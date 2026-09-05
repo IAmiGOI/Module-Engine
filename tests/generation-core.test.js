@@ -135,13 +135,31 @@ test('a stopped generation completes with its own outcome, not silently like a n
 
 test('a new generation started before the previous one ended closes the old run as superseded — a run must never hang forever', async () => {
     const { engine, st, generationCore } = await buildEngine();
-    const seen = collect(engine, 'generation.completed');
+    const superseded = collect(engine, 'generation.superseded');
+    const completed = collect(engine, 'generation.completed');
 
     st.fire('GENERATION_STARTED');
     st.fire('GENERATION_STARTED');
 
-    assert.equal(seen[0].payload.outcome, 'superseded');
+    assert.equal(superseded[0].payload.outcome, 'superseded');
+    assert.deepEqual(completed, [], 'a superseded run is NOT a completed reply — subscribers of generation.completed must not see it');
     assert.equal(generationCore.current().stage, 'beforeSend', 'the second run is now the live one');
+});
+
+test('a DRY RUN start is ignored — one real generation must fire generation.completed exactly once', async () => {
+    const { engine, st } = await buildEngine();
+    const completed = collect(engine, 'generation.completed');
+    const superseded = collect(engine, 'generation.superseded');
+
+    // Настоящая ST шлёт GENERATION_STARTED и для сухого прогона (её собственный
+    // комментарий: «Occurs every time, even if the generation is aborted»),
+    // третьим аргументом — `dryRun`. Такой прогон никогда не кончается.
+    st.fire('GENERATION_STARTED', 'normal', {}, true);
+    st.fire('GENERATION_STARTED', 'normal', {}, false);
+    st.fire('GENERATION_ENDED');
+
+    assert.equal(completed.length, 1, 'exactly one completion for one real generation');
+    assert.deepEqual(superseded, [], 'the dry run never opened a run, so nothing was superseded');
 });
 
 test('a tool registered THROUGH the engine reports its own call and result — the caller writes no reporting code', async () => {

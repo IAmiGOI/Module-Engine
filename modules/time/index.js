@@ -208,12 +208,23 @@ export function createTimeModule(host) {
     async function advance() {
         if (!enabled.peek() || busy.peek()) return null;
         busy.set(true);
+        // Показание гасится НА ВРЕМЯ опроса: пока идёт новый шаг, старое время
+        // уже неверно, и держать его на экране — врать пользователю. Пустое
+        // значение переводит карточку в пульсирующее ожидание (см. StatBlock).
+        label.set('');
         try {
             const result = await call('tracking.poll', {
                 trackerId: TRACKER_ID,
                 vars: { timeline: buildTimeline(history.peek(), startTime.peek()) },
             });
-            if (!result.ok) { await notify('error', `RP time: ${result.error.message}`); return null; }
+            if (!result.ok) {
+                // Опрос не удался — возвращаем ПРОШЛУЮ отметку: она хотя бы
+                // была верна когда-то, а вечно пульсирующая пустота выглядела бы
+                // как «модуль сломался навсегда».
+                label.set(history.peek().at(-1) ?? '');
+                await notify('error', `RP time: ${result.error.message}`);
+                return null;
+            }
             const next = buildTimeLabel(result.value ?? [], displayTemplate.peek());
             label.set(next);
             await rememberLabel(next);
@@ -243,9 +254,13 @@ export function createTimeModule(host) {
 
     /** Виджет в полосе под сообщением — ровно то, чем в Alpha был бейдж времени. */
     function footerWidget() {
-        // Пока времени нет, StatBlock сам ничего не покажет и будет пульсировать
-        // рамкой — см. его собственный комментарий.
-        return StatBlock('Current RP time', label, { icon: '◷' });
+        // Здесь — ПОСЛЕДНЯЯ ИЗВЕСТНАЯ отметка, а не `label`. Разница
+        // принципиальная: `label` намеренно гаснет на время опроса (карточка в
+        // панели должна пульсировать, а не врать старым временем), а бейдж под
+        // сообщением — запись в летописи. Ядро подвала замораживает его, как
+        // только приходит следующее сообщение, и заморозить пустоту значило бы
+        // навсегда оставить под сообщением пульсирующий прочерк.
+        return StatBlock('Current RP time', () => history().at(-1) ?? '', { icon: '◷' });
     }
 
     function tree() {
