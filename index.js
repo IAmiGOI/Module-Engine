@@ -67,7 +67,20 @@ function addTopBarLauncher(panel) {
 }
 
 async function init() {
-    const { engine, panelUi } = await wireEngine({ getContext, fetch: window.fetch.bind(window) });
+    // `scriptUrl` — адрес ИМЕННО этого файла: из него берётся имя папки
+    // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
+    // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
+    // дал бы не то имя.
+    const { engine, panelUi, selfUpdate } = await wireEngine({
+        getContext,
+        fetch: window.fetch.bind(window),
+        scriptUrl: import.meta.url,
+    });
+
+    // Обновление запускается РАНЬШЕ интерфейса: если мы отстали, страница всё
+    // равно перезагрузится, и строить панель дважды незачем. Ход молчит, когда
+    // сказать нечего — не git-установка, нет сети, уже свежее.
+    selfUpdate.run().catch(error => console.warn('[ST Module Engine (Beta)] Self-update skipped:', error));
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
     if (!target) throw new Error('SillyTavern extensions settings container was not found.');
