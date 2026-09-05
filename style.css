@@ -1,0 +1,56 @@
+@import url('./harness/panel.css');
+
+.stmeBeta-drawer { margin-bottom: 10px; }
+
+/* Page-width overlay (harness/full-screen-panel.js) — only used inside real
+   ST (the standalone browser harness has no narrow-drawer problem to solve,
+   so it never creates one). Same shape as Alpha's own .stme-fullscreen. */
+/* Жидкое стекло — a real frosted-glass overlay, not a near-opaque wash: a
+   light tint over `backdrop-filter: blur()` so the actual ST page behind it
+   (chat, sidebar) stays visible but softened, the way a real glass pane
+   would look. The earlier version used a 95%-opaque wash with no blur at
+   all, which hid the page rather than glazing it. */
+.stmeBeta-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 6000;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(rgba(10, 10, 12, .45), rgba(10, 10, 12, .45)), var(--SmartThemeBlurTintColor, #1c1e26);
+    backdrop-filter: blur(22px) saturate(160%);
+    -webkit-backdrop-filter: blur(22px) saturate(160%);
+    color: var(--SmartThemeBodyColor, #dfe3ea);
+    font-family: var(--mainFontFamily, inherit);
+}
+/* A plain class selector's own `display` always beats the UA [hidden] rule
+   at equal specificity — without this the overlay stays laid out and
+   visible regardless of the `hidden` property (same trap Alpha's own
+   .stme-fullscreen[hidden] already documents). */
+.stmeBeta-fullscreen[hidden] { display: none; }
+.stmeBeta-fullscreen-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+    background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .16));
+}
+.stmeBeta-fullscreen-head strong { flex: 1; font-size: 1.05em; letter-spacing: .02em; }
+/* Прокручивается ВСЯ ширина оверлея, а по центру ограничено только
+   содержимое. Раньше `max-width` стоял на самом прокручиваемом элементе, и
+   слева/справа от него оставались мёртвые поля: колесо там доставалось
+   странице за оверлеем, которой ехать некуда, — прокрутка «отскакивала».
+   `min-height: 0` — чтобы флекс-элемент не рос под содержимое вместо
+   прокрутки (по умолчанию `min-height: auto` этого не даёт).
+   `overscroll-behavior: contain` — чтобы докрутив до конца, не начать
+   листать чат ST под панелью. */
+.stmeBeta-fullscreen-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 18px;
+    width: 100%;
+    box-sizing: border-box;
+}
+.stmeBeta-fullscreen-body > * { max-width: 1100px; margin: 0 auto; }

@@ -1,0 +1,12 @@
+{
+  "display_name": "ST Module Engine (Beta)",
+  "loading_order": 5,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "OpenAI",
+  "version": "0.0.1",
+  "description": "Beta rework of ST Module Engine. Takes over the generation pipeline: holds, rewrites and can cancel SillyTavern generations through its own Ядро пайплайнов. Install alongside Alpha under a different folder name.",
+  "generate_interceptor": "stModuleEngineBetaGenerateInterceptor"
+}
