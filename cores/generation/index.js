@@ -110,7 +110,13 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
         run.endedAt = Date.now();
         finished.unshift(run);
         finished.length = Math.min(finished.length, MAX_REMEMBERED_RUNS);
-        publishEvent('generation.completed', { runId: run.runId, outcome, toolCalls: run.toolCalls.length });
+        // Вытесненный прогон — НЕ законченная генерация, и объявлять его как
+        // `generation.completed` нельзя: подписчик на «ответ готов» сработал
+        // бы дважды за один ответ. Ровно это и случалось — определитель
+        // времени тикал и до, и после генерации, потому что ST открывает
+        // прогон ещё и на сухой прогон, а тот вытеснялся настоящим.
+        publishEvent(outcome === 'superseded' ? 'generation.superseded' : 'generation.completed',
+            { runId: run.runId, outcome, toolCalls: run.toolCalls.length });
         // Пост-обработка — цепочка переписывания (PIPELINE.md), поэтому
         // `fold`. Переносимое значение сейчас — снимок прогона: это честно
         // всё, что движок про прогон знает, пока сама отправка не наша.
@@ -332,7 +338,12 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
      */
     function listen() {
         subscriptions.push(
-            host.events.subscribe('st.generationStarted', () => startRun()),
+            // СУХОЙ прогон пропускается. ST шлёт `GENERATION_STARTED` и на него
+            // тоже (её собственный комментарий: «Occurs every time, even if the
+            // generation is aborted»), третьим аргументом идёт `dryRun`, и конца
+            // у такого прогона не бывает вовсе. Открой мы его — он остался бы
+            // висеть до следующей настоящей генерации и был бы ею вытеснен.
+            host.events.subscribe('st.generationStarted', payload => { if (!payload?.args?.[2]) startRun(); }),
             host.events.subscribe('st.generateAfterCombinePrompts', () => advanceToSending()),
             host.events.subscribe('st.generationEnded', () => endRun('ended')),
             host.events.subscribe('st.generationStopped', () => endRun('stopped')),
