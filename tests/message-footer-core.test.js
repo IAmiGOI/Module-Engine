@@ -36,12 +36,20 @@ function fakeNode(className = '') {
 
 function buildEngine() {
     const engine = createEngine();
-    const messageBlock = fakeNode('mes_block');
+    // Поддельный чат: у каждого сообщения СВОЙ блок, как в настоящем ST.
+    // Одного общего блока хватало, пока подвал был один на всех, — а именно
+    // это и было багом.
+    const chat = { ids: ['0', '1'], blocks: new Map() };
+    const blockOf = mesid => {
+        if (!chat.blocks.has(mesid)) chat.blocks.set(mesid, fakeNode('mes_block'));
+        return chat.blocks.get(mesid);
+    };
+    const messageBlock = blockOf('1'); // последнее сообщение — то, с которым работают старые проверки
     const roots = [];
 
     const stHost = engine.registerCaller('service.stChat', 'services', { tier: 'official' });
-    stHost.own.register('stChat.renderedIds', () => ['0', '1']);
-    stHost.own.register('stChat.messageElement', () => messageBlock);
+    stHost.own.register('stChat.renderedIds', () => chat.ids);
+    stHost.own.register('stChat.messageElement', params => (chat.ids.includes(String(params?.mesid)) ? blockOf(String(params.mesid)) : null));
     stHost.own.register('stChat.container', () => null);
     // Узлы создаёт Сервис DOM — Ядро само их не делает и делать не должно.
     const domHost = engine.registerCaller('service.dom', 'services', { tier: 'official' });
@@ -59,7 +67,7 @@ function buildEngine() {
         observe: (container, onChanged) => { observerCallback = onChanged; return () => { observerCallback = null; }; },
     });
 
-    return { engine, core, messageBlock, roots, fireObserver: () => observerCallback?.() };
+    return { engine, core, chat, blockOf, messageBlock, roots, fireObserver: () => observerCallback?.() };
 }
 
 const footerOf = block => block.children.find(child => child.className === 'stme-message-footer');
@@ -171,7 +179,7 @@ test('releasing a slot takes its widget out of the DOM, not just out of the regi
 
     core.release('left');
 
-    assert.equal(roots[0].parent, null, 'узел снят со страницы');
+    assert.equal(messageBlock.contains(roots[0]), false, 'узел снят со страницы вместе со своей ячейкой');
     assert.deepEqual(core.slots().find(entry => entry.slot === 'left').ownerId, null);
 });
 
@@ -217,4 +225,79 @@ test('a slot claimed after the footer is ALREADY placed still gets its cell — 
     await new Promise(resolve => setTimeout(resolve, 0));
 
     assert.deepEqual(footerOf(messageBlock).children.map(child => child.dataset.slot).sort(), ['center', 'left']);
+});
+
+// --- Бейдж прошлого сообщения ----------------------------------------------
+
+test('a NEW message does not steal the previous message\'s badge — every message keeps its own', async () => {
+    const { core, chat, blockOf } = buildEngine();
+    core.claim({ slot: 'left', ownerId: 'module.time', node: h('div', {}, 'time') });
+    await core.start();
+    assert.ok(footerOf(blockOf('1')), 'подвал под текущим последним сообщением');
+
+    chat.ids = ['0', '1', '2'];
+    await core.attach();
+
+    assert.ok(footerOf(blockOf('1')), 'бейдж прошлого сообщения на месте — раньше он отсюда исчезал');
+    assert.ok(footerOf(blockOf('2')), 'и у нового сообщения свой');
+    assert.equal(core.footerCount(), 2);
+});
+
+test('a past message\'s badge FREEZES — it shows what was true then, not what is true now', async () => {
+    const { core, chat, blockOf, roots } = buildEngine();
+    core.claim({ slot: 'left', ownerId: 'module.time', node: h('div', {}, 'time') });
+    await core.start();
+    const first = roots.length;
+
+    chat.ids = ['0', '1', '2'];
+    await core.attach();
+
+    // У нового сообщения СВОЙ Final UI: старое дерево больше не перерисовывается
+    // ничьими сигналами, а его DOM остался на месте.
+    assert.equal(roots.length, first + 1, 'новое сообщение получило собственную отрисовку');
+    assert.ok(blockOf('1').contains(roots[first - 1]), 'старый виджет никуда не делся');
+    assert.ok(blockOf('2').contains(roots[first]));
+});
+
+test('a message that is gone takes its footer with it — no badge hangs on a deleted message', async () => {
+    const { core, chat, blockOf } = buildEngine();
+    core.claim({ slot: 'left', ownerId: 'a', node: h('div', {}, 'x') });
+    await core.start();
+    chat.ids = ['0', '1', '2'];
+    await core.attach();
+    assert.equal(core.footerCount(), 2);
+
+    chat.ids = ['0'];
+    await core.attach();
+
+    assert.equal(core.footerCount(), 1);
+    assert.equal(footerOf(blockOf('1')), undefined);
+});
+
+test('switching chats drops every remembered footer — mesid is an index, so it means a different message now', async () => {
+    const { engine, core, chat } = buildEngine();
+    core.claim({ slot: 'left', ownerId: 'a', node: h('div', {}, 'x') });
+    await core.start();
+    chat.ids = ['0', '1', '2'];
+    await core.attach();
+
+    chat.ids = ['0'];
+    engine.events.emit('st.chatChanged');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(core.footerCount(), 1, 'ровно один подвал — у единственного сообщения нового чата');
+});
+
+test('releasing a slot clears it from PAST messages too — a disabled Module leaves no trail of stale badges', async () => {
+    const { core, chat, blockOf } = buildEngine();
+    core.claim({ slot: 'left', ownerId: 'a', node: h('div', {}, 'x') });
+    await core.start();
+    chat.ids = ['0', '1', '2'];
+    await core.attach();
+
+    core.release('left');
+
+    for (const mesid of ['1', '2']) {
+        assert.equal(footerOf(blockOf(mesid)).children.length, 0, `слот убран и из сообщения ${mesid}`);
+    }
 });

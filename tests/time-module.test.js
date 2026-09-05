@@ -54,7 +54,7 @@ test('every preset is self-consistent — its template only references fields it
 
 // --- Сценарный уровень ------------------------------------------------------
 
-function buildEngine({ replies } = {}) {
+function buildEngine({ replies, gate, fail = false } = {}) {
     const engine = createEngine();
     const settingsContext = { extensionSettings: {}, chatMetadata: {}, saveSettingsDebounced: () => {}, saveMetadataDebounced: () => {}, chat: [
         { is_user: true, is_system: false, mes: 'We ride out at dawn.' },
@@ -71,8 +71,12 @@ function buildEngine({ replies } = {}) {
     // Тест на схлопывание повторов подсовывает свой, неподвижный ответ.
     const answers = replies ?? ['{"time": "11:40", "period": "Morning"}', '{"time": "13:05", "period": "Afternoon"}'];
     const modelHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official' });
-    modelHost.own.register('model.generate', params => {
+    modelHost.own.register('model.generate', async params => {
         prompts.push(params.prompt);
+        // `gate` даёт тесту застать Модуль СРЕДИ опроса — без него промежуточное
+        // состояние невидимо и проверить пульсацию нечем.
+        if (gate) await gate;
+        if (fail) throw new Error('worker unreachable');
         return answers[Math.min(prompts.length - 1, answers.length - 1)];
     });
     modelHost.own.register('model.workers.get', () => [{ id: 'main' }]);
@@ -215,4 +219,68 @@ test('applying a preset swaps fields, start and template together — they must 
     assert.deepEqual(module.fields().map(field => field.name), ['day', 'time', 'period']);
     assert.equal(module.startTime(), 'Day 0, 08:00 (Morning)');
     assert.equal(module.displayTemplate(), 'Day {day}, {time} ({period})');
+});
+
+test('while a step is running the reading goes BLANK — a stale clock shown as current is a lie', async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const { module } = buildEngine({ gate });
+    await module.load();
+    module.applyPreset('clock-only');
+    module.label.set('08:00 (Morning)');
+
+    const running = module.advance();
+    // Пустое значение — именно то, что переводит StatBlock в пульсирующее ожидание.
+    assert.equal(module.label(), '', 'старое время убрано на время опроса');
+
+    release();
+    await running;
+
+    assert.equal(module.label(), '11:40 (Morning)');
+});
+
+test('a FAILED step brings the previous reading back — it must not pulse into an empty card forever', async () => {
+    const { module } = buildEngine({ fail: true });
+    await module.load();
+    module.applyPreset('clock-only');
+    module.history.set(['08:00 (Morning)']);
+    module.label.set('08:00 (Morning)');
+
+    assert.equal(await module.advance(), null);
+
+    assert.equal(module.label(), '08:00 (Morning)');
+});
+
+test('the badge under a message shows the LAST KNOWN time, never the blank of a poll in flight', async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const { module, claims } = buildEngine({ gate });
+    await module.load();
+    module.applyPreset('clock-only');
+    module.history.set(['08:00 (Morning)']);
+
+    // Значение бейджа — функция; читаем её так же, как это делает StatBlock.
+    const valueOf = () => {
+        const found = [];
+        (function walk(node) {
+            if (!node || typeof node !== 'object') return;
+            if (node.props?.class === 'stme-stat-value') found.push(node);
+            for (const child of node.children ?? []) walk(child);
+        })(claims[0].node);
+        const source = found[0].children[0];
+        return typeof source === 'function' ? source() : source;
+    };
+
+    const running = module.advance();
+
+    // Карточка в панели гаснет и пульсирует, а бейдж под сообщением — нет:
+    // Ядро подвала заморозит его при следующем сообщении, и заморозить пустоту
+    // значило бы навсегда оставить в летописи прочерк.
+    assert.equal(module.label(), '');
+    assert.equal(valueOf(), '08:00 (Morning)');
+
+    release();
+    await running;
+
+    assert.equal(valueOf(), '11:40 (Morning)');
 });
