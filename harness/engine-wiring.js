@@ -9,6 +9,10 @@ import { registerStMacrosService } from '../services/st-macros.js';
 import { registerStEventsService } from '../services/st-events.js';
 import { registerStToolsService } from '../services/st-tools.js';
 import { registerStGenerationService } from '../services/st-generation.js';
+import { registerStExtensionsService } from '../services/st-extensions.js';
+import { registerSessionService } from '../services/session.js';
+import { createSelfUpdateCore } from '../cores/self-update/index.js';
+import { deriveExtensionName } from '../libraries/core/update-check.js';
 import { createEventsCore } from '../cores/events/index.js';
 import { createGenerationCore } from '../cores/generation/index.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
@@ -154,7 +158,16 @@ function createModuleRegistry({ engine, uiModules, panelSettled, onChanged = () 
  * instead of resetting to empty every boot, which is what all three did
  * before Ядро сохранения existed.
  */
-export async function wireEngine({ getContext, fetch, interceptTarget = globalThis }) {
+/**
+ * Репозиторий, из которого движок обновляет сам себя. Захардкожен намеренно, а
+ * не берётся из `remoteUrl`, который отдаёт ST: тот — правда о том, что
+ * настроено у git локально, а нам нужна правда о том, откуда проект ДОЛЖЕН
+ * приезжать. Сбитый локальный remote не должен превращать сверку в проверку
+ * самого себя.
+ */
+export const CORE_REPO = Object.freeze({ owner: 'IAmiGOI', repo: 'Module-Engine' });
+
+export async function wireEngine({ getContext, fetch, interceptTarget = globalThis, scriptUrl = import.meta.url }) {
     const engine = createEngine();
 
     registerDomService(engine.buses.services);
@@ -173,6 +186,9 @@ export async function wireEngine({ getContext, fetch, interceptTarget = globalTh
     // ставится именованная функция перехватчика и чей `fetch` подменяется;
     // в реальном ST это window, в харнессе — его собственный поддельный ST.
     registerStGenerationService(engine.buses.services, { target: interceptTarget });
+    // Git-эндпоинты ST и сессия страницы — всё, что нужно самообновлению.
+    registerStExtensionsService(engine.buses.services, { getContext });
+    registerSessionService(engine.buses.services);
 
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
     const modelsCore = createInternalEngineModelsCore(modelsHost);
@@ -242,6 +258,13 @@ export async function wireEngine({ getContext, fetch, interceptTarget = globalTh
     const messageFooter = createMessageFooterCore(messageFooterHost, { createFinalUi: () => createFinalUiPc(messageFooterHost) });
 
     let panelUi = null;
+    // Самообновление: единственное Ядро, которому выдано право выходить в сеть
+    // помимо моделей — оно сверяет наш код с GitHub напрямую.
+    const selfUpdate = createSelfUpdateCore(
+        engine.registerCaller('core.selfUpdate', 'cores', { tier: 'official', networkAccess: true }),
+        { extensionName: deriveExtensionName(scriptUrl), ...CORE_REPO },
+    );
+
     let enginePanelRef = null;
     const modules = createModuleRegistry({
         engine,
@@ -293,5 +316,5 @@ export async function wireEngine({ getContext, fetch, interceptTarget = globalTh
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, modules, enginePanel, panelUi };
+    return { engine, modelsCore, trackingCore, macrosCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, modules, enginePanel, panelUi };
 }
