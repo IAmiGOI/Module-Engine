@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ST Module Engine — Beta harness</title>
+<link rel="stylesheet" href="panel.css">
+<style>
+    :root { color-scheme: light dark; }
+    body { font: 14px/1.4 system-ui, sans-serif; max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 16px; opacity: .7; font-weight: normal; }
+    /* Полоска только для харнесса: в настоящем ST события ST приходят сами,
+       а здесь их нужно чем-то сыграть. В сам экран движка она не входит. */
+    .harness-strip { display: flex; gap: 8px; align-items: center; margin: 12px 0 20px; padding: 10px 12px; border: 1px dashed #8886; border-radius: 10px; font-size: 12px; }
+    .harness-strip select, .harness-strip button { font: inherit; padding: 3px 8px; }
+    #chat { max-width: 1200px; margin: 0 auto 20px; padding: 0 16px; }
+    #chat .mes { padding: 10px 0; border-top: 1px solid #8883; }
+    #chat .mes_text { opacity: .85; line-height: 1.5; }
+</style>
+</head>
+<body>
+<h1>ST Module Engine — Beta harness</h1>
+<div class="harness-strip">
+    <span>Play a SillyTavern event:</span>
+    <select id="harnessEvent"></select>
+    <button id="harnessFire" type="button">Fire</button>
+    <span id="harnessLast"></span>
+</div>
+<div class="harness-strip">
+    <span>Play a whole generation (interceptor → send):</span>
+    <button id="harnessGenerate" type="button">Generate</button>
+    <span id="harnessGenerationResult"></span>
+</div>
+<!-- Разметка чата ТОЙ ЖЕ формы, что у настоящего ST (#chat > .mes[mesid] >
+     .mes_block): без неё полосу под сообщением проверить нечем, а подделка
+     другой формы проверяла бы не то. -->
+<div class="harness-strip">
+    <span>Chat:</span>
+    <button id="harnessReroll" type="button">Reroll last message</button>
+    <button id="harnessEditMsg" type="button">Edit last message</button>
+    <span id="harnessFooterState"></span>
+</div>
+<div id="chat">
+    <div class="mes" mesid="0"><div class="mes_block"><div class="mes_text">Player: I take a swing at the bandit.</div></div></div>
+    <div class="mes" mesid="1"><div class="mes_block"><div class="mes_text">Narrator: The blade bites deep. You stagger back, bleeding.</div></div></div>
+</div>
+<div id="app"></div>
+<script type="module" src="main.js"></script>
+</body>
+</html>
