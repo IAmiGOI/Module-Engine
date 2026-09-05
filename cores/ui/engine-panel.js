@@ -1,0 +1,284 @@
+import { h } from './tree.js';
+import { signal, computed } from './reactive.js';
+import { request } from '../../libraries/shared/request.js';
+import { Button, TextInput, Select, Toggle, Field, Row, Card, Section, Badge, EmptyState, TwoColumn, EditableList } from '../../libraries/shared/widgets.js';
+import { createCollapseState } from '../../libraries/shared/collapse-state.js';
+
+const FORMATS = Object.freeze([
+    { value: 'openai', label: 'OpenAI-compatible' },
+    { value: 'anthropic', label: 'Anthropic' },
+    { value: 'google', label: 'Google Gemini' },
+]);
+
+let uid = 0;
+
+/** Плоская запись воркера → набор сигналов для правки, со стабильным ключом (id можно менять, ключ — нет, иначе строка пересоздаётся на каждую букву). */
+function toRecord(worker = {}) {
+    return {
+        key: `worker_${++uid}`,
+        id: signal(worker.id ?? ''),
+        format: signal(worker.format ?? 'openai'),
+        endpoint: signal(worker.endpoint ?? ''),
+        apiKey: signal(worker.apiKey ?? ''),
+        model: signal(worker.model ?? ''),
+        // Не строка статуса, а КРАТКОВРЕМЕННОЕ состояние блока: '' | 'testing' |
+        // 'ok' | 'error'. Результат словами уходит в уведомления, здесь
+        // остаётся только вспышка обводки — она относится к КОНКРЕТНОМУ
+        // подключению, и показывать её надо на нём, а не строкой под ним.
+        flash: signal(''),
+    };
+}
+
+function fromRecord(record) {
+    return {
+        id: record.id.peek().trim(),
+        format: record.format.peek(),
+        endpoint: record.endpoint.peek().trim(),
+        apiKey: record.apiKey.peek(),
+        model: record.model.peek().trim(),
+    };
+}
+
+/**
+ * Экран движка — то, что пользователь реально видит и трогает.
+ *
+ * Это **Ядро**, а не Модуль: движок без своего интерфейса не работает, и
+ * пользователь его не подключает (см. критерий в ARCHITECTURE.md).
+ *
+ * Панель поделена пополам: слева — своё, ядро и сервисы; справа — то, что
+ * подключает пользователь. Модулей пока нет вообще, и правая половина честно
+ * это показывает, а не притворяется занятой.
+ *
+ * Здесь НЕТ вёрстки как таковой: всё, что можно переиспользовать, живёт в
+ * [libraries/shared/widgets.js](../../libraries/shared/widgets.js) — в этом
+ * файле остаётся только проводка виджетов к настоящим контрактам своей Шины.
+ * И всё, что панель делает с моделями, она делает через контракты
+ * (`model.workers.get/set`, `model.generate`), а не через JS-ссылку на Ядро:
+ * править эндпоинты и ключи в обход Шины было бы ровно тем случаем, ради
+ * которого Гейты и существуют.
+ */
+export function createEnginePanelCore(host, { mount, listContracts, modules: moduleRegistry } = {}) {
+    // Что свёрнуто — помнится между сеансами. По умолчанию свёрнуто всё.
+    const collapse = createCollapseState(host.own, { namespace: 'core.ui.panel' });
+    const workers = signal([]);
+    const modules = signal([]);
+    const enabledIds = signal([]);
+    // Один СТАБИЛЬНЫЙ сигнал включённости на модуль. Раньше здесь был
+    // computed(), создаваемый заново внутри отрисовки карточки — то есть на
+    // каждую перерисовку узел получал НОВЫЙ сигнал, а подписан оставался на
+    // старый. Та же ошибка, что уже ловили с памятью о свёрнутом: сигнал,
+    // рождённый в функции отрисовки, живёт меньше, чем узел, который его читает.
+    const enabledSignals = new Map(); // moduleId -> signal(boolean)
+
+    function enabledSignal(moduleId) {
+        if (!enabledSignals.has(moduleId)) enabledSignals.set(moduleId, signal(enabledIds.peek().includes(moduleId)));
+        return enabledSignals.get(moduleId);
+    }
+
+    function syncEnabled(ids) {
+        enabledIds.set(ids);
+        for (const [moduleId, state] of enabledSignals) state.set(ids.includes(moduleId));
+    }
+    const contracts = signal([]);
+    const generationStage = signal('idle');
+    const eventCount = signal(0);
+
+    async function call(contract, params) {
+        return request(host.own, contract, { params });
+    }
+
+    /**
+     * Включение/выключение делает НЕ панель — она только просит реестр
+     * Модулей. Кто их грузит и монтирует, знает сборщик движка (в будущем —
+     * Раннер), а панель обязана оставаться экраном, а не менеджером
+     * жизненного цикла чужого кода.
+     */
+    async function toggleModule(entry, enable) {
+        if (!moduleRegistry) return;
+        // Панель НЕ отслеживает состояние сама: реестр сообщит о смене через
+        // `refreshModules()` — и когда переключили здесь, и когда Модуль
+        // включили в обход панели. Держи она свой список, эти два пути
+        // разъехались бы.
+        await (enable ? moduleRegistry.enable(entry.id) : moduleRegistry.disable(entry.id));
+    }
+
+    async function loadWorkers() {
+        const result = await call('model.workers.get');
+        workers.set((result.ok ? result.value ?? [] : []).map(toRecord));
+    }
+
+    function notify(tone, text) {
+        return call('ui.notify', { tone, text });
+    }
+
+    /** Вспышка гаснет сама: это подтверждение, а не состояние, и оставлять его висеть незачем. */
+    function flash(record, tone) {
+        record.flash.set(tone);
+        setTimeout(() => { if (record.flash.peek() === tone) record.flash.set(''); }, 1600);
+    }
+
+    async function saveWorkers() {
+        const list = workers.peek().map(fromRecord).filter(worker => worker.id);
+        const result = await call('model.workers.set', { workers: list });
+        await notify(result.ok ? 'ok' : 'error',
+            result.ok ? `Saved ${list.length} connection${list.length === 1 ? '' : 's'}` : result.error.message);
+        return result.ok;
+    }
+
+    async function testWorker(record) {
+        const id = record.id.peek().trim();
+        if (!id) { await notify('error', 'Give the connection a name first'); flash(record, 'error'); return; }
+        // Тест идёт по СОХРАНЁННОЙ конфигурации: иначе «работает» означало бы
+        // «работало бы, если бы ты нажал сохранить» — худший вид зелёной галочки.
+        await saveWorkers();
+        record.flash.set('testing');
+        const startedAt = Date.now();
+        const result = await call('model.generate', { prompt: 'Reply with exactly: OK', maxTokens: 16, workerId: id });
+        flash(record, result.ok ? 'ok' : 'error');
+        await notify(result.ok ? 'ok' : 'error',
+            result.ok ? `${id}: OK in ${Date.now() - startedAt}ms` : `${id}: ${result.error.message}`);
+    }
+
+    function removeWorker(record) {
+        workers.set(workers.peek().filter(item => item !== record));
+    }
+
+    function addWorker() {
+        workers.set([...workers.peek(), toRecord({ id: `connection_${workers.peek().length + 1}`, format: 'openai' })]);
+    }
+
+    function workerRow(record) {
+        // Section, а не Card: рамку рисует «Model connections» сверху, а вложенность
+        // внутри неё видна по фону.
+        return Section(record.id, {
+            key: record.key,
+            className: computed(() => (record.flash() ? `stme-flash stme-flash-${record.flash()}` : '')),
+            ...collapse.bind(`worker:${record.key}`),
+            actions: [Button('Test', () => testWorker(record)), Button('Remove', () => removeWorker(record), { variant: 'danger' })],
+        },
+            Row(
+                Field('Name', TextInput(record.id, { placeholder: 'my-connection' })),
+                Field('Format', Select(record.format, FORMATS)),
+            ),
+            Field('Endpoint', TextInput(record.endpoint, { placeholder: 'https://api.example.com/v1' })),
+            Row(
+                Field('API key', TextInput(record.apiKey, { type: 'password', placeholder: 'optional for local' })),
+                Field('Model', TextInput(record.model, { placeholder: 'model name' })),
+            ),
+        );
+    }
+
+    function modelsCard() {
+        // Save живёт ВНУТРИ блока, а не в шапке: шапка — отдельная полоса с
+        // своим фоном, и кнопка в ней читается как относящаяся к разделу
+        // целиком, а не к списку под ней.
+        return Card('Model connections', {
+            ...collapse.bind('card:models'),
+            subtitle: 'Where the engine gets its own generations from',
+        },
+            EditableList({
+                items: workers,
+                renderItem: workerRow,
+                onAdd: addWorker,
+                addLabel: '+ Add connection',
+                empty: 'No connections yet. Add one to let the engine run its own model calls.',
+                actions: [Button('Save', saveWorkers)],
+            }),
+        );
+    }
+
+    function statusCard() {
+        return Card('Engine', { ...collapse.bind('card:engine'), subtitle: 'What is actually wired right now' },
+            Row(
+                computed(() => Badge(`${contracts().length} contracts`, { tone: 'muted' })),
+                computed(() => Badge(`generation: ${generationStage()}`, { tone: generationStage() === 'idle' ? 'muted' : 'ok' })),
+                computed(() => Badge(`${eventCount()} events seen`, { tone: 'muted' })),
+            ),
+            h('div', { class: 'stme-contract-list' },
+                computed(() => contracts().map(entry => h('code', { key: entry.contract, class: 'stme-contract' }, entry.contract))),
+            ),
+        );
+    }
+
+    /**
+     * Правая половина — то, что подключает пользователь. Панель НЕ рисует
+     * содержимое Модуля сама: у каждого включённого Модуля своё независимое
+     * дерево и свой Final UI (см. Ядро UI модулей), а здесь только его
+     * карточка-переключатель и пустое место под него. Иначе панель знала бы
+     * про внутренности каждого Модуля — ровно то, чего вся эта конструкция и
+     * избегает.
+     */
+    function moduleCard(entry) {
+        const enabled = enabledSignal(entry.id);
+        return Section(entry.title, {
+            key: entry.id,
+            ...collapse.bind(`module:${entry.id}`),
+            subtitle: entry.description,
+            // Тумблер, а не пара кнопок «Enable»/«Disable»: включённость это
+            // СОСТОЯНИЕ, и переключатель показывает его сам, не заставляя
+            // читать надпись на кнопке и догадываться, что она означает —
+            // текущее положение или то, что случится по нажатию. Так же в Alpha.
+            actions: [Toggle('Enabled', enabled, { onChange: value => toggleModule(entry, value) })],
+        },
+            // Место под собственное дерево Модуля. Его Final UI монтируется
+            // сюда тем, кто собирал движок — панель только выделяет слот.
+            computed(() => (enabled()
+                ? h('div', { class: 'stme-module-slot', 'data-module': entry.id })
+                : h('small', { class: 'stme-module-off' }, 'Disabled — the engine keeps running without it.'))),
+        );
+    }
+
+    // Список Модулей раскрыт по умолчанию: это единственное место, где
+    // пользователь что-то подключает, и прятать его за лишним кликом незачем.
+    function modulesCard() {
+        return Card('Modules', { ...collapse.bind('card:modules', { open: true }), subtitle: 'What you plug in yourself' },
+            computed(() => (modules().length
+                ? modules().map(moduleCard)
+                : [EmptyState('No modules installed. The engine runs without them — that is exactly what makes something a Module rather than a Core.')])),
+        );
+    }
+
+    function tree() {
+        return h('div', { class: 'stme-panel' },
+            TwoColumn({
+                left: [statusCard(), modelsCard()],
+                right: [modulesCard()],
+            }),
+        );
+    }
+
+    /** Живые показатели: панель не опрашивает движок по таймеру — она реагирует на те же события, что и всё остальное. */
+    function watch() {
+        return [
+            host.events.subscribe('events.any', () => {
+                eventCount.set(eventCount.peek() + 1);
+            }),
+            host.events.subscribe('generation.beforeSend', () => generationStage.set('running')),
+            host.events.subscribe('generation.completed', () => generationStage.set('idle')),
+        ];
+    }
+
+    async function open() {
+        // Сначала память о свёрнутом — иначе первый кадр раскрылся бы по
+        // умолчанию, а потом схлопнулся, и это было бы видно.
+        await collapse.restore();
+        await loadWorkers();
+        // Список контрактов приходит от сборщика движка: своя шина доступна
+        // через host.own, а шины сервисов и сети — нет (у Ядра туда только
+        // Гейт-аксессор, и это правильно). Так что «что вообще подключено»
+        // знает тот, кто движок собирал.
+        contracts.set(listContracts ? listContracts() : host.own.contracts?.() ?? []);
+        modules.set(moduleRegistry?.list() ?? []);
+        syncEnabled(moduleRegistry?.enabled() ?? []);
+        return mount(tree());
+    }
+
+    const subscriptions = watch();
+
+    return {
+        open,
+        refresh: loadWorkers,
+        refreshModules: () => { modules.set(moduleRegistry?.list() ?? []); syncEnabled(moduleRegistry?.enabled() ?? []); },
+        close: () => { for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
+    };
+}
