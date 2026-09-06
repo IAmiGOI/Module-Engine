@@ -19,6 +19,7 @@ import { createGenerationCore } from '../cores/generation/index.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createInternalEngineModelsCore } from '../cores/models/internal-engine.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
+import { createChatHistoryCore } from '../cores/chat-history/index.js';
 import { createSettingsCore } from '../cores/settings/index.js';
 import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource } from '../cores/backup/index.js';
 import { createTrackingCore } from '../cores/tracking/index.js';
@@ -68,7 +69,11 @@ const DEFINITIONS = [{
         tier: 'community',
         allowedContracts: [
             'tracking.trackers', 'tracking.configure', 'tracking.poll', 'tracking.reset',
-            'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
+            'storage.settings.get', 'storage.settings.set',
+            // Сообщения с их `mesid` и привязка отметок времени к КОНКРЕТНОМУ
+            // сообщению — через общее Ядро истории чата, не напрямую в
+            // `storage.chatMemory` (Модулю туда и нет прямого пути).
+            'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
@@ -269,6 +274,12 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerSessionService(engine.buses.services);
 
     createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
+    // Общая инфраструктура для «привязать что-то к КОНКРЕТНОМУ сообщению» —
+    // сообщения с их `mesid` (Модулям Сервисы не видны напрямую) и хранилище
+    // аннотаций поверх Ядра памяти чата. Строится сразу после него — оба его
+    // контракта (`chatHistory.messages`/`annotate`/`annotations`) зависят от
+    // `stChat.messages` и `storage.chatMemory`, уже зарегистрированных выше.
+    createChatHistoryCore(engine.registerCaller('core.chatHistory', 'cores', { tier: 'official' }));
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
 
     const backupHost = engine.registerCaller('core.backup', 'cores', { tier: 'official' });

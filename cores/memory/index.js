@@ -34,6 +34,18 @@ function requireLocation(params) {
  * Every operation re-reads the raw store fresh from the Сервис rather than
  * caching it — the current chat can change between calls, and a stale
  * cached blob would silently write into the WRONG chat's metadata.
+ *
+ * **`set()`/`remove()` run through a queue, not straight through.** Both are
+ * read-modify-write: read the whole raw blob, mutate a `namespace`/`key`
+ * inside it, write it back. `readNamespacedValue()`'s fallback for a
+ * namespace/key that has never been written is a FRESH object each call —
+ * so two concurrent first-ever writes to the same namespace (e.g. two
+ * Модуля both annotating the same chatHistory bucket on the same
+ * `generation.completed`) can each read the same empty state, mutate their
+ * own separate copy, and the second write-back silently discards the
+ * first's. `enqueue()` below serializes every set/remove against every
+ * other one on this Ядро, closing that window; `get()`/`keys()` stay
+ * unqueued since a plain read is never torn.
  */
 export function createChatMemoryCore(host) {
     async function readRaw() {
@@ -47,31 +59,40 @@ export function createChatMemoryCore(host) {
         if (!result.ok) throw new Error(result.error.message);
     }
 
+    // A tail promise that always settles, so one failed write in the chain
+    // never wedges every write queued after it.
+    let tail = Promise.resolve();
+    function enqueue(task) {
+        const run = tail.then(task, task);
+        tail = run.then(() => {}, () => {});
+        return run;
+    }
+
     const unregisterGet = host.own.register('storage.chatMemory.get', async params => {
         const { namespace, key } = requireLocation(params);
         const raw = await readRaw();
         return readNamespacedValue(raw, namespace, key, params?.fallback);
     });
 
-    const unregisterSet = host.own.register('storage.chatMemory.set', async params => {
+    const unregisterSet = host.own.register('storage.chatMemory.set', params => enqueue(async () => {
         const { namespace, key } = requireLocation(params);
         const raw = await readRaw();
         writeNamespacedValue(raw, namespace, key, params?.value);
         await writeRaw(raw);
         return true;
-    });
+    }));
 
     // Only writes back when something was ACTUALLY removed — a remove() of an
     // already-absent key must not trigger a needless chatMetadata save, same
     // discipline Alpha's own stores already followed (see Alpha's
     // notebook/store.js doc comment on why a no-op must never look like a write).
-    const unregisterRemove = host.own.register('storage.chatMemory.remove', async params => {
+    const unregisterRemove = host.own.register('storage.chatMemory.remove', params => enqueue(async () => {
         const { namespace, key } = requireLocation(params);
         const raw = await readRaw();
         const removed = removeNamespacedValue(raw, namespace, key);
         if (removed) await writeRaw(raw);
         return removed;
-    });
+    }));
 
     const unregisterKeys = host.own.register('storage.chatMemory.keys', async params => {
         const namespace = String(params?.namespace ?? '').trim();

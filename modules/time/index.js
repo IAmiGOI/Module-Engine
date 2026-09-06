@@ -19,16 +19,20 @@ import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCus
  *     пользователю не нужно придумывать их с нуля.
  *  2. **Свой промпт** — он объясняет модели, что от неё хотят ШАГ времени, а
  *     не абсолютную дату из воздуха.
- *  3. **Временная шкала.** Вот это и есть настоящая специализация. Одна
- *     «текущая точка» не говорит модели НИЧЕГО о том, с какой скоростью время
- *     шло до сих пор, и она каждый раз выводила темп заново — у Alpha это
- *     прямо записано как реальная причина рваных скачков. Модуль хранит
- *     несколько прошлых отметок и подаёт их в промпт как `{timeline}`.
+ *  3. **История с метками времени.** Вот это и есть настоящая специализация.
+ *     Одна «текущая точка» не говорит модели НИЧЕГО о том, с какой скоростью
+ *     время шло до сих пор, и она каждый раз выводила темп заново — у Alpha
+ *     это прямо записано как реальная причина рваных скачков. Модуль подаёт
+ *     в промпт саму переписку, где ПЕРЕД каждой репликой стоит настоящая
+ *     метка времени этой конкретной реплики (или `unknown`) — привязка через
+ *     `mesid`, не оторванный от текста список отметок рядом
+ *     (см. `buildAnnotatedHistory()` ниже).
  *
- * Шкала живёт в ПАМЯТИ ЧАТА (`storage.chatMemory`), а не в настройках: у
- * каждого чата своё время, и переносить его между ними бессмысленно. Ровно
- * поэтому же Alpha пересчитывала шкалу из самого чата — «источник правды один,
- * и откатывать после реролла ничего не нужно».
+ * Отметки живут в ПАМЯТИ ЧАТА, через общее [Ядро истории чата](../../cores/chat-history/index.js)
+ * (не свой прямой `storage.chatMemory`, как раньше) — у каждого чата своё
+ * время, и переносить его между ними бессмысленно. Ровно поэтому же Alpha
+ * пересчитывала шкалу из самого чата — «источник правды один, и откатывать
+ * после реролла ничего не нужно».
  *
  * Показывает себя в полосе под сообщением (слот `left`) — там же, где Alpha
  * рисовала свой бейдж. В промпт основной модели не попадает ничего: значение
@@ -38,40 +42,52 @@ import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCus
 export const MODULE_ID = 'module.time';
 const SETTINGS_NAMESPACE = MODULE_ID;
 const TRACKER_ID = 'rp-time';
-const MEMORY_NAMESPACE = MODULE_ID;
-/** Отметка ПОД КАЖДЫМ сообщением: `{ [mesid]: 'Day 1, 08:00' }`. Тоже память чата — бейджи обязаны пережить перезагрузку страницы. */
-const BADGES_KEY = 'badges';
-/** Сколько прошлых отметок показывать модели. Одной мало (нет темпа), десяток — уже шум и лишние токены. */
-const MAX_TIMELINE = 5;
+// `namespace` для Ядра истории чата — свой слот в его хранилище, отдельный от
+// настроек Модуля (`SETTINGS_NAMESPACE`, тот же `storage.settings`, но другой
+// Сервис под ним).
+const HISTORY_NAMESPACE = MODULE_ID;
+/** Сколько последних сообщений чата подавать в промпт с их отметками. */
+const CONTEXT_LIMIT = 10;
+/** Один такой символ — раздражающий шум, а не сигнал; долгую реплику всё равно обрезает Ядро трекинга для generic-трекеров — здесь та же граница для истории с метками. */
+const MESSAGE_CHARS = 900;
 
 /**
- * Промпт специализирован под ШАГ времени. Главное в нём — запрет выдумывать
- * абсолютную дату: модели показывают, куда время двигалось, и просят продлить
- * ту же линию, а не начать новую.
+ * Промпт специализирован под ШАГ времени.
  *
  * **Разделён на два сообщения** (Ядро трекинга умеет это с
  * `systemPromptTemplate` — см. doc-comment [cores/tracking/index.js](../../cores/tracking/index.js)):
- * `TIME_SYSTEM_PROMPT` — ИНСТРУКЦИЯ (что трекать, как оценивать шаг, в каком
- * виде отвечать) — не меняется от опроса к опросу, ей место в `system`.
- * `TIME_PROMPT` остался пользовательским — сама ИСТОРИЯ (шкала и переписка),
- * то, что действительно разное на каждом опросе.
+ * `TIME_SYSTEM_PROMPT` — ИНСТРУКЦИЯ (что трекать, как оценивать шаг, последнее
+ * известное время как якорь, в каком виде отвечать) — не меняется от опроса к
+ * опросу, ей место в `system`. `TIME_PROMPT` — сама ИСТОРИЯ, то, что реально
+ * разное на каждом опросе.
+ *
+ * **Метка времени — ПЕРЕД каждой репликой, а не отдельным списком рядом.**
+ * Раньше `{timeline}` (плоский список последних отметок) и `{context}`
+ * (переписка) шли РАЗНЫМИ подстановками, никак не связанными между собой:
+ * модель видела «вот отметки времени» и отдельно «вот текст» без единой
+ * возможности понять, КАКАЯ отметка к КАКОЙ реплике относится — а формулировка
+ * «extrapolate from it, don't invent a different pace» прямым текстом
+ * требовала держать тот же темп, что уже реальный контент реплики может
+ * противоречить. `buildAnnotatedHistory()` строит ОДНУ историю, где перед
+ * каждой репликой стоит метка времени, ЗАПИСАННАЯ ИМЕННО ПОД ней (или
+ * `unknown`, если ещё не посчитана) — привязка настоящая, через `mesid`
+ * (см. [cores/chat-history/index.js](../../cores/chat-history/index.js)), а
+ * не по счастливому совпадению порядка.
  */
 export const TIME_SYSTEM_PROMPT =
     'You are an in-world time tracker for a roleplay chat. Track only the fields below, ' +
     'using each note to decide how to format it:\n{fields}\n\n' +
+    'The last known in-world time is: {lastKnownTime}. Use it as your anchor point.\n\n' +
     'Estimate the time step using ONLY the newest exchange (the character\'s latest reply, at the end ' +
-    'of the context you are given): how long would plausibly pass for that one exchange to happen?\n\n' +
+    'of the message history you are given): how long would plausibly pass for that one exchange to happen?\n\n' +
     'Default to a SMALL step (seconds to a few minutes) unless the newest exchange explicitly signals ' +
     'a skip (e.g. "the next morning", "hours later", "after the long walk") or a scene transition.\n\n' +
     'Return ONLY a JSON object with exactly these keys: {fieldsJson}. No markdown, no explanation.';
 
 export const TIME_PROMPT =
-    'Recent known in-world time, oldest to most recent: {timeline}. This shows the actual pace time ' +
-    'has been moving at — extrapolate from it, don\'t invent a different pace.\n\n' +
-    'ROLEPLAY CONTEXT:\n{context}\n\n' +
-    'The roleplay text above is scene context only, not a log of elapsed time still to be counted — ' +
-    'everything up through the second-to-last message is already reflected in the timeline.\n\n' +
-    'The character just responded (see the end of the context above).';
+    'MESSAGE HISTORY, each reply marked with the in-world time recorded for it ("unknown" if not yet ' +
+    'determined for that specific reply):\n{annotatedHistory}\n\n' +
+    'The character just responded — see the LAST line above. Work out how much time that reply took.';
 
 export const TIME_PRESETS = Object.freeze([
     {
@@ -153,17 +169,27 @@ export function buildHistory(badges = {}) {
 }
 
 /**
- * Шкала для промпта. Первая точка — заданное пользователем начало: пока
- * ничего не натикало, модели всё равно надо от чего-то отсчитывать, иначе
- * она придумает дату сама.
+ * История сообщений для промпта — КАЖДАЯ реплика со своей меткой времени
+ * ПЕРЕД ней (или `unknown`, если для этого конкретного сообщения ещё не
+ * посчитана), а не оторванный от текста список отметок рядом с отдельной
+ * перепиской. `marks` — та же карта `{mesid: время}`, что и бейджи под
+ * сообщениями (см. doc-comment [createTimeModule()](#createTimeModule)):
+ * привязка настоящая, через `mesid`, а не по порядку.
+ *
+ * Системные сообщения выброшены — трекеру они такой же шум, каким были для
+ * `{context}` у generic-трекера. Длинная реплика обрезается — одна стена
+ * текста не должна вытеснять из окна остальную историю.
  */
-export function buildTimeline(history, startTime) {
-    const entries = (history ?? []).filter(Boolean).slice(-MAX_TIMELINE);
-    const marks = entries.length ? entries : [String(startTime ?? '').trim()].filter(Boolean);
-    if (!marks.length) return '"(not established yet)"';
-    // Кавычки и стрелка — форма Alpha: так модель видит, где кончается одна
-    // отметка и начинается другая, даже когда внутри есть запятые.
-    return marks.map(mark => `"${mark}"`).join(' → ');
+export function buildAnnotatedHistory(messages = [], marks = {}) {
+    const lines = messages
+        .filter(message => !message.isSystem)
+        .map(message => {
+            const mark = String(marks?.[message.mesid] ?? '').trim();
+            const speaker = message.isUser ? 'Player' : 'Character';
+            const text = String(message.text ?? '').slice(0, MESSAGE_CHARS);
+            return `[${mark || 'unknown'}] ${speaker}: ${text}`;
+        });
+    return lines.length ? lines.join('\n') : '(no messages yet)';
 }
 
 export function createTimeModule(host) {
@@ -246,24 +272,25 @@ export function createTimeModule(host) {
         return call('ui.notify', { tone, text });
     }
 
-    // --- Шкала: память чата, а не настройки ---------------------------------
+    // --- Шкала: через Ядро истории чата, не свой прямой storage.chatMemory --
+    //
+    // Отметки времени — ЧАСТНЫЙ случай общей задачи «привязать что-то к
+    // конкретному сообщению», и решает её теперь общее Ядро (см. его
+    // doc-comment), а не свой механизм этого Модуля: то же самое, чем с этого
+    // момента пользуется и generic-трекер для своих снимков полей.
 
     async function loadHistory() {
-        const marks = await call('storage.chatMemory.get', { namespace: MEMORY_NAMESPACE, key: BADGES_KEY, fallback: {} });
+        const marks = await call('chatHistory.annotations', { namespace: HISTORY_NAMESPACE });
         badges.set(marks.ok ? marks.value ?? {} : {});
     }
 
-    async function saveBadges(next) {
-        badges.set(next);
-        await call('storage.chatMemory.set', { namespace: MEMORY_NAMESPACE, key: BADGES_KEY, value: next });
-    }
-
-    /** Отметка под конкретным сообщением. `null` стирает — так реролл возвращает бейдж в пустое пульсирующее ожидание. */
+    /** Отметка под конкретным сообщением. `null` стирает — так реролл возвращает бейдж в пустое пульсирующее ожидание. Локальный сигнал обновляется сразу же (реактивность подвала не ждёт круга по шине), запись — тем же шагом. */
     async function markMessage(mesid, value) {
         if (mesid === null || mesid === undefined) return;
         const next = { ...badges.peek() };
         if (value) next[mesid] = value; else delete next[mesid];
-        await saveBadges(next);
+        badges.set(next);
+        await call('chatHistory.annotate', { namespace: HISTORY_NAMESPACE, mesid, value: value || null });
     }
 
 
@@ -372,8 +399,9 @@ export function createTimeModule(host) {
 
     /**
      * Один шаг времени. Именно здесь живёт специализация: Модуль сам собирает
-     * шкалу и подаёт её в опрос как `{timeline}`, а всё остальное — работа
-     * Ядра трекинга.
+     * ИСТОРИЮ С МЕТКАМИ (см. `buildAnnotatedHistory()`) и последнее известное
+     * время, подаёт их в опрос как `{annotatedHistory}`/`{lastKnownTime}`, а
+     * всё остальное — работа Ядра трекинга.
      */
     async function advance() {
         if (!enabled.peek() || busy.peek()) return null;
@@ -385,9 +413,14 @@ export function createTimeModule(host) {
         // прошлые остаются такими, какими были.
         label.set('');
         try {
+            const messagesResult = await call('chatHistory.messages', { limit: CONTEXT_LIMIT });
+            const messages = messagesResult.ok ? messagesResult.value ?? [] : [];
             const result = await call('tracking.poll', {
                 trackerId: TRACKER_ID,
-                vars: { timeline: buildTimeline(history.peek(), startTime.peek()) },
+                vars: {
+                    annotatedHistory: buildAnnotatedHistory(messages, badges.peek()),
+                    lastKnownTime: history.peek().at(-1) || startTime.peek(),
+                },
             });
             if (!result.ok) {
                 // Опрос не удался — возвращаем ПРОШЛУЮ отметку: она хотя бы
@@ -414,7 +447,8 @@ export function createTimeModule(host) {
         label.set('');
         // Отметки сообщений — единственное, что нужно стереть: шкала из них и
         // считается.
-        await saveBadges({});
+        badges.set({});
+        await call('chatHistory.clearAnnotations', { namespace: HISTORY_NAMESPACE });
         await call('tracking.reset', { trackerId: TRACKER_ID });
         await notify('ok', 'RP time cleared for this chat');
     }
