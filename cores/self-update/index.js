@@ -65,28 +65,56 @@ export function createSelfUpdateCore(host, {
         return entry?.type === 'global';
     }
 
+    /** Один запрос версии под конкретное предположение о типе установки. */
+    async function askVersion(global) {
+        const result = await service('stExtensions.version', { extensionName, global });
+        if (!result.ok) return { ok: false, reason: `${global ? 'global' : 'per-user'} lookup: ${result.error.message}` };
+        return {
+            ok: true,
+            status: {
+                checked: true,
+                global,
+                upToDate: Boolean(result.value?.isUpToDate),
+                currentCommitHash: result.value?.currentCommitHash || null,
+                currentBranchName: result.value?.currentBranchName || null,
+                remoteUrl: result.value?.remoteUrl || null,
+            },
+        };
+    }
+
     /**
      * `{ checked: false }` на всё, что мешает дать настоящий ответ, и вызывающий
      * обязан принять это как «идём дальше молча». Поля `currentCommitHash` и
      * `currentBranchName` ST отдаёт сама — Alpha их выбрасывала, а без них
      * сверить с GitHub нечего.
+     *
+     * **Догадка о типе установки ПРОВЕРЯЕТСЯ, а не принимается на веру.** От
+     * неё зависит, в какой папке ST будет искать расширение: у общей —
+     * `public/scripts/extensions/third-party`, у личной —
+     * `data/<пользователь>/extensions`. Промах означает 404 и полное молчание —
+     * ровно та болезнь Alpha, от которой `/discover` и спасал. Но `/discover`
+     * сам может быть недоступен, а его ответ мы обязаны были принять как
+     * окончательный — и тогда молчание возвращалось. Поэтому при отказе первой
+     * попытки пробуем ВТОРОЙ вариант: лишний запрос дешевле неработающего
+     * обновления.
+     *
+     * Причина отказа больше не теряется — `reason` доходит до панели. «Молчит,
+     * когда сказать нечего» слишком легко превращается в «молчит всегда», и
+     * отличить работающее обновление от сломанного становится нечем.
      */
     async function check() {
-        if (!extensionName) return { checked: false };
-        const global = await isGlobalInstall();
-        const result = await service('stExtensions.version', { extensionName, global });
-        if (!result.ok) {
-            log.info?.('[ST Module Engine (Beta)] Update check skipped (not a git install, or the check failed):', result.error.message);
-            return { checked: false };
+        if (!extensionName) {
+            return { checked: false, reason: 'Could not work out this extension\'s folder name from its script URL.' };
         }
-        return {
-            checked: true,
-            global,
-            upToDate: Boolean(result.value?.isUpToDate),
-            currentCommitHash: result.value?.currentCommitHash || null,
-            currentBranchName: result.value?.currentBranchName || null,
-            remoteUrl: result.value?.remoteUrl || null,
-        };
+        const guessed = await isGlobalInstall();
+        const first = await askVersion(guessed);
+        if (first.ok) return first.status;
+        const second = await askVersion(!guessed);
+        if (second.ok) return second.status;
+
+        const reason = `${first.reason}; ${second.reason}`;
+        log.info?.('[ST Module Engine (Beta)] Update check skipped (not a git install, or the check failed):', reason);
+        return { checked: false, reason };
     }
 
     /**
@@ -147,7 +175,7 @@ export function createSelfUpdateCore(host, {
         if (!force && await attemptedRecently()) return { outcome: 'cooling-down' };
 
         const status = await check();
-        if (!status.checked) return { outcome: 'unavailable' };
+        if (!status.checked) return { outcome: 'unavailable', reason: status.reason ?? null };
 
         // Сверка запускается ДО решения и её результат только пишется в
         // консоль: она наблюдатель, а не участник.

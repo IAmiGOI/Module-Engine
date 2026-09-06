@@ -209,15 +209,17 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         updateBusy.set(false);
         if (!result.ok) { updateTone.set('error'); updateText.set(result.error.message); await notify('error', `Update check failed: ${result.error.message}`); return; }
 
-        const { outcome, error, diagnosis } = result.value ?? {};
+        const { outcome, error, reason, diagnosis } = result.value ?? {};
         const mismatch = diagnosis?.applicable && !diagnosis.matches;
         if (outcome === 'updated') { updateTone.set('ok'); updateText.set('Updated — reloading SillyTavern…'); await notify('ok', 'Engine updated — reloading'); return; }
         if (outcome === 'failed') { updateTone.set('error'); updateText.set(error ?? 'Update failed.'); await notify('error', `Update failed: ${error ?? 'unknown reason'}`); return; }
         if (outcome === 'unavailable') {
             updateTone.set('error');
             // Самая частая причина — копия, положенная руками: git-эндпоинтов
-            // у такой установки нет вовсе. Говорим это прямо, а не «ошибка».
-            updateText.set('SillyTavern cannot check this copy — it is not a git install, or its update endpoints refused. Update the folder by hand.');
+            // у такой установки нет вовсе. Говорим это прямо, а не «ошибка», —
+            // и ДОСЛОВНО показываем, чем ответила ST: без этого «не работает
+            // обновление» невозможно отличить от «обновляться нечем».
+            updateText.set(`SillyTavern cannot check this copy — it is not a git install, or its update endpoints refused. Update the folder by hand.${reason ? ` (${reason})` : ''}`);
             await notify('error', 'Update check unavailable for this install');
             return;
         }
