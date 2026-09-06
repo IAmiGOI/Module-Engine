@@ -70,6 +70,7 @@ const DEFINITIONS = [{
             'tracking.trackers', 'tracking.configure', 'tracking.poll', 'tracking.reset',
             'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
             'model.workers.get', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
+            'ui.messageFooter.liveMesid',
         ],
     },
     create: host => createTimeModule(host),

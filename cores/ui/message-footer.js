@@ -241,6 +241,20 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
     /** Исторический синоним `attach()`: монтирование живёт внутри него — дерево нельзя смонтировать, пока неизвестно, ПОД КАКИМ сообщением оно окажется. */
     const render = () => attach();
 
+    /**
+     * Настоящее последнее отрисованное сообщение — ПРЯМО СЕЙЧАС. Существует
+     * для Модулей, которым нужно знать «куда писать» в момент, не совпадающий
+     * с чужим вызовом фабрики слота (RP Time — по завершении опроса модели, а
+     * не по факту рендера). Модуль не может спросить `stChat.*` сам: он не
+     * знает о Сервисах ничего, и не должен, — а это Ядро уже умеет вычислять
+     * ровно то же самое для собственного `attach()`. Раз посчитано здесь —
+     * DRY, а не второй источник истины о «что сейчас последнее».
+     */
+    async function liveMesid() {
+        const messages = await readMessages();
+        return messages.length ? messages[messages.length - 1].mesid : null;
+    }
+
     async function start() {
         started = true;
         for (const event of REDRAW_EVENTS) subscriptions.push(host.events.subscribe(event, () => { attach(); }));
@@ -265,6 +279,7 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
         host.own.register('ui.messageFooter.release', params => (params?.ownerId ? releaseAllOf(params.ownerId) : release(params?.slot))),
         host.own.register('ui.messageFooter.slots', () => SLOTS.map(slot => ({ slot, ownerId: slots.get(slot)?.ownerId ?? null }))),
         host.own.register('ui.messageFooter.attach', () => attach()),
+        host.own.register('ui.messageFooter.liveMesid', () => liveMesid()),
     ];
 
     return {
@@ -274,6 +289,7 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
         render,
         attach,
         start,
+        liveMesid,
         footerCount: () => footers.size,
         slots: () => SLOTS.map(slot => ({ slot, ownerId: slots.get(slot)?.ownerId ?? null })),
         stop: () => {
