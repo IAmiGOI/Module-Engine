@@ -18,6 +18,31 @@ test('setProp writes DOM-reflected properties (value/checked/...) directly, ever
     assert.equal(el.attributes['data-id'], '42');
 });
 
+test('setProp performs the real assignment on the FIRST write for a key, even if the live property coincidentally already reads as the target value — found live in the browser: a fresh <option> with no value attribute yet reads .value as "" via its own textContent fallback, exactly matching an intended empty default value, and a naive "skip if el[key] already equals value" check left the attribute never actually set — so once a label got appended, .value silently drifted to the label text', () => {
+    let assignCount = 0;
+    const el = {};
+    Object.defineProperty(el, 'value', {
+        get() { return ''; }, // coincidentally already reads as the target, like a fresh <option>
+        set() { assignCount += 1; },
+    });
+
+    domOperations.setProp(el, 'value', '');
+
+    assert.equal(assignCount, 1, 'the assignment must happen for real on the first write for a key, regardless of what the live property currently reads');
+});
+
+test('setProp still skips a REDUNDANT write once WE already wrote this exact value ourselves — the original optimization (typing must not reset the caret to the end on every keystroke) survives the fix above', () => {
+    let assignCount = 0;
+    let stored = '';
+    const el = {};
+    Object.defineProperty(el, 'value', { get() { return stored; }, set(v) { stored = v; assignCount += 1; } });
+
+    domOperations.setProp(el, 'value', 'hello');
+    domOperations.setProp(el, 'value', 'hello'); // same value, second call
+
+    assert.equal(assignCount, 1, 'only the first write should actually assign; repeating the same value we ourselves already wrote must be a no-op');
+});
+
 test('setProp treats "class" as className, and "style" as an object merge', () => {
     const el = makeFakeDocument().createElement('div');
 

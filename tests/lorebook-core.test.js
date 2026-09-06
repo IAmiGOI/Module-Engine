@@ -258,6 +258,74 @@ test('updateEntry() on an unknown uid fails clearly instead of silently no-op-in
     assert.match(result.error.message, /no known entry/);
 });
 
+// --- Read-before-write safety: real ST's loadWorldInfo() returns `null` on
+// ANY failed HTTP response, not only "book does not exist" (verified against
+// the real world-info.js source) — a transient hiccup must never be read as
+// "the book is empty" and written back that way, wiping real content. ------
+
+test('updateEntry() refuses to write when the live re-read of the book fails, instead of silently saving an empty book over real content', async () => {
+    const { engine, fake } = buildEngine({
+        rawState: { selectedWorldInfo: ['Global'] },
+        world: { Global: { entries: { 0: { uid: 0, comment: 'Keep me', key: [], content: 'important lore' } } } },
+    });
+    await callAs(engine, 'lorebook.scan', {});
+    fake.load = async () => null; // simulates ST's real "HTTP response not ok" failure signal
+
+    const result = await callAs(engine, 'lorebook.updateEntry', { uid: 0, patch: { content: 'x' } });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error.message, /refusing to write blind/);
+    assert.equal(fake.saveCalls.length, 0, 'must NEVER call save() on a failed read — that would be the wipe');
+    assert.deepEqual(fake.books.get('Global').entries[0].content, 'important lore', 'the real entry must be untouched');
+});
+
+test('deleteEntry() also refuses to write when the live re-read fails — a transient hiccup must not erase the whole book', async () => {
+    const { engine, fake } = buildEngine({
+        rawState: { selectedWorldInfo: ['Global'] },
+        world: { Global: { entries: { 0: { uid: 0, comment: 'Keep me', key: [], content: 'important lore' }, 1: { uid: 1, comment: 'Also keep', key: [], content: 'more lore' } } } },
+    });
+    await callAs(engine, 'lorebook.scan', {});
+    fake.load = async () => null;
+
+    const result = await callAs(engine, 'lorebook.deleteEntry', { uid: 0 });
+
+    assert.equal(result.ok, false);
+    assert.equal(fake.saveCalls.length, 0, 'must NEVER call save() on a failed read');
+    assert.equal(Object.keys(fake.books.get('Global').entries).length, 2, 'BOTH entries must survive — neither the target nor its sibling');
+});
+
+test('createEntry() into an EXISTING book with real entries also refuses on a failed read, rather than replacing it with a book of just the one new entry', async () => {
+    const { engine, fake } = buildEngine({
+        rawState: {},
+        world: { SomeBook: { entries: { 0: { uid: 0, comment: 'Keep me', key: [], content: 'important lore' } } } },
+    });
+    await callAs(engine, 'lorebook.scan', {});
+    fake.load = async () => null;
+
+    const result = await callAs(engine, 'lorebook.createEntry', { patch: { comment: 'New' }, book: 'SomeBook' });
+
+    assert.equal(result.ok, false);
+    assert.equal(fake.saveCalls.length, 0);
+    assert.equal(Object.keys(fake.books.get('SomeBook').entries).length, 1, 'the pre-existing entry must survive untouched');
+});
+
+test('updateEntry() refuses when the uid vanished from the real book between scan() and write — a stale local index must not resurrect a fabricated entry', async () => {
+    const { engine, fake } = buildEngine({
+        rawState: { selectedWorldInfo: ['Global'] },
+        world: { Global: { entries: { 0: { uid: 0, comment: 'Will vanish', key: [], content: 'x' } } } },
+    });
+    await callAs(engine, 'lorebook.scan', {});
+    // Someone else (native ST editor) removed uid 0 for real, but our local
+    // index (`byUid`) has not re-scanned yet — the classic stale-cache shape.
+    fake.books.set('Global', { entries: {} });
+
+    const result = await callAs(engine, 'lorebook.updateEntry', { uid: 0, patch: { content: 'x' } });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error.message, /no longer in/);
+    assert.equal(fake.saveCalls.length, 0);
+});
+
 test('deleteEntry() removes the entry and re-scans; a deleted, still-published entry gets unpublished from real ST too', async () => {
     const { engine, macroCalls } = buildEngine({
         rawState: { selectedWorldInfo: ['Global'] },
