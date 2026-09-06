@@ -508,7 +508,7 @@
        overflow: hidden обязателен: без него ручка resize не появляется. */
     resize: both;
     overflow: hidden;
-    min-width: 190px;
+    min-width: 210px;
     min-height: 44px;
     max-width: calc(100vw - 32px);
     max-height: calc(100vh - 32px);
@@ -520,7 +520,7 @@
     box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
     color: var(--SmartThemeBodyColor, #dfe3ea);
     font-family: var(--mainFontFamily, inherit);
-    font-size: 12.5px;
+    font-size: 14px;
 }
 /* Когда позицию задали перетаскиванием, правый/нижний якорь надо снять —
    иначе окно растягивается между двумя противоположными краями. */
@@ -540,7 +540,7 @@
     border-radius: 10px 10px 0 0;
 }
 .stme-floating-panel-head:active { cursor: grabbing; }
-.stme-floating-panel-head strong { flex: 1; color: var(--SmartThemeQuoteColor, #8da8ff); font-size: 12px; }
+.stme-floating-panel-head strong { flex: 1; color: var(--SmartThemeQuoteColor, #8da8ff); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
 .stme-floating-panel-grip { flex-shrink: 0; opacity: .45; font-size: 12px; line-height: 1; }
 .stme-floating-panel-btn {
     flex-shrink: 0;
@@ -562,10 +562,56 @@
 /* Свёрнутое окно не должно тянуться вниз пустотой и не нуждается в ручке. */
 .stme-floating-panel:has(> .stme-floating-panel-body[hidden]) { height: auto !important; resize: none; }
 
-.stme-hud-row { display: flex; align-items: baseline; gap: 8px; }
-.stme-hud-name { flex-shrink: 0; opacity: .6; font-size: 11px; }
-.stme-hud-value { font-family: var(--monoFontFamily, ui-monospace, monospace); overflow-wrap: anywhere; }
-.stme-hud-empty { opacity: .55; }
+/*
+   Строка состояния читается как показание в игре, а не как строка лога:
+   подпись сверху мелко и капителью, значение под ней — крупно и жирно.
+   Раньше и то и другое стояло в одну строку одинаково мелким кеглем, и
+   отличить название от значения можно было только по цвету — то есть почти
+   никак. Это ГЛАВНОЕ, ради чего окно вообще открывают: оно обязано читаться
+   мельком.
+*/
+.stme-hud-row {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 5px 0;
+}
+.stme-hud-row + .stme-hud-row { border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #444) 35%, transparent); }
+.stme-hud-name {
+    opacity: .55;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}
+.stme-hud-value {
+    /* Не моноширинный: у большинства тем он заметно уже и хуже читается.
+       Цифры всё равно выравниваются — за это отвечает tabular-nums. */
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+    color: var(--SmartThemeQuoteColor, #8da8ff);
+    overflow-wrap: anywhere;
+}
+.stme-hud-empty { opacity: .55; font-size: 12px; }
+/* Заголовок группы — только когда трекеров несколько; у одного он повторял бы
+   заголовок самого окна. */
+.stme-hud-group {
+    margin-top: 8px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 40%, transparent);
+    color: var(--SmartThemeQuoteColor, #8da8ff);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+.stme-hud-group:first-child { margin-top: 0; }
+/* Строка сразу после заголовка группы уже отделена им самим. */
+.stme-hud-group + .stme-hud-row { border-top: 0; }
+.stme-hud-value-muted { opacity: .5; font-weight: 400; }
 
 /* --- Полоса под сообщением (cores/ui/message-footer.js) ------------------- */
 /*
