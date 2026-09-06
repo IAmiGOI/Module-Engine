@@ -18,7 +18,11 @@ const DISCOVER_ENDPOINT = '/api/extensions/discover';
 const VERSION_ENDPOINT = '/api/extensions/version';
 const UPDATE_ENDPOINT = '/api/extensions/update';
 
-export function registerStExtensionsService(bus, { getContext, fetch: fetchImpl = globalThis.fetch } = {}) {
+// `fetch` привязан к глобальному объекту: браузерный `fetch` требует, чтобы
+// `this` был окном, и вызов «голой» ссылки отвечает «Illegal invocation» — то
+// есть проверка обновления падала бы на первом же запросе и молча превращалась
+// в «проверить нечего».
+export function registerStExtensionsService(bus, { getContext, fetch: fetchImpl = globalThis.fetch?.bind(globalThis) } = {}) {
     function headers(extra = {}) {
         return { ...extra, ...(getContext()?.getRequestHeaders?.() ?? {}) };
     }

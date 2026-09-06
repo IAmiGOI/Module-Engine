@@ -255,3 +255,28 @@ test('a Core with no network right cannot reach GitHub — self-update is not ex
 
     assert.equal(diagnosis.applicable, false);
 });
+
+test('the ST extensions Сервис calls fetch WITH a receiver — an unbound browser fetch answers "Illegal invocation"', async () => {
+    const engine = createEngine();
+    // Браузерный `fetch` требует, чтобы `this` был окном. В Node он к этому
+    // равнодушен, поэтому строгость воспроизводим сами — иначе проверка не
+    // ловила бы ровно тот отказ, из-за которого самообновление не работало
+    // вообще и молча.
+    const original = globalThis.fetch;
+    let receiver = 'never called';
+    globalThis.fetch = function strictFetch() {
+        receiver = this;
+        if (this !== globalThis) throw new TypeError('Illegal invocation');
+        return Promise.resolve({ ok: true, json: async () => [{ type: 'global', name: 'third-party/Module-Engine' }] });
+    };
+    try {
+        registerStExtensionsService(engine.buses.services, { getContext: () => ({}) });
+        const core = createSelfUpdateCore(engine.registerCaller('core.selfUpdate', 'cores', { tier: 'official', networkAccess: true }),
+            { extensionName: 'third-party/Module-Engine', owner: 'IAmiGOI', repo: 'Module-Engine' });
+
+        assert.equal(await core.isGlobalInstall(), true);
+        assert.equal(receiver, globalThis, 'fetch получил окно, а не undefined');
+    } finally {
+        globalThis.fetch = original;
+    }
+});
