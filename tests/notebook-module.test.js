@@ -9,7 +9,7 @@ import { createNotificationsCore } from '../cores/ui/notifications.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import {
     createNotebookModule, clampNoteSettings, addNote, updateNote, removeNote,
-    buildNotebookPrompt, computeInsertIndex, MODULE_ID, DEFAULT_SETTINGS,
+    buildNotebookPrompt, computeInsertIndex, MODULE_ID, DEFAULT_SETTINGS, NOTEBOOK_TOOL_SCHEMA,
 } from '../modules/notebook/index.js';
 
 // --- Чистые функции ---------------------------------------------------------
@@ -84,6 +84,36 @@ test('buildNotebookPrompt() shows each note\'s id, so the model has something to
     assert.match(text, /\[note_1\] Plan: Sneak in at dusk/);
 });
 
+// --- Схема инструмента: жалоба пользователя была "AI почти всегда забывает --
+// title/content разом, и вызывает инструмент реже, чем стоило бы" — оба —
+// симптом слабого промпта, проверяем саму схему, а не только поведение.
+
+test('NOTEBOOK_TOOL_SCHEMA requires title AND content UNCONDITIONALLY, not only for write — the model must never send one without the other', () => {
+    assert.deepEqual(NOTEBOOK_TOOL_SCHEMA.parameters.required, ['action', 'title', 'content']);
+});
+
+test('NOTEBOOK_TOOL_SCHEMA.description explains the notebook\'s actual USE CASES (goal/needs/state/secrets/plans), not just the mechanics of write/update', () => {
+    const description = NOTEBOOK_TOOL_SCHEMA.description.toLowerCase();
+    for (const keyword of ['goal', 'need', 'current state', 'secret', 'plan']) {
+        assert.match(description, new RegExp(keyword), `description should mention "${keyword}"`);
+    }
+});
+
+test('NOTEBOOK_TOOL_SCHEMA.description tells the model to use the tool PROACTIVELY, not just when asked', () => {
+    assert.match(NOTEBOOK_TOOL_SCHEMA.description, /proactiv/i);
+});
+
+test('NOTEBOOK_TOOL_SCHEMA.description tells the model to check for an existing note before creating a duplicate', () => {
+    assert.match(NOTEBOOK_TOOL_SCHEMA.description, /duplicat/i);
+});
+
+test('every parameter the model actually fills in (action/title/content/note_id) has its own description — not a bare, unexplained type', () => {
+    for (const key of ['action', 'title', 'content', 'note_id']) {
+        const property = NOTEBOOK_TOOL_SCHEMA.parameters.properties[key];
+        assert.ok(property.description && property.description.length > 10, `"${key}" needs a real description`);
+    }
+});
+
 test('computeInsertIndex() at depth 0 means "right before what the model is about to say" — the very end', () => {
     assert.equal(computeInsertIndex(10, 0), 10);
 });
@@ -139,6 +169,16 @@ test('load() registers exactly ONE real ST tool, under the name the user sees in
     await module.load();
 
     assert.deepEqual([...tools.keys()], ['Notebook']);
+});
+
+test('the REGISTERED tool really carries NOTEBOOK_TOOL_SCHEMA, not a copy that drifted from it', async () => {
+    const { tools, module } = buildEngine();
+
+    await module.load();
+
+    const registered = tools.get('Notebook');
+    assert.equal(registered.description, NOTEBOOK_TOOL_SCHEMA.description);
+    assert.deepEqual(registered.parameters, NOTEBOOK_TOOL_SCHEMA.parameters);
 });
 
 test('the tool\'s write action creates a real note the panel can see too — same store, one source of truth', async () => {
