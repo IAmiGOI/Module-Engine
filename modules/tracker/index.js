@@ -510,6 +510,45 @@ export function createTrackerModule(host) {
         return h('div', { class: 'stme-hud-root' }, computed(() => (hudVisible() ? hudPanel() : null)));
     }
 
+    /**
+     * Одно ПОКАЗАНИЕ на строку — как статы в игре, а не как строка лога.
+     *
+     * Без шаблона отображения каждое поле получает свою строку: подпись —
+     * имя поля, значение — само значение. Раньше все поля склеивались в одну
+     * строку через `·`, и «health: 87 / 100 · location: Tavern doorway»
+     * приходилось читать глазами по слогам, хотя окно открывают ровно затем,
+     * чтобы взглянуть мельком.
+     *
+     * С шаблоном — одна строка на трекер: пользователь сам сказал, как это
+     * должно выглядеть, и разбирать его формат обратно на поля было бы
+     * самоуправством.
+     */
+    function hudRows(record) {
+        const template = String(record.displayTemplate() ?? '').trim();
+        if (template) {
+            return [h('div', { key: record.key, class: 'stme-hud-row' },
+                h('span', { class: 'stme-hud-name' }, record.id()),
+                h('span', { class: 'stme-hud-value' }, buildLabel(record.values(), template)),
+            )];
+        }
+        const fields = record.values();
+        if (!fields.length) {
+            return [h('div', { key: record.key, class: 'stme-hud-row' },
+                h('span', { class: 'stme-hud-name' }, record.id()),
+                h('span', { class: 'stme-hud-value stme-hud-value-muted' }, 'no fields'),
+            )];
+        }
+        // Заголовок группы нужен только когда трекеров несколько: у одного он
+        // повторял бы заголовок самого окна.
+        const heading = trackers().filter(item => item.enabled() && item.id().trim()).length > 1
+            ? [h('div', { key: `${record.key}:head`, class: 'stme-hud-group' }, record.id())]
+            : [];
+        return [...heading, ...fields.map(field => h('div', { key: `${record.key}:${field.name}`, class: 'stme-hud-row' },
+            h('span', { class: 'stme-hud-name' }, field.name),
+            h('span', { class: 'stme-hud-value' }, String(field.value ?? '—')),
+        ))];
+    }
+
     function hudPanel() {
         return FloatingPanel('Tracked state', {
             position: hudPosition,
@@ -541,12 +580,9 @@ export function createTrackerModule(host) {
             },
         },
             computed(() => {
-                const rows = trackers().filter(record => record.enabled() && record.id().trim());
-                if (!rows.length) return h('small', { class: 'stme-hud-empty' }, 'Nothing tracked yet.');
-                return rows.map(record => h('div', { key: record.key, class: 'stme-hud-row' },
-                    h('span', { class: 'stme-hud-name' }, record.id()),
-                    h('code', { class: 'stme-hud-value' }, buildLabel(record.values(), record.displayTemplate())),
-                ));
+                const shown = trackers().filter(record => record.enabled() && record.id().trim());
+                if (!shown.length) return h('small', { class: 'stme-hud-empty' }, 'Nothing tracked yet.');
+                return shown.flatMap(record => hudRows(record));
             }),
         );
     }

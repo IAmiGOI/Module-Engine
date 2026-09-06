@@ -400,3 +400,69 @@ test('saving the user\'s trackers does NOT wipe the ones other Modules own — c
     assert.deepEqual(trackingCore.trackers().map(tracker => tracker.id).sort(), ['engine', 'mine', 'rp-time']);
     assert.equal(trackingCore.trackers().find(tracker => tracker.id === 'rp-time').ownerId, 'module.time', 'чужой трекер вернулся в Ядро нетронутым');
 });
+
+// --- Плавающая панель: показание, а не строка лога --------------------------
+
+/** Пары «подпись → значение» из плавающей панели. Дерево — данные, DOM для этого не нужен. */
+function hudReadings(module) {
+    const rows = findAll(module.hud(), node => node.props?.class === 'stme-hud-row');
+    const text = node => {
+        const child = node.children[0];
+        return typeof child === 'function' ? child() : child;
+    };
+    return rows.map(row => {
+        const name = findAll(row, node => node.props?.class === 'stme-hud-name')[0];
+        const value = findAll(row, node => String(node.props?.class ?? '').startsWith('stme-hud-value'))[0];
+        return [text(name), text(value)];
+    });
+}
+
+test('each tracked FIELD is its own reading in the floating panel — one run-on line is not something you read at a glance', async () => {
+    const { trackingCore, module } = buildEngine();
+    await trackingCore.configureTrackers([
+        { id: 'hero', kind: 'user', workerId: 'main', triggers: [], fields: [
+            { name: 'health', prompt: 'HP', default: '87 / 100' },
+            { name: 'location', prompt: 'where', default: 'Tavern doorway' },
+        ] },
+    ]);
+    await module.load();
+
+    assert.deepEqual(hudReadings(module), [['health', '87 / 100'], ['location', 'Tavern doorway']]);
+});
+
+test('a tracker WITH a display template keeps its own one-line form — the user said how it should look', async () => {
+    const { trackingCore, module } = buildEngine();
+    await trackingCore.configureTrackers([
+        { id: 'hero', kind: 'user', workerId: 'main', triggers: [], fields: [
+            { name: 'health', prompt: 'HP', default: 87 },
+            { name: 'location', prompt: 'where', default: 'Tavern' },
+        ] },
+    ]);
+    await module.load();
+    module.trackers()[0].displayTemplate.set('❤ {health} · 📍 {location}');
+
+    assert.deepEqual(hudReadings(module), [['hero', '❤ 87 · 📍 Tavern']]);
+});
+
+test('with SEVERAL trackers each gets a heading, so two "health" readings are not mistaken for one another', async () => {
+    const { trackingCore, module } = buildEngine();
+    await trackingCore.configureTrackers([
+        { id: 'hero', kind: 'user', workerId: 'main', triggers: [], fields: [{ name: 'health', prompt: '', default: 87 }] },
+        { id: 'rival', kind: 'user', workerId: 'main', triggers: [], fields: [{ name: 'health', prompt: '', default: 12 }] },
+    ]);
+    await module.load();
+
+    const groups = findAll(module.hud(), node => node.props?.class === 'stme-hud-group')
+        .map(node => (typeof node.children[0] === 'function' ? node.children[0]() : node.children[0]));
+    assert.deepEqual(groups, ['hero', 'rival']);
+});
+
+test('a SINGLE tracker gets no heading — it would only repeat the window\'s own title', async () => {
+    const { trackingCore, module } = buildEngine();
+    await trackingCore.configureTrackers([
+        { id: 'hero', kind: 'user', workerId: 'main', triggers: [], fields: [{ name: 'health', prompt: '', default: 87 }] },
+    ]);
+    await module.load();
+
+    assert.deepEqual(findAll(module.hud(), node => node.props?.class === 'stme-hud-group'), []);
+});

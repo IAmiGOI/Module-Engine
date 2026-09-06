@@ -8,7 +8,7 @@ import { createSettingsCore } from '../cores/settings/index.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
-import { createTimeModule, buildTimeLabel, buildTimeline, TIME_PRESETS, MODULE_ID } from '../modules/time/index.js';
+import { createTimeModule, buildTimeLabel, buildTimeline, buildHistory, TIME_PRESETS, MODULE_ID } from '../modules/time/index.js';
 
 // --- Чистые функции ---------------------------------------------------------
 
@@ -126,17 +126,23 @@ test('advancing sends the TIMELINE to the model — that is the whole specialisa
 });
 
 test('each advance extends the timeline, so the model sees the PACE and not just a point', async () => {
-    const { module, prompts } = buildEngine();
+    const { module, prompts, claims } = buildEngine();
     await module.load();
     module.applyPreset('clock-only'); // поддельная модель отвечает только временем и периодом
+    // Каждый шаг относится к СВОЕМУ сообщению — именно так Ядро подвала и
+    // сообщает Модулю, под каким сообщением сейчас живой бейдж.
+    const liveAt = mesid => claims[0].node({ mesid: String(mesid), isUser: false, live: true });
 
+    liveAt(1);
     await module.advance();
+    liveAt(2);
     await module.advance();
 
     // Вторая просьба к модели уже содержит первую отметку — именно этого и не
     // хватало Alpha, пока она посылала один голый «текущий момент».
     assert.match(prompts.at(1), /oldest to most recent: "11:40 \(Morning\)"/);
 
+    liveAt(3);
     await module.advance();
 
     // А к третьей набралась настоящая ЛИНИЯ, по которой виден темп.
@@ -144,11 +150,13 @@ test('each advance extends the timeline, so the model sees the PACE and not just
 });
 
 test('the same value twice does not pad the timeline with duplicates', async () => {
-    const { module } = buildEngine({ replies: ['{"time": "11:40", "period": "Morning"}'] });
+    const { module, claims } = buildEngine({ replies: ['{"time": "11:40", "period": "Morning"}'] });
     await module.load();
     module.applyPreset('clock-only');
 
+    claims[0].node({ mesid: '1', isUser: false, live: true });
     await module.advance();
+    claims[0].node({ mesid: '2', isUser: false, live: true });
     await module.advance();
 
     assert.deepEqual(module.history(), ['11:40 (Morning)']);
@@ -187,8 +195,9 @@ test('disabled, it advances nothing at all', async () => {
 });
 
 test('resetting clears this chat\'s timeline — a new story starts from the configured beginning', async () => {
-    const { module } = buildEngine();
+    const { module, claims } = buildEngine();
     await module.load();
+    claims[0].node({ mesid: '1', isUser: false, live: true });
     await module.advance();
     assert.equal(module.history().length, 1);
 
@@ -199,15 +208,16 @@ test('resetting clears this chat\'s timeline — a new story starts from the con
 });
 
 test('the timeline is remembered per CHAT, not in settings — another chat has its own clock', async () => {
-    const { module, engine } = buildEngine();
+    const { module, engine, claims } = buildEngine();
     await module.load();
     module.applyPreset('clock-only');
+    claims[0].node({ mesid: '4', isUser: false, live: true });
     await module.advance();
 
     const probe = engine.registerCaller('probe', 'cores', { tier: 'official' });
-    const stored = await new Promise(resolve => probe.own.subscribe('storage.chatMemory.get', { params: { namespace: MODULE_ID, key: 'timeline', fallback: [] } }, resolve));
+    const stored = await new Promise(resolve => probe.own.subscribe('storage.chatMemory.get', { params: { namespace: MODULE_ID, key: 'badges', fallback: {} } }, resolve));
 
-    assert.deepEqual(stored.value, ['11:40 (Morning)'], 'лежит в памяти ЧАТА');
+    assert.deepEqual(stored.value, { 4: '11:40 (Morning)' }, 'лежит в памяти ЧАТА, отметкой на сообщение');
 });
 
 test('applying a preset swaps fields, start and template together — they must never drift apart', async () => {
@@ -329,4 +339,36 @@ test('merely BROWSING existing swipes changes nothing — ST fires the same even
     await new Promise(resolve => setTimeout(resolve, 0));
 
     assert.equal(module.badges()['4'], '11:40 (Morning)');
+});
+
+test('a reroll ROLLS THE CLOCK BACK — the timeline and the card return to the previous message', async () => {
+    const { engine, module, claims, prompts } = buildEngine();
+    await module.load();
+    module.applyPreset('clock-only');
+    const liveAt = mesid => claims[0].node({ mesid: String(mesid), isUser: false, live: true });
+
+    liveAt(1);
+    await module.advance();          // 11:40
+    liveAt(2);
+    await module.advance();          // 13:05
+    assert.deepEqual(module.history(), ['11:40 (Morning)', '13:05 (Afternoon)']);
+
+    // Реролл сообщения 2: свайп + начавшаяся генерация.
+    engine.events.emit('st.messageSwiped');
+    engine.events.emit('generation.beforeSend');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(module.history(), ['11:40 (Morning)'], 'отброшенный вариант ушёл и из шкалы, а не только из бейджа');
+    assert.equal(module.label(), '11:40 (Morning)', 'карточка вернулась к времени предыдущего сообщения');
+
+    await module.advance();
+
+    // И новый опрос отсчитывает от 11:40, а не от отброшенного 13:05.
+    assert.match(prompts.at(-1), /oldest to most recent: "11:40 \(Morning\)"\./);
+});
+
+test('buildHistory() reads the timeline off the message marks, in message order and without repeats', () => {
+    assert.deepEqual(buildHistory({ 10: 'c', 2: 'b', 1: 'a' }), ['a', 'b', 'c'], 'порядок ЧИСЛОВОЙ: иначе «10» встало бы между «1» и «2»');
+    assert.deepEqual(buildHistory({ 1: 'a', 2: 'a', 3: 'b' }), ['a', 'b'], 'подряд идущий повтор не даёт второй точки');
+    assert.deepEqual(buildHistory({}), []);
 });
