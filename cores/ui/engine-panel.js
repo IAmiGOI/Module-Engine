@@ -708,7 +708,15 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
                 'Old chat history is folded into a pyramid of summaries — each level compresses several of the level below — so the model keeps the gist of the past without paying its full token cost. The newest messages always stay untouched, real text; the protected window below sets how many.'),
             Row(
                 Field('Protected window', NumberInput(summaryProtectedWindow, { min: 1, max: 2000 }), { hint: 'How many of the newest messages never get folded.' }),
-                Field('Worker', TextInput(summaryWorkerId, { placeholder: 'leave blank for the default connection' })),
+                // Тот же список, что «Model connection» у Tracker'а
+                // (modules/tracker/index.js) — реальные подключения из
+                // `workers` (Model connections card в этой же панели), а не
+                // строка, куда id воркера пришлось бы переписывать руками и
+                // легко было бы опечататься/забыть, что он вообще переименован.
+                Field('Worker', Select(summaryWorkerId, computed(() => [
+                    { value: '', label: 'Default (any connection)' },
+                    ...workers().map(record => ({ value: record.id(), label: record.id() })),
+                ]))),
             ),
             h('div', { class: 'stme-summary-levels' },
                 computed(() => summaryLevels().map((record, index) => summaryLevelRow(record, index))),
