@@ -811,3 +811,10 @@
     0%, 100% { border-color: var(--stme-warn-ink); }
     50% { border-color: color-mix(in srgb, var(--stme-warn-ink) 35%, transparent); }
 }
+
+/* --- Модуль «Notebook» (modules/notebook/index.js) ------------------------- */
+.stme-note-editor { display: flex; flex-direction: column; gap: 8px; }
+.stme-note-list { display: flex; flex-direction: column; gap: 6px; }
+.stme-note-title { flex: 1; min-width: 120px; font-size: 12.5px; }
+.stme-note-meta { flex-shrink: 0; opacity: .55; font-size: 10.5px; }
+.stme-note-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; opacity: .9; line-height: 1.5; }
