@@ -1,4 +1,5 @@
 import { createEngine } from '../libraries/shared/engine.js';
+import { request } from '../libraries/shared/request.js';
 import { registerDomService } from '../services/dom.js';
 import { registerHttpService } from '../services/http.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
@@ -73,7 +74,11 @@ const DEFINITIONS = [{
     create: host => createTimeModule(host),
 }];
 
-function createModuleRegistry({ engine, uiModules, panelSettled, onChanged = () => {} }) {
+/** Где реестр помнит, что было включено. Неймспейс Раннера, а не Модуля: это состояние ЗАПУСКА, а не настройка кого-то из них. */
+const RUNNER_NAMESPACE = 'core.runner';
+const ENABLED_KEY = 'enabledModules';
+
+function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, storageHost, onChanged = () => {} }) {
     const live = new Map(); // id -> { instance, finalUi }
 
     /**
@@ -85,13 +90,54 @@ function createModuleRegistry({ engine, uiModules, panelSettled, onChanged = () 
      */
     async function attach() {
         await panelSettled();
+        // Ищем ВНУТРИ корня панели, а не по всему документу. Корень попадает
+        // на страницу позже — его вешает тот, кто собрал движок, — и поиск по
+        // `document` во время восстановления состава не находил ничего:
+        // Модули включались, слоты рисовались, а деревья оставались снаружи.
+        const root = panelRoot?.() ?? document;
         for (const [id, entry] of live) {
-            const slot = document.querySelector(`.stme-module-slot[data-module="${id}"]`);
+            const slot = root.querySelector(`.stme-module-slot[data-module="${id}"]`);
             if (slot && !slot.contains(entry.finalUi.getRoot())) slot.append(entry.finalUi.getRoot());
         }
     }
 
-    async function enable(id) {
+    /**
+     * Список включённых — в Ядро сохранения, тем же способом, что и всё
+     * остальное персистентное (см. persisted-list.js). Отдельного «Ядра
+     * состояния» для этого не нужно: `storage.settings` и есть Ядро
+     * сохранения, ему просто никто не рассказывал про состав Модулей.
+     *
+     * Пишем СПИСОК ЦЕЛИКОМ после каждой смены, а не по одному ключу на Модуль:
+     * иначе удалённый из сборки Модуль оставлял бы за собой вечный `false`.
+     */
+    function remember() {
+        return request(storageHost.own, 'storage.settings.set', {
+            params: { namespace: RUNNER_NAMESPACE, key: ENABLED_KEY, value: [...live.keys()] },
+        });
+    }
+
+    /**
+     * Восстановление состава при запуске. Зовётся ОДИН раз и явно — тем, кто
+     * собирает движок, и строго после панели: Модулю нужен слот, а слот
+     * появляется только когда панель отрисована.
+     *
+     * Незнакомый id молча пропускается: сборка могла измениться между
+     * запусками, и падать из-за Модуля, которого больше нет, — худшее из
+     * возможных поведений при старте.
+     */
+    async function restore() {
+        const result = await request(storageHost.own, 'storage.settings.get', {
+            params: { namespace: RUNNER_NAMESPACE, key: ENABLED_KEY, fallback: [] },
+        });
+        const wanted = (result.ok ? result.value ?? [] : []).filter(id => DEFINITIONS.some(item => item.id === id));
+        for (const id of wanted) {
+            try { await enable(id, { remember: false }); }
+            catch (error) { console.warn(`[ST Module Engine (Beta)] Could not bring back module "${id}":`, error); }
+        }
+        return wanted;
+    }
+
+    async function enable(id, { remember: shouldRemember = true } = {}) {
         if (live.has(id)) return true;
         const definition = DEFINITIONS.find(item => item.id === id);
         if (!definition) throw new Error(`module "${id}" is not installed.`);
@@ -115,6 +161,8 @@ function createModuleRegistry({ engine, uiModules, panelSettled, onChanged = () 
 
         onChanged();   // панель узнаёт о новом составе и рисует слот
         await attach(); // и только теперь в этот слот кладётся дерево Модуля
+        // Восстановление состава НЕ перезаписывает то, что само же читает.
+        if (shouldRemember) await remember();
         return true;
     }
 
@@ -127,6 +175,7 @@ function createModuleRegistry({ engine, uiModules, panelSettled, onChanged = () 
         uiModules.disable(id);
         live.delete(id);
         onChanged();
+        await remember();
         return true;
     }
 
@@ -136,6 +185,7 @@ function createModuleRegistry({ engine, uiModules, panelSettled, onChanged = () 
         instance: id => live.get(id)?.instance,
         enable,
         disable,
+        restore,
     };
 }
 
@@ -290,6 +340,10 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         engine,
         uiModules,
         panelSettled: () => panelUi?.settled() ?? Promise.resolve(),
+        panelRoot: () => panelUi?.getRoot() ?? null,
+        // Своя личность на Шине ядер: состав помнится через то же Ядро
+        // сохранения, что и всё остальное, а не отдельным ходом в обход.
+        storageHost: engine.registerCaller('core.runner', 'cores', { tier: 'official' }),
         onChanged: () => enginePanelRef?.refreshModules(),
     });
 
@@ -319,6 +373,10 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // хотя настройки на диске есть. Ровно это и случилось при первой попытке.
     panelUi = await enginePanel.open();
     await panelUi.settled();
+
+    // Состав Модулей — СТРОГО после панели: Модулю нужен слот, а слот рисует
+    // панель. До этого включённые Модули просто не переживали перезагрузку.
+    await modules.restore();
 
     await messageFooter.start();
 

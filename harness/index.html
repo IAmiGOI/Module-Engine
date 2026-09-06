@@ -31,6 +31,9 @@
     <span id="harnessGenerationResult"></span>
 </div>
 <!-- Разметка чата ТОЙ ЖЕ формы, что у настоящего ST (#chat > .mes[mesid] >
+     is_user/is_system строками "true"/"false", как их и пишет ST: без них
+     подвал считал бы репликой персонажа вообще всё, и отказ виджета от
+     сообщения пользователя здесь было бы нечем проверить.
      .mes_block): без неё полосу под сообщением проверить нечем, а подделка
      другой формы проверяла бы не то. -->
 <div class="harness-strip">
@@ -40,8 +43,8 @@
     <span id="harnessFooterState"></span>
 </div>
 <div id="chat">
-    <div class="mes" mesid="0"><div class="mes_block"><div class="mes_text">Player: I take a swing at the bandit.</div></div></div>
-    <div class="mes" mesid="1"><div class="mes_block"><div class="mes_text">Narrator: The blade bites deep. You stagger back, bleeding.</div></div></div>
+    <div class="mes" mesid="0" is_user="true" is_system="false"><div class="mes_block"><div class="mes_text">Player: I take a swing at the bandit.</div></div></div>
+    <div class="mes" mesid="1" is_user="false" is_system="false"><div class="mes_block"><div class="mes_text">Narrator: The blade bites deep. You stagger back, bleeding.</div></div></div>
 </div>
 <div id="app"></div>
 <script type="module" src="main.js"></script>
