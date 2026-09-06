@@ -7,10 +7,28 @@
  * `fetch` anywhere — the actual HTTP call is the Сервис HTTP's job
  * (services/http.js), reached through the Гейт для сети.
  *
- * Deliberately narrower than Alpha's sampler surface (no reasoning-mode/
- * OpenRouter-specific fields yet) — the essentials that make a `model.generate`
- * request meaningful across all three formats; can grow later if a real
- * caller needs more, per priority #1 (don't build ahead of actual need).
+ * **Ризонинг — три РАЗНЫХ настоящих API, ни одного общего поля.** Ни у
+ * Anthropic, ни у Google нет понятия "effort" вообще — только вкл/выкл и
+ * бюджет токенов; у OpenAI-совместимых форматов единого стандарта не
+ * существует в принципе, разные бэкенды понимают это поле по-разному (или
+ * не понимают вовсе — а строгий API на неопознанное поле может и вовсе
+ * отказать). Поэтому:
+ *  - **openai** — ризонинг уходит ТОЛЬКО на настоящий OpenRouter (проверка
+ *    по эндпоинту, `isOpenRouter()`), тем же unified `reasoning` полем, что
+ *    и в SideCar Alpha (`request.reasoningMode !== 'inherit'` — иначе
+ *    провайдер решает сам, и в тело не попадает вообще ничего). На "просто
+ *    OpenAI-совместимый" эндпоинт (в т.ч. настоящий api.openai.com) ничего
+ *    не уходит — сознательно, тот же выбор, что уже был в Alpha; настоящий
+ *    `reasoning_effort` у o-серии OpenAI можно добавить отдельно, если
+ *    реальный пользователь попросит именно его.
+ *  - **anthropic** — реальный `thinking: {type, budget_tokens}` (в Alpha
+ *    этого не было вовсе). `budget_tokens` у Anthropic обязан быть ≥ 1024 И
+ *    строго меньше `max_tokens` — оба ограничения проверены по документации
+ *    и применены здесь, а не оставлены как повод для непонятной ошибки от
+ *    самого Anthropic.
+ *  - **google** — реальный `thinkingConfig: {thinkingBudget}` (тоже не было
+ *    у Alpha): 0 выключает, -1 — «пусть модель решает сама» (бюджет не
+ *    задан), положительное число — явный бюджет.
  */
 
 const FORMATS = Object.freeze(['openai', 'anthropic', 'google']);
@@ -33,6 +51,29 @@ export function buildProviderRequest(worker, request) {
     return buildOpenAiRequest(worker, request);
 }
 
+/** OpenRouter — единственный openai-формат, чей unified `reasoning` мы знаем и на который согласны положиться (см. doc-comment файла). */
+function isOpenRouter(endpoint) {
+    return /openrouter\.ai/i.test(String(endpoint ?? ''));
+}
+
+function buildOpenAiReasoning(worker, request) {
+    // Молчим и на "не OpenRouter", и на что угодно, что НЕ прямое явное
+    // enabled/disabled — `inherit`, отсутствующее поле, любой мусор. Раньше
+    // здесь была проверка только на `!== 'inherit'`, и вызов с пустым/чужим
+    // `reasoningMode` (например прямой сбор запроса в обход
+    // `resolveGenerateRequest()`, как в тестах) молча уезжал как ВКЛЮЧЁННЫЙ
+    // ризонинг — ровно то, чего вызывающий никогда не просил.
+    if (!isOpenRouter(worker.endpoint)) return {};
+    if (request.reasoningMode !== 'enabled' && request.reasoningMode !== 'disabled') return {};
+    return {
+        reasoning: {
+            enabled: request.reasoningMode === 'enabled',
+            effort: request.reasoningEffort,
+            ...(request.reasoningBudget ? { max_tokens: request.reasoningBudget } : {}),
+        },
+    };
+}
+
 function buildOpenAiRequest(worker, request) {
     const url = /\/chat\/completions$/.test(worker.endpoint) ? worker.endpoint : `${trimTrailingSlash(worker.endpoint)}/chat/completions`;
     const headers = { 'Content-Type': 'application/json' };
@@ -46,8 +87,29 @@ function buildOpenAiRequest(worker, request) {
             temperature: request.temperature, top_p: request.topP, max_tokens: request.maxTokens,
             ...(request.topK ? { top_k: request.topK } : {}),
             ...(request.seed ? { seed: request.seed } : {}),
+            ...buildOpenAiReasoning(worker, request),
         }),
     };
+}
+
+/**
+ * Anthropic требует `budget_tokens` не меньше 1024 и строго меньше
+ * `max_tokens` — оба ограничения задокументированы у самого Anthropic;
+ * нарушить любое из них значит получить отказ на КАЖДЫЙ запрос с включённым
+ * ризонингом, а не полезный сигнал о том, что бюджет настроен неудачно.
+ * Молчим (не шлём `thinking` вовсе) и на `inherit`, и на что угодно, что не
+ * прямое явное `enabled`/`disabled` — та же защита, что у OpenAI-ветки.
+ */
+function buildAnthropicThinking(request) {
+    if (request.reasoningMode === 'disabled') return { thinking: { type: 'disabled' } };
+    if (request.reasoningMode !== 'enabled') return {};
+    // Если max_tokens сам меньше или равен минимально допустимому бюджету,
+    // валидного значения не существует В ПРИНЦИПЕ — отправить его всё равно
+    // значило бы гарантированно отказанный запрос вместо того, чтобы просто
+    // не включать ризонинг в этот раз.
+    if (request.maxTokens <= 1024) return {};
+    const budget = Math.min(Math.max(1024, request.reasoningBudget || 1024), request.maxTokens - 1);
+    return { thinking: { type: 'enabled', budget_tokens: budget } };
 }
 
 function buildAnthropicRequest(worker, request) {
@@ -60,8 +122,16 @@ function buildAnthropicRequest(worker, request) {
             top_p: request.topP, top_k: request.topK || undefined,
             system: request.systemPrompt || undefined,
             messages: [{ role: 'user', content: request.prompt }],
+            ...buildAnthropicThinking(request),
         }),
     };
+}
+
+/** Google: 0 — выключено, -1 — «пусть модель сама решает бюджет» (включено, но без явного числа), положительное число — явный бюджет. Молчим (никакого `thinkingConfig`) на `inherit` и на что угодно, что не прямое явное `enabled`/`disabled` — та же защита, что у остальных форматов. */
+function buildGoogleThinking(request) {
+    if (request.reasoningMode === 'disabled') return { thinkingConfig: { thinkingBudget: 0 } };
+    if (request.reasoningMode !== 'enabled') return {};
+    return { thinkingConfig: { thinkingBudget: request.reasoningBudget > 0 ? request.reasoningBudget : -1 } };
 }
 
 function buildGoogleRequest(worker, request) {
@@ -74,6 +144,7 @@ function buildGoogleRequest(worker, request) {
             generationConfig: {
                 temperature: request.temperature, topP: request.topP, topK: request.topK || undefined,
                 maxOutputTokens: request.maxTokens, ...(request.seed ? { seed: request.seed } : {}),
+                ...buildGoogleThinking(request),
             },
         }),
     };

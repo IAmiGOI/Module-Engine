@@ -7,19 +7,27 @@ const PERSISTENCE_NAMESPACE = 'core.models.internal';
 
 const REQUEST_DEFAULTS = Object.freeze({ systemPrompt: '', temperature: 0.7, maxTokens: 1000, topP: 1, topK: 0, seed: 0 });
 
+/** `inherit` — не трогать: провайдер решает сам, и в запрос не уходит вообще ничего про ризонинг (см. provider-request.js). Названия и смысл — те же, что в SideCar Alpha (`REASONING_MODE_OPTIONS`). */
+export const REASONING_MODES = Object.freeze(['inherit', 'enabled', 'disabled']);
+/** Смысла нет ни у Anthropic, ни у Google — эффорт понимает только OpenRouter'овский unified `reasoning`; для остальных полей это просто отправная точка на случай, если включат вручную. */
+export const REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
+
 /**
- * Пресеты сэмплера — только он, ни разу не про то, КАКОЙ воркер («сайдкар»)
- * возьмётся отвечать: воркера выбирает `dispatchQueue` сама (или пиннинг
- * через `workerId` — см. doc-comment Ядра ниже), это отдельный, уже решённый
- * вопрос. Ровно тот же приём, что `TIME_PRESETS` у Модуля «RP Time»: готовая
- * отправная точка одним нажатием, а не четыре ползунка вслепую, — но
- * подкрутить дальше вручную по-прежнему можно, пресет лишь заполняет поля.
+ * Пресеты сэмплера — и, теперь, ризонинга. Ни разу не про то, КАКОЙ воркер
+ * («сайдкар») возьмётся отвечать: воркера выбирает `dispatchQueue` сама (или
+ * пиннинг через `workerId` — см. doc-comment Ядра ниже), это отдельный, уже
+ * решённый вопрос. Ровно тот же приём, что `TIME_PRESETS` у Модуля «RP Time»:
+ * готовая отправная точка одним нажатием, а не восемь полей вслепую, — но
+ * подкрутить дальше вручную по-прежнему можно, пресет лишь заполняет их.
  *
- * Значения — не выдумка: те же самые границы (0–2 / 0–1 / 0–200), что были
- * проверены на практике в SideCar Alpha (core/sidecar-service.js). Четыре
- * пресета, не десять: у трекеров и без того узкая, предсказуемая работа
- * (строгий JSON), а не открытое творческое письмо, для которого раскладка
- * побогаче имела бы смысл.
+ * Сэмплерные значения — не выдумка: те же самые границы (0–2 / 0–1 / 0–200),
+ * что были проверены на практике в SideCar Alpha (core/sidecar-service.js).
+ * Ризонинг у "Deterministic"/"Precise" выключен НАМЕРЕННО, не забыт: это
+ * пресеты под трекеры и строгий JSON, а рассуждающая модель отвечает
+ * заметно дольше и на этом не выигрывает ничего. У "Balanced"/"Creative" —
+ * `inherit` (решает сам провайдер): включать ризонинг никому не в убыток
+ * (запрос его просит только если явно включён), но и настаивать на нём тоже
+ * незачем, раз задача не требует.
  */
 export const SAMPLER_PRESETS = Object.freeze([
     {
@@ -27,24 +35,28 @@ export const SAMPLER_PRESETS = Object.freeze([
         name: 'Deterministic (greedy)',
         description: 'Same input, same output every time — for anything that must parse the same way twice.',
         temperature: 0, topP: 1, topK: 1, maxTokens: 1000,
+        reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
     },
     {
         id: 'precise',
         name: 'Precise',
         description: 'Low temperature, mostly consistent — a safe default for trackers and strict JSON.',
         temperature: 0.2, topP: 0.9, topK: 0, maxTokens: 1000,
+        reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
     },
     {
         id: 'balanced',
         name: 'Balanced',
         description: 'A reasonable middle ground for most tasks.',
         temperature: 0.7, topP: 1, topK: 0, maxTokens: 1000,
+        reasoningMode: 'inherit', reasoningEffort: 'medium', reasoningBudget: 0,
     },
     {
         id: 'creative',
         name: 'Creative',
         description: 'Higher temperature — more varied wording, less predictable.',
         temperature: 1.1, topP: 0.95, topK: 0, maxTokens: 1000,
+        reasoningMode: 'inherit', reasoningEffort: 'medium', reasoningBudget: 0,
     },
 ]);
 
@@ -69,21 +81,31 @@ export function clampSamplerSettings(values = {}) {
     };
 }
 
+/** Тот же приём, отдельной функцией: ризонинг — самостоятельный набор настроек рядом с сэмплером, а не его часть, и клэмп у него свой (перечисление, а не диапазон, для двух из трёх полей). */
+export function clampReasoningSettings(values = {}) {
+    return {
+        reasoningMode: REASONING_MODES.includes(values.reasoningMode) ? values.reasoningMode : 'inherit',
+        reasoningEffort: REASONING_EFFORTS.includes(values.reasoningEffort) ? values.reasoningEffort : 'medium',
+        reasoningBudget: Math.round(clampNumber(values.reasoningBudget, 0, 32768, 0)),
+    };
+}
+
 /**
  * Defensive reader — any missing/malformed field falls back to a sane
  * default rather than reaching a provider with `undefined` in it.
  *
- * `worker` — сэмплер настроен НА ВОРКЕРЕ (его собственные temperature/topP/
- * topK/maxTokens, заполненные пресетом или руками в панели), а не одним
- * значением на весь движок: `REQUEST_DEFAULTS` остаётся только запасным
- * дном, если у воркера ничего не задано вовсе (свежедобавленный, пресет ещё
- * не применяли). Явный параметр САМОГО запроса (`params.temperature` и т.п.)
- * по-прежнему сильнее обоих — на этом уже стоит существующий пиннинг по
- * `workerId`, ломать его незачем.
+ * `worker` — сэмплер И ризонинг настроены НА ВОРКЕРЕ (его собственные поля,
+ * заполненные пресетом или руками в панели), а не одним значением на весь
+ * движок: `REQUEST_DEFAULTS` остаётся только запасным дном, если у воркера
+ * ничего не задано вовсе (свежедобавленный, пресет ещё не применяли). Явный
+ * параметр САМОГО запроса (`params.temperature` и т.п.) по-прежнему сильнее
+ * обоих — на этом уже стоит существующий пиннинг по `workerId`, ломать его
+ * незачем.
  */
 export function resolveGenerateRequest(params, worker) {
     const source = params ?? {};
     const samplerDefaults = clampSamplerSettings(worker);
+    const reasoningDefaults = clampReasoningSettings(worker);
     return {
         prompt: String(source.prompt ?? ''),
         systemPrompt: String(source.systemPrompt ?? REQUEST_DEFAULTS.systemPrompt),
@@ -92,6 +114,9 @@ export function resolveGenerateRequest(params, worker) {
         topP: Number.isFinite(source.topP) ? source.topP : samplerDefaults.topP,
         topK: Number.isFinite(source.topK) ? source.topK : samplerDefaults.topK,
         seed: Number.isFinite(source.seed) ? source.seed : REQUEST_DEFAULTS.seed,
+        reasoningMode: REASONING_MODES.includes(source.reasoningMode) ? source.reasoningMode : reasoningDefaults.reasoningMode,
+        reasoningEffort: REASONING_EFFORTS.includes(source.reasoningEffort) ? source.reasoningEffort : reasoningDefaults.reasoningEffort,
+        reasoningBudget: Number.isFinite(source.reasoningBudget) ? source.reasoningBudget : reasoningDefaults.reasoningBudget,
     };
 }
 
