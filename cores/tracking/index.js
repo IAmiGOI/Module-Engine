@@ -189,8 +189,35 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
     }
 
     const persisted = createPersistedList(host, { namespace: PERSISTENCE_NAMESPACE, key: 'trackers', apply: applyTrackers });
-    const configureTrackers = persisted.save;
     const restoreTrackers = persisted.restore;
+
+    /**
+     * **Владение трекером НЕ отнимается.** `tracking.configure` задаёт набор
+     * целиком, а значит каждый, кто пишет свои трекеры, обязан вернуть обратно
+     * чужие — и запросто теряет при этом `ownerId`, потому что его собственная
+     * форма такого поля не знает. Один такой круг превращал трекер Модуля
+     * («RP Time») в обычный пользовательский: он всплывал и в списке Модуля
+     * трекеров, и в его плавающей панели, хотя человек его не заводил и править
+     * не может. Поэтому уже известное владение переживает любую перезапись:
+     * `ownerId` можно ПОСТАВИТЬ у нового трекера, но не стереть и не перебить у
+     * существующего.
+     *
+     * Событие `tracking.trackersChanged` — чтобы список у того, кто его
+     * показывает, не зависел от порядка загрузки Модулей: Модуль трекеров
+     * читает набор при своей загрузке, а Модуль времени заводит свой трекер
+     * позже, и без объявления первый об этом никогда бы не узнал.
+     */
+    async function configureTrackers(list, by = null) {
+        const kept = (list ?? []).map(tracker => {
+            const existingOwner = trackers.get(tracker.id)?.ownerId;
+            return existingOwner ? { ...tracker, ownerId: existingOwner } : tracker;
+        });
+        const result = await persisted.save(kept);
+        // `by` — чтобы записавший узнал собственное эхо и не перечитывал себя же
+        // посреди правки формы.
+        publishEvent('tracking.trackersChanged', { count: kept.length, by });
+        return result;
+    }
 
     /** Сбрасывает накопленные значения трекера к его же `default`. Отдельно от `configure`: «забыть, что натрекалось» и «поменять настройку» — разные намерения. */
     function reset(trackerId) {
@@ -210,7 +237,7 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         // бы держать JS-ссылку на Ядро, то есть ходить в обход Гейта ровно там,
         // где правится, к какой модели и по какому событию трекер обращается.
         host.own.register('tracking.trackers', () => [...trackers.values()].map(tracker => ({ ...tracker }))),
-        host.own.register('tracking.configure', params => configureTrackers(params?.trackers ?? [])),
+        host.own.register('tracking.configure', (params, { callerId } = {}) => configureTrackers(params?.trackers ?? [], callerId ?? null)),
     ];
 
     return {
