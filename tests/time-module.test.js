@@ -88,9 +88,14 @@ function buildEngine({ replies, gate, fail = false } = {}) {
     createNotificationsCore(engine.registerCaller('core.ui.notifications', 'cores', { tier: 'official' }), { mount: node => node });
 
     const claims = [];
+    // Живое сообщение — то, что настоящее Ядро подвала вычислило бы САМО из
+    // `stChat.renderedIds` прямо сейчас; тест просто выставляет его напрямую,
+    // не поднимая настоящий DOM ради одного числа.
+    const live = { mesid: null };
     const footerHost = engine.registerCaller('core.ui.messageFooter', 'cores', { tier: 'official' });
     footerHost.own.register('ui.messageFooter.claim', params => { claims.push(params); return params.slot; });
     footerHost.own.register('ui.messageFooter.release', () => true);
+    footerHost.own.register('ui.messageFooter.liveMesid', () => live.mesid);
 
     const moduleHost = engine.registerCaller(MODULE_ID, 'modules', {
         tier: 'community',
@@ -98,9 +103,10 @@ function buildEngine({ replies, gate, fail = false } = {}) {
             'tracking.trackers', 'tracking.configure', 'tracking.poll', 'tracking.reset',
             'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
             'model.workers.get', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
+            'ui.messageFooter.liveMesid',
         ],
     });
-    return { engine, trackingCore, prompts, macroWrites, claims, module: createTimeModule(moduleHost) };
+    return { engine, trackingCore, prompts, macroWrites, claims, live, module: createTimeModule(moduleHost) };
 }
 
 test('the module owns NO tracking of its own — it registers one tracker in the shared Ядро', async () => {
@@ -126,12 +132,12 @@ test('advancing sends the TIMELINE to the model — that is the whole specialisa
 });
 
 test('each advance extends the timeline, so the model sees the PACE and not just a point', async () => {
-    const { module, prompts, claims } = buildEngine();
+    const { module, prompts, live } = buildEngine();
     await module.load();
     module.applyPreset('clock-only'); // поддельная модель отвечает только временем и периодом
-    // Каждый шаг относится к СВОЕМУ сообщению — именно так Ядро подвала и
-    // сообщает Модулю, под каким сообщением сейчас живой бейдж.
-    const liveAt = mesid => claims[0].node({ mesid: String(mesid), isUser: false, live: true });
+    // Каждый шаг относится к СВОЕМУ сообщению — именно это настоящее Ядро
+    // подвала вычислило бы для Модуля прямо в момент опроса.
+    const liveAt = mesid => { live.mesid = String(mesid); };
 
     liveAt(1);
     await module.advance();
@@ -150,13 +156,13 @@ test('each advance extends the timeline, so the model sees the PACE and not just
 });
 
 test('the same value twice does not pad the timeline with duplicates', async () => {
-    const { module, claims } = buildEngine({ replies: ['{"time": "11:40", "period": "Morning"}'] });
+    const { module, live } = buildEngine({ replies: ['{"time": "11:40", "period": "Morning"}'] });
     await module.load();
     module.applyPreset('clock-only');
 
-    claims[0].node({ mesid: '1', isUser: false, live: true });
+    live.mesid = '1';
     await module.advance();
-    claims[0].node({ mesid: '2', isUser: false, live: true });
+    live.mesid = '2';
     await module.advance();
 
     assert.deepEqual(module.history(), ['11:40 (Morning)']);
@@ -195,9 +201,9 @@ test('disabled, it advances nothing at all', async () => {
 });
 
 test('resetting clears this chat\'s timeline — a new story starts from the configured beginning', async () => {
-    const { module, claims } = buildEngine();
+    const { module, live } = buildEngine();
     await module.load();
-    claims[0].node({ mesid: '1', isUser: false, live: true });
+    live.mesid = '1';
     await module.advance();
     assert.equal(module.history().length, 1);
 
@@ -208,10 +214,10 @@ test('resetting clears this chat\'s timeline — a new story starts from the con
 });
 
 test('the timeline is remembered per CHAT, not in settings — another chat has its own clock', async () => {
-    const { module, engine, claims } = buildEngine();
+    const { module, engine, live } = buildEngine();
     await module.load();
     module.applyPreset('clock-only');
-    claims[0].node({ mesid: '4', isUser: false, live: true });
+    live.mesid = '4';
     await module.advance();
 
     const probe = engine.registerCaller('probe', 'cores', { tier: 'official' });
@@ -299,11 +305,11 @@ test('a message with no reading yet shows BLANK — that is the pulsing "still w
 });
 
 test('advancing marks the message it was LIVE under, and leaves the ones before it alone', async () => {
-    const { module, claims } = buildEngine();
+    const { module, live } = buildEngine();
     await module.load();
     module.applyPreset('clock-only');
     module.badges.set({ 3: '08:00 (Morning)' });
-    claims[0].node({ mesid: '4', isUser: false, live: true }); // так Ядро подвала сообщает, где живой бейдж
+    live.mesid = '4'; // так настоящее Ядро подвала сообщило бы, где живой бейдж
 
     await module.advance();
 
@@ -311,10 +317,10 @@ test('advancing marks the message it was LIVE under, and leaves the ones before 
 });
 
 test('a reroll clears that message\'s reading — the discarded reply\'s time must not stand', async () => {
-    const { engine, module, claims } = buildEngine();
+    const { engine, module, live } = buildEngine();
     await module.load();
     module.applyPreset('clock-only');
-    claims[0].node({ mesid: '4', isUser: false, live: true });
+    live.mesid = '4';
     await module.advance();
     assert.equal(module.badges()['4'], '11:40 (Morning)');
 
@@ -326,10 +332,10 @@ test('a reroll clears that message\'s reading — the discarded reply\'s time mu
 });
 
 test('merely BROWSING existing swipes changes nothing — ST fires the same event, but there is no new reply to time', async () => {
-    const { engine, module, claims } = buildEngine();
+    const { engine, module, live } = buildEngine();
     await module.load();
     module.applyPreset('clock-only');
-    claims[0].node({ mesid: '4', isUser: false, live: true });
+    live.mesid = '4';
     await module.advance();
 
     // Настоящая ST шлёт MESSAGE_SWIPED и когда просто листают готовые
@@ -342,10 +348,10 @@ test('merely BROWSING existing swipes changes nothing — ST fires the same even
 });
 
 test('a reroll ROLLS THE CLOCK BACK — the timeline and the card return to the previous message', async () => {
-    const { engine, module, claims, prompts } = buildEngine();
+    const { engine, module, live, prompts } = buildEngine();
     await module.load();
     module.applyPreset('clock-only');
-    const liveAt = mesid => claims[0].node({ mesid: String(mesid), isUser: false, live: true });
+    const liveAt = mesid => { live.mesid = String(mesid); };
 
     liveAt(1);
     await module.advance();          // 11:40
@@ -371,4 +377,47 @@ test('buildHistory() reads the timeline off the message marks, in message order 
     assert.deepEqual(buildHistory({ 10: 'c', 2: 'b', 1: 'a' }), ['a', 'b', 'c'], 'порядок ЧИСЛОВОЙ: иначе «10» встало бы между «1» и «2»');
     assert.deepEqual(buildHistory({ 1: 'a', 2: 'a', 3: 'b' }), ['a', 'b'], 'подряд идущий повтор не даёт второй точки');
     assert.deepEqual(buildHistory({}), []);
+});
+
+test('the "Regenerate" menu action clears the reading too — real ST deletes the last message instead of swiping it, no MESSAGE_SWIPED involved at all', async () => {
+    const { engine, module, live } = buildEngine();
+    await module.load();
+    module.applyPreset('clock-only');
+    live.mesid = '4';
+    await module.advance();
+    assert.equal(module.badges()['4'], '11:40 (Morning)');
+
+    // Настоящая ST здесь шлёт MESSAGE_DELETED(newLength) — а newLength ЕСТЬ
+    // индекс только что удалённого сообщения (script.js: `chat.length -= 1;
+    // ...emit(MESSAGE_DELETED, chat.length)`), без единого MESSAGE_SWIPED.
+    engine.events.emit('st.messageDeleted', { event: 'MESSAGE_DELETED', args: [4] });
+
+    assert.equal(module.badges()['4'], undefined, 'иначе новый ответ под тем же mesid унаследовал бы чужое время');
+});
+
+test('deleting an UNRELATED message does not touch a badge that belongs to a different one', async () => {
+    const { engine, module } = buildEngine();
+    await module.load();
+    module.badges.set({ 2: '08:00 (Morning)', 5: '09:00 (Morning)' });
+
+    engine.events.emit('st.messageDeleted', { event: 'MESSAGE_DELETED', args: [2] });
+
+    assert.deepEqual(module.badges(), { 5: '09:00 (Morning)' });
+});
+
+test('advance() asks for the live message FRESH at write time, not from a value cached back when the footer last rendered — a ToolCalls round can move it in between', async () => {
+    const { module, live } = buildEngine();
+    await module.load();
+    module.applyPreset('clock-only');
+    // В момент, когда подвал рисовался в последний раз, «живым» было
+    // сообщение 4 — например, черновик с вызовом инструмента, который ST
+    // потом удалила и пересобрала. К моменту, когда опрос действительно
+    // закончился, по-настоящему последним стало сообщение 6.
+    live.mesid = '4';
+
+    const running = module.advance();
+    live.mesid = '6'; // так выглядела бы пересборка ToolCalls, случившаяся ПОКА шёл опрос
+    await running;
+
+    assert.deepEqual(module.badges(), { 6: '11:40 (Morning)' }, 'ушло на настоящее последнее сообщение, а не на то, что запомнилось раньше');
 });
