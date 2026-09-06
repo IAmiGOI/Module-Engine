@@ -203,7 +203,10 @@ test('the "we just tried" mark is a TIME, so a later check is not blocked foreve
         discover: [{ type: 'local', name: 'third-party/Module-Engine' }],
         version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'main' },
         update: { isUpToDate: true },
-        sessionAt: String(1_000_000 - 5000), // пять секунд назад — ещё остывает
+        // Пять секунд назад — ещё остывает. Запись СТРУКТУРНАЯ (не голое
+        // время): `outcome` отличает «применилось/не применилось» от «попытка
+        // не завершилась» (см. следующий тест) — паузу держит только первое.
+        sessionAt: JSON.stringify({ at: 1_000_000 - 5000, outcome: 'updated' }),
     });
 
     assert.equal((await core.run()).outcome, 'cooling-down');
@@ -367,4 +370,64 @@ test('a check that could not run at all stays SILENT on boot, and speaks only wh
 
     assert.deepEqual(quietSeen, [], 'не-git установка не повод шуметь у того, кто просто скопировал папку');
     assert.equal(askedSeen.length, 1, 'а на явное нажатие промолчать нельзя');
+});
+
+// --- Пауза остывания: пережить перезагрузку, не потерять сообщение --------
+
+test('cooling down after a FAILED attempt re-announces the failure on the next automatic check — a page reload must not make the banner vanish along with the tab', async () => {
+    const { engine, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Stable' },
+        update: null, // apply() откажет
+    });
+    await core.run({ force: true }); // первая попытка — провалилась, пауза началась
+    const seen = [];
+    engine.events.subscribe('selfUpdate.failed', payload => seen.push(payload));
+
+    const outcome = await core.run(); // автоматическая проверка — как при перезагрузке
+
+    assert.equal(outcome.outcome, 'cooling-down');
+    assert.equal(seen.length, 1, 'полоса обязана вернуться, а не пропасть вместе с перезагрузкой');
+    assert.match(String(seen[0].reason), /HTTP 500/);
+});
+
+test('cooling down after a SUCCESSFUL update stays silent — nothing failed, there is nothing to say', async () => {
+    const { engine, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Stable' },
+        update: { isUpToDate: true },
+    });
+    await core.run({ force: true }); // применилось и «перезагрузилось»
+    const seen = [];
+    for (const event of ['selfUpdate.failed', 'selfUpdate.started']) engine.events.subscribe(event, payload => seen.push(payload));
+
+    const outcome = await core.run();
+
+    assert.equal(outcome.outcome, 'cooling-down');
+    assert.deepEqual(seen, [], 'успешное обновление в паузе молчит, как и раньше');
+});
+
+test('an attempt interrupted mid-apply (page reloaded before we learned the outcome) does not block the very next check — the pause exists against a loop, not against uncertainty', async () => {
+    const { calls, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Stable' },
+        update: { isUpToDate: true },
+    });
+    // Имитация: страница ушла в перезагрузку/закрылась РОВНО между «начали
+    // применять» и тем, как узнали исход, — запись так и осталась pending.
+    calls.session['stme.beta.updateAttempt'] = JSON.stringify({ at: 1_000_000 - 1000, outcome: 'pending' });
+
+    const outcome = await core.run(); // автоматический ход, БЕЗ force
+
+    assert.equal(outcome.outcome, 'updated', 'неизвестный исход не считается остыванием — проверка идёт сразу же');
+});
+
+test('a stale record from BEFORE this shape existed (a bare timestamp, not JSON) is treated as no record at all, not as a crash', async () => {
+    const { calls, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: true, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Stable' },
+    });
+    calls.session['stme.beta.updateAttempt'] = '999999'; // старый формат — голое время
+
+    await assert.doesNotReject(core.run());
 });

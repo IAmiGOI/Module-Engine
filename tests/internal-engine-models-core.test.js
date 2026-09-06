@@ -3,8 +3,53 @@ import assert from 'node:assert/strict';
 import { createEngine } from '../libraries/shared/engine.js';
 import { registerHttpService } from '../services/http.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
-import { createInternalEngineModelsCore } from '../cores/models/internal-engine.js';
+import { createInternalEngineModelsCore, resolveGenerateRequest, clampSamplerSettings, SAMPLER_PRESETS } from '../cores/models/internal-engine.js';
 import { createSettingsCore } from '../cores/settings/index.js';
+
+// --- Чистые функции: пресеты и защитное чтение сэмплера ---------------------
+
+test('every sampler preset stays inside the same bounds clampSamplerSettings enforces — a preset is a shortcut INTO the valid range, never a way around it', () => {
+    for (const preset of SAMPLER_PRESETS) {
+        assert.deepEqual(clampSamplerSettings(preset), {
+            temperature: preset.temperature, topP: preset.topP, topK: preset.topK, maxTokens: preset.maxTokens,
+        }, `preset "${preset.id}" survives clamping unchanged`);
+    }
+});
+
+test('clampSamplerSettings() keeps garbage on disk from ever reaching a provider as-is', () => {
+    assert.deepEqual(clampSamplerSettings({ temperature: -5, topP: 'x', topK: 9999, maxTokens: 0 }),
+        { temperature: 0, topP: 1, topK: 200, maxTokens: 1 });
+});
+
+test('clampSamplerSettings() with nothing at all falls back to the engine defaults, not to zero', () => {
+    assert.deepEqual(clampSamplerSettings(), { temperature: 0.7, topP: 1, topK: 0, maxTokens: 1000 });
+});
+
+test('resolveGenerateRequest() uses the WORKER\'s own sampler settings as the default — not one hardcoded value for the whole engine', () => {
+    const worker = { temperature: 0.2, topP: 0.9, topK: 5, maxTokens: 256 };
+
+    const resolved = resolveGenerateRequest({ prompt: 'hi' }, worker);
+
+    assert.equal(resolved.temperature, 0.2);
+    assert.equal(resolved.topP, 0.9);
+    assert.equal(resolved.topK, 5);
+    assert.equal(resolved.maxTokens, 256);
+});
+
+test('resolveGenerateRequest() still lets an explicit per-call value win over the worker\'s own default — existing pinning behaviour must not regress', () => {
+    const worker = { temperature: 0.2 };
+
+    const resolved = resolveGenerateRequest({ prompt: 'hi', temperature: 1.5 }, worker);
+
+    assert.equal(resolved.temperature, 1.5);
+});
+
+test('resolveGenerateRequest() falls back to the engine defaults for a worker with no sampler settings of its own yet — a freshly added connection, no preset applied', () => {
+    const resolved = resolveGenerateRequest({ prompt: 'hi' }, { id: 'fresh' });
+
+    assert.equal(resolved.temperature, 0.7);
+    assert.equal(resolved.maxTokens, 1000);
+});
 
 /**
  * Scenario level (TESTING.md "Уровень 2") — the real engine, real Гейты,
@@ -172,4 +217,38 @@ test('worker config really persists via storage.settings — restoreWorkers() on
     const restored = await secondInstance.restoreWorkers();
 
     assert.deepEqual(restored, [{ id: 'persisted-worker', endpoint: 'https://api.example.com', model: 'gpt-test', format: 'openai' }]);
+});
+
+test('a worker configured with a sampler preset actually sends THOSE values to the provider, not the engine-wide defaults', async () => {
+    const { engine, modelsCore, calls } = buildEngineWithModelsCore();
+    const preset = SAMPLER_PRESETS.find(item => item.id === 'creative');
+    modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com/v1', model: 'gpt-test', format: 'openai', preset: preset.id, temperature: preset.temperature, topP: preset.topP, topK: preset.topK, maxTokens: preset.maxTokens }]);
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+
+    const result = await new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hello' } }, resolve));
+
+    assert.equal(result.ok, true);
+    const body = JSON.parse(calls[0].body);
+    assert.equal(body.temperature, preset.temperature);
+    assert.equal(body.top_p, preset.topP);
+    assert.equal(body.max_tokens, preset.maxTokens);
+});
+
+test('two workers with DIFFERENT presets each keep their own sampler settings — one is not bleeding into the other', async () => {
+    const { engine, modelsCore, calls } = buildEngineWithModelsCore();
+    const precise = SAMPLER_PRESETS.find(item => item.id === 'precise');
+    const creative = SAMPLER_PRESETS.find(item => item.id === 'creative');
+    modelsCore.configureWorkers([
+        { id: 'w1', endpoint: 'https://api.one.example.com', model: 'm1', format: 'openai', temperature: precise.temperature, topP: precise.topP, topK: precise.topK, maxTokens: precise.maxTokens },
+        { id: 'w2', endpoint: 'https://api.two.example.com', model: 'm2', format: 'openai', temperature: creative.temperature, topP: creative.topP, topK: creative.topK, maxTokens: creative.maxTokens },
+    ]);
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+    const generate = workerId => new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hi', workerId } }, resolve));
+
+    await generate('w1');
+    await generate('w2');
+
+    const byWorker = Object.fromEntries(calls.map(call => [call.url, JSON.parse(call.body).temperature]));
+    assert.equal(byWorker['https://api.one.example.com/chat/completions'], precise.temperature);
+    assert.equal(byWorker['https://api.two.example.com/chat/completions'], creative.temperature);
 });

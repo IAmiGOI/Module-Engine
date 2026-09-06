@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { signal } from '../cores/ui/reactive.js';
+import { signal, computed } from '../cores/ui/reactive.js';
 import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock } from '../libraries/shared/widgets.js';
 
 /**
@@ -58,12 +58,37 @@ test('Select() writes the picked value back to the signal', () => {
     assert.equal(value(), 'google');
 });
 
+test('Select() calls onChange too — a preset picker needs to fill OTHER fields, not just remember its own choice', () => {
+    const value = signal('');
+    const seen = [];
+    const node = Select(value, [{ value: 'precise' }, { value: 'creative' }], { onChange: picked => seen.push(picked) });
+
+    node.props['on:change']({ target: { value: 'creative' } });
+
+    assert.equal(value(), 'creative');
+    assert.deepEqual(seen, ['creative']);
+});
+
 test('Field() puts the label and the control together, and drops an absent hint entirely', () => {
     const withHint = Field('Endpoint', TextInput(signal('')), { hint: 'https://…' });
     const without = Field('Endpoint', TextInput(signal('')));
 
     assert.equal(withHint.children[0].children.length, 2);
     assert.equal(without.children[0].children.length, 1, 'no empty hint node is left behind');
+});
+
+test('Field() accepts a SIGNAL hint that keeps following its source — the field itself is never rebuilt when only that signal changes', () => {
+    const chosen = signal('');
+    const hint = computed(() => (chosen() ? `You picked ${chosen()}` : ''));
+    const field = Field('Preset', TextInput(signal('')), { hint });
+
+    const hintNode = field.children[0].children[1];
+    assert.equal(typeof hintNode, 'function', 'a signal-valued hint stays reactive, not resolved once at build time');
+    assert.equal(hintNode(), null, 'nothing chosen yet — no hint node at all');
+
+    chosen.set('Creative');
+
+    assert.equal(hintNode().children[0], 'You picked Creative');
 });
 
 test('Card() keeps its key for list reconciliation and renders actions only when given', () => {
