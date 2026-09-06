@@ -74,6 +74,23 @@ test('on timeout with no delivery, resolves (never rejects) with the standard fa
     }
 });
 
+test('a bus that resolves SYNCHRONOUSLY (a Гейт denial) with timeoutMs never arms a timer at all — one left ticking for the full duration for nothing is a real leak, not just wasted CPU', async () => {
+    // Ровно форма настоящего Гейт-отказа (см. request.js's own doc comment):
+    // subscribe() зовёт callback ДО того, как сам успевает вернуться.
+    const bus = { subscribe: (contract, options, callback) => { callback({ ok: false, error: { message: 'denied' } }); return () => {}; } };
+    const originalSetTimeout = globalThis.setTimeout;
+    let armed = false;
+    globalThis.setTimeout = (...args) => { armed = true; return originalSetTimeout(...args); };
+    try {
+        const result = await request(bus, 'demo.contract', { timeoutMs: 5000 });
+
+        assert.deepEqual(result, { ok: false, error: { message: 'denied' } });
+        assert.equal(armed, false, 'таймер, вооружённый ПОСЛЕ уже готового ответа, держал бы цикл событий занятым 5 секунд впустую — поймано на самообновлении, где это добавляло 15 лишних секунд к КАЖДОМУ прогону тестов');
+    } finally {
+        globalThis.setTimeout = originalSetTimeout;
+    }
+});
+
 test('a delivery that arrives before the timeout wins — the timeout never fires afterward', async () => {
     mock.timers.enable({ apis: ['setTimeout'] });
     try {
