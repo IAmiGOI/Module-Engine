@@ -89,7 +89,7 @@ function buildEngine({ rights } = {}) {
             'pipeline.stages', 'pipeline.stages.add', 'pipeline.stages.remove',
         ],
     });
-    return { engine, trackingCore, generations, notifications, pipelineCore, module: createTrackerModule(moduleHost), settingsContext };
+    return { engine, trackingCore, generations, notifications, pipelineCore, module: createTrackerModule(moduleHost), moduleHost, settingsContext };
 }
 
 /** Находит в дереве все узлы, удовлетворяющие предикату — дерево это данные, никакого DOM для проверки не нужно. */
@@ -156,6 +156,58 @@ test('"Poll now" saves first, then really asks the model, and the parsed values 
     assert.equal(generations[0].workerId, 'main', 'asked through the worker the tracker is pinned to');
     assert.deepEqual(record.values().map(field => [field.name, field.value]), [['health', 42], ['location', 'the inn']]);
     assert.equal(record.flash(), 'ok', 'блок трекера вспыхивает подтверждением');
+});
+
+test('a Generation preset applied to ONE tracker reaches the model call for that tracker — chosen per tracker, not tied to the worker it runs on', async () => {
+    const { module, trackingCore, generations } = buildEngine();
+    await trackingCore.configureTrackers([
+        { id: 'status', kind: 'user', workerId: 'main', fields: [{ name: 'health' }], triggers: [] },
+    ]);
+    await module.load();
+    const record = module.trackers()[0];
+
+    module.applySamplerPreset(record, 'deterministic');
+    await module.pollNow(record);
+
+    assert.equal(generations[0].temperature, 0);
+    assert.equal(generations[0].reasoningMode, 'disabled');
+});
+
+test('two trackers pinned to the SAME worker keep independent sampler settings — the preset lives on the tracker, not the worker', async () => {
+    const { module, trackingCore, generations } = buildEngine();
+    await trackingCore.configureTrackers([
+        { id: 'status', kind: 'user', workerId: 'main', fields: [{ name: 'health' }], triggers: [] },
+        { id: 'mood', kind: 'user', workerId: 'main', fields: [{ name: 'health' }], triggers: [] },
+    ]);
+    await module.load();
+    const [status, mood] = module.trackers();
+
+    module.applySamplerPreset(status, 'deterministic');
+    module.applySamplerPreset(mood, 'creative');
+    await module.pollNow(status);
+    await module.pollNow(mood);
+
+    assert.equal(generations[0].temperature, 0, 'status stayed deterministic');
+    assert.equal(generations[1].temperature, 1.1, 'mood stayed creative, same worker, different call');
+});
+
+test('a chosen preset survives a reload — it is remembered per tracker, not lost or forced back to a worker default', async () => {
+    const { module: first, moduleHost } = buildEngine();
+    await first.load();
+    first.addTracker();
+    const record = first.trackers()[0];
+    record.id.set('status');
+    first.applySamplerPreset(record, 'precise');
+    await first.save();
+
+    // Второй экземпляр Модуля на том же хосте — как перезагрузка страницы:
+    // своей памяти между ними нет, всё восстанавливается через шину.
+    const second = createTrackerModule(moduleHost);
+    await second.load();
+    const reloaded = second.trackers()[0];
+
+    assert.equal(reloaded.samplerPreset.peek(), 'precise', 'подпись пресета пережила перезагрузку');
+    assert.equal(reloaded.temperature.peek(), 0.2, 'а не значения по умолчанию движка');
 });
 
 test('"Poll now" on an unnamed tracker says so instead of asking the model for nothing', async () => {

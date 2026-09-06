@@ -7,7 +7,7 @@ import { registerExtensionSettingsService } from '../services/extension-settings
 import { createInternalEngineModelsCore } from '../cores/models/internal-engine.js';
 import { createSettingsCore } from '../cores/settings/index.js';
 import { registerStChatService } from '../services/st-chat.js';
-import { createTrackingCore, buildTrackerPrompt } from '../cores/tracking/index.js';
+import { createTrackingCore, buildTrackerPrompt, buildTrackerSystemPrompt } from '../cores/tracking/index.js';
 
 // --- Unit level: prompt-building, independent of any Ядро/Сервис ----------
 
@@ -27,6 +27,20 @@ test('buildTrackerPrompt() uses a tracker\'s own promptTemplate when given, via 
     const prompt = buildTrackerPrompt(tracker, [{ name: 'x', prompt: 'p', value: 1 }]);
 
     assert.match(prompt, /^CUSTOM: - x: p \(current: 1\)$/);
+});
+
+test('buildTrackerSystemPrompt() is empty when the tracker has no systemPromptTemplate — a plain, hand-configured user tracker gets no system message at all', () => {
+    const tracker = { id: 't1', promptTemplate: 'CUSTOM: {fields}' };
+
+    assert.equal(buildTrackerSystemPrompt(tracker, [{ name: 'x', prompt: 'p', value: 1 }]), '');
+});
+
+test('buildTrackerSystemPrompt() fills the SAME substitutions as the user prompt, just into a separate template — the two see one consistent set of fields/context/vars', () => {
+    const tracker = { id: 't1', systemPromptTemplate: 'Track: {fieldsJson}. Timeline: {timeline}.' };
+
+    const prompt = buildTrackerSystemPrompt(tracker, [{ name: 'x', prompt: 'p', value: 1 }], [], { timeline: '"a" → "b"' });
+
+    assert.equal(prompt, 'Track: "x". Timeline: "a" → "b".');
 });
 
 // --- Scenario level (TESTING.md "Уровень 2") -------------------------------
@@ -75,6 +89,81 @@ test('tracking.poll dispatches to the tracker\'s OWN pinned worker, parses the J
     assert.deepEqual(result.value, [{ name: 'health', prompt: 'HP', default: 100, value: 90 }]);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, 'https://slow.example.com/chat/completions', 'must land on the pinned worker, not the other configured one');
+});
+
+test('a tracker with a systemPromptTemplate really sends TWO messages to the model — system with the instruction, user with the rest', async () => {
+    const { engine, calls, trackingCore } = buildEngine();
+    trackingCore.configureTrackers([{
+        id: 'char', kind: 'user', workerId: 'fast',
+        systemPromptTemplate: 'Track fields: {fieldsJson}.',
+        promptTemplate: 'History goes here.',
+        fields: [{ name: 'health', prompt: 'HP', default: 100 }],
+    }]);
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    await new Promise(resolve => module.cores.subscribe('tracking.poll', { params: { trackerId: 'char' } }, resolve));
+
+    const body = JSON.parse(calls[0].body);
+    assert.deepEqual(body.messages, [
+        { role: 'system', content: 'Track fields: "health".' },
+        { role: 'user', content: 'History goes here.' },
+    ]);
+});
+
+test('a plain tracker with no systemPromptTemplate still sends just ONE message, exactly as before — nothing changes for the generic hand-configured tracker', async () => {
+    const { engine, calls, trackingCore } = buildEngine();
+    trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', prompt: 'HP', default: 100 }] }]);
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    await new Promise(resolve => module.cores.subscribe('tracking.poll', { params: { trackerId: 'char' } }, resolve));
+
+    const body = JSON.parse(calls[0].body);
+    assert.equal(body.messages.length, 1);
+    assert.equal(body.messages[0].role, 'user');
+});
+
+test('a tracker\'s OWN sampler/reasoning settings reach the provider — chosen per tracker, not tied to the worker it happens to run on', async () => {
+    const { engine, calls, trackingCore } = buildEngine();
+    trackingCore.configureTrackers([{
+        id: 'char', kind: 'user', workerId: 'fast',
+        temperature: 0.1, topP: 0.8, topK: 5, maxTokens: 200,
+        fields: [{ name: 'health', prompt: 'HP', default: 100 }],
+    }]);
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    await new Promise(resolve => module.cores.subscribe('tracking.poll', { params: { trackerId: 'char' } }, resolve));
+
+    const body = JSON.parse(calls[0].body);
+    assert.equal(body.temperature, 0.1);
+    assert.equal(body.top_p, 0.8);
+    assert.equal(body.top_k, 5);
+    assert.equal(body.max_tokens, 200);
+});
+
+test('two trackers pinned to the SAME worker keep their OWN, different sampler settings — one is not bleeding into the other', async () => {
+    const { engine, calls, trackingCore } = buildEngine();
+    trackingCore.configureTrackers([
+        { id: 'precise-one', kind: 'user', workerId: 'fast', temperature: 0.1, fields: [{ name: 'a', prompt: '', default: 1 }] },
+        { id: 'creative-one', kind: 'user', workerId: 'fast', temperature: 1.2, fields: [{ name: 'a', prompt: '', default: 1 }] },
+    ]);
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+    const poll = trackerId => new Promise(resolve => module.cores.subscribe('tracking.poll', { params: { trackerId } }, resolve));
+
+    await poll('precise-one');
+    await poll('creative-one');
+
+    assert.equal(JSON.parse(calls[0].body).temperature, 0.1);
+    assert.equal(JSON.parse(calls[1].body).temperature, 1.2);
+});
+
+test('a tracker with NO sampler settings of its own falls back to the engine\'s defaults — nothing is forced on a tracker that never asked for a preset', async () => {
+    const { engine, calls, trackingCore } = buildEngine();
+    trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', prompt: '', default: 100 }] }]);
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    await new Promise(resolve => module.cores.subscribe('tracking.poll', { params: { trackerId: 'char' } }, resolve));
+
+    assert.equal(JSON.parse(calls[0].body).temperature, 0.7, 'обычный движковый дефолт, а не что-то навязанное трекеру');
 });
 
 test('a tracker\'s configured trigger event automatically polls it — no manual tracking.poll call needed', async () => {

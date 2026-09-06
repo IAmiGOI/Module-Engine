@@ -67,12 +67,14 @@ function buildEngine({ replies, gate, fail = false } = {}) {
     createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
 
     const prompts = [];
+    const calls = []; // весь params.generate целиком — для проверок systemPrompt/сэмплера/ризонинга
     // По умолчанию модель ДВИГАЕТ время от вызова к вызову — как настоящая.
     // Тест на схлопывание повторов подсовывает свой, неподвижный ответ.
     const answers = replies ?? ['{"time": "11:40", "period": "Morning"}', '{"time": "13:05", "period": "Afternoon"}'];
     const modelHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official' });
     modelHost.own.register('model.generate', async params => {
         prompts.push(params.prompt);
+        calls.push(params);
         // `gate` даёт тесту застать Модуль СРЕДИ опроса — без него промежуточное
         // состояние невидимо и проверить пульсацию нечем.
         if (gate) await gate;
@@ -106,7 +108,7 @@ function buildEngine({ replies, gate, fail = false } = {}) {
             'ui.messageFooter.liveMesid',
         ],
     });
-    return { engine, trackingCore, prompts, macroWrites, claims, live, module: createTimeModule(moduleHost) };
+    return { engine, trackingCore, prompts, calls, macroWrites, claims, live, module: createTimeModule(moduleHost) };
 }
 
 test('the module owns NO tracking of its own — it registers one tracker in the shared Ядро', async () => {
@@ -129,6 +131,33 @@ test('advancing sends the TIMELINE to the model — that is the whole specialisa
     assert.match(prompts.at(-1), /"Day 0, 08:00 \(Morning\)"/, 'начальная точка ушла модели');
     assert.match(prompts.at(-1), /Recent known in-world time, oldest to most recent/);
     assert.match(prompts.at(-1), /The sun climbs as the road unwinds/, 'и переписка тоже');
+});
+
+test('the instruction and the history travel as TWO separate messages — system carries the instruction, user carries the timeline and the roleplay context', async () => {
+    const { module, calls } = buildEngine();
+    await module.load();
+
+    await module.advance();
+
+    const call = calls.at(-1);
+    assert.match(call.systemPrompt, /You are an in-world time tracker/, 'инструкция — в системном сообщении');
+    assert.match(call.systemPrompt, /Return ONLY a JSON object/, 'и формат ответа тоже там');
+    assert.doesNotMatch(call.systemPrompt, /ROLEPLAY CONTEXT/, 'а не сама переписка');
+    assert.match(call.prompt, /ROLEPLAY CONTEXT/, 'история — в пользовательском');
+    assert.doesNotMatch(call.prompt, /You are an in-world time tracker/, 'а не инструкция');
+});
+
+test('a Generation preset applied to RP Time reaches the model call — chosen for THIS tracker, not tied to whichever worker executes it', async () => {
+    const { module, calls } = buildEngine();
+    await module.load();
+    module.applySampler('deterministic');
+    await module.save();
+
+    await module.advance();
+
+    const call = calls.at(-1);
+    assert.equal(call.temperature, 0);
+    assert.equal(call.reasoningMode, 'disabled');
 });
 
 test('each advance extends the timeline, so the model sees the PACE and not just a point', async () => {
