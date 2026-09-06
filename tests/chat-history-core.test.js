@@ -16,14 +16,14 @@ import { createChatHistoryCore } from '../cores/chat-history/index.js';
 
 function buildEngine(chat = []) {
     const engine = createEngine();
-    const context = { chat, chatMetadata: {}, saveMetadataDebounced: () => {} };
+    const context = { chat, chatMetadata: {}, saveMetadataDebounced: () => {}, saveChat: async () => {} };
     registerStChatService(engine.buses.services, { getContext: () => context });
     registerChatMetadataService(engine.buses.services, { getContext: () => context });
     createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
     createChatHistoryCore(engine.registerCaller('core.chatHistory', 'cores', { tier: 'official' }));
     const module = engine.registerCaller('module.time', 'modules', {
         tier: 'community',
-        allowedContracts: ['chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations'],
+        allowedContracts: ['chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations', 'chatHistory.hide'],
     });
     return { engine, context, module };
 }
@@ -135,4 +135,44 @@ test('a Модуль without the right to chatHistory.annotate is refused before
     const result = await call(untrusted, 'chatHistory.annotate', { namespace: 'x', mesid: '1', value: 'y' });
 
     assert.equal(result.ok, false);
+});
+
+test('chatHistory.hide proxies through to the real chat message, WITHOUT touching mesid of neighbors', async () => {
+    const { module, context } = buildEngine([
+        { is_user: true, is_system: false, mes: 'Old line' },
+        { is_user: false, is_system: false, mes: 'Newer line' },
+    ]);
+
+    const result = await call(module, 'chatHistory.hide', { mesid: '0', hidden: true });
+
+    assert.deepEqual(result, { ok: true, value: true });
+    assert.equal(context.chat[0].is_system, true);
+    assert.equal(context.chat[1].is_system, false, 'hiding one mesid must not shift or touch another');
+});
+
+test('chatHistory.hide can un-hide (hidden: false)', async () => {
+    const { module, context } = buildEngine([{ is_user: false, is_system: true, mes: 'Was hidden' }]);
+
+    await call(module, 'chatHistory.hide', { mesid: '0', hidden: false });
+
+    assert.equal(context.chat[0].is_system, false);
+});
+
+test('chatHistory.hide without a mesid fails with a clear error, never hangs', async () => {
+    const { module } = buildEngine([{ is_user: false, is_system: false, mes: 'A' }]);
+
+    const result = await call(module, 'chatHistory.hide', { hidden: true });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error.message, /mesid/);
+});
+
+test('a Модуль without the right to chatHistory.hide is refused before the Ядро is ever reached', async () => {
+    const { engine, context } = buildEngine([{ is_user: false, is_system: false, mes: 'A' }]);
+    const untrusted = engine.registerCaller('module.untrusted', 'modules', { tier: 'community', allowedContracts: [] });
+
+    const result = await call(untrusted, 'chatHistory.hide', { mesid: '0', hidden: true });
+
+    assert.equal(result.ok, false);
+    assert.equal(context.chat[0].is_system, false, 'the Гейт must block the write itself, not just the response');
 });
