@@ -240,11 +240,15 @@ export function Details(summary, ...children) {
 }
 
 /** `options` — массив `{ value, label }` или сигнал на него. */
-export function Select(valueSignal, options) {
+export function Select(valueSignal, options, { onChange } = {}) {
     const read = typeof options === 'function' ? options : () => options;
     return h('select', {
         class: 'text_pole',
-        'on:change': event => valueSignal.set(event.target.value),
+        // `onChange` — для случаев вроде «выбор пресета» (RP Time's своё
+        // `applyPreset()`, теперь и у сэмплера воркера): выбор обязан не
+        // только запомниться сам, но и заполнить СОСЕДНИЕ поля — то же
+        // разделение, что `onChange` у `Toggle()` уже даёт переключателю.
+        'on:change': event => { valueSignal.set(event.target.value); onChange?.(event.target.value); },
     }, computed(() => read().map(option => h('option', {
         key: option.value,
         value: option.value,
@@ -256,8 +260,21 @@ export function Select(valueSignal, options) {
 }
 
 export function Field(label, control, { hint } = {}) {
+    // `hint` — обычно голая строка (подсказка не меняется, пока карта не
+    // перерисуется заново), но иногда обязана следить за чужим состоянием
+    // (подсказка пресета сэмплера — за тем, какой пресет выбран СЕЙЧАС), а
+    // сама карта строки при этом не перерисовывается: `EditableList` зовёт
+    // `renderItem` заново только когда меняется САМ массив, а не поле внутри
+    // одной записи. Сигнальная ветка живёт отдельно от строковой, а не
+    // единым `computed()` на оба случая: `computed()`, куда положили голую
+    // строку, всё равно остаётся ФУНКЦИЕЙ — то есть истинным для `h()`'а
+    // фильтра «выбросить null/undefined/false» даже когда подсказки нет, и
+    // старый тест «без подсказки — совсем без узла» перестал бы проходить.
+    const hintNode = typeof hint === 'function'
+        ? computed(() => (hint() ? h('small', {}, hint()) : null))
+        : (hint ? h('small', {}, hint) : null);
     return h('label', { class: 'stme-field' },
-        h('span', { class: 'stme-field-label' }, label, hint ? h('small', {}, hint) : null),
+        h('span', { class: 'stme-field-label' }, label, hintNode),
         control,
     );
 }

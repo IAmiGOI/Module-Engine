@@ -27,7 +27,15 @@ export function request(bus, contract, { params, when, timeoutMs } = {}) {
             unsubscribe();
             resolve(result);
         });
-        if (timeoutMs) {
+        // `!done`: a synchronously-resolved subscribe() (a Гейт denial, or
+        // any bus answering immediately) already settled the promise above,
+        // in the very same call — arming a timer AFTER that would be pure
+        // waste, and a real one at that: `setTimeout` keeps the event loop
+        // alive for its own full `timeoutMs`, even though its callback is a
+        // guaranteed no-op (`done` is already true). Caught by a whole test
+        // suite silently taking `timeoutMs` longer than it should whenever
+        // one denied request happened to carry a timeout.
+        if (timeoutMs && !done) {
             timer = setTimeout(() => {
                 if (done) return;
                 done = true;

@@ -7,16 +7,90 @@ const PERSISTENCE_NAMESPACE = 'core.models.internal';
 
 const REQUEST_DEFAULTS = Object.freeze({ systemPrompt: '', temperature: 0.7, maxTokens: 1000, topP: 1, topK: 0, seed: 0 });
 
-/** Defensive reader — any missing/malformed field falls back to a sane default rather than reaching a provider with `undefined` in it. */
-export function resolveGenerateRequest(params) {
+/**
+ * Пресеты сэмплера — только он, ни разу не про то, КАКОЙ воркер («сайдкар»)
+ * возьмётся отвечать: воркера выбирает `dispatchQueue` сама (или пиннинг
+ * через `workerId` — см. doc-comment Ядра ниже), это отдельный, уже решённый
+ * вопрос. Ровно тот же приём, что `TIME_PRESETS` у Модуля «RP Time»: готовая
+ * отправная точка одним нажатием, а не четыре ползунка вслепую, — но
+ * подкрутить дальше вручную по-прежнему можно, пресет лишь заполняет поля.
+ *
+ * Значения — не выдумка: те же самые границы (0–2 / 0–1 / 0–200), что были
+ * проверены на практике в SideCar Alpha (core/sidecar-service.js). Четыре
+ * пресета, не десять: у трекеров и без того узкая, предсказуемая работа
+ * (строгий JSON), а не открытое творческое письмо, для которого раскладка
+ * побогаче имела бы смысл.
+ */
+export const SAMPLER_PRESETS = Object.freeze([
+    {
+        id: 'deterministic',
+        name: 'Deterministic (greedy)',
+        description: 'Same input, same output every time — for anything that must parse the same way twice.',
+        temperature: 0, topP: 1, topK: 1, maxTokens: 1000,
+    },
+    {
+        id: 'precise',
+        name: 'Precise',
+        description: 'Low temperature, mostly consistent — a safe default for trackers and strict JSON.',
+        temperature: 0.2, topP: 0.9, topK: 0, maxTokens: 1000,
+    },
+    {
+        id: 'balanced',
+        name: 'Balanced',
+        description: 'A reasonable middle ground for most tasks.',
+        temperature: 0.7, topP: 1, topK: 0, maxTokens: 1000,
+    },
+    {
+        id: 'creative',
+        name: 'Creative',
+        description: 'Higher temperature — more varied wording, less predictable.',
+        temperature: 1.1, topP: 0.95, topK: 0, maxTokens: 1000,
+    },
+]);
+
+function clampNumber(value, min, max, fallback) {
+    const number = Number(value);
+    const chosen = Number.isFinite(number) ? number : fallback;
+    return Math.max(min, Math.min(max, chosen));
+}
+
+/**
+ * Защитное чтение настроек сэмплера у ОДНОГО воркера — те же границы, что и
+ * у ползунков в панели, применённые и к тому, что реально лежит на диске:
+ * ручная правка сохранённого файла или старая запись без этих полей вообще
+ * не должны уйти к провайдеру как есть.
+ */
+export function clampSamplerSettings(values = {}) {
+    return {
+        temperature: clampNumber(values.temperature, 0, 2, REQUEST_DEFAULTS.temperature),
+        topP: clampNumber(values.topP, 0, 1, REQUEST_DEFAULTS.topP),
+        topK: Math.round(clampNumber(values.topK, 0, 200, REQUEST_DEFAULTS.topK)),
+        maxTokens: Math.round(clampNumber(values.maxTokens, 1, 32768, REQUEST_DEFAULTS.maxTokens)),
+    };
+}
+
+/**
+ * Defensive reader — any missing/malformed field falls back to a sane
+ * default rather than reaching a provider with `undefined` in it.
+ *
+ * `worker` — сэмплер настроен НА ВОРКЕРЕ (его собственные temperature/topP/
+ * topK/maxTokens, заполненные пресетом или руками в панели), а не одним
+ * значением на весь движок: `REQUEST_DEFAULTS` остаётся только запасным
+ * дном, если у воркера ничего не задано вовсе (свежедобавленный, пресет ещё
+ * не применяли). Явный параметр САМОГО запроса (`params.temperature` и т.п.)
+ * по-прежнему сильнее обоих — на этом уже стоит существующий пиннинг по
+ * `workerId`, ломать его незачем.
+ */
+export function resolveGenerateRequest(params, worker) {
     const source = params ?? {};
+    const samplerDefaults = clampSamplerSettings(worker);
     return {
         prompt: String(source.prompt ?? ''),
         systemPrompt: String(source.systemPrompt ?? REQUEST_DEFAULTS.systemPrompt),
-        temperature: Number.isFinite(source.temperature) ? source.temperature : REQUEST_DEFAULTS.temperature,
-        maxTokens: Number.isFinite(source.maxTokens) ? source.maxTokens : REQUEST_DEFAULTS.maxTokens,
-        topP: Number.isFinite(source.topP) ? source.topP : REQUEST_DEFAULTS.topP,
-        topK: Number.isFinite(source.topK) ? source.topK : REQUEST_DEFAULTS.topK,
+        temperature: Number.isFinite(source.temperature) ? source.temperature : samplerDefaults.temperature,
+        maxTokens: Number.isFinite(source.maxTokens) ? source.maxTokens : samplerDefaults.maxTokens,
+        topP: Number.isFinite(source.topP) ? source.topP : samplerDefaults.topP,
+        topK: Number.isFinite(source.topK) ? source.topK : samplerDefaults.topK,
         seed: Number.isFinite(source.seed) ? source.seed : REQUEST_DEFAULTS.seed,
     };
 }
@@ -77,7 +151,7 @@ export function createInternalEngineModelsCore(host) {
     const unregisters = [
         host.own.register('model.generate', params => {
             const candidates = params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers;
-            return dispatchQueue.enqueue(candidates, worker => dispatchToWorker(worker, resolveGenerateRequest(params)));
+            return dispatchQueue.enqueue(candidates, worker => dispatchToWorker(worker, resolveGenerateRequest(params, worker)));
         }),
         // Configuration as real CONTRACTS, not just the plain `configureWorkers()`
         // method below: the engine's own UI is a Модуль, and a Модуль editing

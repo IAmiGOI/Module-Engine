@@ -35,9 +35,19 @@ import { commitsMatch, describeUpdateDiagnosis, parseCommitSha } from '../../lib
  * это проходит без единого следа в интерфейсе.
  */
 
-const SESSION_KEY = 'stme.beta.updateAttemptedAt';
-/** Пауза между попытками. Не «раз в сессию»: после применённого обновления страница перезагружается, и вторая проверка сразу за ней — норма, а не повод молчать до конца вкладки. */
+const SESSION_KEY = 'stme.beta.updateAttempt';
+/**
+ * Пауза между попытками. Не «раз в сессию»: после применённого обновления
+ * страница перезагружается, и вторая проверка сразу за ней — норма, а не
+ * повод молчать до конца вкладки. Защищает только сам ШАГ «нашли отставание →
+ * тянем → перезагружаемся» (см. `attemptedRecently()`) — просто ПРОВЕРКА
+ * ничего не зацикливает и ею никогда не гейтится.
+ */
 const RETRY_COOLDOWN_MS = 20000;
+/** Ни один сетевой шаг самообновления не имеет права висеть дольше этого — иначе перекрытие экрана виснет вместе с ним, и единственный выход у пользователя — перезагрузка, которая сама попадает в паузу остывания молча. */
+const NETWORK_TIMEOUT_MS = 15000;
+/** Сам `git pull` — файловая/сетевая операция на СТОРОНЕ ST, вправе занять чуть больше, чем простой опрос статуса. */
+const APPLY_TIMEOUT_MS = 30000;
 const GITHUB_API = 'https://api.github.com';
 
 export function createSelfUpdateCore(host, {
@@ -47,14 +57,17 @@ export function createSelfUpdateCore(host, {
     log = console,
     now = () => Date.now(),
     cooldownMs = RETRY_COOLDOWN_MS,
+    networkTimeoutMs = NETWORK_TIMEOUT_MS,
+    applyTimeoutMs = APPLY_TIMEOUT_MS,
     publish,
 } = {}) {
     // Публикация — через Ядро событий (защиты, реестр поверхности); прямой
     // эмит оставлен для узких тестов, поднимающих это Ядро в одиночку.
     const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
 
-    async function service(contract, params) {
-        return request(host.services, contract, { params });
+    /** `timeoutMs` только на РЕАЛЬНО сетевых шагах (см. вызовы ниже) — сессия/локальные контракты внутри движка не виснут никогда, таймаут им только мешал бы. */
+    async function service(contract, params, { timeoutMs } = {}) {
+        return request(host.services, contract, { params, timeoutMs });
     }
 
     /**
@@ -64,7 +77,7 @@ export function createSelfUpdateCore(host, {
      */
     async function isGlobalInstall() {
         if (!extensionName) return false;
-        const result = await service('stExtensions.discover');
+        const result = await service('stExtensions.discover', {}, { timeoutMs: networkTimeoutMs });
         if (!result.ok || !Array.isArray(result.value)) return false;
         const entry = result.value.find(item => item?.name === extensionName || item?.name === `third-party/${extensionName}`);
         return entry?.type === 'global';
@@ -72,7 +85,7 @@ export function createSelfUpdateCore(host, {
 
     /** Один запрос версии под конкретное предположение о типе установки. */
     async function askVersion(global) {
-        const result = await service('stExtensions.version', { extensionName, global });
+        const result = await service('stExtensions.version', { extensionName, global }, { timeoutMs: networkTimeoutMs });
         if (!result.ok) return { ok: false, reason: `${global ? 'global' : 'per-user'} lookup: ${result.error.message}` };
         return {
             ok: true,
@@ -134,6 +147,7 @@ export function createSelfUpdateCore(host, {
                 method: 'GET',
                 headers: { Accept: 'application/vnd.github.sha' },
             },
+            timeoutMs: networkTimeoutMs,
         });
         if (!result.ok || !result.value?.ok) return null;
         return parseCommitSha(result.value.text);
@@ -155,7 +169,7 @@ export function createSelfUpdateCore(host, {
 
     async function apply({ global = false } = {}) {
         if (!extensionName) return { applied: false, error: 'Could not determine this extension\'s folder name.' };
-        const result = await service('stExtensions.update', { extensionName, global });
+        const result = await service('stExtensions.update', { extensionName, global }, { timeoutMs: applyTimeoutMs });
         if (!result.ok) {
             log.error?.('[ST Module Engine (Beta)] Self-update failed:', result.error.message);
             return { applied: false, error: result.error.message };
@@ -163,9 +177,39 @@ export function createSelfUpdateCore(host, {
         return { applied: true, upToDate: Boolean(result.value?.isUpToDate) };
     }
 
+    /** Читает последнюю попытку из сессии — `null`, если её не было или запись повреждена (никогда не бросает). */
+    async function lastAttempt() {
+        const stored = await service('session.get', { key: SESSION_KEY, fallback: null });
+        if (!stored.ok || !stored.value) return null;
+        try {
+            const parsed = JSON.parse(stored.value);
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch {
+            return null;
+        }
+    }
+
+    function recordAttempt(outcome, extra = {}) {
+        return service('session.set', { key: SESSION_KEY, value: JSON.stringify({ at: now(), outcome, ...extra }) });
+    }
+
+    /**
+     * Остыла ли пауза. `pending` — попытка НАЧАЛАСЬ, но её исход неизвестен:
+     * либо `apply()` до сих пор идёт (тогда `run()` и так не позовут второй
+     * раз параллельно с самим собой — незачем и рано), либо страница
+     * перезагрузилась или закрылась ПОСЕРЕДИНЕ, а мы этого не увидели. Во
+     * втором случае бы молчать паузой значило бы просто повторить тот же
+     * симптом «после зависшего обновления ничего не происходит», от которого
+     * теперь спасает `networkTimeoutMs`/`applyTimeoutMs` — но защититься сразу
+     * с обеих сторон надёжнее, чем понадеяться на один таймаут. Поэтому
+     * `pending` НЕ считается остыванием: следующая попытка идёт сразу же, а
+     * `apply()` в любом случае безопасно повторить — она либо уже применилась
+     * (тогда ST тут же ответит «свежо»), либо нет (тогда просто дотянется).
+     */
     async function attemptedRecently() {
-        const stored = await service('session.get', { key: SESSION_KEY, fallback: '0' });
-        return now() - Number(stored.ok ? stored.value : 0) < cooldownMs;
+        const last = await lastAttempt();
+        if (!last || last.outcome === 'pending') return false;
+        return now() - Number(last.at ?? 0) < cooldownMs;
     }
 
     /**
@@ -184,7 +228,18 @@ export function createSelfUpdateCore(host, {
      * обновления и его показ были одним куском кода, и разделить их было негде.
      */
     async function run({ force = false } = {}) {
-        if (!force && await attemptedRecently()) return { outcome: 'cooling-down' };
+        if (!force && await attemptedRecently()) {
+            // Автоматическая проверка при загрузке молчала бы точно так же, как
+            // и раньше — но если ПРОШЛАЯ попытка в это самое окно остывания
+            // закончилась неудачей, полоса с причиной обязана вернуться и после
+            // перезагрузки, а не пропасть вместе с ней: иначе «обновление не
+            // работает» неотличимо от «обновляться нечего», ровно то, из-за
+            // чего перезагрузка выглядела так, будто вообще ничего не
+            // происходит.
+            const last = await lastAttempt();
+            if (last?.outcome === 'failed') publishEvent('selfUpdate.failed', { reason: last.reason ?? null });
+            return { outcome: 'cooling-down', lastOutcome: last?.outcome ?? null };
+        }
 
         const status = await check();
         if (!status.checked) {
@@ -207,15 +262,19 @@ export function createSelfUpdateCore(host, {
         }
 
         // Отсюда и до перезагрузки экран перекрыт: код меняется под ногами, и
-        // работать с наполовину заменённым движком нельзя.
+        // работать с наполовину заменённым движком нельзя. Пауза остывания
+        // защищает ИМЕННО этот шаг (не сам по себе просмотр статуса) — только
+        // отсюда и пишется отметка попытки.
         publishEvent('selfUpdate.started', { branch: status.currentBranchName });
-        await service('session.set', { key: SESSION_KEY, value: now() });
+        await recordAttempt('pending');
         const applied = await apply({ global: status.global });
         if (!applied.applied) {
+            await recordAttempt('failed', { reason: applied.error ?? null });
             publishEvent('selfUpdate.failed', { reason: applied.error ?? null });
             return { outcome: 'failed', error: applied.error, diagnosis };
         }
 
+        await recordAttempt('updated');
         publishEvent('selfUpdate.applied', { branch: status.currentBranchName });
         await service('session.reload');
         return { outcome: 'updated', diagnosis };
