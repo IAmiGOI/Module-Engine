@@ -2,7 +2,15 @@ import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { fillTemplate } from '../../libraries/core/fill-template.js';
-import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, StatBlock } from '../../libraries/shared/widgets.js';
+import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, StatBlock, Slider } from '../../libraries/shared/widgets.js';
+import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, REASONING_EFFORTS } from '../../cores/models/internal-engine.js';
+
+const REASONING_MODE_OPTIONS = Object.freeze([
+    { value: 'inherit', label: 'Provider default' },
+    { value: 'enabled', label: 'Enabled' },
+    { value: 'disabled', label: 'Disabled' },
+]);
+const REASONING_EFFORT_OPTIONS = Object.freeze(REASONING_EFFORTS.map(id => ({ value: id, label: id[0].toUpperCase() + id.slice(1) })));
 
 /**
  * Модуль «Время» — определитель внутриигрового времени, как в Alpha.
@@ -46,21 +54,30 @@ const MAX_TIMELINE = 5;
  * Промпт специализирован под ШАГ времени. Главное в нём — запрет выдумывать
  * абсолютную дату: модели показывают, куда время двигалось, и просят продлить
  * ту же линию, а не начать новую.
+ *
+ * **Разделён на два сообщения** (Ядро трекинга умеет это с
+ * `systemPromptTemplate` — см. doc-comment [cores/tracking/index.js](../../cores/tracking/index.js)):
+ * `TIME_SYSTEM_PROMPT` — ИНСТРУКЦИЯ (что трекать, как оценивать шаг, в каком
+ * виде отвечать) — не меняется от опроса к опросу, ей место в `system`.
+ * `TIME_PROMPT` остался пользовательским — сама ИСТОРИЯ (шкала и переписка),
+ * то, что действительно разное на каждом опросе.
  */
-export const TIME_PROMPT =
+export const TIME_SYSTEM_PROMPT =
     'You are an in-world time tracker for a roleplay chat. Track only the fields below, ' +
     'using each note to decide how to format it:\n{fields}\n\n' +
+    'Estimate the time step using ONLY the newest exchange (the character\'s latest reply, at the end ' +
+    'of the context you are given): how long would plausibly pass for that one exchange to happen?\n\n' +
+    'Default to a SMALL step (seconds to a few minutes) unless the newest exchange explicitly signals ' +
+    'a skip (e.g. "the next morning", "hours later", "after the long walk") or a scene transition.\n\n' +
+    'Return ONLY a JSON object with exactly these keys: {fieldsJson}. No markdown, no explanation.';
+
+export const TIME_PROMPT =
     'Recent known in-world time, oldest to most recent: {timeline}. This shows the actual pace time ' +
     'has been moving at — extrapolate from it, don\'t invent a different pace.\n\n' +
     'ROLEPLAY CONTEXT:\n{context}\n\n' +
     'The roleplay text above is scene context only, not a log of elapsed time still to be counted — ' +
-    'everything up through the second-to-last message is already reflected in the timeline. Estimate ' +
-    'the time step using ONLY the newest exchange (the character\'s latest reply, at the end of the ' +
-    'context): how long would plausibly pass for that one exchange to happen?\n\n' +
-    'Default to a SMALL step (seconds to a few minutes) unless the newest exchange explicitly signals ' +
-    'a skip (e.g. "the next morning", "hours later", "after the long walk") or a scene transition.\n\n' +
-    'The character just responded (see the end of the context above). Return ONLY a JSON object with ' +
-    'exactly these keys: {fieldsJson}. No markdown, no explanation.';
+    'everything up through the second-to-last message is already reflected in the timeline.\n\n' +
+    'The character just responded (see the end of the context above).';
 
 export const TIME_PRESETS = Object.freeze([
     {
@@ -163,6 +180,22 @@ export function createTimeModule(host) {
     const workerId = signal('');
     const enabled = signal(true);
     const workers = signal([]);
+    // Пресет сэмплера/ризонинга — свойство ЭТОГО трекера, не воркера,
+    // который его исполнит: тот же воркер может параллельно нести и
+    // творческую генерацию, и её другие настройки не должны переезжать сюда
+    // просто потому, что заняли один порт. `samplerPreset` (не `preset` —
+    // это имя уже занято пресетом ПОЛЕЙ времени выше) хранится только ради
+    // интерфейса, само Ядро трекинга смотрит на сами значения.
+    const samplerPreset = signal('');
+    const defaultSampler = clampSamplerSettings();
+    const defaultReasoning = clampReasoningSettings();
+    const temperature = signal(defaultSampler.temperature);
+    const topP = signal(defaultSampler.topP);
+    const topK = signal(defaultSampler.topK);
+    const maxTokens = signal(defaultSampler.maxTokens);
+    const reasoningMode = signal(defaultReasoning.reasoningMode);
+    const reasoningEffort = signal(defaultReasoning.reasoningEffort);
+    const reasoningBudget = signal(defaultReasoning.reasoningBudget);
     const label = signal('');
     const busy = signal(false);
     // Отметка каждого сообщения отдельно. Один общий сигнал на весь чат
@@ -237,6 +270,20 @@ export function createTimeModule(host) {
 
     // --- Настройка трекера в Ядре -------------------------------------------
 
+    /** Пресет заполняет и сэмплер, и ризонинг одним нажатием — дальше можно подкрутить руками, само нажатие ничего не сохраняет (Save остаётся отдельным шагом). Та же механика, что у пресетов полей времени выше и у воркеров панели движка. */
+    function applySampler(id) {
+        const found = SAMPLER_PRESETS.find(item => item.id === id);
+        if (!found) return;
+        samplerPreset.set(found.id);
+        temperature.set(found.temperature);
+        topP.set(found.topP);
+        topK.set(found.topK);
+        maxTokens.set(found.maxTokens);
+        reasoningMode.set(found.reasoningMode);
+        reasoningEffort.set(found.reasoningEffort);
+        reasoningBudget.set(found.reasoningBudget);
+    }
+
     function trackerConfig() {
         return {
             id: TRACKER_ID,
@@ -251,7 +298,17 @@ export function createTimeModule(host) {
             enabled: enabled.peek(),
             workerId: workerId.peek(),
             fields: fields.peek().map(field => ({ name: field.name, prompt: field.prompt ?? '' })),
+            // Инструкция — в системное сообщение, сама шкала/переписка — в
+            // пользовательское (Ядро трекинга шлёт их РАЗНЫМИ сообщениями,
+            // см. его doc-comment).
+            systemPromptTemplate: TIME_SYSTEM_PROMPT,
             promptTemplate: TIME_PROMPT,
+            // Сэмплер/ризонинг — свойство ЭТОГО трекера, не воркера: «RP
+            // Time» вправе хотеть точности и без раздумий, даже если тот же
+            // воркер параллельно обслуживает творческую генерацию с другими
+            // настройками.
+            temperature: temperature.peek(), topP: topP.peek(), topK: topK.peek(), maxTokens: maxTokens.peek(),
+            reasoningMode: reasoningMode.peek(), reasoningEffort: reasoningEffort.peek(), reasoningBudget: reasoningBudget.peek(),
             // Триггеров у трекера нет: опрос запускает САМ Модуль (см.
             // `advance()`), потому что перед опросом он обязан подставить в
             // промпт свежую шкалу. Триггер Директора этого сделать не может —
@@ -268,7 +325,11 @@ export function createTimeModule(host) {
             await call('storage.settings.set', {
                 namespace: SETTINGS_NAMESPACE,
                 key: 'settings',
-                value: { preset: preset.peek(), startTime: startTime.peek(), displayTemplate: displayTemplate.peek(), fields: fields.peek(), workerId: workerId.peek(), enabled: enabled.peek() },
+                value: {
+                    preset: preset.peek(), startTime: startTime.peek(), displayTemplate: displayTemplate.peek(), fields: fields.peek(), workerId: workerId.peek(), enabled: enabled.peek(),
+                    samplerPreset: samplerPreset.peek(), temperature: temperature.peek(), topP: topP.peek(), topK: topK.peek(), maxTokens: maxTokens.peek(),
+                    reasoningMode: reasoningMode.peek(), reasoningEffort: reasoningEffort.peek(), reasoningBudget: reasoningBudget.peek(),
+                },
             });
         }
         await notify(result.ok ? 'ok' : 'error', result.ok ? 'RP time settings saved' : result.error.message);
@@ -370,6 +431,29 @@ export function createTimeModule(host) {
                 Toggle('Enabled', enabled),
             ),
             Row(Button('Apply preset', () => applyPreset(preset.peek()))),
+            // Сэмплер/ризонинг — свойство ЭТОГО трекера, а не выбранного выше
+            // подключения: тот же воркер вправе параллельно обслуживать
+            // творческую генерацию с другими настройками. «Generation
+            // preset», не «Preset» — то слово уже занято форматом полей выше.
+            Field('Generation preset', Select(samplerPreset, [
+                { value: '', label: 'Custom (pick a preset below to start from one)' },
+                ...SAMPLER_PRESETS.map(item => ({ value: item.id, label: item.name })),
+            ], { onChange: id => applySampler(id) }), {
+                hint: computed(() => SAMPLER_PRESETS.find(item => item.id === samplerPreset())?.description ?? ''),
+            }),
+            Row(
+                Slider('Temperature', temperature, { min: 0, max: 2, step: 0.05 }),
+                Slider('Top P', topP, { min: 0, max: 1, step: 0.01 }),
+                Slider('Top K', topK, { min: 0, max: 200, step: 1 }),
+                Slider('Max tokens', maxTokens, { min: 1, max: 4096, step: 1 }),
+            ),
+            Row(
+                Field('Reasoning', Select(reasoningMode, REASONING_MODE_OPTIONS)),
+                Field('Effort', Select(reasoningEffort, REASONING_EFFORT_OPTIONS), {
+                    hint: 'OpenRouter only — Anthropic and Google have no effort levels of their own.',
+                }),
+                Slider('Reasoning budget (tokens)', reasoningBudget, { min: 0, max: 32768, step: 64 }),
+            ),
             Field('Starting time', TextInput(startTime, { placeholder: 'Year 1, Month 1, Day 1, 08:00 (Morning)' }), {
                 hint: 'Where the clock starts before anything has been worked out yet.',
             }),
@@ -471,6 +555,19 @@ export function createTimeModule(host) {
             fields.set(saved.value.fields ?? TIME_PRESETS[0].fields);
             workerId.set(saved.value.workerId ?? '');
             enabled.set(saved.value.enabled !== false);
+            samplerPreset.set(saved.value.samplerPreset ?? '');
+            // Клэмп, а не значения с диска как есть — ручная правка файла
+            // настроек или старая запись до появления этих полей не должны
+            // уйти к провайдеру мимо собственных границ ползунков.
+            const sampler = clampSamplerSettings(saved.value);
+            temperature.set(sampler.temperature);
+            topP.set(sampler.topP);
+            topK.set(sampler.topK);
+            maxTokens.set(sampler.maxTokens);
+            const reasoning = clampReasoningSettings(saved.value);
+            reasoningMode.set(reasoning.reasoningMode);
+            reasoningEffort.set(reasoning.reasoningEffort);
+            reasoningBudget.set(reasoning.reasoningBudget);
         }
         const workerList = await call('model.workers.get');
         workers.set((workerList.ok ? workerList.value ?? [] : []).map(worker => ({ value: worker.id, label: worker.id })));
@@ -495,6 +592,7 @@ export function createTimeModule(host) {
         reset,
         save,
         applyPreset,
+        applySampler,
         label,
         history,
         badges,
@@ -502,6 +600,14 @@ export function createTimeModule(host) {
         startTime,
         displayTemplate,
         enabled,
+        samplerPreset,
+        temperature,
+        topP,
+        topK,
+        maxTokens,
+        reasoningMode,
+        reasoningEffort,
+        reasoningBudget,
         stop: () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             call('ui.messageFooter.release', { ownerId: MODULE_ID });
