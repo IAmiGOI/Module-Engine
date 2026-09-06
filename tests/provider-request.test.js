@@ -93,3 +93,110 @@ test('resolveProviderResponseText() returns "" for malformed JSON or an unexpect
     assert.equal(resolveProviderResponseText('openai', 'not json at all'), '');
     assert.equal(resolveProviderResponseText('openai', JSON.stringify({ unexpected: true })), '');
 });
+
+// --- Ризонинг: три разных настоящих API, ни одного общего поля -------------
+
+test('a request with no reasoning fields at all sends NOTHING extra — the bare REQUEST fixture above must stay a safe, inert baseline for every other test in this file', () => {
+    const anthropic = buildProviderRequest({ endpoint: 'https://api.example.com', format: 'anthropic' }, REQUEST);
+    const google = buildProviderRequest({ endpoint: 'https://generativelanguage.googleapis.com/v1', model: 'g', format: 'google' }, REQUEST);
+    const openai = buildProviderRequest({ endpoint: 'https://openrouter.ai/api/v1', format: 'openai' }, REQUEST);
+
+    assert.equal('thinking' in JSON.parse(anthropic.body), false);
+    assert.equal('thinkingConfig' in JSON.parse(google.body).generationConfig, false);
+    assert.equal('reasoning' in JSON.parse(openai.body), false);
+});
+
+test('openai reasoning ONLY goes to a real OpenRouter endpoint — a generic OpenAI-compatible one gets nothing, since there is no shared standard for it', () => {
+    const generic = buildProviderRequest(
+        { endpoint: 'https://api.example.com/v1', format: 'openai' },
+        { ...REQUEST, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000 },
+    );
+    const openRouter = buildProviderRequest(
+        { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
+        { ...REQUEST, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000 },
+    );
+
+    assert.equal('reasoning' in JSON.parse(generic.body), false);
+    assert.deepEqual(JSON.parse(openRouter.body).reasoning, { enabled: true, effort: 'high', max_tokens: 2000 });
+});
+
+test('openai reasoning "disabled" is sent as an explicit choice, distinct from silence ("inherit")', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
+        { ...REQUEST, reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0 },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).reasoning, { enabled: false, effort: 'low' });
+});
+
+test('openai reasoning stays silent on "inherit" — the provider decides, nothing is sent either way', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
+        { ...REQUEST, reasoningMode: 'inherit' },
+    );
+
+    assert.equal('reasoning' in JSON.parse(built.body), false);
+});
+
+test('anthropic "enabled" sends a real thinking budget, clamped to Anthropic\'s own minimum of 1024', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://api.example.com', format: 'anthropic' },
+        { ...REQUEST, maxTokens: 4000, reasoningMode: 'enabled', reasoningBudget: 200 },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).thinking, { type: 'enabled', budget_tokens: 1024 });
+});
+
+test('anthropic "enabled" never sends a budget that reaches or exceeds max_tokens — Anthropic requires it strictly smaller', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://api.example.com', format: 'anthropic' },
+        { ...REQUEST, maxTokens: 2000, reasoningMode: 'enabled', reasoningBudget: 999999 },
+    );
+
+    assert.equal(JSON.parse(built.body).thinking.budget_tokens, 1999);
+});
+
+test('anthropic "enabled" with a max_tokens too small to hold ANY valid budget sends no thinking at all, rather than a request Anthropic is guaranteed to refuse', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://api.example.com', format: 'anthropic' },
+        { ...REQUEST, maxTokens: 500, reasoningMode: 'enabled', reasoningBudget: 200 },
+    );
+
+    assert.equal('thinking' in JSON.parse(built.body), false);
+});
+
+test('anthropic "disabled" is sent explicitly, not just silence', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://api.example.com', format: 'anthropic' },
+        { ...REQUEST, reasoningMode: 'disabled' },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).thinking, { type: 'disabled' });
+});
+
+test('google "enabled" with an explicit budget sends that exact number', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://generativelanguage.googleapis.com/v1', model: 'g', format: 'google' },
+        { ...REQUEST, reasoningMode: 'enabled', reasoningBudget: 3000 },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).generationConfig.thinkingConfig, { thinkingBudget: 3000 });
+});
+
+test('google "enabled" with NO explicit budget asks for -1 — "let the model decide", not a hardcoded guess', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://generativelanguage.googleapis.com/v1', model: 'g', format: 'google' },
+        { ...REQUEST, reasoningMode: 'enabled', reasoningBudget: 0 },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).generationConfig.thinkingConfig, { thinkingBudget: -1 });
+});
+
+test('google "disabled" sends an explicit zero budget', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://generativelanguage.googleapis.com/v1', model: 'g', format: 'google' },
+        { ...REQUEST, reasoningMode: 'disabled' },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).generationConfig.thinkingConfig, { thinkingBudget: 0 });
+});
