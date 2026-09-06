@@ -365,3 +365,38 @@ test('switching a tracker away from "hold the generation" takes its refresh stag
 
     assert.deepEqual(pipelineCore.stages('generation.prepare'), []);
 });
+
+// --- Чужие трекеры ----------------------------------------------------------
+
+test('a tracker owned by ANOTHER Module is not in the user\'s list, and not in the floating panel either', async () => {
+    const { module, trackingCore } = buildEngine();
+    trackingCore.configureTrackers([
+        { id: 'mine', kind: 'user', workerId: 'main', triggers: [], fields: [{ name: 'health', prompt: 'HP' }] },
+        // Ровно тот случай, что вылез живьём: специализированный трекер Модуля
+        // «RP Time» — полноценный `user` (макрос писаться обязан), но правит
+        // его свой Модуль, а не человек.
+        { id: 'rp-time', kind: 'user', ownerId: 'module.time', workerId: 'main', triggers: [], fields: [{ name: 'time', prompt: 'clock' }] },
+        { id: 'engine', kind: 'system', workerId: 'main', triggers: [], fields: [{ name: 'x', prompt: 'x' }] },
+    ]);
+
+    await module.load();
+
+    // Список и плавающая панель рисуются из одного и того же набора, поэтому
+    // проверка одного покрывает оба.
+    assert.deepEqual(module.trackers().map(record => record.id.peek()), ['mine']);
+});
+
+test('saving the user\'s trackers does NOT wipe the ones other Modules own — configure replaces the WHOLE set', async () => {
+    const { module, trackingCore } = buildEngine();
+    trackingCore.configureTrackers([
+        { id: 'mine', kind: 'user', workerId: 'main', triggers: [], fields: [{ name: 'health', prompt: 'HP' }] },
+        { id: 'rp-time', kind: 'user', ownerId: 'module.time', workerId: 'main', triggers: [], fields: [{ name: 'time', prompt: 'clock' }] },
+        { id: 'engine', kind: 'system', workerId: 'main', triggers: [], fields: [{ name: 'x', prompt: 'x' }] },
+    ]);
+    await module.load();
+
+    await module.save();
+
+    assert.deepEqual(trackingCore.trackers().map(tracker => tracker.id).sort(), ['engine', 'mine', 'rp-time']);
+    assert.equal(trackingCore.trackers().find(tracker => tracker.id === 'rp-time').ownerId, 'module.time', 'чужой трекер вернулся в Ядро нетронутым');
+});

@@ -10,7 +10,7 @@
  * mean something (see network-gate.js's own doc comment for the bypass
  * this closes).
  */
-export function registerHttpService(networkBus, { fetch: fetchImpl = globalThis.fetch } = {}) {
+export function registerHttpService(networkBus, { fetch: fetchImpl = globalThis.fetch?.bind(globalThis) } = {}) {
     return networkBus.register('http.request', async ({ url, method = 'GET', headers, body }) => {
         const response = await fetchImpl(url, { method, headers, body });
         const text = await response.text();

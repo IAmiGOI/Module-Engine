@@ -172,7 +172,14 @@ export function createTimeModule(host) {
     function trackerConfig() {
         return {
             id: TRACKER_ID,
+            // `kind: 'user'` — потому что макрос писаться ОБЯЗАН: время всегда
+            // доступно как `{{...}}`, ровно как в Alpha.
             kind: 'user',
+            // …но распоряжается им этот Модуль, а не человек руками. Модуль
+            // трекеров по `ownerId` его и не показывает — ни в списке, ни в
+            // своей плавающей панели: там место трекерам, которые пользователь
+            // завёл сам.
+            ownerId: MODULE_ID,
             enabled: enabled.peek(),
             workerId: workerId.peek(),
             fields: fields.peek().map(field => ({ name: field.name, prompt: field.prompt ?? '' })),

@@ -284,3 +284,14 @@ test('the badge under a message shows the LAST KNOWN time, never the blank of a 
 
     assert.equal(valueOf(), '11:40 (Morning)');
 });
+
+test('the tracker it registers is OWNED by this Module — the tracker Module must not show it as one of the user\'s own', async () => {
+    const { module, trackingCore } = buildEngine();
+
+    await module.load();
+
+    const tracker = trackingCore.trackers().find(item => item.id === 'rp-time');
+    assert.equal(tracker.ownerId, MODULE_ID, 'без этого он вылезал в список трекеров и в их плавающую панель');
+    // И при этом остаётся полноценным `user`: макрос времени писаться обязан.
+    assert.equal(tracker.kind, 'user');
+});

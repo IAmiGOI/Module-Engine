@@ -162,6 +162,8 @@ function fromRecord(record) {
     return {
         id: record.id.peek().trim(),
         kind: 'user',
+        // Трекеры этого Модуля — ничьи: их завёл человек руками. `ownerId`
+        // ставит только Модуль, который держит СВОЙ специализированный трекер.
         enabled: record.enabled.peek(),
         workerId: record.workerId.peek(),
         fields: record.fields.peek().map(field => ({ name: field.name, prompt: record.prompts.get(field.name)?.peek() ?? '', default: field.default })),
@@ -244,7 +246,11 @@ export function createTrackerModule(host) {
         await Promise.all([collapse.restore(), loadHudState()]);
         const [listed, display, staged] = await Promise.all([call('tracking.trackers'), loadDisplayTemplates(), loadStagedIds()]);
         const records = (listed.ok ? listed.value ?? [] : [])
-            .filter(tracker => tracker.kind !== 'system') // системные трекеры заводит движок, их не правят руками
+            // Системные заводит движок, а трекер с `ownerId` — чужой Модуль
+            // (например, «RP Time»). Ни те, ни другие не правятся руками, и в
+            // списке пользователя им делать нечего — как и в плавающей панели
+            // ниже, которая рисуется из этого же набора.
+            .filter(tracker => tracker.kind !== 'system' && !tracker.ownerId)
             .map(tracker => toRecord(tracker, display[tracker.id] ?? '', staged.has(computeStageId(tracker.id))));
         trackers.set(records);
         await Promise.all(records.map(refreshValues));
@@ -289,7 +295,15 @@ export function createTrackerModule(host) {
 
     async function save() {
         const list = trackers.peek().map(fromRecord).filter(tracker => tracker.id);
-        const result = await call('tracking.configure', { trackers: list });
+        // `tracking.configure` задаёт НАБОР ЦЕЛИКОМ. Отдать только свои записи
+        // значило бы стереть из Ядра всё, чего этот Модуль не показывает, —
+        // системные трекеры движка и трекеры чужих Модулей. Поэтому чужое
+        // перечитывается прямо перед записью и уходит обратно нетронутым.
+        const listed = await call('tracking.trackers');
+        const mine = new Set(list.map(tracker => tracker.id));
+        const foreign = (listed.ok ? listed.value ?? [] : [])
+            .filter(tracker => (tracker.kind === 'system' || tracker.ownerId) && !mine.has(tracker.id));
+        const result = await call('tracking.configure', { trackers: [...foreign, ...list] });
         if (result.ok) { await saveDisplayTemplates(); await syncStages(); }
         lastSave = result;
         await notify(result.ok ? 'ok' : 'error',
