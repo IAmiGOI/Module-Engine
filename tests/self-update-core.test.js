@@ -309,3 +309,62 @@ test('when BOTH tries fail the reason survives all the way out — "unavailable"
     assert.match(outcome.reason, /per-user lookup/);
     assert.match(outcome.reason, /global lookup/);
 });
+
+test('the update ANNOUNCES its run — the screen is drawn by someone else, and has no other way to know', async () => {
+    const { engine, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Stable' },
+        update: { isUpToDate: true },
+    });
+    const seen = [];
+    for (const event of ['selfUpdate.started', 'selfUpdate.applied', 'selfUpdate.failed', 'selfUpdate.upToDate']) {
+        engine.events.subscribe(event, () => seen.push(event));
+    }
+
+    await core.run({ force: true });
+
+    assert.deepEqual(seen, ['selfUpdate.started', 'selfUpdate.applied']);
+});
+
+test('a failed pull announces the failure WITH its reason — the banner has nothing else to show', async () => {
+    const { engine, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Stable' },
+        update: null,
+    });
+    const seen = [];
+    engine.events.subscribe('selfUpdate.failed', payload => seen.push(payload));
+
+    await core.run({ force: true });
+
+    assert.equal(seen.length, 1);
+    assert.match(String(seen[0].reason), /HTTP 500/);
+});
+
+test('being up to date announces exactly that, and NOTHING that would put a screen in the way', async () => {
+    const { engine, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: true, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Stable' },
+    });
+    const seen = [];
+    for (const event of ['selfUpdate.started', 'selfUpdate.upToDate']) engine.events.subscribe(event, () => seen.push(event));
+
+    await core.run({ force: true });
+
+    assert.deepEqual(seen, ['selfUpdate.upToDate']);
+});
+
+test('a check that could not run at all stays SILENT on boot, and speaks only when a person asked', async () => {
+    const quiet = buildEngine({ discover: null, version: null });
+    const asked = buildEngine({ discover: null, version: null });
+    const quietSeen = [];
+    const askedSeen = [];
+    quiet.engine.events.subscribe('selfUpdate.failed', payload => quietSeen.push(payload));
+    asked.engine.events.subscribe('selfUpdate.failed', payload => askedSeen.push(payload));
+
+    await quiet.core.run();          // автоматический ход при старте
+    await asked.core.run({ force: true }); // нажатая кнопка
+
+    assert.deepEqual(quietSeen, [], 'не-git установка не повод шуметь у того, кто просто скопировал папку');
+    assert.equal(askedSeen.length, 1, 'а на явное нажатие промолчать нельзя');
+});
