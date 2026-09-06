@@ -29,6 +29,14 @@ const ST_EVENT_TYPES = Object.freeze({
     GENERATION_ENDED: 'generation_ended',
     MESSAGE_SWIPED: 'message_swiped',
     MESSAGE_EDITED: 'message_edited',
+    // Настоящие значения из ST (scripts/events.js), не выдуманные — Ядро
+    // работы с WI подписывается на них через `eventsCore.bridge()`, а тот
+    // мостит только то, что `eventTypes` вообще заявляет о себе.
+    WORLDINFO_UPDATED: 'worldinfo_updated',
+    WORLDINFO_SETTINGS_UPDATED: 'worldinfo_settings_updated',
+    WORLD_INFO_ACTIVATED: 'world_info_activated',
+    WORLDINFO_ENTRIES_LOADED: 'worldinfo_entries_loaded',
+    WORLDINFO_SCAN_DONE: 'worldinfo_scan_done',
 });
 const stListeners = new Map();
 
@@ -43,10 +51,28 @@ const stContext = {
         { is_user: true, is_system: false, name: 'Player', mes: 'I take a swing at the bandit and catch a blade on my arm.' },
         { is_user: false, is_system: false, name: 'Narrator', mes: 'The blade bites deep. You stagger back into the tavern doorway, bleeding.' },
     ]),
-    chatMetadata: loadJson('stmeBetaHarness.chatMetadata', {}),
+    chatMetadata: loadJson('stmeBetaHarness.chatMetadata', {
+        // Реальная ST кладёт книгу чата именно сюда (`chatMetadata.world_info`)
+        // — заводим демо-книгу с порога, иначе Ядру работы с WI нечего
+        // сканировать без ручной настройки харнесса.
+        world_info: 'Demo Lore',
+    }),
     extensionSettings: loadJson('stmeBetaHarness.extensionSettings', {}),
     saveMetadataDebounced: () => saveJson('stmeBetaHarness.chatMetadata', stContext.chatMetadata),
     saveSettingsDebounced: () => saveJson('stmeBetaHarness.extensionSettings', stContext.extensionSettings),
+    // Настоящая ST хранит книги мира на бэкенде — здесь так же за
+    // localStorage, тем же приёмом, что и остальной харнесс. Форма
+    // `{ entries: { uid: entry } }` — ровно то, что отдаёт настоящий
+    // `loadWorldInfo()`.
+    async loadWorldInfo(name) {
+        const books = loadJson('stmeBetaHarness.worldInfo', {});
+        return books[name] ?? null;
+    },
+    async saveWorldInfo(name, data) {
+        const books = loadJson('stmeBetaHarness.worldInfo', {});
+        books[name] = data;
+        saveJson('stmeBetaHarness.worldInfo', books);
+    },
     macros: { register: () => {}, registry: { unregisterMacro: () => {} } },
     // Настоящая ST держит инструменты по имени, и умеет позвать action()
     // напрямую — тем же путём, каким это в итоге делает сама модель. Без
@@ -61,6 +87,18 @@ const stContext = {
         off: (name, handler) => stListeners.set(name, (stListeners.get(name) ?? []).filter(item => item !== handler)),
     },
 };
+
+// Затравка демо-книги — один раз, если её ещё вообще не было (не
+// перетираем то, что харнесс уже накопил за прошлые сеансы).
+if (!localStorage.getItem('stmeBetaHarness.worldInfo')) {
+    saveJson('stmeBetaHarness.worldInfo', {
+        'Demo Lore': {
+            entries: {
+                0: { uid: 0, key: ['tavern', 'inn'], comment: 'Tavern Doorway', content: 'A weathered oak door leads into a warm, noisy tavern.', disable: false, constant: false, order: 100, probability: 100 },
+            },
+        },
+    });
+}
 
 // --- Demo-aware fetch: "demo://..." endpoints get a canned reply so the
 // harness works with zero setup; anything else hits the real network, so a
