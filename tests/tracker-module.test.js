@@ -68,6 +68,15 @@ function buildEngine({ rights } = {}) {
         return '{"health": 42, "location": "the inn"}';
     });
     modelHost.own.register('model.workers.get', () => [{ id: 'main' }, { id: 'backup' }]);
+    // Свои пресеты — тот же контракт, что у настоящего Ядра моделей, только
+    // без клэмпа/санитации: сохранённое тестом здесь и без того валидно.
+    let customPresets = [];
+    modelHost.own.register('model.presets.get', () => customPresets);
+    modelHost.own.register('model.presets.set', params => {
+        customPresets = params?.presets ?? [];
+        engine.events.emit('model.presets.changed', { count: customPresets.length });
+        return customPresets;
+    });
 
     const trackingCore = createTrackingCore(engine.registerCaller('core.tracking', 'cores', { tier: 'official' }));
     // Настоящее Ядро уведомлений: словесные результаты уходят туда, и проверять
@@ -83,7 +92,7 @@ function buildEngine({ rights } = {}) {
         tier: 'community',
         allowedContracts: [
             'tracking.trackers', 'tracking.configure', 'tracking.fields', 'tracking.poll', 'tracking.reset',
-            'model.workers.get', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
+            'model.workers.get', 'model.presets.get', 'model.presets.set', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
             // «Обновиться до ответа» регистрируется этапом пайплайна
             // `generation.prepare` — значит Модулю нужно право трогать его состав.
             'pipeline.stages', 'pipeline.stages.add', 'pipeline.stages.remove',
@@ -189,6 +198,79 @@ test('two trackers pinned to the SAME worker keep independent sampler settings �
 
     assert.equal(generations[0].temperature, 0, 'status stayed deterministic');
     assert.equal(generations[1].temperature, 1.1, 'mood stayed creative, same worker, different call');
+});
+
+test('the Generation settings card is a real collapsible <details>, same as any other advanced section — the block must not stand loose in the middle of the card', async () => {
+    const { module, trackingCore } = buildEngine();
+    await trackingCore.configureTrackers([{ id: 'status', kind: 'user', fields: [{ name: 'health' }], triggers: [] }]);
+    await module.load();
+
+    const tree = module.tree();
+
+    const details = findAll(tree, node => node.tag === 'details');
+    const generationDetails = details.find(node => JSON.stringify(node.children).includes('Generation settings (advanced)'));
+    assert.ok(generationDetails, 'сэмплер/ризонинг завёрнуты в <details>, не голым блоком');
+});
+
+test('"Save as preset" adds a new preset to the SHARED list, selects it, and clears the name field', async () => {
+    const { module, trackingCore } = buildEngine();
+    await trackingCore.configureTrackers([{ id: 'status', kind: 'user', fields: [{ name: 'health' }], triggers: [] }]);
+    await module.load();
+    const record = module.trackers()[0];
+    record.temperature.set(0.33);
+    record.newPresetName.set('My Strict JSON');
+
+    await module.savePreset(record, record.newPresetName.peek());
+
+    assert.deepEqual(module.customPresets().map(item => item.name), ['My Strict JSON']);
+    assert.equal(module.customPresets()[0].temperature, 0.33);
+    assert.equal(record.samplerPreset(), 'custom:my-strict-json', 'сразу выбран, как только сохранён');
+    assert.equal(record.newPresetName(), '', 'поле имени очищено');
+});
+
+test('saving a preset under a name already in use UPDATES it in place instead of adding a duplicate', async () => {
+    const { module, trackingCore } = buildEngine();
+    await trackingCore.configureTrackers([{ id: 'status', kind: 'user', fields: [{ name: 'health' }], triggers: [] }]);
+    await module.load();
+    const record = module.trackers()[0];
+    await module.savePreset(record, 'Mine');
+
+    record.temperature.set(1.5);
+    await module.savePreset(record, 'Mine');
+
+    assert.equal(module.customPresets().length, 1, 'не появился второй рядом');
+    assert.equal(module.customPresets()[0].temperature, 1.5, 'а обновлён тот же самый');
+});
+
+test('"Delete preset" removes a custom preset from the shared list and returns the tracker to Custom, without touching its current slider values', async () => {
+    const { module, trackingCore } = buildEngine();
+    await trackingCore.configureTrackers([{ id: 'status', kind: 'user', fields: [{ name: 'health' }], triggers: [] }]);
+    await module.load();
+    const record = module.trackers()[0];
+    await module.savePreset(record, 'Temporary');
+    const keptTemperature = record.temperature();
+
+    await module.deletePreset(record);
+
+    assert.deepEqual(module.customPresets(), []);
+    assert.equal(record.samplerPreset(), '', 'выбор вернулся к Custom');
+    assert.equal(record.temperature(), keptTemperature, 'значения на самом трекере не тронуты');
+});
+
+test('a preset saved from ONE tracker reaches a SECOND tracker\'s dropdown through model.presets.changed — the list is shared, not per-tracker', async () => {
+    const { module, trackingCore } = buildEngine();
+    await trackingCore.configureTrackers([
+        { id: 'status', kind: 'user', fields: [{ name: 'health' }], triggers: [] },
+        { id: 'mood', kind: 'user', fields: [{ name: 'health' }], triggers: [] },
+    ]);
+    await module.load();
+    const [status, mood] = module.trackers();
+
+    await module.savePreset(status, 'Shared Preset');
+
+    assert.deepEqual(module.customPresets().map(item => item.name), ['Shared Preset'], 'виден и трекеру mood — список один на весь Модуль');
+    module.applySamplerPreset(mood, 'custom:shared-preset');
+    assert.equal(mood.samplerPreset(), 'custom:shared-preset');
 });
 
 test('a chosen preset survives a reload — it is remembered per tracker, not lost or forced back to a worker default', async () => {

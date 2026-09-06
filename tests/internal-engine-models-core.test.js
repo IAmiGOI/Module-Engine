@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createEngine } from '../libraries/shared/engine.js';
 import { registerHttpService } from '../services/http.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
-import { createInternalEngineModelsCore, resolveGenerateRequest, clampSamplerSettings, clampReasoningSettings, SAMPLER_PRESETS, REASONING_MODES, REASONING_EFFORTS } from '../cores/models/internal-engine.js';
+import { createInternalEngineModelsCore, resolveGenerateRequest, clampSamplerSettings, clampReasoningSettings, SAMPLER_PRESETS, REASONING_MODES, REASONING_EFFORTS, slugifyPresetName, buildCustomPreset } from '../cores/models/internal-engine.js';
 import { createSettingsCore } from '../cores/settings/index.js';
 
 // --- Чистые функции: пресеты и защитное чтение сэмплера ---------------------
@@ -94,6 +94,42 @@ test('resolveGenerateRequest() still lets an explicit per-call reasoning overrid
     const resolved = resolveGenerateRequest({ prompt: 'hi', reasoningMode: 'enabled' }, worker);
 
     assert.equal(resolved.reasoningMode, 'enabled');
+});
+
+// --- Свои пресеты: id из имени, форма пресета -------------------------------
+
+test('slugifyPresetName() turns a name into a stable id, prefixed so it can never collide with a built-in preset', () => {
+    assert.equal(slugifyPresetName('Strict Tracker JSON'), 'custom:strict-tracker-json');
+    assert.equal(slugifyPresetName('  extra   spaces  '), 'custom:extra-spaces');
+});
+
+test('slugifyPresetName() with no usable name at all yields no id — nothing to save under', () => {
+    assert.equal(slugifyPresetName(''), '');
+    assert.equal(slugifyPresetName('   '), '');
+    assert.equal(slugifyPresetName(undefined), '');
+});
+
+test('the SAME name always slugifies to the SAME id — saving under a name already in use updates that preset instead of duplicating it', () => {
+    assert.equal(slugifyPresetName('Precise JSON'), slugifyPresetName('Precise JSON'));
+});
+
+test('buildCustomPreset() carries the exact sampler/reasoning values given, clamped the same way a worker\'s would be, and is marked custom', () => {
+    const preset = buildCustomPreset('My Preset', { temperature: 0.33, topP: 0.5, topK: 10, maxTokens: 512, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 4000 });
+
+    assert.equal(preset.id, 'custom:my-preset');
+    assert.equal(preset.name, 'My Preset');
+    assert.equal(preset.custom, true);
+    assert.equal(preset.temperature, 0.33);
+    assert.equal(preset.reasoningMode, 'enabled');
+    assert.equal(preset.reasoningBudget, 4000);
+});
+
+test('buildCustomPreset() clamps garbage exactly like clampSamplerSettings/clampReasoningSettings would — a custom preset is not a way around the same bounds', () => {
+    const preset = buildCustomPreset('Sloppy', { temperature: -5, topK: 9999, reasoningMode: 'yolo' });
+
+    assert.equal(preset.temperature, 0);
+    assert.equal(preset.topK, 200);
+    assert.equal(preset.reasoningMode, 'inherit');
 });
 
 /**
@@ -310,4 +346,54 @@ test('a worker configured with reasoning enabled actually sends it to a REAL Ope
 
     assert.equal(result.ok, true);
     assert.deepEqual(JSON.parse(calls[0].body).reasoning, { enabled: true, effort: 'high', max_tokens: 2000 });
+});
+
+// --- Свои пресеты: контракты + событие --------------------------------------
+
+test('model.presets.set saves a custom preset, and model.presets.get reads it straight back through the real Гейт', async () => {
+    const { engine, modelsCore } = buildEngineWithModelsCore();
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'community', allowedContracts: ['model.presets.get', 'model.presets.set'] });
+
+    await modelsCore.configurePresets([{ name: 'Strict JSON', temperature: 0.1, maxTokens: 200 }]);
+    const result = await new Promise(resolve => module.cores.subscribe('model.presets.get', {}, resolve));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.value.length, 1);
+    assert.equal(result.value[0].id, 'custom:strict-json');
+    assert.equal(result.value[0].name, 'Strict JSON');
+    assert.equal(result.value[0].custom, true);
+    assert.equal(result.value[0].temperature, 0.1);
+});
+
+test('a preset with no name is dropped rather than saved as junk nobody can select', async () => {
+    const { engine, modelsCore } = buildEngineWithModelsCore();
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'community', allowedContracts: ['model.presets.get'] });
+
+    await modelsCore.configurePresets([{ name: '   ', temperature: 0.5 }, { name: 'Real One' }]);
+    const result = await new Promise(resolve => module.cores.subscribe('model.presets.get', {}, resolve));
+
+    assert.deepEqual(result.value.map(item => item.name), ['Real One']);
+});
+
+test('configurePresets() announces model.presets.changed — a sibling screen (the other Module) can refresh without a page reload', async () => {
+    const { engine, modelsCore } = buildEngineWithModelsCore();
+    const seen = [];
+    engine.events.subscribe('model.presets.changed', payload => seen.push(payload));
+
+    await modelsCore.configurePresets([{ name: 'One' }, { name: 'Two' }]);
+
+    assert.deepEqual(seen, [{ count: 2 }]);
+});
+
+test('custom presets really persist via storage.settings — restorePresets() on a FRESH Ядро instance recovers what a previous one saved', async () => {
+    const { engine } = buildEngineWithModelsCore();
+    const firstInstance = createInternalEngineModelsCore(engine.registerCaller('core.models.internal.first', 'cores', { tier: 'official', networkAccess: true }));
+    await firstInstance.configurePresets([{ name: 'Persisted Preset', temperature: 0.15 }]);
+
+    const secondInstance = createInternalEngineModelsCore(engine.registerCaller('core.models.internal.second', 'cores', { tier: 'official', networkAccess: true }));
+    const restored = await secondInstance.restorePresets();
+
+    assert.equal(restored.length, 1);
+    assert.equal(restored[0].id, 'custom:persisted-preset');
+    assert.equal(restored[0].temperature, 0.15);
 });

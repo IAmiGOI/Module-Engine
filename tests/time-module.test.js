@@ -82,6 +82,15 @@ function buildEngine({ replies, gate, fail = false } = {}) {
         return answers[Math.min(prompts.length - 1, answers.length - 1)];
     });
     modelHost.own.register('model.workers.get', () => [{ id: 'main' }]);
+    // Свои пресеты — тот же контракт, что у настоящего Ядра моделей, и тот
+    // же общий список, что видит Модуль «Трекер».
+    let customPresets = [];
+    modelHost.own.register('model.presets.get', () => customPresets);
+    modelHost.own.register('model.presets.set', params => {
+        customPresets = params?.presets ?? [];
+        engine.events.emit('model.presets.changed', { count: customPresets.length });
+        return customPresets;
+    });
 
     const macroWrites = [];
     const trackingCore = createTrackingCore(engine.registerCaller('core.tracking', 'cores', { tier: 'official' }), {
@@ -104,7 +113,7 @@ function buildEngine({ replies, gate, fail = false } = {}) {
         allowedContracts: [
             'tracking.trackers', 'tracking.configure', 'tracking.poll', 'tracking.reset',
             'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
-            'model.workers.get', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
+            'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
     });
@@ -158,6 +167,70 @@ test('a Generation preset applied to RP Time reaches the model call — chosen f
     const call = calls.at(-1);
     assert.equal(call.temperature, 0);
     assert.equal(call.reasoningMode, 'disabled');
+});
+
+test('the Generation settings card is a real collapsible <details>, same widget the Tracker module uses — the block must not stand loose in the middle of the screen', async () => {
+    const { module } = buildEngine();
+    await module.load();
+
+    function findAll(node, predicate, found = []) {
+        if (Array.isArray(node)) { for (const item of node) findAll(item, predicate, found); return found; }
+        if (typeof node === 'function') return findAll(node(), predicate, found);
+        if (!node || typeof node !== 'object') return found;
+        if (predicate(node)) found.push(node);
+        for (const child of node.children ?? []) findAll(child, predicate, found);
+        return found;
+    }
+
+    const details = findAll(module.tree(), node => node.tag === 'details');
+    const generationDetails = details.find(node => JSON.stringify(node.children).includes('Generation settings (advanced)'));
+    assert.ok(generationDetails, 'сэмплер/ризонинг завёрнуты в <details>, не голым блоком, ровно как у Модуля «Трекер»');
+});
+
+test('"Save as preset" saves the current tuning to the SHARED preset list, selects it, and clears the name field', async () => {
+    const { module } = buildEngine();
+    await module.load();
+    module.temperature.set(0.33);
+    module.newPresetName.set('My RP Preset');
+
+    await module.savePreset(module.newPresetName.peek());
+
+    assert.deepEqual(module.customPresets().map(item => item.name), ['My RP Preset']);
+    assert.equal(module.customPresets()[0].temperature, 0.33);
+    assert.equal(module.samplerPreset(), 'custom:my-rp-preset', 'сразу выбран, как только сохранён');
+    assert.equal(module.newPresetName(), '', 'поле имени очищено');
+});
+
+test('"Delete preset" removes it from the shared list and returns to Custom, without touching the current slider values', async () => {
+    const { module } = buildEngine();
+    await module.load();
+    await module.savePreset('Temporary');
+    const keptTemperature = module.temperature();
+
+    await module.deletePreset();
+
+    assert.deepEqual(module.customPresets(), []);
+    assert.equal(module.samplerPreset(), '', 'выбор вернулся к Custom');
+    assert.equal(module.temperature(), keptTemperature, 'значения не тронуты');
+});
+
+test('a preset saved elsewhere (the Tracker module, sharing the same Ядро) reaches RP Time through model.presets.changed — no reload needed', async () => {
+    const { engine, module } = buildEngine();
+    await module.load();
+    assert.deepEqual(module.customPresets(), []);
+
+    // «Где-то ещё» здесь — прямая запись через тот же контракт, что и любой
+    // другой держатель прав: сам факт, что Модуль обновился ПО СОБЫТИЮ, а не
+    // потому что дёрнул тест, и есть то, что проверяется.
+    const writer = engine.registerCaller('module.other-writer', 'modules', { tier: 'community', allowedContracts: ['model.presets.set'] });
+    await new Promise(resolve => writer.cores.subscribe('model.presets.set', { params: { presets: [{ id: 'custom:elsewhere', name: 'Elsewhere', custom: true, temperature: 0.5 }] } }, resolve));
+    // Обновление по событию — fire-and-forget внутри подписки Модуля (см. её
+    // подписку на `model.presets.changed`): сама запись уже случилась синхронно
+    // выше, а вот `refreshCustomPresets()` внутри неё довершает свой `await`
+    // ЕЩЁ одним отдельным циклом микрозадач — реальный макротик даёт им всем стечь.
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(module.customPresets().map(item => item.name), ['Elsewhere']);
 });
 
 test('each advance extends the timeline, so the model sees the PACE and not just a point', async () => {
