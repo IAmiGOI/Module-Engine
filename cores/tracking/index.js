@@ -122,6 +122,26 @@ function fieldKey(trackerId, fieldName) {
  * [persisted-list.js](../../libraries/core/persisted-list.js)), not memory
  * that resets on reload.
  *
+ * **Конфигурация — глобальная (одна на все чаты, как воркеры). Натрекан-
+ * ные ЗНАЧЕНИЯ полей — НЕТ.** Раньше `values` были голым `Map` в памяти
+ * процесса: ни персистентности, ни привязки к чату — переключил чат в ST
+ * (SPA, страница не перезагружается) и трекер продолжал невозмутимо
+ * показывать значения ПРЕДЫДУЩЕГО разговора, а обычная перезагрузка страницы
+ * стирала их вовсе. Реальный баг, пойманный не по коду, а по ощущению «трекер
+ * будто одна память на все чаты». Значения теперь лежат в `storage.
+ * chatMemory` (то же Ядро памяти чата, которым уже пользуется шкала «RP
+ * Time» — см. doc-comment [modules/time/index.js](../../modules/time/index.js)):
+ * `restoreTrackers()` подгружает их для ТЕКУЩЕГО чата сразу после
+ * конфигурации, а подписка на `st.chatChanged` перечитывает их заново при
+ * каждом переключении и объявляет `tracking.blocks.changed`/`systemBlocks.
+ * changed` по каждому трекеру, чтобы плавающая панель и подвал сообщений
+ * узнали о смене без ручной перезагрузки. `chatValues` в памяти — только
+ * КЭШ для быстрого синхронного чтения; источник правды — `storage.
+ * chatMemory`, куда каждое `setField()`/`reset()` дописывается настоящим
+ * запросом. Хост без Ядра памяти чата рядом (узкие тесты) не ломается —
+ * чтение/запись просто не находят поставщика и тихо остаются в памяти,
+ * ровно как читает контекст `readContext()` ниже.
+ *
  * **Промпт может прийти ДВУМЯ половинами.** `promptTemplate` (обязательный,
  * идёт в `user`) остаётся ровно тем же, чем был — генерический трекер,
  * настроенный руками через Модуль «Трекер», как и раньше не знает никакого
@@ -149,7 +169,10 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
     // Ядро в одиночку, без Ядра событий рядом.
     const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
     let trackers = new Map(); // id -> config
-    const values = new Map(); // fieldKey -> value
+    // Кэш натрекан­ных значений ТЕКУЩЕГО чата — не голая память, см. doc-comment
+    // выше. Обычный объект, не Map: это ровно то, что уходит в `storage.
+    // chatMemory.set` целиком, без промежуточной пере­упаковки.
+    let chatValues = {}; // fieldKey -> value
     const triggerUnsubscribers = new Map(); // trackerId -> [unsubscribe...]
 
     function requireTracker(trackerId) {
@@ -168,16 +191,48 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         const tracker = requireTracker(trackerId);
         requireField(tracker, fieldName);
         const key = fieldKey(trackerId, fieldName);
-        return values.has(key) ? values.get(key) : fallback;
+        return key in chatValues ? chatValues[key] : fallback;
     }
 
+    /**
+     * Меняет значение СИНХРОННО в кэше текущего чата — персистентность
+     * отдельным шагом (`saveChatValues()`), который вызывающий сам решает,
+     * когда позвать: `poll()` копит несколько полей и сохраняет одним
+     * запросом, `tracking.set`/`reset()` — сразу же.
+     */
     function setField(trackerId, fieldName, value) {
         const tracker = requireTracker(trackerId);
         requireField(tracker, fieldName);
-        values.set(fieldKey(trackerId, fieldName), value);
+        chatValues[fieldKey(trackerId, fieldName)] = value;
         if (tracker.kind === 'user') onUserFieldRegistered({ trackerId, fieldName, value });
         publishEvent(tracker.kind === 'system' ? 'tracking.systemBlocks.changed' : 'tracking.blocks.changed', { trackerId });
         return true;
+    }
+
+    /** Дефолты — только для того, у чего в ТЕКУЩЕМ чате ещё вообще нет значения. Зовётся и при подгрузке чата (после чтения `storage.chatMemory`), и при живой перенастройке (новое поле/трекер должно тут же читаться, а не как `undefined` до первого опроса). */
+    function seedDefaults() {
+        for (const tracker of trackers.values()) {
+            for (const field of tracker.fields ?? []) {
+                const key = fieldKey(tracker.id, field.name);
+                if (!(key in chatValues)) chatValues[key] = field.default;
+            }
+        }
+    }
+
+    /** Читает натрекан­ные значения ТЕКУЩЕГО чата — источник правды `storage.chatMemory`, кэш в памяти только ускоряет повторные чтения. Без Ядра памяти чата рядом (узкие тесты) тихо остаётся при дефолтах. */
+    async function loadValuesForCurrentChat() {
+        const result = await request(host.own, 'storage.chatMemory.get', {
+            params: { namespace: PERSISTENCE_NAMESPACE, key: 'values', fallback: {} },
+        });
+        chatValues = result.ok ? { ...(result.value ?? {}) } : {};
+        seedDefaults();
+    }
+
+    /** Пишет ВЕСЬ кэш текущего чата одним запросом — та же форма, что `saveBadges()` у Модуля «RP Time». Молча остаётся только в памяти, если писать некуда (см. doc-comment Ядра). */
+    async function saveChatValues() {
+        await request(host.own, 'storage.chatMemory.set', {
+            params: { namespace: PERSISTENCE_NAMESPACE, key: 'values', value: chatValues },
+        });
     }
 
     function listFields(trackerId) {
@@ -217,9 +272,14 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
         if (!parsed || typeof parsed !== 'object') throw new Error(`tracking.poll: tracker "${trackerId}"'s model reply was not a JSON object.`);
+        let changed = false;
         for (const field of tracker.fields ?? []) {
-            if (Object.prototype.hasOwnProperty.call(parsed, field.name)) setField(trackerId, field.name, parsed[field.name]);
+            if (Object.prototype.hasOwnProperty.call(parsed, field.name)) { setField(trackerId, field.name, parsed[field.name]); changed = true; }
         }
+        // Одним запросом на весь опрос, а не по одному на поле — `setField()`
+        // уже обновил кэш и объявил событие для каждого, здесь только
+        // персистентность в `storage.chatMemory`.
+        if (changed) await saveChatValues();
         return listFields(trackerId);
     }
 
@@ -241,15 +301,26 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
                     params: { trackerId: tracker.id },
                     when: typeof trigger === 'string' ? { event: trigger } : trigger,
                 }, () => {})));
-            for (const field of tracker.fields ?? []) {
-                const key = fieldKey(tracker.id, field.name);
-                if (!values.has(key)) values.set(key, field.default);
-            }
         }
+        // Дефолты — для текущего чата (`chatValues`), не для конфигурации:
+        // новый трекер/поле обязано читаться сразу, даже до того, как для
+        // ЭТОГО чата вообще позвали `loadValuesForCurrentChat()`.
+        seedDefaults();
     }
 
     const persisted = createPersistedList(host, { namespace: PERSISTENCE_NAMESPACE, key: 'trackers', apply: applyTrackers });
-    const restoreTrackers = persisted.restore;
+    /**
+     * Конфигурация трекеров — глобальная, из `storage.settings`
+     * (`persisted.restore()`). Натрекан­ные значения — для ТЕКУЩЕГО чата,
+     * из `storage.chatMemory`, и подгружаются здесь же, сразу следом: до
+     * этого момента `chatValues` держит только дефолты из `seedDefaults()`,
+     * которые сама конфигурация уже успела заполнить.
+     */
+    async function restoreTrackers() {
+        const list = await persisted.restore();
+        await loadValuesForCurrentChat();
+        return list;
+    }
 
     /**
      * **Владение трекером НЕ отнимается.** `tracking.configure` задаёт набор
@@ -279,17 +350,22 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         return result;
     }
 
-    /** Сбрасывает накопленные значения трекера к его же `default`. Отдельно от `configure`: «забыть, что натрекалось» и «поменять настройку» — разные намерения. */
-    function reset(trackerId) {
+    /** Сбрасывает накопленные значения трекера к его же `default`, для ТЕКУЩЕГО чата. Отдельно от `configure`: «забыть, что натрекалось» и «поменять настройку» — разные намерения. */
+    async function reset(trackerId) {
         const tracker = requireTracker(trackerId);
-        for (const field of tracker.fields ?? []) values.set(fieldKey(trackerId, field.name), field.default);
+        for (const field of tracker.fields ?? []) chatValues[fieldKey(trackerId, field.name)] = field.default;
+        await saveChatValues();
         publishEvent(tracker.kind === 'system' ? 'tracking.systemBlocks.changed' : 'tracking.blocks.changed', { trackerId });
         return listFields(trackerId);
     }
 
     const unregisters = [
         host.own.register('tracking.value', params => getField(params?.trackerId, params?.fieldName, params?.fallback)),
-        host.own.register('tracking.set', params => setField(params?.trackerId, params?.fieldName, params?.value)),
+        host.own.register('tracking.set', async params => {
+            const result = setField(params?.trackerId, params?.fieldName, params?.value);
+            await saveChatValues();
+            return result;
+        }),
         host.own.register('tracking.fields', params => listFields(params?.trackerId)),
         host.own.register('tracking.poll', params => poll(params?.trackerId, params?.vars)),
         host.own.register('tracking.reset', params => reset(params?.trackerId)),
@@ -300,6 +376,21 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         host.own.register('tracking.configure', (params, { callerId } = {}) => configureTrackers(params?.trackers ?? [], callerId ?? null)),
     ];
 
+    // Другой чат — другие натрекан­ные значения: перечитываем из `storage.
+    // chatMemory` заново (та же реакция, что у шкалы «RP Time» на этот же
+    // ивент) и объявляем изменение по КАЖДОМУ трекеру, чтобы плавающая
+    // панель и подвал сообщений отрисовали то, что реально принадлежит
+    // новому чату, а не застывшую картинку из предыдущего.
+    const subscriptions = [
+        host.events.subscribe('st.chatChanged', () => {
+            loadValuesForCurrentChat().then(() => {
+                for (const tracker of trackers.values()) {
+                    publishEvent(tracker.kind === 'system' ? 'tracking.systemBlocks.changed' : 'tracking.blocks.changed', { trackerId: tracker.id });
+                }
+            });
+        }),
+    ];
+
     return {
         configureTrackers,
         restoreTrackers,
@@ -308,6 +399,7 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         unregister: () => {
             for (const unsubscribers of triggerUnsubscribers.values()) for (const unsubscribe of unsubscribers) unsubscribe();
             for (const unregister of unregisters) unregister();
+            for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
         },
     };
 }

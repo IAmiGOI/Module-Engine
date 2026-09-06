@@ -85,6 +85,11 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     const updateText = signal('Not checked yet.');
     const updateTone = signal('muted');
     const updateBusy = signal(false);
+    // Та же вспышка обводки, что и у проверки подключения («Test»): синяя
+    // пульсация пока идёт запрос, зелёная/красная — на исход. Раньше об
+    // исходе проверки версии движка говорил только текст статуса, и его
+    // легко было не заметить рядом с остальной панелью.
+    const updateFlash = signal('');
     const eventCount = signal(0);
 
     async function call(contract, params) {
@@ -115,10 +120,10 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         return call('ui.notify', { tone, text });
     }
 
-    /** Вспышка гаснет сама: это подтверждение, а не состояние, и оставлять его висеть незачем. */
-    function flash(record, tone) {
-        record.flash.set(tone);
-        setTimeout(() => { if (record.flash.peek() === tone) record.flash.set(''); }, 1600);
+    /** Вспышка гаснет сама: это подтверждение, а не состояние, и оставлять его висеть незачем. Берёт сигнал напрямую — годится и записи воркера (`record.flash`), и одиночному сигналу вроде `updateFlash`. */
+    function flash(flashSignal, tone) {
+        flashSignal.set(tone);
+        setTimeout(() => { if (flashSignal.peek() === tone) flashSignal.set(''); }, 1600);
     }
 
     async function saveWorkers() {
@@ -131,14 +136,14 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
 
     async function testWorker(record) {
         const id = record.id.peek().trim();
-        if (!id) { await notify('error', 'Give the connection a name first'); flash(record, 'error'); return; }
+        if (!id) { await notify('error', 'Give the connection a name first'); flash(record.flash, 'error'); return; }
         // Тест идёт по СОХРАНЁННОЙ конфигурации: иначе «работает» означало бы
         // «работало бы, если бы ты нажал сохранить» — худший вид зелёной галочки.
         await saveWorkers();
         record.flash.set('testing');
         const startedAt = Date.now();
         const result = await call('model.generate', { prompt: 'Reply with exactly: OK', maxTokens: 16, workerId: id });
-        flash(record, result.ok ? 'ok' : 'error');
+        flash(record.flash, result.ok ? 'ok' : 'error');
         await notify(result.ok ? 'ok' : 'error',
             result.ok ? `${id}: OK in ${Date.now() - startedAt}ms` : `${id}: ${result.error.message}`);
     }
@@ -202,19 +207,31 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         updateBusy.set(true);
         updateText.set('Checking…');
         updateTone.set('muted');
+        // Синяя пульсация, ровно как у «Test» на воркере, пока идёт запрос.
+        updateFlash.set('testing');
         // `force`: явное нажатие не должно молча упираться в паузу между
         // попытками — она существует против цикла «обновились → перезагрузка →
         // обновились», а не против пользователя.
         const result = await call('selfUpdate.run', { force: true });
         updateBusy.set(false);
-        if (!result.ok) { updateTone.set('error'); updateText.set(result.error.message); await notify('error', `Update check failed: ${result.error.message}`); return; }
+        if (!result.ok) {
+            updateTone.set('error'); updateText.set(result.error.message); flash(updateFlash, 'error');
+            await notify('error', `Update check failed: ${result.error.message}`); return;
+        }
 
         const { outcome, error, reason, diagnosis } = result.value ?? {};
         const mismatch = diagnosis?.applicable && !diagnosis.matches;
-        if (outcome === 'updated') { updateTone.set('ok'); updateText.set('Updated — reloading SillyTavern…'); await notify('ok', 'Engine updated — reloading'); return; }
-        if (outcome === 'failed') { updateTone.set('error'); updateText.set(error ?? 'Update failed.'); await notify('error', `Update failed: ${error ?? 'unknown reason'}`); return; }
+        if (outcome === 'updated') {
+            updateTone.set('ok'); updateText.set('Updated — reloading SillyTavern…'); flash(updateFlash, 'ok');
+            await notify('ok', 'Engine updated — reloading'); return;
+        }
+        if (outcome === 'failed') {
+            updateTone.set('error'); updateText.set(error ?? 'Update failed.'); flash(updateFlash, 'error');
+            await notify('error', `Update failed: ${error ?? 'unknown reason'}`); return;
+        }
         if (outcome === 'unavailable') {
             updateTone.set('error');
+            flash(updateFlash, 'error');
             // Самая частая причина — копия, положенная руками: git-эндпоинтов
             // у такой установки нет вовсе. Говорим это прямо, а не «ошибка», —
             // и ДОСЛОВНО показываем, чем ответила ST: без этого «не работает
@@ -226,11 +243,13 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         if (mismatch) {
             // Ровно тот случай, ради которого сверка с GitHub и существует.
             updateTone.set('error');
+            flash(updateFlash, 'error');
             updateText.set(`SillyTavern says up to date at ${String(diagnosis.localSha).slice(0, 7)}, but GitHub's "${diagnosis.branch}" is at ${String(diagnosis.remoteSha).slice(0, 7)}. The local checkout is stuck behind origin.`);
             await notify('error', 'Local copy is behind GitHub despite SillyTavern saying otherwise');
             return;
         }
         updateTone.set('ok');
+        flash(updateFlash, 'ok');
         updateText.set(diagnosis?.applicable
             ? `Up to date — commit ${String(diagnosis.localSha).slice(0, 7)} on "${diagnosis.branch}" matches GitHub.`
             : 'Up to date, as far as SillyTavern can tell (GitHub was not reachable for a direct check).');
@@ -238,7 +257,11 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     }
 
     function updatesCard() {
-        return Card('Updates', { ...collapse.bind('card:updates'), subtitle: 'Where this engine comes from, and whether it is current' },
+        return Card('Updates', {
+            ...collapse.bind('card:updates'),
+            subtitle: 'Where this engine comes from, and whether it is current',
+            className: computed(() => (updateFlash() ? `stme-flash stme-flash-${updateFlash()}` : '')),
+        },
             Row(
                 computed(() => Badge(repository().owner && repository().repo ? `${repository().owner}/${repository().repo}` : 'repository unknown', { tone: 'muted' })),
                 computed(() => Badge(repository().extensionName ? `folder: ${repository().extensionName}` : 'folder unknown', { tone: repository().extensionName ? 'muted' : 'error' })),
