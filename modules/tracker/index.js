@@ -280,6 +280,12 @@ export function createTrackerModule(host) {
         customPresets.set(result.ok ? result.value ?? [] : []);
     }
 
+    /** Список подключений — читается заново по `model.workers.changed`, а не только при загрузке: подключение, добавленное или удалённое в панели воркеров, обязано появиться в выборе трекера без перезагрузки страницы. */
+    async function refreshWorkers() {
+        const result = await call('model.workers.get');
+        workers.set((result.ok ? result.value ?? [] : []).map(worker => ({ value: worker.id, label: worker.id })));
+    }
+
     async function refreshValues(record) {
         const id = record.id.peek().trim();
         if (!id) return;
@@ -308,8 +314,7 @@ export function createTrackerModule(host) {
         trackers.set(records);
         await Promise.all(records.map(refreshValues));
 
-        const workerList = await call('model.workers.get');
-        workers.set((workerList.ok ? workerList.value ?? [] : []).map(worker => ({ value: worker.id, label: worker.id })));
+        await refreshWorkers();
     }
 
     function notify(tone, text) {
@@ -592,6 +597,9 @@ export function createTrackerModule(host) {
         // Модулем «RP Time», и без этого сохранённое там появлялось бы здесь
         // только после ручной перезагрузки страницы.
         host.events.subscribe('model.presets.changed', () => refreshCustomPresets()),
+        // Подключение добавили/убрали в панели воркеров — список выбора у
+        // каждого трекера обязан узнать об этом сам, без перезагрузки страницы.
+        host.events.subscribe('model.workers.changed', () => refreshWorkers()),
     ];
 
     /**
@@ -707,6 +715,7 @@ export function createTrackerModule(host) {
         savePreset,
         deletePreset,
         customPresets: () => customPresets.peek(),
+        workers: () => workers.peek(),
         hudVisible,
         hudPosition,
         hudCollapsed,

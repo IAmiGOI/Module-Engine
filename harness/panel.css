@@ -466,7 +466,7 @@
    на нём самом, а не строкой под ним. Гаснет само: это подтверждение, а не
    состояние, и оставлять его висеть незачем.
 */
-.stme-section.stme-flash { position: relative; }
+.stme-section.stme-flash, .stme-card.stme-flash { position: relative; }
 .stme-flash-ok { animation: stme-flash-ok 1.6s ease-out 1; }
 .stme-flash-error { animation: stme-flash-error 1.6s ease-out 1; }
 .stme-flash-testing, .stme-flash-polling { animation: stme-flash-wait 1.1s ease-in-out infinite; }

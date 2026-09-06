@@ -169,7 +169,10 @@ export function resolveGenerateRequest(params, worker) {
  * при сборке движка (см. harness/engine-wiring.js), не из конструктора —
  * самозагрузка внутри конструктора гонялась бы с вызовом configureWorkers()
  * самим вызывающим кодом, случившимся раньше, чем асинхронное чтение успеет
- * разрешиться.
+ * разрешиться. `configureWorkers()` также announces `model.workers.changed` —
+ * без этого список подключений в форме трекера/«RP Time» оставался тем, что
+ * было при загрузке страницы, и добавленное в панели воркеров подключение
+ * появлялось там только после ручной перезагрузки.
  *
  * Свои пресеты сэмплера/ризонинга (`customPresets`) персистятся ТЕМ ЖЕ
  * приёмом, вторым независимым списком: `model.presets.get`/`model.presets.set`
@@ -190,7 +193,16 @@ export function createInternalEngineModelsCore(host, { publish } = {}) {
         key: 'workers',
         apply: list => { workers = Array.isArray(list) ? list : []; },
     });
-    const configureWorkers = persisted.save;
+    /**
+     * `model.workers.changed` — тот же приём, что у пресетов: без него список
+     * подключений в форме трекера/«RP Time» оставался тем, что было при
+     * ЗАГРУЗКЕ страницы, и добавленное (или удалённое) в панели воркеров
+     * подключение появлялось там только после ручной перезагрузки.
+     */
+    async function configureWorkers(list) {
+        await persisted.save(list);
+        publishEvent('model.workers.changed', { count: workers.length });
+    }
     const restoreWorkers = persisted.restore;
 
     const presetsPersisted = createPersistedList(host, {

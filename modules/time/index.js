@@ -288,6 +288,12 @@ export function createTimeModule(host) {
         customPresets.set(result.ok ? result.value ?? [] : []);
     }
 
+    /** Список подключений — читается заново по `model.workers.changed`, не только при загрузке: подключение, добавленное или удалённое в панели воркеров, обязано появиться в выборе без перезагрузки страницы. */
+    async function refreshWorkers() {
+        const result = await call('model.workers.get');
+        workers.set((result.ok ? result.value ?? [] : []).map(worker => ({ value: worker.id, label: worker.id })));
+    }
+
     /** Сохраняет текущую подстройку как СВОЙ пресет — в общий список, доступный и Модулю «Трекер». Имя, уже занятое, обновляет тот же пресет (см. `buildCustomPreset`/`slugifyPresetName`). */
     async function savePreset(name) {
         const trimmed = String(name ?? '').trim();
@@ -564,6 +570,9 @@ export function createTimeModule(host) {
         // Модулем «Трекер», и без этого сохранённое там появлялось бы здесь
         // только после ручной перезагрузки страницы.
         host.events.subscribe('model.presets.changed', () => refreshCustomPresets()),
+        // Подключение добавили/убрали в панели воркеров — список выбора
+        // обязан узнать об этом сам, без перезагрузки страницы.
+        host.events.subscribe('model.workers.changed', () => refreshWorkers()),
     ];
 
     async function load() {
@@ -589,8 +598,7 @@ export function createTimeModule(host) {
             reasoningEffort.set(reasoning.reasoningEffort);
             reasoningBudget.set(reasoning.reasoningBudget);
         }
-        const workerList = await call('model.workers.get');
-        workers.set((workerList.ok ? workerList.value ?? [] : []).map(worker => ({ value: worker.id, label: worker.id })));
+        await refreshWorkers();
         await refreshCustomPresets();
 
         await loadHistory();
@@ -617,6 +625,7 @@ export function createTimeModule(host) {
         savePreset,
         deletePreset,
         customPresets: () => customPresets.peek(),
+        workers: () => workers.peek(),
         newPresetName,
         label,
         history,
