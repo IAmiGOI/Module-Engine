@@ -263,6 +263,19 @@ test('macros.test reports a syntax/runtime error without throwing through the en
     assert.match(result.value.error, /end/i);
 });
 
+test('macros.setValue/macros.clearValue are reachable over the bus — Ядро работы с WI (a separate Ядро) has no JS reference to setValueMacro/clearValueMacro, only the Гейт Ядро↔Ядро', async () => {
+    const { engine, resolveStMacro } = buildEngine();
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    const setResult = await new Promise(resolve => module.cores.subscribe('macros.setValue', { params: { name: 'lorebook_tavern', value: 'A cozy tavern.' } }, resolve));
+    assert.deepEqual(setResult, { ok: true, value: undefined });
+    assert.equal(resolveStMacro('lorebook_tavern'), 'A cozy tavern.');
+
+    const clearResult = await new Promise(resolve => module.cores.subscribe('macros.clearValue', { params: { name: 'lorebook_tavern' } }, resolve));
+    assert.deepEqual(clearResult, { ok: true, value: true });
+    assert.equal(resolveStMacro('lorebook_tavern'), undefined);
+});
+
 test('a Module without the right to macros.configure/programs/test is refused before the Ядро is ever reached', async () => {
     const { engine } = buildEngine();
     const module = engine.registerCaller('module.untrusted', 'modules', { tier: 'community', allowedContracts: [] });
