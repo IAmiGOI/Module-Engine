@@ -553,7 +553,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
             subtitle: `${record.book}${record.length ? ` · ${record.length} chars` : ''}`,
             actions: [
                 Toggle('Publish', record.published, {
-                    hint: 'Exposes this entry\'s full content as a real {{macro}} — usable in prompts, World Info, or read by any module, the same way Tracker/RP Time publish their own values.',
+                    hint: 'Expose as a {{macro}}.',
                     onChange: checked => toggleLorebookPublish(record, checked),
                 }),
                 Button('Save', () => saveLorebookEntry(record)),
@@ -581,7 +581,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
             ...collapse.bind('card:lorebook'),
             subtitle: computed(() => (lorebookBooks().length ? `Active: ${lorebookBooks().join(', ')}` : 'No lorebook active for this chat/character yet')),
         },
-            h('p', { class: 'stme-lorebook-help' }, 'Every entry in your currently active lorebook(s) — global, character, chat, and persona. Create, edit, and delete right here, or in ST\'s own World Info panel — both stay in sync automatically, no manual Rescan needed.'),
+            h('p', { class: 'stme-lorebook-help' }, 'Every entry in your currently active lorebook(s) — global, character, chat, and persona. Create, edit, and delete right here, or in ST\'s own World Info panel — both stay in sync automatically, no manual Rescan needed. Toggle Publish to expose an entry\'s full content as a real {{macro}}, usable in prompts, World Info, or any module — the same way Tracker/RP Time publish their own values.'),
             EditableList({
                 items: lorebookEntries,
                 renderItem: lorebookRow,

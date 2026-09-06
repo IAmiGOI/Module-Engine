@@ -61,6 +61,78 @@ const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 export const DEFAULT_SETTINGS = Object.freeze({ maxNotes: 12, cleanupBatch: 4, injectionDepth: 4 });
 
 /**
+ * Схема инструмента — вынесена отдельным экспортируемым объектом (без
+ * `action`/`formatMessage`, тех двух полей, что реально нужен `host`,
+ * см. `load()` ниже), чтобы проверяться тестами напрямую, а не только
+ * косвенно через поведение.
+ *
+ * Переписана целиком по живой жалобе пользователя: модель почти всегда
+ * забывала заполнить И title, И content разом, и вызывала инструмент
+ * заметно реже, чем стоило бы. Обе причины — один и тот же корень, слабый
+ * промпт:
+ *  - **`title`/`content` теперь в `required` БЕЗУСЛОВНО**, не только для
+ *    `write`. Компромисс осознанный: `updateNote()` по-прежнему умеет
+ *    частичную правку (см. её doc-comment) — это осталось СПОСОБНОСТЬЮ
+ *    функции, не тем, что обязана делать модель. Схема специально не
+ *    различает write/update (`draft-04`, никакого `if/then` под рукой,
+ *    да и не все бэкенды function-calling его вообще уважают) —
+ *    безусловное `required` работает одинаково везде, а модель и так
+ *    видит ТЕКУЩИЕ title/content в блоке блокнота у себя в контексте
+ *    (см. `buildNotebookPrompt()`) и может просто повторить неизменное
+ *    поле, если меняет только одно.
+ *  - **`description` объясняет ЗАЧЕМ, не только КАК.** Раньше было одно
+ *    сухое утилитарное предложение — не продавало пользу инструмента и
+ *    не подсказывало, когда его вообще стоит доставать. Теперь —
+ *    конкретные категории (goal, needs, current state, secrets, plans,
+ *    relationships) и прямая просьба писать ПРОАКТИВНО, а не только по
+ *    запросу.
+ */
+export const NOTEBOOK_TOOL_SCHEMA = Object.freeze({
+    name: TOOL_NAME,
+    displayName: 'Notebook',
+    description:
+        'Your PRIVATE notebook — persists across replies, never shown to the player. Use it to track anything about ' +
+        'the story or its characters that you would otherwise forget or lose track of: a character\'s current GOAL or ' +
+        'MOTIVATION, their NEEDS or WANTS, their CURRENT STATE (physical condition, emotional state, location, what ' +
+        'they are doing right now), secrets, unresolved plans, promises made, relationships, or any other fact worth ' +
+        'carrying forward into later replies.\n\n' +
+        'Use this tool PROACTIVELY, as the story develops — do not wait to be asked. Whenever something changes that ' +
+        'matters for later (a goal shifts, an injury happens, a secret is revealed, a plan is made), write or update ' +
+        'a note for it in the SAME turn, before it slips your mind.\n\n' +
+        'Before writing a NEW note, check the notebook already shown in your context (the "[Private notebook...]" ' +
+        'block, if present) — if the fact you want to record already has a note, use update on its id instead of ' +
+        'creating a duplicate.\n\n' +
+        'FORMAT: every note needs BOTH a short, specific title (a label, like "Elena\'s goal" or "Tavern keeper\'s ' +
+        'secret") AND real content (the actual detail, as long as it needs to be). A title alone or content alone is ' +
+        'not a usable note — always provide both, every time.',
+    parameters: {
+        $schema: 'http://json-schema.org/draft-04/schema#',
+        type: 'object',
+        properties: {
+            action: {
+                type: 'string',
+                enum: ['write', 'update'],
+                description: '"write" creates a brand-new note. "update" edits an existing note by its note_id (shown in brackets in the notebook block in your context).',
+            },
+            title: {
+                type: 'string',
+                description: 'A short, specific label for the note — e.g. "Elena\'s goal", "Current injury", "Tavern keeper\'s secret". Always required — for update, resend the note\'s current title if you are only changing the content.',
+            },
+            content: {
+                type: 'string',
+                description: 'The actual detail to remember, in your own words — as short or long as the fact needs. Always required — for update, resend the note\'s current content if you are only changing the title.',
+            },
+            note_id: {
+                type: 'string',
+                description: 'The id of the note to change (shown in brackets in the notebook block, e.g. "note_abc123"). Required for update, ignored for write.',
+            },
+        },
+        required: ['action', 'title', 'content'],
+    },
+    stealth: false,
+});
+
+/**
  * `fallback` is clamped too, not returned raw — a garbage `cleanupBatch`
  * next to a garbage-but-now-clamped `maxNotes` of 1 must not fall back to a
  * default of 4 and quietly break the "cleanupBatch <= maxNotes" invariant.
@@ -128,11 +200,18 @@ export function removeNote(notes, id) {
     return { notes: next, removed: true };
 }
 
-/** Текст, который модель увидит и по которому сможет сослаться на заметку для `update`. Пустой блокнот не добавляет в промпт ни байта. */
+/**
+ * Текст, который модель увидит и по которому сможет сослаться на заметку
+ * для `update`. Пустой блокнот не добавляет в промпт ни байта. Шапка —
+ * короткое напоминание, а не повтор полного описания инструмента
+ * (`NOTEBOOK_TOOL_SCHEMA.description` выше) — эта строка уходит в промпт
+ * НА КАЖДЫЙ ход, где блокнот не пуст, и разрастаться ей незачем; полное
+ * объяснение «зачем» модель уже увидела при выборе инструмента.
+ */
 export function buildNotebookPrompt(notes) {
     if (!notes.length) return '';
     return [
-        '[Private notebook — your own working memory, not visible to the player. Reference a note by its id to update it.]',
+        '[Private notebook — your persistent working memory, invisible to the player. Keep it updated as things change: goals, needs, current state, secrets, plans. Reference a note by its id to update it instead of duplicating it.]',
         ...notes.map(note => `- [${note.id}] ${note.title}: ${note.content}`),
     ].join('\n');
 }
@@ -297,23 +376,9 @@ export function createNotebookModule(host) {
 
         await call('generation.registerTool', {
             definition: {
-                name: TOOL_NAME,
-                displayName: 'Notebook',
-                description: 'Private working-memory notebook. Use write to save a title and content, or update with note_id and new title and/or content.',
-                parameters: {
-                    $schema: 'http://json-schema.org/draft-04/schema#',
-                    type: 'object',
-                    properties: {
-                        action: { type: 'string', enum: ['write', 'update'] },
-                        title: { type: 'string' },
-                        content: { type: 'string' },
-                        note_id: { type: 'string' },
-                    },
-                    required: ['action'],
-                },
+                ...NOTEBOOK_TOOL_SCHEMA,
                 action: toolAction,
                 formatMessage: args => (args?.action === 'update' ? 'Updating notebook note…' : 'Saving notebook note…'),
-                stealth: false,
             },
         });
     }

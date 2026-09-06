@@ -333,6 +333,15 @@
 .stme-switch-label { display: flex; flex-direction: column; gap: 1px; font-size: 13px; }
 .stme-switch-label small { opacity: .62; font-size: 11px; }
 
+/* Тумблер в шапке Card/Section живёт в колонке `auto` без реального
+   ограничения ширины (см. `.stme-card-head`/`.stme-section-head`) — унаследованный
+   от `.stme-switch` `white-space: nowrap` там растягивал бы `hint` в одну
+   гигантскую строку и выталкивал остальные actions (например, Save) за
+   пределы карточки, где `overflow: hidden` их просто обрезает — кнопка
+   существует, но недостижима. Тут `hint` обязан переноситься. */
+.stme-card-actions .stme-switch { white-space: normal; max-width: 190px; }
+.stme-card-actions .stme-switch-label small { white-space: normal; }
+
 .stme-chip {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 3px 10px;
