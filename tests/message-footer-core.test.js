@@ -204,7 +204,10 @@ test('a Module can claim a slot over the bus, and one without the right cannot',
 test('the Ядро has NO way to write into a message — the model can never see the footer', () => {
     const { core } = buildEngine();
 
-    const surface = Object.keys(core);
+    // `liveMesid` — законное исключение: он ЧИТАЕТ, какое сообщение сейчас
+    // последнее (нужно Модулям вроде RP Time, чтобы знать, куда писать СВОЁ
+    // состояние), и не даёт способа тронуть текст самого сообщения.
+    const surface = Object.keys(core).filter(name => name !== 'liveMesid');
     assert.deepEqual(surface.filter(name => /message|mes|prompt|text/i.test(name)), [], 'ни одного метода, которым можно дописать сообщение');
 });
 
@@ -329,4 +332,26 @@ test('releasing a slot clears it from PAST messages too — a disabled Module le
     for (const mesid of ['1', '2']) {
         assert.equal(footerOf(blockOf(mesid)).children.length, 0, `слот убран и из сообщения ${mesid}`);
     }
+});
+
+// --- liveMesid(): фактическое последнее сообщение, спрошенное СЕЙЧАС -------
+
+test('liveMesid() reads the last rendered message fresh — it changes the moment the chat itself changes, not on the next attach()', async () => {
+    const { core, chat } = buildEngine();
+
+    assert.equal(await core.liveMesid(), '1');
+
+    // Никакого attach() между этим и следующей проверкой не было — только
+    // сам список сообщений изменился, как это происходит между двумя
+    // перепрогонами ToolCalls внутри одной генерации.
+    chat.ids = ['0', '1', '2'];
+
+    assert.equal(await core.liveMesid(), '2', 'а не то, что запомнилось с прошлого рендера');
+});
+
+test('liveMesid() is null when nothing is rendered at all, not the id of something that no longer exists', async () => {
+    const { core, chat } = buildEngine();
+    chat.ids = [];
+
+    assert.equal(await core.liveMesid(), null);
 });
