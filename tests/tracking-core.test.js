@@ -7,6 +7,8 @@ import { registerExtensionSettingsService } from '../services/extension-settings
 import { createInternalEngineModelsCore } from '../cores/models/internal-engine.js';
 import { createSettingsCore } from '../cores/settings/index.js';
 import { registerStChatService } from '../services/st-chat.js';
+import { registerChatMetadataService } from '../services/chat-metadata.js';
+import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createTrackingCore, buildTrackerPrompt, buildTrackerSystemPrompt } from '../cores/tracking/index.js';
 
 // --- Unit level: prompt-building, independent of any Ядро/Сервис ----------
@@ -414,4 +416,86 @@ test('every rewrite of the set is announced — a list drawn elsewhere must not 
 
     assert.equal(seen.length, 1);
     assert.equal(seen[0].count, 1);
+});
+
+// --- Значения трекера — привязаны к ЧАТУ, не к движку целиком --------------
+//
+// Раньше `values` жили голым Map в памяти процесса: ни персистентности, ни
+// привязки к чату. Переключение чата в ST не перезагружает страницу (SPA) —
+// трекер продолжал невозмутимо показывать значения ПРЕДЫДУЩЕГО разговора.
+// Эти тесты поднимают настоящее Ядро памяти чата (`storage.chatMemory`) —
+// то же самое, которым уже пользуется шкала «RP Time» — и настоящий Сервис
+// chatMetadata, а не голый Map теста.
+
+function buildEngineWithChatMemory({ fetchReply = '{"health": 90}' } = {}) {
+    const engine = createEngine();
+    const { fetch, calls } = fakeFetchReplying(fetchReply);
+    registerHttpService(engine.buses.network, { fetch });
+    const settingsContext = { extensionSettings: {}, chatMetadata: {}, saveSettingsDebounced: () => {}, saveMetadataDebounced: () => {} };
+    registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
+    registerChatMetadataService(engine.buses.services, { getContext: () => settingsContext });
+    createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
+    createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
+    const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
+    const modelsCore = createInternalEngineModelsCore(modelsHost);
+    modelsCore.configureWorkers([{ id: 'fast', endpoint: 'https://fast.example.com', model: 'm1', format: 'openai' }]);
+    const trackingCore = createTrackingCore(engine.registerCaller('core.tracking', 'cores', { tier: 'official' }));
+    return { engine, calls, trackingCore, settingsContext };
+}
+
+test('a tracked value is written to storage.chatMemory, not to settings — proof it is per-chat state, not engine-wide config', async () => {
+    const { engine, trackingCore } = buildEngineWithChatMemory();
+    await trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', default: 100 }] }]);
+
+    await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } });
+
+    const probe = engine.registerCaller('probe', 'cores', { tier: 'official' });
+    const stored = await new Promise(resolve => probe.own.subscribe('storage.chatMemory.get', { params: { namespace: 'core.tracking', key: 'values', fallback: {} } }, resolve));
+    assert.equal(stored.value['char:health'], 90, 'настоящее значение лежит в памяти ЧАТА');
+});
+
+test('switching to a DIFFERENT chat shows that chat\'s OWN values, not the previous chat\'s — the bug the user actually hit', async () => {
+    const { engine, trackingCore, settingsContext } = buildEngineWithChatMemory();
+    await trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', default: 100 }] }]);
+    await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } }); // health -> 90 в чате А
+
+    // Другой чат — другая chatMetadata, ровно как отдаёт настоящий ST при
+    // переключении (SPA, страница не перезагружается).
+    settingsContext.chatMetadata = {};
+    engine.events.emit('st.chatChanged');
+    await new Promise(resolve => setTimeout(resolve, 0)); // подписка в Ядре — fire-and-forget, см. её же doc-comment
+
+    const result = await request(engine.buses.cores, 'tracking.fields', { params: { trackerId: 'char' } });
+    assert.equal(result.value.find(field => field.name === 'health').value, 100, 'в НОВОМ чате трекер ещё ничего не насчитал — дефолт, а не 90 из старого чата');
+});
+
+test('switching BACK to a chat with its own saved metadata restores that chat\'s values — nothing bleeds between chats in either direction', async () => {
+    const { engine, trackingCore, settingsContext } = buildEngineWithChatMemory();
+    await trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', default: 100 }] }]);
+    const chatA = settingsContext.chatMetadata;
+    await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } }); // chatA: health -> 90
+
+    settingsContext.chatMetadata = {}; // chat B, свежий
+    engine.events.emit('st.chatChanged');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    settingsContext.chatMetadata = chatA; // обратно в chat A
+    engine.events.emit('st.chatChanged');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const result = await request(engine.buses.cores, 'tracking.fields', { params: { trackerId: 'char' } });
+    assert.equal(result.value.find(field => field.name === 'health').value, 90, 'chat A помнит свои 90, они никуда не делись');
+});
+
+test('a chat switch announces tracking.blocks.changed for every tracker, so the floating panel and the footer redraw without a manual reload', async () => {
+    const { engine, trackingCore, settingsContext } = buildEngineWithChatMemory();
+    await trackingCore.configureTrackers([{ id: 'char', kind: 'user', fields: [{ name: 'health', default: 100 }] }]);
+    const seen = [];
+    engine.events.subscribe('tracking.blocks.changed', payload => seen.push(payload));
+
+    settingsContext.chatMetadata = {};
+    engine.events.emit('st.chatChanged');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(seen, [{ trackerId: 'char' }]);
 });
