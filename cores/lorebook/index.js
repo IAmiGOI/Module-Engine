@@ -21,6 +21,37 @@ function requireEntryLocation(params) {
 }
 
 /**
+ * Читает книгу перед записью — и НИКОГДА не подставляет вместо неудачного
+ * чтения пустую книгу. Настоящая `loadWorldInfo()` возвращает `null` не
+ * только когда книги реально не существует, а на ЛЮБОЙ неудачный HTTP-ответ
+ * (`response.ok === false` — сбой сети, ST на секунду недоступна и т.п.,
+ * проверено по актуальному исходнику `world-info.js`) — то есть `null`
+ * означает «не удалось узнать, что в книге», а не «в книге пусто». Раньше
+ * здесь стояла подстановка `{ entries: {} }` на этот случай, и `updateEntry`/
+ * `deleteEntry` (для которых книга ГАРАНТИРОВАННО не пуста — в ней как
+ * минимум искомая запись) сохраняли эту пустую подмену ПОВЕРХ настоящей
+ * книги на сервере: один транзиентный сбой чтения — и вся книга стирается
+ * первым же Save/Remove. Требование точное: `uid` реально существует в
+ * прочитанном `data.entries`, если только это не свежесозданная запись
+ * (`create`, `requireExistingUid: false`) — иначе гонка «сначала кто-то ещё
+ * успел удалить эту запись, потом мы читаем устаревший индекс и правим
+ * призрака» тоже осталась бы незамеченной.
+ */
+async function readBookOrThrow(callService, book, { operation, uid, requireExistingUid = false } = {}) {
+    const loadResult = await callService('stLorebook.load', { name: book });
+    if (!loadResult.ok) throw new Error(`lorebook.${operation}: failed to read "${book}" before writing: ${loadResult.error.message}`);
+    const data = loadResult.value;
+    if (!data || typeof data !== 'object') {
+        throw new Error(`lorebook.${operation}: SillyTavern would not return "${book}"'s current content — refusing to write blind and risk erasing it. Try again.`);
+    }
+    data.entries ??= {};
+    if (requireExistingUid && !(uid in data.entries)) {
+        throw new Error(`lorebook.${operation}: uid ${uid} is no longer in "${book}" (removed elsewhere?) — refusing to write a stale copy back.`);
+    }
+    return data;
+}
+
+/**
  * Ядро работы с WI (CORES.md) — сканирует реальный World Info ST (все
  * четыре источника, которые сама ST объединяет перед генерацией: глобально
  * выбранные книги, книги персонажа/группы, книга чата, книга персоны — см.
@@ -204,9 +235,7 @@ export function createLorebookCore(host, { publish } = {}) {
         const book = targetBook || books[0];
         if (!book) throw new Error('lorebook.createEntry: no lorebook active for this chat/character, and none was given explicitly.');
         return enqueueWrite(async () => {
-            const loadResult = await callService('stLorebook.load', { name: book });
-            const data = (loadResult.ok && loadResult.value) ? loadResult.value : { entries: {} };
-            data.entries ??= {};
+            const data = await readBookOrThrow(callService, book, { operation: 'createEntry' });
             const uid = nextUid(data.entries);
             const entry = { ...blankEntry(uid), ...patch, uid };
             data.entries[uid] = entry;
@@ -224,10 +253,8 @@ export function createLorebookCore(host, { publish } = {}) {
         if (!owner) throw new Error(`lorebook.updateEntry: no known entry with uid ${uid}${book ? ` in "${book}"` : ''} (scan() first, or it may not exist).`);
         const targetBook = owner.book;
         return enqueueWrite(async () => {
-            const loadResult = await callService('stLorebook.load', { name: targetBook });
-            const data = (loadResult.ok && loadResult.value) ? loadResult.value : { entries: {} };
-            data.entries ??= {};
-            const existing = data.entries[uid] ?? { ...owner };
+            const data = await readBookOrThrow(callService, targetBook, { operation: 'updateEntry', uid, requireExistingUid: true });
+            const existing = data.entries[uid];
             const previous = { ...existing, book: targetBook };
             const updated = { ...existing, ...patch, uid };
             data.entries[uid] = updated;
@@ -245,9 +272,12 @@ export function createLorebookCore(host, { publish } = {}) {
         if (!owner) throw new Error(`lorebook.deleteEntry: no known entry with uid ${uid}${book ? ` in "${book}"` : ''} (scan() first, or it may not exist).`);
         const targetBook = owner.book;
         return enqueueWrite(async () => {
-            const loadResult = await callService('stLorebook.load', { name: targetBook });
-            const data = (loadResult.ok && loadResult.value) ? loadResult.value : { entries: {} };
-            delete data.entries?.[uid];
+            // Без `requireExistingUid`: удаление уже удалённой (например, тем же
+            // самым нативным редактором ST) записи — не ошибка, тот же принцип,
+            // что у Notebook's `removeNote()`. Но неудачное ЧТЕНИЕ книги — всё
+            // равно повод остановиться, а не сохранить пустую подмену.
+            const data = await readBookOrThrow(callService, targetBook, { operation: 'deleteEntry' });
+            delete data.entries[uid];
             await callService('stLorebook.save', { name: targetBook, data, immediately: true });
             await scan();
             publishEvent('lorebook.entryDeleted', { uid, book: targetBook });

@@ -15,6 +15,19 @@
 
 const DOM_PROPS = new Set(['value', 'checked', 'disabled', 'selected', 'textContent', 'className', 'open', 'hidden']);
 
+/**
+ * Что мы САМИ последний раз записали в этот проп — не то, что сейчас
+ * ЧИТАЕТСЯ из `el[key]`. Проверено на реальном браузере: у `<option>` без
+ * явно выставленного content-атрибута `value` геттер `.value` откатывается на
+ * `textContent` — если сравнение ниже читает живой `el.value`, а не то, что
+ * писали МЫ, запись `value: ''` на свежий `<option>` (ДО того, как в него
+ * положили текст-подпись) читается как «уже ''», пропускается, атрибут так и
+ * не выставляется — и после того, как подпись дописалась, `.value` тихо
+ * съезжает на неё саму. Тем же путём словил бы и `checked`/`selected` на
+ * элементе, где браузер зачем-то откатывается на своё умолчание.
+ */
+const lastWritten = new WeakMap(); // el -> { [key]: value }
+
 function setProp(el, key, value) {
     if (key.startsWith('on:')) {
         const type = key.slice(3);
@@ -30,8 +43,16 @@ function setProp(el, key, value) {
     // в .value ставит каретку в конец, даже если строка не изменилась. А
     // реактивное связывание поля именно это и делает на каждое нажатие
     // (ввод → сигнал → диффинг → сюда), так что без этой проверки печатать
-    // в середине строки было бы невозможно.
-    if (DOM_PROPS.has(key)) { if (el[key] !== value) el[key] = value; return; }
+    // в середине строки было бы невозможно. Сравниваем с тем, что писали МЫ
+    // (см. doc-comment `lastWritten` выше), а не с текущим `el[key]`.
+    if (DOM_PROPS.has(key)) {
+        const written = lastWritten.get(el);
+        if (!written || written[key] !== value) {
+            el[key] = value;
+            lastWritten.set(el, { ...written, [key]: value });
+        }
+        return;
+    }
     if (value === false || value == null) el.removeAttribute(key);
     else el.setAttribute(key, value === true ? '' : String(value));
 }
