@@ -287,6 +287,55 @@ test('the ToolCall flag from stChat.rendered reaches the slot\'s factory untouch
     assert.ok(footerOf(blockOf('1')), 'а настоящий ответ его получает');
 });
 
+test('generation.completed forces a final redraw — catches ST adding a class AFTER the node is already in the DOM, which the MutationObserver (childList/subtree only) cannot see', async () => {
+    const { core, chat, blockOf, engine } = buildEngine();
+    // Момент вставки: класс toolCall ещё не появился — реальный ST
+    // выставляет его отдельным шагом на УЖЕ вставленный узел
+    // (`updateMessageElement()` мутирует существующий элемент), не через
+    // childList.
+    chat.rendered = [{ mesid: '1', isUser: false, isToolCall: false }];
+    core.claim({ slot: 'left', ownerId: 'module.time', node: message => (message.isToolCall ? null : h('div', {}, 'time')) });
+    await core.start();
+    assert.ok(footerOf(blockOf('1')), 'бейдж создан, пока класс ещё не появился');
+
+    // ST позже навесила класс — обычная мутация атрибута на уже вставленном
+    // узле; ни один ST REDRAW_EVENT здесь не летит (стриминг), и наблюдатель
+    // тоже её не видит (он слушает childList/subtree, не attributes).
+    chat.rendered = [{ mesid: '1', isUser: false, isToolCall: true }];
+    engine.events.emit('generation.completed', {});
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(footerOf(blockOf('1')), undefined, 'финальный проход по generation.completed убрал устаревший бейдж');
+});
+
+test('attach() announces its own started/completed — the triad this bug needed to become fixable at all', async () => {
+    const { core, chat, engine } = buildEngine();
+    chat.rendered = [{ mesid: '1', isUser: false }];
+    const seen = [];
+    engine.events.subscribe('ui.messageFooter.attach.started', payload => seen.push(['started', payload]));
+    engine.events.subscribe('ui.messageFooter.attach.completed', payload => seen.push(['completed', payload]));
+    core.claim({ slot: 'left', ownerId: 'module.time', node: () => h('div', {}, 'x') });
+
+    await core.start();
+
+    assert.equal(seen[0][0], 'started');
+    assert.equal(seen[1][0], 'completed');
+    assert.equal(seen[1][1].placed, true, 'completed несёт, было ли реально что-то размещено');
+});
+
+test('attach() announces .completed with placed: false when nothing was rendered at all — a real attempt, just an empty one, not silence', async () => {
+    const { core, chat, engine } = buildEngine();
+    chat.rendered = [];
+    chat.ids = [];
+    const seen = [];
+    engine.events.subscribe('ui.messageFooter.attach.completed', payload => seen.push(payload));
+    core.claim({ slot: 'left', ownerId: 'module.time', node: () => h('div', {}, 'x') });
+
+    await core.start();
+
+    assert.deepEqual(seen, [{ placed: false }]);
+});
+
 test('a slot that STOPS wanting a message takes its footer away — a reroll must not leave a second badge behind', async () => {
     const { core, chat, blockOf } = buildEngine();
     chat.rendered = [{ mesid: '0', isUser: false }, { mesid: '1', isUser: false }];
