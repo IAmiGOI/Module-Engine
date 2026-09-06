@@ -81,7 +81,8 @@ function buildEngine({ replies, gate, fail = false } = {}) {
         if (fail) throw new Error('worker unreachable');
         return answers[Math.min(prompts.length - 1, answers.length - 1)];
     });
-    modelHost.own.register('model.workers.get', () => [{ id: 'main' }]);
+    let workerList = [{ id: 'main' }];
+    modelHost.own.register('model.workers.get', () => workerList);
     // Свои пресеты — тот же контракт, что у настоящего Ядра моделей, и тот
     // же общий список, что видит Модуль «Трекер».
     let customPresets = [];
@@ -117,7 +118,8 @@ function buildEngine({ replies, gate, fail = false } = {}) {
             'ui.messageFooter.liveMesid',
         ],
     });
-    return { engine, trackingCore, prompts, calls, macroWrites, claims, live, module: createTimeModule(moduleHost) };
+    const setWorkers = list => { workerList = list; };
+    return { engine, trackingCore, prompts, calls, macroWrites, claims, live, module: createTimeModule(moduleHost), setWorkers };
 }
 
 test('the module owns NO tracking of its own — it registers one tracker in the shared Ядро', async () => {
@@ -231,6 +233,18 @@ test('a preset saved elsewhere (the Tracker module, sharing the same Ядро) r
     await new Promise(resolve => setTimeout(resolve, 0));
 
     assert.deepEqual(module.customPresets().map(item => item.name), ['Elsewhere']);
+});
+
+test('a connection added or removed in the worker panel reaches the "Model connection" dropdown through model.workers.changed — no page reload needed', async () => {
+    const { module, setWorkers, engine } = buildEngine();
+    await module.load();
+    assert.deepEqual(module.workers(), [{ value: 'main', label: 'main' }]);
+
+    setWorkers([{ id: 'main' }, { id: 'new-connection' }]);
+    engine.events.emit('model.workers.changed', { count: 2 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(module.workers(), [{ value: 'main', label: 'main' }, { value: 'new-connection', label: 'new-connection' }]);
 });
 
 test('each advance extends the timeline, so the model sees the PACE and not just a point', async () => {

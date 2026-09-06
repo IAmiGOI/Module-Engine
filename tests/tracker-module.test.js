@@ -67,7 +67,11 @@ function buildEngine({ rights } = {}) {
         generations.push(params);
         return '{"health": 42, "location": "the inn"}';
     });
-    modelHost.own.register('model.workers.get', () => [{ id: 'main' }, { id: 'backup' }]);
+    // Изменяемый, а не голый массив: тест на «список обновился по событию»
+    // должен мочь подменить его и эмитнуть `model.workers.changed` сам,
+    // без настоящей панели воркеров рядом.
+    let workerList = [{ id: 'main' }, { id: 'backup' }];
+    modelHost.own.register('model.workers.get', () => workerList);
     // Свои пресеты — тот же контракт, что у настоящего Ядра моделей, только
     // без клэмпа/санитации: сохранённое тестом здесь и без того валидно.
     let customPresets = [];
@@ -98,7 +102,8 @@ function buildEngine({ rights } = {}) {
             'pipeline.stages', 'pipeline.stages.add', 'pipeline.stages.remove',
         ],
     });
-    return { engine, trackingCore, generations, notifications, pipelineCore, module: createTrackerModule(moduleHost), moduleHost, settingsContext };
+    const setWorkers = list => { workerList = list; };
+    return { engine, trackingCore, generations, notifications, pipelineCore, module: createTrackerModule(moduleHost), moduleHost, settingsContext, setWorkers };
 }
 
 /** Находит в дереве все узлы, удовлетворяющие предикату — дерево это данные, никакого DOM для проверки не нужно. */
@@ -271,6 +276,18 @@ test('a preset saved from ONE tracker reaches a SECOND tracker\'s dropdown throu
     assert.deepEqual(module.customPresets().map(item => item.name), ['Shared Preset'], 'виден и трекеру mood — список один на весь Модуль');
     module.applySamplerPreset(mood, 'custom:shared-preset');
     assert.equal(mood.samplerPreset(), 'custom:shared-preset');
+});
+
+test('a connection added or removed in the worker panel reaches the tracker\'s "Model connection" dropdown through model.workers.changed — no page reload needed', async () => {
+    const { engine, module, setWorkers } = buildEngine();
+    await module.load();
+    assert.deepEqual(module.workers(), [{ value: 'main', label: 'main' }, { value: 'backup', label: 'backup' }]);
+
+    setWorkers([{ id: 'main' }, { id: 'new-connection' }]);
+    engine.events.emit('model.workers.changed', { count: 2 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(module.workers(), [{ value: 'main', label: 'main' }, { value: 'new-connection', label: 'new-connection' }]);
 });
 
 test('a chosen preset survives a reload — it is remembered per tracker, not lost or forced back to a worker default', async () => {

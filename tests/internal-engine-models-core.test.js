@@ -375,6 +375,16 @@ test('a preset with no name is dropped rather than saved as junk nobody can sele
     assert.deepEqual(result.value.map(item => item.name), ['Real One']);
 });
 
+test('configureWorkers() announces model.workers.changed — a Module\'s worker dropdown can refresh without a page reload', async () => {
+    const { engine, modelsCore } = buildEngineWithModelsCore();
+    const seen = [];
+    engine.events.subscribe('model.workers.changed', payload => seen.push(payload));
+
+    await modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com', model: 'm', format: 'openai' }]);
+
+    assert.deepEqual(seen, [{ count: 1 }]);
+});
+
 test('configurePresets() announces model.presets.changed — a sibling screen (the other Module) can refresh without a page reload', async () => {
     const { engine, modelsCore } = buildEngineWithModelsCore();
     const seen = [];
