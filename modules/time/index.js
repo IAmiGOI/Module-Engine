@@ -174,15 +174,40 @@ export function createTimeModule(host) {
     // был свой, реролл откатывал бейдж, но не шкалу: модель продолжала
     // отсчитывать от времени отброшенного варианта.
     const history = computed(() => buildHistory(badges()));
-    // Под каким сообщением рисуется живой бейдж. Узнаём это от Ядра подвала,
-    // когда оно зовёт нашу фабрику, — своего доступа к чату у Модуля нет и не
-    // должно быть.
-    let liveMesid = null;
-    // Сообщение, которое ПОХОЖЕ на реролл: свайп был, генерация ещё нет.
-    let pendingSwipe = null;
+    // Свайп был, генерация ещё нет — под каким сообщением, узнаём позже,
+    // прямо в обработчике `generation.beforeSend` (см. подписки ниже).
+    let pendingSwipe = false;
 
     async function call(contract, params) {
         return request(host.cores, contract, { params });
+    }
+
+    /**
+     * Настоящее последнее отрисованное сообщение — ПРЯМО СЕЙЧАС, не то, что
+     * когда-то запомнил рендер подвала. Раньше «куда писать» бралось из
+     * побочного эффекта: фабрика подвала запоминала `mesid` каждый раз, когда
+     * Ядро подвала звало её с `live: true`. При генерации с ToolCalls ST может
+     * внутри ОДНОГО ответа пользователя несколько раз пересоздать и удалить
+     * черновик последнего сообщения (пустой первый проход с вызовом
+     * инструмента удаляется, а настоящий текст дописывается новым проходом —
+     * `Generate()` там честно перезапускается целиком, `GENERATION_STARTED`
+     * летит второй раз, наш же Ядро жизненного цикла закрывает первый прогон
+     * как `superseded`). Запомненное значение рисковало застрять на этом
+     * промежуточном, уже не существующем сообщении — и тогда свежее время
+     * записывалось на сообщение ДО настоящего ответа, а не на него. Спрашивая
+     * заново прямо в момент записи, гонки с этой пересборкой попросту нет: что
+     * бы ни происходило посередине, к моменту `generation.completed` в чате
+     * уже стоит настоящий финальный ответ.
+     *
+     * Спрашивает Ядро подвала (`ui.messageFooter.liveMesid`), а не Сервис
+     * `stChat.*` напрямую: Модуль не обязан знать о существовании Сервисов
+     * ST вообще, а Ядро подвала это значение и так уже считает для себя на
+     * каждый `attach()` — второй источник истины о «что сейчас последнее»
+     * заводить незачем.
+     */
+    async function currentMesid() {
+        const result = await call('ui.messageFooter.liveMesid');
+        return result.ok ? result.value ?? null : null;
     }
 
     function notify(tone, text) {
@@ -264,7 +289,6 @@ export function createTimeModule(host) {
         // Бейджа под сообщением это НЕ касается: у каждого своя отметка, и
         // прошлые остаются такими, какими были.
         label.set('');
-        const target = liveMesid;
         try {
             const result = await call('tracking.poll', {
                 trackerId: TRACKER_ID,
@@ -280,7 +304,11 @@ export function createTimeModule(host) {
             }
             const next = buildTimeLabel(result.value ?? [], displayTemplate.peek());
             label.set(next);
-            await markMessage(target, next);
+            // Спрашиваем, куда писать, ТОЛЬКО сейчас — см. doc-comment
+            // `currentMesid()`: опрос модели шёл какое-то время, и брать цель
+            // до него значило бы рисковать той же гонкой, от которой это и
+            // лечит.
+            await markMessage(await currentMesid(), next);
             return next;
         } finally {
             busy.set(false);
@@ -317,17 +345,6 @@ export function createTimeModule(host) {
         // покажет пустоту и будет пульсировать рамкой: именно это и означает
         // «время для этого ответа ещё считается».
         return StatBlock('Current RP time', () => badges()[message.mesid] ?? '', { icon: '◷' });
-    }
-
-    /**
-     * Фабрика для Ядра подвала. Заодно запоминаем, под каким сообщением сейчас
-     * живой бейдж: `advance()` пишет отметку именно туда, а своего доступа к
-     * чату у Модуля нет.
-     */
-    function footerFactory(message) {
-        const node = footerWidget(message);
-        if (node && message.live) liveMesid = message.mesid;
-        return node;
     }
 
     function tree() {
@@ -385,19 +402,49 @@ export function createTimeModule(host) {
         // другое. Но `MESSAGE_SWIPED` у ST шлётся и при ПРОСТОМ пролистывании
         // уже готовых вариантов (проверено по script.js: событие идёт до
         // ветки `if (run_generate)`), а там переписывать нечего. Поэтому здесь
-        // только запоминаем кандидата, а стираем — когда генерация
-        // действительно началась. Иначе листание свайпов оставляло бы бейдж
-        // пустым и пульсирующим навсегда.
-        host.events.subscribe('st.messageSwiped', () => { pendingSwipe = liveMesid; }),
+        // только поднимается ФЛАГ, а стирание и цель — на `generation.
+        // beforeSend`, когда генерация уже точно началась.
+        //
+        // Флаг — булев, а не сразу пойманный `mesid`: оба события синхронные,
+        // а поймать `mesid` в САМОМ обработчике свайпа значило бы ждать
+        // `ui.messageFooter.liveMesid` асинхронно — и `generation.beforeSend`
+        // от настоящей ST успевал прилететь РАНЬШЕ, чем этот запрос вернётся
+        // (проверено этим же тестом: без него `pendingSwipe` в момент проверки
+        // ещё оставался пуст). Спрашивать «под каким сообщением» нужно уже
+        // ВНУТРИ обработчика beforeSend — там гонки нет, это последний
+        // потребитель в цепочке, и его никто не ждёт синхронно.
+        host.events.subscribe('st.messageSwiped', () => { pendingSwipe = true; }),
         host.events.subscribe('generation.beforeSend', async () => {
-            if (pendingSwipe === null) return;
-            const target = pendingSwipe;
-            pendingSwipe = null;
+            if (!pendingSwipe) return;
+            pendingSwipe = false;
+            // На этот момент сообщение, которое свайпнули, ЕЩЁ остаётся
+            // последним отрисованным — новый свайп не создаёт новый DOM-узел,
+            // он лишь дописывается к существующему.
+            const target = await currentMesid();
             // Откат ЦЕЛИКОМ: снятая отметка убирает и последнюю точку шкалы
             // (та считается из отметок), а карточка возвращается к времени
             // предыдущего сообщения. Иначе модель продолжала бы отсчитывать от
             // варианта, который пользователь только что отбросил.
             await markMessage(target, null);
+            label.set(history.peek().at(-1) ?? '');
+        }),
+        /**
+         * ВТОРОЙ путь реролла — не свайп-стрелка, а «Regenerate» (пункт меню
+         * / хоткей). У настоящей ST это СОВСЕМ другой код: он не эмитит
+         * `MESSAGE_SWIPED` вовсе, а вместо этого укорачивает `chat` на одно
+         * сообщение (`chat.length -= 1`) и шлёт `MESSAGE_DELETED` с новой
+         * длиной чата — которая и есть индекс/`mesid` только что удалённого
+         * сообщения (проверено по script.js). Новое сообщение сгенерируется
+         * под тем же самым `mesid` — если не стереть тут старую отметку, она
+         * молча всплывёт на месте ещё не досчитанного нового ответа. Стираем
+         * БЕЗУСЛОВНО: если сообщение удалили и без намерения перегенерировать
+         * его, стирать там всё равно нечего терять — прежняя отметка мертва
+         * вместе с сообщением.
+         */
+        host.events.subscribe('st.messageDeleted', async payload => {
+            const deletedMesid = String(payload?.args?.[0] ?? '').trim();
+            if (!deletedMesid) return;
+            await markMessage(deletedMesid, null);
             label.set(history.peek().at(-1) ?? '');
         }),
         // Другой чат — другое время. Шкалу перечитываем, а не тащим с собой.
@@ -424,7 +471,7 @@ export function createTimeModule(host) {
         const listed = await call('tracking.trackers');
         const others = (listed.ok ? listed.value ?? [] : []).filter(tracker => tracker.id !== TRACKER_ID);
         await call('tracking.configure', { trackers: [...others, trackerConfig()] });
-        await call('ui.messageFooter.claim', { slot: 'left', ownerId: MODULE_ID, node: footerFactory });
+        await call('ui.messageFooter.claim', { slot: 'left', ownerId: MODULE_ID, node: footerWidget });
     }
 
     return {
