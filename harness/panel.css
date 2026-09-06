@@ -656,3 +656,14 @@
 @media (prefers-reduced-motion: reduce) {
     .stme-stat-pending { animation: none; border-style: dashed; }
 }
+
+/* Состояние обновления. Тон — цветом текста, без заливки и без рамки: это
+   строка отчёта внутри карточки, а не самостоятельный блок. */
+.stme-update-status {
+    margin: 8px 0;
+    font-size: 12px;
+    line-height: 1.45;
+    opacity: .82;
+}
+.stme-update-ok { color: var(--stme-ok-bright); }
+.stme-update-error { color: var(--stme-danger-bright); }

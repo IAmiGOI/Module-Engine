@@ -81,6 +81,10 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     }
     const contracts = signal([]);
     const generationStage = signal('idle');
+    const repository = signal({ owner: '', repo: '', extensionName: '' });
+    const updateText = signal('Not checked yet.');
+    const updateTone = signal('muted');
+    const updateBusy = signal(false);
     const eventCount = signal(0);
 
     async function call(contract, params) {
@@ -187,6 +191,61 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         );
     }
 
+    /**
+     * Обновление. До этого оно жило ТОЛЬКО в консоли: ход запускался при
+     * старте и молчал, что бы ни случилось, — а «молчит, когда сказать нечего»
+     * незаметно превратилось в «молчит всегда», и отличить работающее
+     * самообновление от сломанного было нечем. Здесь оно наконец видно и
+     * запускается руками.
+     */
+    async function checkUpdates() {
+        updateBusy.set(true);
+        updateText.set('Checking…');
+        updateTone.set('muted');
+        // `force`: явное нажатие не должно молча упираться в паузу между
+        // попытками — она существует против цикла «обновились → перезагрузка →
+        // обновились», а не против пользователя.
+        const result = await call('selfUpdate.run', { force: true });
+        updateBusy.set(false);
+        if (!result.ok) { updateTone.set('error'); updateText.set(result.error.message); await notify('error', `Update check failed: ${result.error.message}`); return; }
+
+        const { outcome, error, diagnosis } = result.value ?? {};
+        const mismatch = diagnosis?.applicable && !diagnosis.matches;
+        if (outcome === 'updated') { updateTone.set('ok'); updateText.set('Updated — reloading SillyTavern…'); await notify('ok', 'Engine updated — reloading'); return; }
+        if (outcome === 'failed') { updateTone.set('error'); updateText.set(error ?? 'Update failed.'); await notify('error', `Update failed: ${error ?? 'unknown reason'}`); return; }
+        if (outcome === 'unavailable') {
+            updateTone.set('error');
+            // Самая частая причина — копия, положенная руками: git-эндпоинтов
+            // у такой установки нет вовсе. Говорим это прямо, а не «ошибка».
+            updateText.set('SillyTavern cannot check this copy — it is not a git install, or its update endpoints refused. Update the folder by hand.');
+            await notify('error', 'Update check unavailable for this install');
+            return;
+        }
+        if (mismatch) {
+            // Ровно тот случай, ради которого сверка с GitHub и существует.
+            updateTone.set('error');
+            updateText.set(`SillyTavern says up to date at ${String(diagnosis.localSha).slice(0, 7)}, but GitHub's "${diagnosis.branch}" is at ${String(diagnosis.remoteSha).slice(0, 7)}. The local checkout is stuck behind origin.`);
+            await notify('error', 'Local copy is behind GitHub despite SillyTavern saying otherwise');
+            return;
+        }
+        updateTone.set('ok');
+        updateText.set(diagnosis?.applicable
+            ? `Up to date — commit ${String(diagnosis.localSha).slice(0, 7)} on "${diagnosis.branch}" matches GitHub.`
+            : 'Up to date, as far as SillyTavern can tell (GitHub was not reachable for a direct check).');
+        await notify('ok', 'Engine is up to date');
+    }
+
+    function updatesCard() {
+        return Card('Updates', { ...collapse.bind('card:updates'), subtitle: 'Where this engine comes from, and whether it is current' },
+            Row(
+                computed(() => Badge(repository().owner && repository().repo ? `${repository().owner}/${repository().repo}` : 'repository unknown', { tone: 'muted' })),
+                computed(() => Badge(repository().extensionName ? `folder: ${repository().extensionName}` : 'folder unknown', { tone: repository().extensionName ? 'muted' : 'error' })),
+            ),
+            h('p', { class: computed(() => `stme-update-status stme-update-${updateTone()}`) }, updateText),
+            Row(computed(() => Button(updateBusy() ? 'Checking…' : 'Check for updates', checkUpdates))),
+        );
+    }
+
     function statusCard() {
         return Card('Engine', { ...collapse.bind('card:engine'), subtitle: 'What is actually wired right now' },
             Row(
@@ -241,7 +300,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     function tree() {
         return h('div', { class: 'stme-panel' },
             TwoColumn({
-                left: [statusCard(), modelsCard()],
+                left: [statusCard(), modelsCard(), updatesCard()],
                 right: [modulesCard()],
             }),
         );
@@ -268,6 +327,8 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         // Гейт-аксессор, и это правильно). Так что «что вообще подключено»
         // знает тот, кто движок собирал.
         contracts.set(listContracts ? listContracts() : host.own.contracts?.() ?? []);
+        const repo = await call('selfUpdate.repository');
+        if (repo.ok) repository.set({ owner: '', repo: '', extensionName: '', ...repo.value });
         modules.set(moduleRegistry?.list() ?? []);
         syncEnabled(moduleRegistry?.enabled() ?? []);
         return mount(tree());

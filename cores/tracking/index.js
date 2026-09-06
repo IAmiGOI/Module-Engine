@@ -75,6 +75,16 @@ function fieldKey(trackerId, fieldName) {
  * always available too, via the `tracking.poll` contract directly — the two
  * are the same underlying `poll()`, just triggered differently.
  *
+ * **`ownerId` — чей это трекер.** Отдельно от `kind`, потому что это разные
+ * вопросы. `kind` отвечает «куда публикуется и пишется ли макрос»; `ownerId`
+ * отвечает «кто им распоряжается». Трекер с `ownerId` завёл СВОЙ Модуль
+ * (например, «RP Time»): он такой же полноценный `kind: 'user'` — пишет макрос
+ * и публикуется в общий поток, — но настраивает его тот Модуль, а не человек
+ * руками. Без этого различения специализированный трекер Модуля вылезал в
+ * список и в плавающую панель Модуля трекеров как обычный, чужой и
+ * недоредактируемый. Само Ядро на `ownerId` не смотрит вовсе — оно только
+ * хранит и отдаёт его; решает тот, кто рисует список.
+ *
  * `onUserFieldRegistered` (defaults to a no-op) is the hook a USER tracker
  * field's every update is handed to — engine-wiring.js passes a real one
  * that calls Ядро исполнения макросов's `setValueMacro()`, closing the loop
