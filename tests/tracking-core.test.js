@@ -9,6 +9,7 @@ import { createSettingsCore } from '../cores/settings/index.js';
 import { registerStChatService } from '../services/st-chat.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
+import { createChatHistoryCore } from '../cores/chat-history/index.js';
 import { createTrackingCore, buildTrackerPrompt, buildTrackerSystemPrompt } from '../cores/tracking/index.js';
 
 // --- Unit level: prompt-building, independent of any Ядро/Сервис ----------
@@ -498,4 +499,62 @@ test('a chat switch announces tracking.blocks.changed for every tracker, so the 
     await new Promise(resolve => setTimeout(resolve, 0));
 
     assert.deepEqual(seen, [{ trackerId: 'char' }]);
+});
+
+// --- Значения трекера — привязаны ещё и к СООБЩЕНИЮ, не только к чату ------
+//
+// «Текущее значение» (chatValues, выше) — не единственная запись: каждый
+// успешный опрос дополнительно кладёт снимок ВСЕХ полей трекера на mesid
+// последнего сообщения в контексте опроса, через Ядро истории чата — то же
+// самое, чем раньше пользовалась только шкала «RP Time» для своих отметок.
+
+function buildEngineWithChatHistory(options) {
+    const built = buildEngineWithChatMemory(options);
+    registerStChatService(built.engine.buses.services, { getContext: () => built.settingsContext });
+    createChatHistoryCore(built.engine.registerCaller('core.chatHistory', 'cores', { tier: 'official' }));
+    return built;
+}
+
+async function readAnnotations(engine, namespace) {
+    const probe = engine.registerCaller('probe', 'cores', { tier: 'official' });
+    const result = await new Promise(resolve => probe.own.subscribe('chatHistory.annotations', { params: { namespace } }, resolve));
+    return result.value;
+}
+
+test('a successful poll annotates the LAST message in its context with a snapshot of every field, not just the ones that changed', async () => {
+    const { engine, trackingCore, settingsContext } = buildEngineWithChatHistory({ fetchReply: '{"health": 90}' });
+    settingsContext.chat = [
+        { is_user: true, is_system: false, mes: 'I take a swing.' },
+        { is_user: false, is_system: false, mes: 'The blade lands.' },
+    ];
+    await trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', default: 100 }, { name: 'mood', default: 'calm' }] }]);
+
+    await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } });
+
+    const annotations = await readAnnotations(engine, 'char');
+    assert.deepEqual(annotations, { 1: { health: 90, mood: 'calm' } }, 'привязано к mesid "1" — последнему сообщению в контексте, снимок несёт ОБА поля');
+});
+
+test('each poll re-annotates the message that was current AT THAT TIME — an earlier snapshot is not overwritten', async () => {
+    const { engine, trackingCore, settingsContext } = buildEngineWithChatHistory({ fetchReply: '{"health": 90}' });
+    settingsContext.chat = [{ is_user: false, is_system: false, mes: 'first reply' }];
+    await trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', default: 100 }] }]);
+    await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } }); // mesid "0" -> 90
+
+    settingsContext.chat.push({ is_user: false, is_system: false, mes: 'second reply' });
+    await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } }); // mesid "1" -> 90 again
+
+    const annotations = await readAnnotations(engine, 'char');
+    assert.deepEqual(annotations, { 0: { health: 90 }, 1: { health: 90 } }, 'обе отметки живы — вторая не стёрла первую');
+});
+
+test('a poll with an empty chat (no message to tie the snapshot to) skips the annotation gracefully, does not throw', async () => {
+    const { engine, trackingCore, settingsContext } = buildEngineWithChatHistory({ fetchReply: '{"health": 90}' });
+    settingsContext.chat = [];
+    await trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', default: 100 }] }]);
+
+    const result = await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(await readAnnotations(engine, 'char'), {});
 });

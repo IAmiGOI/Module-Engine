@@ -95,6 +95,21 @@ test('set()/get() without a namespace or key fails with a clear error through th
     assert.match(result.error.message, /namespace/);
 });
 
+test('two concurrent FIRST writes to the same namespace both survive — neither set() reads a stale empty fallback and clobbers the other', async () => {
+    const { engine } = buildEngineWithMemoryCore();
+    const moduleA = engine.registerCaller('module.a', 'modules', { tier: 'official' });
+    const moduleB = engine.registerCaller('module.b', 'modules', { tier: 'official' });
+
+    // Same namespace, DIFFERENT keys — before the queue, both could read the
+    // namespace's bucket as freshly-empty and write back only their own key.
+    const setA = new Promise(resolve => moduleA.cores.subscribe('storage.chatMemory.set', { params: { namespace: 'shared', key: 'a', value: 1 } }, resolve));
+    const setB = new Promise(resolve => moduleB.cores.subscribe('storage.chatMemory.set', { params: { namespace: 'shared', key: 'b', value: 2 } }, resolve));
+    await Promise.all([setA, setB]);
+
+    const keys = await new Promise(resolve => moduleA.cores.subscribe('storage.chatMemory.keys', { params: { namespace: 'shared' } }, resolve));
+    assert.deepEqual(keys.value.sort(), ['a', 'b'], 'both concurrent first writes must land, not just whichever finished last');
+});
+
 test('a Module without the right to storage.chatMemory.set is refused before the Ядро — and the Сервис save — are ever reached', async () => {
     const { engine, saveCalls } = buildEngineWithMemoryCore();
     const module = engine.registerCaller('module.untrusted', 'modules', { tier: 'community', allowedContracts: [] });
