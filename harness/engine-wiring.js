@@ -346,7 +346,10 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // Полоса под последним сообщением: три независимых виджета, во всю ширину
     // чата. Модель её не видит вовсе — она живёт только в DOM.
     const messageFooterHost = engine.registerCaller('core.ui.messageFooter', 'cores', { tier: 'official' });
-    const messageFooter = createMessageFooterCore(messageFooterHost, { createFinalUi: () => createFinalUiPc(messageFooterHost) });
+    const messageFooter = createMessageFooterCore(messageFooterHost, {
+        createFinalUi: () => createFinalUiPc(messageFooterHost),
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.messageFooter' }),
+    });
 
     let panelUi = null;
     // Самообновление: единственное Ядро, которому выдано право выходить в сеть

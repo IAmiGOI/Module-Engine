@@ -66,7 +66,15 @@ const REDRAW_EVENTS = Object.freeze([
 
 const FOOTER_CLASS = 'stme-message-footer';
 
-export function createMessageFooterCore(host, { createFinalUi, observe = defaultObserve } = {}) {
+export function createMessageFooterCore(host, { createFinalUi, observe = defaultObserve, publish } = {}) {
+    // Триада started/completed/failed — не для всего, а по критерию
+    // (ARCHITECTURE.md): attach() трогает настоящий DOM ST, у него ЕСТЬ путь
+    // «легитимно ничего не сделал» (гейт по attaching/slots.size), и до
+    // события ловить «когда он ДЕЙСТВИТЕЛЬНО settled» было нечем — ровно тот
+    // пробел, из-за которого бейдж ToolCall застревал: класс `toolCall`
+    // навешивается ST на УЖЕ вставленный узел (атрибут, не childList), и
+    // раньше ничего не гарантировало ещё один проход `attach()` ПОСЛЕ этого.
+    const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
     // Тот же механизм, что под Ядром UI модулей и Ядром UI для Engine: каждый
     // ключ получает СВОЙ независимый Final UI, иначе пути деревьев столкнутся
     // в одной карте (см. ui-mount-registry.js). Ключ здесь — пара
@@ -217,9 +225,10 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
     async function attach() {
         if (attaching || !slots.size) return false;
         attaching = true;
+        publishEvent('ui.messageFooter.attach.started', {});
         try {
             const messages = await readMessages();
-            if (!messages.length) return false;
+            if (!messages.length) { publishEvent('ui.messageFooter.attach.completed', { placed: false }); return false; }
             const lastId = messages[messages.length - 1].mesid;
 
             // Сообщения, которых в чате больше нет, забываем вместе с подвалом.
@@ -232,7 +241,11 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
                 if (!block) continue;
                 placed = await fillSlots({ ...message, live: message.mesid === lastId }, block) || placed;
             }
+            publishEvent('ui.messageFooter.attach.completed', { placed });
             return placed;
+        } catch (error) {
+            publishEvent('ui.messageFooter.attach.failed', { message: error.message });
+            throw error;
         } finally {
             attaching = false;
         }
@@ -258,6 +271,16 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
     async function start() {
         started = true;
         for (const event of REDRAW_EVENTS) subscriptions.push(host.events.subscribe(event, () => { attach(); }));
+        // Финальный корректирующий проход: `generation.completed` — единственный
+        // момент, который ГАРАНТИРОВАННО наступает уже ПОСЛЕ того, как ST
+        // реально доставила класс `toolCall` (реальный код: `saveReply()`,
+        // где этот класс расставляется, отрабатывает до `hideStopButton()`/
+        // `GENERATION_ENDED`, из которого и строится это событие) — в отличие
+        // от `st.characterMessageRendered`, который ST пропускает во время
+        // самого стриминга. Без него подвал мог застрять на состоянии,
+        // прочитанном ДО того, как класс появился, и больше никогда не
+        // перечитаться.
+        subscriptions.push(host.events.subscribe('generation.completed', () => { attach(); }));
         // Другой чат — другие сообщения под теми же номерами (`mesid` — это
         // индекс, а не устойчивый идентификатор). Всё накопленное выбрасываем
         // ПЕРЕД тем, как раскладывать заново, иначе подвалы прошлого чата
