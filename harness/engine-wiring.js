@@ -26,6 +26,7 @@ import { createBackupCore, createChatMetadataBackupSource, createExtensionSettin
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createMacrosCore } from '../cores/macros/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
+import { createBasicSummaryCore } from '../cores/summary/index.js';
 import { createUiEngineCore } from '../cores/ui/ui-engine.js';
 import { createEnginePanelCore } from '../cores/ui/engine-panel.js';
 import { createFinalUiPc } from '../cores/ui/final-ui-pc.js';
@@ -334,6 +335,14 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.lorebook' }),
     });
 
+    // Свёртка старой истории в иерархию саммари — регистрирует свои же этапы
+    // на `generation.prepare` (порог + фолд) и `generation.beforeSend`
+    // (инъекция активных саммари в `chat`), поэтому строится ПОСЛЕ Ядра
+    // пайплайнов/генерации выше, как и остальные вкладчики.
+    const summaryCore = createBasicSummaryCore(engine.registerCaller('core.summary', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.summary' }),
+    });
+
     const uiHost = engine.registerCaller('core.ui.engine', 'cores', { tier: 'official' });
     const uiEngine = createUiEngineCore(() => createFinalUiPc(uiHost));
     // У Модулей СВОЙ реестр UI, отдельный от слотов движка: у каждого
@@ -409,7 +418,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
 
     // Every Ядро is constructed by now (Settings Core included) — safe to
     // actually read back whatever was persisted last time.
-    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), lorebookCore.scan()]);
+    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), lorebookCore.scan(), summaryCore.load()]);
 
     // Панель монтируется здесь же, а не у вызывающего: реестру Модулей нужно
     // уметь дождаться её перерисовки, чтобы положить дерево Модуля в слот.
@@ -445,5 +454,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
 }
