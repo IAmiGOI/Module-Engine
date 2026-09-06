@@ -55,11 +55,19 @@ export function registerStChatService(bus, { getContext } = {}) {
          * пользователя, а по одному `mesid` роль не узнать. Атрибуты `is_user`
          * и `is_system` — строки `"true"`/`"false"` (проверено по разметке ST
          * 1.16.0), наружу отдаём нормальные булевы, как и `stChat.messages`.
+         *
+         * `isToolCall` — сообщение с вызовом инструмента (ST ставит ему класс
+         * `toolCall`, когда у него есть `mes.extra.tool_invocations`, см.
+         * script.js). Это НЕ отдельное служебное сообщение — та же самая
+         * реплика персонажа, просто с вызовом инструмента внутри; следом за
+         * ней ST добавит ЕЩЁ одну, уже настоящую реплику-продолжение. До неё
+         * это сообщение — черновик по пути, а не окончательный ответ.
          */
         bus.register('stChat.rendered', () => [...document.querySelectorAll('#chat .mes[mesid]')].map(node => ({
             mesid: node.getAttribute('mesid'),
             isUser: node.getAttribute('is_user') === 'true',
             isSystem: node.getAttribute('is_system') === 'true',
+            isToolCall: node.classList.contains('toolCall'),
         })), { loadMetric: () => 0 }),
         bus.register('stChat.length', () => (Array.isArray(getContext()?.chat) ? getContext().chat.length : 0), { loadMetric: () => 0 }),
     ];

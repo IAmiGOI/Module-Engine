@@ -276,6 +276,17 @@ test('a slot that DECLINES a message leaves no footer there at all — a badge h
     assert.ok(footerOf(blockOf('1')), 'а под ответом — бейдж');
 });
 
+test('the ToolCall flag from stChat.rendered reaches the slot\'s factory untouched — readMessages() spreads whatever the Сервис reports, not just isUser/isSystem', async () => {
+    const { core, chat, blockOf } = buildEngine();
+    chat.rendered = [{ mesid: '0', isUser: false, isToolCall: true }, { mesid: '1', isUser: false, isToolCall: false }];
+    core.claim({ slot: 'left', ownerId: 'module.time', node: message => (message.isToolCall ? null : h('div', {}, 'time')) });
+
+    await core.start();
+
+    assert.equal(footerOf(blockOf('0')), undefined, 'черновик с вызовом инструмента — без бейджа');
+    assert.ok(footerOf(blockOf('1')), 'а настоящий ответ его получает');
+});
+
 test('a slot that STOPS wanting a message takes its footer away — a reroll must not leave a second badge behind', async () => {
     const { core, chat, blockOf } = buildEngine();
     chat.rendered = [{ mesid: '0', isUser: false }, { mesid: '1', isUser: false }];

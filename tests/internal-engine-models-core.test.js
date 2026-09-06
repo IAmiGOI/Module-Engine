@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createEngine } from '../libraries/shared/engine.js';
 import { registerHttpService } from '../services/http.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
-import { createInternalEngineModelsCore, resolveGenerateRequest, clampSamplerSettings, SAMPLER_PRESETS } from '../cores/models/internal-engine.js';
+import { createInternalEngineModelsCore, resolveGenerateRequest, clampSamplerSettings, clampReasoningSettings, SAMPLER_PRESETS, REASONING_MODES, REASONING_EFFORTS } from '../cores/models/internal-engine.js';
 import { createSettingsCore } from '../cores/settings/index.js';
 
 // --- Чистые функции: пресеты и защитное чтение сэмплера ---------------------
@@ -49,6 +49,51 @@ test('resolveGenerateRequest() falls back to the engine defaults for a worker wi
 
     assert.equal(resolved.temperature, 0.7);
     assert.equal(resolved.maxTokens, 1000);
+});
+
+// --- Ризонинг: та же механика, отдельные поля ------------------------------
+
+test('every sampler preset also carries a valid reasoning triple — the preset is one coherent starting point, not sampler-only', () => {
+    for (const preset of SAMPLER_PRESETS) {
+        assert.ok(REASONING_MODES.includes(preset.reasoningMode), `preset "${preset.id}" has a real reasoningMode`);
+        assert.ok(REASONING_EFFORTS.includes(preset.reasoningEffort), `preset "${preset.id}" has a real reasoningEffort`);
+        assert.ok(Number.isFinite(preset.reasoningBudget), `preset "${preset.id}" has a real reasoningBudget`);
+    }
+});
+
+test('the tracker-oriented presets turn reasoning OFF on purpose — a strict-JSON task gains nothing from a reasoning model thinking longer', () => {
+    const deterministic = SAMPLER_PRESETS.find(item => item.id === 'deterministic');
+    const precise = SAMPLER_PRESETS.find(item => item.id === 'precise');
+
+    assert.equal(deterministic.reasoningMode, 'disabled');
+    assert.equal(precise.reasoningMode, 'disabled');
+});
+
+test('clampReasoningSettings() rejects an unknown mode/effort instead of passing it through to a provider', () => {
+    assert.deepEqual(clampReasoningSettings({ reasoningMode: 'yolo', reasoningEffort: 'extreme', reasoningBudget: -50 }),
+        { reasoningMode: 'inherit', reasoningEffort: 'medium', reasoningBudget: 0 });
+});
+
+test('clampReasoningSettings() with nothing at all defaults to "inherit" — silence, not an opinion the engine never asked for', () => {
+    assert.deepEqual(clampReasoningSettings(), { reasoningMode: 'inherit', reasoningEffort: 'medium', reasoningBudget: 0 });
+});
+
+test('resolveGenerateRequest() reads reasoning settings from the WORKER, same as the sampler ones', () => {
+    const worker = { reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000 };
+
+    const resolved = resolveGenerateRequest({ prompt: 'hi' }, worker);
+
+    assert.equal(resolved.reasoningMode, 'enabled');
+    assert.equal(resolved.reasoningEffort, 'high');
+    assert.equal(resolved.reasoningBudget, 2000);
+});
+
+test('resolveGenerateRequest() still lets an explicit per-call reasoning override win over the worker\'s own default', () => {
+    const worker = { reasoningMode: 'disabled' };
+
+    const resolved = resolveGenerateRequest({ prompt: 'hi', reasoningMode: 'enabled' }, worker);
+
+    assert.equal(resolved.reasoningMode, 'enabled');
 });
 
 /**
@@ -251,4 +296,18 @@ test('two workers with DIFFERENT presets each keep their own sampler settings �
     const byWorker = Object.fromEntries(calls.map(call => [call.url, JSON.parse(call.body).temperature]));
     assert.equal(byWorker['https://api.one.example.com/chat/completions'], precise.temperature);
     assert.equal(byWorker['https://api.two.example.com/chat/completions'], creative.temperature);
+});
+
+test('a worker configured with reasoning enabled actually sends it to a REAL OpenRouter endpoint through the full chain', async () => {
+    const { engine, modelsCore, calls } = buildEngineWithModelsCore();
+    modelsCore.configureWorkers([{
+        id: 'w1', endpoint: 'https://openrouter.ai/api/v1', model: 'm1', format: 'openai',
+        reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000,
+    }]);
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+
+    const result = await new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hello' } }, resolve));
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(JSON.parse(calls[0].body).reasoning, { enabled: true, effort: 'high', max_tokens: 2000 });
 });

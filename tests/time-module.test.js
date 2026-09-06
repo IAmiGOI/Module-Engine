@@ -291,6 +291,14 @@ test('the badge declines a USER message outright — time is worked out from the
     assert.ok(build({ mesid: '4', isUser: false, live: true }), 'а под ответом бейдж есть');
 });
 
+test('a ToolCall message gets NOTHING at all, not even an empty pulsing badge — it is a draft on the way, never the message advance() will actually write to', async () => {
+    const { module, claims } = buildEngine();
+    await module.load();
+    const build = claims[0].node;
+
+    assert.equal(build({ mesid: '4', isUser: false, isToolCall: true, live: true }), null);
+});
+
 test('a message with no reading yet shows BLANK — that is the pulsing "still working it out", not a stale time', async () => {
     const { module, claims } = buildEngine();
     await module.load();
