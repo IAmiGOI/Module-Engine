@@ -167,7 +167,10 @@ function createModuleRegistry({ engine, uiModules, panelSettled, onChanged = () 
  */
 export const CORE_REPO = Object.freeze({ owner: 'IAmiGOI', repo: 'Module-Engine' });
 
-export async function wireEngine({ getContext, fetch, interceptTarget = globalThis, scriptUrl = import.meta.url }) {
+// `fetch` по умолчанию ПРИВЯЗАН к глобальному объекту: браузерный `fetch`
+// требует, чтобы `this` был окном, и вызов «голой» ссылки отвечает «Illegal
+// invocation».
+export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(globalThis), interceptTarget = globalThis, scriptUrl = import.meta.url }) {
     const engine = createEngine();
 
     registerDomService(engine.buses.services);
@@ -187,7 +190,12 @@ export async function wireEngine({ getContext, fetch, interceptTarget = globalTh
     // в реальном ST это window, в харнессе — его собственный поддельный ST.
     registerStGenerationService(engine.buses.services, { target: interceptTarget });
     // Git-эндпоинты ST и сессия страницы — всё, что нужно самообновлению.
-    registerStExtensionsService(engine.buses.services, { getContext });
+    // `fetch` передаётся ЯВНО. Значение по умолчанию (`globalThis.fetch`)
+    // вызывалось бы без получателя, а браузерный `fetch` требует, чтобы `this`
+    // был окном, и отвечает на такой вызов «Illegal invocation». Проверка
+    // обновления падала на первом же запросе и молча превращалась в «проверить
+    // нечего» — то есть самообновление не работало вовсе, ни разу и без следа.
+    registerStExtensionsService(engine.buses.services, { getContext, fetch });
     registerSessionService(engine.buses.services);
 
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
