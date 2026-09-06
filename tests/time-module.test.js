@@ -6,9 +6,10 @@ import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerStChatService } from '../services/st-chat.js';
 import { createSettingsCore } from '../cores/settings/index.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
+import { createChatHistoryCore } from '../cores/chat-history/index.js';
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
-import { createTimeModule, buildTimeLabel, buildTimeline, buildHistory, TIME_PRESETS, MODULE_ID } from '../modules/time/index.js';
+import { createTimeModule, buildTimeLabel, buildAnnotatedHistory, buildHistory, TIME_PRESETS, MODULE_ID } from '../modules/time/index.js';
 
 // --- Чистые функции ---------------------------------------------------------
 
@@ -26,21 +27,34 @@ test('a field with no value yet reads as a dash, not "undefined"', () => {
     assert.equal(buildTimeLabel([{ name: 'time' }], '{time}'), '—');
 });
 
-test('buildTimeline() shows the model where time has been GOING, not just where it is', () => {
-    const timeline = buildTimeline(['08:00', '09:15', '09:40'], 'start');
+test('buildAnnotatedHistory() puts a time label BEFORE each reply, tied by mesid, not a list floating next to the text', () => {
+    const messages = [
+        { mesid: '1', isUser: true, text: 'I ride out at dawn.' },
+        { mesid: '2', isUser: false, text: 'The sun climbs as the road unwinds.' },
+    ];
 
-    assert.equal(timeline, '"08:00" → "09:15" → "09:40"', 'один якорь не сообщает темпа — из-за этого в Alpha были рваные скачки');
+    const built = buildAnnotatedHistory(messages, { 2: '09:15 (Morning)' });
+
+    assert.equal(built, '[unknown] Player: I ride out at dawn.\n[09:15 (Morning)] Character: The sun climbs as the road unwinds.');
 });
 
-test('buildTimeline() falls back to the configured start, so the model never has to invent a date', () => {
-    assert.equal(buildTimeline([], 'Day 0, 08:00 (Morning)'), '"Day 0, 08:00 (Morning)"', 'в кавычках: внутри отметки бывают запятые');
+test('buildAnnotatedHistory() marks a reply "unknown" when this SPECIFIC mesid has no recorded time yet, not the nearest one', () => {
+    const messages = [{ mesid: '5', isUser: false, text: 'It creaks.' }];
+
+    assert.match(buildAnnotatedHistory(messages, { 3: '08:00' }), /^\[unknown\] Character: It creaks\.$/);
 });
 
-test('buildTimeline() keeps only the recent few — a long tail is noise and wasted tokens', () => {
-    const timeline = buildTimeline(['1', '2', '3', '4', '5', '6', '7'], 'start');
+test('buildAnnotatedHistory() drops system messages — noise for a time tracker exactly like it is for a generic tracker\'s {context}', () => {
+    const messages = [
+        { mesid: '1', isSystem: true, text: 'System: chat renamed' },
+        { mesid: '2', isUser: false, text: 'A real reply.' },
+    ];
 
-    assert.equal(timeline.split(' → ').length, 5);
-    assert.match(timeline, /^"3" →/);
+    assert.equal(buildAnnotatedHistory(messages, {}), '[unknown] Character: A real reply.');
+});
+
+test('buildAnnotatedHistory() on an empty chat says so plainly instead of an empty string', () => {
+    assert.equal(buildAnnotatedHistory([], {}), '(no messages yet)');
 });
 
 test('every preset is self-consistent — its template only references fields it actually declares', () => {
@@ -65,6 +79,7 @@ function buildEngine({ replies, gate, fail = false } = {}) {
     registerStChatService(engine.buses.services, { getContext: () => settingsContext });
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
     createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
+    createChatHistoryCore(engine.registerCaller('core.chatHistory', 'cores', { tier: 'official' }));
 
     const prompts = [];
     const calls = []; // весь params.generate целиком — для проверок systemPrompt/сэмплера/ризонинга
@@ -113,13 +128,14 @@ function buildEngine({ replies, gate, fail = false } = {}) {
         tier: 'community',
         allowedContracts: [
             'tracking.trackers', 'tracking.configure', 'tracking.poll', 'tracking.reset',
-            'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
+            'storage.settings.get', 'storage.settings.set',
+            'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
     });
     const setWorkers = list => { workerList = list; };
-    return { engine, trackingCore, prompts, calls, macroWrites, claims, live, module: createTimeModule(moduleHost), setWorkers };
+    return { engine, trackingCore, prompts, calls, macroWrites, claims, live, module: createTimeModule(moduleHost), setWorkers, settingsContext };
 }
 
 test('the module owns NO tracking of its own — it registers one tracker in the shared Ядро', async () => {
@@ -132,19 +148,22 @@ test('the module owns NO tracking of its own — it registers one tracker in the
     assert.deepEqual(tracker.fields.map(field => field.name), ['year', 'month', 'day', 'time', 'period']);
 });
 
-test('advancing sends the TIMELINE to the model — that is the whole specialisation', async () => {
-    const { module, prompts } = buildEngine();
+test('advancing sends the ANNOTATED HISTORY to the model, each reply marked with its own time — that is the whole specialisation', async () => {
+    const { module, calls } = buildEngine();
     await module.load();
     module.startTime.set('Day 0, 08:00 (Morning)');
 
     await module.advance();
 
-    assert.match(prompts.at(-1), /"Day 0, 08:00 \(Morning\)"/, 'начальная точка ушла модели');
-    assert.match(prompts.at(-1), /Recent known in-world time, oldest to most recent/);
-    assert.match(prompts.at(-1), /The sun climbs as the road unwinds/, 'и переписка тоже');
+    const call = calls.at(-1);
+    // Ничего ещё не насчитано — последнее известное время это стартовая
+    // точка, и она идёт ЯКОРЕМ в системное сообщение, а не в пользовательское.
+    assert.match(call.systemPrompt, /The last known in-world time is: Day 0, 08:00 \(Morning\)/, 'начальная точка ушла модели якорем');
+    assert.match(call.prompt, /\[unknown\] Player: We ride out at dawn\./, 'реплика игрока — с честной пометкой "ещё не посчитано"');
+    assert.match(call.prompt, /\[unknown\] Character: The sun climbs as the road unwinds\. Hours pass\./, 'и переписка тоже, той же пометкой — до опроса время неизвестно для ОБЕИХ реплик');
 });
 
-test('the instruction and the history travel as TWO separate messages — system carries the instruction, user carries the timeline and the roleplay context', async () => {
+test('the instruction and the history travel as TWO separate messages — system carries the instruction + anchor, user carries the annotated history', async () => {
     const { module, calls } = buildEngine();
     await module.load();
 
@@ -153,9 +172,28 @@ test('the instruction and the history travel as TWO separate messages — system
     const call = calls.at(-1);
     assert.match(call.systemPrompt, /You are an in-world time tracker/, 'инструкция — в системном сообщении');
     assert.match(call.systemPrompt, /Return ONLY a JSON object/, 'и формат ответа тоже там');
-    assert.doesNotMatch(call.systemPrompt, /ROLEPLAY CONTEXT/, 'а не сама переписка');
-    assert.match(call.prompt, /ROLEPLAY CONTEXT/, 'история — в пользовательском');
+    assert.match(call.systemPrompt, /The last known in-world time is:/, 'и последнее известное время как якорь');
+    assert.doesNotMatch(call.systemPrompt, /MESSAGE HISTORY/, 'а не сама история');
+    assert.match(call.prompt, /MESSAGE HISTORY/, 'история — в пользовательском');
     assert.doesNotMatch(call.prompt, /You are an in-world time tracker/, 'а не инструкция');
+});
+
+test('a reply already annotated by an EARLIER poll keeps its OWN recorded time in the history — the next poll does not overwrite it with "unknown" or the newest reply\'s time', async () => {
+    const { module, calls, live, settingsContext } = buildEngine({ replies: ['{"time": "11:40", "period": "Morning"}', '{"time": "13:05", "period": "Afternoon"}'] });
+    await module.load();
+    module.applyPreset('clock-only');
+    live.mesid = '1'; // первый ответ ("The sun climbs...") посчитан на mesid "1"
+    await module.advance();
+    assert.equal(module.badges()['1'], '11:40 (Morning)');
+
+    // Чат стал длиннее — новый ответ персонажа приписан в конец.
+    settingsContext.chat.push({ is_user: false, is_system: false, mes: 'The road forks ahead.' });
+    live.mesid = '2';
+    await module.advance();
+
+    const call = calls.at(-1);
+    assert.match(call.prompt, /\[11:40 \(Morning\)\] Character: The sun climbs as the road unwinds\. Hours pass\./, 'старая метка mesid "1" осталась ЕГО, не стала "unknown" и не съехала на новую реплику');
+    assert.match(call.prompt, /\[unknown\] Character: The road forks ahead\./, 'а у новой реплики честно "unknown" — время для неё ещё считается');
 });
 
 test('a Generation preset applied to RP Time reaches the model call — chosen for THIS tracker, not tied to whichever worker executes it', async () => {
@@ -247,28 +285,37 @@ test('a connection added or removed in the worker panel reaches the "Model conne
     assert.deepEqual(module.workers(), [{ value: 'main', label: 'main' }, { value: 'new-connection', label: 'new-connection' }]);
 });
 
-test('each advance extends the timeline, so the model sees the PACE and not just a point', async () => {
-    const { module, prompts, live } = buildEngine();
+test('each advance grows the REAL annotated history, so the model sees the pace from actual marked replies, not a floating list', async () => {
+    const { module, calls, live, settingsContext } = buildEngine();
     await module.load();
     module.applyPreset('clock-only'); // поддельная модель отвечает только временем и периодом
     // Каждый шаг относится к СВОЕМУ сообщению — именно это настоящее Ядро
     // подвала вычислило бы для Модуля прямо в момент опроса.
-    const liveAt = mesid => { live.mesid = String(mesid); };
+    live.mesid = '1';
+    await module.advance(); // mesid "1" -> 11:40
 
-    liveAt(1);
-    await module.advance();
-    liveAt(2);
-    await module.advance();
+    settingsContext.chat.push({ is_user: false, is_system: false, mes: 'The road forks ahead.' });
+    live.mesid = '2';
+    await module.advance(); // mesid "2" -> 13:05
 
-    // Вторая просьба к модели уже содержит первую отметку — именно этого и не
-    // хватало Alpha, пока она посылала один голый «текущий момент».
-    assert.match(prompts.at(1), /oldest to most recent: "11:40 \(Morning\)"/);
+    // Вторая просьба к модели видит ОБЕ реплики, каждую с её СОБСТВЕННОЙ
+    // меткой — не список отметок в отрыве от текста.
+    const secondCall = calls.at(1);
+    assert.match(secondCall.prompt, /\[11:40 \(Morning\)\] Character: The sun climbs as the road unwinds\. Hours pass\./);
+    assert.match(secondCall.prompt, /\[unknown\] Character: The road forks ahead\./, 'вторая реплика ещё не досчитана в момент, когда за ней пошли к модели');
+    // И якорь в системном сообщении подхватил САМОЕ свежее известное время.
+    assert.match(secondCall.systemPrompt, /The last known in-world time is: 11:40 \(Morning\)/);
 
-    liveAt(3);
-    await module.advance();
+    settingsContext.chat.push({ is_user: false, is_system: false, mes: 'Camp is made at dusk.' });
+    live.mesid = '3';
+    await module.advance(); // mesid "3" -> следующее значение
 
-    // А к третьей набралась настоящая ЛИНИЯ, по которой виден темп.
-    assert.match(prompts.at(2), /"11:40 \(Morning\)" → "13:05 \(Afternoon\)"/);
+    // К третьему опросу в истории — уже ТРИ реплики персонажа, каждая со
+    // своей меткой: настоящая линия, а не голый «текущий момент».
+    const thirdCall = calls.at(2);
+    assert.match(thirdCall.prompt, /\[11:40 \(Morning\)\] Character: The sun climbs/);
+    assert.match(thirdCall.prompt, /\[13:05 \(Afternoon\)\] Character: The road forks ahead\./);
+    assert.match(thirdCall.prompt, /\[unknown\] Character: Camp is made at dusk\./);
 });
 
 test('the same value twice does not pad the timeline with duplicates', async () => {
@@ -337,9 +384,9 @@ test('the timeline is remembered per CHAT, not in settings — another chat has 
     await module.advance();
 
     const probe = engine.registerCaller('probe', 'cores', { tier: 'official' });
-    const stored = await new Promise(resolve => probe.own.subscribe('storage.chatMemory.get', { params: { namespace: MODULE_ID, key: 'badges', fallback: {} } }, resolve));
+    const stored = await new Promise(resolve => probe.own.subscribe('chatHistory.annotations', { params: { namespace: MODULE_ID } }, resolve));
 
-    assert.deepEqual(stored.value, { 4: '11:40 (Morning)' }, 'лежит в памяти ЧАТА, отметкой на сообщение');
+    assert.deepEqual(stored.value, { 4: '11:40 (Morning)' }, 'лежит в памяти ЧАТА (через Ядро истории чата), отметкой на сообщение');
 });
 
 test('applying a preset swaps fields, start and template together — they must never drift apart', async () => {
@@ -472,7 +519,7 @@ test('merely BROWSING existing swipes changes nothing — ST fires the same even
 });
 
 test('a reroll ROLLS THE CLOCK BACK — the timeline and the card return to the previous message', async () => {
-    const { engine, module, live, prompts } = buildEngine();
+    const { engine, module, live, calls } = buildEngine();
     await module.load();
     module.applyPreset('clock-only');
     const liveAt = mesid => { live.mesid = String(mesid); };
@@ -493,8 +540,8 @@ test('a reroll ROLLS THE CLOCK BACK — the timeline and the card return to the 
 
     await module.advance();
 
-    // И новый опрос отсчитывает от 11:40, а не от отброшенного 13:05.
-    assert.match(prompts.at(-1), /oldest to most recent: "11:40 \(Morning\)"\./);
+    // И новый опрос якорится на 11:40, а не на отброшенном 13:05.
+    assert.match(calls.at(-1).systemPrompt, /The last known in-world time is: 11:40 \(Morning\)/);
 });
 
 test('buildHistory() reads the timeline off the message marks, in message order and without repeats', () => {

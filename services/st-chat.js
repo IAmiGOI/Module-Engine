@@ -8,9 +8,16 @@
  * `chatMetadata` (наше хранилище при чате), этот — про сами сообщения. Их
  * легко перепутать по названию, но это разные части ST API.
  *
- * Форма сообщения нормализуется: `{ isUser, isSystem, name, text }`. Наружу не
- * протекают ни `mes`, ни `is_user` — сырые имена полей ST остаются внутри
- * этого файла, как и везде в Сервисах.
+ * Форма сообщения нормализуется: `{ mesid, isUser, isSystem, name, text }`.
+ * Наружу не протекают ни `mes`, ни `is_user` — сырые имена полей ST остаются
+ * внутри этого файла, как и везде в Сервисах.
+ *
+ * `mesid` — индекс сообщения в `context.chat`, тем же числом-строкой, каким
+ * его ставит сама ST в разметку (`.mes[mesid]`, см. `stChat.rendered` ниже).
+ * Посчитан ДО фильтрации системных, а не после: иначе позиция в отфильтрованном
+ * списке разъехалась бы с реальным индексом, и всё, что привязывает свою
+ * информацию к КОНКРЕТНОМУ сообщению (Ядро истории чата), привязывалось бы не
+ * туда.
  */
 export function registerStChatService(bus, { getContext } = {}) {
     /** `limit` — сколько ПОСЛЕДНИХ сообщений вернуть; `includeSystem` по умолчанию false, системные строки в контексте почти всегда шум. */
@@ -18,9 +25,11 @@ export function registerStChatService(bus, { getContext } = {}) {
         const chat = getContext()?.chat;
         if (!Array.isArray(chat)) return [];
         return chat
-            .filter(message => includeSystem || !message?.is_system)
+            .map((message, index) => ({ message, mesid: String(index) }))
+            .filter(({ message }) => includeSystem || !message?.is_system)
             .slice(-Math.max(0, limit))
-            .map(message => ({
+            .map(({ message, mesid }) => ({
+                mesid,
                 isUser: Boolean(message?.is_user),
                 isSystem: Boolean(message?.is_system),
                 name: String(message?.name ?? ''),
