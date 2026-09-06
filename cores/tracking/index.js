@@ -279,8 +279,30 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         // Одним запросом на весь опрос, а не по одному на поле — `setField()`
         // уже обновил кэш и объявил событие для каждого, здесь только
         // персистентность в `storage.chatMemory`.
-        if (changed) await saveChatValues();
+        if (changed) {
+            await saveChatValues();
+            await annotateMessage(trackerId, messages);
+        }
         return listFields(trackerId);
+    }
+
+    /**
+     * Привязывает СНИМОК ЦЕЛИКОМ (все поля трекера, а не только что менялись
+     * в этот опрос — «на сообщении N трекер выглядел вот так») к сообщению,
+     * которое было последним в контексте опроса. Через Ядро истории чата
+     * (см. doc-comment [cores/chat-history/index.js](../chat-history/index.js)),
+     * а не своим механизмом: то же самое, что раньше писала только шкала
+     * «RP Time», теперь доступно любому трекеру, не только специализированному
+     * Модулю. Тихо ничего не делает, если в контексте не было ни одного
+     * сообщения (пустой чат) или Ядра истории чата рядом нет (узкие тесты) —
+     * это ДОПОЛНИТЕЛЬНАЯ история, а не единственный источник текущего значения
+     * (им остаётся `chatValues`/`storage.chatMemory`, см. doc-comment Ядра).
+     */
+    async function annotateMessage(trackerId, messages) {
+        const mesid = messages.at(-1)?.mesid;
+        if (mesid === undefined || mesid === null) return;
+        const snapshot = Object.fromEntries(listFields(trackerId).map(field => [field.name, field.value]));
+        await request(host.own, 'chatHistory.annotate', { params: { namespace: trackerId, mesid, value: snapshot } });
     }
 
     /** Adopts a tracker set into memory — re-subscribes every trigger fresh; a field with no value yet starts at its own `default`. The persisting `configureTrackers()` below is this PLUS a real `storage.settings` write (see persisted-list.js). */
