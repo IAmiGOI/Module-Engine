@@ -85,47 +85,85 @@ export function createMacrosCore(host) {
         return result.ok ? result.value : undefined;
     }
 
-    /** Refreshes ONE program's cached value — see this file's own top doc-comment for the full pre-fetch/run/flush dance. Throws on a syntax/runtime error (after still caching+registering a "[macro error]" placeholder), matching every other Ядро's error-envelope convention. */
-    async function runProgram(programId) {
-        const program = requireProgram(programs, programId);
-
-        if (program.kind !== 'code') {
-            const value = String(program.source ?? '');
-            cachedResults.set(program.macroName, value);
-            await ensureMacroRegistered(program.macroName);
-            return value;
-        }
+    /**
+     * Computes what `program` resolves to RIGHT NOW — the pure pre-fetch/run
+     * step shared by `runProgram()` (a REAL refresh: flushes `save()`s,
+     * updates the cache, registers with real ST) and `testProgram()` below (a
+     * PREVIEW: reads real current values so the result is honest, but touches
+     * nothing persisted). Never throws — `{ok:false, error}` on a syntax/
+     * runtime error, same envelope shape every other Ядро uses.
+     */
+    async function computeProgramValue(program) {
+        if (program.kind !== 'code') return { ok: true, value: String(program.source ?? ''), saves: [] };
 
         let ast;
         try { ast = parse(tokenize(program.source)); }
-        catch (error) {
-            cachedResults.set(program.macroName, `[macro error: ${program.name || program.macroName}]`);
-            await ensureMacroRegistered(program.macroName);
-            throw error;
-        }
+        catch (error) { return { ok: false, error }; }
 
         const resolved = {};
         for (const key of collectGetKeys(ast)) resolved[key] = await resolveGetKey(program.id, key);
 
         const saves = [];
-        let value;
         try {
-            value = run(ast, { get: key => resolved[key], save: (key, savedValue) => saves.push({ key, value: savedValue }), timeLimitMs: DEFAULT_TIME_LIMIT_MS });
+            const value = run(ast, { get: key => resolved[key], save: (key, savedValue) => saves.push({ key, value: savedValue }), timeLimitMs: DEFAULT_TIME_LIMIT_MS });
+            return { ok: true, value, saves };
         } catch (error) {
-            cachedResults.set(program.macroName, `[macro error: ${program.name || program.macroName}]`);
-            await ensureMacroRegistered(program.macroName);
-            throw error;
+            return { ok: false, error };
         }
-
-        for (const { key, value: savedValue } of saves) {
-            await request(host.own, 'storage.chatMemory.set', { params: { namespace: `macro.${program.id}`, key, value: savedValue } });
-        }
-        cachedResults.set(program.macroName, value);
-        await ensureMacroRegistered(program.macroName);
-        return value;
     }
 
-    /** Adopts a program set into memory — re-subscribes every trigger fresh and runs each program once immediately, so a macro's cache is never stale-empty right after (re)configuration. The persisting `configurePrograms()` below is this PLUS a real `storage.settings` write (see persisted-list.js). */
+    /** Refreshes ONE program's cached value — see this file's own top doc-comment for the full pre-fetch/run/flush dance. Throws on a syntax/runtime error (after still caching+registering a "[macro error]" placeholder), matching every other Ядро's error-envelope convention. */
+    async function runProgram(programId) {
+        const program = requireProgram(programs, programId);
+        const result = await computeProgramValue(program);
+
+        if (!result.ok) {
+            cachedResults.set(program.macroName, `[macro error: ${program.name || program.macroName}]`);
+            await ensureMacroRegistered(program.macroName);
+            throw result.error;
+        }
+
+        for (const { key, value: savedValue } of result.saves ?? []) {
+            await request(host.own, 'storage.chatMemory.set', { params: { namespace: `macro.${program.id}`, key, value: savedValue } });
+        }
+        cachedResults.set(program.macroName, result.value);
+        await ensureMacroRegistered(program.macroName);
+        return result.value;
+    }
+
+    /**
+     * "Test run" for the UI — computes a DRAFT program's value (not
+     * necessarily saved yet, may not even have a real `id`) against REAL
+     * current `get` values, so the preview is honest, but never flushes its
+     * `save()`s and never touches `cachedResults`/registers anything with
+     * real ST: iterating on a macro before saving must not have side effects
+     * a user did not ask for.
+     */
+    async function testProgram(draft) {
+        const program = { id: draft?.id || 'draft', name: draft?.name ?? '', macroName: draft?.macroName ?? '', kind: draft?.kind === 'code' ? 'code' : 'text', source: draft?.source ?? '' };
+        const result = await computeProgramValue(program);
+        return result.ok ? { ok: true, value: result.value } : { ok: false, error: result.error.message };
+    }
+
+    /**
+     * Adopts a program set into memory — re-subscribes every trigger fresh and
+     * runs each program once immediately, so a macro's cache is never
+     * stale-empty right after (re)configuration. The persisting
+     * `configurePrograms()` below is this PLUS a real `storage.settings`
+     * write (see persisted-list.js).
+     *
+     * **Triggers go through the Director, same as Ядро трекинга's own —
+     * `host.own.subscribe('macros.run', { params, when }, cb)`, not a bare
+     * `host.events.subscribe(eventName, cb)`.** `when` accepts everything the
+     * Director already understands (`{event}`, `{event, every}`,
+     * `{every:{ms}}`) — a macro gets "every N replies"/"every N minutes" for
+     * free, the same choices a tracker has, via the same shared
+     * [trigger-modes.js](../../libraries/core/trigger-modes.js) the UI picks
+     * from. A saved program with the OLD bare-string-event shape
+     * (`triggers: ['generation.completed']`) still works — `typeof trigger
+     * === 'string'` normalizes it to `{event: trigger}` before it reaches the
+     * Director, exactly like Ядро трекинга already does for its own.
+     */
     function applyPrograms(list) {
         for (const unsubscribers of triggerUnsubscribers.values()) for (const unsubscribe of unsubscribers) unsubscribe();
         triggerUnsubscribers.clear();
@@ -137,8 +175,15 @@ export function createMacrosCore(host) {
         programs = next;
 
         for (const program of programs.values()) {
-            triggerUnsubscribers.set(program.id, (program.triggers ?? []).map(eventName =>
-                host.events.subscribe(eventName, () => { runProgram(program.id).catch(() => {}); })));
+            // Выключенный макрос — как удалённый для настоящей ST (не
+            // зарегистрирован, {{name}} не резолвится), но конфигурация
+            // остаётся: включить обратно можно без пересоздания программы.
+            if (program.enabled === false) { unregisterMacroName(program.macroName).catch(() => {}); continue; }
+            triggerUnsubscribers.set(program.id, (program.triggers ?? []).map(trigger =>
+                host.own.subscribe('macros.run', {
+                    params: { programId: program.id },
+                    when: typeof trigger === 'string' ? { event: trigger } : trigger,
+                }, () => {})));
             runProgram(program.id).catch(() => {});
         }
     }
@@ -162,6 +207,19 @@ export function createMacrosCore(host) {
         if (!cachedResults.has(params?.name)) throw new Error(`macros: unknown macro "${params?.name}".`);
         return cachedResults.get(params.name);
     });
+    // Contracts on the Шина ядер — the earlier v1 shape only exposed
+    // `configurePrograms`/`restorePrograms` as plain JS functions on the
+    // object this factory returns, reachable ONLY by whoever directly holds
+    // that reference (the engine assembler). A real UI Ядро (the macros
+    // panel) can only ever reach another Ядро through the Гейт Ядро↔Ядро —
+    // it never gets a JS reference at all — so without these, no UI could
+    // ever list/save a program. Same shape as `tracking.trackers`/`tracking.
+    // configure`.
+    const unregisterPrograms = host.own.register('macros.programs', () => [...programs.values()].map(program => ({ ...program })));
+    const unregisterConfigure = host.own.register('macros.configure', params => configurePrograms(params?.programs ?? []));
+    // Draft preview — see `testProgram()`'s own doc-comment for why it never
+    // touches `cachedResults`/real ST registration.
+    const unregisterTest = host.own.register('macros.test', params => testProgram(params?.program));
 
     return {
         configurePrograms,
@@ -170,7 +228,7 @@ export function createMacrosCore(host) {
         clearValueMacro,
         unregister: () => {
             for (const unsubscribers of triggerUnsubscribers.values()) for (const unsubscribe of unsubscribers) unsubscribe();
-            unregisterRun(); unregisterValue();
+            unregisterRun(); unregisterValue(); unregisterPrograms(); unregisterConfigure(); unregisterTest();
         },
     };
 }

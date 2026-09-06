@@ -12,6 +12,9 @@ import { GenerationSettingsPanel } from '../../libraries/shared/generation-setti
 import {
     SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCustomPreset,
 } from '../../cores/models/internal-engine.js';
+import {
+    TRIGGER_MODES, computeTriggers as computeBaseTriggers, resolveTriggerMode as resolveBaseTriggerMode,
+} from '../../libraries/core/trigger-modes.js';
 
 /**
  * Модуль «Трекер» — ПЕРВЫЙ настоящий Модуль в Beta, и он же проверка
@@ -64,19 +67,8 @@ const HUD_KEY = 'hud';
  * продукт — значение НА ШИНЕ; кто его туда потянет (плавающая панель, макрос,
  * позже Prompt Manager) — не его забота.
  */
-export const TRIGGER_MODES = Object.freeze([
-    { value: 'manual', label: 'Manual only' },
-    { value: 'beforeSend', label: 'Refresh before the reply' },
-    { value: 'onUserMessage', label: 'When the user sends a message' },
-    { value: 'onToolCall', label: 'During the reply, on every tool call' },
-    { value: 'everyReply', label: 'After every reply' },
-    { value: 'everyNReplies', label: 'Every N replies' },
-    { value: 'everyNMinutes', label: 'Every N minutes' },
-]);
+export { TRIGGER_MODES };
 
-const REPLY_EVENT = 'generation.completed';
-const USER_MESSAGE_EVENT = 'st.messageSent';
-const TOOL_CALL_EVENT = 'generation.toolCall';
 // Трекер обновляет СВОЁ состояние, а не вкладывается в промпт: его продукт —
 // публикация на шину (`tracking.blocks.changed` + макрос), а читают её те, кому
 // значение нужно (плавающая панель, макросы ST, позже Prompt Manager). Поэтому
@@ -91,37 +83,31 @@ export function computeStageId(trackerId) {
 
 let uid = 0;
 
-/** Выбор пользователя → условие `when` Директора. Единственное место в Модуле, где вообще есть слово «триггер». */
+/**
+ * Выбор пользователя → условие `when` Директора. Тонкая обёртка вокруг общей
+ * Библиотеки ([trigger-modes.js](../../libraries/core/trigger-modes.js)):
+ * единственное, что у трекера СВОЁ — `beforeSend`, блокирующий генерацию,
+ * живёт не подпиской, а ЭТАПОМ пайплайна `generation.prepare` (см. `save()`/
+ * `syncStages()` ниже), значит здесь у него нет триггера вовсе.
+ * «До отправки, но не ждать» — это обычный триггер на том же моменте: опрос
+ * стартует, генерация не задерживается, свежие значения попадут уже в
+ * СЛЕДУЮЩИЙ промпт. Ровно та разница, ради которой и нужен выбор.
+ */
 export function computeTriggers(mode, count, { blocking = true } = {}) {
-    const n = Math.max(1, Number(count) || 1);
-    // «До отправки, но не ждать» — это обычный триггер на том же моменте:
-    // опрос стартует, генерация не задерживается, свежие значения попадут уже
-    // в СЛЕДУЮЩИЙ промпт. Ровно та разница, ради которой и нужен выбор.
-    if (mode === 'beforeSend' && !blocking) return [{ event: 'generation.beforeSend' }];
-    if (mode === 'everyReply') return [{ event: REPLY_EVENT }];
-    if (mode === 'everyNReplies') return [{ event: REPLY_EVENT, every: n }];
-    if (mode === 'everyNMinutes') return [{ every: { ms: n * 60000 } }];
-    if (mode === 'onUserMessage') return [{ event: USER_MESSAGE_EVENT }];
-    if (mode === 'onToolCall') return [{ event: TOOL_CALL_EVENT }];
-    // У `manual` и `beforeSend` триггеров нет: первый не срабатывает сам,
-    // второй живёт этапом пайплайна, а не подпиской.
-    return [];
+    if (mode === 'beforeSend' && blocking) return [];
+    return computeBaseTriggers(mode, count);
 }
 
-/** Обратное чтение: по сохранённому условию восстановить, что было выбрано. Неизвестную форму не ломаем и не теряем — см. `custom` ниже. */
+/** Обратное чтение: по сохранённому условию восстановить, что было выбрано. */
 export function resolveTriggerMode(triggers, { hasStage = false } = {}) {
     // Этап пайплайна сильнее любого триггера: он и есть «до отправки, ждать».
     if (hasStage) return { mode: 'beforeSend', count: 3, blocking: true };
-    const trigger = (triggers ?? [])[0];
-    if (!trigger) return { mode: 'manual', count: 3, blocking: true };
-    const shape = typeof trigger === 'string' ? { event: trigger } : trigger;
-    if (shape.every?.ms) return { mode: 'everyNMinutes', count: Math.max(1, Math.round(shape.every.ms / 60000)), blocking: true };
-    if (shape.event === REPLY_EVENT && shape.every) return { mode: 'everyNReplies', count: Number(shape.every) || 1, blocking: true };
-    if (shape.event === REPLY_EVENT) return { mode: 'everyReply', count: 3, blocking: true };
-    if (shape.event === USER_MESSAGE_EVENT) return { mode: 'onUserMessage', count: 3, blocking: true };
-    if (shape.event === TOOL_CALL_EVENT) return { mode: 'onToolCall', count: 3, blocking: true };
-    if (shape.event === 'generation.beforeSend') return { mode: 'beforeSend', count: 3, blocking: false };
-    return { mode: 'custom', count: 3, blocking: true, custom: shape };
+    const base = resolveBaseTriggerMode(triggers);
+    // `blocking` имеет смысл только для `beforeSend`: настоящий (не-этапный)
+    // триггер на этом событии и есть «не ждать» — любой другой режим трекер
+    // всегда ждёт своего собственного опроса завершиться прежде, чем считать
+    // его сделанным.
+    return { ...base, blocking: base.mode !== 'beforeSend' };
 }
 
 /** Строка состояния по шаблону: `❤ {health} · 📍 {location}`. Пустой шаблон — автоматический список «имя: значение». */
