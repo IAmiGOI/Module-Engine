@@ -51,6 +51,11 @@ const stContext = {
         { is_user: true, is_system: false, name: 'Player', mes: 'I take a swing at the bandit and catch a blade on my arm.' },
         { is_user: false, is_system: false, name: 'Narrator', mes: 'The blade bites deep. You stagger back into the tavern doorway, bleeding.' },
     ]),
+    // BasicSummary скрывает старые сообщения через `is_system=true` и зовёт
+    // это же (`context.saveChat`) — без фейка правка держалась бы только в
+    // памяти вкладки и пропадала бы при перезагрузке харнесса, в отличие от
+    // настоящей ST.
+    async saveChat() { saveJson('stmeBetaHarness.chat', stContext.chat); },
     chatMetadata: loadJson('stmeBetaHarness.chatMetadata', {
         // Реальная ST кладёт книгу чата именно сюда (`chatMetadata.world_info`)
         // — заводим демо-книгу с порога, иначе Ядру работы с WI нечего

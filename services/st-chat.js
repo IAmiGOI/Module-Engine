@@ -8,9 +8,10 @@
  * `chatMetadata` (наше хранилище при чате), этот — про сами сообщения. Их
  * легко перепутать по названию, но это разные части ST API.
  *
- * Форма сообщения нормализуется: `{ mesid, isUser, isSystem, name, text }`.
- * Наружу не протекают ни `mes`, ни `is_user` — сырые имена полей ST остаются
- * внутри этого файла, как и везде в Сервисах.
+ * Форма сообщения нормализуется: `{ mesid, isUser, isSystem, name, text,
+ * sendDate, isToolCall, hasReasoning }`. Наружу не протекают ни `mes`, ни
+ * `is_user`/`extra` целиком — сырые имена полей ST остаются внутри этого
+ * файла, как и везде в Сервисах.
  *
  * `mesid` — индекс сообщения в `context.chat`, тем же числом-строкой, каким
  * его ставит сама ST в разметку (`.mes[mesid]`, см. `stChat.rendered` ниже).
@@ -18,6 +19,13 @@
  * списке разъехалась бы с реальным индексом, и всё, что привязывает свою
  * информацию к КОНКРЕТНОМУ сообщению (Ядро истории чата), привязывалось бы не
  * туда.
+ *
+ * `isToolCall`/`hasReasoning` добавлены для BasicSummary (ROADMAP.md): без них
+ * нечем отличить цепочку ToolCall (вызов → результат → настоящий ответ — «черновик
+ * по пути», см. doc-comment [cores/generation/index.js](../cores/generation/index.js))
+ * от простого сообщения при подсчёте порога свёртки. Поле проверено по
+ * реальному ST: `extra.tool_invocations` — тот же признак, каким сама ST
+ * фильтрует `coreChat` (script.js, `Generate()`).
  */
 export function registerStChatService(bus, { getContext } = {}) {
     /** `limit` — сколько ПОСЛЕДНИХ сообщений вернуть; `includeSystem` по умолчанию false, системные строки в контексте почти всегда шум. */
@@ -34,7 +42,29 @@ export function registerStChatService(bus, { getContext } = {}) {
                 isSystem: Boolean(message?.is_system),
                 name: String(message?.name ?? ''),
                 text: String(message?.mes ?? ''),
+                sendDate: message?.send_date ?? null,
+                isToolCall: Array.isArray(message?.extra?.tool_invocations) && message.extra.tool_invocations.length > 0,
+                hasReasoning: Boolean(message?.extra?.reasoning),
             }));
+    }
+
+    /**
+     * Скрытие/показ сообщения — `is_system` не двигает `mesid` (см. doc-comment
+     * выше), поэтому это безопасная альтернатива удалению для BasicSummary:
+     * свёрнутое сообщение пропадает из промпта (ST сама фильтрует `is_system`
+     * при сборке `coreChat`), но остаётся адресуемым по тому же `mesid` для
+     * всего, что уже привязало к нему свою информацию (`chatHistory.annotate`).
+     */
+    async function setMessageHidden({ mesid, hidden } = {}) {
+        const context = getContext();
+        const chat = context?.chat;
+        const index = Number(mesid);
+        if (!Array.isArray(chat) || !Number.isInteger(index) || !chat[index]) {
+            throw new Error(`stChat.setHidden: no message at mesid "${mesid}".`);
+        }
+        chat[index].is_system = Boolean(hidden);
+        await context.saveChat?.();
+        return true;
     }
 
     /**
@@ -53,6 +83,7 @@ export function registerStChatService(bus, { getContext } = {}) {
 
     const unregisters = [
         bus.register('stChat.messages', params => readChat(params), { loadMetric: () => 0 }),
+        bus.register('stChat.setHidden', params => setMessageHidden(params), { loadMetric: () => 0 }),
         bus.register('stChat.messageElement', params => messageElement(params?.mesid), { loadMetric: () => 0 }),
         /** Контейнер всего чата — за ним наблюдают, чтобы заметить перерисовку, о которой никто не сообщил. */
         bus.register('stChat.container', () => document.getElementById('chat'), { loadMetric: () => 0 }),

@@ -40,6 +40,15 @@ function requireAnnotationLocation(params) {
  * сообщения, а не пишет `null` буквально — симметрично с тем, как реролл
  * должен уметь откатить показание, а не оставить в истории мусор.
  *
+ * **`chatHistory.hide`** — тонкий проброс к `stChat.setHidden` (тот же
+ * принцип, что и у `chatHistory.messages`: Модули не ходят в Сервисы
+ * напрямую). Существует здесь, а не только в BasicSummary, ровно потому же,
+ * почему здесь же `annotate`: это тоже generic-операция НАД сообщением, а не
+ * то, что принадлежит одному конкретному Ядру/Модулю — `is_system` не двигает
+ * `mesid` (см. doc-comment [services/st-chat.js](../../services/st-chat.js)),
+ * так что скрытие безопасно уживается с любыми чужими аннотациями на том же
+ * сообщении.
+ *
  * **Своя очередь на запись, отдельная от очереди `storage.chatMemory`.**
  * `annotate()` сам по себе read-modify-write — читает карту аннотаций целиком,
  * мутирует один `mesid`, пишет карту назад ОДНИМ `storage.chatMemory.set`.
@@ -57,6 +66,14 @@ export function createChatHistoryCore(host) {
         const result = await request(host.services, 'stChat.messages', { params });
         if (!result.ok) throw new Error(result.error.message);
         return result.value ?? [];
+    }
+
+    async function hideMessage(params) {
+        const mesid = params?.mesid === undefined || params?.mesid === null ? '' : String(params.mesid);
+        if (!mesid) throw new Error('chatHistory.hide: "mesid" is required.');
+        const result = await request(host.services, 'stChat.setHidden', { params: { mesid, hidden: Boolean(params?.hidden) } });
+        if (!result.ok) throw new Error(result.error.message);
+        return true;
     }
 
     async function readAnnotations(namespace) {
@@ -109,6 +126,7 @@ export function createChatHistoryCore(host) {
 
     const unregisters = [
         host.own.register('chatHistory.messages', params => readMessages(params)),
+        host.own.register('chatHistory.hide', params => hideMessage(params)),
         host.own.register('chatHistory.annotate', params => enqueue(() => annotate(params))),
         host.own.register('chatHistory.annotations', params => annotations(params)),
         host.own.register('chatHistory.clearAnnotations', params => enqueue(() => clearAnnotations(params))),

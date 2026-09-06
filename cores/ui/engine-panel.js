@@ -116,6 +116,10 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     const macros = signal([]);
     const lorebookEntries = signal([]);
     const lorebookBooks = signal([]);
+    const summaries = signal([]);
+    const summaryLevels = signal([]);
+    const summaryProtectedWindow = signal(20);
+    const summaryWorkerId = signal('');
     // Список трекеров (с полями) для «Insert a value» под редактором кода —
     // источник, откуда пикер берёт настоящие `get "id:field"` ключи, а не
     // заставляет вводить их руками (реальный `id` трекера — не его название).
@@ -594,6 +598,135 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     }
 
     /**
+     * Свёртка старой истории (BasicSummary, ROADMAP.md) — тоже часть ЭКРАНА
+     * ДВИЖКА, не Модуль: как и у Macros/Lorebook, это не отключаемая фича, а
+     * общий механизм управления контекстом. Панель — тонкая проводка к
+     * контрактам [cores/summary/index.js](../summary/index.js):
+     * `summary.list`/`update`/`delete` (записи), `summary.settings`/
+     * `configure` (пороги/уровни), `summary.check` (ручной «Fold now» —
+     * тот же контракт, что дёргает сам движок автоматически на
+     * `generation.prepare`, так что кнопка честно показывает то же самое
+     * поведение, а не отдельную имитацию).
+     */
+    function toSummaryRecord(record) {
+        return {
+            key: `summary_${record.id}`,
+            id: record.id,
+            level: record.level,
+            startIndex: record.startIndex,
+            endIndex: record.endIndex,
+            text: signal(record.text),
+            edited: record.edited,
+            flash: signal(''),
+        };
+    }
+
+    function toLevelRecord(level = {}) {
+        return { key: `level_${++uid}`, batchSize: signal(level.batchSize ?? 5) };
+    }
+
+    async function loadSummaries() {
+        const result = await call('summary.list');
+        summaries.set((result.ok ? result.value ?? [] : []).map(toSummaryRecord));
+    }
+
+    async function loadSummarySettings() {
+        const result = await call('summary.settings');
+        if (!result.ok || !result.value) return;
+        summaryLevels.set(result.value.levels.map(toLevelRecord));
+        summaryProtectedWindow.set(result.value.protectedWindow);
+        summaryWorkerId.set(result.value.workerId ?? '');
+    }
+
+    function addSummaryLevel() {
+        summaryLevels.set([...summaryLevels.peek(), toLevelRecord({ batchSize: 5 })]);
+    }
+
+    function removeSummaryLevel(record) {
+        summaryLevels.set(summaryLevels.peek().filter(item => item !== record));
+    }
+
+    async function saveSummarySettings() {
+        const levels = summaryLevels.peek().map(record => ({ batchSize: record.batchSize.peek() }));
+        const result = await call('summary.configure', {
+            levels, protectedWindow: summaryProtectedWindow.peek(), workerId: summaryWorkerId.peek().trim() || null,
+        });
+        if (result.ok) {
+            summaryLevels.set(result.value.levels.map(toLevelRecord));
+            summaryProtectedWindow.set(result.value.protectedWindow);
+        }
+        await notify(result.ok ? 'ok' : 'error', result.ok ? 'Saved summary settings' : result.error.message);
+    }
+
+    /** Тот же контракт, что и автоматический прогон на `generation.prepare` — кнопка не имитирует поведение движка отдельным путём, а честно его вызывает. */
+    async function forceSummaryFold() {
+        const result = await call('summary.check');
+        await notify(result.ok ? 'ok' : 'error', result.ok ? `Now ${result.value.length} active summary/summaries` : result.error.message);
+        if (result.ok) await loadSummaries();
+    }
+
+    async function saveSummaryText(record) {
+        const result = await call('summary.update', { id: record.id, text: record.text.peek() });
+        flash(record.flash, result.ok ? 'ok' : 'error');
+        await notify(result.ok ? 'ok' : 'error', result.ok ? 'Saved summary' : result.error.message);
+    }
+
+    async function removeSummaryRecord(record) {
+        const result = await call('summary.delete', { id: record.id });
+        await notify(result.ok ? 'ok' : 'error', result.ok ? 'Deleted summary' : result.error.message);
+        if (result.ok) await loadSummaries();
+    }
+
+    function summaryRow(record) {
+        return Section(`Level ${record.level} summary`, {
+            key: record.key,
+            className: computed(() => (record.flash() ? `stme-flash stme-flash-${record.flash()}` : '')),
+            ...collapse.bind(`summary:${record.key}`),
+            subtitle: `covers messages ${record.startIndex}–${record.endIndex}${record.edited ? ' · edited by hand' : ''}`,
+            actions: [
+                Button('Save', () => saveSummaryText(record)),
+                Button('Remove', () => removeSummaryRecord(record), { variant: 'danger' }),
+            ],
+        },
+            Field('Text', TextArea(record.text, { rows: 4, placeholder: 'Summary text…' })),
+        );
+    }
+
+    function summaryLevelRow(record, index) {
+        return Row(
+            Field(`Level ${index + 1} batch size`, NumberInput(record.batchSize, { min: 2, max: 200 })),
+            Button('Remove', () => removeSummaryLevel(record), { variant: 'danger' }),
+        );
+    }
+
+    function summaryCard() {
+        return Card('Chat Summary', {
+            ...collapse.bind('card:summary'),
+            subtitle: computed(() => `${summaries().length} active summar${summaries().length === 1 ? 'y' : 'ies'}`),
+        },
+            h('p', { class: 'stme-summary-help' },
+                'Old chat history is folded into a pyramid of summaries — each level compresses several of the level below — so the model keeps the gist of the past without paying its full token cost. The newest messages always stay untouched, real text; the protected window below sets how many.'),
+            Row(
+                Field('Protected window', NumberInput(summaryProtectedWindow, { min: 1, max: 2000 }), { hint: 'How many of the newest messages never get folded.' }),
+                Field('Worker', TextInput(summaryWorkerId, { placeholder: 'leave blank for the default connection' })),
+            ),
+            h('div', { class: 'stme-summary-levels' },
+                computed(() => summaryLevels().map((record, index) => summaryLevelRow(record, index))),
+            ),
+            Row(
+                Button('+ Add level', addSummaryLevel),
+                Button('Save settings', saveSummarySettings),
+                Button('Fold now', forceSummaryFold),
+            ),
+            EditableList({
+                items: summaries,
+                renderItem: summaryRow,
+                empty: 'No summaries yet — they appear automatically once enough old messages queue up beyond the protected window.',
+            }),
+        );
+    }
+
+    /**
      * Обновление. До этого оно жило ТОЛЬКО в консоли: ход запускался при
      * старте и молчал, что бы ни случилось, — а «молчит, когда сказать нечего»
      * незаметно превратилось в «молчит всегда», и отличить работающее
@@ -722,7 +855,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     function tree() {
         return h('div', { class: 'stme-panel' },
             TwoColumn({
-                left: [statusCard(), modelsCard(), macrosCard(), lorebookCard(), updatesCard()],
+                left: [statusCard(), modelsCard(), macrosCard(), lorebookCard(), summaryCard(), updatesCard()],
                 right: [modulesCard()],
             }),
         );
@@ -746,6 +879,10 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
             // его doc-comment) — список здесь обязан узнать об этом без
             // ручного нажатия Rescan в этой карточке.
             host.events.subscribe('lorebook.scanned', () => loadLorebook()),
+            // Свёртка происходит САМА на каждой генерации (`generation.prepare`
+            // держит порог) — панель узнаёт о новых/пропавших саммари тем же
+            // событием, без ручного Rescan.
+            host.events.subscribe('summary.folded', () => loadSummaries()),
         ];
     }
 
@@ -757,6 +894,8 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         await loadMacros();
         await loadTrackerFields();
         await loadLorebook();
+        await loadSummarySettings();
+        await loadSummaries();
         // Список контрактов приходит от сборщика движка: своя шина доступна
         // через host.own, а шины сервисов и сети — нет (у Ядра туда только
         // Гейт-аксессор, и это правильно). Так что «что вообще подключено»
