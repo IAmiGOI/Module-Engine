@@ -304,3 +304,25 @@ test('a real poll reads the chat over the bus and sends it to the model', async 
     assert.match(sent, /Warmth spreads through you/);
     assert.doesNotMatch(sent, /chat renamed/, 'системные строки в контекст не идут — это шум');
 });
+
+test('ownership of a tracker cannot be taken away by whoever rewrites the set next', async () => {
+    const { trackingCore } = buildEngine();
+    await trackingCore.configureTrackers([{ id: 'rp-time', kind: 'user', ownerId: 'module.time', fields: [] }]);
+
+    // Так выглядит сохранение из Модуля трекеров: чужое перечитано и отдано
+    // обратно ЕГО собственной формой, которая про `ownerId` ничего не знает.
+    await trackingCore.configureTrackers([{ id: 'rp-time', kind: 'user', fields: [] }]);
+
+    assert.equal(trackingCore.trackers()[0].ownerId, 'module.time', 'иначе трекер Модуля становится обычным пользовательским');
+});
+
+test('every rewrite of the set is announced — a list drawn elsewhere must not depend on module load order', async () => {
+    const { engine, trackingCore } = buildEngine();
+    const seen = [];
+    engine.events.subscribe('tracking.trackersChanged', payload => seen.push(payload));
+
+    await trackingCore.configureTrackers([{ id: 'char', kind: 'user', fields: [] }]);
+
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].count, 1);
+});

@@ -251,47 +251,82 @@ test('a FAILED step brings the previous reading back — it must not pulse into 
     assert.equal(module.label(), '08:00 (Morning)');
 });
 
-test('the badge under a message shows the LAST KNOWN time, never the blank of a poll in flight', async () => {
-    let release;
-    const gate = new Promise(resolve => { release = resolve; });
-    const { module, claims } = buildEngine({ gate });
+// --- Бейдж под сообщением ---------------------------------------------------
+
+/** Читает значение StatBlock'а так же, как это делает сам виджет. */
+function badgeValue(node) {
+    const found = [];
+    (function walk(item) {
+        if (!item || typeof item !== 'object') return;
+        if (item.props?.class === 'stme-stat-value') found.push(item);
+        for (const child of item.children ?? []) walk(child);
+    })(node);
+    const source = found[0].children[0];
+    return typeof source === 'function' ? source() : source;
+}
+
+test('the badge declines a USER message outright — time is worked out from the reply, not from the line before it', async () => {
+    const { module, claims } = buildEngine();
     await module.load();
-    module.applyPreset('clock-only');
-    module.history.set(['08:00 (Morning)']);
+    const build = claims[0].node;
 
-    // Значение бейджа — функция; читаем её так же, как это делает StatBlock.
-    const valueOf = () => {
-        const found = [];
-        (function walk(node) {
-            if (!node || typeof node !== 'object') return;
-            if (node.props?.class === 'stme-stat-value') found.push(node);
-            for (const child of node.children ?? []) walk(child);
-        })(claims[0].node);
-        const source = found[0].children[0];
-        return typeof source === 'function' ? source() : source;
-    };
-
-    const running = module.advance();
-
-    // Карточка в панели гаснет и пульсирует, а бейдж под сообщением — нет:
-    // Ядро подвала заморозит его при следующем сообщении, и заморозить пустоту
-    // значило бы навсегда оставить в летописи прочерк.
-    assert.equal(module.label(), '');
-    assert.equal(valueOf(), '08:00 (Morning)');
-
-    release();
-    await running;
-
-    assert.equal(valueOf(), '11:40 (Morning)');
+    assert.equal(build({ mesid: '4', isUser: true, live: true }), null);
+    assert.equal(build({ mesid: '4', isSystem: true, live: true }), null);
+    assert.ok(build({ mesid: '4', isUser: false, live: true }), 'а под ответом бейдж есть');
 });
 
-test('the tracker it registers is OWNED by this Module — the tracker Module must not show it as one of the user\'s own', async () => {
-    const { module, trackingCore } = buildEngine();
-
+test('a message with no reading yet shows BLANK — that is the pulsing "still working it out", not a stale time', async () => {
+    const { module, claims } = buildEngine();
     await module.load();
+    module.applyPreset('clock-only');
+    const build = claims[0].node;
 
-    const tracker = trackingCore.trackers().find(item => item.id === 'rp-time');
-    assert.equal(tracker.ownerId, MODULE_ID, 'без этого он вылезал в список трекеров и в их плавающую панель');
-    // И при этом остаётся полноценным `user`: макрос времени писаться обязан.
-    assert.equal(tracker.kind, 'user');
+    // Предыдущее сообщение уже посчитано, новое — ещё нет.
+    module.badges.set({ 3: '08:00 (Morning)' });
+
+    assert.equal(badgeValue(build({ mesid: '3', isUser: false, live: false })), '08:00 (Morning)');
+    assert.equal(badgeValue(build({ mesid: '4', isUser: false, live: true })), '', 'новое сообщение ждёт своего времени');
+});
+
+test('advancing marks the message it was LIVE under, and leaves the ones before it alone', async () => {
+    const { module, claims } = buildEngine();
+    await module.load();
+    module.applyPreset('clock-only');
+    module.badges.set({ 3: '08:00 (Morning)' });
+    claims[0].node({ mesid: '4', isUser: false, live: true }); // так Ядро подвала сообщает, где живой бейдж
+
+    await module.advance();
+
+    assert.deepEqual(module.badges(), { 3: '08:00 (Morning)', 4: '11:40 (Morning)' });
+});
+
+test('a reroll clears that message\'s reading — the discarded reply\'s time must not stand', async () => {
+    const { engine, module, claims } = buildEngine();
+    await module.load();
+    module.applyPreset('clock-only');
+    claims[0].node({ mesid: '4', isUser: false, live: true });
+    await module.advance();
+    assert.equal(module.badges()['4'], '11:40 (Morning)');
+
+    engine.events.emit('st.messageSwiped');
+    engine.events.emit('generation.beforeSend');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(module.badges()['4'], undefined, 'бейдж вернулся в пустое пульсирующее ожидание');
+});
+
+test('merely BROWSING existing swipes changes nothing — ST fires the same event, but there is no new reply to time', async () => {
+    const { engine, module, claims } = buildEngine();
+    await module.load();
+    module.applyPreset('clock-only');
+    claims[0].node({ mesid: '4', isUser: false, live: true });
+    await module.advance();
+
+    // Настоящая ST шлёт MESSAGE_SWIPED и когда просто листают готовые
+    // варианты — генерации за этим не следует. Стереть отметку здесь значило
+    // бы оставить бейдж пустым и пульсирующим навсегда.
+    engine.events.emit('st.messageSwiped');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(module.badges()['4'], '11:40 (Morning)');
 });

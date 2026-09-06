@@ -39,7 +39,7 @@ function buildEngine() {
     // Поддельный чат: у каждого сообщения СВОЙ блок, как в настоящем ST.
     // Одного общего блока хватало, пока подвал был один на всех, — а именно
     // это и было багом.
-    const chat = { ids: ['0', '1'], blocks: new Map() };
+    const chat = { ids: ['0', '1'], rendered: null, blocks: new Map() };
     const blockOf = mesid => {
         if (!chat.blocks.has(mesid)) chat.blocks.set(mesid, fakeNode('mes_block'));
         return chat.blocks.get(mesid);
@@ -49,7 +49,12 @@ function buildEngine() {
 
     const stHost = engine.registerCaller('service.stChat', 'services', { tier: 'official' });
     stHost.own.register('stChat.renderedIds', () => chat.ids);
-    stHost.own.register('stChat.messageElement', params => (chat.ids.includes(String(params?.mesid)) ? blockOf(String(params.mesid)) : null));
+    // Роли сообщений: тест их задаёт, только когда они важны.
+    stHost.own.register('stChat.rendered', () => chat.rendered);
+    stHost.own.register('stChat.messageElement', params => {
+        const known = chat.rendered ? chat.rendered.map(item => String(item.mesid)) : chat.ids;
+        return known.includes(String(params?.mesid)) ? blockOf(String(params.mesid)) : null;
+    });
     stHost.own.register('stChat.container', () => null);
     // Узлы создаёт Сервис DOM — Ядро само их не делает и делать не должно.
     const domHost = engine.registerCaller('service.dom', 'services', { tier: 'official' });
@@ -227,45 +232,69 @@ test('a slot claimed after the footer is ALREADY placed still gets its cell — 
     assert.deepEqual(footerOf(messageBlock).children.map(child => child.dataset.slot).sort(), ['center', 'left']);
 });
 
-// --- Бейдж прошлого сообщения ----------------------------------------------
+// --- Подвал у каждого сообщения --------------------------------------------
+
+/** Фабрика, какую даёт настоящий Модуль: своё дерево на каждое сообщение. */
+const perMessage = () => message => h('div', { key: message.mesid }, `badge ${message.mesid}`);
 
 test('a NEW message does not steal the previous message\'s badge — every message keeps its own', async () => {
     const { core, chat, blockOf } = buildEngine();
-    core.claim({ slot: 'left', ownerId: 'module.time', node: h('div', {}, 'time') });
+    core.claim({ slot: 'left', ownerId: 'module.time', node: perMessage() });
     await core.start();
-    assert.ok(footerOf(blockOf('1')), 'подвал под текущим последним сообщением');
+    assert.ok(footerOf(blockOf('1')));
 
     chat.ids = ['0', '1', '2'];
     await core.attach();
 
     assert.ok(footerOf(blockOf('1')), 'бейдж прошлого сообщения на месте — раньше он отсюда исчезал');
     assert.ok(footerOf(blockOf('2')), 'и у нового сообщения свой');
-    assert.equal(core.footerCount(), 2);
 });
 
-test('a past message\'s badge FREEZES — it shows what was true then, not what is true now', async () => {
-    const { core, chat, blockOf, roots } = buildEngine();
-    core.claim({ slot: 'left', ownerId: 'module.time', node: h('div', {}, 'time') });
+test('each message gets its OWN tree, so one reading never overwrites the message before it', async () => {
+    const { core, chat, roots } = buildEngine();
+    core.claim({ slot: 'left', ownerId: 'module.time', node: perMessage() });
     await core.start();
     const first = roots.length;
 
     chat.ids = ['0', '1', '2'];
     await core.attach();
 
-    // У нового сообщения СВОЙ Final UI: старое дерево больше не перерисовывается
-    // ничьими сигналами, а его DOM остался на месте.
-    assert.equal(roots.length, first + 1, 'новое сообщение получило собственную отрисовку');
-    assert.ok(blockOf('1').contains(roots[first - 1]), 'старый виджет никуда не делся');
-    assert.ok(blockOf('2').contains(roots[first]));
+    assert.equal(roots.length, first + 1, 'новое сообщение получило собственную отрисовку, а не переехавшую чужую');
+});
+
+test('a slot that DECLINES a message leaves no footer there at all — a badge has no business under a user line', async () => {
+    const { core, chat, blockOf } = buildEngine();
+    chat.rendered = [{ mesid: '0', isUser: true }, { mesid: '1', isUser: false }];
+    core.claim({ slot: 'left', ownerId: 'module.time', node: message => (message.isUser ? null : h('div', {}, 'time')) });
+
+    await core.start();
+
+    assert.equal(footerOf(blockOf('0')), undefined, 'под репликой пользователя пусто');
+    assert.ok(footerOf(blockOf('1')), 'а под ответом — бейдж');
+});
+
+test('a slot that STOPS wanting a message takes its footer away — a reroll must not leave a second badge behind', async () => {
+    const { core, chat, blockOf } = buildEngine();
+    chat.rendered = [{ mesid: '0', isUser: false }, { mesid: '1', isUser: false }];
+    const wanted = new Set(['0', '1']);
+    core.claim({ slot: 'left', ownerId: 'module.time', node: message => (wanted.has(message.mesid) ? h('div', {}, 'time') : null) });
+    await core.start();
+    assert.equal(core.footerCount(), 2);
+
+    wanted.delete('1');
+    await core.attach();
+
+    assert.equal(core.footerCount(), 1);
+    assert.equal(footerOf(blockOf('1')), undefined);
 });
 
 test('a message that is gone takes its footer with it — no badge hangs on a deleted message', async () => {
     const { core, chat, blockOf } = buildEngine();
-    core.claim({ slot: 'left', ownerId: 'a', node: h('div', {}, 'x') });
+    core.claim({ slot: 'left', ownerId: 'a', node: perMessage() });
     await core.start();
     chat.ids = ['0', '1', '2'];
     await core.attach();
-    assert.equal(core.footerCount(), 2);
+    assert.equal(core.footerCount(), 3);
 
     chat.ids = ['0'];
     await core.attach();
@@ -276,7 +305,7 @@ test('a message that is gone takes its footer with it — no badge hangs on a de
 
 test('switching chats drops every remembered footer — mesid is an index, so it means a different message now', async () => {
     const { engine, core, chat } = buildEngine();
-    core.claim({ slot: 'left', ownerId: 'a', node: h('div', {}, 'x') });
+    core.claim({ slot: 'left', ownerId: 'a', node: perMessage() });
     await core.start();
     chat.ids = ['0', '1', '2'];
     await core.attach();
@@ -290,7 +319,7 @@ test('switching chats drops every remembered footer — mesid is an index, so it
 
 test('releasing a slot clears it from PAST messages too — a disabled Module leaves no trail of stale badges', async () => {
     const { core, chat, blockOf } = buildEngine();
-    core.claim({ slot: 'left', ownerId: 'a', node: h('div', {}, 'x') });
+    core.claim({ slot: 'left', ownerId: 'a', node: perMessage() });
     await core.start();
     chat.ids = ['0', '1', '2'];
     await core.attach();
