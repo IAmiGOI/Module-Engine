@@ -47,7 +47,12 @@ export function createSelfUpdateCore(host, {
     log = console,
     now = () => Date.now(),
     cooldownMs = RETRY_COOLDOWN_MS,
+    publish,
 } = {}) {
+    // Публикация — через Ядро событий (защиты, реестр поверхности); прямой
+    // эмит оставлен для узких тестов, поднимающих это Ядро в одиночку.
+    const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
+
     async function service(contract, params) {
         return request(host.services, contract, { params });
     }
@@ -170,12 +175,25 @@ export function createSelfUpdateCore(host, {
      * `force` пропускает паузу: явное нажатие пользователя не должно молча
      * игнорироваться. Возвращает, ЧТО именно произошло, — вызывающему
      * (панели) есть что показать, а тесту есть что проверить.
+     *
+     * **Ход ОБЪЯВЛЯЕТСЯ, а не показывается.** События `selfUpdate.started`/
+     * `applied`/`failed`/`upToDate` — всё, что это Ядро делает для интерфейса;
+     * перекрытие экрана и полосу с «Retry» рисует [Ядро экрана
+     * обновления](../ui/update-overlay.js), которое про git не знает вовсе. У
+     * Alpha `attemptCoreUpdate()` сам создавал и удалял свои узлы, то есть ход
+     * обновления и его показ были одним куском кода, и разделить их было негде.
      */
     async function run({ force = false } = {}) {
         if (!force && await attemptedRecently()) return { outcome: 'cooling-down' };
 
         const status = await check();
-        if (!status.checked) return { outcome: 'unavailable', reason: status.reason ?? null };
+        if (!status.checked) {
+            const reason = status.reason ?? null;
+            // Не-git установка — не поломка: показывать нечего. Но если человек
+            // нажал кнопку сам, промолчать в ответ нельзя.
+            if (force) publishEvent('selfUpdate.failed', { reason });
+            return { outcome: 'unavailable', reason };
+        }
 
         // Сверка запускается ДО решения и её результат только пишется в
         // консоль: она наблюдатель, а не участник.
@@ -183,12 +201,22 @@ export function createSelfUpdateCore(host, {
         const described = describeUpdateDiagnosis(diagnosis, { upToDate: status.upToDate });
         if (described) log[described.level]?.(`[ST Module Engine (Beta)] Update check: ${described.text}`);
 
-        if (status.upToDate) return { outcome: 'up-to-date', diagnosis };
+        if (status.upToDate) {
+            publishEvent('selfUpdate.upToDate', { commit: status.currentCommitHash, branch: status.currentBranchName });
+            return { outcome: 'up-to-date', diagnosis };
+        }
 
+        // Отсюда и до перезагрузки экран перекрыт: код меняется под ногами, и
+        // работать с наполовину заменённым движком нельзя.
+        publishEvent('selfUpdate.started', { branch: status.currentBranchName });
         await service('session.set', { key: SESSION_KEY, value: now() });
         const applied = await apply({ global: status.global });
-        if (!applied.applied) return { outcome: 'failed', error: applied.error, diagnosis };
+        if (!applied.applied) {
+            publishEvent('selfUpdate.failed', { reason: applied.error ?? null });
+            return { outcome: 'failed', error: applied.error, diagnosis };
+        }
 
+        publishEvent('selfUpdate.applied', { branch: status.currentBranchName });
         await service('session.reload');
         return { outcome: 'updated', diagnosis };
     }
