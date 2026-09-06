@@ -60,6 +60,31 @@ export const SAMPLER_PRESETS = Object.freeze([
     },
 ]);
 
+/**
+ * Свой пресет — тот же контракт «одна кнопка заполняет ползунки», что и у
+ * `SAMPLER_PRESETS`, но заведённый пользователем: «строгий JSON под мой
+ * промпт», «разговорный без ризонинга», что угодно, для чего четырёх готовых
+ * мало. Живёт РЯДОМ со встроенными, не вместо них — `model.presets.get`
+ * отдаёт только свои, готовые уже держит `SAMPLER_PRESETS`, а собрать их
+ * вместе для формы — дело вызывающего (Модуль «Трекер», Модуль «RP Time»).
+ *
+ * `id` — слаг от имени, не случайный: «Save as preset» под уже занятым
+ * именем тем самым ОБНОВЛЯЕТ его, а не плодит дубликат рядом. Префикс
+ * `custom:` не даёт столкнуться со встроенными id (`deterministic` и т.п.),
+ * у которых двоеточия никогда не бывает.
+ */
+export function slugifyPresetName(name) {
+    const slug = String(name ?? '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+    return slug ? `custom:${slug}` : '';
+}
+
+/** Пресет из текущих значений формы — та же форма, что у `SAMPLER_PRESETS`, плюс `custom: true`: только это отличает сохранённый пользователем от готового из коробки (см. `GenerationSettingsPanel` в widgets.js — там же ЭТИМ решается, можно ли пресет удалить). */
+export function buildCustomPreset(name, values = {}) {
+    const sampler = clampSamplerSettings(values);
+    const reasoning = clampReasoningSettings(values);
+    return { id: slugifyPresetName(name), name: String(name ?? '').trim(), custom: true, ...sampler, ...reasoning };
+}
+
 function clampNumber(value, min, max, fallback) {
     const number = Number(value);
     const chosen = Number.isFinite(number) ? number : fallback;
@@ -145,10 +170,20 @@ export function resolveGenerateRequest(params, worker) {
  * самозагрузка внутри конструктора гонялась бы с вызовом configureWorkers()
  * самим вызывающим кодом, случившимся раньше, чем асинхронное чтение успеет
  * разрешиться.
+ *
+ * Свои пресеты сэмплера/ризонинга (`customPresets`) персистятся ТЕМ ЖЕ
+ * приёмом, вторым независимым списком: `model.presets.get`/`model.presets.set`
+ * зеркалят `model.workers.get`/`set` один в один, а `model.presets.changed`
+ * даёт любому открытому экрану (карточке трекера, «RP Time») узнать о новом
+ * пресете, сохранённом СОСЕДНИМ, без ручной перезагрузки страницы.
  */
-export function createInternalEngineModelsCore(host) {
+export function createInternalEngineModelsCore(host, { publish } = {}) {
     const dispatchQueue = createDispatchQueue();
     let workers = [];
+    let customPresets = [];
+    // Тот же фоллбэк на прямой эмит, что и у Ядра трекинга — только для узких
+    // тестов, которые поднимают это Ядро в одиночку, без Ядра событий рядом.
+    const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
 
     const persisted = createPersistedList(host, {
         namespace: PERSISTENCE_NAMESPACE,
@@ -157,6 +192,24 @@ export function createInternalEngineModelsCore(host) {
     });
     const configureWorkers = persisted.save;
     const restoreWorkers = persisted.restore;
+
+    const presetsPersisted = createPersistedList(host, {
+        namespace: PERSISTENCE_NAMESPACE,
+        key: 'customPresets',
+        apply: list => { customPresets = Array.isArray(list) ? list : []; },
+    });
+    /**
+     * Пересобирает КАЖДЫЙ пресет через `buildCustomPreset()`, а не сохраняет
+     * форму как есть — та же защита, что клэмп у воркеров: ручная правка
+     * файла настроек или пустое имя не должны осесть в списке, который потом
+     * читает любой открытый экран.
+     */
+    async function configurePresets(list) {
+        const sanitized = (list ?? []).map(preset => buildCustomPreset(preset?.name, preset)).filter(preset => preset.id && preset.name);
+        await presetsPersisted.save(sanitized);
+        publishEvent('model.presets.changed', { count: sanitized.length });
+    }
+    const restorePresets = presetsPersisted.restore;
 
     async function dispatchToWorker(worker, generateRequest) {
         const providerRequest = buildProviderRequest(worker, generateRequest);
@@ -187,7 +240,12 @@ export function createInternalEngineModelsCore(host) {
         // holds the reference legitimately (see harness/engine-wiring.js).
         host.own.register('model.workers.get', () => workers),
         host.own.register('model.workers.set', params => configureWorkers(params?.workers ?? [])),
+        host.own.register('model.presets.get', () => customPresets),
+        host.own.register('model.presets.set', params => configurePresets(params?.presets ?? [])),
     ];
 
-    return { configureWorkers, restoreWorkers, unregister: () => { for (const unregister of unregisters) unregister(); } };
+    return {
+        configureWorkers, restoreWorkers, configurePresets, restorePresets,
+        unregister: () => { for (const unregister of unregisters) unregister(); },
+    };
 }

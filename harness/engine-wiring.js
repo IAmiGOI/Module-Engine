@@ -53,7 +53,7 @@ const DEFINITIONS = [{
         tier: 'community',
         allowedContracts: [
             'tracking.trackers', 'tracking.configure', 'tracking.fields', 'tracking.poll', 'tracking.reset',
-            'model.workers.get', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
+            'model.workers.get', 'model.presets.get', 'model.presets.set', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
             // «Обновиться до ответа» регистрируется этапом пайплайна
             // `generation.prepare` — значит Модулю нужно право трогать его состав.
             'pipeline.stages', 'pipeline.stages.add', 'pipeline.stages.remove',
@@ -69,7 +69,7 @@ const DEFINITIONS = [{
         allowedContracts: [
             'tracking.trackers', 'tracking.configure', 'tracking.poll', 'tracking.reset',
             'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
-            'model.workers.get', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
+            'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
     },
@@ -268,9 +268,6 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerStExtensionsService(engine.buses.services, { getContext, fetch });
     registerSessionService(engine.buses.services);
 
-    const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
-    const modelsCore = createInternalEngineModelsCore(modelsHost);
-
     createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
 
@@ -283,6 +280,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // его `publish` при сборке, чтобы защиты и реестр видели ВСЮ поверхность,
     // а не только мост ST.
     const eventsCore = createEventsCore(engine.registerCaller('core.events', 'cores', { tier: 'official' }));
+
+    const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
+    const modelsCore = createInternalEngineModelsCore(modelsHost, {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.models.internal' }),
+    });
 
     // Исполнитель объявленных этапов. `resolveAs` — привилегированная
     // возможность из сборки движка: этап обязан идти под правами СВОЕГО
@@ -383,7 +385,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
 
     // Every Ядро is constructed by now (Settings Core included) — safe to
     // actually read back whatever was persisted last time.
-    await Promise.all([modelsCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms()]);
+    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms()]);
 
     // Панель монтируется здесь же, а не у вызывающего: реестру Модулей нужно
     // уметь дождаться её перерисовки, чтобы положить дерево Модуля в слот.

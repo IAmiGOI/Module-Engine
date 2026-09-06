@@ -8,16 +8,10 @@ import {
     Button, TextInput, TextArea, Slider, Select, Toggle, Chip, Details,
     Field, Row, Section, EditableList, FloatingPanel,
 } from '../../libraries/shared/widgets.js';
+import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
 import {
-    SAMPLER_PRESETS, REASONING_EFFORTS, clampSamplerSettings, clampReasoningSettings,
+    SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCustomPreset,
 } from '../../cores/models/internal-engine.js';
-
-const REASONING_MODE_OPTIONS = Object.freeze([
-    { value: 'inherit', label: 'Provider default' },
-    { value: 'enabled', label: 'Enabled' },
-    { value: 'disabled', label: 'Disabled' },
-]);
-const REASONING_EFFORT_OPTIONS = Object.freeze(REASONING_EFFORTS.map(id => ({ value: id, label: id[0].toUpperCase() + id.slice(1) })));
 
 /**
  * Модуль «Трекер» — ПЕРВЫЙ настоящий Модуль в Beta, и он же проверка
@@ -160,6 +154,10 @@ function toRecord(tracker = {}, displayTemplate = '', hasStage = false, samplerP
         reasoningMode: signal(reasoning.reasoningMode),
         reasoningEffort: signal(reasoning.reasoningEffort),
         reasoningBudget: signal(reasoning.reasoningBudget),
+        // Имя для «Save as preset» — своё поле формы, не часть конфигурации
+        // трекера: пресет уходит в ОБЩИЙ список (см. `savePreset()` ниже), а
+        // не привязывается к этому трекеру.
+        newPresetName: signal(''),
         // В списке живут только ИМЕНА полей — структура. Текст подсказки у
         // каждого поля свой сигнал (`prompts`), потому что иначе набор буквы в
         // подсказке менял бы сигнал списка и перерисовывал весь редактор полей
@@ -220,6 +218,11 @@ export function createTrackerModule(host) {
     const hudVisible = signal(true);
     const hudPosition = signal({});
     const hudSize = signal({});
+    // Свои пресеты сэмплера/ризонинга — ОБЩИЙ список у Ядра моделей
+    // (`model.presets.get`/`set`), один и тот же для каждой карточки трекера
+    // здесь И для Модуля «RP Time»: сохранённый в одном месте пресет обязан
+    // быть виден в другом без перезагрузки страницы (см. подписку ниже).
+    const customPresets = signal([]);
     let lastSave = null; // последний ответ на сохранение — для тестов и для хоста
 
     /** Всё наружу — только через Гейт Модуль→Ядро. Прямой ссылки на Ядро трекинга у Модуля нет и не должно быть. */
@@ -272,6 +275,11 @@ export function createTrackerModule(host) {
         await call('storage.settings.set', { namespace: SETTINGS_NAMESPACE, key: SAMPLER_KEY, value: map });
     }
 
+    async function refreshCustomPresets() {
+        const result = await call('model.presets.get');
+        customPresets.set(result.ok ? result.value ?? [] : []);
+    }
+
     async function refreshValues(record) {
         const id = record.id.peek().trim();
         if (!id) return;
@@ -286,7 +294,7 @@ export function createTrackerModule(host) {
     }
 
     async function load() {
-        await Promise.all([collapse.restore(), loadHudState()]);
+        await Promise.all([collapse.restore(), loadHudState(), refreshCustomPresets()]);
         const [listed, display, samplerPresets, staged] = await Promise.all([
             call('tracking.trackers'), loadDisplayTemplates(), loadSamplerPresets(), loadStagedIds(),
         ]);
@@ -394,9 +402,9 @@ export function createTrackerModule(host) {
         record.fields.set(record.fields.peek().filter(field => field.name !== name));
     }
 
-    /** Пресет — только отправная точка: применяет значения один раз, дальше их можно крутить по отдельности, как в Модуле «Время». */
+    /** Пресет — только отправная точка: применяет значения один раз, дальше их можно крутить по отдельности, как в Модуле «Время». Ищет и среди готовых, и среди СВОИХ — выбор в форме об этом различии не знает. */
     function applySamplerPreset(record, id) {
-        const found = SAMPLER_PRESETS.find(item => item.id === id);
+        const found = [...SAMPLER_PRESETS, ...customPresets.peek()].find(item => item.id === id);
         if (!found) return;
         record.samplerPreset.set(found.id);
         record.temperature.set(found.temperature);
@@ -406,6 +414,30 @@ export function createTrackerModule(host) {
         record.reasoningMode.set(found.reasoningMode);
         record.reasoningEffort.set(found.reasoningEffort);
         record.reasoningBudget.set(found.reasoningBudget);
+    }
+
+    /** Сохраняет текущую подстройку ЭТОГО трекера как СВОЙ пресет — в общий список, доступный любому другому трекеру и Модулю «RP Time». Имя, уже занятое, обновляет тот же пресет, а не плодит дубликат (см. `buildCustomPreset`/`slugifyPresetName`). */
+    async function savePreset(record, name) {
+        const trimmed = String(name ?? '').trim();
+        if (!trimmed) { await notify('error', 'Name the preset first'); return; }
+        const preset = buildCustomPreset(trimmed, {
+            temperature: record.temperature.peek(), topP: record.topP.peek(), topK: record.topK.peek(), maxTokens: record.maxTokens.peek(),
+            reasoningMode: record.reasoningMode.peek(), reasoningEffort: record.reasoningEffort.peek(), reasoningBudget: record.reasoningBudget.peek(),
+        });
+        const next = [...customPresets.peek().filter(item => item.id !== preset.id), preset];
+        const result = await call('model.presets.set', { presets: next });
+        if (result.ok) { customPresets.set(next); record.samplerPreset.set(preset.id); record.newPresetName.set(''); }
+        await notify(result.ok ? 'ok' : 'error', result.ok ? `Saved preset "${trimmed}"` : result.error.message);
+    }
+
+    /** Удаляет пресет, выбранный СЕЙЧАС у этого трекера — только свой (готовый из коробки в списке для удаления не показывается вовсе, см. GenerationSettingsPanel). Значения на самом трекере не трогает: имя забыто, подстройка остаётся. */
+    async function deletePreset(record) {
+        const id = record.samplerPreset.peek();
+        if (!id) return;
+        const next = customPresets.peek().filter(item => item.id !== id);
+        const result = await call('model.presets.set', { presets: next });
+        if (result.ok) { customPresets.set(next); record.samplerPreset.set(''); }
+        await notify(result.ok ? 'ok' : 'error', result.ok ? 'Preset deleted' : result.error.message);
     }
 
     function addTracker() {
@@ -473,30 +505,6 @@ export function createTrackerModule(host) {
         );
     }
 
-    function samplerSection(record) {
-        return h('div', { class: 'stme-tracker-sampler' },
-            Field('Generation preset', Select(record.samplerPreset, [
-                { value: '', label: 'Custom (pick a preset below to start from one)' },
-                ...SAMPLER_PRESETS.map(item => ({ value: item.id, label: item.name })),
-            ], { onChange: id => applySamplerPreset(record, id) }), {
-                hint: computed(() => SAMPLER_PRESETS.find(item => item.id === record.samplerPreset())?.description ?? ''),
-            }),
-            Row(
-                Slider('Temperature', record.temperature, { min: 0, max: 2, step: 0.05 }),
-                Slider('Top P', record.topP, { min: 0, max: 1, step: 0.01 }),
-                Slider('Top K', record.topK, { min: 0, max: 200, step: 1 }),
-                Slider('Max tokens', record.maxTokens, { min: 1, max: 4096, step: 1 }),
-            ),
-            Row(
-                Field('Reasoning', Select(record.reasoningMode, REASONING_MODE_OPTIONS)),
-                Field('Effort', Select(record.reasoningEffort, REASONING_EFFORT_OPTIONS), {
-                    hint: 'OpenRouter only — Anthropic and Google have no effort levels of their own.',
-                }),
-                Slider('Reasoning budget (tokens)', record.reasoningBudget, { min: 0, max: 32768, step: 64 }),
-            ),
-        );
-    }
-
     function displaySection(record) {
         return h('div', { class: 'stme-tracker-display' },
             Field('Display template', TextInput(record.displayTemplate, { placeholder: '❤ {health} · 📍 {location}' }), {
@@ -536,9 +544,11 @@ export function createTrackerModule(host) {
                 h('strong', {}, 'Current state'),
                 computed(() => h('span', { class: 'stme-tracker-current-value' }, buildLabel(record.values(), record.displayTemplate()))),
             ),
-            Details('Generation settings (advanced)',
-                samplerSection(record),
-            ),
+            GenerationSettingsPanel(record, () => [...SAMPLER_PRESETS, ...customPresets()], {
+                onApplyPreset: id => applySamplerPreset(record, id),
+                onSavePreset: name => savePreset(record, name),
+                onDeletePreset: () => deletePreset(record),
+            }),
             Details('Prompt template (advanced)',
                 Field('Poll prompt', TextArea(record.promptTemplate, { rows: 4, placeholder: 'Leave empty for the engine default. Placeholder: {fields}' })),
             ),
@@ -578,6 +588,10 @@ export function createTrackerModule(host) {
         // первым. Собственное сохранение при этом пропускаем: перечитывать себя
         // же посреди правки значило бы затирать несохранённые поля формы.
         host.events.subscribe('tracking.trackersChanged', payload => { if (payload?.by !== MODULE_ID) load(); }),
+        // Пресет сохранил или удалил КТО-ТО ДРУГОЙ — свой же список общий с
+        // Модулем «RP Time», и без этого сохранённое там появлялось бы здесь
+        // только после ручной перезагрузки страницы.
+        host.events.subscribe('model.presets.changed', () => refreshCustomPresets()),
     ];
 
     /**
@@ -690,6 +704,9 @@ export function createTrackerModule(host) {
         addField,
         removeField,
         applySamplerPreset,
+        savePreset,
+        deletePreset,
+        customPresets: () => customPresets.peek(),
         hudVisible,
         hudPosition,
         hudCollapsed,
