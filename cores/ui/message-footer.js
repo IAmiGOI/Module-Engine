@@ -206,7 +206,7 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
             return rendered.map(item => ({ ...item, mesid: String(item.mesid) }));
         }
         const ids = await service('stChat.renderedIds');
-        return (ids ?? []).map(mesid => ({ mesid: String(mesid), isUser: false, isSystem: false }));
+        return (ids ?? []).map(mesid => ({ mesid: String(mesid), isUser: false, isSystem: false, isToolCall: false }));
     }
 
     /**
