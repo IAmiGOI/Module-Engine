@@ -220,6 +220,15 @@ export function createMacrosCore(host) {
     // Draft preview — see `testProgram()`'s own doc-comment for why it never
     // touches `cachedResults`/real ST registration.
     const unregisterTest = host.own.register('macros.test', params => testProgram(params?.program));
+    // Same gap as configurePrograms/restorePrograms above, for the OTHER
+    // half of this Ядро's public surface: `setValueMacro`/`clearValueMacro`
+    // were plain JS functions, reachable only by whoever holds a direct
+    // reference (until now, only the engine assembler's own Ядро трекинга
+    // hook). Ядро работы с WI needs the SAME "publish a value as a real
+    // {{macro}}" primitive for its own "Publish" toggle — reachable only
+    // through the Гейт Ядро↔Ядро, never a JS reference.
+    const unregisterSetValue = host.own.register('macros.setValue', params => setValueMacro(params?.name, params?.value));
+    const unregisterClearValue = host.own.register('macros.clearValue', params => { clearValueMacro(params?.name); return true; });
 
     return {
         configurePrograms,
@@ -229,6 +238,7 @@ export function createMacrosCore(host) {
         unregister: () => {
             for (const unsubscribers of triggerUnsubscribers.values()) for (const unsubscribe of unsubscribers) unsubscribe();
             unregisterRun(); unregisterValue(); unregisterPrograms(); unregisterConfigure(); unregisterTest();
+            unregisterSetValue(); unregisterClearValue();
         },
     };
 }

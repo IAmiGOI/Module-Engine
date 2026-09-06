@@ -7,6 +7,7 @@ import { registerStChatService } from '../services/st-chat.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
 import { registerFileService } from '../services/file.js';
 import { registerStMacrosService } from '../services/st-macros.js';
+import { registerStLorebookService } from '../services/st-lorebook.js';
 import { registerStEventsService } from '../services/st-events.js';
 import { registerStToolsService } from '../services/st-tools.js';
 import { registerStGenerationService } from '../services/st-generation.js';
@@ -24,6 +25,7 @@ import { createSettingsCore } from '../cores/settings/index.js';
 import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource } from '../cores/backup/index.js';
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createMacrosCore } from '../cores/macros/index.js';
+import { createLorebookCore } from '../cores/lorebook/index.js';
 import { createUiEngineCore } from '../cores/ui/ui-engine.js';
 import { createEnginePanelCore } from '../cores/ui/engine-panel.js';
 import { createFinalUiPc } from '../cores/ui/final-ui-pc.js';
@@ -257,6 +259,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
     registerStMacrosService(engine.buses.services, { getContext });
+    registerStLorebookService(engine.buses.services, { getContext });
     registerStEventsService(engine.buses.services, { getContext });
     registerStToolsService(engine.buses.services, { getContext });
     // Сервис перехвата: сюда встанут обе точки, которыми движок забирает
@@ -322,6 +325,13 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     const trackingCore = createTrackingCore(engine.registerCaller('core.tracking', 'cores', { tier: 'official' }), {
         onUserFieldRegistered: ({ trackerId, fieldName, value }) => macrosCore.setValueMacro(`${trackerId}_${fieldName}`, value),
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.tracking' }),
+    });
+    // Реагирует на реальные `st.worldinfoUpdated`/`st.worldinfoSettingsUpdated`/
+    // `st.chatChanged` (уже смощённые Ядром событий выше — без единой
+    // строчки моста с нашей стороны) и публикует записи через Ядро macros —
+    // строится после обоих.
+    const lorebookCore = createLorebookCore(engine.registerCaller('core.lorebook', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.lorebook' }),
     });
 
     const uiHost = engine.registerCaller('core.ui.engine', 'cores', { tier: 'official' });
@@ -399,7 +409,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
 
     // Every Ядро is constructed by now (Settings Core included) — safe to
     // actually read back whatever was persisted last time.
-    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms()]);
+    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), lorebookCore.scan()]);
 
     // Панель монтируется здесь же, а не у вызывающего: реестру Модулей нужно
     // уметь дождаться её перерисовки, чтобы положить дерево Модуля в слот.
@@ -435,5 +445,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
 }
