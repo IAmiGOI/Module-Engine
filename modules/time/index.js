@@ -37,7 +37,6 @@ export const MODULE_ID = 'module.time';
 const SETTINGS_NAMESPACE = MODULE_ID;
 const TRACKER_ID = 'rp-time';
 const MEMORY_NAMESPACE = MODULE_ID;
-const TIMELINE_KEY = 'timeline';
 /** Отметка ПОД КАЖДЫМ сообщением: `{ [mesid]: 'Day 1, 08:00' }`. Тоже память чата — бейджи обязаны пережить перезагрузку страницы. */
 const BADGES_KEY = 'badges';
 /** Сколько прошлых отметок показывать модели. Одной мало (нет темпа), десяток — уже шум и лишние токены. */
@@ -122,6 +121,27 @@ export function buildTimeLabel(fields, displayTemplate) {
 }
 
 /**
+ * Шкала из отметок сообщений: значения в порядке самих сообщений, подряд
+ * идущие повторы схлопнуты.
+ *
+ * Это ЕДИНСТВЕННЫЙ источник шкалы — отдельного списка «истории» больше нет.
+ * Пока он существовал, реролл откатывал бейдж сообщения, но не шкалу: модель
+ * продолжала отсчитывать от времени отброшенного варианта, а карточка в
+ * панели показывала его же. Alpha пришла к тому же выводу своим путём —
+ * «источник правды один, и откатывать после реролла ничего не нужно».
+ *
+ * `mesid` у ST — индекс, поэтому порядок числовой, а не лексический: иначе
+ * «10» встало бы между «1» и «2».
+ */
+export function buildHistory(badges = {}) {
+    return Object.keys(badges)
+        .sort((a, b) => Number(a) - Number(b))
+        .map(mesid => badges[mesid])
+        .filter(Boolean)
+        .filter((mark, index, all) => mark !== all[index - 1]);
+}
+
+/**
  * Шкала для промпта. Первая точка — заданное пользователем начало: пока
  * ничего не натикало, модели всё равно надо от чего-то отсчитывать, иначе
  * она придумает дату сама.
@@ -144,13 +164,16 @@ export function createTimeModule(host) {
     const enabled = signal(true);
     const workers = signal([]);
     const label = signal('');
-    const history = signal([]);
     const busy = signal(false);
     // Отметка каждого сообщения отдельно. Один общий сигнал на весь чат
     // означал бы одно время под всеми сообщениями сразу: обновили — переписали
     // историю. А ещё именно отсюда берётся честное «ещё не посчитано» у нового
     // сообщения: записи просто нет, и бейдж пульсирует пустым.
     const badges = signal({});
+    // Шкала — ПРОИЗВОДНАЯ от отметок, а не второй список рядом. Пока список
+    // был свой, реролл откатывал бейдж, но не шкалу: модель продолжала
+    // отсчитывать от времени отброшенного варианта.
+    const history = computed(() => buildHistory(badges()));
     // Под каким сообщением рисуется живой бейдж. Узнаём это от Ядра подвала,
     // когда оно зовёт нашу фабрику, — своего доступа к чату у Модуля нет и не
     // должно быть.
@@ -169,8 +192,6 @@ export function createTimeModule(host) {
     // --- Шкала: память чата, а не настройки ---------------------------------
 
     async function loadHistory() {
-        const result = await call('storage.chatMemory.get', { namespace: MEMORY_NAMESPACE, key: TIMELINE_KEY, fallback: [] });
-        history.set(result.ok ? result.value ?? [] : []);
         const marks = await call('storage.chatMemory.get', { namespace: MEMORY_NAMESPACE, key: BADGES_KEY, fallback: {} });
         badges.set(marks.ok ? marks.value ?? {} : {});
     }
@@ -188,12 +209,6 @@ export function createTimeModule(host) {
         await saveBadges(next);
     }
 
-    async function rememberLabel(next) {
-        if (!next || history.peek().at(-1) === next) return;
-        const kept = [...history.peek(), next].slice(-MAX_TIMELINE);
-        history.set(kept);
-        await call('storage.chatMemory.set', { namespace: MEMORY_NAMESPACE, key: TIMELINE_KEY, value: kept });
-    }
 
     // --- Настройка трекера в Ядре -------------------------------------------
 
@@ -265,7 +280,6 @@ export function createTimeModule(host) {
             }
             const next = buildTimeLabel(result.value ?? [], displayTemplate.peek());
             label.set(next);
-            await rememberLabel(next);
             await markMessage(target, next);
             return next;
         } finally {
@@ -274,10 +288,10 @@ export function createTimeModule(host) {
     }
 
     async function reset() {
-        history.set([]);
         label.set('');
+        // Отметки сообщений — единственное, что нужно стереть: шкала из них и
+        // считается.
         await saveBadges({});
-        await call('storage.chatMemory.set', { namespace: MEMORY_NAMESPACE, key: TIMELINE_KEY, value: [] });
         await call('tracking.reset', { trackerId: TRACKER_ID });
         await notify('ok', 'RP time cleared for this chat');
     }
@@ -375,11 +389,16 @@ export function createTimeModule(host) {
         // действительно началась. Иначе листание свайпов оставляло бы бейдж
         // пустым и пульсирующим навсегда.
         host.events.subscribe('st.messageSwiped', () => { pendingSwipe = liveMesid; }),
-        host.events.subscribe('generation.beforeSend', () => {
+        host.events.subscribe('generation.beforeSend', async () => {
             if (pendingSwipe === null) return;
             const target = pendingSwipe;
             pendingSwipe = null;
-            markMessage(target, null);
+            // Откат ЦЕЛИКОМ: снятая отметка убирает и последнюю точку шкалы
+            // (та считается из отметок), а карточка возвращается к времени
+            // предыдущего сообщения. Иначе модель продолжала бы отсчитывать от
+            // варианта, который пользователь только что отбросил.
+            await markMessage(target, null);
+            label.set(history.peek().at(-1) ?? '');
         }),
         // Другой чат — другое время. Шкалу перечитываем, а не тащим с собой.
         host.events.subscribe('st.chatChanged', () => { loadHistory().then(() => label.set(history.peek().at(-1) ?? '')); }),
