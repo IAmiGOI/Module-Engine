@@ -2,15 +2,9 @@ import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { fillTemplate } from '../../libraries/core/fill-template.js';
-import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, StatBlock, Slider } from '../../libraries/shared/widgets.js';
-import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, REASONING_EFFORTS } from '../../cores/models/internal-engine.js';
-
-const REASONING_MODE_OPTIONS = Object.freeze([
-    { value: 'inherit', label: 'Provider default' },
-    { value: 'enabled', label: 'Enabled' },
-    { value: 'disabled', label: 'Disabled' },
-]);
-const REASONING_EFFORT_OPTIONS = Object.freeze(REASONING_EFFORTS.map(id => ({ value: id, label: id[0].toUpperCase() + id.slice(1) })));
+import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, StatBlock } from '../../libraries/shared/widgets.js';
+import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
+import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCustomPreset } from '../../cores/models/internal-engine.js';
 
 /**
  * Модуль «Время» — определитель внутриигрового времени, как в Alpha.
@@ -196,6 +190,11 @@ export function createTimeModule(host) {
     const reasoningMode = signal(defaultReasoning.reasoningMode);
     const reasoningEffort = signal(defaultReasoning.reasoningEffort);
     const reasoningBudget = signal(defaultReasoning.reasoningBudget);
+    // Имя для «Save as preset» — своё поле формы, не персистится само по
+    // себе. Пресет уходит в ОБЩИЙ список Ядра моделей (`model.presets.*`),
+    // тот же, что видит и Модуль «Трекер».
+    const newPresetName = signal('');
+    const customPresets = signal([]);
     const label = signal('');
     const busy = signal(false);
     // Отметка каждого сообщения отдельно. Один общий сигнал на весь чат
@@ -270,9 +269,9 @@ export function createTimeModule(host) {
 
     // --- Настройка трекера в Ядре -------------------------------------------
 
-    /** Пресет заполняет и сэмплер, и ризонинг одним нажатием — дальше можно подкрутить руками, само нажатие ничего не сохраняет (Save остаётся отдельным шагом). Та же механика, что у пресетов полей времени выше и у воркеров панели движка. */
+    /** Пресет заполняет и сэмплер, и ризонинг одним нажатием — дальше можно подкрутить руками, само нажатие ничего не сохраняет (Save остаётся отдельным шагом). Та же механика, что у пресетов полей времени выше. Ищет и среди готовых, и среди СВОИХ — форма об этом различии не знает. */
     function applySampler(id) {
-        const found = SAMPLER_PRESETS.find(item => item.id === id);
+        const found = [...SAMPLER_PRESETS, ...customPresets.peek()].find(item => item.id === id);
         if (!found) return;
         samplerPreset.set(found.id);
         temperature.set(found.temperature);
@@ -282,6 +281,35 @@ export function createTimeModule(host) {
         reasoningMode.set(found.reasoningMode);
         reasoningEffort.set(found.reasoningEffort);
         reasoningBudget.set(found.reasoningBudget);
+    }
+
+    async function refreshCustomPresets() {
+        const result = await call('model.presets.get');
+        customPresets.set(result.ok ? result.value ?? [] : []);
+    }
+
+    /** Сохраняет текущую подстройку как СВОЙ пресет — в общий список, доступный и Модулю «Трекер». Имя, уже занятое, обновляет тот же пресет (см. `buildCustomPreset`/`slugifyPresetName`). */
+    async function savePreset(name) {
+        const trimmed = String(name ?? '').trim();
+        if (!trimmed) { await notify('error', 'Name the preset first'); return; }
+        const preset = buildCustomPreset(trimmed, {
+            temperature: temperature.peek(), topP: topP.peek(), topK: topK.peek(), maxTokens: maxTokens.peek(),
+            reasoningMode: reasoningMode.peek(), reasoningEffort: reasoningEffort.peek(), reasoningBudget: reasoningBudget.peek(),
+        });
+        const next = [...customPresets.peek().filter(item => item.id !== preset.id), preset];
+        const result = await call('model.presets.set', { presets: next });
+        if (result.ok) { customPresets.set(next); samplerPreset.set(preset.id); newPresetName.set(''); }
+        await notify(result.ok ? 'ok' : 'error', result.ok ? `Saved preset "${trimmed}"` : result.error.message);
+    }
+
+    /** Удаляет пресет, выбранный СЕЙЧАС — только свой (готовый из коробки для удаления не показывается вовсе). Значения не трогает: имя забыто, подстройка остаётся. */
+    async function deletePreset() {
+        const id = samplerPreset.peek();
+        if (!id) return;
+        const next = customPresets.peek().filter(item => item.id !== id);
+        const result = await call('model.presets.set', { presets: next });
+        if (result.ok) { customPresets.set(next); samplerPreset.set(''); }
+        await notify(result.ok ? 'ok' : 'error', result.ok ? 'Preset deleted' : result.error.message);
     }
 
     function trackerConfig() {
@@ -433,26 +461,14 @@ export function createTimeModule(host) {
             Row(Button('Apply preset', () => applyPreset(preset.peek()))),
             // Сэмплер/ризонинг — свойство ЭТОГО трекера, а не выбранного выше
             // подключения: тот же воркер вправе параллельно обслуживать
-            // творческую генерацию с другими настройками. «Generation
-            // preset», не «Preset» — то слово уже занято форматом полей выше.
-            Field('Generation preset', Select(samplerPreset, [
-                { value: '', label: 'Custom (pick a preset below to start from one)' },
-                ...SAMPLER_PRESETS.map(item => ({ value: item.id, label: item.name })),
-            ], { onChange: id => applySampler(id) }), {
-                hint: computed(() => SAMPLER_PRESETS.find(item => item.id === samplerPreset())?.description ?? ''),
-            }),
-            Row(
-                Slider('Temperature', temperature, { min: 0, max: 2, step: 0.05 }),
-                Slider('Top P', topP, { min: 0, max: 1, step: 0.01 }),
-                Slider('Top K', topK, { min: 0, max: 200, step: 1 }),
-                Slider('Max tokens', maxTokens, { min: 1, max: 4096, step: 1 }),
-            ),
-            Row(
-                Field('Reasoning', Select(reasoningMode, REASONING_MODE_OPTIONS)),
-                Field('Effort', Select(reasoningEffort, REASONING_EFFORT_OPTIONS), {
-                    hint: 'OpenRouter only — Anthropic and Google have no effort levels of their own.',
-                }),
-                Slider('Reasoning budget (tokens)', reasoningBudget, { min: 0, max: 32768, step: 64 }),
+            // творческую генерацию с другими настройками. Общая карточка
+            // (см. libraries/shared/generation-settings-panel.js) — та же,
+            // что у каждого трекера в Модуле «Трекер», иначе они расходятся
+            // при первой же самостоятельной правке.
+            GenerationSettingsPanel(
+                { samplerPreset, temperature, topP, topK, maxTokens, reasoningMode, reasoningEffort, reasoningBudget, newPresetName },
+                () => [...SAMPLER_PRESETS, ...customPresets()],
+                { onApplyPreset: applySampler, onSavePreset: savePreset, onDeletePreset: deletePreset },
             ),
             Field('Starting time', TextInput(startTime, { placeholder: 'Year 1, Month 1, Day 1, 08:00 (Morning)' }), {
                 hint: 'Where the clock starts before anything has been worked out yet.',
@@ -544,6 +560,10 @@ export function createTimeModule(host) {
         }),
         // Другой чат — другое время. Шкалу перечитываем, а не тащим с собой.
         host.events.subscribe('st.chatChanged', () => { loadHistory().then(() => label.set(history.peek().at(-1) ?? '')); }),
+        // Пресет сохранил или удалил КТО-ТО ДРУГОЙ — свой же список общий с
+        // Модулем «Трекер», и без этого сохранённое там появлялось бы здесь
+        // только после ручной перезагрузки страницы.
+        host.events.subscribe('model.presets.changed', () => refreshCustomPresets()),
     ];
 
     async function load() {
@@ -571,6 +591,7 @@ export function createTimeModule(host) {
         }
         const workerList = await call('model.workers.get');
         workers.set((workerList.ok ? workerList.value ?? [] : []).map(worker => ({ value: worker.id, label: worker.id })));
+        await refreshCustomPresets();
 
         await loadHistory();
         label.set(history.peek().at(-1) ?? '');
@@ -593,6 +614,10 @@ export function createTimeModule(host) {
         save,
         applyPreset,
         applySampler,
+        savePreset,
+        deletePreset,
+        customPresets: () => customPresets.peek(),
+        newPresetName,
         label,
         history,
         badges,
