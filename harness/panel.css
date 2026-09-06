@@ -667,3 +667,101 @@
 }
 .stme-update-ok { color: var(--stme-ok-bright); }
 .stme-update-error { color: var(--stme-danger-bright); }
+
+/* ===== Экран обновления (cores/ui/update-overlay.js) =======================
+   Живёт вне `.stme-panel`, как и плавающие уведомления: перекрытие относится
+   ко всей странице, а полоса обязана быть видна при свёрнутой панели. Поэтому
+   свои переменные объявляются здесь заново — наследовать их неоткуда. */
+
+.stme-update-ui {
+    --stme-accent: var(--SmartThemeQuoteColor, #8da8ff);
+    --stme-warn: #dba617;
+    --stme-warn-ink: #241a00;
+}
+
+.stme-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Жидкое стекло, как у полноэкранной панели движка: страница видна, но
+       работать с ней нельзя — это и требовалось показать. Alpha закрывала её
+       глухой заливкой. */
+    background: linear-gradient(rgba(8, 9, 12, .55), rgba(8, 9, 12, .55));
+    backdrop-filter: blur(16px) saturate(140%);
+    font-family: var(--mainFontFamily, inherit);
+    color: var(--SmartThemeBodyColor, #eee);
+}
+
+.stme-overlay-box {
+    /* Иначе `max-width` считается по КОНТЕНТУ, и коробка выходит шире
+       заявленного ровно на свои поля — 442px вместо 380px. */
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    max-width: min(380px, calc(100vw - 40px));
+    padding: 26px 30px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1e26) 88%, var(--stme-accent));
+    box-shadow: 0 22px 60px rgba(0, 0, 0, .5);
+    text-align: center;
+}
+
+.stme-overlay-title { font-size: 1.02em; }
+.stme-overlay-text { margin: 0; opacity: .75; font-size: .9em; line-height: 1.45; }
+
+.stme-spinner {
+    border-radius: 50%;
+    border: 3px solid color-mix(in srgb, var(--stme-accent) 30%, transparent);
+    border-top-color: var(--stme-accent);
+    animation: stme-spin .8s linear infinite;
+}
+.stme-spinner-sm { width: 16px; height: 16px; border-width: 2px; }
+.stme-spinner-md { width: 26px; height: 26px; }
+.stme-spinner-lg { width: 38px; height: 38px; border-width: 4px; }
+@keyframes stme-spin { to { transform: rotate(360deg); } }
+
+/* Уважение к тем, кому анимация мешает: кольцо остаётся, вращение — нет. */
+@media (prefers-reduced-motion: reduce) {
+    .stme-spinner { animation: none; }
+}
+
+.stme-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 8000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 9px 16px;
+    font-family: var(--mainFontFamily, inherit);
+    font-size: .9em;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, .32);
+}
+.stme-banner-warn { background: var(--stme-warn); color: var(--stme-warn-ink); }
+.stme-banner-text { max-width: 70ch; }
+
+/* Кнопка на полосе — тот же контурный стиль, что и везде в движке (UI.md:
+   кнопка не заливается), только на жёлтом фоне: контур и текст тёмные. */
+.stme-banner .menu_button {
+    border: 1px solid var(--stme-warn-ink);
+    background: transparent;
+    color: var(--stme-warn-ink);
+    font-weight: 600;
+}
+.stme-banner .menu_button:not(.disabled):not([disabled]):hover {
+    background-color: transparent;
+    animation: stme-banner-pulse 1.1s ease-in-out infinite;
+}
+@keyframes stme-banner-pulse {
+    0%, 100% { border-color: var(--stme-warn-ink); }
+    50% { border-color: color-mix(in srgb, var(--stme-warn-ink) 35%, transparent); }
+}

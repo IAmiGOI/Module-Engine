@@ -28,6 +28,7 @@ import { createFinalUiPc } from '../cores/ui/final-ui-pc.js';
 import { createUiModulesCore } from '../cores/ui/ui-modules.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
+import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createTrackerModule, MODULE_ID as TRACKER_MODULE_ID } from '../modules/tracker/index.js';
 import { createTimeModule, MODULE_ID as TIME_MODULE_ID } from '../modules/time/index.js';
 
@@ -270,7 +271,18 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // помимо моделей — оно сверяет наш код с GitHub напрямую.
     const selfUpdate = createSelfUpdateCore(
         engine.registerCaller('core.selfUpdate', 'cores', { tier: 'official', networkAccess: true }),
-        { extensionName: deriveExtensionName(scriptUrl), ...CORE_REPO },
+        {
+            extensionName: deriveExtensionName(scriptUrl),
+            ...CORE_REPO,
+            publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.selfUpdate' }),
+        },
+    );
+
+    // Экран обновления: перекрытие страницы и полоса с «Retry». Про git не
+    // знает ничего — только слушает объявления самообновления.
+    const updateOverlay = createUpdateOverlayCore(
+        engine.registerCaller('core.ui.updateOverlay', 'cores', { tier: 'official' }),
+        { mount: node => uiEngine.mount('updateOverlay', node) },
     );
 
     let enginePanelRef = null;
@@ -314,6 +326,12 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     await notificationsUi.settled();
     document.body.append(notificationsUi.getRoot());
 
+    // Тоже на BODY, а не в панель: перекрытие относится ко всей странице, а
+    // полоса обязана быть видна и при свёрнутой панели.
+    const updateOverlayUi = updateOverlay.open();
+    await updateOverlayUi.settled();
+    document.body.append(updateOverlayUi.getRoot());
+
     // Слух движка включается ПОСЛЕ восстановления конфигурации: иначе
     // событие ST могло бы прилететь трекеру, которого ещё нет.
     await eventsCore.bridge();
@@ -324,5 +342,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, modules, enginePanel, panelUi };
+    return { engine, modelsCore, trackingCore, macrosCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
 }

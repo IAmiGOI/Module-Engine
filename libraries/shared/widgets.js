@@ -359,3 +359,55 @@ export function EditableList({ items, renderItem, onAdd, addLabel = '+ Add', emp
         onAdd || actions ? h('div', { class: 'stme-list-actions' }, onAdd ? Button(addLabel, onAdd) : null, actions ?? null) : null,
     );
 }
+
+/**
+ * Крутящийся индикатор. Отдельным виджетом, а не разметкой внутри `Overlay`:
+ * ожидание бывает не только у обновления, и второй раз рисовать то же кольцо
+ * руками не придётся.
+ */
+export function Spinner({ size = 'md' } = {}) {
+    return h('div', { class: `stme-spinner stme-spinner-${size}` });
+}
+
+/**
+ * Наложение на ВЕСЬ экран, перекрывающее доступ к странице.
+ *
+ * Не «модалка вообще», а именно перекрытие доступа: у Alpha оно появилось,
+ * когда просьба была заблокировать САМУ СТРАНИЦУ, а не только свою панель —
+ * пока движок обновляется, работать с наполовину заменённым кодом нельзя.
+ * Поэтому у него нет ни крестика, ни закрытия по клику: закрывать его
+ * пользователю нечем и незачем.
+ *
+ * `visible` — сигнал: виджет ничего не решает сам, он только рисует то
+ * состояние, которое ему дали.
+ */
+export function Overlay(visibleSignal, { title, description, children } = {}) {
+    return h('div', { class: 'stme-overlay-root' },
+        computed(() => (visibleSignal() ? h('div', { class: 'stme-overlay' },
+            h('div', { class: 'stme-overlay-box' },
+                Spinner(),
+                h('strong', { class: 'stme-overlay-title' }, title),
+                description ? h('p', { class: 'stme-overlay-text' }, description) : null,
+                children ?? null,
+            ),
+        ) : null)),
+    );
+}
+
+/**
+ * Полоса во всю ширину у самого верха страницы — для того, что нельзя
+ * пропустить и что не проходит само. Отличается от `Toast` именно этим:
+ * плашка временная и уезжает сама, полоса висит, пока причина не устранена, и
+ * несёт действие, которым её устраняют.
+ *
+ * Живёт вне разметки расширения намеренно: у Alpha она была прибита к верху
+ * окна ровно потому, что свёрнутая панель не должна прятать сообщение о том,
+ * что движок не обновился.
+ */
+export function Banner(textSignal, { tone = 'warn', icon = '⚠', action, actionLabel = 'Retry', busy } = {}) {
+    return h('div', { class: `stme-banner stme-banner-${tone}` },
+        h('span', { class: 'stme-banner-icon' }, icon),
+        h('span', { class: 'stme-banner-text' }, textSignal),
+        action ? computed(() => Button(busy && busy() ? 'Working…' : actionLabel, action, { disabled: Boolean(busy && busy()) })) : null,
+    );
+}
