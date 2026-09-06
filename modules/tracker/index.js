@@ -8,6 +8,16 @@ import {
     Button, TextInput, TextArea, Slider, Select, Toggle, Chip, Details,
     Field, Row, Section, EditableList, FloatingPanel,
 } from '../../libraries/shared/widgets.js';
+import {
+    SAMPLER_PRESETS, REASONING_EFFORTS, clampSamplerSettings, clampReasoningSettings,
+} from '../../cores/models/internal-engine.js';
+
+const REASONING_MODE_OPTIONS = Object.freeze([
+    { value: 'inherit', label: 'Provider default' },
+    { value: 'enabled', label: 'Enabled' },
+    { value: 'disabled', label: 'Disabled' },
+]);
+const REASONING_EFFORT_OPTIONS = Object.freeze(REASONING_EFFORTS.map(id => ({ value: id, label: id[0].toUpperCase() + id.slice(1) })));
 
 /**
  * Модуль «Трекер» — ПЕРВЫЙ настоящий Модуль в Beta, и он же проверка
@@ -42,6 +52,7 @@ import {
 export const MODULE_ID = 'module.tracker';
 const SETTINGS_NAMESPACE = MODULE_ID;
 const DISPLAY_KEY = 'display';
+const SAMPLER_KEY = 'samplerPreset';
 const HUD_KEY = 'hud';
 
 /**
@@ -127,13 +138,28 @@ export function buildLabel(fields, displayTemplate) {
     return fillTemplate(displayTemplate, known);
 }
 
-function toRecord(tracker = {}, displayTemplate = '', hasStage = false) {
+function toRecord(tracker = {}, displayTemplate = '', hasStage = false, samplerPreset = '') {
     const { mode, count, blocking, custom } = resolveTriggerMode(tracker.triggers, { hasStage });
+    const sampler = clampSamplerSettings(tracker);
+    const reasoning = clampReasoningSettings(tracker);
     return {
         key: `tracker_${++uid}`,
         id: signal(tracker.id ?? ''),
         workerId: signal(tracker.workerId ?? ''),
         enabled: signal(tracker.enabled !== false),
+        // Пресет сэмплера/ризонинга — свойство ЭТОГО трекера, а не воркера: см.
+        // доку у `resolveGenerateRequest` в cores/models/internal-engine.js.
+        // Сам ID пресета нужен только форме (какую подпись показать) — Ядру
+        // трекинга он не сдаётся, поэтому хранится в неймспейсе Модуля рядом
+        // с `displayTemplate`, а не в конфигурации трекера.
+        samplerPreset: signal(samplerPreset),
+        temperature: signal(sampler.temperature),
+        topP: signal(sampler.topP),
+        topK: signal(sampler.topK),
+        maxTokens: signal(sampler.maxTokens),
+        reasoningMode: signal(reasoning.reasoningMode),
+        reasoningEffort: signal(reasoning.reasoningEffort),
+        reasoningBudget: signal(reasoning.reasoningBudget),
         // В списке живут только ИМЕНА полей — структура. Текст подсказки у
         // каждого поля свой сигнал (`prompts`), потому что иначе набор буквы в
         // подсказке менял бы сигнал списка и перерисовывал весь редактор полей
@@ -171,6 +197,13 @@ function fromRecord(record) {
             ? [record.customTrigger]
             : computeTriggers(record.triggerMode.peek(), record.triggerCount.peek(), { blocking: record.blocking.peek() }),
         promptTemplate: record.promptTemplate.peek().trim() || undefined,
+        temperature: record.temperature.peek(),
+        topP: record.topP.peek(),
+        topK: record.topK.peek(),
+        maxTokens: record.maxTokens.peek(),
+        reasoningMode: record.reasoningMode.peek(),
+        reasoningEffort: record.reasoningEffort.peek(),
+        reasoningBudget: record.reasoningBudget.peek(),
     };
 }
 
@@ -229,6 +262,16 @@ export function createTrackerModule(host) {
         await call('storage.settings.set', { namespace: SETTINGS_NAMESPACE, key: DISPLAY_KEY, value: map });
     }
 
+    async function loadSamplerPresets() {
+        const result = await call('storage.settings.get', { namespace: SETTINGS_NAMESPACE, key: SAMPLER_KEY, fallback: {} });
+        return result.ok ? (result.value ?? {}) : {};
+    }
+
+    async function saveSamplerPresets() {
+        const map = Object.fromEntries(trackers.peek().map(record => [record.id.peek().trim(), record.samplerPreset.peek()]).filter(([id, preset]) => id && preset));
+        await call('storage.settings.set', { namespace: SETTINGS_NAMESPACE, key: SAMPLER_KEY, value: map });
+    }
+
     async function refreshValues(record) {
         const id = record.id.peek().trim();
         if (!id) return;
@@ -244,14 +287,16 @@ export function createTrackerModule(host) {
 
     async function load() {
         await Promise.all([collapse.restore(), loadHudState()]);
-        const [listed, display, staged] = await Promise.all([call('tracking.trackers'), loadDisplayTemplates(), loadStagedIds()]);
+        const [listed, display, samplerPresets, staged] = await Promise.all([
+            call('tracking.trackers'), loadDisplayTemplates(), loadSamplerPresets(), loadStagedIds(),
+        ]);
         const records = (listed.ok ? listed.value ?? [] : [])
             // Системные заводит движок, а трекер с `ownerId` — чужой Модуль
             // (например, «RP Time»). Ни те, ни другие не правятся руками, и в
             // списке пользователя им делать нечего — как и в плавающей панели
             // ниже, которая рисуется из этого же набора.
             .filter(tracker => tracker.kind !== 'system' && !tracker.ownerId)
-            .map(tracker => toRecord(tracker, display[tracker.id] ?? '', staged.has(computeStageId(tracker.id))));
+            .map(tracker => toRecord(tracker, display[tracker.id] ?? '', staged.has(computeStageId(tracker.id)), samplerPresets[tracker.id] ?? ''));
         trackers.set(records);
         await Promise.all(records.map(refreshValues));
 
@@ -304,7 +349,7 @@ export function createTrackerModule(host) {
         const foreign = (listed.ok ? listed.value ?? [] : [])
             .filter(tracker => (tracker.kind === 'system' || tracker.ownerId) && !mine.has(tracker.id));
         const result = await call('tracking.configure', { trackers: [...foreign, ...list] });
-        if (result.ok) { await saveDisplayTemplates(); await syncStages(); }
+        if (result.ok) { await saveDisplayTemplates(); await saveSamplerPresets(); await syncStages(); }
         lastSave = result;
         await notify(result.ok ? 'ok' : 'error',
             result.ok ? `Saved ${list.length} tracker${list.length === 1 ? '' : 's'}` : result.error.message);
@@ -347,6 +392,20 @@ export function createTrackerModule(host) {
     function removeField(record, name) {
         record.prompts.delete(name);
         record.fields.set(record.fields.peek().filter(field => field.name !== name));
+    }
+
+    /** Пресет — только отправная точка: применяет значения один раз, дальше их можно крутить по отдельности, как в Модуле «Время». */
+    function applySamplerPreset(record, id) {
+        const found = SAMPLER_PRESETS.find(item => item.id === id);
+        if (!found) return;
+        record.samplerPreset.set(found.id);
+        record.temperature.set(found.temperature);
+        record.topP.set(found.topP);
+        record.topK.set(found.topK);
+        record.maxTokens.set(found.maxTokens);
+        record.reasoningMode.set(found.reasoningMode);
+        record.reasoningEffort.set(found.reasoningEffort);
+        record.reasoningBudget.set(found.reasoningBudget);
     }
 
     function addTracker() {
@@ -414,6 +473,30 @@ export function createTrackerModule(host) {
         );
     }
 
+    function samplerSection(record) {
+        return h('div', { class: 'stme-tracker-sampler' },
+            Field('Generation preset', Select(record.samplerPreset, [
+                { value: '', label: 'Custom (pick a preset below to start from one)' },
+                ...SAMPLER_PRESETS.map(item => ({ value: item.id, label: item.name })),
+            ], { onChange: id => applySamplerPreset(record, id) }), {
+                hint: computed(() => SAMPLER_PRESETS.find(item => item.id === record.samplerPreset())?.description ?? ''),
+            }),
+            Row(
+                Slider('Temperature', record.temperature, { min: 0, max: 2, step: 0.05 }),
+                Slider('Top P', record.topP, { min: 0, max: 1, step: 0.01 }),
+                Slider('Top K', record.topK, { min: 0, max: 200, step: 1 }),
+                Slider('Max tokens', record.maxTokens, { min: 1, max: 4096, step: 1 }),
+            ),
+            Row(
+                Field('Reasoning', Select(record.reasoningMode, REASONING_MODE_OPTIONS)),
+                Field('Effort', Select(record.reasoningEffort, REASONING_EFFORT_OPTIONS), {
+                    hint: 'OpenRouter only — Anthropic and Google have no effort levels of their own.',
+                }),
+                Slider('Reasoning budget (tokens)', record.reasoningBudget, { min: 0, max: 32768, step: 64 }),
+            ),
+        );
+    }
+
     function displaySection(record) {
         return h('div', { class: 'stme-tracker-display' },
             Field('Display template', TextInput(record.displayTemplate, { placeholder: '❤ {health} · 📍 {location}' }), {
@@ -452,6 +535,9 @@ export function createTrackerModule(host) {
             h('div', { class: 'stme-tracker-current' },
                 h('strong', {}, 'Current state'),
                 computed(() => h('span', { class: 'stme-tracker-current-value' }, buildLabel(record.values(), record.displayTemplate()))),
+            ),
+            Details('Generation settings (advanced)',
+                samplerSection(record),
             ),
             Details('Prompt template (advanced)',
                 Field('Poll prompt', TextArea(record.promptTemplate, { rows: 4, placeholder: 'Leave empty for the engine default. Placeholder: {fields}' })),
@@ -603,6 +689,7 @@ export function createTrackerModule(host) {
         removeTracker,
         addField,
         removeField,
+        applySamplerPreset,
         hudVisible,
         hudPosition,
         hudCollapsed,

@@ -25,8 +25,8 @@ export function buildTrackerContext(messages = []) {
 }
 
 /**
- * Pure — точный текст, уходящий модели за один опрос. Экспортируется, чтобы
- * проверяться напрямую, без Ядра и Сервисов вокруг.
+ * Подстановки, общие для системной и пользовательской половин промпта —
+ * посчитаны один раз, чтобы обе видели одни и те же поля/контекст/vars.
  *
  * Плейсхолдеры: `{context}` — недавняя переписка, `{fields}` — что трекать с
  * подсказками и текущими значениями, `{fieldsJson}` — только имена (удобно
@@ -37,9 +37,9 @@ export function buildTrackerContext(messages = []) {
  * него не подставлялось ничего: модель просили обновить поля по переписке,
  * которой она не видела, и отвечала она выдумкой.
  */
-export function buildTrackerPrompt(tracker, fields, messages = [], vars = {}) {
+function buildTrackerSubstitutions(fields, messages, vars) {
     const fieldLines = fields.map(field => `- ${field.name}: ${field.prompt ?? ''} (current: ${JSON.stringify(field.value)})`).join('\n');
-    return fillTemplate(tracker.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE, {
+    return {
         context: buildTrackerContext(messages) || '(no messages yet)',
         fields: fieldLines,
         fieldsJson: fields.map(field => `"${field.name}"`).join(', '),
@@ -50,7 +50,30 @@ export function buildTrackerPrompt(tracker, fields, messages = [], vars = {}) {
         // общем Ядре трекинга значило бы затащить в него чужую предметную
         // область.
         ...vars,
-    });
+    };
+}
+
+/** Pure — точный текст пользовательского сообщения, уходящий модели за один опрос. Экспортируется, чтобы проверяться напрямую, без Ядра и Сервисов вокруг. */
+export function buildTrackerPrompt(tracker, fields, messages = [], vars = {}) {
+    return fillTemplate(tracker.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE, buildTrackerSubstitutions(fields, messages, vars));
+}
+
+/**
+ * Системное сообщение — ЕСЛИ у трекера оно вообще есть (`systemPromptTemplate`).
+ * Разделение на системное (инструкция: что и как делать) и пользовательское
+ * (сама история: переписка/показания) — приём специализированного Модуля
+ * («RP Time» первым его использовал), а не требование для каждого трекера:
+ * пользовательский трекер, настроенный руками через Модуль «Трекер», как и
+ * раньше обходится одним `promptTemplate` целиком в `user` — никого не
+ * заставляем переучиваться ради разделения, которое не просили.
+ *
+ * Без `systemPromptTemplate` возвращает `''`, и `model.generate` тогда не
+ * получает системного сообщения вовсе (см. `resolveGenerateRequest()`) —
+ * поведение НЕ меняется для тех, кто это поле не задавал.
+ */
+export function buildTrackerSystemPrompt(tracker, fields, messages = [], vars = {}) {
+    if (!tracker.systemPromptTemplate) return '';
+    return fillTemplate(tracker.systemPromptTemplate, buildTrackerSubstitutions(fields, messages, vars));
 }
 
 function fieldKey(trackerId, fieldName) {
@@ -98,6 +121,26 @@ function fieldKey(trackerId, fieldName) {
  * (`configureTrackers()`/`restoreTrackers()`, see
  * [persisted-list.js](../../libraries/core/persisted-list.js)), not memory
  * that resets on reload.
+ *
+ * **Промпт может прийти ДВУМЯ половинами.** `promptTemplate` (обязательный,
+ * идёт в `user`) остаётся ровно тем же, чем был — генерический трекер,
+ * настроенный руками через Модуль «Трекер», как и раньше не знает никакого
+ * разделения. `systemPromptTemplate` — опциональный: специализированный
+ * Модуль (первым — «RP Time») может вынести в него ИНСТРУКЦИЮ (что и как
+ * делать), оставив в `user` только саму ИСТОРИЮ (переписку/показания).
+ * Разделение реальное: обе половины уходят в `model.generate` как разные
+ * поля (`prompt`/`systemPrompt`), а не склеиваются заранее.
+ *
+ * **Сэмплер и ризонинг — свойство ТРЕКЕРА, не воркера, который его
+ * исполнит.** Один воркер может нести и точный трекинг, и творческую
+ * генерацию одновременно, и им нужны разные настройки — `temperature`/
+ * `topP`/`topK`/`maxTokens`/`reasoningMode`/`reasoningEffort`/
+ * `reasoningBudget` читаются С САМОГО трекера и уходят в `model.generate`
+ * явными параметрами запроса, которые (см. doc-comment
+ * `resolveGenerateRequest()` в [internal-engine.js](../models/internal-engine.js))
+ * побеждают дефолт воркера тем же механизмом, что уже держит пиннинг по
+ * `workerId`. Трекер, не задавший ни одного из этих полей, ведёт себя
+ * ровно как раньше — тихо использует дефолт воркера/движка.
  */
 export function createTrackingCore(host, { onUserFieldRegistered = () => {}, publish } = {}) {
     // Публикация идёт через Ядро событий (защиты от петель/штормов, реестр
@@ -152,8 +195,25 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
 
     async function poll(trackerId, vars = {}) {
         const tracker = requireTracker(trackerId);
-        const prompt = buildTrackerPrompt(tracker, listFields(trackerId), await readContext(tracker), vars);
-        const result = await request(host.own, 'model.generate', { params: { prompt, workerId: tracker.workerId } });
+        const fields = listFields(trackerId);
+        const messages = await readContext(tracker);
+        const prompt = buildTrackerPrompt(tracker, fields, messages, vars);
+        const systemPrompt = buildTrackerSystemPrompt(tracker, fields, messages, vars);
+        const result = await request(host.own, 'model.generate', {
+            params: {
+                prompt, systemPrompt, workerId: tracker.workerId,
+                // Пресет сэмплера/ризонинга — свойство ЭТОГО трекера, а не
+                // воркера, который его исполнит: один и тот же воркер вправе
+                // нести и точный трекинг, и творческую генерацию одновременно,
+                // и им нужны разные настройки — «выбирается индивидуально под
+                // каждый запрос», не привязкой к модели. Поля не заданы —
+                // `resolveGenerateRequest()` тихо возьмёт дефолт воркера/
+                // движка, как и раньше; заданы — явный параметр запроса
+                // побеждает (тот же механизм, что уже держит пиннинг воркера).
+                temperature: tracker.temperature, topP: tracker.topP, topK: tracker.topK, maxTokens: tracker.maxTokens,
+                reasoningMode: tracker.reasoningMode, reasoningEffort: tracker.reasoningEffort, reasoningBudget: tracker.reasoningBudget,
+            },
+        });
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
         if (!parsed || typeof parsed !== 'object') throw new Error(`tracking.poll: tracker "${trackerId}"'s model reply was not a JSON object.`);

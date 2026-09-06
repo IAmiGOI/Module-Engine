@@ -1,16 +1,8 @@
 import { h } from './tree.js';
 import { signal, computed } from './reactive.js';
 import { request } from '../../libraries/shared/request.js';
-import { Button, TextInput, Select, Toggle, Field, Row, Card, Section, Badge, EmptyState, TwoColumn, EditableList, Slider } from '../../libraries/shared/widgets.js';
+import { Button, TextInput, Select, Toggle, Field, Row, Card, Section, Badge, EmptyState, TwoColumn, EditableList } from '../../libraries/shared/widgets.js';
 import { createCollapseState } from '../../libraries/shared/collapse-state.js';
-import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, REASONING_EFFORTS } from '../models/internal-engine.js';
-
-const REASONING_MODE_OPTIONS = Object.freeze([
-    { value: 'inherit', label: 'Provider default' },
-    { value: 'enabled', label: 'Enabled' },
-    { value: 'disabled', label: 'Disabled' },
-]);
-const REASONING_EFFORT_OPTIONS = Object.freeze(REASONING_EFFORTS.map(id => ({ value: id, label: id[0].toUpperCase() + id.slice(1) })));
 
 const FORMATS = Object.freeze([
     { value: 'openai', label: 'OpenAI-compatible' },
@@ -20,20 +12,8 @@ const FORMATS = Object.freeze([
 
 let uid = 0;
 
-/**
- * Плоская запись воркера → набор сигналов для правки, со стабильным ключом
- * (id можно менять, ключ — нет, иначе строка пересоздаётся на каждую букву).
- *
- * `preset` — какой пресет выбран ПОСЛЕДНИМ, чисто для интерфейса (чтобы
- * Select не забывал выбор при переоткрытии панели); само Ядро внутренних
- * моделей на это поле не смотрит вовсе, оно читает только сами значения
- * сэмплера и ризонинга. `clampSamplerSettings()`/`clampReasoningSettings()` —
- * та же защита от мусора, что и на самом Ядре: значения с диска не должны
- * попасть в форму за пределами их собственной шкалы.
- */
+/** Плоская запись воркера → набор сигналов для правки, со стабильным ключом (id можно менять, ключ — нет, иначе строка пересоздаётся на каждую букву). */
 function toRecord(worker = {}) {
-    const sampler = clampSamplerSettings(worker);
-    const reasoning = clampReasoningSettings(worker);
     return {
         key: `worker_${++uid}`,
         id: signal(worker.id ?? ''),
@@ -41,14 +21,6 @@ function toRecord(worker = {}) {
         endpoint: signal(worker.endpoint ?? ''),
         apiKey: signal(worker.apiKey ?? ''),
         model: signal(worker.model ?? ''),
-        preset: signal(worker.preset ?? ''),
-        temperature: signal(sampler.temperature),
-        topP: signal(sampler.topP),
-        topK: signal(sampler.topK),
-        maxTokens: signal(sampler.maxTokens),
-        reasoningMode: signal(reasoning.reasoningMode),
-        reasoningEffort: signal(reasoning.reasoningEffort),
-        reasoningBudget: signal(reasoning.reasoningBudget),
         // Не строка статуса, а КРАТКОВРЕМЕННОЕ состояние блока: '' | 'testing' |
         // 'ok' | 'error'. Результат словами уходит в уведомления, здесь
         // остаётся только вспышка обводки — она относится к КОНКРЕТНОМУ
@@ -64,29 +36,7 @@ function fromRecord(record) {
         endpoint: record.endpoint.peek().trim(),
         apiKey: record.apiKey.peek(),
         model: record.model.peek().trim(),
-        preset: record.preset.peek(),
-        temperature: record.temperature.peek(),
-        topP: record.topP.peek(),
-        topK: record.topK.peek(),
-        maxTokens: record.maxTokens.peek(),
-        reasoningMode: record.reasoningMode.peek(),
-        reasoningEffort: record.reasoningEffort.peek(),
-        reasoningBudget: record.reasoningBudget.peek(),
     };
-}
-
-/** Пресет заполняет и сэмплер, и ризонинг одним нажатием — дальше можно подкрутить руками, само нажатие ничего не сохраняет (Save остаётся отдельным шагом, как и везде в панели). */
-function applySamplerPreset(record, presetId) {
-    const found = SAMPLER_PRESETS.find(item => item.id === presetId);
-    if (!found) return;
-    record.preset.set(found.id);
-    record.temperature.set(found.temperature);
-    record.topP.set(found.topP);
-    record.topK.set(found.topK);
-    record.maxTokens.set(found.maxTokens);
-    record.reasoningMode.set(found.reasoningMode);
-    record.reasoningEffort.set(found.reasoningEffort);
-    record.reasoningBudget.set(found.reasoningBudget);
 }
 
 /**
@@ -218,37 +168,6 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
             Row(
                 Field('API key', TextInput(record.apiKey, { type: 'password', placeholder: 'optional for local' })),
                 Field('Model', TextInput(record.model, { placeholder: 'model name' })),
-            ),
-            // Пресет — про СЭМПЛЕР и РИЗОНИНГ вместе, одной отправной точкой.
-            // КАКОЙ воркер возьмётся отвечать — отдельный, уже решённый вопрос
-            // (очередь сама балансирует, `workerId` при желании пиннингует);
-            // здесь этого выбора нет и быть не должно.
-            Field('Preset', Select(record.preset, [
-                { value: '', label: 'Custom (pick a preset below to start from one)' },
-                ...SAMPLER_PRESETS.map(item => ({ value: item.id, label: item.name })),
-            ], { onChange: id => applySamplerPreset(record, id) }), {
-                // Сигналом, а не снятым один раз значением — иначе подсказка
-                // застыла бы на пресете, который был выбран при отрисовке.
-                hint: computed(() => SAMPLER_PRESETS.find(item => item.id === record.preset())?.description ?? ''),
-            }),
-            Row(
-                Slider('Temperature', record.temperature, { min: 0, max: 2, step: 0.05 }),
-                Slider('Top P', record.topP, { min: 0, max: 1, step: 0.01 }),
-                Slider('Top K', record.topK, { min: 0, max: 200, step: 1 }),
-                Slider('Max tokens', record.maxTokens, { min: 1, max: 4096, step: 1 }),
-            ),
-            // Ризонинг — три РАЗНЫХ настоящих API у трёх форматов (см.
-            // doc-comment provider-request.js): "Enabled"/"Disabled" —
-            // явный выбор, "Provider default" — движок не посылает про это
-            // ни байта, и решает сам провайдер/модель. Budget = 0 у Google
-            // читается как "пусть модель сама решит бюджет", у Anthropic —
-            // как "взять минимально допустимый".
-            Row(
-                Field('Reasoning', Select(record.reasoningMode, REASONING_MODE_OPTIONS)),
-                Field('Effort', Select(record.reasoningEffort, REASONING_EFFORT_OPTIONS), {
-                    hint: 'OpenRouter only — Anthropic and Google have no effort levels of their own.',
-                }),
-                Slider('Reasoning budget (tokens)', record.reasoningBudget, { min: 0, max: 32768, step: 64 }),
             ),
         );
     }
