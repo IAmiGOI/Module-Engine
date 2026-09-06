@@ -152,14 +152,27 @@ test('a program\'s configured trigger re-runs it automatically, refreshing the c
     const { engine, macrosCore } = buildEngine();
     let counter = 0;
     // A "system"-ish tracker-free program: uses its own save/get counter, driven purely by the trigger.
-    macrosCore.configurePrograms([{ id: 'ticker', macroName: 'ticker', kind: 'code', source: 'set n to get "n"\nif n is "" then\nset n to 0\nend\nset n to n + 1\nsave n as "n"\nreturn n', triggers: ['generation.completed'] }]);
+    // Awaited (not just flushMicrotasks()'d): triggers now go through the
+    // Director (host.own.subscribe with a `when` condition, same as Ядро
+    // трекинга's own — see cores/macros/index.js's applyPrograms()), one
+    // async hop deeper than the old bare host.events.subscribe(), and the
+    // very next line reads the cache synchronously through the bus.
+    await macrosCore.configurePrograms([{ id: 'ticker', macroName: 'ticker', kind: 'code', source: 'set n to get "n"\nif n is "" then\nset n to 0\nend\nset n to n + 1\nsave n as "n"\nreturn n', triggers: ['generation.completed'] }]);
     await flushMicrotasks();
     const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
     const before = await new Promise(resolve => module.cores.subscribe('macros.value', { params: { name: 'ticker' } }, resolve));
 
     engine.events.emit('generation.completed');
-    await flushMicrotasks();
-    const after = await new Promise(resolve => module.cores.subscribe('macros.value', { params: { name: 'ticker' } }, resolve));
+    // Ждёт УСЛОВИЯ, а не фиксированного числа тиков (см. тот же приём в
+    // tracking-core.test.js's until()): триггер идёт через Директора
+    // (host.own.subscribe -> реальный вызов контракта macros.run), а не
+    // напрямую вызванным промисом, который можно было бы просто await'нуть.
+    let after;
+    for (let i = 0; i < 50; i++) {
+        after = await new Promise(resolve => module.cores.subscribe('macros.value', { params: { name: 'ticker' } }, resolve));
+        if (after.ok && Number(after.value) !== Number(before.value)) break;
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
 
     assert.equal(Number(after.value), Number(before.value) + 1);
 });
@@ -198,4 +211,111 @@ test('program config really persists via storage.settings — restorePrograms() 
     const restored = await secondInstance.restorePrograms();
 
     assert.deepEqual(restored, programConfig);
+});
+
+// --- Контракты на Шине ядер: без них ни один Ядро UI (панель макросов) не --
+// -- смог бы ни прочитать, ни сохранить список — configurePrograms()/
+// -- restorePrograms() были обычными JS-функциями, недостижимыми через Гейт.
+
+test('macros.programs lists the current set over the bus — a UI Ядро has no JS reference to reach it any other way', async () => {
+    const { engine, macrosCore } = buildEngine();
+    await macrosCore.configurePrograms([{ id: 'p1', macroName: 'greeting', kind: 'text', source: 'hi', triggers: [] }]);
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    const result = await new Promise(resolve => module.cores.subscribe('macros.programs', {}, resolve));
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value, [{ id: 'p1', macroName: 'greeting', kind: 'text', source: 'hi', triggers: [] }]);
+});
+
+test('macros.configure saves a new set over the bus, and it really registers the real {{macro}}', async () => {
+    const { engine, resolveStMacro } = buildEngine();
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    const result = await new Promise(resolve => module.cores.subscribe('macros.configure', { params: { programs: [{ id: 'p1', macroName: 'greeting', kind: 'text', source: 'hi there' }] } }, resolve));
+    await flushMicrotasks();
+
+    assert.equal(result.ok, true);
+    assert.equal(resolveStMacro('greeting'), 'hi there');
+});
+
+test('macros.test previews a DRAFT program (not necessarily saved) against real current values, without registering anything with real ST or touching the saved program set', async () => {
+    const { engine } = buildEngine();
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    const result = await new Promise(resolve => module.cores.subscribe('macros.test', { params: { program: { kind: 'code', source: 'return 2 + 3' } } }, resolve));
+    const programs = await new Promise(resolve => module.cores.subscribe('macros.programs', {}, resolve));
+
+    // run() всегда отдаёт строку (toDisplay()) — тот же формат, что уходит в
+    // настоящий {{macro}}, а не "числовой", когда получилось число.
+    assert.deepEqual(result, { ok: true, value: { ok: true, value: '5' } });
+    assert.deepEqual(programs.value, [], 'предпросмотр не сохраняет и не регистрирует ничего — только считает');
+});
+
+test('macros.test reports a syntax/runtime error without throwing through the envelope, so the UI can show it inline', async () => {
+    const { engine } = buildEngine();
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+
+    const result = await new Promise(resolve => module.cores.subscribe('macros.test', { params: { program: { kind: 'code', source: 'if true then\nreturn 1' } } }, resolve)); // missing "end"
+
+    assert.equal(result.ok, true, 'контракт сам не падает');
+    assert.equal(result.value.ok, false);
+    assert.match(result.value.error, /end/i);
+});
+
+test('a Module without the right to macros.configure/programs/test is refused before the Ядро is ever reached', async () => {
+    const { engine } = buildEngine();
+    const module = engine.registerCaller('module.untrusted', 'modules', { tier: 'community', allowedContracts: [] });
+
+    const programs = await new Promise(resolve => module.cores.subscribe('macros.programs', {}, resolve));
+    const configure = await new Promise(resolve => module.cores.subscribe('macros.configure', { params: { programs: [] } }, resolve));
+    const testRun = await new Promise(resolve => module.cores.subscribe('macros.test', { params: { program: { kind: 'text', source: 'x' } } }, resolve));
+
+    assert.equal(programs.ok, false);
+    assert.equal(configure.ok, false);
+    assert.equal(testRun.ok, false);
+});
+
+test('a program with enabled: false never registers a real {{macro}} at all — config kept, not deleted', async () => {
+    const { engine, macrosCore, resolveStMacro } = buildEngine();
+    await macrosCore.configurePrograms([{ id: 'p1', macroName: 'greeting', kind: 'text', source: 'hi', enabled: false }]);
+
+    assert.equal(resolveStMacro('greeting'), undefined);
+    const programs = await new Promise(resolve => engine.registerCaller('probe', 'cores', { tier: 'official' }).own.subscribe('macros.programs', {}, resolve));
+    assert.equal(programs.value.length, 1, 'конфигурация осталась — выключенный это не удалённый');
+});
+
+test('flipping enabled back to true re-registers the real {{macro}} — no need to re-create the program', async () => {
+    const { macrosCore, resolveStMacro } = buildEngine();
+    await macrosCore.configurePrograms([{ id: 'p1', macroName: 'greeting', kind: 'text', source: 'hi', enabled: false }]);
+    assert.equal(resolveStMacro('greeting'), undefined);
+
+    await macrosCore.configurePrograms([{ id: 'p1', macroName: 'greeting', kind: 'text', source: 'hi', enabled: true }]);
+
+    assert.equal(resolveStMacro('greeting'), 'hi');
+});
+
+// --- Триггеры — через Директора, паритет с Ядром трекинга -----------------
+
+test('a program with an "every N replies" trigger only re-runs on the Nth generation.completed, via the real Director — the same {event, every} shape Ядро трекинга uses', async () => {
+    const { engine, macrosCore } = buildEngine();
+    await macrosCore.configurePrograms([{ id: 'counter', macroName: 'counter', kind: 'code', source: 'set n to get "n"\nif n is "" then\nset n to 0\nend\nset n to n + 1\nsave n as "n"\nreturn n', triggers: [{ event: 'generation.completed', every: 3 }] }]);
+    await flushMicrotasks();
+    const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+    const initial = await new Promise(resolve => module.cores.subscribe('macros.value', { params: { name: 'counter' } }, resolve));
+
+    engine.events.emit('generation.completed');
+    engine.events.emit('generation.completed');
+    await flushMicrotasks();
+    const afterTwo = await new Promise(resolve => module.cores.subscribe('macros.value', { params: { name: 'counter' } }, resolve));
+    assert.equal(afterTwo.value, initial.value, 'первые два прогона Директор ещё не пропускает — считает только каждый третий');
+
+    engine.events.emit('generation.completed');
+    let afterThree;
+    for (let i = 0; i < 50; i++) {
+        afterThree = await new Promise(resolve => module.cores.subscribe('macros.value', { params: { name: 'counter' } }, resolve));
+        if (Number(afterThree.value) !== Number(initial.value)) break;
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    assert.equal(Number(afterThree.value), Number(initial.value) + 1);
 });
