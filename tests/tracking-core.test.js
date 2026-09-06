@@ -94,6 +94,37 @@ test('tracking.poll dispatches to the tracker\'s OWN pinned worker, parses the J
     assert.equal(calls[0].url, 'https://slow.example.com/chat/completions', 'must land on the pinned worker, not the other configured one');
 });
 
+test('a successful poll announces tracking.poll.started then tracking.poll.completed — the triad a footer badge\'s pulsing can key off, instead of guessing a message\'s role from the DOM', async () => {
+    const { engine, trackingCore } = buildEngine();
+    trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'slow', fields: [{ name: 'health', prompt: 'HP', default: 100 }] }]);
+    const seen = [];
+    engine.events.subscribe('tracking.poll.started', payload => seen.push(['started', payload]));
+    engine.events.subscribe('tracking.poll.completed', payload => seen.push(['completed', payload]));
+    engine.events.subscribe('tracking.poll.failed', payload => seen.push(['failed', payload]));
+
+    await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } });
+
+    assert.deepEqual(seen, [['started', { trackerId: 'char' }], ['completed', { trackerId: 'char' }]]);
+});
+
+test('a poll whose model reply is not valid JSON announces tracking.poll.failed, not completed', async () => {
+    const { engine, trackingCore } = buildEngine({ fetchReply: 'not json at all' });
+    trackingCore.configureTrackers([{ id: 'char', kind: 'user', workerId: 'slow', fields: [{ name: 'health', prompt: 'HP', default: 100 }] }]);
+    const seen = [];
+    engine.events.subscribe('tracking.poll.started', payload => seen.push(['started', payload]));
+    engine.events.subscribe('tracking.poll.completed', payload => seen.push(['completed', payload]));
+    engine.events.subscribe('tracking.poll.failed', payload => seen.push(['failed', payload]));
+
+    const result = await request(engine.buses.cores, 'tracking.poll', { params: { trackerId: 'char' } });
+
+    assert.equal(result.ok, false);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0][0], 'started');
+    assert.equal(seen[1][0], 'failed');
+    assert.equal(seen[1][1].trackerId, 'char');
+    assert.match(seen[1][1].message, /JSON object/);
+});
+
 test('a tracker with a systemPromptTemplate really sends TWO messages to the model — system with the instruction, user with the rest', async () => {
     const { engine, calls, trackingCore } = buildEngine();
     trackingCore.configureTrackers([{

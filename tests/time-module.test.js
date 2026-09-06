@@ -444,35 +444,59 @@ function badgeValue(node) {
     return typeof source === 'function' ? source() : source;
 }
 
-test('the badge declines a USER message outright — time is worked out from the reply, not from the line before it', async () => {
+test('a badge appears only where there is a recorded value or a poll is actually pending for THAT mesid — role (user/system/ToolCall) plays no part in the decision', async () => {
     const { module, claims } = buildEngine();
     await module.load();
     const build = claims[0].node;
 
+    // Ничего не насчитано, опрос не идёт — неважно, какая у сообщения роль,
+    // бейджа нет ни у кого, включая настоящий ответ.
     assert.equal(build({ mesid: '4', isUser: true, live: true }), null);
     assert.equal(build({ mesid: '4', isSystem: true, live: true }), null);
-    assert.ok(build({ mesid: '4', isUser: false, live: true }), 'а под ответом бейдж есть');
+    assert.equal(build({ mesid: '4', isToolCall: true, live: true }), null);
+    assert.equal(build({ mesid: '4', isUser: false, live: true }), null, 'настоящий ответ без записи и без идущего опроса — тоже ничего');
+
+    // А раз для mesid есть запись — бейдж покажется, и роль сообщения на это
+    // не влияет вовсе (механизм её даже не читает).
+    module.badges.set({ 4: '11:40 (Morning)' });
+    assert.ok(build({ mesid: '4', isUser: true, live: true }), 'решает факт записи, не роль');
 });
 
-test('a ToolCall message gets NOTHING at all, not even an empty pulsing badge — it is a draft on the way, never the message advance() will actually write to', async () => {
-    const { module, claims } = buildEngine();
-    await module.load();
-    const build = claims[0].node;
-
-    assert.equal(build({ mesid: '4', isUser: false, isToolCall: true, live: true }), null);
-});
-
-test('a message with no reading yet shows BLANK — that is the pulsing "still working it out", not a stale time', async () => {
-    const { module, claims } = buildEngine();
+test('while advance() is actually polling, the message it targets shows a BLANK pulsing badge, and nothing else does — pulsing is tied to the fact of the poll (tracking.poll.started/completed), not to DOM role', async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const { module, claims, live } = buildEngine({ gate });
     await module.load();
     module.applyPreset('clock-only');
     const build = claims[0].node;
+    live.mesid = '4';
 
-    // Предыдущее сообщение уже посчитано, новое — ещё нет.
-    module.badges.set({ 3: '08:00 (Morning)' });
+    const running = module.advance();
+    // Дать tracking.poll.started долететь до подписки Модуля — сама подписка
+    // асинхронно спрашивает currentMesid() внутри обработчика.
+    await new Promise(resolve => setTimeout(resolve, 0));
 
-    assert.equal(badgeValue(build({ mesid: '3', isUser: false, live: false })), '08:00 (Morning)');
-    assert.equal(badgeValue(build({ mesid: '4', isUser: false, live: true })), '', 'новое сообщение ждёт своего времени');
+    const pulsing = build({ mesid: '4', isUser: false, live: true });
+    assert.ok(pulsing, 'сообщение, под которым идёт опрос, получает бейдж');
+    assert.equal(badgeValue(pulsing), '', 'но пока пустой — опрос ещё не закончился');
+    assert.equal(build({ mesid: '5', isUser: false, isToolCall: true, live: false }), null, 'соседний ToolCall-черновик — ничего, опрос не под ним');
+    assert.equal(build({ mesid: '0', isUser: true, live: false }), null, 'реплика пользователя — тоже ничего');
+
+    release();
+    await running;
+
+    assert.equal(badgeValue(build({ mesid: '4', isUser: false, live: true })), '11:40 (Morning)', 'опрос закончился — настоящее значение');
+});
+
+test('a FAILED poll clears the pulsing entirely — no badge left stuck forever, the error already went out as a toast', async () => {
+    const { module, claims, live } = buildEngine({ fail: true });
+    await module.load();
+    const build = claims[0].node;
+    live.mesid = '4';
+
+    assert.equal(await module.advance(), null);
+
+    assert.equal(build({ mesid: '4', isUser: false, live: true }), null, 'провалившийся опрос не оставляет вечно пустой пульсации');
 });
 
 test('advancing marks the message it was LIVE under, and leaves the ones before it alone', async () => {
