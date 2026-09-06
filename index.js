@@ -80,7 +80,12 @@ async function init() {
     // Обновление запускается РАНЬШЕ интерфейса: если мы отстали, страница всё
     // равно перезагрузится, и строить панель дважды незачем. Ход молчит, когда
     // сказать нечего — не git-установка, нет сети, уже свежее.
-    selfUpdate.run().catch(error => console.warn('[ST Module Engine (Beta)] Self-update skipped:', error));
+    // Итог хода печатается ВСЕГДА. «Молчит, когда сказать нечего» задумывалось
+    // против шума в интерфейсе, а не против диагностики: без строчки в консоли
+    // отличить работающее самообновление от сломанного было нечем.
+    selfUpdate.run()
+        .then(result => console.info('[ST Module Engine (Beta)] Self-update:', result?.outcome ?? 'no result', result?.reason ?? result?.error ?? ''))
+        .catch(error => console.warn('[ST Module Engine (Beta)] Self-update skipped:', error));
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
     if (!target) throw new Error('SillyTavern extensions settings container was not found.');

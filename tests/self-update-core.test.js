@@ -76,8 +76,11 @@ function buildEngine({ discover, version, update, remoteSha = SHA_LOCAL, session
         const body = JSON.parse(init.body);
         if (url.endsWith('/version')) {
             calls.version.push(body);
-            if (!version) return { ok: false, status: 404, json: async () => ({}) };
-            return { ok: true, status: 200, json: async () => version };
+            // Функция — чтобы ответ мог ЗАВИСЕТЬ от того, про какую установку спросили:
+            // у настоящей ST это две РАЗНЫЕ папки, и промах — это 404.
+            const answer = typeof version === 'function' ? version(body) : version;
+            if (!answer) return { ok: false, status: 404, json: async () => ({}) };
+            return { ok: true, status: 200, json: async () => answer };
         }
         calls.update.push(body);
         if (!update) return { ok: false, status: 500, json: async () => ({}) };
@@ -279,4 +282,30 @@ test('the ST extensions Сервис calls fetch WITH a receiver — an unbound 
     } finally {
         globalThis.fetch = original;
     }
+});
+
+test('a wrong guess about the install type is CORRECTED by a second try, not left as a silent 404', async () => {
+    // `/discover` недоступен → «не общая». Но расширение лежит именно в общей
+    // папке: без второй попытки это был бы 404 и полное молчание — та самая
+    // болезнь Alpha, только зашедшая с другой стороны.
+    const { core, calls } = buildEngine({
+        discover: null,
+        version: body => (body.global ? { isUpToDate: true, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Stable' } : null),
+    });
+
+    const status = await core.check();
+
+    assert.equal(status.checked, true);
+    assert.equal(status.global, true, 'вторая попытка нашла общую установку');
+    assert.deepEqual(calls.version.map(entry => Boolean(entry.global)), [false, true], 'сначала догадка, потом другой вариант');
+});
+
+test('when BOTH tries fail the reason survives all the way out — "unavailable" alone is undebuggable', async () => {
+    const { core } = buildEngine({ discover: null, version: null });
+
+    const outcome = await core.run({ force: true });
+
+    assert.equal(outcome.outcome, 'unavailable');
+    assert.match(outcome.reason, /per-user lookup/);
+    assert.match(outcome.reason, /global lookup/);
 });

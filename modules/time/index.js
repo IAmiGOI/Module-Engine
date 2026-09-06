@@ -38,6 +38,8 @@ const SETTINGS_NAMESPACE = MODULE_ID;
 const TRACKER_ID = 'rp-time';
 const MEMORY_NAMESPACE = MODULE_ID;
 const TIMELINE_KEY = 'timeline';
+/** Отметка ПОД КАЖДЫМ сообщением: `{ [mesid]: 'Day 1, 08:00' }`. Тоже память чата — бейджи обязаны пережить перезагрузку страницы. */
+const BADGES_KEY = 'badges';
 /** Сколько прошлых отметок показывать модели. Одной мало (нет темпа), десяток — уже шум и лишние токены. */
 const MAX_TIMELINE = 5;
 
@@ -144,6 +146,17 @@ export function createTimeModule(host) {
     const label = signal('');
     const history = signal([]);
     const busy = signal(false);
+    // Отметка каждого сообщения отдельно. Один общий сигнал на весь чат
+    // означал бы одно время под всеми сообщениями сразу: обновили — переписали
+    // историю. А ещё именно отсюда берётся честное «ещё не посчитано» у нового
+    // сообщения: записи просто нет, и бейдж пульсирует пустым.
+    const badges = signal({});
+    // Под каким сообщением рисуется живой бейдж. Узнаём это от Ядра подвала,
+    // когда оно зовёт нашу фабрику, — своего доступа к чату у Модуля нет и не
+    // должно быть.
+    let liveMesid = null;
+    // Сообщение, которое ПОХОЖЕ на реролл: свайп был, генерация ещё нет.
+    let pendingSwipe = null;
 
     async function call(contract, params) {
         return request(host.cores, contract, { params });
@@ -158,6 +171,21 @@ export function createTimeModule(host) {
     async function loadHistory() {
         const result = await call('storage.chatMemory.get', { namespace: MEMORY_NAMESPACE, key: TIMELINE_KEY, fallback: [] });
         history.set(result.ok ? result.value ?? [] : []);
+        const marks = await call('storage.chatMemory.get', { namespace: MEMORY_NAMESPACE, key: BADGES_KEY, fallback: {} });
+        badges.set(marks.ok ? marks.value ?? {} : {});
+    }
+
+    async function saveBadges(next) {
+        badges.set(next);
+        await call('storage.chatMemory.set', { namespace: MEMORY_NAMESPACE, key: BADGES_KEY, value: next });
+    }
+
+    /** Отметка под конкретным сообщением. `null` стирает — так реролл возвращает бейдж в пустое пульсирующее ожидание. */
+    async function markMessage(mesid, value) {
+        if (mesid === null || mesid === undefined) return;
+        const next = { ...badges.peek() };
+        if (value) next[mesid] = value; else delete next[mesid];
+        await saveBadges(next);
     }
 
     async function rememberLabel(next) {
@@ -218,7 +246,10 @@ export function createTimeModule(host) {
         // Показание гасится НА ВРЕМЯ опроса: пока идёт новый шаг, старое время
         // уже неверно, и держать его на экране — врать пользователю. Пустое
         // значение переводит карточку в пульсирующее ожидание (см. StatBlock).
+        // Бейджа под сообщением это НЕ касается: у каждого своя отметка, и
+        // прошлые остаются такими, какими были.
         label.set('');
+        const target = liveMesid;
         try {
             const result = await call('tracking.poll', {
                 trackerId: TRACKER_ID,
@@ -235,6 +266,7 @@ export function createTimeModule(host) {
             const next = buildTimeLabel(result.value ?? [], displayTemplate.peek());
             label.set(next);
             await rememberLabel(next);
+            await markMessage(target, next);
             return next;
         } finally {
             busy.set(false);
@@ -244,6 +276,7 @@ export function createTimeModule(host) {
     async function reset() {
         history.set([]);
         label.set('');
+        await saveBadges({});
         await call('storage.chatMemory.set', { namespace: MEMORY_NAMESPACE, key: TIMELINE_KEY, value: [] });
         await call('tracking.reset', { trackerId: TRACKER_ID });
         await notify('ok', 'RP time cleared for this chat');
@@ -260,14 +293,27 @@ export function createTimeModule(host) {
     // --- Отрисовка -----------------------------------------------------------
 
     /** Виджет в полосе под сообщением — ровно то, чем в Alpha был бейдж времени. */
-    function footerWidget() {
-        // Здесь — ПОСЛЕДНЯЯ ИЗВЕСТНАЯ отметка, а не `label`. Разница
-        // принципиальная: `label` намеренно гаснет на время опроса (карточка в
-        // панели должна пульсировать, а не врать старым временем), а бейдж под
-        // сообщением — запись в летописи. Ядро подвала замораживает его, как
-        // только приходит следующее сообщение, и заморозить пустоту значило бы
-        // навсегда оставить под сообщением пульсирующий прочерк.
-        return StatBlock('Current RP time', () => history().at(-1) ?? '', { icon: '◷' });
+    function footerWidget(message) {
+        // Реплика пользователя — не момент игрового времени: время считается
+        // ПО ответу. Отказ возвращается Ядру подвала как `null`, и подвала под
+        // таким сообщением не заводится вовсе. Раньше бейдж успевал прыгнуть в
+        // сообщение пользователя и остаться там вторым.
+        if (message.isUser || message.isSystem) return null;
+        // Своё значение у каждого сообщения. Записи ещё нет — StatBlock сам
+        // покажет пустоту и будет пульсировать рамкой: именно это и означает
+        // «время для этого ответа ещё считается».
+        return StatBlock('Current RP time', () => badges()[message.mesid] ?? '', { icon: '◷' });
+    }
+
+    /**
+     * Фабрика для Ядра подвала. Заодно запоминаем, под каким сообщением сейчас
+     * живой бейдж: `advance()` пишет отметку именно туда, а своего доступа к
+     * чату у Модуля нет.
+     */
+    function footerFactory(message) {
+        const node = footerWidget(message);
+        if (node && message.live) liveMesid = message.mesid;
+        return node;
     }
 
     function tree() {
@@ -321,6 +367,20 @@ export function createTimeModule(host) {
         // Время идёт ПОСЛЕ ответа: раньше него шага ещё не случилось. Ровно тот
         // же момент, на котором это делала Alpha.
         host.events.subscribe('generation.completed', () => { advance(); }),
+        // Реролл: ответ будет переписан заново, значит и время для него —
+        // другое. Но `MESSAGE_SWIPED` у ST шлётся и при ПРОСТОМ пролистывании
+        // уже готовых вариантов (проверено по script.js: событие идёт до
+        // ветки `if (run_generate)`), а там переписывать нечего. Поэтому здесь
+        // только запоминаем кандидата, а стираем — когда генерация
+        // действительно началась. Иначе листание свайпов оставляло бы бейдж
+        // пустым и пульсирующим навсегда.
+        host.events.subscribe('st.messageSwiped', () => { pendingSwipe = liveMesid; }),
+        host.events.subscribe('generation.beforeSend', () => {
+            if (pendingSwipe === null) return;
+            const target = pendingSwipe;
+            pendingSwipe = null;
+            markMessage(target, null);
+        }),
         // Другой чат — другое время. Шкалу перечитываем, а не тащим с собой.
         host.events.subscribe('st.chatChanged', () => { loadHistory().then(() => label.set(history.peek().at(-1) ?? '')); }),
     ];
@@ -345,7 +405,7 @@ export function createTimeModule(host) {
         const listed = await call('tracking.trackers');
         const others = (listed.ok ? listed.value ?? [] : []).filter(tracker => tracker.id !== TRACKER_ID);
         await call('tracking.configure', { trackers: [...others, trackerConfig()] });
-        await call('ui.messageFooter.claim', { slot: 'left', ownerId: MODULE_ID, node: footerWidget() });
+        await call('ui.messageFooter.claim', { slot: 'left', ownerId: MODULE_ID, node: footerFactory });
     }
 
     return {
@@ -360,6 +420,7 @@ export function createTimeModule(host) {
         applyPreset,
         label,
         history,
+        badges,
         fields,
         startTime,
         displayTemplate,

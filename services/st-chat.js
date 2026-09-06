@@ -49,6 +49,18 @@ export function registerStChatService(bus, { getContext } = {}) {
         bus.register('stChat.container', () => document.getElementById('chat'), { loadMetric: () => 0 }),
         /** Идентификаторы всех сообщений, что сейчас в DOM. */
         bus.register('stChat.renderedIds', () => [...document.querySelectorAll('#chat .mes[mesid]')].map(node => node.getAttribute('mesid')), { loadMetric: () => 0 }),
+        /**
+         * То же, но с ролью каждого сообщения. Нужно тому, кто рисует что-то
+         * ПОД сообщением: бейджу времени нечего делать под репликой
+         * пользователя, а по одному `mesid` роль не узнать. Атрибуты `is_user`
+         * и `is_system` — строки `"true"`/`"false"` (проверено по разметке ST
+         * 1.16.0), наружу отдаём нормальные булевы, как и `stChat.messages`.
+         */
+        bus.register('stChat.rendered', () => [...document.querySelectorAll('#chat .mes[mesid]')].map(node => ({
+            mesid: node.getAttribute('mesid'),
+            isUser: node.getAttribute('is_user') === 'true',
+            isSystem: node.getAttribute('is_system') === 'true',
+        })), { loadMetric: () => 0 }),
         bus.register('stChat.length', () => (Array.isArray(getContext()?.chat) ? getContext().chat.length : 0), { loadMetric: () => 0 }),
     ];
 

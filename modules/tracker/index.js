@@ -485,6 +485,13 @@ export function createTrackerModule(host) {
             const record = trackers.peek().find(item => item.id.peek().trim() === trackerId);
             if (record) refreshValues(record);
         }),
+        // Набор трекеров поменял КТО-ТО ДРУГОЙ — перечитываем. Без этого список
+        // зависел от порядка загрузки Модулей: свой набор мы читаем при
+        // загрузке, а Модуль времени заводит свой трекер позже, и его «RP Time»
+        // либо не отфильтровывался, либо не появлялся вовсе — смотря кто успел
+        // первым. Собственное сохранение при этом пропускаем: перечитывать себя
+        // же посреди правки значило бы затирать несохранённые поля формы.
+        host.events.subscribe('tracking.trackersChanged', payload => { if (payload?.by !== MODULE_ID) load(); }),
     ];
 
     /**
