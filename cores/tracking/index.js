@@ -248,42 +248,60 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         return result.ok ? result.value ?? [] : [];
     }
 
+    /**
+     * `tracking.poll.started`/`.completed`/`.failed` — триада по критерию из
+     * ARCHITECTURE.md: реальный сетевой запрос к модели, неопределённая
+     * длительность, честно может провалиться. Построена не ради галочки —
+     * это ровно то, чего не хватало «RP Time», чтобы пульсация бейджа под
+     * сообщением зависела от ФАКТА идущего опроса, а не от угадывания роли
+     * сообщения по DOM (там и жил баг с ToolCall — см. doc-comment
+     * [modules/time/index.js](../../modules/time/index.js)). Генерический
+     * контракт — любой трекер (не только специализированный Модуль) получает
+     * эту наблюдаемость бесплатно.
+     */
     async function poll(trackerId, vars = {}) {
         const tracker = requireTracker(trackerId);
-        const fields = listFields(trackerId);
-        const messages = await readContext(tracker);
-        const prompt = buildTrackerPrompt(tracker, fields, messages, vars);
-        const systemPrompt = buildTrackerSystemPrompt(tracker, fields, messages, vars);
-        const result = await request(host.own, 'model.generate', {
-            params: {
-                prompt, systemPrompt, workerId: tracker.workerId,
-                // Пресет сэмплера/ризонинга — свойство ЭТОГО трекера, а не
-                // воркера, который его исполнит: один и тот же воркер вправе
-                // нести и точный трекинг, и творческую генерацию одновременно,
-                // и им нужны разные настройки — «выбирается индивидуально под
-                // каждый запрос», не привязкой к модели. Поля не заданы —
-                // `resolveGenerateRequest()` тихо возьмёт дефолт воркера/
-                // движка, как и раньше; заданы — явный параметр запроса
-                // побеждает (тот же механизм, что уже держит пиннинг воркера).
-                temperature: tracker.temperature, topP: tracker.topP, topK: tracker.topK, maxTokens: tracker.maxTokens,
-                reasoningMode: tracker.reasoningMode, reasoningEffort: tracker.reasoningEffort, reasoningBudget: tracker.reasoningBudget,
-            },
-        });
-        if (!result.ok) throw new Error(result.error.message);
-        const parsed = parseModelJson(result.value);
-        if (!parsed || typeof parsed !== 'object') throw new Error(`tracking.poll: tracker "${trackerId}"'s model reply was not a JSON object.`);
-        let changed = false;
-        for (const field of tracker.fields ?? []) {
-            if (Object.prototype.hasOwnProperty.call(parsed, field.name)) { setField(trackerId, field.name, parsed[field.name]); changed = true; }
+        publishEvent('tracking.poll.started', { trackerId });
+        try {
+            const fields = listFields(trackerId);
+            const messages = await readContext(tracker);
+            const prompt = buildTrackerPrompt(tracker, fields, messages, vars);
+            const systemPrompt = buildTrackerSystemPrompt(tracker, fields, messages, vars);
+            const result = await request(host.own, 'model.generate', {
+                params: {
+                    prompt, systemPrompt, workerId: tracker.workerId,
+                    // Пресет сэмплера/ризонинга — свойство ЭТОГО трекера, а не
+                    // воркера, который его исполнит: один и тот же воркер вправе
+                    // нести и точный трекинг, и творческую генерацию одновременно,
+                    // и им нужны разные настройки — «выбирается индивидуально под
+                    // каждый запрос», не привязкой к модели. Поля не заданы —
+                    // `resolveGenerateRequest()` тихо возьмёт дефолт воркера/
+                    // движка, как и раньше; заданы — явный параметр запроса
+                    // побеждает (тот же механизм, что уже держит пиннинг воркера).
+                    temperature: tracker.temperature, topP: tracker.topP, topK: tracker.topK, maxTokens: tracker.maxTokens,
+                    reasoningMode: tracker.reasoningMode, reasoningEffort: tracker.reasoningEffort, reasoningBudget: tracker.reasoningBudget,
+                },
+            });
+            if (!result.ok) throw new Error(result.error.message);
+            const parsed = parseModelJson(result.value);
+            if (!parsed || typeof parsed !== 'object') throw new Error(`tracking.poll: tracker "${trackerId}"'s model reply was not a JSON object.`);
+            let changed = false;
+            for (const field of tracker.fields ?? []) {
+                if (Object.prototype.hasOwnProperty.call(parsed, field.name)) { setField(trackerId, field.name, parsed[field.name]); changed = true; }
+            }
+            // Одним запросом на весь опрос, а не по одному на поле — `setField()`
+            // уже обновил кэш и объявил событие для каждого, здесь только
+            // персистентность в `storage.chatMemory`.
+            if (changed) {
+                await saveChatValues();
+                await annotateMessage(trackerId, messages);
+            }
+            publishEvent('tracking.poll.completed', { trackerId });
+            return listFields(trackerId);
+        } catch (error) {
+            publishEvent('tracking.poll.failed', { trackerId, message: error.message });
+            throw error;
         }
-        // Одним запросом на весь опрос, а не по одному на поле — `setField()`
-        // уже обновил кэш и объявил событие для каждого, здесь только
-        // персистентность в `storage.chatMemory`.
-        if (changed) {
-            await saveChatValues();
-            await annotateMessage(trackerId, messages);
-        }
-        return listFields(trackerId);
     }
 
     /**
