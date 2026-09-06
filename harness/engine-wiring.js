@@ -32,6 +32,7 @@ import { createMessageFooterCore } from '../cores/ui/message-footer.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createTrackerModule, MODULE_ID as TRACKER_MODULE_ID } from '../modules/tracker/index.js';
 import { createTimeModule, MODULE_ID as TIME_MODULE_ID } from '../modules/time/index.js';
+import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../modules/notebook/index.js';
 
 /**
  * Реестр Модулей — временная замена настоящему Раннеру (ARCHITECTURE.md,
@@ -72,6 +73,23 @@ const DEFINITIONS = [{
         ],
     },
     create: host => createTimeModule(host),
+}, {
+    id: NOTEBOOK_MODULE_ID,
+    title: 'Notebook',
+    description: 'A private notebook the AI can write to and read back — working memory for plans, secrets and goals.',
+    rights: {
+        tier: 'community',
+        allowedContracts: [
+            'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
+            'generation.registerTool', 'generation.unregisterTool',
+            // Этап на `generation.beforeSend` исполняется под ЕГО правами
+            // (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
+            // и снимает этап сам Модуль, отсюда — эти два права.
+            'pipeline.stages.add', 'pipeline.stages.remove',
+            'ui.notify',
+        ],
+    },
+    create: host => createNotebookModule(host),
 }];
 
 /** Где реестр помнит, что было включено. Неймспейс Раннера, а не Модуля: это состояние ЗАПУСКА, а не настройка кого-то из них. */

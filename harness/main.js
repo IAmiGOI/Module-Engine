@@ -48,6 +48,13 @@ const stContext = {
     saveMetadataDebounced: () => saveJson('stmeBetaHarness.chatMetadata', stContext.chatMetadata),
     saveSettingsDebounced: () => saveJson('stmeBetaHarness.extensionSettings', stContext.extensionSettings),
     macros: { register: () => {}, registry: { unregisterMacro: () => {} } },
+    // Настоящая ST держит инструменты по имени, и умеет позвать action()
+    // напрямую — тем же путём, каким это в итоге делает сама модель. Без
+    // этой пары харнесс не мог бы проверить ни один Модуль, заводящий
+    // настоящий инструмент (Notebook — первый такой).
+    functionTools: new Map(),
+    registerFunctionTool(definition) { stContext.functionTools.set(definition.name, definition); },
+    unregisterFunctionTool(name) { stContext.functionTools.delete(name); },
     eventTypes: ST_EVENT_TYPES,
     eventSource: {
         on: (name, handler) => stListeners.set(name, [...(stListeners.get(name) ?? []), handler]),
@@ -130,7 +137,13 @@ const { engine } = wired;
 // Только для харнесса: с консоли удобно зарегистрировать этап и посмотреть,
 // что реально ушло «провайдеру». В реальном ST наружу выставляется сам движок
 // (см. ../index.js), а не эта отладочная обвязка.
-window.stmeBetaHarness = { ...wired, interceptTarget, backendCalls };
+// `invokeTool(name, args)` — тот же вызов, который в реальной ST делает
+// сама модель, доступный из консоли для проверки любого зарегистрированного
+// инструмента без настоящей LLM под рукой.
+window.stmeBetaHarness = {
+    ...wired, interceptTarget, backendCalls,
+    invokeTool: (name, args) => stContext.functionTools.get(name)?.action(args),
+};
 
 // Настоящий экран движка — тот же, что монтируется внутри реального ST.
 // Смонтирован уже сборщиком (реестру Модулей нужно уметь дождаться его
