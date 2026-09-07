@@ -1820,6 +1820,21 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // См. комментарий в checkAndPlace() — то же самое: attachToRegionByKey()
                 // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
                 await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
+                // Реальный баг, найден живьём (жалоба пользователя): обычный
+                // `set()` лишь СБРАСЫВАЕТ и заново взводит ST-шный debounce
+                // (`saveMetadataDebounced()`, реальный `debounce_timeout.relaxed`
+                // = 1000ms — проверено по настоящему исходнику ST,
+                // `public/scripts/extensions.js`) — перезагрузка страницы в
+                // течение секунды ПОСЛЕ бутстрапа (типичный момент, он ведь
+                // ТОЛЬКО что достроился) теряла весь только что построенный
+                // граф молча: `bootstrapIfEmpty()` на следующей загрузке видел
+                // пустые `nodes` и достраивал ВСЁ заново, воспринималось как
+                // "старый граф не подгружается". Явный `flush()` (см.
+                // `storage.chatMemory.flush`/`chatMetadata.flush`) форсирует
+                // настоящее сохранение ПРЯМО СЕЙЧАС, до публикации события
+                // успеха — к моменту, когда пользователь видит 100%/успех,
+                // данные уже реально на диске, не только в памяти вкладки.
+                await call('storage.chatMemory.flush');
                 publishEvent('memoryGraph.bootstrapped', { source: 'lorebook', nodeCount: Object.keys(nodes).length });
                 succeeded = true;
                 return true;

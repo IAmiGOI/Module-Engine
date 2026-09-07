@@ -100,7 +100,23 @@ export function createChatMemoryCore(host) {
         return listNamespacedKeys(await readRaw(), namespace);
     });
 
+    /**
+     * Форсирует немедленное, настоящее сохранение поверх обычного `set()` —
+     * найдено живьём (жалоба пользователя): `set()` (и, соответственно,
+     * `context.saveMetadataDebounced()` за ним, см. `services/chat-metadata.js`'s
+     * doc-comment на `flush()`) откладывает реальную запись на секунду;
+     * перезагрузка страницы раньше теряет данные молча. Прогоняется ЧЕРЕЗ
+     * ту же очередь `enqueue()`, что и `set()`/`remove()` — гарантирует, что
+     * флашится состояние ПОСЛЕ всех уже поставленных в очередь записей, а
+     * не что-то посреди ещё не выполнившегося read-modify-write.
+     */
+    const unregisterFlush = host.own.register('storage.chatMemory.flush', () => enqueue(async () => {
+        const result = await request(host.services, 'chatMetadata.flush', {});
+        if (!result.ok) throw new Error(result.error.message);
+        return true;
+    }));
+
     return {
-        unregister: () => { unregisterGet(); unregisterSet(); unregisterRemove(); unregisterKeys(); },
+        unregister: () => { unregisterGet(); unregisterSet(); unregisterRemove(); unregisterKeys(); unregisterFlush(); },
     };
 }
