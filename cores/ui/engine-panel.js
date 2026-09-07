@@ -109,13 +109,14 @@ function fromMacroRecord(record) {
  * править эндпоинты и ключи в обход Шины было бы ровно тем случаем, ради
  * которого Гейты и существуют.
  */
-export function createEnginePanelCore(host, { mount, listContracts, modules: moduleRegistry } = {}) {
+export function createEnginePanelCore(host, { mount, listContracts, modules: moduleRegistry, openMemoryGraphPanel } = {}) {
     // Что свёрнуто — помнится между сеансами. По умолчанию свёрнуто всё.
     const collapse = createCollapseState(host.own, { namespace: 'core.ui.panel' });
     const workers = signal([]);
     const macros = signal([]);
     const lorebookEntries = signal([]);
     const lorebookBooks = signal([]);
+    const memoryGraphNodeCount = signal(0);
     const summaries = signal([]);
     const summaryLevels = signal([]);
     const summaryProtectedWindow = signal(20);
@@ -630,6 +631,12 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         summaries.set((result.ok ? result.value ?? [] : []).map(toSummaryRecord));
     }
 
+    /** Только счётчик — сам граф рисует и правит `cores/ui/memory-graph-panel.js`'s отдельное окно, эта карточка лишь открывает его. */
+    async function loadMemoryGraphCount() {
+        const result = await call('memoryGraph.nodes');
+        if (result.ok) memoryGraphNodeCount.set(result.value.length);
+    }
+
     async function loadSummarySettings() {
         const result = await call('summary.settings');
         if (!result.ok || !result.value) return;
@@ -794,6 +801,18 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         await notify('ok', 'Engine is up to date');
     }
 
+    /**
+     * Только вход в отдельное floating-окно (`cores/ui/memory-graph-panel.js`,
+     * решено с пользователем: "полноценный UI... окно, а не узкая секция") —
+     * счётчик узлов и кнопка, сам граф эта карточка не рисует вообще.
+     */
+    function memoryGraphCard() {
+        return Card('Memory Graph', { ...collapse.bind('card:memoryGraph'), subtitle: computed(() => `${memoryGraphNodeCount()} node${memoryGraphNodeCount() === 1 ? '' : 's'}`) },
+            h('p', { class: 'stme-summary-help' }, 'Long-term memory as a mind-map — facts as nodes, typed edges between them, retrieved by relevance instead of recency.'),
+            Row(Button('Open Graph Editor', () => openMemoryGraphPanel?.())),
+        );
+    }
+
     function updatesCard() {
         return Card('Updates', {
             ...collapse.bind('card:updates'),
@@ -863,7 +882,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     function tree() {
         return h('div', { class: 'stme-panel' },
             TwoColumn({
-                left: [statusCard(), modelsCard(), macrosCard(), lorebookCard(), summaryCard(), updatesCard()],
+                left: [statusCard(), modelsCard(), macrosCard(), lorebookCard(), summaryCard(), memoryGraphCard(), updatesCard()],
                 right: [modulesCard()],
             }),
         );
@@ -891,6 +910,18 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
             // держит порог) — панель узнаёт о новых/пропавших саммари тем же
             // событием, без ручного Rescan.
             host.events.subscribe('summary.folded', () => loadSummaries()),
+            ...[
+                'memoryGraph.nodeCreated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeEvicted',
+                'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
+            ].map(event => host.events.subscribe(event, () => loadMemoryGraphCount())),
+            // Тот же автоматический фолд может и упасть (провайдер ответил,
+            // но `chatHistory.hide` или следующий батж каскада — нет) — в
+            // отличие от ручного «Fold now» (`forceSummaryFold()` ниже,
+            // который сам получает `result.error.message`), у автоматического
+            // пути нет своего вызывающего, который увидел бы отказ: сообщение
+            // просто не сворачивалось молча. Без этого тоста пользователь не
+            // видел вообще НИЧЕГО — ни успеха, ни ошибки.
+            host.events.subscribe('summary.foldFailed', payload => notify('error', `Summary fold failed: ${payload?.message ?? 'unknown error'}`)),
         ];
     }
 
@@ -904,6 +935,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         await loadLorebook();
         await loadSummarySettings();
         await loadSummaries();
+        await loadMemoryGraphCount();
         // Список контрактов приходит от сборщика движка: своя шина доступна
         // через host.own, а шины сервисов и сети — нет (у Ядра туда только
         // Гейт-аксессор, и это правильно). Так что «что вообще подключено»

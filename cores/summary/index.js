@@ -205,52 +205,77 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
      * сообщения; каждый следующий уровень — уже готовые тексты уровня ниже,
      * поэтому цена каскада не растёт с глубиной истории.
      */
+    /**
+     * `summary.folded` уходит СРАЗУ после каждого сохранённого батча, не
+     * только один раз в конце всей функции — раньше был именно так, и это
+     * пряталось за тем же наблюдением, что уже отражено в комментарии ниже
+     * про построчное `saveSummaries()`: упади батч ПОСЛЕ хотя бы одного
+     * удачного (второй уровень, второй проход уровня 1 — что угодно дальше
+     * по цепочке), исключение уходит из `checkAndFold()` до строки с
+     * `publishEvent`, и УЖЕ СОХРАНЁННЫЙ на диск батч остаётся невидим
+     * панели — `cores/ui/engine-panel.js` перечитывает список ТОЛЬКО по
+     * этому событию (см. его doc-comment на `summary.folded`), а не при
+     * каждом открытии. Данные не терялись (это уже проверяет отдельный
+     * тест), терялось только уведомление панели о том, что они появились.
+     */
     async function checkAndFold() {
-        return enqueueWrite(async () => {
-            let list = [...summaries];
-            let changed = false;
+        try {
+            return await enqueueWrite(async () => {
+                let list = [...summaries];
 
-            // Сохраняем ПОСЛЕ КАЖДОГО удачного фолда, а не одним разом в конце:
-            // `foldRawUnits()` уже скрыло реальные сообщения через `chatHistory.hide`
-            // до того, как эта функция вообще узнаёт, удался ли фолд — и упади
-            // следующий батч в цепочке (например, второй уровень или второй
-            // проход уровня 1), запись «в один присест» потеряла бы уже
-            // состоявшийся, необратимый фолд: сообщения скрыты, а саммари для
-            // них — нет. Обнаружено живой проверкой в браузере (сеть реально
-            // упала на втором вызове модели), не придумано заранее.
-            const level1 = settings.levels[0];
-            if (level1) {
-                const fetched = await call('chatHistory.messages', { limit: settings.protectedWindow + level1.batchSize + FETCH_MARGIN });
-                const messages = fetched.ok ? fetched.value ?? [] : [];
-                const units = groupIntoUnits(messages);
-                while (shouldFold(units.length, settings.protectedWindow, level1.batchSize)) {
-                    const batch = units.splice(0, level1.batchSize);
-                    const record = await foldRawUnits(batch);
-                    list = [...list, record];
-                    changed = true;
-                    await saveSummaries(list);
+                // Сохраняем ПОСЛЕ КАЖДОГО удачного фолда, а не одним разом в конце:
+                // `foldRawUnits()` уже скрыло реальные сообщения через `chatHistory.hide`
+                // до того, как эта функция вообще узнаёт, удался ли фолд — и упади
+                // следующий батч в цепочке (например, второй уровень или второй
+                // проход уровня 1), запись «в один присест» потеряла бы уже
+                // состоявшийся, необратимый фолд: сообщения скрыты, а саммари для
+                // них — нет. Обнаружено живой проверкой в браузере (сеть реально
+                // упала на втором вызове модели), не придумано заранее.
+                const level1 = settings.levels[0];
+                if (level1) {
+                    const fetched = await call('chatHistory.messages', { limit: settings.protectedWindow + level1.batchSize + FETCH_MARGIN });
+                    const messages = fetched.ok ? fetched.value ?? [] : [];
+                    const units = groupIntoUnits(messages);
+                    while (shouldFold(units.length, settings.protectedWindow, level1.batchSize)) {
+                        const batch = units.splice(0, level1.batchSize);
+                        const record = await foldRawUnits(batch);
+                        list = [...list, record];
+                        await saveSummaries(list);
+                        publishEvent('summary.folded', { count: list.length });
+                    }
                 }
-            }
 
-            for (let levelIndex = 1; levelIndex < settings.levels.length; levelIndex += 1) {
-                const level = settings.levels[levelIndex];
-                const parentLevel = levelIndex; // саммари уровня `levelIndex` (1-based level number == levelIndex here, since levels[0] produces level:1)
-                let pool = activeSummaries(list).filter(record => record.level === parentLevel);
-                while (pool.length >= level.batchSize) {
-                    const batch = pool.slice(0, level.batchSize);
-                    const record = await foldChildSummaries(batch, parentLevel + 1);
-                    const batchIds = new Set(batch.map(child => child.id));
-                    list = list.map(item => (batchIds.has(item.id) ? { ...item, folded: true } : item));
-                    list = [...list, record];
-                    pool = pool.slice(level.batchSize);
-                    changed = true;
-                    await saveSummaries(list);
+                for (let levelIndex = 1; levelIndex < settings.levels.length; levelIndex += 1) {
+                    const level = settings.levels[levelIndex];
+                    const parentLevel = levelIndex; // саммари уровня `levelIndex` (1-based level number == levelIndex here, since levels[0] produces level:1)
+                    let pool = activeSummaries(list).filter(record => record.level === parentLevel);
+                    while (pool.length >= level.batchSize) {
+                        const batch = pool.slice(0, level.batchSize);
+                        const record = await foldChildSummaries(batch, parentLevel + 1);
+                        const batchIds = new Set(batch.map(child => child.id));
+                        list = list.map(item => (batchIds.has(item.id) ? { ...item, folded: true } : item));
+                        list = [...list, record];
+                        pool = pool.slice(level.batchSize);
+                        await saveSummaries(list);
+                        publishEvent('summary.folded', { count: list.length });
+                    }
                 }
-            }
 
-            if (changed) publishEvent('summary.folded', { count: list.length });
-            return activeSummaries(list);
-        });
+                return activeSummaries(list);
+            });
+        } catch (error) {
+            // Автоматический фолд идёт этапом `generation.prepare` с
+            // `onExhausted: 'flag'` — его отказ НЕ идёт через ручной путь
+            // «Fold now» (`engine-panel.js`'s `forceSummaryFold()`), который
+            // сам показывает `result.error.message`. Без этого события
+            // автоматический сбой был не виден вообще НИГДЕ: сообщение уже
+            // не свёрнуто, а почему — неизвестно ни пользователю, ни при
+            // отладке. Модуль/панель решает, показывать ли это как тост —
+            // здесь только объявление факта, тот же приём, что и `tracking.
+            // poll.failed` у Ядра трекинга.
+            publishEvent('summary.foldFailed', { message: error?.message ?? String(error) });
+            throw error;
+        }
     }
 
     async function updateSummary({ id, text } = {}) {
