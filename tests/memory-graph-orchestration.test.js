@@ -134,6 +134,31 @@ test('bootstrapFromLorebook() places the FIRST imported entry as its region\'s p
     assert.ok(nodes.value[0].regionId, 'must actually be attached to a region, not left staged');
 });
 
+test('a genuinely UNRELATED second entry can seed its OWN region instead of being forced into the first — a region with no center yet must be a NEUTRAL candidate, not a permanently-losing one', async () => {
+    // Слова подобраны так, чтобы fakeEmbed() дал ЧИСТЫЕ ортогональные векторы
+    // (ни одного общего слова, каждый набор целиком хэшируется в свой
+    // измерение из 4) — реальный, а не притянутый пример "совсем другой
+    // темы": cosineSimilarity=0, сдвинутый сходство ровно 0.5, СТОЛЬКО ЖЕ,
+    // сколько нейтральная базовая линия у любого пустого региона после
+    // фикса. Это прямой тест на self-reinforcing баг: до фикса пустой
+    // регион имел сходство 0 (хуже любого совпадения, а не "неизвестно"),
+    // поэтому единственный уже занятый регион побеждал АБСОЛЮТНО ВСЕГДА —
+    // ни одна вторая тема никогда не получала свой регион.
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: [
+            { uid: 0, comment: 'Topic Alpha', content: 'alpha bravo charlie delta echo hotel juliet mike' },
+            { uid: 1, comment: 'Topic Beta', content: 'golf lima oscar quebec sierra yankee' },
+        ],
+    });
+    await graphCore.load();
+
+    const nodes = await call(caller, 'memoryGraph.nodes');
+    const first = nodes.value.find(n => n.label === 'Topic Alpha');
+    const second = nodes.value.find(n => n.label === 'Topic Beta');
+    assert.equal(first.regionId, '0:0', 'first entry still seeds the bootstrap region, unchanged');
+    assert.notEqual(second.regionId, '0:0', 'an unrelated second topic must NOT be dragged into the first region just because it is the only one with a center yet');
+});
+
 test('a region past capacity (23) queues its weakest CLUSTER for reconsolidation instead of evicting immediately — reconsolidation is preferred, it preserves more information than outright deletion', async () => {
     const entries = Array.from({ length: 24 }, (_, i) => ({ uid: i, comment: `Entry ${i}`, content: `Distinct lore fact number ${i} about the world, unrelated to the others.` }));
     const { graphCore, caller } = buildEngine({ lorebookEntries: entries });
@@ -174,10 +199,16 @@ test('sweeping a matured reconsolidation queue folds the weak cluster into ONE d
 });
 
 test('enforceRegionCapacity() falls back to plain eviction when fewer than reconsolidationMinCluster candidates are eligible', async () => {
+    // Общая формулировка ("shared lore fact about this tiny region") —
+    // намеренно: сходство с центром должно быть УБЕДИТЕЛЬНЫМ (после фикса
+    // vectorProbsForAllRegions() пустой регион больше не проигрывает
+    // автоматически — см. "a genuinely UNRELATED second entry..." выше),
+    // иначе 2-я/3-я запись просто уйдут в накопитель вместо того же
+    // региона, и тест перестанет проверять то, что заявлено в названии.
     const entries = [
-        { uid: 0, comment: 'Center', content: 'the anchor of this tiny region.' },
-        { uid: 1, comment: 'Second', content: 'a minor fact one.' },
-        { uid: 2, comment: 'Third', content: 'a minor fact two.' },
+        { uid: 0, comment: 'Center', content: 'a shared lore fact about this tiny region, entry zero.' },
+        { uid: 1, comment: 'Second', content: 'a shared lore fact about this tiny region, entry one.' },
+        { uid: 2, comment: 'Third', content: 'a shared lore fact about this tiny region, entry two.' },
     ];
     const { graphCore, caller } = buildEngine({ lorebookEntries: entries });
     // Tight custom cap, set BEFORE load()/bootstrap: the 3rd entry alone
