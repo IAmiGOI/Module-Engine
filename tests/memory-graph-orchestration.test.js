@@ -147,7 +147,15 @@ function call(caller, contract, params) {
 
 // --- Бутстрап из Lorebook -------------------------------------------------
 
-test('load() resolves WITHOUT waiting for a slow bootstrap — the engine must not hang on it (решено с пользователем: "зависание при bootstrap... вынеси его отдельно")', async () => {
+// SKIPPED: `bootstrapIfEmpty()` (the auto-trigger this test exercises via
+// `load()`) is TEMPORARILY disabled — see its doc-comment in
+// cores/memory-graph/index.js (решено с пользователем: "удали все, кроме
+// кнопки" / "не удаляй, просто закоменти" — investigation into a real bug:
+// `resolveBookNames()` puts the GLOBALLY-selected World Info into "active
+// books" unconditionally, so `load()` could send the WHOLE Lorebook to
+// SideCar before the real active chat's data had even settled). Assertions
+// kept verbatim for when the auto-trigger is restored — do not delete.
+test.skip('load() resolves WITHOUT waiting for a slow bootstrap — the engine must not hang on it (решено с пользователем: "зависание при bootstrap... вынеси его отдельно")', async () => {
     let releaseEmbedding;
     const embeddingGate = new Promise(resolve => { releaseEmbedding = resolve; });
     const entries = [{ uid: 0, comment: 'Slow Entry', content: 'this entry\'s embedding is deliberately held up.' }];
@@ -194,7 +202,7 @@ test('bootstrapFromLorebook() sends an explicit maxTokens override on every Пр
         fetchOverride,
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     assert.ok(requestBodies.length >= 2, 'sanity: both Проход 1 and Проход 2 must have actually fired');
     for (const body of requestBodies) {
@@ -216,7 +224,7 @@ test('bootstrapFromLorebook() respects a configured bootstrapMaxTokens override,
     });
     await call(caller, 'memoryGraph.configure', { bootstrapMaxTokens: 8000 });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     assert.ok(requestBodies.length >= 2);
     for (const body of requestBodies) assert.equal(body.max_tokens, 8000);
@@ -235,7 +243,7 @@ test('bootstrapFromLorebook() sends its own low temperature and the strict-instr
         fetchOverride,
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     assert.ok(requestBodies.length >= 2, 'sanity: both Проход 1 and Проход 2 must have actually fired');
     for (const body of requestBodies) {
@@ -259,7 +267,7 @@ test('bootstrapFromLorebook() respects configured bootstrapTemperature/bootstrap
     });
     await call(caller, 'memoryGraph.configure', { bootstrapTemperature: 0.9, bootstrapReasoningEffort: 'high' });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     assert.ok(requestBodies.length >= 2);
     for (const body of requestBodies) {
@@ -281,7 +289,7 @@ test('bootstrapFromLorebook() publishes started/progress/finished events around 
     engine.events.subscribe('memoryGraph.bootstrapProgress', payload => progress.push(payload));
     engine.events.subscribe('memoryGraph.bootstrapFinished', payload => finished.push(payload));
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     assert.equal(started.length, 1);
     assert.equal(started[0].totalEntries, 1);
@@ -311,7 +319,7 @@ test('bootstrapFromLorebook() still publishes bootstrapFinished with success:fal
     engine.events.subscribe('memoryGraph.bootstrapFinished', payload => finished.push(payload));
     engine.events.subscribe('memoryGraph.bootstrapped', payload => bootstrapped.push(payload));
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     assert.equal(started.length, 1, 'summaries were non-empty — real work was attempted, so it must have started');
     assert.equal(finished.length, 1);
@@ -328,7 +336,7 @@ test('bootstrapFromLorebook() forces a REAL, immediate chatMetadata save before 
     context.saveMetadata = async () => { flushCalls += 1; };
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     assert.equal(flushCalls, 1, 'bootstrapFromLorebook() must call the REAL save (not just the debounced one) before it is done — otherwise an immediate page reload can lose the whole just-built graph');
 });
@@ -344,7 +352,7 @@ test('bootstrapFromLorebook() aborts entirely (graph stays empty) when Прох�
         fetchReplies: ['this is not JSON at all', '[{"region":"World","centerUid":0}]'],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, [], 'a failed skeleton pass must not leave a half-built graph');
 });
 
@@ -354,7 +362,7 @@ test('bootstrapFromLorebook() aborts entirely (graph stays empty) when Прох�
         fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', 'this is not JSON at all'],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, [], 'a failed centers pass must not leave orphaned sub-center-only nodes');
 });
 
@@ -390,7 +398,7 @@ test('bootstrapFromLorebook(): a Проход 3 failure for ONE region does not 
     await call(caller, 'memoryGraph.configure', { centerMinBackboneDegree: 0, subCenterMinDegree: 0 });
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     assert.equal(nodes.length, 4, 'the failed Проход 3 call must not have aborted the whole bootstrap — all 4 entries still become nodes');
@@ -424,7 +432,7 @@ test('bootstrapFromLorebook(): a SUCCESSFUL Проход 3 response creates a re
     graphCoreRef = graphCore;
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     const anchor = nodes.find(n => n.label === 'Anchor');
@@ -449,7 +457,7 @@ test('bootstrapFromLorebook() imports every lorebook entry as a graph node — a
         fetchReplies: ['[{"region":"World","subCenterUids":[0,1]}]', '[{"region":"World","centerUid":0}]'],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     assert.equal(nodes.value.length, 3, 'all three lorebook entries must become graph nodes');
@@ -466,7 +474,7 @@ test('bootstrapFromLorebook() gives a curated ("constant": true) entry a higher 
         fetchReplies: ['[{"region":"Facts","subCenterUids":[0,1]}]', '[{"region":"Facts","centerUid":0}]'],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     const core = nodes.find(n => n.label === 'Core Fact');
     const minor = nodes.find(n => n.label === 'Minor Fact');
@@ -486,7 +494,7 @@ test('bootstrapFromLorebook() boosts importance for a node other entries actuall
         fetchReplies: ['[{"region":"People","subCenterUids":[2]}]', '[{"region":"People","centerUid":0}]'],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     const alice = nodes.find(n => n.label === 'Alice');
     const lonely = nodes.find(n => n.label === 'Lonely');
@@ -500,7 +508,7 @@ test('bootstrapFromLorebook() places a region\'s designated center as a protecte
         fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     assert.equal(nodes.value.length, 1);
@@ -564,7 +572,7 @@ test('a region past capacity (23) queues its weakest CLUSTER for reconsolidation
     });
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     assert.equal(nodes.length, 24, 'reconsolidation QUEUES instead of evicting immediately — the region temporarily exceeds capacity, same principle already accepted for the "all protected" edge case');
@@ -597,7 +605,7 @@ test('sweeping a matured reconsolidation queue folds the weak cluster into ONE d
     });
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     assert.equal(graphCore.nodes().length, 24);
 
     for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   '); // advance turnCounter past reconsolidationQueueMaxTurns without touching SideCar
@@ -626,7 +634,7 @@ test('askSideCarForReconsolidation() sends an explicit maxTokens override, not t
     const { graphCore } = buildEngine({ lorebookEntries: entries, fetchOverride });
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
     await graphCore.sweepReconsolidationQueue();
 
@@ -658,7 +666,7 @@ test('enforceRegionCapacity() falls back to plain eviction when fewer than recon
     // независимо от неё.
     await call(caller, 'memoryGraph.configure', { maxNodesPerRegion: 2, subCentersPerRegion: 0 });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const nodes = graphCore.nodes();
     assert.equal(nodes.length, 2, 'below reconsolidationMinCluster -> must fall back to plain eviction, not stay over capacity waiting on a queue that will never trigger');
@@ -802,7 +810,7 @@ test('a near-duplicate pair detected on insertion is queued for SideCar merge, N
     });
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     assert.equal(graphCore.nodes().length, 2, 'both near-duplicate entries exist independently right after bootstrap');
     assert.equal(graphCore.mergeQueue().length, 1, 'the near-duplicate pair must be QUEUED, not merged immediately (decided with the user explicitly)');
@@ -831,7 +839,7 @@ test('a merge candidate queued as a side effect of bootstrapFromLorebook() is pe
     });
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     assert.equal(graphCore.mergeQueue().length, 1, 'sanity: bootstrap really queued a candidate in-memory');
 
     // Simulate a reload: a SECOND Core instance reading the SAME persisted
@@ -864,7 +872,7 @@ test('sweepMergeQueue() does NOT touch a queued pair before mergeQueueMaxTurns (
     });
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     assert.equal(graphCore.mergeQueue().length, 1);
 
     // Sweep immediately, and again after only 3 of the required 8 turns —
@@ -905,7 +913,7 @@ test('merging redirects a THIRD node\'s edge to the survivor instead of dropping
     // досоздать Witness↔"Alpha Two" ребро сверх органического Witness→Alpha.
     await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     const witnessBefore = graphCore.nodes().find(n => n.label === 'Witness');
     assert.equal(witnessBefore.degree, 1, 'Witness must have gotten a real "mentions" edge to Alpha at insertion time');
     assert.equal(graphCore.mergeQueue().length, 1, 'Alpha and Alpha Two must be queued as a near-duplicate pair');
@@ -933,7 +941,7 @@ test('sweepMergeQueue() leaves both nodes untouched when SideCar judges them gen
     });
 
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
     assert.equal(graphCore.mergeQueue().length, 1);
 
     for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
@@ -954,14 +962,17 @@ test('bootstrapFromLorebook() skips entries with empty content — nothing to em
         fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     assert.equal(nodes.value.length, 1);
     assert.equal(nodes.value[0].label, 'Real entry');
 });
 
-test('an already-populated graph does NOT re-run the lorebook bootstrap on load() — bootstrap is a one-time, empty-graph-only operation', async () => {
+// SKIPPED: same reason as the test above — `bootstrapIfEmpty()`'s
+// auto-trigger (which this test's whole premise, TWO `load()` calls, relies
+// on) is temporarily disabled. Assertions kept verbatim for restoration.
+test.skip('an already-populated graph does NOT re-run the lorebook bootstrap on load() — bootstrap is a one-time, empty-graph-only operation', async () => {
     const { graphCore: firstGraph, caller: firstCaller, engine } = buildEngine({
         lorebookEntries: [{ uid: 0, comment: 'Seed', content: 'The founding fact of this world.' }],
         fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
@@ -1014,7 +1025,13 @@ test('st.chatChanged makes the graph re-read the (possibly DIFFERENT) active cha
     assert.equal(nodes[0].id, 'node_existing', 'must have picked up the OTHER chat\'s real persisted graph on chatChanged, not stayed stuck on stale in-memory state from before the switch');
 });
 
-test('multiple automatic bootstrap triggers firing close together (load()\'s own kickoff + repeated st.chatChanged) never lose or double the graph — real concern raised by the user: "регенерация начиналась ещё и сама по себе. Оно не будет пересекаться?"', async () => {
+// SKIPPED: both automatic triggers this test races against each other
+// (load()'s own kickoff, st.chatChanged's reload) are temporarily disabled
+// — see `bootstrapIfEmpty()`'s doc-comment. The underlying protections it
+// proved (`loadStateEnqueued()`'s queue serialization, `bootstrapInFlight`)
+// are still in place in the code, just currently unreachable from an
+// automatic trigger. Assertions kept verbatim for restoration.
+test.skip('multiple automatic bootstrap triggers firing close together (load()\'s own kickoff + repeated st.chatChanged) never lose or double the graph — real concern raised by the user: "регенерация начиналась ещё и сама по себе. Оно не будет пересекаться?"', async () => {
     // Real failure mode caught live while building this test (bypassing
     // `loadStateEnqueued()`'s `enqueueWrite()` reproduced it): NOT
     // duplication — a concurrent, un-queued `loadState()` tore the
@@ -1190,7 +1207,11 @@ function buildRealLorebookAndGraph(entries, { fetchReplies = [] } = {}) {
     return { lorebookCore, graphCore };
 }
 
-test('memoryGraphCore.load() bootstraps from a REAL (async) Lorebook Core once scan() has genuinely finished — the exact sequencing harness/engine-wiring.js relies on', async () => {
+// SKIPPED: this test specifically proves the auto-trigger's timing relative
+// to a real (async) Lorebook Core's scan() — the auto-trigger itself is
+// disabled, see `bootstrapIfEmpty()`'s doc-comment. Assertions kept
+// verbatim for restoration.
+test.skip('memoryGraphCore.load() bootstraps from a REAL (async) Lorebook Core once scan() has genuinely finished — the exact sequencing harness/engine-wiring.js relies on', async () => {
     const entries = { 0: { uid: 0, comment: 'Seed', content: 'The founding fact of this world.', key: [] } };
     const { lorebookCore, graphCore } = buildRealLorebookAndGraph(entries, {
         fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
@@ -1219,7 +1240,7 @@ test('the beforeSend stage injects a Memory message built from the graph\'s own 
         fetchReplies: ['[{"region":"Story","subCenterUids":[1]}]', '[{"region":"Story","centerUid":0}]', '[]'],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const outgoing = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
     const result = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
@@ -1279,7 +1300,7 @@ test('a node off the beacon route, but one edge from it, gets pulled in as noise
     // выбран маяком") держится именно на том, что слотов МЕНЬШЕ кандидатов.
     await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 3 });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const outgoing = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
@@ -1309,7 +1330,7 @@ test('a node TWO edges off the beacon route, reachable only through a first-hop 
     // reach two hops deep, past whatever the route itself already covers.
     await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 2, retrievalTargetNodes: 10 });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.bootstrapFromLorebook();
 
     const outgoing = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
