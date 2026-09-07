@@ -634,13 +634,26 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         return regions[key] ?? { sector, ring, centerNodeId: null, subCenterIds: [], nodeIds: [], wordProfile: {} };
     }
 
-    /** Векторные вероятности региона — косинус к центру региона (не к среднему всех нод, MEMORY_GRAPH.md — против дрейфа центроида), softmax поверх сходств. Регион без центра ещё — вероятность 0, не участвует до первой ноды. */
+    /**
+     * Векторные вероятности региона — косинус к центру региона (не к среднему
+     * всех нод, MEMORY_GRAPH.md — против дрейфа центроида), softmax поверх
+     * сходств. Регион без центра ещё — НЕЙТРАЛЬНОЕ сходство 0.5 (то же
+     * значение, что дал бы РЕАЛЬНЫЙ центр при cos=0, "не похоже и не
+     * непохоже"), а не 0. Раньше было 0 — "хуже любого совпадения", а не
+     * "неизвестно": из-за этого после самой первой ноды графа единственный
+     * уже занятый регион побеждал АБСОЛЮТНО ВСЕГДА (sum>0 берёт только его
+     * ненулевой вклад, остальные 14 обнулялись начисто) — ни одна вторая
+     * тема никогда не получала свой регион, самоусиливающийся тупик.
+     * Найдено живьём: реальный бутстрап из Lorebook (61 запись) свалил
+     * буквально всё в регион 0:0. Тест — memory-graph-orchestration.test.js,
+     * "a genuinely UNRELATED second entry...".
+     */
     function vectorProbsForAllRegions(embedding) {
         const coords = allRegionCoords();
         const sims = coords.map(({ sector, ring }) => {
             const region = regionEntry(sector, ring);
             const center = region.centerNodeId ? nodes[region.centerNodeId] : null;
-            return center?.embedding ? (cosineSimilarity(embedding, center.embedding) + 1) / 2 : 0; // сдвиг в [0,1] — softmax ниже не любит отрицательные "вероятности"
+            return center?.embedding ? (cosineSimilarity(embedding, center.embedding) + 1) / 2 : 0.5; // сдвиг в [0,1] — softmax ниже не любит отрицательные "вероятности"
         });
         const sum = sims.reduce((a, b) => a + b, 0);
         const probs = sum > 0 ? sims.map(s => s / sum) : coords.map(() => 1 / coords.length);

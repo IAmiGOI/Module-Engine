@@ -300,7 +300,12 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             elements: [...nodeElements(), ...edgeElements()],
             layout: { name: 'preset' },
             style: [
-                { selector: 'node', style: { label: 'data(label)', 'background-color': '#4a9eff', color: '#fff', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4, width: 2, height: 2 } },
+                // Подпись СКРЫТА по умолчанию — при таком размере ноды (2px)
+                // текст на весь холст был нечитаемым нагромождением (жалоба
+                // пользователя). Показывается только классом `.hovered`,
+                // который вешает/снимает `mouseover`/`mouseout` ниже.
+                { selector: 'node', style: { 'background-color': '#4a9eff', color: '#fff', width: 2, height: 2 } },
+                { selector: 'node.hovered', style: { label: 'data(label)', 'font-size': 0.9, 'text-valign': 'bottom', 'text-margin-y': 4 } },
                 { selector: 'node[?protectedNode]', style: { 'background-color': '#ffb454', 'border-width': 2, 'border-color': '#fff' } },
                 { selector: 'edge', style: { width: 1, 'line-color': '#888', 'curve-style': 'bezier', label: 'data(type)', 'font-size': 7, color: '#aaa' } },
                 // Маркер места будущего узла в режиме создания — пунктир,
@@ -322,6 +327,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             if (event.target.id() === PREVIEW_ID) return; // не настоящий узел — нечего редактировать
             openEditForm(nodes().find(node => node.id === event.target.id()));
         });
+        // Имя показывается ТОЛЬКО под курсором (решено с пользователем —
+        // при 61 ноде подписи разом занимали весь холст).
+        cy.on('mouseover', 'node', event => event.target.addClass('hovered'));
+        cy.on('mouseout', 'node', event => event.target.removeClass('hovered'));
         // Клик по ребру удаляет его СРАЗУ, без `confirm()` — тот же принцип,
         // что у Delete-кнопки узла и Remove у Lorebook в этом же движке:
         // нигде больше в проекте нет блокирующего нативного диалога.
