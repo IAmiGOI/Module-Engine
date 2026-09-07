@@ -112,6 +112,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // именно СИМВОЛОВ, не число узлов (решено явно пользователем: богатый
     // регион не должен раздувать промпт числом мелких узлов).
     noiseCharBudget: 400,
+    // LLM-driven семантические регионы бутстрапа (решено с пользователем,
+    // MEMORY_GRAPH.md — "80% нод без связи" на старом дартборд-бутстрапе):
+    // `baseRegionNames` — ОТПРАВНАЯ ТОЧКА для Прохода 1, не жёсткое
+    // правило ("берём это за основу, а не фиксированное правило") — LLM
+    // может предложить свои регионы вместо/вместе с этими.
+    // `entriesPerRegionCenter` — цель для Прохода 2: сколько регионов
+    // ДОЛЖНО быть всего, примерно по одному центру на N записей Lorebook.
+    baseRegionNames: ['Locations', 'Main Characters', 'Factions'],
+    entriesPerRegionCenter: 20,
     workerId: null,
 });
 
@@ -147,6 +156,10 @@ export function clampGraphSettings(values = {}) {
         beaconWeightFactor: clampInt(values.beaconWeightFactor * 10, 0, 100, DEFAULT_SETTINGS.beaconWeightFactor * 10) / 10,
         routeMaxHops: clampInt(values.routeMaxHops, 1, 50, DEFAULT_SETTINGS.routeMaxHops),
         noiseCharBudget: clampInt(values.noiseCharBudget, 0, 5000, DEFAULT_SETTINGS.noiseCharBudget),
+        baseRegionNames: Array.isArray(values.baseRegionNames) && values.baseRegionNames.length
+            ? values.baseRegionNames.map(name => String(name).trim()).filter(Boolean)
+            : DEFAULT_SETTINGS.baseRegionNames,
+        entriesPerRegionCenter: clampInt(values.entriesPerRegionCenter, 1, 200, DEFAULT_SETTINGS.entriesPerRegionCenter),
         workerId: values.workerId ?? null,
     };
 }
@@ -595,6 +608,127 @@ export function applyConnectionBonus(baseImportance, degree) {
     return Math.max(0, Math.min(10, (baseImportance ?? 0) + (degree ?? 0)));
 }
 
+// --- LLM-driven семантические регионы бутстрапа (решено с пользователем,
+// после живого разбора: старый дартборд-бутстрап давал ~80% нод без единой
+// связи — единственный механизм связывания, extractCharacterNames(), ловит
+// только дословное упоминание чужого имени, для локаций/фракций почти
+// никогда не срабатывает; сама раскладка по 15 абстрактным ячейкам не
+// несёт смысла). Три прогона SideCar + эмбединг-присвоение, см.
+// MEMORY_GRAPH.md за полным разбором. Органический рост (`checkAndPlace`)
+// этого не касается — остаётся на дартборде, решено явно: цена LLM здесь
+// приемлема, потому что бутстрап — один раз на Lorebook, не на каждый ход.
+
+/**
+ * Проход 1 — весь Lorebook целиком + отправная точка (`baseRegionNames`,
+ * НЕ жёсткое правило — "берём это за основу"). Просим по 2 записи-под-центра
+ * на каждый подходящий регион (базовый или свой). Чистая функция —
+ * составление текста промпта, ответ модели разбирается отдельно
+ * (`parseRegionSkeletonResponse`), как и остальные SideCar-промпты в файле.
+ */
+export function buildRegionSkeletonPrompt(entries, baseRegionNames) {
+    const listing = entries.map(entry => `${entry.uid}. ${entry.label}: ${entry.content}`).join('\n');
+    return `Here is the FULL World Info / Lorebook for this story (${entries.length} entries, numbered):\n\n${listing}\n\nWe are organizing this into semantic regions of a memory graph. Starting point (adjust, skip, or add your own if the lore doesn't fit): ${baseRegionNames.join(', ')}.\n\nFor EACH region that genuinely fits this lore, pick exactly 2 entries (by number) that best represent it — the most foundational, representative entries for that region. Skip a region if nothing in the lore fits it. You may propose your OWN additional region names too, if the base list misses an obvious major topic.\n\nReply with ONLY a JSON array: [{"region": "region name", "subCenterUids": [number, number]}, ...]`;
+}
+
+/** Разбор ответа Прохода 1 — терпимо к частично неверным полям (регион без валидного uid отбрасывается целиком, не роняет остальные). */
+export function parseRegionSkeletonResponse(parsed, entries) {
+    if (!Array.isArray(parsed)) return [];
+    const validUids = new Set(entries.map(entry => entry.uid));
+    const seenUids = new Set();
+    const regions = [];
+    for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+        const name = String(item.region ?? '').trim();
+        if (!name) continue;
+        const uids = Array.isArray(item.subCenterUids)
+            ? item.subCenterUids.map(Number).filter(uid => validUids.has(uid) && !seenUids.has(uid))
+            : [];
+        if (!uids.length) continue; // регион без единого валидного под-центра — не заводим
+        for (const uid of uids) seenUids.add(uid);
+        regions.push({ name, subCenterUids: uids.slice(0, 2) });
+    }
+    return regions;
+}
+
+/**
+ * Проход 2 — центр для КАЖДОГО региона из Прохода 1 (у него пока только
+ * под-центры) плюс новые регионы сверх них, чтобы дойти до целевой
+ * плотности (`entriesPerRegionCenter` — один центр примерно на N записей).
+ */
+export function buildAdditionalCentersPrompt(entries, existingRegionNames, targetTotalRegions, entriesPerRegionCenter) {
+    const listing = entries.map(entry => `${entry.uid}. ${entry.label}: ${entry.content}`).join('\n');
+    return `The same World Info (${entries.length} entries, numbered) is being organized into these regions, each already has 2 representative entries: ${existingRegionNames.join(', ')}.\n\nWe need:\n1. A CENTER entry for EACH of these ${existingRegionNames.length} regions — the single most defining entry for that region (can be one of its own 2 representatives, or a different entry that fits better).\n2. Enough NEW regions (with their own center entry) so the total region count reaches about ${targetTotalRegions} (roughly one region per ${entriesPerRegionCenter} entries is the target density — deviate if the lore genuinely doesn't split that way).\n\nAll entries:\n${listing}\n\nReply with ONLY a JSON array covering ALL regions (the ${existingRegionNames.length} existing ones AND any new ones): [{"region": "region name", "centerUid": number}, ...]`;
+}
+
+/** Разбор ответа Прохода 2 — дедуп и по имени региона, и по uid центра (модель могла назначить один и тот же uid двум регионам). */
+export function parseAdditionalCentersResponse(parsed, entries) {
+    if (!Array.isArray(parsed)) return [];
+    const validUids = new Set(entries.map(entry => entry.uid));
+    const seenNames = new Set();
+    const seenUids = new Set();
+    const result = [];
+    for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+        const name = String(item.region ?? '').trim();
+        const uid = Number(item.centerUid);
+        if (!name || seenNames.has(name) || !validUids.has(uid) || seenUids.has(uid)) continue;
+        seenNames.add(name);
+        seenUids.add(uid);
+        result.push({ name, centerUid: uid });
+    }
+    return result;
+}
+
+/**
+ * Присвоение ОСТАЛЬНЫХ записей — argmax косинуса к уже размещённым
+ * центрам/под-центрам (не ко всем 15 дартборд-ячейкам — у семантических
+ * регионов их просто нет). `anchors` — ноды с известным `regionId`
+ * (центры/под-центры). Всегда находит регион, если есть хоть один якорь —
+ * нет "накопителя"/неуверенности, как у дартборд-каскада: сравнение с
+ * реальными эмбедингами однозначно.
+ */
+export function pickNearestRegion(embedding, anchors) {
+    let bestRegionId = null;
+    let bestScore = -Infinity;
+    for (const anchor of anchors) {
+        if (!anchor?.embedding || !anchor?.regionId) continue;
+        const score = cosineSimilarity(embedding, anchor.embedding);
+        if (score > bestScore) { bestScore = score; bestRegionId = anchor.regionId; }
+    }
+    return bestRegionId;
+}
+
+/**
+ * Проход 3 — по ОДНОМУ вызову на КАЖДЫЙ регион, уже над реальными нодами
+ * графа (`id` — id ноды, не lorebook uid: Проход 3 идёт ПОСЛЕ размещения).
+ * Межрегиональные связи сюда не относятся — те продолжают ловиться
+ * `extractCharacterNames()` внутри `attachToRegionByKey()`, как и раньше
+ * (решено с пользователем: "пока оставим старым").
+ */
+export function buildRegionEdgesPrompt(regionNodes) {
+    const listing = regionNodes.map(node => `${node.id}. ${node.label}: ${node.content}`).join('\n');
+    return `These entries all belong to the SAME region of a memory graph:\n\n${listing}\n\nPropose meaningful connections BETWEEN these entries — which ones are genuinely related and would benefit from being linked (not every pair needs one). Reply with ONLY a JSON array of pairs, using the exact ids given above: [{"from": "id", "to": "id"}, ...] (empty array if truly nothing connects).`;
+}
+
+/** Разбор ответа Прохода 3 — фильтрует к валидным id региона, без петель на себя, без дублей (неориентированная пара). */
+export function parseRegionEdgesResponse(parsed, regionNodes) {
+    if (!Array.isArray(parsed)) return [];
+    const validIds = new Set(regionNodes.map(node => node.id));
+    const seen = new Set();
+    const edges = [];
+    for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+        const from = String(item.from ?? '');
+        const to = String(item.to ?? '');
+        if (!validIds.has(from) || !validIds.has(to) || from === to) continue;
+        const key = [from, to].sort().join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edges.push({ from, to });
+    }
+    return edges;
+}
+
 /**
  * Ядро графа памяти (MEMORY_GRAPH.md, Phase 1) — "TopTier" долгосрочная
  * память, физически параллельная BasicSummary ("LowTier"); Tier-переключатель
@@ -944,25 +1078,48 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         return mergedId;
     }
 
-    function attachToRegion(node, sector, ring) {
-        const key = regionKey(sector, ring);
-        const region = regionEntry(sector, ring);
-        const isFirst = !region.centerNodeId;
-        // "Под-центр" — реальная НАЗНАЧАЕМАЯ роль (решено с пользователем;
-        // раньше `subCenterIds` было заведённым, но никогда не заполняемым
-        // полем): первые `subCentersPerRegion` узла ПОСЛЕ центра региона.
-        // Тот же принцип, что у центра — "первый(-ые) в регионе структурно
-        // важны", тот же порядок прибытия, не отдельная оценка важности.
-        const isSubCenter = !isFirst && region.subCenterIds.length < settings.subCentersPerRegion;
+    /**
+     * Обобщённая версия `attachToRegion()` — по произвольному строковому
+     * `key`, не только "sector:ring" (решено с пользователем: семантические
+     * регионы бутстрапа из Lorebook, MEMORY_GRAPH.md, "LLM-driven
+     * семантические регионы" — у них нет геометрии дартса вообще). Вся
+     * реальная логика теперь ЗДЕСЬ; `attachToRegion(node, sector, ring)`
+     * ниже — тонкая обёртка (плюс дартборд-специфичный `bumpWordProfile`,
+     * который семантическим регионам не нужен — они не участвуют в
+     * `vectorProbsForAllRegions`'s keyword-логитах).
+     *
+     * `forceRole` — ЯВНОЕ назначение роли (`'center'`/`'subCenter'`/
+     * `'ordinary'`/`null`), а не по порядку прибытия: у семантического
+     * региона роль уже решила LLM (Проход 1/2 бутстрапа), не "кто пришёл
+     * первым". `null` (по умолчанию) — старое авто-поведение по порядку
+     * вставки, для дартборд-пути не меняется. `'ordinary'` — РЕАЛЬНЫЙ баг,
+     * найденный живьём: обычные записи бутстрапа, присвоенные региону через
+     * `pickNearestRegion()` (не LLM-роль), шли с `forceRole: null` и
+     * ПОДХВАТЫВАЛИ старую авто-детекцию под-центра по порядку вставки —
+     * третья запись в свежесозданном семантическом регионе неожиданно
+     * становилась под-центром (раз `region.subCenterIds.length < settings.subCentersPerRegion`
+     * ещё не исчерпан), затем `enforceBackboneConnectivity()` тянул её в
+     * бэкбон. `'ordinary'` — явный отказ от авто-детекции, всегда
+     * обычная нода, независимо от `subCentersPerRegion`.
+     */
+    function attachToRegionByKey(node, key, { createRegion = () => ({ centerNodeId: null, subCenterIds: [], nodeIds: [], wordProfile: {} }), forceRole = null } = {}) {
+        const region = regions[key] ?? createRegion();
+        // 'ordinary' явно ОТКЛЮЧАЕТ и роль центра (даже если региона ещё
+        // технически не было — защитный край, семантический бутстрап
+        // никогда не зовёт 'ordinary' раньше центра региона), и авто-детекцию
+        // под-центра по порядку вставки.
+        const isFirst = forceRole === 'ordinary' ? false : !region.centerNodeId;
+        const isSubCenter = forceRole
+            ? forceRole === 'subCenter'
+            : (!isFirst && region.subCenterIds.length < settings.subCentersPerRegion);
         regions[key] = {
-            ...region, sector, ring,
+            ...region,
             centerNodeId: region.centerNodeId ?? node.id,
             subCenterIds: isSubCenter ? [...region.subCenterIds, node.id] : region.subCenterIds,
             nodeIds: [...region.nodeIds, node.id],
         };
         node.regionId = key;
         node.protectedNode = node.protectedNode || isFirst || isSubCenter; // центр/под-центр региона — защищены (MEMORY_GRAPH.md)
-        bumpWordProfile(sector, ring, node.content);
         for (const name of extractCharacterNames(node.content)) {
             const owner = Object.values(nodes).find(other => other.id !== node.id && other.label === name);
             if (!owner) continue;
@@ -981,6 +1138,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         }
         detectMergeCandidate(node, key);
         enforceRegionCapacity(key);
+    }
+
+    function attachToRegion(node, sector, ring) {
+        bumpWordProfile(sector, ring, node.content);
+        attachToRegionByKey(node, regionKey(sector, ring), {
+            createRegion: () => ({ sector, ring, centerNodeId: null, subCenterIds: [], nodeIds: [], wordProfile: {} }),
+        });
     }
 
     // --- Бэкбон связности между центрами/под-центрами (решено с
@@ -1407,12 +1571,15 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     /**
-     * Бутстрап пустого графа из УЖЕ АКТИВНОГО Lorebook игрока. Не отдельная
-     * подсистема — тот же `placeNewNode()`, что и у SideCar-нод, просто
-     * контент уже готов (запись WI), поэтому SideCar здесь не нужен вообще:
-     * извлекать нечего, извлечённое — это и есть сама запись. Разовый
-     * проход при бутстрапе, без гейта "сильного изменения" (импортируем всё,
-     * что есть, не фильтруем по новизне против графа, который ещё пуст).
+     * Бутстрап пустого графа из УЖЕ АКТИВНОГО Lorebook игрока — LLM-driven
+     * семантические регионы (решено с пользователем, MEMORY_GRAPH.md: старый
+     * дартборд-бутстрап давал ~80% нод без единой связи). Три прогона
+     * SideCar (весь Lorebook целиком видит модель, не по одной записи) +
+     * эмбединг-присвоение остальных записей + региональные связи. Дартборд
+     * (`vectorProbsForAllRegions`/`decideFirstPlacement`/`placeNewNode`) НЕ
+     * трогается — он по-прежнему полностью обслуживает `checkAndPlace()`
+     * (органический рост во время игры остаётся на нём, решено явно: цена
+     * LLM здесь приемлема как разовая, не на каждый ход).
      */
     async function bootstrapFromLorebook() {
         // Обёрнуто в enqueueWrite (не было раньше) — решено с пользователем:
@@ -1427,7 +1594,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const summariesResult = await call('lorebook.find', {});
             if (!summariesResult.ok || !summariesResult.value?.length) return false;
 
-            const bootstrappedIds = [];
+            // 1. Читаем ВСЕ записи целиком, БЕЗ немедленного размещения —
+            // Проходу 1 нужен полный текст Lorebook сразу, не по одной штуке.
+            const rawEntries = [];
+            const entryByUid = new Map();
             for (const summary of summariesResult.value) {
                 const fullResult = await call('lorebook.get', { uid: summary.uid, book: summary.book });
                 if (!fullResult.ok) continue;
@@ -1435,32 +1605,135 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 const label = String(entry.comment ?? '').trim() || `WI #${entry.uid}`;
                 const content = String(entry.content ?? '').trim();
                 if (!content) continue; // пустая запись — нечего эмбедить и нечего класть в граф
-
-                const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
-                if (!embeddingResult.ok) continue;
-                const { coords, probs: vectorProbs } = vectorProbsForAllRegions(embeddingResult.value);
-                const importance = importanceFromLorebookEntry(entry);
-                const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance, createdTurn: 0 }, { coords, vectorProbs });
-                bootstrappedIds.push(result.nodeId);
+                const record = { uid: summary.uid, label, content, raw: entry };
+                rawEntries.push(record);
+                entryByUid.set(summary.uid, record);
             }
-            // Бэкбон — ДО бонуса важности за связи ниже: досозданные `backbone`-
-            // рёбра тоже должны учитываться в итоговой degree, когда важность
-            // считает "количество соединений" (иначе центр/под-центр с
-            // добавленными связями оценивался бы по СТАРОЙ, органической
-            // степени, будто досоздания не было).
+            if (!rawEntries.length) return false;
+
+            // 2. Проход 1 — базовый скелет (Locations/Main Characters/
+            // Factions или свои варианты) + 2 под-центра на каждый.
+            const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
+            const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined });
+            if (!skeletonResult.ok) return false;
+            const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
+            if (!skeletonRegions.length) return false;
+
+            // 3. Проход 2 — центр для КАЖДОГО региона из Прохода 1, плюс
+            // новые регионы сверх них, до целевой плотности
+            // (entriesPerRegionCenter). Отказ здесь ТОЖЕ прерывает бутстрап
+            // целиком (решено с пользователем — как и Проход 1, не как
+            // мягкий откат Прохода 3 ниже).
+            const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
+            const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
+            const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined });
+            if (!centersResult.ok) return false;
+            const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
+            if (!centerAssignments.length) return false;
+
+            // Сшиваем Проход 1 (под-центры) и Проход 2 (центры) по имени
+            // региона; регион без реального, валидного центра — не заводим
+            // (регион-калека хуже отсутствующего региона).
+            const regionPlans = new Map();
+            for (const region of skeletonRegions) regionPlans.set(region.name, { name: region.name, subCenterUids: region.subCenterUids, centerUid: null });
+            for (const assignment of centerAssignments) {
+                const existing = regionPlans.get(assignment.name);
+                if (existing) existing.centerUid = assignment.centerUid;
+                else regionPlans.set(assignment.name, { name: assignment.name, subCenterUids: [], centerUid: assignment.centerUid });
+            }
+            const finalRegionPlans = [...regionPlans.values()].filter(region => region.centerUid != null && entryByUid.has(region.centerUid));
+            if (!finalRegionPlans.length) return false;
+
+            async function buildNodeFromEntry(entry) {
+                const embeddingResult = await callService('embedding.compute', { text: `${entry.label}: ${entry.content}`, kind: 'passage' });
+                if (!embeddingResult.ok) return null;
+                return {
+                    id: makeId('node', now, random),
+                    label: entry.label, content: entry.content, embedding: embeddingResult.value,
+                    importance: importanceFromLorebookEntry(entry.raw),
+                    degree: 0, createdAt: now(), createdTurn: 0, lastTouchedTurn: turnCounter,
+                    protectedNode: false, regionId: null, edges: [], gameTime: null,
+                };
+            }
+
+            function placeInRegion(node, regionName, forceRole) {
+                nodes[node.id] = node;
+                attachToRegionByKey(node, regionName, {
+                    createRegion: () => ({ name: regionName, centerNodeId: null, subCenterIds: [], nodeIds: [], wordProfile: {} }),
+                    forceRole,
+                });
+            }
+
+            // 4. Размещаем центры/под-центров — роль ЯВНАЯ (LLM уже решила),
+            // не по порядку прибытия.
+            const usedUids = new Set();
+            const bootstrappedIds = [];
+            for (const region of finalRegionPlans) {
+                if (usedUids.has(region.centerUid)) continue; // тот же uid уже занят другим регионом — не дублируем ноду
+                usedUids.add(region.centerUid);
+                const centerNode = await buildNodeFromEntry(entryByUid.get(region.centerUid));
+                if (!centerNode) continue;
+                placeInRegion(centerNode, region.name, 'center');
+                bootstrappedIds.push(centerNode.id);
+
+                for (const subUid of region.subCenterUids) {
+                    if (usedUids.has(subUid) || !entryByUid.has(subUid)) continue;
+                    usedUids.add(subUid);
+                    const subNode = await buildNodeFromEntry(entryByUid.get(subUid));
+                    if (!subNode) continue;
+                    placeInRegion(subNode, region.name, 'subCenter');
+                    bootstrappedIds.push(subNode.id);
+                }
+            }
+
+            // 5. Присвоение остальных записей — argmax косинуса к уже
+            // размещённым центрам/под-центрам (pickNearestRegion). Всегда
+            // находит дом — нет "накопителя" для этого пути.
+            const regionAnchors = bootstrappedIds.map(id => nodes[id]).filter(Boolean);
+            for (const entry of rawEntries) {
+                if (usedUids.has(entry.uid)) continue;
+                const node = await buildNodeFromEntry(entry);
+                if (!node) continue;
+                const bestRegionName = pickNearestRegion(node.embedding, regionAnchors);
+                if (!bestRegionName) continue; // якорей нет вовсе (Проход 2 не дал ни одного валидного центра) — запись пропускается
+                placeInRegion(node, bestRegionName, 'ordinary'); // НЕ null — иначе подхватывает авто-детекцию под-центра по порядку вставки (реальный баг, см. attachToRegionByKey()'s doc-comment)
+                bootstrappedIds.push(node.id);
+            }
+
+            // 6. Проход 3 — связи ВНУТРИ каждого региона, по одному вызову
+            // на регион. Отказ здесь НЕ прерывает бутстрап — пропускает
+            // связи только для ЭТОГО региона, остальные продолжаются
+            // (тот же принцип, что у escalateToSideCar). Межрегиональные
+            // связи — старый extractCharacterNames(), уже отработал внутри
+            // attachToRegionByKey() выше, для КАЖДОЙ размещённой ноды.
+            for (const region of finalRegionPlans) {
+                const liveRegion = regions[region.name];
+                if (!liveRegion || liveRegion.nodeIds.length < 2) continue;
+                const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
+                const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })));
+                const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined });
+                if (!edgesResult.ok) continue;
+                const proposedEdges = parseRegionEdgesResponse(parseModelJson(edgesResult.value), regionNodes.map(node => ({ id: node.id })));
+                for (const edge of proposedEdges) {
+                    const from = nodes[edge.from];
+                    const to = nodes[edge.to];
+                    if (!from || !to) continue;
+                    if ((from.edges ?? []).some(existingEdge => existingEdge.to === to.id)) continue; // уже связаны (например, mentions выше)
+                    from.edges = [...(from.edges ?? []), { to: to.id, type: 'related' }];
+                    to.edges = [...(to.edges ?? []), { to: from.id, type: 'related' }];
+                    from.degree = (from.degree ?? 0) + 1;
+                    to.degree = (to.degree ?? 0) + 1;
+                }
+            }
+
+            // 7. Бэкбон — ДО бонуса важности за связи ниже: досозданные
+            // `backbone`-рёбра тоже должны учитываться в итоговой degree.
             enforceBackboneConnectivity();
-            // Второй проход — решено с пользователем: важность из полей WI это
-            // только СТАРТОВЫЙ сигнал, "потом смотрим на количество соединений
-            // и проверяем". ПОСЛЕ всего цикла — все связи `mentions` между
-            // ЛЮБОЙ парой записей бутстрапа уже разведены (attachToRegion()
-            // сверяет новую ноду со всеми уже вставленными на КАЖДОМ шаге, так
-            // что к концу цикла degree каждой ноды окончательный, а не только
-            // от вставленных ДО неё).
             for (const nodeId of bootstrappedIds) {
                 const node = nodes[nodeId];
                 if (node) node.importance = applyConnectionBonus(node.importance, node.degree);
             }
-            // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
+            // См. комментарий в checkAndPlace() — то же самое: attachToRegionByKey()
             // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
             publishEvent('memoryGraph.bootstrapped', { source: 'lorebook', nodeCount: Object.keys(nodes).length });
