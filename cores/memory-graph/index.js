@@ -121,6 +121,14 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // ДОЛЖНО быть всего, примерно по одному центру на N записей Lorebook.
     baseRegionNames: ['Locations', 'Main Characters', 'Factions'],
     entriesPerRegionCenter: 20,
+    // Найдено живьём: `model.generate` без явного `maxTokens` в запросе
+    // падает на `REQUEST_DEFAULTS.maxTokens = 1000`
+    // (cores/models/internal-engine.js) — рассчитан на короткие ответы
+    // трекеров/одной ноды, не на структурированный JSON Проходов 1-3
+    // (несколько регионов, под-центры, связи целого региона). Достаточно
+    // большой запас, а не впритык — усечённый JSON посреди объекта не
+    // парсится вообще, экономить тут не на чем.
+    bootstrapMaxTokens: 4000,
     workerId: null,
 });
 
@@ -160,6 +168,7 @@ export function clampGraphSettings(values = {}) {
             ? values.baseRegionNames.map(name => String(name).trim()).filter(Boolean)
             : DEFAULT_SETTINGS.baseRegionNames,
         entriesPerRegionCenter: clampInt(values.entriesPerRegionCenter, 1, 200, DEFAULT_SETTINGS.entriesPerRegionCenter),
+        bootstrapMaxTokens: clampInt(values.bootstrapMaxTokens, 100, 32768, DEFAULT_SETTINGS.bootstrapMaxTokens), // тот же верхний предел, что у clampSamplerSettings() в internal-engine.js
         workerId: values.workerId ?? null,
     };
 }
@@ -1614,7 +1623,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // 2. Проход 1 — базовый скелет (Locations/Main Characters/
             // Factions или свои варианты) + 2 под-центра на каждый.
             const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
-            const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined });
+            const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens });
             if (!skeletonResult.ok) return false;
             const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
             if (!skeletonRegions.length) return false;
@@ -1626,7 +1635,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // мягкий откат Прохода 3 ниже).
             const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
             const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
-            const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined });
+            const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens });
             if (!centersResult.ok) return false;
             const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
             if (!centerAssignments.length) return false;
@@ -1711,7 +1720,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (!liveRegion || liveRegion.nodeIds.length < 2) continue;
                 const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
                 const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })));
-                const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined });
+                const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens });
                 if (!edgesResult.ok) continue;
                 const proposedEdges = parseRegionEdgesResponse(parseModelJson(edgesResult.value), regionNodes.map(node => ({ id: node.id })));
                 for (const edge of proposedEdges) {
