@@ -4,6 +4,7 @@ import { registerDomService } from '../services/dom.js';
 import { registerHttpService } from '../services/http.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerStChatService } from '../services/st-chat.js';
+import { registerEmbeddingService } from '../services/embedding.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
 import { registerFileService } from '../services/file.js';
 import { registerStMacrosService } from '../services/st-macros.js';
@@ -27,6 +28,7 @@ import { createTrackingCore } from '../cores/tracking/index.js';
 import { createMacrosCore } from '../cores/macros/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
 import { createBasicSummaryCore } from '../cores/summary/index.js';
+import { createMemoryGraphCore } from '../cores/memory-graph/index.js';
 import { createUiEngineCore } from '../cores/ui/ui-engine.js';
 import { createEnginePanelCore } from '../cores/ui/engine-panel.js';
 import { createFinalUiPc } from '../cores/ui/final-ui-pc.js';
@@ -34,6 +36,7 @@ import { createUiModulesCore } from '../cores/ui/ui-modules.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
+import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
 import { createTrackerModule, MODULE_ID as TRACKER_MODULE_ID } from '../modules/tracker/index.js';
 import { createTimeModule, MODULE_ID as TIME_MODULE_ID } from '../modules/time/index.js';
 import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../modules/notebook/index.js';
@@ -257,6 +260,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // Сами сообщения чата — отдельно от метаданных: без них трекер опрашивал бы
     // модель по переписке, которой она не видела.
     registerStChatService(engine.buses.services, { getContext });
+    // Локальный эмбединг — не сетевой вызов через `http.request` (см.
+    // doc-comment services/embedding.js за честной оговоркой: сама закачка
+    // весов модели идёт мимо нашего Гейта сети, это делает сторонняя
+    // библиотека изнутри себя).
+    registerEmbeddingService(engine.buses.services);
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
     registerStMacrosService(engine.buses.services, { getContext });
@@ -343,8 +351,27 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.summary' }),
     });
 
+    // Граф памяти (MEMORY_GRAPH.md, Phase 1) — "TopTier" долгосрочная память,
+    // параллельная BasicSummary ("LowTier"). Tier-переключатель между ними —
+    // Phase 3, здесь оба Ядра активны безусловно одновременно.
+    const memoryGraphCore = createMemoryGraphCore(engine.registerCaller('core.memoryGraph', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.memoryGraph' }),
+    });
+
     const uiHost = engine.registerCaller('core.ui.engine', 'cores', { tier: 'official' });
     const uiEngine = createUiEngineCore(() => createFinalUiPc(uiHost));
+
+    // Визуальный редактор графа памяти — своё `official`-Ядро, свой
+    // floating-корень через `uiEngine.mount()`, тем же способом, что
+    // notifications/updateOverlay ниже (решено с пользователем: большое
+    // окно, не секция общей панели настроек). `core.memoryGraph` и
+    // `core.ui.memoryGraph` оба в домене `cores` — Ядро↔Ядро остаётся на
+    // ОДНОЙ Шине, контракты `memoryGraph.*` достижимы через `host.own`
+    // самого Ядра UI без Гейта.
+    const memoryGraphPanel = createMemoryGraphPanelCore(
+        engine.registerCaller('core.ui.memoryGraph', 'cores', { tier: 'official' }),
+        { mount: node => uiEngine.mount('memoryGraph', node) },
+    );
     // У Модулей СВОЙ реестр UI, отдельный от слотов движка: у каждого
     // включённого Модуля свой независимый Final UI, иначе пути их деревьев
     // столкнулись бы в одной карте (см. ui-mount-registry.js).
@@ -413,12 +440,23 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
             ...engine.buses.network.contracts(),
         ],
         modules,
+        openMemoryGraphPanel: () => memoryGraphPanel.show(),
     });
     enginePanelRef = enginePanel;
 
     // Every Ядро is constructed by now (Settings Core included) — safe to
     // actually read back whatever was persisted last time.
+    //
+    // `lorebookCore.scan()` must FINISH before `memoryGraphCore.load()`
+    // starts, not just be "in the same batch": its bootstrap
+    // (`bootstrapFromLorebook()`) reads `lorebook.books()`/`.find()`/`.get()`,
+    // which only see real data AFTER `scan()`'s own awaited I/O settles —
+    // racing them in one `Promise.all` let the graph's read win sometimes,
+    // silently leaving a real, non-empty Lorebook's graph bootstrap empty
+    // (found live in the harness: `lorebook.find()` returned real entries
+    // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
     await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), lorebookCore.scan(), summaryCore.load()]);
+    await memoryGraphCore.load();
 
     // Панель монтируется здесь же, а не у вызывающего: реестру Модулей нужно
     // уметь дождаться её перерисовки, чтобы положить дерево Модуля в слот.
@@ -444,6 +482,13 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     await updateOverlayUi.settled();
     document.body.append(updateOverlayUi.getRoot());
 
+    // Корень должен быть в ЖИВОМ документе ДО activate() — та ленивым
+    // эффектом ищет `#stme-memory-graph-canvas` через `document.getElementById`,
+    // который ничего не находит в отсоединённом дереве.
+    const memoryGraphPanelUi = await memoryGraphPanel.open();
+    document.body.append(memoryGraphPanelUi.getRoot());
+    memoryGraphPanel.activate();
+
     // Слух движка включается ПОСЛЕ восстановления конфигурации: иначе
     // событие ST могло бы прилететь трекеру, которого ещё нет.
     await eventsCore.bridge();
@@ -454,5 +499,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
 }
