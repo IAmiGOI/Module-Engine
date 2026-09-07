@@ -122,9 +122,9 @@ test('regionWedgePath() returns a well-formed SVG path (starts with M, ends with
     }
 });
 
-test('regionWedgePath() for ring 0 starts exactly at the canvas center (a solid wedge, no degenerate zero-radius arc)', () => {
-    const d = regionWedgePath(0, 0, { screenRadius: 240 });
-    assert.ok(d.startsWith('M 240.00,240.00'), `expected ring 0 to start at the center (240,240): ${d}`);
+test('regionWedgePath() for ring 0 starts exactly at the model-space center (a solid wedge, no degenerate zero-radius arc)', () => {
+    const d = regionWedgePath(0, 0, { maxRadius: 240 });
+    assert.ok(d.startsWith('M 240.00,240.00'), `expected ring 0 to start at (240,240) — the center in a 240-radius model space: ${d}`);
 });
 
 test('renderRegionBackgroundSvg() emits exactly 15 path cells (5 sectors x 3 rings) inside a single <svg>', () => {
@@ -132,4 +132,12 @@ test('renderRegionBackgroundSvg() emits exactly 15 path cells (5 sectors x 3 rin
     assert.ok(svg.startsWith('<svg'));
     const pathCount = (svg.match(/<path /g) ?? []).length;
     assert.equal(pathCount, 15);
+});
+
+test('renderRegionBackgroundSvg() sizes the <svg> in EXPLICIT pixels equal to 2*maxRadius, not a percentage — so 1 SVG unit stays exactly 1 CSS px for the live pan/zoom transform to scale correctly', () => {
+    const svg = renderRegionBackgroundSvg({ maxRadius: 300 });
+    assert.ok(svg.includes('width="600"'), svg);
+    assert.ok(svg.includes('height="600"'), svg);
+    assert.ok(svg.includes('viewBox="0 0 600 600"'), svg);
+    assert.ok(!svg.includes('width="100%"'), 'must not fall back to percentage sizing');
 });

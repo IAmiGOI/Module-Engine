@@ -39,7 +39,7 @@ function fakeEmbed(text) {
     return vec.map(v => v / norm);
 }
 
-function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', lorebookEntries = null, random } = {}) {
+function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', lorebookEntries = null, random, embeddingGate = Promise.resolve(), character = null } = {}) {
     const engine = createEngine();
     const context = {};
     registerHttpService(engine.buses.network, { fetch: fakeFetchReplying(fetchReply) });
@@ -59,8 +59,12 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
     pipelineCore.define({ id: 'generation.beforeSend', mode: 'collect' });
 
     // Фейковый эмбединг — детерминированный, без реальной модели/сети.
+    // `embeddingGate` (по умолчанию уже разрешённый промис — НИКАКОГО
+    // поведения для существующих тестов) даёт управляемо ЗАДЕРЖАТЬ каждый
+    // вызов — единственный способ доказать неблокирующий бутстрап, не
+    // полагаясь на хрупкий замер реального времени в тесте.
     const embeddingHost = engine.registerCaller('service.embedding', 'services', { tier: 'official' });
-    embeddingHost.own.register('embedding.compute', params => fakeEmbed(params?.text));
+    embeddingHost.own.register('embedding.compute', async params => { await embeddingGate; return fakeEmbed(params?.text); });
 
     // Фейковый RP Time — по умолчанию "выключен" (как requireTracker() бросает в реальном Ядре трекинга).
     const trackingHost = engine.registerCaller('core.tracking', 'cores', { tier: 'official' });
@@ -73,6 +77,13 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
     lorebookHost.own.register('lorebook.find', () => (lorebookEntries ?? []).map(e => ({ uid: e.uid, book: 'Demo Lore', name: e.comment })));
     lorebookHost.own.register('lorebook.get', params => (lorebookEntries ?? []).find(e => e.uid === params?.uid));
 
+    // Фейковая карточка активного персонажа — управляется параметром теста
+    // (тем же принципом, что и lorebookEntries выше). `null` — "нет
+    // активного персонажа" (реалистично: services/st-character.js's
+    // current() тоже отдаёт `null`, если context.characterId не задан).
+    const characterHost = engine.registerCaller('service.character', 'services', { tier: 'official' });
+    characterHost.own.register('stCharacter.current', () => character);
+
     const graphCore = createMemoryGraphCore(engine.registerCaller('core.memoryGraph', 'cores', { tier: 'official' }), random ? { random } : {});
 
     const caller = engine.registerCaller('module.probe', 'modules', {
@@ -81,8 +92,9 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.settings', 'memoryGraph.configure', 'memoryGraph.nodes', 'memoryGraph.regions', 'memoryGraph.check',
             'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue',
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
+            'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete',
-            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.bootstrapFromLorebook',
+            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook',
         ],
     });
 
@@ -95,9 +107,26 @@ function call(caller, contract, params) {
 
 // --- Бутстрап из Lorebook -------------------------------------------------
 
+test('load() resolves WITHOUT waiting for a slow bootstrap — the engine must not hang on it (решено с пользователем: "зависание при bootstrap... вынеси его отдельно")', async () => {
+    let releaseEmbedding;
+    const embeddingGate = new Promise(resolve => { releaseEmbedding = resolve; });
+    const entries = [{ uid: 0, comment: 'Slow Entry', content: 'this entry\'s embedding is deliberately held up.' }];
+    const { graphCore, caller } = buildEngine({ lorebookEntries: entries, embeddingGate });
+
+    await graphCore.load(); // должно вернуться, ПОКА bootstrapFromLorebook() всё ещё висит на embeddingGate
+    const nodesWhileStillBootstrapping = await call(caller, 'memoryGraph.nodes');
+    assert.deepEqual(nodesWhileStillBootstrapping.value, [], 'load() must not have waited for the still-blocked embedding call — the entry cannot be placed yet');
+
+    releaseEmbedding();
+    await graphCore.waitForBootstrap();
+    const nodesAfterBootstrap = await call(caller, 'memoryGraph.nodes');
+    assert.equal(nodesAfterBootstrap.value.length, 1, 'once actually awaited, the background bootstrap must still complete correctly');
+});
+
 test('bootstrapFromLorebook() does nothing when the player has no active lorebook — leaves the graph empty for the "new world" SideCar-hint path instead', async () => {
     const { graphCore, caller } = buildEngine({ lorebookEntries: null });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     assert.deepEqual(nodes.value, []);
@@ -115,6 +144,7 @@ test('bootstrapFromLorebook() imports every lorebook entry as a graph node, WITH
     // Перехватить model.generate, чтобы доказать: бутстрап его не зовёт.
     const originalGenerate = graphCore; // no-op placeholder, real check is via fetch call count below
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     assert.equal(nodes.value.length, 3, 'all three lorebook entries must become graph nodes');
@@ -130,6 +160,7 @@ test('bootstrapFromLorebook() gives a curated ("constant": true) entry a higher 
         ],
     });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     const core = nodes.find(n => n.label === 'Core Fact');
     const minor = nodes.find(n => n.label === 'Minor Fact');
@@ -145,6 +176,7 @@ test('bootstrapFromLorebook() boosts importance for a node other entries actuall
         ],
     });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     const alice = nodes.find(n => n.label === 'Alice');
     const lonely = nodes.find(n => n.label === 'Lonely');
@@ -157,6 +189,7 @@ test('bootstrapFromLorebook() places the FIRST imported entry as its region\'s p
         lorebookEntries: [{ uid: 0, comment: 'The Continent', content: 'A vast land split into three subcontinents, teeming with leviathans.' }],
     });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     assert.equal(nodes.value.length, 1);
@@ -181,6 +214,7 @@ test('a genuinely UNRELATED second entry can seed its OWN region instead of bein
         ],
     });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     const first = nodes.value.find(n => n.label === 'Topic Alpha');
@@ -194,6 +228,7 @@ test('a region past capacity (23) queues its weakest CLUSTER for reconsolidation
     const { graphCore, caller } = buildEngine({ lorebookEntries: entries });
 
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     assert.equal(nodes.length, 24, 'reconsolidation QUEUES instead of evicting immediately — the region temporarily exceeds capacity, same principle already accepted for the "all protected" edge case');
@@ -206,7 +241,9 @@ test('a region past capacity (23) queues its weakest CLUSTER for reconsolidation
     assert.ok(!queue[0].nodeIds.includes(center.id), 'the protected center must never be queued for reconsolidation');
 
     const queuedLabels = nodes.filter(n => queue[0].nodeIds.includes(n.id)).map(n => n.label).sort();
-    assert.deepEqual(queuedLabels, ['Entry 1', 'Entry 2', 'Entry 3'], 'all bootstrap nodes tie at weight 0, so the OLDEST 3 (stable sort) must be the ones queued');
+    // Entry 1/2 — под-центры по умолчанию (subCentersPerRegion:2), защищены
+    // как и центр (Entry 0) — первые незащищённые кандидаты теперь Entry 3-5.
+    assert.deepEqual(queuedLabels, ['Entry 3', 'Entry 4', 'Entry 5'], 'all bootstrap nodes tie at weight 0, so the OLDEST 3 UNPROTECTED (stable sort, after the center + 2 sub-centers) must be the ones queued');
 });
 
 test('sweeping a matured reconsolidation queue folds the weak cluster into ONE denser node, shrinking the region back down', async () => {
@@ -217,6 +254,7 @@ test('sweeping a matured reconsolidation queue folds the weak cluster into ONE d
     });
 
     await graphCore.load();
+    await graphCore.waitForBootstrap();
     assert.equal(graphCore.nodes().length, 24);
 
     for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   '); // advance turnCounter past reconsolidationQueueMaxTurns without touching SideCar
@@ -244,13 +282,135 @@ test('enforceRegionCapacity() falls back to plain eviction when fewer than recon
     // Tight custom cap, set BEFORE load()/bootstrap: the 3rd entry alone
     // overflows a region that only ever had 2 non-protected candidates —
     // below reconsolidationMinCluster (3), so it can never queue.
-    await call(caller, 'memoryGraph.configure', { maxNodesPerRegion: 2 });
+    // `subCentersPerRegion: 0` — this test is about the eviction-vs-queue
+    // fallback specifically, not the backbone sub-center feature; without
+    // this, entries 0 AND 1 would BOTH end up protected (center + default
+    // 2 sub-centers), leaving nothing at all to evict.
+    await call(caller, 'memoryGraph.configure', { maxNodesPerRegion: 2, subCentersPerRegion: 0 });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const nodes = graphCore.nodes();
     assert.equal(nodes.length, 2, 'below reconsolidationMinCluster -> must fall back to plain eviction, not stay over capacity waiting on a queue that will never trigger');
     assert.equal(graphCore.reconsolidationQueue().length, 0);
     assert.ok(nodes.some(n => n.protectedNode), 'the protected center must survive either way');
+});
+
+// --- Бэкбон-связность по роли узла (решено с пользователем, числами:
+// "малая нода - не более 3 связей, под-центр - 10-15, центр - не менее 4
+// [к другим центрам/под-центрам]") ------------------------------------
+
+test('the 2nd and 3rd nodes to arrive in a region become its protected sub-centers (subCentersPerRegion: 2 by default) — a 4th stays ordinary', async () => {
+    const entries = [
+        { uid: 0, comment: 'Center', content: 'a shared lore fact about this tiny region, entry zero.' },
+        { uid: 1, comment: 'SubOne', content: 'a shared lore fact about this tiny region, entry one.' },
+        { uid: 2, comment: 'SubTwo', content: 'a shared lore fact about this tiny region, entry two.' },
+        { uid: 3, comment: 'Plain', content: 'a shared lore fact about this tiny region, entry three.' },
+    ];
+    const { graphCore, caller } = buildEngine({ lorebookEntries: entries });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const regions = (await call(caller, 'memoryGraph.regions')).value;
+    const center = nodes.find(n => n.label === 'Center');
+    const subOne = nodes.find(n => n.label === 'SubOne');
+    const subTwo = nodes.find(n => n.label === 'SubTwo');
+    const plain = nodes.find(n => n.label === 'Plain');
+
+    const region = regions.find(r => r.centerNodeId === center.id);
+    assert.deepEqual([...region.subCenterIds].sort(), [subOne.id, subTwo.id].sort(), 'exactly the 2nd and 3rd arrivals must be recorded as this region\'s sub-centers');
+    assert.equal(subOne.protectedNode, true, 'a sub-center is protected, same as a center');
+    assert.equal(subTwo.protectedNode, true);
+    assert.equal(plain.protectedNode, false, 'the 4th arrival is past subCentersPerRegion (2) — must stay an ordinary node');
+});
+
+test('an ordinary node never exceeds ordinaryMaxDegree (3) connections, even when many other entries mention it by name', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
+    // "Seed" claims region 0:0's center slot so "Bob" (created right after,
+    // same region) is a genuinely ORDINARY node, not a center himself.
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Seed', content: 'the anchor of this region, unrelated to Bob.', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Bob', content: 'an ordinary resident of this region.', sector: 0, ring: 0 });
+    // Five DIFFERENT mentioners, each its own region's center (so the cap
+    // under test is Bob's own, not weakened by the mentioner also being ordinary).
+    for (let i = 0; i < 5; i += 1) {
+        await call(caller, 'memoryGraph.nodes.create', { label: `Mentioner${i}`, content: `Mentioner${i} often talks to Bob about the weather.`, sector: (i + 1) % 5, ring: 0 });
+    }
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const bob = nodes.find(n => n.label === 'Bob');
+    assert.equal(bob.protectedNode, false, 'sanity: Bob must actually be ordinary for this cap to mean anything');
+    assert.equal(bob.degree, 3, 'five entries mentioned Bob by name, but an ordinary node must cap at 3');
+});
+
+test('sweepBackbone()/enforceBackboneConnectivity() gives each center at least centerMinBackboneDegree PEER connections to other centers/sub-centers', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
+    const created = [];
+    for (let sector = 0; sector < 5; sector += 1) {
+        const result = await call(caller, 'memoryGraph.nodes.create', { label: `Center${sector}`, content: `unique unrelated lore about place ${sector}.`, sector, ring: 0 });
+        created.push(result.value.nodeId);
+    }
+    const swept = await call(caller, 'memoryGraph.sweepBackbone');
+    assert.ok(swept.ok);
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    for (const id of created) {
+        const node = nodes.find(n => n.id === id);
+        const peerEdges = node.edges.filter(edge => created.includes(edge.to));
+        assert.ok(peerEdges.length >= 4, `center "${node.label}" only has ${peerEdges.length} peer connections (need >= centerMinBackboneDegree=4) — with 5 centers total, 4 is literally "connect to everyone else"`);
+        assert.ok(peerEdges.every(edge => edge.type === 'backbone'), 'organic mentions never fired here (unrelated content) — every peer edge must be the actively-created backbone type');
+    }
+});
+
+test('sweepBackbone() fills a sub-center up to subCenterMinDegree from other backbone nodes (any role, not peer-restricted like a center)', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 1, subCenterMinDegree: 5, subCenterMaxDegree: 6, centerMinBackboneDegree: 0 });
+    const subIds = [];
+    for (let sector = 0; sector < 4; sector += 1) {
+        await call(caller, 'memoryGraph.nodes.create', { label: `C${sector}`, content: `unrelated center lore ${sector}.`, sector, ring: 0 });
+        const sub = await call(caller, 'memoryGraph.nodes.create', { label: `S${sector}`, content: `unrelated sub lore ${sector}.`, sector, ring: 0 });
+        subIds.push(sub.value.nodeId);
+    }
+    await call(caller, 'memoryGraph.sweepBackbone');
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    for (const id of subIds) {
+        const node = nodes.find(n => n.id === id);
+        assert.ok(node.degree >= 5, `sub-center "${node.label}" has degree ${node.degree}, below subCenterMinDegree (5)`);
+    }
+});
+
+test('sweepBackbone() never pushes a sub-center past subCenterMaxDegree, even when its minimum demands more than that', async () => {
+    const { caller } = buildEngine();
+    // Min (20) deliberately unreachable — far more than both the max (5)
+    // AND the number of other backbone nodes actually available (7)  —
+    // proves the ceiling wins over an impossible-to-satisfy minimum.
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 1, subCenterMinDegree: 20, subCenterMaxDegree: 5, centerMinBackboneDegree: 0 });
+    const subIds = [];
+    for (let sector = 0; sector < 4; sector += 1) {
+        await call(caller, 'memoryGraph.nodes.create', { label: `C${sector}`, content: `unrelated center lore ${sector}.`, sector, ring: 0 });
+        const sub = await call(caller, 'memoryGraph.nodes.create', { label: `S${sector}`, content: `unrelated sub lore ${sector}.`, sector, ring: 0 });
+        subIds.push(sub.value.nodeId);
+    }
+    await call(caller, 'memoryGraph.sweepBackbone');
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    for (const id of subIds) {
+        const node = nodes.find(n => n.id === id);
+        assert.ok(node.degree <= 5, `sub-center "${node.label}" has degree ${node.degree}, past subCenterMaxDegree (5)`);
+    }
+});
+
+test('a manually-created node does NOT get backbone-filled automatically — sweepBackbone() must be triggered, same as any other sweep', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
+    for (let sector = 0; sector < 5; sector += 1) {
+        await call(caller, 'memoryGraph.nodes.create', { label: `Center${sector}`, content: `unrelated lore ${sector}.`, sector, ring: 0 });
+    }
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.ok(nodes.every(n => (n.degree ?? 0) === 0), 'manual creation alone must not invoke enforceBackboneConnectivity()');
 });
 
 test('a near-duplicate pair detected on insertion is queued for SideCar merge, NOT merged immediately — matures after mergeQueueMaxTurns and combines into one node', async () => {
@@ -264,6 +424,7 @@ test('a near-duplicate pair detected on insertion is queued for SideCar merge, N
     });
 
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     assert.equal(graphCore.nodes().length, 2, 'both near-duplicate entries exist independently right after bootstrap');
     assert.equal(graphCore.mergeQueue().length, 1, 'the near-duplicate pair must be QUEUED, not merged immediately (decided with the user explicitly)');
@@ -289,6 +450,7 @@ test('a merge candidate queued as a side effect of bootstrapFromLorebook() is pe
     const { engine, graphCore } = buildEngine({ lorebookEntries: entries });
 
     await graphCore.load();
+    await graphCore.waitForBootstrap();
     assert.equal(graphCore.mergeQueue().length, 1, 'sanity: bootstrap really queued a candidate in-memory');
 
     // Simulate a reload: a SECOND Core instance reading the SAME persisted
@@ -297,6 +459,7 @@ test('a merge candidate queued as a side effect of bootstrapFromLorebook() is pe
     // side effect was actually WRITTEN to storage, not just held in memory.
     const reloadedGraphCore = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.reloaded', 'cores', { tier: 'official' }));
     await reloadedGraphCore.load();
+    await reloadedGraphCore.waitForBootstrap();
 
     assert.equal(reloadedGraphCore.mergeQueue().length, 1, 'the queued merge candidate must have been persisted by bootstrapFromLorebook() itself, not lost until the next sweep');
 });
@@ -312,6 +475,7 @@ test('sweepMergeQueue() does NOT touch a queued pair before mergeQueueMaxTurns (
     });
 
     await graphCore.load();
+    await graphCore.waitForBootstrap();
     assert.equal(graphCore.mergeQueue().length, 1);
 
     // Sweep immediately, and again after only 3 of the required 8 turns —
@@ -330,12 +494,18 @@ test('merging redirects a THIRD node\'s edge to the survivor instead of dropping
         { uid: 1, comment: 'Alpha Two', content: 'a tavern doorway of old wood with rusted brass hinges, worn smooth across the years.' }, // near-duplicate of Alpha
         { uid: 2, comment: 'Witness', content: 'Alpha stands quietly nearby, watching the doorway every night.' }, // mentions "Alpha" by name -> gets an edge to it
     ];
-    const { graphCore } = buildEngine({
+    const { graphCore, caller } = buildEngine({
         lorebookEntries: entries,
         fetchReply: '{"label":"Alpha Merged","content":"Combined.","importance":3}',
     });
-
+    // Это тест на merge/переадресацию рёбер, не на бэкбон-фичу — без этого
+    // все 3 записи (одного региона) стали бы бэкбон-узлами (центр + 2
+    // под-центра по умолчанию) и enforceBackboneConnectivity() досоздал бы
+    // Witness↔"Alpha Two" ребро сверх органического Witness→Alpha, ломая
+    // предпосылку "ровно одно ребро от вставки".
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
     const witnessBefore = graphCore.nodes().find(n => n.label === 'Witness');
     assert.equal(witnessBefore.degree, 1, 'Witness must have gotten a real "mentions" edge to Alpha at insertion time');
     assert.equal(graphCore.mergeQueue().length, 1, 'Alpha and Alpha Two must be queued as a near-duplicate pair');
@@ -360,6 +530,7 @@ test('sweepMergeQueue() leaves both nodes untouched when SideCar judges them gen
     const { graphCore } = buildEngine({ lorebookEntries: entries, fetchReply: '{"distinct":true}' });
 
     await graphCore.load();
+    await graphCore.waitForBootstrap();
     assert.equal(graphCore.mergeQueue().length, 1);
 
     for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
@@ -377,6 +548,7 @@ test('bootstrapFromLorebook() skips entries with empty content — nothing to em
         ],
     });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     assert.equal(nodes.value.length, 1);
@@ -388,11 +560,13 @@ test('an already-populated graph does NOT re-run the lorebook bootstrap on load(
         lorebookEntries: [{ uid: 0, comment: 'Seed', content: 'The founding fact of this world.' }],
     });
     await firstGraph.load();
+    await firstGraph.waitForBootstrap();
     const afterFirstLoad = await call(firstCaller, 'memoryGraph.nodes');
     assert.equal(afterFirstLoad.value.length, 1);
 
     // A second load() call on the SAME already-populated core must not duplicate the import.
     await firstGraph.load();
+    await firstGraph.waitForBootstrap();
     const afterSecondLoad = await call(firstCaller, 'memoryGraph.nodes');
     assert.equal(afterSecondLoad.value.length, 1, 'load() must be idempotent — it must not re-import into an already-populated graph');
 });
@@ -402,6 +576,7 @@ test('an already-populated graph does NOT re-run the lorebook bootstrap on load(
 test('checkAndPlace() creates a node via SideCar on the very first call (no baseline yet, always "strong")', async () => {
     const { graphCore, caller } = buildEngine();
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const result = await graphCore.checkAndPlace('The player enters a dark cave and finds an old sword.');
 
@@ -415,6 +590,7 @@ test('checkAndPlace() creates a node via SideCar on the very first call (no base
 test('checkAndPlace() with blank context text is skipped — nothing to embed', async () => {
     const { graphCore, caller } = buildEngine();
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const result = await graphCore.checkAndPlace('   ');
 
@@ -472,6 +648,7 @@ test('memoryGraphCore.load() bootstraps from a REAL (async) Lorebook Core once s
 
     await lorebookCore.scan();
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     assert.equal(graphCore.nodes().length, 1, 'the real, already-scanned Lorebook entry must have been imported');
 });
@@ -486,6 +663,7 @@ test('the beforeSend stage injects a Memory message built from the graph\'s own 
     ];
     const { graphCore, pipelineCore } = buildEngine({ lorebookEntries: entries });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const outgoing = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
     const result = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
@@ -502,6 +680,7 @@ test('the beforeSend stage injects a Memory message built from the graph\'s own 
 test('the beforeSend stage contributes nothing when the graph has no placed nodes yet', async () => {
     const { graphCore, pipelineCore } = buildEngine(); // no lorebookEntries -> empty graph
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const outgoing = [{ mes: 'hello' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
@@ -522,8 +701,15 @@ test('a node off the beacon route, but one edge from it, gets pulled in as noise
     let seed = 1;
     const seededRandom = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
 
-    const { graphCore, pipelineCore } = buildEngine({ lorebookEntries: entries, random: seededRandom });
+    const { graphCore, pipelineCore, caller } = buildEngine({ lorebookEntries: entries, random: seededRandom });
+    // Это тест на отбор маяков/шума, не на бэкбон-фичу — без этого Elena И
+    // Ruins стали бы под-центрами (subCentersPerRegion: 2 по умолчанию) и
+    // получили бы бесконечный вес в scoreBeaconCandidate() наравне с
+    // Marcus, что тривиально проталкивало бы ВСЕХ троих в маяки и ломало
+    // саму предпосылку теста ("Ruins не выбран маяком").
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
     await graphCore.load();
+    await graphCore.waitForBootstrap();
 
     const outgoing = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
@@ -560,6 +746,39 @@ test('memoryGraph.nodes.create rejects empty content', async () => {
     const { caller } = buildEngine();
     const result = await call(caller, 'memoryGraph.nodes.create', { label: 'Empty', content: '   ', sector: 0, ring: 0 });
     assert.equal(result.value.ok, false);
+});
+
+// --- Импорт главного персонажа из карточки (решено с пользователем) -------
+
+test('memoryGraph.nodes.createFromCharacterCard combines description+personality into the node content, with a high default importance', async () => {
+    const { caller } = buildEngine({
+        character: { name: 'Aria', description: 'A wandering healer with a quiet past.', personality: 'Calm, patient, quick to forgive.' },
+    });
+    const result = await call(caller, 'memoryGraph.nodes.createFromCharacterCard');
+    assert.equal(result.value.ok, true);
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes.length, 1);
+    const node = nodes[0];
+    assert.equal(node.label, 'Aria');
+    assert.ok(node.content.includes('A wandering healer with a quiet past.'));
+    assert.ok(node.content.includes('Calm, patient, quick to forgive.'), 'personality must be included, not just description');
+    assert.ok(node.importance >= 7, 'a main character should not default to a throwaway importance');
+    assert.ok(node.regionId, 'must actually be placed, not left staged, for a solo/first entry');
+});
+
+test('memoryGraph.nodes.createFromCharacterCard fails cleanly when there is no active character', async () => {
+    const { caller } = buildEngine({ character: null });
+    const result = await call(caller, 'memoryGraph.nodes.createFromCharacterCard');
+    assert.equal(result.value.ok, false);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.length, 0);
+});
+
+test('memoryGraph.nodes.createFromCharacterCard fails cleanly when the card has neither description nor personality', async () => {
+    const { caller } = buildEngine({ character: { name: 'Blank', description: '', personality: '   ' } });
+    const result = await call(caller, 'memoryGraph.nodes.createFromCharacterCard');
+    assert.equal(result.value.ok, false);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.length, 0);
 });
 
 test('memoryGraph.nodes.update recomputes the embedding ONLY when label/content actually changed', async () => {
@@ -634,6 +853,11 @@ test('memoryGraph.nodes.move clears the OLD region\'s center when the moved node
 
 test('memoryGraph.nodes.move leaves the OLD region\'s center UNCHANGED when the moved node was NOT the center', async () => {
     const { caller } = buildEngine();
+    // `subCentersPerRegion: 0` — this test wants an ordinary (unprotected)
+    // second node; by default the 2nd arrival in a region becomes a
+    // protected sub-center (backbone feature), which is not what's under
+    // test here.
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
     await call(caller, 'memoryGraph.nodes.create', { label: 'Center', content: 'stays put, the anchor of this region.', sector: 0, ring: 0 });
     await call(caller, 'memoryGraph.nodes.create', { label: 'Sidekick', content: 'a second, unrelated node in the same region.', sector: 0, ring: 0 });
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;

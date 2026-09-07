@@ -107,6 +107,10 @@ test('NOTEBOOK_TOOL_SCHEMA.description tells the model to check for an existing 
     assert.match(NOTEBOOK_TOOL_SCHEMA.description, /duplicat/i);
 });
 
+test('NOTEBOOK_TOOL_SCHEMA.description requires the call to happen FIRST, before the reply to the player — not as an afterthought once the reply is already drafted', () => {
+    assert.match(NOTEBOOK_TOOL_SCHEMA.description, /before.{0,40}(reply|completion)/i);
+});
+
 test('every parameter the model actually fills in (action/title/content/note_id) has its own description — not a bare, unexplained type', () => {
     for (const key of ['action', 'title', 'content', 'note_id']) {
         const property = NOTEBOOK_TOOL_SCHEMA.parameters.properties[key];
