@@ -26,6 +26,26 @@ function fakeFetchReplying(reply) {
     });
 }
 
+/**
+ * Как `fakeFetchReplying()`, но РАЗНЫЙ ответ на КАЖДЫЙ последовательный
+ * вызов `model.generate` — нужно для нового 3-проходного бутстрапа
+ * (Проход 1 → Проход 2 → Проход 3 по одному вызову на регион): единый
+ * `fetchReply` для всех вызовов сразу здесь не подходит. Последний элемент
+ * массива повторяется для всех вызовов сверх его длины (удобно, когда
+ * Проход 3 зовётся по разу на N регионов, но их ответ одинаковый в тесте).
+ */
+function fakeFetchSequence(replies) {
+    let index = 0;
+    return async () => {
+        const reply = replies[Math.min(index, replies.length - 1)];
+        index += 1;
+        return {
+            status: 200, ok: true, headers: { entries: () => [] },
+            text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }),
+        };
+    };
+}
+
 /** Детерминированный "эмбединг" — хэш первых слов текста в маленький вектор, чтобы РАЗНЫЙ текст давал РАЗНЫЙ (но воспроизводимый) вектор без реальной модели. */
 function fakeEmbed(text) {
     const words = String(text).toLowerCase().match(/[a-zа-яё0-9]+/g) ?? [''];
@@ -39,10 +59,14 @@ function fakeEmbed(text) {
     return vec.map(v => v / norm);
 }
 
-function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', lorebookEntries = null, random, embeddingGate = Promise.resolve(), character = null } = {}) {
+function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', fetchReplies = null, fetchOverride = null, lorebookEntries = null, random, embeddingGate = Promise.resolve(), character = null } = {}) {
     const engine = createEngine();
     const context = {};
-    registerHttpService(engine.buses.network, { fetch: fakeFetchReplying(fetchReply) });
+    // `fetchOverride` — полный контроль над fetch (нужно, например, чтобы
+    // симулировать отказ ОДНОГО конкретного вызова model.generate — обычный
+    // fetchReplies всегда отвечает 200 OK, этого недостаточно для теста
+    // "один сбой Прохода 3 не блокирует остальные регионы").
+    registerHttpService(engine.buses.network, { fetch: fetchOverride ?? (fetchReplies ? fakeFetchSequence(fetchReplies) : fakeFetchReplying(fetchReply)) });
     const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
     registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
     registerChatMetadataService(engine.buses.services, { getContext: () => context });
@@ -111,7 +135,10 @@ test('load() resolves WITHOUT waiting for a slow bootstrap — the engine must n
     let releaseEmbedding;
     const embeddingGate = new Promise(resolve => { releaseEmbedding = resolve; });
     const entries = [{ uid: 0, comment: 'Slow Entry', content: 'this entry\'s embedding is deliberately held up.' }];
-    const { graphCore, caller } = buildEngine({ lorebookEntries: entries, embeddingGate });
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: entries, embeddingGate,
+        fetchReplies: ['[{"region":"Test","subCenterUids":[0]}]', '[{"region":"Test","centerUid":0}]'],
+    });
 
     await graphCore.load(); // должно вернуться, ПОКА bootstrapFromLorebook() всё ещё висит на embeddingGate
     const nodesWhileStillBootstrapping = await call(caller, 'memoryGraph.nodes');
@@ -132,17 +159,121 @@ test('bootstrapFromLorebook() does nothing when the player has no active loreboo
     assert.deepEqual(nodes.value, []);
 });
 
-test('bootstrapFromLorebook() imports every lorebook entry as a graph node, WITHOUT calling SideCar at all — the fact already exists, nothing to extract', async () => {
-    let modelCalls = 0;
+test('bootstrapFromLorebook() aborts entirely (graph stays empty) when Проход 1 (skeleton) produces no usable region at all', async () => {
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        // Проход 2's ответ намеренно ВАЛИДНЫЙ и реально создал бы ноду,
+        // если бы до него дошло — изолирует проверку именно на отказе
+        // Прохода 1 (иначе тест прошёл бы и без этой проверки в коде,
+        // просто споткнувшись о ту же переиспользованную "not JSON" на
+        // Проходе 2 — реальная ловушка, поймана при написании этого теста).
+        fetchReplies: ['this is not JSON at all', '[{"region":"World","centerUid":0}]'],
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, [], 'a failed skeleton pass must not leave a half-built graph');
+});
+
+test('bootstrapFromLorebook() aborts entirely (graph stays empty) when Проход 2 (additional centers) produces no usable center — a region with only sub-centers and no center is a cripple, not created', async () => {
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', 'this is not JSON at all'],
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, [], 'a failed centers pass must not leave orphaned sub-center-only nodes');
+});
+
+test('bootstrapFromLorebook(): a Проход 3 failure for ONE region does not block completion for OTHER regions or abort the bootstrap — the same "one failure does not block everything" principle as escalateToSideCar()', async () => {
+    const entries = [
+        { uid: 0, comment: 'A1', content: 'first region anchor.' },
+        { uid: 1, comment: 'A2', content: 'first region second entry.' },
+        { uid: 2, comment: 'B1', content: 'second region anchor.' },
+        { uid: 3, comment: 'B2', content: 'second region second entry.' },
+    ];
+    // Проход 1/2 успешны (200 OK), Проход 3 региона "RegionA" (первый по
+    // порядку в finalRegionPlans, 3-й вызов model.generate целиком) ПАДАЕТ
+    // (500). RegionB тоже без связей (пустой ответ) — тест не про успех
+    // Прохода 3, только про то, что один отказ не роняет весь бутстрап.
+    let callIndex = 0;
+    const fetchOverride = async () => {
+        const index = callIndex;
+        callIndex += 1;
+        if (index === 2) return { status: 500, ok: false, headers: { entries: () => [] }, text: async () => 'boom' };
+        const replies = [
+            '[{"region":"RegionA","subCenterUids":[1]},{"region":"RegionB","subCenterUids":[3]}]',
+            '[{"region":"RegionA","centerUid":0},{"region":"RegionB","centerUid":2}]',
+            null, // index 2 — never reached, handled above (500)
+            '[]',
+        ];
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: replies[index] } }] }) };
+    };
+    const { graphCore, caller } = buildEngine({ lorebookEntries: entries, fetchOverride });
+    // Центр/под-центр минимумы бэкбона обнулены — иначе enforceBackboneConnectivity()
+    // сама досоздаёт МЕЖрегиональные `backbone`-рёбра между A1/A2 и B1/B2
+    // (обе пары — реальные центр+под-центр), заглушая то, что тест
+    // проверяет (отсутствие ИМЕННО `related`-рёбер Прохода 3 в RegionA).
+    await call(caller, 'memoryGraph.configure', { centerMinBackboneDegree: 0, subCenterMinDegree: 0 });
+
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes.length, 4, 'the failed Проход 3 call must not have aborted the whole bootstrap — all 4 entries still become nodes');
+    const a1 = nodes.find(n => n.label === 'A1');
+    const a2 = nodes.find(n => n.label === 'A2');
+    assert.equal(a1.degree + a2.degree, 0, 'RegionA got no "related" edges — its Проход 3 call failed');
+});
+
+test('bootstrapFromLorebook(): a SUCCESSFUL Проход 3 response creates a real "related" edge between two region members that never mention each other by name', async () => {
+    const entries = [
+        { uid: 0, comment: 'Anchor', content: 'the first entry of this region.' },
+        { uid: 1, comment: 'Second', content: 'a second, thematically linked entry with no name overlap.' },
+    ];
+    let graphCoreRef;
+    // Проход 3's ответ должен ссылаться на РЕАЛЬНЫЕ id нод графа (строки,
+    // не lorebook uid) — они известны только ПОСЛЕ размещения Прохода 1/2,
+    // поэтому fetch здесь читает текущее состояние графа налету через
+    // замыкание на graphCoreRef, а не статичный текст.
+    let callIndex = 0;
+    const fetchOverride = async () => {
+        const index = callIndex;
+        callIndex += 1;
+        if (index === 0) return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '[{"region":"Region","subCenterUids":[1]}]' } }] }) };
+        if (index === 1) return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '[{"region":"Region","centerUid":0}]' } }] }) };
+        const anchor = graphCoreRef.nodes().find(n => n.label === 'Anchor');
+        const second = graphCoreRef.nodes().find(n => n.label === 'Second');
+        const reply = JSON.stringify([{ from: anchor.id, to: second.id }]);
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    const { graphCore, caller } = buildEngine({ lorebookEntries: entries, fetchOverride });
+    graphCoreRef = graphCore;
+
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const anchor = nodes.find(n => n.label === 'Anchor');
+    const second = nodes.find(n => n.label === 'Second');
+    assert.equal(anchor.degree, 1, 'Проход 3 must have wired a real edge, even though neither entry mentions the other by name');
+    assert.equal(anchor.edges[0].type, 'related', 'the edge type must distinguish it from organic "mentions"/active "backbone"');
+    assert.equal(second.edges[0].to, anchor.id);
+});
+
+test('bootstrapFromLorebook() imports every lorebook entry as a graph node — anchors placed explicitly by the LLM passes, the rest via nearest-region embedding assignment', async () => {
     const { graphCore, caller } = buildEngine({
         lorebookEntries: [
             { uid: 0, comment: 'The Continent', content: 'A vast land split into three subcontinents.' },
             { uid: 1, comment: 'Giadian Empire', content: 'A technologically superior power east of the Republic.' },
             { uid: 2, comment: 'Revolution Festival', content: 'A yearly celebration with fireworks in the capital.' },
         ],
+        // Проход 1: регион "World" с под-центрами 0 и 1. Проход 2: центр
+        // региона — 0 (переиспользован, дедуп в attachToRegionByKey не даёт
+        // вставить его дважды). Запись 2 не назначена ни тем, ни другим —
+        // попадает через argmax-присвоение (pickNearestRegion), единственный
+        // существующий регион.
+        fetchReplies: ['[{"region":"World","subCenterUids":[0,1]}]', '[{"region":"World","centerUid":0}]'],
     });
-    // Перехватить model.generate, чтобы доказать: бутстрап его не зовёт.
-    const originalGenerate = graphCore; // no-op placeholder, real check is via fetch call count below
     await graphCore.load();
     await graphCore.waitForBootstrap();
 
@@ -158,6 +289,7 @@ test('bootstrapFromLorebook() gives a curated ("constant": true) entry a higher 
             { uid: 0, comment: 'Core Fact', content: 'the foundational rule of this world.', constant: true, order: 100 },
             { uid: 1, comment: 'Minor Fact', content: 'a small unrelated detail nobody cares about.', constant: false, order: 100 },
         ],
+        fetchReplies: ['[{"region":"Facts","subCenterUids":[0,1]}]', '[{"region":"Facts","centerUid":0}]'],
     });
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -174,6 +306,10 @@ test('bootstrapFromLorebook() boosts importance for a node other entries actuall
             { uid: 1, comment: 'Lonely', content: 'a quiet corner nobody talks about.' },
             { uid: 2, comment: 'Bob', content: 'Bob talks to Alice every day in the market.' },
         ],
+        // Alice = центр, Bob = под-центр (вставлен ПОСЛЕ Alice — mentions
+        // "Alice" сработает внутри attachToRegionByKey). Lonely не назначен
+        // ни тем, ни другим — попадёт через argmax, единственный регион.
+        fetchReplies: ['[{"region":"People","subCenterUids":[2]}]', '[{"region":"People","centerUid":0}]'],
     });
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -184,9 +320,10 @@ test('bootstrapFromLorebook() boosts importance for a node other entries actuall
     assert.ok(alice.importance > lonely.importance, `a mentioned node (${alice.importance}) must outscore an unconnected one (${lonely.importance}), same base WI fields on both`);
 });
 
-test('bootstrapFromLorebook() places the FIRST imported entry as its region\'s protected center', async () => {
+test('bootstrapFromLorebook() places a region\'s designated center as a protected node — role comes from the LLM pass, not arrival order', async () => {
     const { graphCore, caller } = buildEngine({
         lorebookEntries: [{ uid: 0, comment: 'The Continent', content: 'A vast land split into three subcontinents, teeming with leviathans.' }],
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
     });
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -197,9 +334,16 @@ test('bootstrapFromLorebook() places the FIRST imported entry as its region\'s p
     assert.ok(nodes.value[0].regionId, 'must actually be attached to a region, not left staged');
 });
 
-test('a genuinely UNRELATED second entry can seed its OWN region instead of being forced into the first — a region with no center yet must be a NEUTRAL candidate, not a permanently-losing one', async () => {
+test('checkAndPlace(): a genuinely UNRELATED second node can seed its OWN dartboard region instead of being forced into the first — a region with no center yet must be a NEUTRAL candidate, not a permanently-losing one', async () => {
+    // Перенесено с бутстрапа на checkAndPlace() — LLM-driven семантический
+    // бутстрап (MEMORY_GRAPH.md) больше не ходит через дартборд-каскад
+    // (vectorProbsForAllRegions/decideFirstPlacement) вообще, только
+    // checkAndPlace() (органический рост) всё ещё на нём — решено с
+    // пользователем явно. Регрессия, которую этот тест доказывает, теперь
+    // актуальна только здесь.
+    //
     // Слова подобраны так, чтобы fakeEmbed() дал ЧИСТЫЕ ортогональные векторы
-    // (ни одного общего слова, каждый набор целиком хэшируется в свой
+    // (ни одного общего слова, каждый набор целиком хэшируется в своё
     // измерение из 4) — реальный, а не притянутый пример "совсем другой
     // темы": cosineSimilarity=0, сдвинутый сходство ровно 0.5, СТОЛЬКО ЖЕ,
     // сколько нейтральная базовая линия у любого пустого региона после
@@ -207,25 +351,43 @@ test('a genuinely UNRELATED second entry can seed its OWN region instead of bein
     // регион имел сходство 0 (хуже любого совпадения, а не "неизвестно"),
     // поэтому единственный уже занятый регион побеждал АБСОЛЮТНО ВСЕГДА —
     // ни одна вторая тема никогда не получала свой регион.
-    const { graphCore, caller } = buildEngine({
-        lorebookEntries: [
-            { uid: 0, comment: 'Topic Alpha', content: 'alpha bravo charlie delta echo hotel juliet mike' },
-            { uid: 1, comment: 'Topic Beta', content: 'golf lima oscar quebec sierra yankee' },
+    const { graphCore } = buildEngine({
+        fetchReplies: [
+            '{"label":"Topic Alpha","content":"alpha bravo charlie delta echo hotel juliet mike","importance":5}',
+            '{"label":"Topic Beta","content":"golf lima oscar quebec sierra yankee","importance":5}',
         ],
     });
     await graphCore.load();
-    await graphCore.waitForBootstrap();
+    await graphCore.waitForBootstrap(); // пустой Lorebook -> нет-оп
 
-    const nodes = await call(caller, 'memoryGraph.nodes');
-    const first = nodes.value.find(n => n.label === 'Topic Alpha');
-    const second = nodes.value.find(n => n.label === 'Topic Beta');
-    assert.equal(first.regionId, '0:0', 'first entry still seeds the bootstrap region, unchanged');
+    // Первые ДВА вызова гарантированно "сильное изменение" (нет базовой
+    // линии distanceStats, count<2) — isStrongChange() всегда true.
+    // ВАЖНО: эмбединг для РАЗМЕЩЕНИЯ считается из АРГУМЕНТА checkAndPlace()
+    // (контекст, не content ответа модели) — те же ортогональные слова
+    // нужны ЗДЕСЬ, не в fetchReplies выше (реальная ловушка при переносе
+    // теста: с обычным текстом контекста оба вызова считали ПОХОЖИЙ
+    // эмбединг, и регрессия просто не воспроизводилась).
+    await graphCore.checkAndPlace('alpha bravo charlie delta echo hotel juliet mike');
+    await graphCore.checkAndPlace('golf lima oscar quebec sierra yankee');
+
+    const nodes = graphCore.nodes();
+    const first = nodes.find(n => n.label === 'Topic Alpha');
+    const second = nodes.find(n => n.label === 'Topic Beta');
+    assert.equal(first.regionId, '0:0', 'first node still seeds the bootstrap region 0:0, unchanged');
     assert.notEqual(second.regionId, '0:0', 'an unrelated second topic must NOT be dragged into the first region just because it is the only one with a center yet');
 });
 
 test('a region past capacity (23) queues its weakest CLUSTER for reconsolidation instead of evicting immediately — reconsolidation is preferred, it preserves more information than outright deletion', async () => {
     const entries = Array.from({ length: 24 }, (_, i) => ({ uid: i, comment: `Entry ${i}`, content: `Distinct lore fact number ${i} about the world, unrelated to the others.` }));
-    const { graphCore, caller } = buildEngine({ lorebookEntries: entries });
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: entries,
+        // Один регион "Big": центр = Entry 0, под-центры = Entry 1/2 (те же
+        // 3 защищённых узла, что и раньше). Остальные 21 (Entry 3..23) не
+        // назначены ни тем, ни другим — попадают через argmax, единственный
+        // существующий регион, в том же порядке (uid по возрастанию),
+        // сохраняя "старейшие непротестированные" ту же семантику.
+        fetchReplies: ['[{"region":"Big","subCenterUids":[1,2]}]', '[{"region":"Big","centerUid":0}]', '[]'],
+    });
 
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -250,7 +412,14 @@ test('sweeping a matured reconsolidation queue folds the weak cluster into ONE d
     const entries = Array.from({ length: 24 }, (_, i) => ({ uid: i, comment: `Entry ${i}`, content: `Distinct lore fact number ${i} about the world, unrelated to the others.` }));
     const { graphCore } = buildEngine({
         lorebookEntries: entries,
-        fetchReply: '{"label":"Folded Entries","content":"A compressed summary of several minor facts.","importance":2}',
+        // 3 ответа бутстрапа (Проход 1/2/3), 4-й — на ПОЗДНИЙ вызов
+        // askSideCarForReconsolidation() из sweepReconsolidationQueue() ниже.
+        fetchReplies: [
+            '[{"region":"Big","subCenterUids":[1,2]}]',
+            '[{"region":"Big","centerUid":0}]',
+            '[]',
+            '{"label":"Folded Entries","content":"A compressed summary of several minor facts.","importance":2}',
+        ],
     });
 
     await graphCore.load();
@@ -267,25 +436,27 @@ test('sweeping a matured reconsolidation queue folds the weak cluster into ONE d
 });
 
 test('enforceRegionCapacity() falls back to plain eviction when fewer than reconsolidationMinCluster candidates are eligible', async () => {
-    // Общая формулировка ("shared lore fact about this tiny region") —
-    // намеренно: сходство с центром должно быть УБЕДИТЕЛЬНЫМ (после фикса
-    // vectorProbsForAllRegions() пустой регион больше не проигрывает
-    // автоматически — см. "a genuinely UNRELATED second entry..." выше),
-    // иначе 2-я/3-я запись просто уйдут в накопитель вместо того же
-    // региона, и тест перестанет проверять то, что заявлено в названии.
     const entries = [
         { uid: 0, comment: 'Center', content: 'a shared lore fact about this tiny region, entry zero.' },
         { uid: 1, comment: 'Second', content: 'a shared lore fact about this tiny region, entry one.' },
         { uid: 2, comment: 'Third', content: 'a shared lore fact about this tiny region, entry two.' },
     ];
-    const { graphCore, caller } = buildEngine({ lorebookEntries: entries });
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: entries,
+        // Только Entry 0 получает роль (центр, через Проход 1+2 — uid
+        // переиспользован, дедуп в attachToRegionByKey не вставляет
+        // дважды). Entry 1/2 падают через argmax как ОБЫЧНЫЕ ноды.
+        fetchReplies: ['[{"region":"Tiny","subCenterUids":[0]}]', '[{"region":"Tiny","centerUid":0}]', '[]'],
+    });
     // Tight custom cap, set BEFORE load()/bootstrap: the 3rd entry alone
     // overflows a region that only ever had 2 non-protected candidates —
     // below reconsolidationMinCluster (3), so it can never queue.
-    // `subCentersPerRegion: 0` — this test is about the eviction-vs-queue
-    // fallback specifically, not the backbone sub-center feature; without
-    // this, entries 0 AND 1 would BOTH end up protected (center + default
-    // 2 sub-centers), leaving nothing at all to evict.
+    // `subCentersPerRegion: 0` — без него Entry 1 (первая ОБЫЧНАЯ вставка
+    // через argmax, forceRole=null) авто-назначилась бы под-центром по
+    // порядку прибытия (дефолт subCentersPerRegion:2) и стала бы защищённой
+    // — не то, что тестируется здесь. Явные роли (forceRole) из Прохода 1/2
+    // ЭТУ настройку не используют вовсе — Entry 0 остаётся центром
+    // независимо от неё.
     await call(caller, 'memoryGraph.configure', { maxNodesPerRegion: 2, subCentersPerRegion: 0 });
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -301,15 +472,15 @@ test('enforceRegionCapacity() falls back to plain eviction when fewer than recon
 // [к другим центрам/под-центрам]") ------------------------------------
 
 test('the 2nd and 3rd nodes to arrive in a region become its protected sub-centers (subCentersPerRegion: 2 by default) — a 4th stays ordinary', async () => {
-    const entries = [
-        { uid: 0, comment: 'Center', content: 'a shared lore fact about this tiny region, entry zero.' },
-        { uid: 1, comment: 'SubOne', content: 'a shared lore fact about this tiny region, entry one.' },
-        { uid: 2, comment: 'SubTwo', content: 'a shared lore fact about this tiny region, entry two.' },
-        { uid: 3, comment: 'Plain', content: 'a shared lore fact about this tiny region, entry three.' },
-    ];
-    const { graphCore, caller } = buildEngine({ lorebookEntries: entries });
-    await graphCore.load();
-    await graphCore.waitForBootstrap();
+    // Ручное создание, не бутстрап — это тест дартборд-каскада (attachToRegion(),
+    // авто-роль по порядку прибытия). Семантический бутстрап роль назначает
+    // ЯВНО (forceRole из LLM-прохода), не по порядку — эта регрессия больше
+    // не применима к bootstrapFromLorebook() (решено с пользователем).
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Center', content: 'the anchor of this region.', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'SubOne', content: 'a second, unrelated node in the same region.', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'SubTwo', content: 'a third, unrelated node in the same region.', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Plain', content: 'a fourth, unrelated node in the same region.', sector: 0, ring: 0 });
 
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     const regions = (await call(caller, 'memoryGraph.regions')).value;
@@ -420,7 +591,15 @@ test('a near-duplicate pair detected on insertion is queued for SideCar merge, N
     ];
     const { graphCore } = buildEngine({
         lorebookEntries: entries,
-        fetchReply: '{"label":"Tavern Door","content":"An old tavern door that creaks, sometimes loudly, in the evening light.","importance":3}',
+        // Проход 1/2/3 (бутстрап, 2 записи в одном регионе — под-центр
+        // ловит near-duplicate против центра внутри attachToRegionByKey()),
+        // 4-й ответ — ПОЗДНИЙ вызов askSideCarForMerge() из sweepMergeQueue() ниже.
+        fetchReplies: [
+            '[{"region":"Door","subCenterUids":[1]}]',
+            '[{"region":"Door","centerUid":0}]',
+            '[]',
+            '{"label":"Tavern Door","content":"An old tavern door that creaks, sometimes loudly, in the evening light.","importance":3}',
+        ],
     });
 
     await graphCore.load();
@@ -447,7 +626,10 @@ test('a merge candidate queued as a side effect of bootstrapFromLorebook() is pe
         { uid: 0, comment: 'Tavern Door', content: 'The old tavern door creaks in the evening light.' },
         { uid: 1, comment: 'Tavern Door Again', content: 'The old tavern door creaks loudly in the evening light.' },
     ];
-    const { engine, graphCore } = buildEngine({ lorebookEntries: entries });
+    const { engine, graphCore } = buildEngine({
+        lorebookEntries: entries,
+        fetchReplies: ['[{"region":"Door","subCenterUids":[1]}]', '[{"region":"Door","centerUid":0}]', '[]'],
+    });
 
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -471,7 +653,15 @@ test('sweepMergeQueue() does NOT touch a queued pair before mergeQueueMaxTurns (
     ];
     const { graphCore } = buildEngine({
         lorebookEntries: entries,
-        fetchReply: '{"label":"Tavern Door","content":"Combined.","importance":3}',
+        // Ход не созревает до mergeQueueMaxTurns (8) в этом тесте вообще —
+        // askSideCarForMerge() не зовётся ни разу, 4-й ответ ниже не
+        // расходуется, оставлен для симметрии с соседними тестами.
+        fetchReplies: [
+            '[{"region":"Door","subCenterUids":[1]}]',
+            '[{"region":"Door","centerUid":0}]',
+            '[]',
+            '{"label":"Tavern Door","content":"Combined.","importance":3}',
+        ],
     });
 
     await graphCore.load();
@@ -496,13 +686,24 @@ test('merging redirects a THIRD node\'s edge to the survivor instead of dropping
     ];
     const { graphCore, caller } = buildEngine({
         lorebookEntries: entries,
-        fetchReply: '{"label":"Alpha Merged","content":"Combined.","importance":3}',
+        // Alpha = центр (Проход 1+2), Alpha Two = под-центр (Проход 1) —
+        // near-duplicate детектируется против центра при вставке. Witness
+        // падает через argmax (forceRole:'ordinary' — не авто-подцентр,
+        // см. attachToRegionByKey()'s doc-comment) и мимоходом упоминает
+        // "Alpha" по имени. 4-й ответ — ПОЗДНИЙ askSideCarForMerge().
+        fetchReplies: [
+            '[{"region":"Door","subCenterUids":[1]}]',
+            '[{"region":"Door","centerUid":0}]',
+            '[]',
+            '{"label":"Alpha Merged","content":"Combined.","importance":3}',
+        ],
     });
     // Это тест на merge/переадресацию рёбер, не на бэкбон-фичу — без этого
-    // все 3 записи (одного региона) стали бы бэкбон-узлами (центр + 2
-    // под-центра по умолчанию) и enforceBackboneConnectivity() досоздал бы
-    // Witness↔"Alpha Two" ребро сверх органического Witness→Alpha, ломая
-    // предпосылку "ровно одно ребро от вставки".
+    // Witness (argmax, 'ordinary') всё равно ОСТАЛСЯ бы обычным (фикс
+    // forceRole:'ordinary' это гарантирует независимо от настройки), но
+    // subCentersPerRegion:0 оставлен на всякий случай для симметрии со
+    // старой версией теста — enforceBackboneConnectivity() не должен
+    // досоздать Witness↔"Alpha Two" ребро сверх органического Witness→Alpha.
     await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -527,7 +728,10 @@ test('sweepMergeQueue() leaves both nodes untouched when SideCar judges them gen
         { uid: 0, comment: 'Tavern Door', content: 'The old tavern door creaks in the evening light.' },
         { uid: 1, comment: 'Tavern Door Again', content: 'The old tavern door creaks loudly in the evening light.' },
     ];
-    const { graphCore } = buildEngine({ lorebookEntries: entries, fetchReply: '{"distinct":true}' });
+    const { graphCore } = buildEngine({
+        lorebookEntries: entries,
+        fetchReplies: ['[{"region":"Door","subCenterUids":[1]}]', '[{"region":"Door","centerUid":0}]', '[]', '{"distinct":true}'],
+    });
 
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -546,6 +750,9 @@ test('bootstrapFromLorebook() skips entries with empty content — nothing to em
             { uid: 0, comment: 'Real entry', content: 'Something with real content in it.' },
             { uid: 1, comment: 'Empty entry', content: '' },
         ],
+        // Пустая запись отфильтровывается ДО Прохода 1 (rawEntries) — модель
+        // её вообще не увидит, остаётся ровно одна валидная запись (uid 0).
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
     });
     await graphCore.load();
     await graphCore.waitForBootstrap();
@@ -558,6 +765,7 @@ test('bootstrapFromLorebook() skips entries with empty content — nothing to em
 test('an already-populated graph does NOT re-run the lorebook bootstrap on load() — bootstrap is a one-time, empty-graph-only operation', async () => {
     const { graphCore: firstGraph, caller: firstCaller, engine } = buildEngine({
         lorebookEntries: [{ uid: 0, comment: 'Seed', content: 'The founding fact of this world.' }],
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
     });
     await firstGraph.load();
     await firstGraph.waitForBootstrap();
@@ -619,8 +827,9 @@ function fakeStLorebookAsync(entries) {
     };
 }
 
-function buildRealLorebookAndGraph(entries) {
+function buildRealLorebookAndGraph(entries, { fetchReplies = [] } = {}) {
     const engine = createEngine();
+    const context = {};
     const fakeSt = fakeStLorebookAsync(entries);
     const stLorebookHost = engine.registerCaller('service.stLorebook', 'services', { tier: 'official' });
     stLorebookHost.own.register('stLorebook.rawState', fakeSt.rawState);
@@ -637,6 +846,20 @@ function buildRealLorebookAndGraph(entries) {
     const trackingHost = engine.registerCaller('core.tracking', 'cores', { tier: 'official' });
     trackingHost.own.register('tracking.fields', () => { throw new Error('tracking: unknown tracker "rp-time".'); });
 
+    // Семантический бутстрап зовёт model.generate (3 прохода) — этому
+    // хелперу раньше это было не нужно (старый бутстрап SideCar не звал
+    // вовсе). Тот же набор сервисов, что и в buildEngine() выше —
+    // `storage.settings.*` (через Settings Core) нужен даже
+    // `modelsCore.configureWorkers()`, не только самому бутстрапу.
+    const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
+    registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
+    registerChatMetadataService(engine.buses.services, { getContext: () => context });
+    createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
+    registerHttpService(engine.buses.network, { fetch: fakeFetchSequence(fetchReplies) });
+    const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
+    const modelsCore = createInternalEngineModelsCore(modelsHost);
+    modelsCore.configureWorkers([{ id: 'fast', endpoint: 'https://fast.example.com', model: 'm1', format: 'openai' }]);
+
     const lorebookCore = createLorebookCore(engine.registerCaller('core.lorebook', 'cores', { tier: 'official' }));
     const graphCore = createMemoryGraphCore(engine.registerCaller('core.memoryGraph', 'cores', { tier: 'official' }));
     return { lorebookCore, graphCore };
@@ -644,7 +867,9 @@ function buildRealLorebookAndGraph(entries) {
 
 test('memoryGraphCore.load() bootstraps from a REAL (async) Lorebook Core once scan() has genuinely finished — the exact sequencing harness/engine-wiring.js relies on', async () => {
     const entries = { 0: { uid: 0, comment: 'Seed', content: 'The founding fact of this world.', key: [] } };
-    const { lorebookCore, graphCore } = buildRealLorebookAndGraph(entries);
+    const { lorebookCore, graphCore } = buildRealLorebookAndGraph(entries, {
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
+    });
 
     await lorebookCore.scan();
     await graphCore.load();
@@ -661,7 +886,13 @@ test('the beforeSend stage injects a Memory message built from the graph\'s own 
         { uid: 1, comment: 'Elena', content: 'Elena often visits Marcus to trade rare herbs.' }, // mentions Marcus -> edge
         { uid: 2, comment: 'Ruins', content: 'Elena explores Ruins searching for lost artifacts.' }, // mentions Elena -> edge
     ];
-    const { graphCore, pipelineCore } = buildEngine({ lorebookEntries: entries });
+    const { graphCore, pipelineCore } = buildEngine({
+        lorebookEntries: entries,
+        // Marcus = центр, Elena = под-центр (упоминает "Marcus" при
+        // вставке). Ruins падает через argmax ('ordinary') и упоминает
+        // "Elena" — та же цепочка рёбер, что и раньше.
+        fetchReplies: ['[{"region":"Story","subCenterUids":[1]}]', '[{"region":"Story","centerUid":0}]', '[]'],
+    });
     await graphCore.load();
     await graphCore.waitForBootstrap();
 
@@ -701,7 +932,17 @@ test('a node off the beacon route, but one edge from it, gets pulled in as noise
     let seed = 1;
     const seededRandom = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
 
-    const { graphCore, pipelineCore, caller } = buildEngine({ lorebookEntries: entries, random: seededRandom });
+    const { graphCore, pipelineCore, caller } = buildEngine({
+        lorebookEntries: entries, random: seededRandom,
+        // Marcus = центр, Elena = под-центр. Ruins/Whiskers падают через
+        // argmax ('ordinary') — с фиксом forceRole:'ordinary' они НЕ могут
+        // случайно стать под-центрами по порядку прибытия (реальный баг,
+        // найденный при переводе этого самого теста на новый бутстрап —
+        // см. attachToRegionByKey()'s doc-comment), так что
+        // subCentersPerRegion:0 ниже здесь уже подстраховка, не строгая
+        // необходимость.
+        fetchReplies: ['[{"region":"Story","subCenterUids":[1]}]', '[{"region":"Story","centerUid":0}]', '[]'],
+    });
     // Это тест на отбор маяков/шума, не на бэкбон-фичу — без этого Elena И
     // Ruins стали бы под-центрами (subCentersPerRegion: 2 по умолчанию) и
     // получили бы бесконечный вес в scoreBeaconCandidate() наравне с
@@ -935,7 +1176,10 @@ test('memoryGraph.sweepStaging/sweepMergeQueue/sweepReconsolidationQueue contrac
 
 test('memoryGraph.bootstrapFromLorebook contract can be triggered manually, independent of the empty-graph auto-bootstrap', async () => {
     const entries = [{ uid: 0, comment: 'Manual Import', content: 'a fact only pulled in by pressing the debug button.' }];
-    const { caller } = buildEngine({ lorebookEntries: entries });
+    const { caller } = buildEngine({
+        lorebookEntries: entries,
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
+    });
     // No graphCore.load() here — nothing has auto-bootstrapped yet.
     const result = await call(caller, 'memoryGraph.bootstrapFromLorebook');
     assert.equal(result.value, true);
