@@ -16,11 +16,8 @@ import { createFullScreenPanel } from './harness/full-screen-panel.js';
  * instead (see [harness/full-screen-panel.js](harness/full-screen-panel.js)),
  * same shape as Alpha's own full-screen panel and for the same reason:
  * several rows of fields simply don't fit a narrow drawer. The REAL, one-
- * click way in is a persistent top-bar icon (`addTopBarLauncher()` below) —
- * mirrors Alpha's own `addTopBarLauncher()` in Alpha/index.js exactly (same
- * insertion point, same fallback chain) — expanding the drawer first just
- * to find a button was never the actual intended path, it stays only as a
- * safety net if the top-bar insertion ever fails on some ST build.
+ * click way in is a persistent floating launcher dock (`addLauncherDock()`
+ * below), not a top-bar icon — see that function's own doc-comment for why.
  */
 
 const DRAWER_HTML = `
@@ -43,27 +40,39 @@ function getContext() {
 }
 
 /**
- * A persistent icon in ST's own top-right icon row, next to its native ones
- * — copied verbatim from Alpha/index.js's own `addTopBarLauncher()` (same
- * insertion point, same fallback chain, same reasoning: ST has no plugin
- * API for adding a top-level icon, so extensions that want one insert into
- * the real row directly). A distinct icon (flask, not Alpha's layer-group)
- * so the two are visually distinguishable if both happen to be installed.
+ * A persistent floating launcher, fixed to the right edge of the viewport —
+ * NOT inserted into ST's own top-bar. Used to be a `.drawer` icon appended
+ * next to `#rightNavHolder`/inside `#top-bar` (same shape as Alpha's own
+ * `addTopBarLauncher()`), but that made it disappear completely under the
+ * popular third-party extension "SillyTavern-ProbablyTooManyTabs": its own
+ * `style.css` sets `#top-bar, #top-settings-holder { display: none !important; }`
+ * UNCONDITIONALLY (checked against its real source, not just its README) —
+ * the whole container is hidden, not filtered by content, so nothing placed
+ * there survives, regardless of id/class. A `position: fixed` element on
+ * `<body>` doesn't depend on that container at all, so the SAME code shows
+ * the SAME launcher whether or not that extension (or any other that
+ * reorganizes the top bar) is installed.
+ *
+ * Five icon-sized slots by height, one of them real (`stme-launcher-dock-btn`,
+ * opens the panel) — the rest are empty `stme-launcher-dock-slot`s reserved
+ * for future quick actions, kept the same visual size so the dock's shape
+ * doesn't change when a second real action arrives.
  */
-function addTopBarLauncher(panel) {
-    const launcher = document.createElement('div');
-    launcher.className = 'drawer';
-    launcher.innerHTML = `
-        <div class="drawer-toggle drawer-header" title="Open ST Module Engine (Beta)" data-i18n="[title]Open ST Module Engine (Beta)">
-            <div class="drawer-icon fa-solid fa-flask fa-fw"></div>
-        </div>`;
-    launcher.addEventListener('click', () => panel.toggle());
-
-    const sibling = document.getElementById('rightNavHolder') ?? document.getElementById('top-settings-holder');
-    if (sibling) { sibling.after(launcher); return; }
-    const bar = document.getElementById('top-bar');
-    if (bar) { bar.append(launcher); return; }
-    console.warn('[ST Module Engine (Beta)] Could not find a top-bar container to attach the launcher icon to — the panel is still reachable via the extensions drawer button.');
+function addLauncherDock(panel) {
+    if (document.getElementById('stmeBetaLauncherDock')) return;
+    const dock = document.createElement('div');
+    dock.id = 'stmeBetaLauncherDock';
+    dock.className = 'stme-launcher-dock';
+    dock.innerHTML = `
+        <button type="button" class="stme-launcher-dock-btn" title="Open ST Module Engine (Beta)" data-i18n="[title]Open ST Module Engine (Beta)">
+            <i class="fa-solid fa-flask fa-fw"></i>
+        </button>
+        <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+        <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+        <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+        <div class="stme-launcher-dock-slot" aria-hidden="true"></div>`;
+    dock.querySelector('button').addEventListener('click', () => panel.toggle());
+    document.body.append(dock);
 }
 
 async function init() {
@@ -95,10 +104,10 @@ async function init() {
     panel.body.append(panelUi.getRoot());
 
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => panel.open());
-    addTopBarLauncher(panel);
+    addLauncherDock(panel);
 
     window.STModuleEngineBeta = engine;
-    console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the top-bar icon.');
+    console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the floating launcher dock.');
 }
 
 jQuery(async () => {
