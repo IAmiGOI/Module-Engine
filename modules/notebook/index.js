@@ -247,6 +247,23 @@ export function createNotebookModule(host) {
         notes.set(result.ok ? result.value ?? [] : []);
     }
 
+    /**
+     * Заметки лежат в памяти ЧАТА (`storage.chatMemory`), а `load()`
+     * выполняется ровно один раз — при инициализации движка, зачастую ДО
+     * того, как ST успевает подгрузить `chatMetadata` текущего чата (и это
+     * та же гонка, что и на самой обычной перезагрузке страницы: `st.
+     * chatChanged` ловит и самый первый чат после неё, не только ручное
+     * переключение). Без этой подписки заметки из предыдущей загрузки
+     * просто оставались бы невидимы панели — а если модель в этот момент
+     * вызвала бы `write`, `persistNotes()` сохранил бы новый список ПОВЕРХ
+     * устаревшего пустого, реально затерев то, что уже было на диске. Тот
+     * же приём, что уже есть у Модулей «Трекер» и «RP Time» (см. их
+     * doc-comment на `st.chatChanged`).
+     */
+    const subscriptions = [
+        host.events.subscribe('st.chatChanged', () => { loadNotes(); }),
+    ];
+
     function currentSettings() {
         return { maxNotes: maxNotes.peek(), cleanupBatch: cleanupBatch.peek(), injectionDepth: injectionDepth.peek() };
     }
@@ -399,6 +416,7 @@ export function createNotebookModule(host) {
         write,
         remove,
         stop: () => {
+            for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             call('pipeline.stages.remove', { pipelineId: BEFORE_SEND_PIPELINE, stageId: STAGE_ID });
             call('generation.unregisterTool', { name: TOOL_NAME });
         },
