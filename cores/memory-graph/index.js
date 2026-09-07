@@ -20,6 +20,11 @@ const RP_TIME_TRACKER_ID = 'rp-time'; // константа из modules/time/in
 export const SECTORS = 5;
 export const RINGS = 3;
 
+// Тот же набор значений, что REASONING_EFFORTS в internal-engine.js — не
+// импортируем оттуда напрямую (Ядра друг друга не знают, только через
+// Гейты), просто дублируем закрытый список валидных значений для клэмпа.
+const BOOTSTRAP_REASONING_EFFORTS = ['low', 'medium', 'high'];
+
 export const DEFAULT_SETTINGS = Object.freeze({
     // Множитель адаптивного порога "сильного изменения" — MEMORY_GRAPH.md:
     // порог НЕ фиксированный, подстраивается под разброс расстояний внутри
@@ -114,9 +119,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     noiseCharBudget: 400,
     // LLM-driven семантические регионы бутстрапа (решено с пользователем,
     // MEMORY_GRAPH.md — "80% нод без связи" на старом дартборд-бутстрапе):
-    // `baseRegionNames` — ОТПРАВНАЯ ТОЧКА для Прохода 1, не жёсткое
-    // правило ("берём это за основу, а не фиксированное правило") — LLM
-    // может предложить свои регионы вместо/вместе с этими.
+    // `baseRegionNames` — ЕДИНСТВЕННЫЙ источник регионов для Прохода 1
+    // (решено с пользователем явно: "за один прогон он и выводит под-центры
+    // в регионы и добавляет новые центры" — плохо, разделено на два прогона
+    // — Проход 1 больше НЕ может изобретать свои регионы, только раскладывать
+    // под-центры по ЭТОМУ списку; новые регионы сверху — исключительно
+    // работа Прохода 2, см. buildAdditionalCentersPrompt()).
     // `entriesPerRegionCenter` — цель для Прохода 2: сколько регионов
     // ДОЛЖНО быть всего, примерно по одному центру на N записей Lorebook.
     baseRegionNames: ['Locations', 'Main Characters', 'Factions'],
@@ -125,10 +133,27 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // падает на `REQUEST_DEFAULTS.maxTokens = 1000`
     // (cores/models/internal-engine.js) — рассчитан на короткие ответы
     // трекеров/одной ноды, не на структурированный JSON Проходов 1-3
-    // (несколько регионов, под-центры, связи целого региона). Достаточно
-    // большой запас, а не впритык — усечённый JSON посреди объекта не
-    // парсится вообще, экономить тут не на чем.
-    bootstrapMaxTokens: 4000,
+    // (несколько регионов, под-центры, связи целого региона). 4000
+    // оказалось МАЛО на реальном лорбуке живьём (пользователь: "он не
+    // вывозит") — поднято до 50000. Не экономим на этом: усечённый
+    // посреди объекта JSON просто не парсится вообще.
+    bootstrapMaxTokens: 50000,
+    // Сэмплер для Проходов 1-3 (решено с пользователем явно, числами) —
+    // низкая температура и низкий reasoning-эффорт: это структурированная
+    // JSON-раскладка по точным правилам, не творческая генерация, ей не
+    // нужна вариативность и не нужны долгие раздумья (реальная жалоба:
+    // модель "слишком долго размышляет" вместо того, чтобы просто выполнить
+    // инструкцию). `reasoningEffort` без `reasoningMode:'enabled'` НИЧЕГО
+    // не делает (см. provider-request.js — оба unified-`reasoning`-билдера
+    // возвращают `{}`, пока mode не 'enabled'/'disabled' явно) — поэтому в
+    // самих вызовах бутстрапа `reasoningMode: 'enabled'` зашит явно (не
+    // настройка — это не "выключить ризонинг", а "включить, но по низкому
+    // эффорту", отдельная настройка тут не нужна). Эффорт всё ещё реально
+    // влияет только у воркеров OpenRouter-формата (см. doc-comment
+    // resolveGenerateRequest() в internal-engine.js) — для остальных полей
+    // reasoning просто не строится вовсе, безопасно передавать всегда.
+    bootstrapTemperature: 0.4,
+    bootstrapReasoningEffort: 'low',
     workerId: null,
 });
 
@@ -168,7 +193,9 @@ export function clampGraphSettings(values = {}) {
             ? values.baseRegionNames.map(name => String(name).trim()).filter(Boolean)
             : DEFAULT_SETTINGS.baseRegionNames,
         entriesPerRegionCenter: clampInt(values.entriesPerRegionCenter, 1, 200, DEFAULT_SETTINGS.entriesPerRegionCenter),
-        bootstrapMaxTokens: clampInt(values.bootstrapMaxTokens, 100, 32768, DEFAULT_SETTINGS.bootstrapMaxTokens), // тот же верхний предел, что у clampSamplerSettings() в internal-engine.js
+        bootstrapMaxTokens: clampInt(values.bootstrapMaxTokens, 100, 200000, DEFAULT_SETTINGS.bootstrapMaxTokens), // потолок ВЫШЕ, чем у clampSamplerSettings() в internal-engine.js (32768) — там граница под обычный чат-сэмплер, бутстрапу реально нужно больше на настоящем лорбуке
+        bootstrapTemperature: clampInt(values.bootstrapTemperature * 100, 0, 200, DEFAULT_SETTINGS.bootstrapTemperature * 100) / 100,
+        bootstrapReasoningEffort: BOOTSTRAP_REASONING_EFFORTS.includes(values.bootstrapReasoningEffort) ? values.bootstrapReasoningEffort : DEFAULT_SETTINGS.bootstrapReasoningEffort,
         workerId: values.workerId ?? null,
     };
 }
@@ -628,15 +655,29 @@ export function applyConnectionBonus(baseImportance, degree) {
 // приемлема, потому что бутстрап — один раз на Lorebook, не на каждый ход.
 
 /**
- * Проход 1 — весь Lorebook целиком + отправная точка (`baseRegionNames`,
- * НЕ жёсткое правило — "берём это за основу"). Просим по 2 записи-под-центра
- * на каждый подходящий регион (базовый или свой). Чистая функция —
- * составление текста промпта, ответ модели разбирается отдельно
+ * Общий system-prompt для всех трёх LLM-вызовов бутстрапа (решено с
+ * пользователем явно: одного сэмплера/эффорта мало для воркеров не
+ * OpenRouter-формата, где `reasoningEffort` не действует вовсе — эта
+ * инструкция подкрепляет ту же цель словами). Задача механическая — точная
+ * раскладка по заданным правилам, не творчество, поэтому явно запрещаем
+ * долгие раздумья и отклонение от инструкции.
+ */
+export const BOOTSTRAP_SYSTEM_PROMPT = 'Follow the instructions in the user message exactly and literally. Do not add items beyond what is asked, do not skip required ones, do not rename or invent things the instructions did not ask for. This is a mechanical structured-data task, not a creative one — decide quickly without extended reasoning and reply with ONLY the requested JSON, nothing else.';
+
+/**
+ * Проход 1 — весь Lorebook целиком, раскладка ТОЛЬКО по `baseRegionNames`
+ * (решено с пользователем: Проход 1 больше не может изобретать свои
+ * регионы — за один прогон одновременно раскладывать под-центры И
+ * добавлять новые центры было ошибкой, разделено на два прогона; изобретение
+ * НОВЫХ регионов сверх базового списка — исключительно Проход 2, см.
+ * buildAdditionalCentersPrompt()). Просим по 2 записи-под-центра на
+ * каждый подходящий регион ИЗ ЭТОГО списка. Чистая функция — составление
+ * текста промпта, ответ модели разбирается отдельно
  * (`parseRegionSkeletonResponse`), как и остальные SideCar-промпты в файле.
  */
 export function buildRegionSkeletonPrompt(entries, baseRegionNames) {
     const listing = entries.map(entry => `${entry.uid}. ${entry.label}: ${entry.content}`).join('\n');
-    return `Here is the FULL World Info / Lorebook for this story (${entries.length} entries, numbered):\n\n${listing}\n\nWe are organizing this into semantic regions of a memory graph. Starting point (adjust, skip, or add your own if the lore doesn't fit): ${baseRegionNames.join(', ')}.\n\nFor EACH region that genuinely fits this lore, pick exactly 2 entries (by number) that best represent it — the most foundational, representative entries for that region. Skip a region if nothing in the lore fits it. You may propose your OWN additional region names too, if the base list misses an obvious major topic.\n\nReply with ONLY a JSON array: [{"region": "region name", "subCenterUids": [number, number]}, ...]`;
+    return `Here is the FULL World Info / Lorebook for this story (${entries.length} entries, numbered):\n\n${listing}\n\nWe are organizing this into semantic regions of a memory graph. Use ONLY these regions — do NOT invent, rename, merge, or add any others: ${baseRegionNames.join(', ')}.\n\nFor EACH region that genuinely fits this lore, pick exactly 2 entries (by number) that best represent it — the most foundational, representative entries for that region. Skip a region if nothing in the lore fits it.\n\nReply with ONLY a JSON array, using EXACTLY the region names given above: [{"region": "region name", "subCenterUids": [number, number]}, ...]`;
 }
 
 /** Разбор ответа Прохода 1 — терпимо к частично неверным полям (регион без валидного uid отбрасывается целиком, не роняет остальные). */
@@ -1623,7 +1664,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // 2. Проход 1 — базовый скелет (Locations/Main Characters/
             // Factions или свои варианты) + 2 под-центра на каждый.
             const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
-            const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens });
+            const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
             if (!skeletonResult.ok) return false;
             const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
             if (!skeletonRegions.length) return false;
@@ -1635,7 +1676,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // мягкий откат Прохода 3 ниже).
             const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
             const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
-            const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens });
+            const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
             if (!centersResult.ok) return false;
             const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
             if (!centerAssignments.length) return false;
@@ -1720,7 +1761,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (!liveRegion || liveRegion.nodeIds.length < 2) continue;
                 const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
                 const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })));
-                const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens });
+                const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
                 if (!edgesResult.ok) continue;
                 const proposedEdges = parseRegionEdgesResponse(parseModelJson(edgesResult.value), regionNodes.map(node => ({ id: node.id })));
                 for (const edge of proposedEdges) {
