@@ -303,6 +303,20 @@ test('bootstrapFromLorebook() still publishes bootstrapFinished with success:fal
     assert.deepEqual(bootstrapped, [], 'the graph never actually got built — no success event');
 });
 
+test('bootstrapFromLorebook() forces a REAL, immediate chatMetadata save before publishing success — an ordinary set() only debounces (реальный баг: перезагрузка страницы сразу после бутстрапа теряла весь только что построенный граф)', async () => {
+    const { graphCore, context } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
+    });
+    let flushCalls = 0;
+    context.saveMetadata = async () => { flushCalls += 1; };
+
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    assert.equal(flushCalls, 1, 'bootstrapFromLorebook() must call the REAL save (not just the debounced one) before it is done — otherwise an immediate page reload can lose the whole just-built graph');
+});
+
 test('bootstrapFromLorebook() aborts entirely (graph stays empty) when Проход 1 (skeleton) produces no usable region at all', async () => {
     const { graphCore, caller } = buildEngine({
         lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],

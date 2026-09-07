@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pixelToRegion, regionLayoutPosition, packOffsetInRegion, regionWedgePath, renderRegionBackgroundSvg, fallbackSemanticPosition, SEMANTIC_ANCHOR_RADIUS } from '../cores/ui/memory-graph-panel.js';
+import {
+    pixelToRegion, regionLayoutPosition, packOffsetInRegion, regionWedgePath, renderRegionBackgroundSvg,
+    fallbackSemanticPosition, semanticAnchorRadius, SEMANTIC_MAX_ANCHOR_DISTANCE, SEMANTIC_REGION_GAP,
+    backgroundTransformCss, MAX_RADIUS,
+} from '../cores/ui/memory-graph-panel.js';
 
 // --- pixelToRegion() / regionLayoutPosition() — geometry round-trips ------
 
@@ -132,7 +136,7 @@ test('fallbackSemanticPosition() spreads distinct regions EVENLY around the full
 });
 
 test('fallbackSemanticPosition() places every region\'s FIRST node at the SAME distance from the canvas center — a real radial spread, not a hash-picked point that could land anywhere', () => {
-    // Node #0 sits `minAnchorDistance` (16px) further out than the anchor
+    // Node #0 sits `SEMANTIC_MIN_ANCHOR_DISTANCE` further out than the anchor
     // itself (same convention as regionLayoutPosition(), see its own
     // doc-comment) — so this checks all regions AGREE with each other, not
     // against a hardcoded absolute number tied to that offset.
@@ -144,7 +148,7 @@ test('fallbackSemanticPosition() places every region\'s FIRST node at the SAME d
     for (const distance of distances) {
         assert.ok(Math.abs(distance - distances[0]) < 1, `regions landed at inconsistent distances from center: ${distances.join(', ')}`);
     }
-    assert.ok(distances[0] > SEMANTIC_ANCHOR_RADIUS * 0.9, 'the anchor radius itself must be a real, substantial fraction of the canvas — not a tiny huddle near the center');
+    assert.ok(distances[0] > semanticAnchorRadius(3) * 0.9, 'the anchor radius itself must be a real, substantial fraction of the canvas — not a tiny huddle near the center');
 });
 
 test('fallbackSemanticPosition() keeps every PAIR of nodes within the SAME region roughly minPointDistance apart, even for a large region — no square-grid clumping', () => {
@@ -159,7 +163,7 @@ test('fallbackSemanticPosition() keeps every PAIR of nodes within the SAME regio
     for (let i = 0; i < points.length; i += 1) {
         for (let j = i + 1; j < points.length; j += 1) {
             const distance = Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y);
-            assert.ok(distance >= 6.5, `nodes #${i}/#${j} of the same region are only ${distance.toFixed(2)}px apart — real clumping, not rounding slack`);
+            assert.ok(distance >= 20, `nodes #${i}/#${j} of the same region are only ${distance.toFixed(2)}px apart — real clumping, not rounding slack`);
         }
     }
 });
@@ -169,6 +173,58 @@ test('fallbackSemanticPosition() is deterministic — the same regionId/index/li
     const first = fallbackSemanticPosition('Factions', 3, regionIds);
     const second = fallbackSemanticPosition('Factions', 3, regionIds);
     assert.deepEqual(first, second);
+});
+
+// --- semanticAnchorRadius() — region-to-region spacing scales with region count ---
+// Реальная жалоба пользователя: при фиксированном радиусе регионы оказывались
+// "далеко друг от друга" (при малом N — огромная хорда), а разброс ВНУТРИ
+// региона — "слишком близко" (тот же малый masштаб дартборда на любое число нод).
+
+test('semanticAnchorRadius() places regions so neighboring anchors are roughly SEMANTIC_MAX_ANCHOR_DISTANCE*2+GAP apart — not an arbitrary fixed fraction of the canvas', () => {
+    const desired = 2 * SEMANTIC_MAX_ANCHOR_DISTANCE + SEMANTIC_REGION_GAP;
+    const minRadius = SEMANTIC_MAX_ANCHOR_DISTANCE + SEMANTIC_REGION_GAP;
+    const maxRadius = MAX_RADIUS - SEMANTIC_MAX_ANCHOR_DISTANCE;
+    for (const count of [2, 3, 5, 8, 12]) {
+        const rawRadius = desired / (2 * Math.sin(Math.PI / count));
+        if (rawRadius < minRadius || rawRadius > maxRadius) continue; // a floor/ceiling clamp is active for this count — chord is intentionally NOT the formula value then, checked separately
+        const radius = semanticAnchorRadius(count);
+        const chord = 2 * radius * Math.sin(Math.PI / count);
+        assert.ok(Math.abs(chord - desired) < 1, `count=${count}: chord ${chord.toFixed(1)}, expected ~${desired}`);
+    }
+});
+
+test('semanticAnchorRadius() never places a region\'s anchor so far out that its own spread would fall off the canvas', () => {
+    for (const count of [1, 2, 3, 5, 10, 30]) {
+        const radius = semanticAnchorRadius(count);
+        assert.ok(radius + SEMANTIC_MAX_ANCHOR_DISTANCE <= MAX_RADIUS + 1e-9, `count=${count}: radius ${radius} + spread would exceed the canvas`);
+    }
+});
+
+test('semanticAnchorRadius() never collapses a lone or small region to the exact center — a real, substantial offset even at N=1', () => {
+    assert.ok(semanticAnchorRadius(1) > SEMANTIC_MAX_ANCHOR_DISTANCE);
+});
+
+// --- backgroundTransformCss() — dartboard background must line up with MODEL (0,0) ---
+// Реальная жалоба пользователя со скриншотом: подложка регионов рендерилась
+// в углу канваса вместо центра — "точка отсчета не верная".
+
+test('backgroundTransformCss() cancels the SVG\'s own (maxRadius, maxRadius) drawing offset — model (0,0) must land on the SAME screen point for nodes AND background', () => {
+    const pan = { x: 240, y: 180 };
+    const zoom = 0.5;
+    const maxRadius = MAX_RADIUS;
+    const css = backgroundTransformCss(pan, zoom, maxRadius);
+    // Parse "translate(Xpx, Ypx) scale(Z)" back out.
+    const match = css.match(/translate\(([-\d.]+)px, ([-\d.]+)px\) scale\(([\d.]+)\)/);
+    assert.ok(match, `unexpected transform format: ${css}`);
+    const [, tx, ty, scale] = match.map(Number);
+    // The wedge's own drawn center sits at SVG-local (maxRadius, maxRadius).
+    // After this transform, it must land at screen (pan.x, pan.y) — the SAME
+    // point Cytoscape itself renders MODEL (0,0) at.
+    const wedgeCenterScreenX = tx + maxRadius * scale;
+    const wedgeCenterScreenY = ty + maxRadius * scale;
+    assert.ok(Math.abs(wedgeCenterScreenX - pan.x) < 1e-9, `wedge center landed at x=${wedgeCenterScreenX}, expected ${pan.x}`);
+    assert.ok(Math.abs(wedgeCenterScreenY - pan.y) < 1e-9, `wedge center landed at y=${wedgeCenterScreenY}, expected ${pan.y}`);
+    assert.equal(scale, zoom);
 });
 
 // --- regionWedgePath() / renderRegionBackgroundSvg() — the faint per-region background fill ---
