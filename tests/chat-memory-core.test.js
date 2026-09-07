@@ -13,19 +13,25 @@ import { createChatMemoryCore } from '../cores/memory/index.js';
 
 function fakeContext(initialChatMetadata = {}) {
     let saveCalls = 0;
+    let flushCalls = 0;
     return {
-        context: { chatMetadata: initialChatMetadata, saveMetadataDebounced: () => { saveCalls += 1; } },
+        context: {
+            chatMetadata: initialChatMetadata,
+            saveMetadataDebounced: () => { saveCalls += 1; },
+            saveMetadata: async () => { flushCalls += 1; },
+        },
         saveCalls: () => saveCalls,
+        flushCalls: () => flushCalls,
     };
 }
 
 function buildEngineWithMemoryCore() {
     const engine = createEngine();
-    const { context, saveCalls } = fakeContext({});
+    const { context, saveCalls, flushCalls } = fakeContext({});
     registerChatMetadataService(engine.buses.services, { getContext: () => context });
     const memoryHost = engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' });
     createChatMemoryCore(memoryHost);
-    return { engine, context, saveCalls };
+    return { engine, context, saveCalls, flushCalls };
 }
 
 test('a Module writes then reads back a value through the real Director -> Гейт -> Ядро -> Гейт -> Сервис chain', async () => {
@@ -118,4 +124,44 @@ test('a Module without the right to storage.chatMemory.set is refused before the
 
     assert.equal(result.ok, false);
     assert.equal(saveCalls(), 0);
+});
+
+// --- storage.chatMemory.flush — real save NOW, bypassing saveMetadataDebounced()'s 1s window ---
+// Реальный баг, найден по жалобе пользователя: перезагрузка страницы вскоре
+// после bootstrapFromLorebook() теряла только что построенный граф —
+// saveMetadataDebounced() (настоящий ST, public/scripts/extensions.js)
+// откладывает реальную запись на debounce_timeout.relaxed (1000ms).
+
+test('storage.chatMemory.flush reaches the real Сервис save (saveMetadata()), through the full Director -> Гейт -> Ядро -> Гейт -> Сервис chain', async () => {
+    const { engine, flushCalls } = buildEngineWithMemoryCore();
+    const module = engine.registerCaller('module.notebook', 'modules', { tier: 'community', allowedContracts: ['storage.chatMemory.set', 'storage.chatMemory.flush'] });
+    await new Promise(resolve => module.cores.subscribe('storage.chatMemory.set', { params: { namespace: 'module.notebook', key: 'notes', value: ['a'] } }, resolve));
+
+    const result = await new Promise(resolve => module.cores.subscribe('storage.chatMemory.flush', {}, resolve));
+
+    assert.deepEqual(result, { ok: true, value: true });
+    assert.equal(flushCalls(), 1, 'the REAL context.saveMetadata() must have actually been called — a debounced-only save can still be lost on an immediate page reload');
+});
+
+test('storage.chatMemory.flush waits for already-queued set() calls to land first — flushing mid-write would save a stale, half-written blob', async () => {
+    const { engine, context } = buildEngineWithMemoryCore();
+    const module = engine.registerCaller('module.notebook', 'modules', { tier: 'community', allowedContracts: ['storage.chatMemory.set', 'storage.chatMemory.flush'] });
+
+    // Fired WITHOUT awaiting the set() first — same shape as bootstrapFromLorebook()'s
+    // Promise.all([...persist calls]) racing a flush right after.
+    const setPromise = new Promise(resolve => module.cores.subscribe('storage.chatMemory.set', { params: { namespace: 'module.notebook', key: 'notes', value: ['a', 'b'] } }, resolve));
+    const flushPromise = new Promise(resolve => module.cores.subscribe('storage.chatMemory.flush', {}, resolve));
+    await Promise.all([setPromise, flushPromise]);
+
+    assert.deepEqual(context.chatMetadata.stme_memory, { 'module.notebook': { notes: ['a', 'b'] } }, 'by the time flush() resolves, the queued set() must already be reflected in the raw blob it saved');
+});
+
+test('a Module without the right to storage.chatMemory.flush is refused before the real save is ever reached', async () => {
+    const { engine, flushCalls } = buildEngineWithMemoryCore();
+    const module = engine.registerCaller('module.untrusted', 'modules', { tier: 'community', allowedContracts: [] });
+
+    const result = await new Promise(resolve => module.cores.subscribe('storage.chatMemory.flush', {}, resolve));
+
+    assert.equal(result.ok, false);
+    assert.equal(flushCalls(), 0);
 });
