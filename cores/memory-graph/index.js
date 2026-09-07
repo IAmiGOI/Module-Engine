@@ -37,11 +37,30 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // — `region.nodeIds.length`, центр уже часть этого массива). Решено с
     // пользователем: буквально по изначальной формуле — 1 центр + 2
     // под-центра + до 10 узлов у каждого под-центра = 23 (арифметика "12 vs
-    // 23" из MEMORY_GRAPH.md закрыта этим числом). Под-центры как отдельная
-    // РОЛЬ узла ещё не реализованы (см. `subCenterIds` — заведён, но пока
-    // никто не назначает) — переполнение в этом проходе работает как единый
-    // плоский лимит на регион, не различая центр/под-центр/обычный узел.
+    // 23" из MEMORY_GRAPH.md закрыта этим числом). Переполнение работает как
+    // единый плоский лимит на регион, не различая центр/под-центр/обычный
+    // узел.
     maxNodesPerRegion: 23,
+    // Ограничения связности по РОЛИ узла (решено с пользователем явно,
+    // числами; "под-центры" теперь реальная назначаемая роль — первые
+    // `subCentersPerRegion` узлов ПОСЛЕ центра региона, см. attachToRegion(),
+    // а не только заведённое, но пустое поле `subCenterIds`, как раньше):
+    // обычная ("малая") нода — не больше `ordinaryMaxDegree` связей вообще
+    // (мягкий отказ вплетать новое `mentions`-ребро сверх лимита, обеим
+    // сторонам сразу — см. attachToRegion()); под-центр — от
+    // `subCenterMinDegree` до `subCenterMaxDegree` связей ЛЮБОГО типа
+    // (органические `mentions` + добавленные `backbone`); центр — минимум
+    // `centerMinBackboneDegree` связей, но ТОЛЬКО к другим центрам/
+    // под-центрам (peer-only, без верхнего предела и без ограничения на
+    // связи с обычными узлами). Активное досоздание рёбер типа `backbone`
+    // (не через SideCar — геометрия и косинус эмбедингов, тот же принцип,
+    // что и у остального графа) — `enforceBackboneConnectivity()`, сейчас
+    // зовётся только из `bootstrapFromLorebook()` (решено с пользователем:
+    // область — бутстрап).
+    ordinaryMaxDegree: 3,
+    subCenterMinDegree: 10,
+    subCenterMaxDegree: 15,
+    centerMinBackboneDegree: 4,
     // Объединение почти-дубликатов (второй механизм переполнения, решено с
     // пользователем): дешёвый отбор по словам (Жаккар) → точное
     // подтверждение косинусом эмбедингов → пара уходит в ОЧЕРЕДЬ на
@@ -112,6 +131,10 @@ export function clampGraphSettings(values = {}) {
         stagingMaxTurns: clampInt(values.stagingMaxTurns, 1, 500, DEFAULT_SETTINGS.stagingMaxTurns),
         subCentersPerRegion: clampInt(values.subCentersPerRegion, 0, 10, DEFAULT_SETTINGS.subCentersPerRegion),
         maxNodesPerRegion: clampInt(values.maxNodesPerRegion, 2, 200, DEFAULT_SETTINGS.maxNodesPerRegion),
+        ordinaryMaxDegree: clampInt(values.ordinaryMaxDegree, 0, 50, DEFAULT_SETTINGS.ordinaryMaxDegree),
+        subCenterMinDegree: clampInt(values.subCenterMinDegree, 0, 100, DEFAULT_SETTINGS.subCenterMinDegree),
+        subCenterMaxDegree: clampInt(values.subCenterMaxDegree, 0, 100, DEFAULT_SETTINGS.subCenterMaxDegree),
+        centerMinBackboneDegree: clampInt(values.centerMinBackboneDegree, 0, 100, DEFAULT_SETTINGS.centerMinBackboneDegree),
         mergeWordOverlapThreshold: clampInt(values.mergeWordOverlapThreshold * 100, 0, 100, DEFAULT_SETTINGS.mergeWordOverlapThreshold * 100) / 100,
         mergeSimilarityThreshold: clampInt(values.mergeSimilarityThreshold * 100, 0, 100, DEFAULT_SETTINGS.mergeSimilarityThreshold * 100) / 100,
         mergeQueueMaxTurns: clampInt(values.mergeQueueMaxTurns, 1, 200, DEFAULT_SETTINGS.mergeQueueMaxTurns),
@@ -925,25 +948,162 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const key = regionKey(sector, ring);
         const region = regionEntry(sector, ring);
         const isFirst = !region.centerNodeId;
+        // "Под-центр" — реальная НАЗНАЧАЕМАЯ роль (решено с пользователем;
+        // раньше `subCenterIds` было заведённым, но никогда не заполняемым
+        // полем): первые `subCentersPerRegion` узла ПОСЛЕ центра региона.
+        // Тот же принцип, что у центра — "первый(-ые) в регионе структурно
+        // важны", тот же порядок прибытия, не отдельная оценка важности.
+        const isSubCenter = !isFirst && region.subCenterIds.length < settings.subCentersPerRegion;
         regions[key] = {
             ...region, sector, ring,
             centerNodeId: region.centerNodeId ?? node.id,
+            subCenterIds: isSubCenter ? [...region.subCenterIds, node.id] : region.subCenterIds,
             nodeIds: [...region.nodeIds, node.id],
         };
         node.regionId = key;
-        node.protectedNode = node.protectedNode || isFirst; // первая нода региона — его центр, защищена (MEMORY_GRAPH.md)
+        node.protectedNode = node.protectedNode || isFirst || isSubCenter; // центр/под-центр региона — защищены (MEMORY_GRAPH.md)
         bumpWordProfile(sector, ring, node.content);
         for (const name of extractCharacterNames(node.content)) {
             const owner = Object.values(nodes).find(other => other.id !== node.id && other.label === name);
-            if (owner) {
-                node.edges = [...(node.edges ?? []), { to: owner.id, type: 'mentions' }];
-                owner.edges = [...(owner.edges ?? []), { to: node.id, type: 'mentions' }];
-                node.degree = (node.degree ?? 0) + 1;
-                owner.degree = (owner.degree ?? 0) + 1;
-            }
+            if (!owner) continue;
+            // Потолок связей для ОБЫЧНЫХ ("малых", не protectedNode) нод —
+            // решено с пользователем явно, числом: не больше
+            // `ordinaryMaxDegree` связей вообще. Центр/под-центр здесь без
+            // потолка — их собственные пределы (если есть) обеспечивает
+            // ОТДЕЛЬНЫЙ, активный механизм `enforceBackboneConnectivity()`,
+            // не органическое связывание по имени.
+            if (!node.protectedNode && (node.degree ?? 0) >= settings.ordinaryMaxDegree) continue;
+            if (!owner.protectedNode && (owner.degree ?? 0) >= settings.ordinaryMaxDegree) continue;
+            node.edges = [...(node.edges ?? []), { to: owner.id, type: 'mentions' }];
+            owner.edges = [...(owner.edges ?? []), { to: node.id, type: 'mentions' }];
+            node.degree = (node.degree ?? 0) + 1;
+            owner.degree = (owner.degree ?? 0) + 1;
         }
         detectMergeCandidate(node, key);
         enforceRegionCapacity(key);
+    }
+
+    // --- Бэкбон связности между центрами/под-центрами (решено с
+    // пользователем явно, числами: "малая нода — не больше 3 связей,
+    // под-центр — 10-15, центр — не менее 4, но только к другим
+    // центрам/под-центрам"). АКТИВНОЕ досоздание рёбер — органическое
+    // связывание по имени (`attachToRegion()`) физически не может это
+    // гарантировать: на 15 регионов даже 4 связи у КАЖДОГО центра —
+    // не то, что появится само по себе от случайных упоминаний в 1-2
+    // предложениях лорбука. Приоритет кандидатов — СНАЧАЛА соседние по
+    // геометрии дартса регионы (`regionAdjacency()`, тот же принцип "не
+    // LLM решает соседство"), потом — по убыванию косинуса эмбедингов
+    // среди оставшихся. Сейчас зовётся только из `bootstrapFromLorebook()`
+    // (решено с пользователем: область действия — бутстрап, не
+    // органический рост графа за ходом).
+
+    function isCenterNode(nodeId) {
+        return Object.values(regions).some(region => region.centerNodeId === nodeId);
+    }
+
+    function isBackboneNode(nodeId) {
+        return Object.values(regions).some(region => region.centerNodeId === nodeId || region.subCenterIds.includes(nodeId));
+    }
+
+    /** Степень узла, считая ТОЛЬКО связи с другими бэкбон-узлами (центр/под-центр) — то, что реально нужно центру (peer-only минимум), не общая степень. */
+    function peerDegree(node) {
+        return (node.edges ?? []).filter(edge => isBackboneNode(edge.to)).length;
+    }
+
+    function addBackboneEdge(a, b) {
+        if ((a.edges ?? []).some(edge => edge.to === b.id)) return; // уже связаны (органически или предыдущим проходом)
+        a.edges = [...(a.edges ?? []), { to: b.id, type: 'backbone' }];
+        b.edges = [...(b.edges ?? []), { to: a.id, type: 'backbone' }];
+        a.degree = (a.degree ?? 0) + 1;
+        b.degree = (b.degree ?? 0) + 1;
+    }
+
+    function enforceBackboneConnectivity() {
+        const backboneIds = Object.values(regions).flatMap(region => [region.centerNodeId, ...region.subCenterIds]).filter(Boolean);
+        for (const nodeId of backboneIds) {
+            const node = nodes[nodeId];
+            if (!node) continue;
+            const center = isCenterNode(nodeId);
+            // Центр — минимум ТОЛЬКО по peer-связям (могут быть и другие,
+            // органические, связи с обычными нодами — они сюда не
+            // считаются и не мешают). Под-центр — минимум/максимум по
+            // ОБЩЕЙ степени (решено с пользователем — у под-центра
+            // ограничение без оговорки "только к центрам").
+            const need = center
+                ? Math.max(0, settings.centerMinBackboneDegree - peerDegree(node))
+                : Math.max(0, settings.subCenterMinDegree - (node.degree ?? 0));
+            if (need <= 0) continue;
+
+            const connectedIds = new Set((node.edges ?? []).map(edge => edge.to));
+            const [ownSector, ownRing] = node.regionId ? node.regionId.split(':').map(Number) : [null, null];
+            const adjacentKeys = node.regionId
+                ? new Set(regionAdjacency(ownSector, ownRing).map(({ sector, ring }) => regionKey(sector, ring)))
+                : new Set();
+
+            const pool = backboneIds
+                .filter(id => id !== nodeId && !connectedIds.has(id) && nodes[id])
+                .map(id => ({
+                    id,
+                    adjacent: adjacentKeys.has(nodes[id].regionId) ? 1 : 0,
+                    similarity: cosineSimilarity(node.embedding, nodes[id].embedding),
+                }))
+                .sort((a, b) => (b.adjacent - a.adjacent) || (b.similarity - a.similarity));
+
+            let added = 0;
+            for (const candidate of pool) {
+                if (added >= need) break;
+                const other = nodes[candidate.id];
+                // Под-центр не должен пробить СВОЙ потолок (15), и не
+                // должен пробивать потолок соседнего под-центра тоже —
+                // центр без верхнего предела вовсе.
+                if (!center && (node.degree ?? 0) >= settings.subCenterMaxDegree) break;
+                if (!isCenterNode(candidate.id) && (other.degree ?? 0) >= settings.subCenterMaxDegree) continue;
+                addBackboneEdge(node, other);
+                added += 1;
+            }
+        }
+    }
+
+    // --- Импорт главного персонажа из карточки (решено с пользователем:
+    // "если в LB нет ноды главного Char (он полностью в карточке) - надо
+    // создавать ноду автоматически"; форма УТОЧНЕНА пользователем позже —
+    // не автоматическая эвристика, а явный выбор в UI: "персонаж уже в
+    // LB" (ничего не делать) / "только в карточке" (эта функция)) --------
+
+    /** Насколько важен персонаж по умолчанию — не откалиброванный протокол, как и другие эвристики важности в этом файле; главный персонаж по определению не второстепенная деталь. */
+    const MAIN_CHARACTER_IMPORTANCE = 7;
+
+    /**
+     * Ставит ноду главного персонажа тем же КАСКАДОМ размещения, что и у
+     * бутстрапа/SideCar-нод (`placeNewNode()`) — не ручным сектором/кольцом:
+     * у пользователя нет оснований выбирать регион для персонажа вручную,
+     * эмбединг решает сам, как для любой другой органической записи. Поля
+     * карточки — ТОЛЬКО `description`+`personality` (решено с
+     * пользователем явно, из нескольких вариантов). Источник данных —
+     * `stCharacter.current` (Сервис, `services/st-character.js`,
+     * `host.services`, не `host.own` — тот же принцип, что у
+     * `embedding.compute`).
+     */
+    async function createNodeFromCharacterCard() {
+        return enqueueWrite(async () => {
+            const characterResult = await callService('stCharacter.current');
+            if (!characterResult.ok || !characterResult.value) return { ok: false, error: 'No active character.' };
+            const character = characterResult.value;
+            const label = String(character.name ?? '').trim() || 'Main Character';
+            const content = [character.description, character.personality]
+                .map(part => String(part ?? '').trim()).filter(Boolean).join('\n\n');
+            if (!content) return { ok: false, error: 'Character card has no description/personality to import.' };
+
+            const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
+            if (!embeddingResult.ok) return { ok: false, error: embeddingResult.error.message };
+            const { coords, probs: vectorProbs } = vectorProbsForAllRegions(embeddingResult.value);
+            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE }, { coords, vectorProbs });
+            // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
+            // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
+            await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
+            publishEvent('memoryGraph.nodeCreated', { nodeId: result.nodeId, status: result.status, source: 'characterCard' });
+            return { ok: true, nodeId: result.nodeId, status: result.status, label };
+        });
     }
 
     // --- Ручное редактирование графа (UI-редактор, решено с пользователем:
@@ -1255,43 +1415,57 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * что есть, не фильтруем по новизне против графа, который ещё пуст).
      */
     async function bootstrapFromLorebook() {
-        const booksResult = await call('lorebook.books');
-        if (!booksResult.ok || !booksResult.value?.length) return false;
-        const summariesResult = await call('lorebook.find', {});
-        if (!summariesResult.ok || !summariesResult.value?.length) return false;
+        // Обёрнуто в enqueueWrite (не было раньше) — решено с пользователем:
+        // теперь бутстрап зовётся ИЗ ФОНА, не awaited вызывающим (см.
+        // `load()` ниже), поэтому реальная генерация (`checkAndPlace()`,
+        // тоже через enqueueWrite) может стартовать, пока бутстрап ещё
+        // выполняется — без общей очереди это была бы гонка по `nodes`/
+        // `regions` между двумя параллельными мутациями графа.
+        return enqueueWrite(async () => {
+            const booksResult = await call('lorebook.books');
+            if (!booksResult.ok || !booksResult.value?.length) return false;
+            const summariesResult = await call('lorebook.find', {});
+            if (!summariesResult.ok || !summariesResult.value?.length) return false;
 
-        const bootstrappedIds = [];
-        for (const summary of summariesResult.value) {
-            const fullResult = await call('lorebook.get', { uid: summary.uid, book: summary.book });
-            if (!fullResult.ok) continue;
-            const entry = fullResult.value;
-            const label = String(entry.comment ?? '').trim() || `WI #${entry.uid}`;
-            const content = String(entry.content ?? '').trim();
-            if (!content) continue; // пустая запись — нечего эмбедить и нечего класть в граф
+            const bootstrappedIds = [];
+            for (const summary of summariesResult.value) {
+                const fullResult = await call('lorebook.get', { uid: summary.uid, book: summary.book });
+                if (!fullResult.ok) continue;
+                const entry = fullResult.value;
+                const label = String(entry.comment ?? '').trim() || `WI #${entry.uid}`;
+                const content = String(entry.content ?? '').trim();
+                if (!content) continue; // пустая запись — нечего эмбедить и нечего класть в граф
 
-            const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
-            if (!embeddingResult.ok) continue;
-            const { coords, probs: vectorProbs } = vectorProbsForAllRegions(embeddingResult.value);
-            const importance = importanceFromLorebookEntry(entry);
-            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance, createdTurn: 0 }, { coords, vectorProbs });
-            bootstrappedIds.push(result.nodeId);
-        }
-        // Второй проход — решено с пользователем: важность из полей WI это
-        // только СТАРТОВЫЙ сигнал, "потом смотрим на количество соединений
-        // и проверяем". ПОСЛЕ всего цикла — все связи `mentions` между
-        // ЛЮБОЙ парой записей бутстрапа уже разведены (attachToRegion()
-        // сверяет новую ноду со всеми уже вставленными на КАЖДОМ шаге, так
-        // что к концу цикла degree каждой ноды окончательный, а не только
-        // от вставленных ДО неё).
-        for (const nodeId of bootstrappedIds) {
-            const node = nodes[nodeId];
-            if (node) node.importance = applyConnectionBonus(node.importance, node.degree);
-        }
-        // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
-        // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
-        await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
-        publishEvent('memoryGraph.bootstrapped', { source: 'lorebook', nodeCount: Object.keys(nodes).length });
-        return true;
+                const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
+                if (!embeddingResult.ok) continue;
+                const { coords, probs: vectorProbs } = vectorProbsForAllRegions(embeddingResult.value);
+                const importance = importanceFromLorebookEntry(entry);
+                const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance, createdTurn: 0 }, { coords, vectorProbs });
+                bootstrappedIds.push(result.nodeId);
+            }
+            // Бэкбон — ДО бонуса важности за связи ниже: досозданные `backbone`-
+            // рёбра тоже должны учитываться в итоговой degree, когда важность
+            // считает "количество соединений" (иначе центр/под-центр с
+            // добавленными связями оценивался бы по СТАРОЙ, органической
+            // степени, будто досоздания не было).
+            enforceBackboneConnectivity();
+            // Второй проход — решено с пользователем: важность из полей WI это
+            // только СТАРТОВЫЙ сигнал, "потом смотрим на количество соединений
+            // и проверяем". ПОСЛЕ всего цикла — все связи `mentions` между
+            // ЛЮБОЙ парой записей бутстрапа уже разведены (attachToRegion()
+            // сверяет новую ноду со всеми уже вставленными на КАЖДОМ шаге, так
+            // что к концу цикла degree каждой ноды окончательный, а не только
+            // от вставленных ДО неё).
+            for (const nodeId of bootstrappedIds) {
+                const node = nodes[nodeId];
+                if (node) node.importance = applyConnectionBonus(node.importance, node.degree);
+            }
+            // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
+            // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
+            await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
+            publishEvent('memoryGraph.bootstrapped', { source: 'lorebook', nodeCount: Object.keys(nodes).length });
+            return true;
+        });
     }
 
     /** Прогон накопителя — ретраи/эскалация по расписанию (MEMORY_GRAPH.md, числа согласованы с пользователем). Зовётся из того же прохода `generation.prepare`, что и `checkAndPlace`, но независимо от того, была ли эта генерация "сильным изменением". */
@@ -1411,6 +1585,20 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     /**
+     * Ручной перезапуск бэкбон-довязки (решено с пользователем: механизм
+     * активный, не только на бутстрапе) — например, после серии РУЧНЫХ
+     * созданий нод через UI-редактор (`memoryGraph.nodes.create` сама по
+     * себе НЕ зовёт `enforceBackboneConnectivity()`, только бутстрап это
+     * делает автоматически).
+     */
+    async function sweepBackbone() {
+        return enqueueWrite(async () => {
+            enforceBackboneConnectivity();
+            await Promise.all([persistNodes(), persistRegions()]);
+        });
+    }
+
+    /**
      * Бутстрап пустого графа — MEMORY_GRAPH.md, решено с пользователем:
      * есть Lorebook → перестроить граф из него (`bootstrapFromLorebook()`,
      * реализовано — оказалось не отдельной подсистемой, а тем же
@@ -1423,6 +1611,25 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     async function bootstrapIfEmpty() {
         if (Object.keys(nodes).length > 0) return;
         await bootstrapFromLorebook();
+    }
+
+    /**
+     * Промис ТЕКУЩЕГО (или последнего) фонового бутстрапа — решено с
+     * пользователем: "зависание при bootstrap... вынеси его отдельно".
+     * `load()` больше НЕ ждёт `bootstrapIfEmpty()` сама — при большом
+     * Lorebook (десятки записей, у каждой свой вызов реальной ONNX-модели
+     * эмбеддинга) это реально ДОЛГО, а `load()` до сих пор awaited напрямую
+     * в `harness/engine-wiring.js`'s главной цепочке — весь движок (панель,
+     * докер запуска) висел за ОДНИМ этим `await`, пока бутстрап не
+     * закончится. Экспортируется как `waitForBootstrap()` на возвращаемом
+     * объекте Ядра — тестам и любому коду, которому ДЕЙСТВИТЕЛЬНО нужно
+     * дождаться результата (а не просто не блокировать остальных), есть
+     * явный способ это сделать; `load()` этот промис сама не ждёт.
+     */
+    let bootstrapPromise = Promise.resolve();
+
+    function waitForBootstrap() {
+        return bootstrapPromise;
     }
 
     /**
@@ -1462,7 +1669,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     async function load() {
         await loadSettings();
         await loadState();
-        await bootstrapIfEmpty();
+        // Регистрация этапов пайплайна — БЫСТРАЯ, идёт ДО бутстрапа (раньше
+        // шла после — бутстрап мог задержать даже это). Без неё граф вообще
+        // не участвовал бы в генерации, даже с уже загруженными данными.
         await call('pipeline.stages.add', {
             pipelineId: PREPARE_PIPELINE,
             stage: { id: 'memory-graph:place', contract: CHECK_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' },
@@ -1471,6 +1680,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         await call('pipeline.stages.add', {
             pipelineId: BEFORE_SEND_PIPELINE,
             stage: { id: INJECT_STAGE_ID, contract: INJECT_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' },
+        });
+        // Бутстрап — ПОСЛЕДНИМ и НЕ awaited здесь (решено с пользователем,
+        // см. `waitForBootstrap()`'s doc-comment). Ошибка ловится и
+        // логируется явно, не проглатывается молча и не улетает
+        // необработанным отказом промиса.
+        bootstrapPromise = bootstrapIfEmpty().catch(error => {
+            console.warn('[memoryGraph] background bootstrap failed:', error);
         });
     }
 
@@ -1493,6 +1709,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.check', params => manualCheck(extractLatestText(params?.chat))),
         // Ручное редактирование графа (UI-редактор) — CRUD нод/рёбер.
         host.own.register('memoryGraph.nodes.create', params => createNodeManually(params ?? {})),
+        host.own.register('memoryGraph.nodes.createFromCharacterCard', () => createNodeFromCharacterCard()),
         host.own.register('memoryGraph.nodes.update', params => updateNodeManually(params ?? {})),
         host.own.register('memoryGraph.nodes.delete', params => deleteNodeManually(params ?? {})),
         host.own.register('memoryGraph.nodes.move', params => moveNodeManually(params ?? {})),
@@ -1504,11 +1721,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.sweepStaging', () => sweepStaging()),
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),
         host.own.register('memoryGraph.sweepReconsolidationQueue', () => sweepReconsolidationQueue()),
+        host.own.register('memoryGraph.sweepBackbone', () => sweepBackbone()),
         host.own.register('memoryGraph.bootstrapFromLorebook', () => bootstrapFromLorebook()),
     ];
 
     return {
-        load,
+        load, waitForBootstrap,
         checkAndPlace, sweepStaging, sweepMergeQueue, sweepReconsolidationQueue, injectIntoPrompt,
         settings: () => settings,
         nodes: () => Object.values(nodes),
