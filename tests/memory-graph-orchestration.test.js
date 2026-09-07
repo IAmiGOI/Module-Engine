@@ -593,6 +593,31 @@ test('sweeping a matured reconsolidation queue folds the weak cluster into ONE d
     assert.equal(graphCore.reconsolidationQueue().length, 0, 'the matured entry must be consumed');
 });
 
+test('askSideCarForReconsolidation() sends an explicit maxTokens override, not the engine\'s 1000-token default (реальная жалоба: "[сайдкар] имеет макс контекст тоже в 1000")', async () => {
+    const entries = Array.from({ length: 24 }, (_, i) => ({ uid: i, comment: `Entry ${i}`, content: `Distinct lore fact number ${i} about the world, unrelated to the others.` }));
+    const replies = [
+        '[{"region":"Big","subCenterUids":[1,2]}]',
+        '[{"region":"Big","centerUid":0}]',
+        '[]',
+        '{"label":"Folded Entries","content":"A compressed summary of several minor facts.","importance":2}',
+    ];
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        const reply = replies[Math.min(requestBodies.length - 1, replies.length - 1)];
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    const { graphCore } = buildEngine({ lorebookEntries: entries, fetchOverride });
+
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
+    await graphCore.sweepReconsolidationQueue();
+
+    assert.equal(requestBodies.length, 4, 'sanity: bootstrap Проход 1/2/3 + the reconsolidation call itself must all have fired');
+    assert.equal(requestBodies.at(-1).max_tokens, 2000, `askSideCarForReconsolidation() must override the 1000-token engine default: ${JSON.stringify(requestBodies.at(-1))}`);
+});
+
 test('enforceRegionCapacity() falls back to plain eviction when fewer than reconsolidationMinCluster candidates are eligible', async () => {
     const entries = [
         { uid: 0, comment: 'Center', content: 'a shared lore fact about this tiny region, entry zero.' },
@@ -951,6 +976,35 @@ test('checkAndPlace() creates a node via SideCar on the very first call (no base
     assert.equal(nodes.value.length, 1);
     assert.equal(nodes.value[0].label, 'Test Fact');
     assert.equal(nodes.value[0].gameTime, null, 'RP Time is "disabled" in this test setup — gameTime must degrade to null, not throw');
+});
+
+test('checkAndPlace() creates NO node when SideCar judges the context purely short-term/situational — {"skip": true} takes precedence even if label/content are also (stray-)present (реальная жалоба: "мелкие краткосрочные договорённости" захватывались как память)', async () => {
+    const { graphCore, caller } = buildEngine({ fetchReply: '{"skip": true, "label": "Noon Meeting", "content": "Player agreed to meet the merchant at noon."}' });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const result = await graphCore.checkAndPlace('The player agrees to meet the merchant at noon tomorrow.');
+
+    assert.equal(result.status, 'sidecar-empty', 'a deliberate skip must be the same calm status as any other "SideCar had nothing" case, not an error');
+    assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, []);
+});
+
+test('askSideCarForNode()\'s prompt gives the model an explicit escape hatch and an anchored importance scale — not an unconditional "always produce a fact"', async () => {
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"skip": true}' } }] }) };
+    };
+    const { graphCore } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    await graphCore.checkAndPlace('The player agrees to meet the merchant at noon tomorrow.');
+
+    assert.equal(requestBodies.length, 1);
+    const prompt = requestBodies[0].messages.at(-1).content;
+    assert.match(prompt, /skip.*true/is, 'the model must be told it may decline entirely, not forced to invent a fact from thin context');
+    assert.match(prompt, /short-term|situational/i, 'the prompt must explicitly steer away from fleeting, plot-mechanic arrangements');
+    assert.match(prompt, /0-3|4-7|8-10/, 'importance must have anchored bands, not a bare unexplained 0-10 range the model has no reason to actually spread across');
 });
 
 test('checkAndPlace() with blank context text is skipped — nothing to embed', async () => {
