@@ -128,6 +128,11 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     // `bootstrapFromLorebook()` тикает её по ходу дела), не точный процент.
     const memoryGraphFlash = signal('');
     const memoryGraphProgress = signal(null);
+    // Чувствительность отбора "сильных изменений" (`thresholdK` — реальная
+    // жалоба пользователя: "не работает это, я могу подкрутить сам это
+    // число? Где оно?" — раньше настраивалось ТОЛЬКО кодом/контрактом
+    // напрямую, никакого UI не было вовсе).
+    const memoryGraphThresholdK = signal(1.5);
     const summaries = signal([]);
     const summaryLevels = signal([]);
     const summaryProtectedWindow = signal(20);
@@ -648,6 +653,17 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         if (result.ok) memoryGraphNodeCount.set(result.value.length);
     }
 
+    async function loadMemoryGraphSettings() {
+        const result = await call('memoryGraph.settings');
+        if (result.ok) memoryGraphThresholdK.set(result.value.thresholdK);
+    }
+
+    async function saveMemoryGraphThresholdK() {
+        const result = await call('memoryGraph.configure', { thresholdK: memoryGraphThresholdK.peek() });
+        if (result.ok) memoryGraphThresholdK.set(result.value.thresholdK); // отражает реальный клэмп (0.1-10), не то, что могло быть введено вручную
+        await notify(result.ok ? 'ok' : 'error', result.ok ? 'Saved sensitivity' : result.error.message);
+    }
+
     async function loadSummarySettings() {
         const result = await call('summary.settings');
         if (!result.ok || !result.value) return;
@@ -851,6 +867,12 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         },
             h('p', { class: 'stme-summary-help' }, 'Long-term memory as a mind-map — facts as nodes, typed edges between them, retrieved by relevance instead of recency.'),
             memoryGraphProgressBar(),
+            Row(
+                Field('Sensitivity (thresholdK)', NumberInput(memoryGraphThresholdK, { min: 0.1, max: 10, step: 0.1 }), {
+                    hint: 'How many standard deviations a message must stand out by before it is even considered for a new memory. LOWER catches more (more SideCar calls, more nodes); HIGHER catches less.',
+                }),
+                Button('Save', saveMemoryGraphThresholdK),
+            ),
             Row(Button('Open Graph Editor', () => openMemoryGraphPanel?.())),
         );
     }
@@ -995,6 +1017,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         await loadSummarySettings();
         await loadSummaries();
         await loadMemoryGraphCount();
+        await loadMemoryGraphSettings();
         // Список контрактов приходит от сборщика движка: своя шина доступна
         // через host.own, а шины сервисов и сети — нет (у Ядра туда только
         // Гейт-аксессор, и это правильно). Так что «что вообще подключено»
