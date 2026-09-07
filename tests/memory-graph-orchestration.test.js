@@ -159,6 +159,47 @@ test('bootstrapFromLorebook() does nothing when the player has no active loreboo
     assert.deepEqual(nodes.value, []);
 });
 
+test('bootstrapFromLorebook() sends an explicit maxTokens override on every Проход — the engine default (1000, cores/models/internal-engine.js) truncates the structured JSON reply for a real-size Lorebook (found live)', async () => {
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        const replies = ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'];
+        const reply = replies[Math.min(requestBodies.length - 1, replies.length - 1)];
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    const { graphCore } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchOverride,
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    assert.ok(requestBodies.length >= 2, 'sanity: both Проход 1 and Проход 2 must have actually fired');
+    for (const body of requestBodies) {
+        assert.equal(body.max_tokens, 4000, `every model.generate call from the bootstrap must override the 1000-token engine default: ${JSON.stringify(body)}`);
+    }
+});
+
+test('bootstrapFromLorebook() respects a configured bootstrapMaxTokens override, not just its own 4000 default', async () => {
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        const replies = ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'];
+        const reply = replies[Math.min(requestBodies.length - 1, replies.length - 1)];
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchOverride,
+    });
+    await call(caller, 'memoryGraph.configure', { bootstrapMaxTokens: 8000 });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    assert.ok(requestBodies.length >= 2);
+    for (const body of requestBodies) assert.equal(body.max_tokens, 8000);
+});
+
 test('bootstrapFromLorebook() aborts entirely (graph stays empty) when Проход 1 (skeleton) produces no usable region at all', async () => {
     const { graphCore, caller } = buildEngine({
         lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
