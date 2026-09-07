@@ -302,6 +302,34 @@ test('the beforeSend stage contributes nothing when there is no summary yet', as
     assert.deepEqual(outgoing, [{ mes: 'a' }]);
 });
 
+test('st.chatChanged re-reads summaries so a stale-empty core does not OVERWRITE old records with a new fold — real complaint: summaries of the previous session vanished, not just the freshly folded one', async () => {
+    // Гонка как в жизни: `load()` движка стартует ДО того, как ST подгрузил
+    // chatMetadata текущего чата (см. modules/notebook/index.js, doc-comment
+    // на st.chatChanged). Симуляция: chatMetadata пуст на момент load(),
+    // «диск» догружается только потом.
+    const chat = makeChat(4); // protectedWindow(2)+batchSize(3) = 5 -> сам по себе фолд не случится
+    const { engine, context, caller, summaryCore } = buildEngine({ chat });
+    context.chatMetadata = {}; // на старте данных ещё нет — loadSummaries() увидит []
+    await summaryCore.load();
+
+    // Между тем на диске (как будто ST догрузил метаданные после старта движка) уже лежат два старых саммари.
+    const oldSummaries = [
+        { id: 'old_1', level: 1, coveredIds: ['0', '1'], startIndex: 0, endIndex: 1, startTime: null, endTime: null, text: 'Old summary one.', createdAt: 1, edited: false, folded: false },
+        { id: 'old_2', level: 1, coveredIds: ['2', '3'], startIndex: 2, endIndex: 3, startTime: null, endTime: null, text: 'Old summary two.', createdAt: 2, edited: false, folded: false },
+    ];
+    context.chatMetadata = { stme_memory: { 'core.summary': { summaries: oldSummaries } } };
+
+    // ST сменил/догрузил чат — движок должен перечитать список с диска.
+    engine.events.emit('st.chatChanged', {});
+    await new Promise(resolve => setImmediate(resolve)); // подписка запускает async-перезагрузку — даём ей осесть
+
+    // Порог ещё не достигнут — фолд не добавит ничего, но и СТАРОЕ затереть не должен.
+    await call(caller, 'summary.check');
+    const list = await call(caller, 'summary.list');
+
+    assert.deepEqual(list.value.map(r => r.id).sort(), ['old_1', 'old_2'], 'pre-existing summaries must survive a fold cycle that started from a stale-empty core');
+});
+
 // --- Proving the threshold guard actually guards (project discipline) -----
 // Verified during development, not just asserted here: temporarily reverting
 // shouldFold() to `unitCount >= protectedWindow` (dropping `+ batchSize`) made
