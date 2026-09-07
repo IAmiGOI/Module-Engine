@@ -571,6 +571,67 @@
 /* Свёрнутое окно не должно тянуться вниз пустотой и не нуждается в ручке. */
 .stme-floating-panel:has(> .stme-floating-panel-body[hidden]) { height: auto !important; resize: none; }
 
+/* --- Док запуска (index.js's addLauncherDock) ------------------------------
+   Заменил top-bar иконку: у стороннего расширения «ProbablyTooManyTabs»
+   реальный `#top-bar` (и весь top-settings-holder) уходит в
+   `display: none !important` целиком — не выборочно, а весь контейнер, так
+   что ЛЮБАЯ иконка, вставленная туда, пропадает вместе с ним (проверено по
+   их же `style.css`). Этот док не зависит ни от одного ST-контейнера вообще
+   — `position: fixed` прямо на `<body>`, поэтому виден и с этим расширением,
+   и без него, одним и тем же кодом.
+   Тот же «стеклянный» рецепт, что уже есть у `.stme-floating-panel`
+   (blur+saturate, полупрозрачный `--SmartThemeBlurTintColor`, мягкая тень) —
+   просто в форме узкой пилюли на 5 мест по высоте, а не окна. */
+.stme-launcher-dock {
+    position: fixed;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 6950;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 40px;
+    padding: 8px 0;
+    border: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 55%, transparent);
+    /* Больше половины ширины — гарантированно даёт полностью скруглённые
+       (полукруглые) верх и низ независимо от того, сколько мест реально
+       занято, без пересчёта под высоту. */
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1e26) 94%, transparent);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+}
+.stme-launcher-dock-btn {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #dfe3ea);
+    font-size: 15px;
+    cursor: pointer;
+    transition: background .12s ease, color .12s ease;
+}
+.stme-launcher-dock-btn:hover { background: color-mix(in srgb, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)) 22%, transparent); color: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); }
+/* Пустые места — задел на будущее (другие быстрые действия движка), не
+   декорация: тот же круглый слот, что у настоящей кнопки, просто притушенный
+   и некликабельный, чтобы форма дока не менялась, когда там появится вторая
+   настоящая иконка. */
+.stme-launcher-dock-slot {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 10%, transparent);
+}
+
 /*
    Строка состояния читается как показание в игре, а не как строка лога:
    подпись сверху мелко и капителью, значение под ней — крупно и жирно.
