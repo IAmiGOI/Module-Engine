@@ -581,32 +581,72 @@
    и без него, одним и тем же кодом.
    Тот же «стеклянный» рецепт, что уже есть у `.stme-floating-panel`
    (blur+saturate, полупрозрачный `--SmartThemeBlurTintColor`, мягкая тень) —
-   просто в форме узкой пилюли на 5 мест по высоте, а не окна. */
+   просто в форме узкой пилюли на 5 мест по высоте, а не окна.
+   Размеры — от исходных +15% (40→46 / 32→37 / 6→7 / 8→9 / 15→17).
+
+   **Выезжает по наведению.** В покое `right` уводит пилюлю почти целиком за
+   правый край экрана — остаётся только `--stme-dock-peek` (10px) узкой
+   полосой, ровно она же несёт мерцающую синюю линию (`::before`). Наведение
+   на ЭТУ полосу — единственный вход: `position: fixed` не обрезается
+   вьюпортом, так что видимый огрызок пилюли остаётся честно наводимым и
+   кликабельным сам по себе, без отдельной зоны-ловушки. `transition` на
+   `right`, а не `transform: translateX` — тут это тот же результат, но
+   числа читаются напрямую (сколько видно в закрытом виде), без пересчёта
+   через ширину элемента в `calc()`. */
 .stme-launcher-dock {
+    --stme-dock-peek: 10px;
     position: fixed;
-    right: 14px;
-    top: 50%;
-    transform: translateY(-50%);
+    right: calc(-1 * (46px - var(--stme-dock-peek)));
+    bottom: 14%; /* нижняя треть экрана, но с запасом от самого края */
     z-index: 6950;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
-    width: 40px;
-    padding: 8px 0;
-    border: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 55%, transparent);
+    gap: 7px;
+    width: 46px;
+    padding: 9px 0;
+    border: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 45%, transparent);
     /* Больше половины ширины — гарантированно даёт полностью скруглённые
        (полукруглые) верх и низ независимо от того, сколько мест реально
        занято, без пересчёта под высоту. */
     border-radius: 999px;
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1e26) 94%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1e26) 72%, transparent);
     backdrop-filter: blur(16px) saturate(160%);
     -webkit-backdrop-filter: blur(16px) saturate(160%);
     box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+    overflow: hidden;
+    transition: right .25s ease;
+}
+.stme-launcher-dock:hover, .stme-launcher-dock:focus-within {
+    right: 16px;
+}
+/* Полоска на краю в закрытом состоянии — та же часть пилюли, что торчит из-за
+   края экрана, просто с собственным мерцающим градиентом поверх стекла, а не
+   декорация где-то ещё отдельно: свернули — видна она, развернули — она
+   становится просто акцентной линией у левого края самого дока. */
+.stme-launcher-dock::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10%;
+    bottom: 10%;
+    width: 4px;
+    border-radius: 999px;
+    background: linear-gradient(180deg, #5b8dff, #9db4ff, #3f6fe0, #8da8ff, #5b8dff);
+    background-size: 100% 300%;
+    box-shadow: 0 0 10px color-mix(in srgb, #5b8dff 70%, transparent);
+    animation: stme-dock-shimmer 3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-launcher-dock::before { animation: none; background-position: 0 50%; }
+}
+@keyframes stme-dock-shimmer {
+    0%, 100% { background-position: 0 0%; }
+    50% { background-position: 0 100%; }
 }
 .stme-launcher-dock-btn {
-    width: 32px;
-    height: 32px;
+    width: 37px;
+    height: 37px;
     flex-shrink: 0;
     display: flex;
     align-items: center;
@@ -615,7 +655,7 @@
     border-radius: 50%;
     background: transparent;
     color: var(--SmartThemeBodyColor, #dfe3ea);
-    font-size: 15px;
+    font-size: 17px;
     cursor: pointer;
     transition: background .12s ease, color .12s ease;
 }
@@ -625,8 +665,8 @@
    и некликабельный, чтобы форма дока не менялась, когда там появится вторая
    настоящая иконка. */
 .stme-launcher-dock-slot {
-    width: 32px;
-    height: 32px;
+    width: 37px;
+    height: 37px;
     flex-shrink: 0;
     border-radius: 50%;
     background: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 10%, transparent);
