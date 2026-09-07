@@ -53,10 +53,14 @@ function getContext() {
  * the SAME launcher whether or not that extension (or any other that
  * reorganizes the top bar) is installed.
  *
- * Five icon-sized slots by height, one of them real (`stme-launcher-dock-btn`,
- * opens the panel) — the rest are empty `stme-launcher-dock-slot`s reserved
- * for future quick actions, kept the same visual size so the dock's shape
- * doesn't change when a second real action arrives.
+ * Five icon-sized slots by height — TWO of them real now
+ * (`stme-launcher-dock-btn`, opens the engine panel; `stme-launcher-dock-btn-graph`,
+ * opens the Memory Graph editor's own floating window directly, without
+ * detouring through the settings panel's card first — решено с пользователем:
+ * "вынеси заход в граф в боковую панель тоже"), the rest stay empty
+ * `stme-launcher-dock-slot`s reserved for future quick actions, kept the
+ * same visual size so the dock's shape doesn't change when another real
+ * action arrives.
  *
  * Wrapped in a `.stme-launcher-dock-zone` — a stationary hover hitbox, NOT
  * the pill itself. An earlier version put `:hover` directly on the sliding
@@ -65,7 +69,7 @@ function getContext() {
  * `:hover` — a visible vibration (caught live). The zone never moves; only
  * the pill inside it does.
  */
-function addLauncherDock(panel) {
+function addLauncherDock(panel, { openMemoryGraphPanel } = {}) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
     const zone = document.createElement('div');
     zone.id = 'stmeBetaLauncherDock';
@@ -75,12 +79,15 @@ function addLauncherDock(panel) {
             <button type="button" class="stme-launcher-dock-btn" title="Open ST Module Engine (Beta)" data-i18n="[title]Open ST Module Engine (Beta)">
                 <i class="fa-solid fa-flask fa-fw"></i>
             </button>
-            <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+            <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-graph" title="Open Memory Graph" data-i18n="[title]Open Memory Graph">
+                <i class="fa-solid fa-diagram-project fa-fw"></i>
+            </button>
             <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
             <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
             <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
         </div>`;
-    zone.querySelector('button').addEventListener('click', () => panel.toggle());
+    zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph)').addEventListener('click', () => panel.toggle());
+    zone.querySelector('.stme-launcher-dock-btn-graph').addEventListener('click', () => openMemoryGraphPanel?.());
     document.body.append(zone);
 }
 
@@ -89,7 +96,7 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, selfUpdate } = await wireEngine({
+    const { engine, panelUi, selfUpdate, memoryGraphPanel } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
@@ -113,7 +120,7 @@ async function init() {
     panel.body.append(panelUi.getRoot());
 
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => panel.open());
-    addLauncherDock(panel);
+    addLauncherDock(panel, { openMemoryGraphPanel: () => memoryGraphPanel.show() });
 
     window.STModuleEngineBeta = engine;
     console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the floating launcher dock.');
