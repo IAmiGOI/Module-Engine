@@ -38,21 +38,70 @@ const MAX_RADIUS = 480; // x2 от исходных 240 — узлы стали 
 
 // --- Геометрия: региональная сетка ↔ экранные координаты (чистые функции) --
 
+const MIN_ANCHOR_DISTANCE = 16;
+const MIN_POINT_DISTANCE = 8;
+
 /**
- * Экранная позиция узла внутри его региона. `indexInRegion`/`countInRegion`
- * веерно разводят НЕСКОЛЬКО узлов одного региона по небольшому угловому
- * спреду внутри своей ячейки, чтобы они не легли друг на друга.
+ * Позиция N-й ноды внутри региона относительно его точки привязки —
+ * концентрические кольца, а не угловой веер (решено с пользователем явно,
+ * числами: "минимальная дистанция от точки привязки - 16 пикселей,
+ * минимальная дистанция до любой другой точки - 8 пикселей"; прежний
+ * угловой веер с фиксированным раствором `sectorAngle*0.7` от этого не
+ * защищал — при многих нодах в регионе (до 23) они сжимались теснее 8px).
+ *
+ * Кольцо k — радиус `minAnchorDistance + minPointDistance*k`. Радиальный
+ * шаг между кольцами УЖЕ РАВЕН minPointDistance — этого одного факта
+ * достаточно, чтобы ЛЮБЫЕ две точки из соседних (или более дальних) колец
+ * были на дистанции ≥ minPointDistance друг от друга, независимо от угла.
+ * Внутри одного кольца точки разнесены по хорде: `2*r*sin(dθ/2) = minPointDistance`
+ * даёт максимальное число точек на кольце без нарушения той же дистанции.
+ * Результат — угол/радиус в ЛОКАЛЬНОЙ системе (0° — вдоль луча от начала
+ * координат наружу), поворачивается на `centerAngle` вызывающим кодом:
+ * так нода #0 ложится СТРОГО по тому же лучу, что и сама точка привязки
+ * (просто дальше на minAnchorDistance), не смещая угол — раскладка внутри
+ * региона не съезжает в соседний сектор на малых радиусах.
+ *
+ * Не зависит от `countInRegion` — в отличие от прежнего веера, позиция
+ * ноды #5 не пересчитывается заново каждый раз, когда в регион добавляется
+ * ноды #6: пришедшие раньше не "плавают" при новых вставках.
  */
-export function regionLayoutPosition(sector, ring, { maxRadius = MAX_RADIUS, sectors = 5, rings = 3, indexInRegion = 0, countInRegion = 1 } = {}) {
+export function packOffsetInRegion(indexInRegion, { minAnchorDistance = MIN_ANCHOR_DISTANCE, minPointDistance = MIN_POINT_DISTANCE } = {}) {
+    let remaining = Math.max(0, Math.floor(indexInRegion) || 0);
+    let ringIndex = 0;
+    for (;;) {
+        const radius = minAnchorDistance + minPointDistance * ringIndex;
+        const step = 2 * Math.asin(Math.min(1, minPointDistance / (2 * radius)));
+        const capacity = Math.max(1, Math.floor((2 * Math.PI) / step));
+        if (remaining < capacity) {
+            // `+ ringIndex * step/2` — соседние кольца сдвинуты друг относительно
+            // друга на полшага, чтобы точки не легли строго по радиальным линиям
+            // (косметика, на гарантии дистанций не влияет).
+            return { radius, angle: remaining * step + ringIndex * (step / 2) };
+        }
+        remaining -= capacity;
+        ringIndex += 1;
+    }
+}
+
+/**
+ * Экранная позиция узла внутри его региона — точка привязки региона
+ * (центр сектора/кольца дартса) плюс `packOffsetInRegion()`, повёрнутый на
+ * тот же угол, что и сама точка привязки.
+ */
+export function regionLayoutPosition(sector, ring, { maxRadius = MAX_RADIUS, sectors = 5, rings = 3, indexInRegion = 0, minAnchorDistance = MIN_ANCHOR_DISTANCE, minPointDistance = MIN_POINT_DISTANCE } = {}) {
     const sectorAngle = (2 * Math.PI) / sectors;
     const centerAngle = sector * sectorAngle + sectorAngle / 2 - Math.PI / 2; // сектор 0 начинается сверху
     const ringInner = (ring / rings) * maxRadius;
     const ringOuter = ((ring + 1) / rings) * maxRadius;
-    const radius = (ringInner + ringOuter) / 2;
-    const spread = sectorAngle * 0.7;
-    const angleOffset = countInRegion > 1 ? (indexInRegion / (countInRegion - 1) - 0.5) * spread : 0;
-    const angle = centerAngle + angleOffset;
-    return { x: Math.round(Math.cos(angle) * radius), y: Math.round(Math.sin(angle) * radius) };
+    const anchorRadius = (ringInner + ringOuter) / 2;
+    const anchorX = Math.cos(centerAngle) * anchorRadius;
+    const anchorY = Math.sin(centerAngle) * anchorRadius;
+    const offset = packOffsetInRegion(indexInRegion, { minAnchorDistance, minPointDistance });
+    const globalAngle = centerAngle + offset.angle;
+    return {
+        x: Math.round(anchorX + Math.cos(globalAngle) * offset.radius),
+        y: Math.round(anchorY + Math.sin(globalAngle) * offset.radius),
+    };
 }
 
 /**
@@ -279,7 +328,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 let position = { x: 0, y: 0 };
                 if (regionId !== 'staged') {
                     const [sector, ring] = regionId.split(':').map(Number);
-                    position = regionLayoutPosition(sector, ring, { indexInRegion: index, countInRegion: members.length });
+                    position = regionLayoutPosition(sector, ring, { indexInRegion: index });
                 }
                 elements.push({
                     data: { id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode) },
@@ -307,7 +356,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 { selector: 'node', style: { 'background-color': '#4a9eff', color: '#fff', width: 2, height: 2 } },
                 { selector: 'node.hovered', style: { label: 'data(label)', 'font-size': 0.9, 'text-valign': 'bottom', 'text-margin-y': 4 } },
                 { selector: 'node[?protectedNode]', style: { 'background-color': '#ffb454', 'border-width': 2, 'border-color': '#fff' } },
-                { selector: 'edge', style: { width: 1, 'line-color': '#888', 'curve-style': 'bezier', label: 'data(type)', 'font-size': 7, color: '#aaa' } },
+                // Без подписи типа ребра — при реальном графе ("mentions"
+                // почти на каждом ребре) текст сплошным нагромождением
+                // покрывал весь холст (жалоба пользователя).
+                { selector: 'edge', style: { width: 1, 'line-color': '#888', 'curve-style': 'bezier' } },
                 // Маркер места будущего узла в режиме создания — пунктир,
                 // не сплошная заливка, чтобы не путать с настоящим узлом;
                 // не кликабелен и не перетаскиваем (см. `grabbable`/`selectable` ниже).
@@ -425,7 +477,16 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             {
                 position: panelPosition, size: panelSize, collapsed: panelCollapsed,
                 onToggle: value => { panelCollapsed.set(value); saveWindowState(); },
-                onClose: () => { panelVisible.set(false); saveWindowState(); },
+                // Закрытие панели убирает #stme-memory-graph-canvas из
+                // дерева (computed() выше возвращает null) — старый `cy`
+                // остаётся живым объектом, но привязанным к уже удалённому
+                // контейнеру. Без явного `destroy()` его `ensureCytoscape()`
+                // при следующем открытии видел бы `cy` истинным и НЕ
+                // пересоздавал инстанс для нового контейнера — граф
+                // визуально пропадал до перезагрузки страницы (жалоба
+                // пользователя: "если выйти из графа и зайти заново - он
+                // пропадает").
+                onClose: () => { panelVisible.set(false); saveWindowState(); if (cy) { cy.destroy(); cy = null; } },
                 drag: createDragHandlers(panelPosition, { onDrop: dropped => { panelPosition.set(clampToViewport(dropped, { width: panelSize.peek().width ?? 720, height: panelSize.peek().height ?? 560, viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })); saveWindowState(); } }),
                 onResize: next => { panelSize.set(next); saveWindowState(); },
             },
