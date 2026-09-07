@@ -8,7 +8,7 @@ import { createInternalEngineModelsCore } from '../cores/models/internal-engine.
 import { createSettingsCore } from '../cores/settings/index.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
-import { createMemoryGraphCore } from '../cores/memory-graph/index.js';
+import { createMemoryGraphCore, BOOTSTRAP_SYSTEM_PROMPT } from '../cores/memory-graph/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
 
 /**
@@ -59,7 +59,7 @@ function fakeEmbed(text) {
     return vec.map(v => v / norm);
 }
 
-function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', fetchReplies = null, fetchOverride = null, lorebookEntries = null, random, embeddingGate = Promise.resolve(), character = null } = {}) {
+function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', fetchReplies = null, fetchOverride = null, lorebookEntries = null, random, embeddingGate = Promise.resolve(), character = null, workerEndpoint = 'https://fast.example.com', workerFormat = 'openai' } = {}) {
     const engine = createEngine();
     const context = {};
     // `fetchOverride` — полный контроль над fetch (нужно, например, чтобы
@@ -76,7 +76,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
 
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
     const modelsCore = createInternalEngineModelsCore(modelsHost);
-    modelsCore.configureWorkers([{ id: 'fast', endpoint: 'https://fast.example.com', model: 'm1', format: 'openai' }]);
+    modelsCore.configureWorkers([{ id: 'fast', endpoint: workerEndpoint, model: 'm1', format: workerFormat }]);
 
     const pipelineCore = createPipelineCore(engine.registerCaller('core.pipeline', 'cores', { tier: 'official' }), { resolveAs: engine.resolveAs });
     pipelineCore.define({ id: 'generation.prepare', mode: 'collect' });
@@ -176,11 +176,11 @@ test('bootstrapFromLorebook() sends an explicit maxTokens override on every Пр
 
     assert.ok(requestBodies.length >= 2, 'sanity: both Проход 1 and Проход 2 must have actually fired');
     for (const body of requestBodies) {
-        assert.equal(body.max_tokens, 4000, `every model.generate call from the bootstrap must override the 1000-token engine default: ${JSON.stringify(body)}`);
+        assert.equal(body.max_tokens, 50000, `every model.generate call from the bootstrap must override the 1000-token engine default: ${JSON.stringify(body)}`);
     }
 });
 
-test('bootstrapFromLorebook() respects a configured bootstrapMaxTokens override, not just its own 4000 default', async () => {
+test('bootstrapFromLorebook() respects a configured bootstrapMaxTokens override, not just its own 50000 default', async () => {
     const requestBodies = [];
     const fetchOverride = async (url, init) => {
         requestBodies.push(JSON.parse(init.body));
@@ -198,6 +198,53 @@ test('bootstrapFromLorebook() respects a configured bootstrapMaxTokens override,
 
     assert.ok(requestBodies.length >= 2);
     for (const body of requestBodies) assert.equal(body.max_tokens, 8000);
+});
+
+test('bootstrapFromLorebook() sends its own low temperature and the strict-instruction system prompt on every Проход — a structured JSON layout task, not creative generation (решено с пользователем: "ты ужасно сделал... поставь температуру на 0.4")', async () => {
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        const replies = ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'];
+        const reply = replies[Math.min(requestBodies.length - 1, replies.length - 1)];
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    const { graphCore } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchOverride,
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    assert.ok(requestBodies.length >= 2, 'sanity: both Проход 1 and Проход 2 must have actually fired');
+    for (const body of requestBodies) {
+        assert.equal(body.temperature, 0.4, `every model.generate call from the bootstrap must use its own low default temperature, not the engine's 0.7: ${JSON.stringify(body)}`);
+        assert.deepEqual(body.messages[0], { role: 'system', content: BOOTSTRAP_SYSTEM_PROMPT }, 'the strict instruction-following / no-long-reasoning directive must ride along as a system message on every Проход');
+    }
+});
+
+test('bootstrapFromLorebook() respects configured bootstrapTemperature/bootstrapReasoningEffort overrides, not just their own defaults', async () => {
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        const replies = ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'];
+        const reply = replies[Math.min(requestBodies.length - 1, replies.length - 1)];
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchOverride,
+        workerEndpoint: 'https://openrouter.ai/api/v1/chat/completions', // reasoning.effort только у OpenRouter-формата (см. provider-request.js)
+    });
+    await call(caller, 'memoryGraph.configure', { bootstrapTemperature: 0.9, bootstrapReasoningEffort: 'high' });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    assert.ok(requestBodies.length >= 2);
+    for (const body of requestBodies) {
+        assert.equal(body.temperature, 0.9);
+        assert.equal(body.reasoning.enabled, true, 'reasoningMode is forced "enabled" inside the bootstrap — effort alone does nothing without it (see provider-request.js)');
+        assert.equal(body.reasoning.effort, 'high');
+    }
 });
 
 test('bootstrapFromLorebook() aborts entirely (graph stays empty) when Проход 1 (skeleton) produces no usable region at all', async () => {

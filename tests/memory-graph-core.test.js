@@ -544,7 +544,7 @@ test('applyConnectionBonus() adds degree to the base importance, clamped at 10 �
 
 // --- LLM-driven семантические регионы бутстрапа (решено с пользователем) ---
 
-test('buildRegionSkeletonPrompt() includes EVERY entry, numbered, and the base region names as a starting point', () => {
+test('buildRegionSkeletonPrompt() includes EVERY entry, numbered, and the mandatory region names', () => {
     const entries = [
         { uid: 5, label: 'Alpha', content: 'first fact' },
         { uid: 9, label: 'Beta', content: 'second fact' },
@@ -554,6 +554,13 @@ test('buildRegionSkeletonPrompt() includes EVERY entry, numbered, and the base r
     assert.ok(prompt.includes('9. Beta: second fact'));
     assert.ok(prompt.includes('Locations'));
     assert.ok(prompt.includes('Factions'));
+});
+
+test('buildRegionSkeletonPrompt() does NOT invite the model to invent its own regions — that is exclusively Pass 2\'s job', () => {
+    const entries = [{ uid: 1, label: 'A', content: 'x' }];
+    const prompt = buildRegionSkeletonPrompt(entries, ['Locations']);
+    assert.ok(!/propose|your own additional/i.test(prompt), 'Pass 1 must only assign sub-centers to the given regions, never invent new ones — see buildAdditionalCentersPrompt()');
+    assert.ok(prompt.includes('ONLY these regions'));
 });
 
 test('parseRegionSkeletonResponse() drops a region with no valid sub-center uid, but keeps other valid regions', () => {
