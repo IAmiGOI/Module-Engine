@@ -527,6 +527,51 @@ function extractCharacterNames(text) {
     return [...new Set((String(text ?? '').match(/\b[A-ZА-ЯЁ][a-zа-яё]{1,}\b/g) ?? []))];
 }
 
+// --- Авто-важность при бутстрапе из Lorebook (решено с пользователем:
+// "читаем из LB поля, потом смотрим на количество соединений и проверяем")
+// ------------------------------------------------------------------------
+
+/**
+ * Стартовый сигнал важности — ИЗ ПОЛЕЙ САМОЙ записи Lorebook, без единого
+ * вызова модели (бутстрап намеренно НЕ зовёт SideCar вообще — см.
+ * `bootstrapFromLorebook()`). Поля подтверждены по реальному исходнику ST
+ * (`public/scripts/world-info.js`):
+ * - `constant: true` — курируемая запись, ВСЕГДА активна независимо от
+ *   ключевых слов (`aValue = a.disable?2:a.constant?0:1` — константные
+ *   идут первыми, выше приоритетом всех остальных) — сильный сигнал:
+ *   автор явно счёл её базовой.
+ * - `order` — приоритет вставки, ЧЕМ БОЛЬШЕ ЧИСЛО, ТЕМ ВАЖНЕЕ
+ *   (`sortFn: (a,b) => b.order - a.order`, реальная сортировка ST),
+ *   нейтральное значение по умолчанию — 100 (`DEFAULT_WEIGHT` в исходнике
+ *   ST). Отклонение от 100 — намеренная правка автора, переводится в
+ *   ±3 шкалы важности.
+ * Формула — эвристика ("на усмотрение", как и другие некалиброванные
+ * пороги в этом файле — MEMORY_GRAPH.md), не протокол: числа подобраны,
+ * чтобы курируемая constant-запись С нейтральным order давала ~6/10, а
+ * обычная запись — ~3/10, оставляя пространство для бонуса за связи
+ * (см. `applyConnectionBonus()`) до потолка 10.
+ */
+export function importanceFromLorebookEntry(entry) {
+    let score = entry?.constant ? 6 : 3;
+    const order = Number(entry?.order);
+    if (Number.isFinite(order)) score += Math.max(-3, Math.min(3, Math.round((order - 100) / 25)));
+    return Math.max(0, Math.min(10, score));
+}
+
+/**
+ * Второй проход, ПОСЛЕ размещения всех записей бутстрапа (когда рёбра
+ * `mentions` уже разведены `attachToRegion()` по точному совпадению
+ * имени — до этого момента `degree` для более ранних записей неполный).
+ * "Смотрим на количество соединений и проверяем" — узел, на который
+ * реально ссылаются другие записи, явно центральнее по смыслу, чем
+ * предполагал один только начальный сигнал из полей WI — добавляем
+ * degree к базовой важности (не заменяем), с тем же потолком 10, что и у
+ * остальной шкалы важности.
+ */
+export function applyConnectionBonus(baseImportance, degree) {
+    return Math.max(0, Math.min(10, (baseImportance ?? 0) + (degree ?? 0)));
+}
+
 /**
  * Ядро графа памяти (MEMORY_GRAPH.md, Phase 1) — "TopTier" долгосрочная
  * память, физически параллельная BasicSummary ("LowTier"); Tier-переключатель
@@ -1215,6 +1260,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const summariesResult = await call('lorebook.find', {});
         if (!summariesResult.ok || !summariesResult.value?.length) return false;
 
+        const bootstrappedIds = [];
         for (const summary of summariesResult.value) {
             const fullResult = await call('lorebook.get', { uid: summary.uid, book: summary.book });
             if (!fullResult.ok) continue;
@@ -1226,7 +1272,20 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
             if (!embeddingResult.ok) continue;
             const { coords, probs: vectorProbs } = vectorProbsForAllRegions(embeddingResult.value);
-            placeNewNode({ label, content, embedding: embeddingResult.value, createdTurn: 0 }, { coords, vectorProbs });
+            const importance = importanceFromLorebookEntry(entry);
+            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance, createdTurn: 0 }, { coords, vectorProbs });
+            bootstrappedIds.push(result.nodeId);
+        }
+        // Второй проход — решено с пользователем: важность из полей WI это
+        // только СТАРТОВЫЙ сигнал, "потом смотрим на количество соединений
+        // и проверяем". ПОСЛЕ всего цикла — все связи `mentions` между
+        // ЛЮБОЙ парой записей бутстрапа уже разведены (attachToRegion()
+        // сверяет новую ноду со всеми уже вставленными на КАЖДОМ шаге, так
+        // что к концу цикла degree каждой ноды окончательный, а не только
+        // от вставленных ДО неё).
+        for (const nodeId of bootstrappedIds) {
+            const node = nodes[nodeId];
+            if (node) node.importance = applyConnectionBonus(node.importance, node.degree);
         }
         // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
         // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.

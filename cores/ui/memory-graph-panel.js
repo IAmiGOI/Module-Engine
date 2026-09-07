@@ -33,6 +33,7 @@ import {
 const MODULE_UI_NAMESPACE = 'core.ui.memoryGraph';
 const WINDOW_KEY = 'window';
 const CANVAS_ID = 'stme-memory-graph-canvas';
+const BG_ID = 'stme-memory-graph-region-bg';
 const PREVIEW_ID = '__memory_graph_preview__';
 const MAX_RADIUS = 480; // x2 от исходных 240 — узлы стали в 10 раз меньше визуально, ближний вид "слипался"
 
@@ -40,6 +41,13 @@ const MAX_RADIUS = 480; // x2 от исходных 240 — узлы стали 
 
 const MIN_ANCHOR_DISTANCE = 16;
 const MIN_POINT_DISTANCE = 8;
+// "Малые" (обычные) ноды — решено с пользователем явно: потолок 30px от
+// точки привязки. Центр региона (индекс 0, "основная" нода) никогда не
+// подходит к этому потолку в принципе — он всегда сидит на minAnchorDistance
+// (16px), самом БЛИЖНЕМ кольце, так что отдельного исключения ему не нужно:
+// "основные ноды могут быть дальше" уже выполняется автоматически (центр —
+// ближе всех, а не дальше).
+const MAX_ANCHOR_DISTANCE = 30;
 
 /**
  * Позиция N-й ноды внутри региона относительно его точки привязки —
@@ -49,27 +57,34 @@ const MIN_POINT_DISTANCE = 8;
  * угловой веер с фиксированным раствором `sectorAngle*0.7` от этого не
  * защищал — при многих нодах в регионе (до 23) они сжимались теснее 8px).
  *
- * Кольцо k — радиус `minAnchorDistance + minPointDistance*k`. Радиальный
- * шаг между кольцами УЖЕ РАВЕН minPointDistance — этого одного факта
- * достаточно, чтобы ЛЮБЫЕ две точки из соседних (или более дальних) колец
- * были на дистанции ≥ minPointDistance друг от друга, независимо от угла.
- * Внутри одного кольца точки разнесены по хорде: `2*r*sin(dθ/2) = minPointDistance`
- * даёт максимальное число точек на кольце без нарушения той же дистанции.
- * Результат — угол/радиус в ЛОКАЛЬНОЙ системе (0° — вдоль луча от начала
- * координат наружу), поворачивается на `centerAngle` вызывающим кодом:
- * так нода #0 ложится СТРОГО по тому же лучу, что и сама точка привязки
- * (просто дальше на minAnchorDistance), не смещая угол — раскладка внутри
- * региона не съезжает в соседний сектор на малых радиусах.
+ * Кольцо k — радиус `minAnchorDistance + minPointDistance*k`, ЗАЖАТЫЙ
+ * сверху `maxAnchorDistance` (решено с пользователем: "максимальная
+ * удалённость от точки привязки... если малые — то максимальная 30
+ * пикселей"). Радиальный шаг между кольцами РАВЕН minPointDistance ПОКА
+ * радиус не упёрся в потолок — этого одного факта достаточно, чтобы ЛЮБЫЕ
+ * две точки из соседних (или более дальних) колец были на дистанции ≥
+ * minPointDistance друг от друга, независимо от угла. При текущих
+ * настройках (16/8/30, maxNodesPerRegion=23) потолок вообще не
+ * достигается: первых двух колец (12+18=30 мест) хватает на весь регион
+ * целиком — упор в потолок документированный, но практически недостижимый
+ * крайний случай. Внутри одного кольца точки разнесены по хорде:
+ * `2*r*sin(dθ/2) = minPointDistance` даёт максимальное число точек на
+ * кольце без нарушения той же дистанции. Результат — угол/радиус в
+ * ЛОКАЛЬНОЙ системе (0° — вдоль луча от начала координат наружу),
+ * поворачивается на `centerAngle` вызывающим кодом: так нода #0 ложится
+ * СТРОГО по тому же лучу, что и сама точка привязки (просто дальше на
+ * minAnchorDistance), не смещая угол — раскладка внутри региона не съезжает
+ * в соседний сектор на малых радиусах.
  *
  * Не зависит от `countInRegion` — в отличие от прежнего веера, позиция
  * ноды #5 не пересчитывается заново каждый раз, когда в регион добавляется
  * ноды #6: пришедшие раньше не "плавают" при новых вставках.
  */
-export function packOffsetInRegion(indexInRegion, { minAnchorDistance = MIN_ANCHOR_DISTANCE, minPointDistance = MIN_POINT_DISTANCE } = {}) {
+export function packOffsetInRegion(indexInRegion, { minAnchorDistance = MIN_ANCHOR_DISTANCE, minPointDistance = MIN_POINT_DISTANCE, maxAnchorDistance = MAX_ANCHOR_DISTANCE } = {}) {
     let remaining = Math.max(0, Math.floor(indexInRegion) || 0);
     let ringIndex = 0;
     for (;;) {
-        const radius = minAnchorDistance + minPointDistance * ringIndex;
+        const radius = Math.min(minAnchorDistance + minPointDistance * ringIndex, maxAnchorDistance);
         const step = 2 * Math.asin(Math.min(1, minPointDistance / (2 * radius)));
         const capacity = Math.max(1, Math.floor((2 * Math.PI) / step));
         if (remaining < capacity) {
@@ -88,7 +103,7 @@ export function packOffsetInRegion(indexInRegion, { minAnchorDistance = MIN_ANCH
  * (центр сектора/кольца дартса) плюс `packOffsetInRegion()`, повёрнутый на
  * тот же угол, что и сама точка привязки.
  */
-export function regionLayoutPosition(sector, ring, { maxRadius = MAX_RADIUS, sectors = 5, rings = 3, indexInRegion = 0, minAnchorDistance = MIN_ANCHOR_DISTANCE, minPointDistance = MIN_POINT_DISTANCE } = {}) {
+export function regionLayoutPosition(sector, ring, { maxRadius = MAX_RADIUS, sectors = 5, rings = 3, indexInRegion = 0, minAnchorDistance = MIN_ANCHOR_DISTANCE, minPointDistance = MIN_POINT_DISTANCE, maxAnchorDistance = MAX_ANCHOR_DISTANCE } = {}) {
     const sectorAngle = (2 * Math.PI) / sectors;
     const centerAngle = sector * sectorAngle + sectorAngle / 2 - Math.PI / 2; // сектор 0 начинается сверху
     const ringInner = (ring / rings) * maxRadius;
@@ -96,7 +111,7 @@ export function regionLayoutPosition(sector, ring, { maxRadius = MAX_RADIUS, sec
     const anchorRadius = (ringInner + ringOuter) / 2;
     const anchorX = Math.cos(centerAngle) * anchorRadius;
     const anchorY = Math.sin(centerAngle) * anchorRadius;
-    const offset = packOffsetInRegion(indexInRegion, { minAnchorDistance, minPointDistance });
+    const offset = packOffsetInRegion(indexInRegion, { minAnchorDistance, minPointDistance, maxAnchorDistance });
     const globalAngle = centerAngle + offset.angle;
     return {
         x: Math.round(anchorX + Math.cos(globalAngle) * offset.radius),
@@ -118,6 +133,45 @@ export function pixelToRegion(dx, dy, { maxRadius = MAX_RADIUS, sectors = 5, rin
     const sector = Math.min(sectors - 1, Math.floor((angle % (2 * Math.PI)) / sectorAngle));
     const ring = Math.max(0, Math.min(rings - 1, Math.floor((radius / maxRadius) * rings)));
     return { sector, ring };
+}
+
+// --- Фон регионов — решено с пользователем: "сложно визуально разграничить
+// регионы, добавь слабую заливку фона". Cytoscape держит ЗАФИКСИРОВАННые
+// zoom/pan (см. `ensureCytoscape()`) — модельный радиус MAX_RADIUS всегда
+// отображается на экранный радиус SCREEN_RADIUS, поэтому подложку можно
+// нарисовать один раз статичным SVG в тех же экранных пикселях, что и
+// канвас-контейнер (480×480), без пересчёта на каждый кадр. Не через
+// `h()`-дерево — оно строит элементы через обычный `document.createElement`
+// (не `createElementNS`), SVG-теги так не рендерятся как векторная графика.
+const SCREEN_RADIUS = 240; // половина канваса (480px) — экранный радиус внешнего кольца при zoom=ZOOM
+const ZOOM = SCREEN_RADIUS / MAX_RADIUS;
+
+/** Путь одной ячейки дартса (сектор×кольцо) в ЭКРАННЫХ пикселях — тот же угол, что у `regionLayoutPosition`/`pixelToRegion`, другой только масштаб радиуса. Кольцо 0 — сплошной клин от центра (без вырожденной дуги радиуса 0), остальные — кольцевой сегмент. */
+export function regionWedgePath(sector, ring, { sectors = 5, rings = 3, screenRadius = SCREEN_RADIUS } = {}) {
+    const sectorAngle = (2 * Math.PI) / sectors;
+    const a0 = sector * sectorAngle - Math.PI / 2;
+    const a1 = a0 + sectorAngle;
+    const cx = screenRadius;
+    const cy = screenRadius;
+    const r1 = ((ring + 1) / rings) * screenRadius;
+    const pt = (r, a) => `${(cx + Math.cos(a) * r).toFixed(2)},${(cy + Math.sin(a) * r).toFixed(2)}`;
+    if (ring === 0) {
+        return `M ${cx.toFixed(2)},${cy.toFixed(2)} L ${pt(r1, a0)} A ${r1.toFixed(2)} ${r1.toFixed(2)} 0 0 1 ${pt(r1, a1)} Z`;
+    }
+    const r0 = (ring / rings) * screenRadius;
+    return `M ${pt(r0, a0)} L ${pt(r1, a0)} A ${r1.toFixed(2)} ${r1.toFixed(2)} 0 0 1 ${pt(r1, a1)} L ${pt(r0, a1)} A ${r0.toFixed(2)} ${r0.toFixed(2)} 0 0 0 ${pt(r0, a0)} Z`;
+}
+
+/** Вся подложка — 15 ячеек, шахматная заливка по чётности (sector+ring), чтобы соседние регионы отличались на глаз, но не спорили с нодами/рёбрами поверх. */
+export function renderRegionBackgroundSvg({ sectors = 5, rings = 3, screenRadius = SCREEN_RADIUS } = {}) {
+    const cells = [];
+    for (let sector = 0; sector < sectors; sector += 1) {
+        for (let ring = 0; ring < rings; ring += 1) {
+            const fill = (sector + ring) % 2 === 0 ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.07)';
+            cells.push(`<path d="${regionWedgePath(sector, ring, { sectors, rings, screenRadius })}" fill="${fill}" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" />`);
+        }
+    }
+    return `<svg viewBox="0 0 ${screenRadius * 2} ${screenRadius * 2}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">${cells.join('')}</svg>`;
 }
 
 export function createMemoryGraphPanelCore(host, { mount } = {}) {
@@ -343,11 +397,24 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (cy) return cy;
         const container = document.getElementById(CANVAS_ID);
         if (!container) return null;
+        // Фон региона — статичный SVG под канвасом, тот же контейнер-размер
+        // (480×480), тот же угловой охват, что у regionLayoutPosition()/
+        // pixelToRegion() (решено с пользователем: "сложно визуально
+        // разграничить регионы, добавь слабую заливку фона"). Рисуется ОДИН
+        // раз здесь, не в syncCytoscape() — регионы (сектора/кольца) не
+        // меняются, перерисовывать при каждом изменении графа незачем.
+        const bg = document.getElementById(BG_ID);
+        if (bg) bg.innerHTML = renderRegionBackgroundSvg();
         const cytoscape = await loadCytoscape();
         cy = cytoscape({
             container,
             elements: [...nodeElements(), ...edgeElements()],
-            layout: { name: 'preset' },
+            // ЗАФИКСИРОВАННЫЕ zoom/pan (не автo-fit) — иначе подложка (статичный
+            // SVG в экранных координатах) и реальные позиции нод разъезжались
+            // бы каждый раз, когда fit пересчитывал масштаб под новый набор
+            // элементов. `ZOOM`/`SCREEN_RADIUS` — та же пара чисел, что и у
+            // самой подложки.
+            layout: { name: 'preset', fit: false, zoom: ZOOM, pan: { x: SCREEN_RADIUS, y: SCREEN_RADIUS } },
             style: [
                 // Подпись СКРЫТА по умолчанию — при таком размере ноды (2px)
                 // текст на весь холст был нечитаемым нагромождением (жалоба
@@ -359,7 +426,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 // Без подписи типа ребра — при реальном графе ("mentions"
                 // почти на каждом ребре) текст сплошным нагромождением
                 // покрывал весь холст (жалоба пользователя).
-                { selector: 'edge', style: { width: 1, 'line-color': '#888', 'curve-style': 'bezier' } },
+                { selector: 'edge', style: { width: 0.25, 'line-color': '#fff', 'curve-style': 'bezier' } },
                 // Маркер места будущего узла в режиме создания — пунктир,
                 // не сплошная заливка, чтобы не путать с настоящим узлом;
                 // не кликабелен и не перетаскиваем (см. `grabbable`/`selectable` ниже).
@@ -432,7 +499,13 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             });
         }
         cy.add(elements);
-        cy.layout({ name: 'preset' }).run();
+        // `fit: false`, БЕЗ явных zoom/pan — в отличие от начальной
+        // инициализации в ensureCytoscape(), здесь не подгоняем и не
+        // переопределяем: только зафиксированный zoom при первом создании
+        // держит подложку и ноды в одном масштабе, а зум/пан колёсиком мыши
+        // (если пользователь успел покрутить) не должен сбрасываться на
+        // каждое изменение графа.
+        cy.layout({ name: 'preset', fit: false }).run();
     }
 
     // --- Дебаг-блок: 5 существующих оркестрационных операций (решено с пользователем) --
@@ -491,10 +564,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 onResize: next => { panelSize.set(next); saveWindowState(); },
             },
             h('div', { class: 'stme-memory-graph-body', style: { display: 'flex', gap: '8px', minWidth: '680px', minHeight: '480px' } },
-                h('div', {
-                    id: CANVAS_ID,
-                    style: { width: '480px', height: '480px', background: '#1a1a1a', borderRadius: '8px', flexShrink: '0' },
-                }),
+                // Обёртка — position:relative, ДВА слоя внутри: фон региона
+                // (SVG, рисуется напрямую в DOM, см. ensureCytoscape()) и
+                // сам канвас Cytoscape поверх с прозрачным фоном, чтобы
+                // подложка была видна сквозь него.
+                h('div', { style: { position: 'relative', width: '480px', height: '480px', background: '#1a1a1a', borderRadius: '8px', flexShrink: '0', overflow: 'hidden' } },
+                    h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } }),
+                    h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
+                ),
                 h('div', { class: 'stme-memory-graph-sidebar', style: { flex: '1', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' } },
                     Row(
                         Button('+ Node', () => openCreateForm({ sector: 0, ring: 0 })),
