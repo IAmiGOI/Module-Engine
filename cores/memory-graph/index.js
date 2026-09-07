@@ -90,6 +90,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // накопителя.
     reconsolidationMinCluster: 3,
     reconsolidationQueueMaxTurns: 8,
+    // Тот же класс бага, что у бутстрапа (см. `bootstrapMaxTokens` ниже) —
+    // без явного maxTokens `askSideCarForReconsolidation()` падал на
+    // движковый дефолт 1000 (жалоба пользователя). Один компрессированный
+    // JSON-факт заметно короче бутстраповской многорегиональной структуры,
+    // поэтому потолок скромнее.
+    reconsolidationMaxTokens: 2000,
     // Веса decay-формулы. "Время" и "недавность" из MEMORY_GRAPH.md
     // сведены в ОДНУ экспоненциальную кривую по прошедшему времени
     // (gameTime с фолбэком на число сообщений) — это была одна и та же ось,
@@ -182,6 +188,7 @@ export function clampGraphSettings(values = {}) {
         mergeQueueMaxTurns: clampInt(values.mergeQueueMaxTurns, 1, 200, DEFAULT_SETTINGS.mergeQueueMaxTurns),
         reconsolidationMinCluster: clampInt(values.reconsolidationMinCluster, 2, 20, DEFAULT_SETTINGS.reconsolidationMinCluster),
         reconsolidationQueueMaxTurns: clampInt(values.reconsolidationQueueMaxTurns, 1, 200, DEFAULT_SETTINGS.reconsolidationQueueMaxTurns),
+        reconsolidationMaxTokens: clampInt(values.reconsolidationMaxTokens, 100, 100000, DEFAULT_SETTINGS.reconsolidationMaxTokens),
         decayHalfLifeTurns: clampInt(values.decayHalfLifeTurns, 1, 2000, DEFAULT_SETTINGS.decayHalfLifeTurns),
         importanceWeight: clampInt(values.importanceWeight * 10, 0, 100, DEFAULT_SETTINGS.importanceWeight * 10) / 10,
         degreeWeight: clampInt(values.degreeWeight * 10, 0, 100, DEFAULT_SETTINGS.degreeWeight * 10) / 10,
@@ -1493,7 +1500,39 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         });
     }
 
-    /** Тихий вызов SideCar — тот же контракт/приём, что `tracking.poll()`/BasicSummary. Отдаёт JSON `{label, content, importance}` для одной ноды, разбирается через уже существующую parse-model-json.js. */
+    /**
+     * Тихий вызов SideCar — тот же контракт/приём, что `tracking.poll()`/
+     * BasicSummary. Отдаёт JSON `{label, content, importance}` для одной
+     * ноды, разбирается через уже существующую parse-model-json.js.
+     *
+     * Реальная жалоба пользователя (сформулирована после уточняющего
+     * вопроса — исходное "чистит слишком много" оказалось СИМПТОМОМ, не
+     * причиной): "получение и пополнение фактов работает не на то...
+     * мелкие краткосрочные договорённости, а не влияющие вещи. Плюс эти
+     * ноды не сортировались сразу". Т.е. проблема выше по потоку, не в
+     * реконсолидации — САМ захват узлов не отличал "договорились встретиться
+     * у таверны в полдень" (сюжетная механика, забудется через пару ходов)
+     * от настоящего долгоживущего факта, и `importance` не отражал эту
+     * разницу с самого создания (не "сортировался"), из-за чего вся
+     * математика дальше (decay, эвикшн, бэкбон) видела мусорные узлы как
+     * равноценные важным. Плюс у промпта не было пути ОТКАЗАТЬСЯ — модель
+     * была вынуждена всегда изобрести "факт", даже если `isStrongChange()`
+     * сработал на смене темы, а не на чём-то memory-worthy (эмбединг-порог
+     * ловит НОВИЗНУ, не ЗНАЧИМОСТЬ — это математика, ей неоткуда знать
+     * разницу).
+     *
+     * Исправлено: (1) явное исключение краткосрочных/ситуативных
+     * договорённостей текстом промпта, явный критерий "будет иметь значение
+     * спустя десятки ходов"; (2) закреплённая шкала importance (не голое
+     * "0-10" без якорей) — заставляет модель реально РАЗЛИЧАТЬ, а не выдавать
+     * один и тот же средний балл всему подряд; (3) явный отказ
+     * `{"skip": true}` (тот же приём, что `{"distinct": true}` у
+     * `askSideCarForMerge`) — на СТРОГО ситуативный контекст модель теперь
+     * может честно сказать "здесь нечего запоминать" вместо того, чтобы
+     * изобретать узел из пустоты. `checkAndPlace()` уже трактует `null` как
+     * `sidecar-empty` (спокойный, не ошибочный статус) — правок вызывающего
+     * кода не требуется.
+     */
     async function askSideCarForNode(contextText, { isFirstNode = false } = {}) {
         // Подсказка для бутстрапа "нового мира" (решено с пользователем):
         // ТОЛЬКО на самом первом узле пустого графа, и только подсказка —
@@ -1502,11 +1541,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const bootstrapHint = isFirstNode
             ? ' This is the very first memory in a fresh graph — consider whether the protagonist, another character, or a location is the most natural starting point, but decide freely.'
             : '';
-        const prompt = `Recent story context:\n\n${contextText}\n\nExtract ONE new, distinct, important fact worth remembering long-term (a character detail, a place, an event, a relationship).${bootstrapHint} Reply with ONLY a JSON object: {"label": short name, "content": the fact itself, "importance": 0-10}.`;
+        const prompt = `Recent story context:\n\n${contextText}\n\nDoes this contain a fact worth remembering LONG-TERM — something that will still matter dozens of turns from now (a lasting character trait, a place, an established relationship, a major event or revelation)? Do NOT extract a short-term or purely situational arrangement that resolves on its own within the next few messages (a plan to meet somewhere, a small trade, a scheduling detail, idle small talk) — those are plot mechanics, not memories.${bootstrapHint}\n\nIf there is a genuine long-term fact, reply with ONLY a JSON object: {"label": short name, "content": the fact itself, "importance": a 0-10 score where 0-3 is minor/situational detail unlikely to matter again, 4-7 is a meaningful but secondary fact, and 8-10 permanently defines the character or world}. If nothing here rises to that bar, reply with ONLY: {"skip": true}.`;
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined });
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
-        if (!parsed || typeof parsed !== 'object' || !parsed.label || !parsed.content) return null;
+        if (!parsed || typeof parsed !== 'object' || parsed.skip) return null;
+        if (!parsed.label || !parsed.content) return null;
         return { label: String(parsed.label), content: String(parsed.content), importance: Number(parsed.importance) || 0 };
     }
 
@@ -1541,7 +1581,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     async function askSideCarForReconsolidation(nodesToFold) {
         const listing = nodesToFold.map((node, i) => `${i + 1}. ${node.label}: ${node.content}`).join('\n');
         const prompt = `These ${nodesToFold.length} low-priority memories are crowding out a region of long-term memory:\n\n${listing}\n\nCompress them into ONE shorter, denser memory that preserves what matters from all of them. Reply with ONLY a JSON object: {"label": short combined name, "content": the compressed fact, "importance": 0-10}.`;
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined });
+        // Явный maxTokens (жалоба пользователя: "[сайдкар] имеет макс
+        // контекст тоже в 1000" — тот же класс бага, что уже нашли и
+        // починили у бутстрапа, см. `bootstrapMaxTokens`). Без него падает
+        // на `REQUEST_DEFAULTS.maxTokens = 1000` (cores/models/internal-engine.js)
+        // — `reconsolidationMinCluster` может доходить до 20 узлов
+        // (клэмп 2-20), усечённый посреди JSON-объекта результата
+        // `parseModelJson()` тихо отдаёт `undefined`, реконсолидация просто
+        // не срабатывает (узлы остаются как были — не потеря данных, но и
+        // не то, ради чего очередь вообще заводилась).
+        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.reconsolidationMaxTokens });
         if (!result.ok) return null;
         const parsed = parseModelJson(result.value);
         if (!parsed || typeof parsed !== 'object' || !parsed.label || !parsed.content) return null;
