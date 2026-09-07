@@ -86,6 +86,14 @@ export const DEFAULT_SETTINGS = Object.freeze({ maxNotes: 12, cleanupBatch: 4, i
  *    конкретные категории (goal, needs, current state, secrets, plans,
  *    relationships) и прямая просьба писать ПРОАКТИВНО, а не только по
  *    запросу.
+ *  - **`TIMING` — вызов ОБЯЗАН идти в начале рассуждения, до самого
+ *    ответа игроку, не после.** Без этого модель писала заметку (если
+ *    вообще писала) уже ПОСЛЕ того, как реплика собрана — то есть
+ *    ближе к концу хода или вовсе следующим ходом, когда то, что нужно
+ *    было запомнить, уже потерялось из фокуса рассуждения. Явный якорь
+ *    «в начале CoT, до completion» переносит решение «что запомнить» на
+ *    момент, когда модель ещё ДУМАЕТ над ходом, а не когда уже дописала
+ *    его и меньше всего расположена возвращаться назад.
  */
 export const NOTEBOOK_TOOL_SCHEMA = Object.freeze({
     name: TOOL_NAME,
@@ -99,6 +107,9 @@ export const NOTEBOOK_TOOL_SCHEMA = Object.freeze({
         'Use this tool PROACTIVELY, as the story develops — do not wait to be asked. Whenever something changes that ' +
         'matters for later (a goal shifts, an injury happens, a secret is revealed, a plan is made), write or update ' +
         'a note for it in the SAME turn, before it slips your mind.\n\n' +
+        'TIMING — MANDATORY: call this tool FIRST, at the very start of your reasoning for this turn, before you draft ' +
+        'or send your reply to the player. Decide what needs to be written down BEFORE composing the reply, never ' +
+        'after — a note queued for "after I finish the reply" gets skipped the moment the reply is sent.\n\n' +
         'Before writing a NEW note, check the notebook already shown in your context (the "[Private notebook...]" ' +
         'block, if present) — if the fact you want to record already has a note, use update on its id instead of ' +
         'creating a duplicate.\n\n' +

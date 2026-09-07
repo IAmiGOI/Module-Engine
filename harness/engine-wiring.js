@@ -9,6 +9,7 @@ import { registerExtensionSettingsService } from '../services/extension-settings
 import { registerFileService } from '../services/file.js';
 import { registerStMacrosService } from '../services/st-macros.js';
 import { registerStLorebookService } from '../services/st-lorebook.js';
+import { registerStCharacterService } from '../services/st-character.js';
 import { registerStEventsService } from '../services/st-events.js';
 import { registerStToolsService } from '../services/st-tools.js';
 import { registerStGenerationService } from '../services/st-generation.js';
@@ -269,6 +270,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerFileService(engine.buses.services);
     registerStMacrosService(engine.buses.services, { getContext });
     registerStLorebookService(engine.buses.services, { getContext });
+    registerStCharacterService(engine.buses.services, { getContext });
     registerStEventsService(engine.buses.services, { getContext });
     registerStToolsService(engine.buses.services, { getContext });
     // Сервис перехвата: сюда встанут обе точки, которыми движок забирает
@@ -456,6 +458,15 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
     await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), lorebookCore.scan(), summaryCore.load()]);
+    // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
+    // (решено с пользователем: "зависание при bootstrap... вынеси его
+    // отдельно" — при большом Lorebook эмбединг каждой записи по
+    // отдельности реально долгий, и этот один `await` держал весь движок,
+    // включая панель и докер запуска). `load()` сама возвращается быстро
+    // (настройки+состояние+регистрация этапов пайплайна), бутстрап уходит
+    // в фон — см. `memoryGraphCore.waitForBootstrap()`'s doc-comment в
+    // `cores/memory-graph/index.js`, если где-то ДЕЙСТВИТЕЛЬНО нужно
+    // дождаться его результата (а не просто не блокировать остальных).
     await memoryGraphCore.load();
 
     // Панель монтируется здесь же, а не у вызывающего: реестру Модулей нужно

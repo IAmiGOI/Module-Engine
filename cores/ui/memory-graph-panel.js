@@ -34,6 +34,7 @@ const MODULE_UI_NAMESPACE = 'core.ui.memoryGraph';
 const WINDOW_KEY = 'window';
 const CANVAS_ID = 'stme-memory-graph-canvas';
 const BG_ID = 'stme-memory-graph-region-bg';
+const BG_SVG_ID = 'stme-memory-graph-region-bg-svg';
 const PREVIEW_ID = '__memory_graph_preview__';
 const MAX_RADIUS = 480; // x2 от исходных 240 — узлы стали в 10 раз меньше визуально, ближний вид "слипался"
 
@@ -136,42 +137,57 @@ export function pixelToRegion(dx, dy, { maxRadius = MAX_RADIUS, sectors = 5, rin
 }
 
 // --- Фон регионов — решено с пользователем: "сложно визуально разграничить
-// регионы, добавь слабую заливку фона". Cytoscape держит ЗАФИКСИРОВАННые
-// zoom/pan (см. `ensureCytoscape()`) — модельный радиус MAX_RADIUS всегда
-// отображается на экранный радиус SCREEN_RADIUS, поэтому подложку можно
-// нарисовать один раз статичным SVG в тех же экранных пикселях, что и
-// канвас-контейнер (480×480), без пересчёта на каждый кадр. Не через
-// `h()`-дерево — оно строит элементы через обычный `document.createElement`
-// (не `createElementNS`), SVG-теги так не рендерятся как векторная графика.
-const SCREEN_RADIUS = 240; // половина канваса (480px) — экранный радиус внешнего кольца при zoom=ZOOM
-const ZOOM = SCREEN_RADIUS / MAX_RADIUS;
+// регионы, добавь слабую заливку фона". Рисуется В МОДЕЛЬНЫХ единицах
+// Cytoscape (тех же, что `regionLayoutPosition`/`pixelToRegion`, радиус до
+// MAX_RADIUS), а не в экранных пикселях — реальный zoom/pan МЕНЯЕТСЯ живьём
+// (колесо мыши/драг канваса), и статичная подложка, посчитанная под ОДИН
+// фиксированный масштаб, уезжала бы от нод при любом взаимодействии
+// (живой баг, поймано пользователем: "фон, который физически уезжает" —
+// "можно двигать и приближать фон"). Вместо этого элемент с подложкой несёт
+// CSS `transform: translate(pan) scale(zoom)`, обновляемый на КАЖДОЕ
+// `cy.on('pan zoom', ...)` — тот же расчёт экран=pan+модель*zoom, что и у
+// самого Cytoscape, поэтому подложка синхронна с нодами при любом
+// взаимодействии, не только в начальный момент. Не через `h()`-дерево — оно
+// строит элементы через обычный `document.createElement` (не
+// `createElementNS`), SVG-теги так не рендерятся как векторная графика.
 
-/** Путь одной ячейки дартса (сектор×кольцо) в ЭКРАННЫХ пикселях — тот же угол, что у `regionLayoutPosition`/`pixelToRegion`, другой только масштаб радиуса. Кольцо 0 — сплошной клин от центра (без вырожденной дуги радиуса 0), остальные — кольцевой сегмент. */
-export function regionWedgePath(sector, ring, { sectors = 5, rings = 3, screenRadius = SCREEN_RADIUS } = {}) {
+/** Путь одной ячейки дартса (сектор×кольцо) в МОДЕЛЬНЫХ единицах — тот же угол, что у `regionLayoutPosition`/`pixelToRegion`, тот же масштаб радиуса (`maxRadius`). Кольцо 0 — сплошной клин от центра (без вырожденной дуги радиуса 0), остальные — кольцевой сегмент. */
+export function regionWedgePath(sector, ring, { sectors = 5, rings = 3, maxRadius = MAX_RADIUS } = {}) {
     const sectorAngle = (2 * Math.PI) / sectors;
     const a0 = sector * sectorAngle - Math.PI / 2;
     const a1 = a0 + sectorAngle;
-    const cx = screenRadius;
-    const cy = screenRadius;
-    const r1 = ((ring + 1) / rings) * screenRadius;
+    const cx = maxRadius;
+    const cy = maxRadius;
+    const r1 = ((ring + 1) / rings) * maxRadius;
     const pt = (r, a) => `${(cx + Math.cos(a) * r).toFixed(2)},${(cy + Math.sin(a) * r).toFixed(2)}`;
     if (ring === 0) {
         return `M ${cx.toFixed(2)},${cy.toFixed(2)} L ${pt(r1, a0)} A ${r1.toFixed(2)} ${r1.toFixed(2)} 0 0 1 ${pt(r1, a1)} Z`;
     }
-    const r0 = (ring / rings) * screenRadius;
+    const r0 = (ring / rings) * maxRadius;
     return `M ${pt(r0, a0)} L ${pt(r1, a0)} A ${r1.toFixed(2)} ${r1.toFixed(2)} 0 0 1 ${pt(r1, a1)} L ${pt(r0, a1)} A ${r0.toFixed(2)} ${r0.toFixed(2)} 0 0 0 ${pt(r0, a0)} Z`;
 }
 
-/** Вся подложка — 15 ячеек, шахматная заливка по чётности (sector+ring), чтобы соседние регионы отличались на глаз, но не спорили с нодами/рёбрами поверх. */
-export function renderRegionBackgroundSvg({ sectors = 5, rings = 3, screenRadius = SCREEN_RADIUS } = {}) {
+/**
+ * Вся подложка — 15 ячеек, шахматная заливка по чётности (sector+ring),
+ * чтобы соседние регионы отличались на глаз, но не спорили с нодами/рёбрами
+ * поверх. `<svg>` — ЯВНЫЕ пиксельные `width`/`height` (не `100%`), чтобы
+ * 1 единица SVG = 1 CSS-пиксель РОВНО, без скрытого масштабирования от
+ * вписывания в контейнер — иначе внешний `transform: scale(zoom)` (см.
+ * `updateBackgroundTransform()`) домножался бы на этот скрытый коэффициент
+ * и съезжал относительно реальных позиций нод. `id`/`style` — на самом
+ * `<svg>`, чтобы `updateBackgroundTransform()` мог найти его напрямую и
+ * применить transform без лишней обёртки.
+ */
+export function renderRegionBackgroundSvg({ sectors = 5, rings = 3, maxRadius = MAX_RADIUS } = {}) {
     const cells = [];
     for (let sector = 0; sector < sectors; sector += 1) {
         for (let ring = 0; ring < rings; ring += 1) {
             const fill = (sector + ring) % 2 === 0 ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.07)';
-            cells.push(`<path d="${regionWedgePath(sector, ring, { sectors, rings, screenRadius })}" fill="${fill}" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" />`);
+            cells.push(`<path d="${regionWedgePath(sector, ring, { sectors, rings, maxRadius })}" fill="${fill}" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" />`);
         }
     }
-    return `<svg viewBox="0 0 ${screenRadius * 2} ${screenRadius * 2}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">${cells.join('')}</svg>`;
+    const size = maxRadius * 2;
+    return `<svg id="${BG_SVG_ID}" style="position:absolute;left:0;top:0;transform-origin:0 0;" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${cells.join('')}</svg>`;
 }
 
 export function createMemoryGraphPanelCore(host, { mount } = {}) {
@@ -385,7 +401,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     position = regionLayoutPosition(sector, ring, { indexInRegion: index });
                 }
                 elements.push({
-                    data: { id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode) },
+                    data: { id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode), importance: node.importance ?? 0 },
                     position,
                 });
             });
@@ -393,36 +409,53 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         return elements;
     }
 
+    /**
+     * Держит подложку регионов синхронной с ЖИВЫМ pan/zoom Cytoscape —
+     * решено с пользователем: подложка считалась под один фиксированный
+     * масштаб и "физически уезжала" при любом драге/скролле канваса.
+     * Тот же расчёт экран=pan+модель*zoom, что использует сам Cytoscape.
+     */
+    function updateBackgroundTransform() {
+        if (!cy) return;
+        const svg = document.getElementById(BG_SVG_ID);
+        if (!svg) return;
+        const pan = cy.pan();
+        const zoom = cy.zoom();
+        svg.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+    }
+
     async function ensureCytoscape() {
         if (cy) return cy;
         const container = document.getElementById(CANVAS_ID);
         if (!container) return null;
-        // Фон региона — статичный SVG под канвасом, тот же контейнер-размер
-        // (480×480), тот же угловой охват, что у regionLayoutPosition()/
-        // pixelToRegion() (решено с пользователем: "сложно визуально
-        // разграничить регионы, добавь слабую заливку фона"). Рисуется ОДИН
-        // раз здесь, не в syncCytoscape() — регионы (сектора/кольца) не
-        // меняются, перерисовывать при каждом изменении графа незачем.
+        // Фон региона — статичный SVG под канвасом, В МОДЕЛЬНЫХ единицах
+        // (см. renderRegionBackgroundSvg()'s doc-comment) — рисуется ОДИН
+        // раз здесь, не в syncCytoscape(): регионы (сектора/кольца) сами по
+        // себе не меняются, перерисовывать разметку при каждом изменении
+        // графа незачем, а её ЭКРАННОЕ положение держит
+        // `updateBackgroundTransform()` через 'pan'/'zoom' ниже.
         const bg = document.getElementById(BG_ID);
         if (bg) bg.innerHTML = renderRegionBackgroundSvg();
         const cytoscape = await loadCytoscape();
         cy = cytoscape({
             container,
             elements: [...nodeElements(), ...edgeElements()],
-            // ЗАФИКСИРОВАННЫЕ zoom/pan (не автo-fit) — иначе подложка (статичный
-            // SVG в экранных координатах) и реальные позиции нод разъезжались
-            // бы каждый раз, когда fit пересчитывал масштаб под новый набор
-            // элементов. `ZOOM`/`SCREEN_RADIUS` — та же пара чисел, что и у
-            // самой подложки.
-            layout: { name: 'preset', fit: false, zoom: ZOOM, pan: { x: SCREEN_RADIUS, y: SCREEN_RADIUS } },
+            layout: { name: 'preset' },
             style: [
                 // Подпись СКРЫТА по умолчанию — при таком размере ноды (2px)
                 // текст на весь холст был нечитаемым нагромождением (жалоба
                 // пользователя). Показывается только классом `.hovered`,
                 // который вешает/снимает `mouseover`/`mouseout` ниже.
-                { selector: 'node', style: { 'background-color': '#4a9eff', color: '#fff', width: 2, height: 2 } },
+                // Цвет — по важности (решено с пользователем: "чем важнее,
+                // тем зеленее, чем менее важна, тем краснее"), линейная
+                // интерполяция по шкале 0..10.
+                { selector: 'node', style: { 'background-color': 'mapData(importance, 0, 10, #e74c3c, #2ecc71)', color: '#fff', width: 2, height: 2 } },
                 { selector: 'node.hovered', style: { label: 'data(label)', 'font-size': 0.9, 'text-valign': 'bottom', 'text-margin-y': 4 } },
-                { selector: 'node[?protectedNode]', style: { 'background-color': '#ffb454', 'border-width': 2, 'border-color': '#fff' } },
+                // Защищённые (центр/под-центр региона) — та же заливка по
+                // важности, только БЕЛАЯ ОБВОДКА поверх отличает их роль,
+                // не отдельный цвет заливки (иначе он бы спорил со шкалой
+                // важности).
+                { selector: 'node[?protectedNode]', style: { 'border-width': 2, 'border-color': '#fff' } },
                 // Без подписи типа ребра — при реальном графе ("mentions"
                 // почти на каждом ребре) текст сплошным нагромождением
                 // покрывал весь холст (жалоба пользователя).
@@ -442,6 +475,12 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             ],
             wheelSensitivity: 0.2,
         });
+        // Начальный кадр (auto-fit ещё не выставил pan/zoom за пределами
+        // конструктора) + КАЖДОЕ последующее изменение — драг/скролл
+        // канваса живьём шлёт эти события, syncCytoscape()'s `.layout(...).run()`
+        // тоже (fit пересчитывает масштаб под новый набор нод).
+        cy.on('pan zoom', updateBackgroundTransform);
+        updateBackgroundTransform();
         cy.on('tap', 'node', event => {
             if (event.target.id() === PREVIEW_ID) return; // не настоящий узел — нечего редактировать
             openEditForm(nodes().find(node => node.id === event.target.id()));
@@ -499,13 +538,30 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             });
         }
         cy.add(elements);
-        // `fit: false`, БЕЗ явных zoom/pan — в отличие от начальной
-        // инициализации в ensureCytoscape(), здесь не подгоняем и не
-        // переопределяем: только зафиксированный zoom при первом создании
-        // держит подложку и ноды в одном масштабе, а зум/пан колёсиком мыши
-        // (если пользователь успел покрутить) не должен сбрасываться на
-        // каждое изменение графа.
+        // `fit: false` — зум/пан колесом мыши (если пользователь успел
+        // покрутить) не должен сбрасываться на каждое изменение графа.
+        // Подложка регионов остаётся синхронной в любом случае — её
+        // экранное положение не хардкодится, а пересчитывается от ЖИВОГО
+        // `cy.pan()`/`cy.zoom()` через 'pan'/'zoom' в ensureCytoscape().
         cy.layout({ name: 'preset', fit: false }).run();
+    }
+
+    // --- Главный персонаж: в LB или только в карточке? (решено с
+    // пользователем явно: не автоматическая эвристика — явный выбор
+    // пользователя в UI панели, доступный всегда, не только при первом
+    // открытии). "Уже в LB" ничего не создаёт — обычный бутстрап и так
+    // импортирует Lorebook целиком, выбор здесь только подтверждает, что
+    // отдельная нода персонажа не нужна. "Только в карточке" — реальное
+    // действие, `memoryGraph.nodes.createFromCharacterCard`. Повторный
+    // клик не блокируется отдельно: почти идентичный повторный импорт
+    // естественно поймает существующий merge-dedup механизм
+    // (`detectMergeCandidate`), как и любой другой почти-дубликат —
+    // отдельная защита от двойного клика не нужна.
+    function characterOriginRow() {
+        return Row(
+            Button('Character already in Lorebook', () => statusText.set('Noted — no separate node created.')),
+            Button('Only in character card — import', () => runDebugAction('memoryGraph.nodes.createFromCharacterCard')),
+        );
     }
 
     // --- Дебаг-блок: 5 существующих оркестрационных операций (решено с пользователем) --
@@ -519,6 +575,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 Button('sweepStaging', () => runDebugAction('memoryGraph.sweepStaging')),
                 Button('sweepMergeQueue', () => runDebugAction('memoryGraph.sweepMergeQueue')),
                 Button('sweepReconsolidationQueue', () => runDebugAction('memoryGraph.sweepReconsolidationQueue')),
+                Button('sweepBackbone', () => runDebugAction('memoryGraph.sweepBackbone')),
                 Button('bootstrapFromLorebook', () => runDebugAction('memoryGraph.bootstrapFromLorebook')),
             ),
             computed(() => (mergeQueue().length ? Badge(`${mergeQueue().length} pending merge`, { tone: 'muted' }) : null)),
@@ -577,6 +634,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                         Button('+ Node', () => openCreateForm({ sector: 0, ring: 0 })),
                         Button('Refresh', refresh),
                     ),
+                    characterOriginRow(),
                     computed(() => (statusText() ? h('div', { class: 'stme-memory-graph-status' }, statusText()) : null)),
                     nodeForm(),
                     debugBlock(),
