@@ -8,6 +8,7 @@ import {
     pickEvictionCandidate, jaccardOverlap, findMergeCandidate, wordsOf,
     scoreBeaconCandidate, pickBeacons, findShortestPath, buildBeaconRoute, renderMemoryPrompt,
     gaussianRandom, pickNoiseNodes,
+    importanceFromLorebookEntry, applyConnectionBonus,
 } from '../cores/memory-graph/index.js';
 
 // --- Физика регионов --------------------------------------------------
@@ -504,4 +505,35 @@ test('pickNoiseNodes() keeps trying smaller LATER candidates after a bigger one 
 test('pickNoiseNodes() returns nothing when the character budget is 0', () => {
     const nodesById = { r1: { edges: [{ to: 'n1', type: 'mentions' }] }, n1: { label: 'N', content: 'x', edges: [] } };
     assert.deepEqual(pickNoiseNodes(nodesById, ['r1'], { charBudget: 0, random: () => 0.5 }), []);
+});
+
+// --- importanceFromLorebookEntry() / applyConnectionBonus() — auto importance for bootstrap (решено с пользователем) ---
+
+test('importanceFromLorebookEntry() scores a constant (curated, always-on) entry higher than a normal one, order equal', () => {
+    const constant = importanceFromLorebookEntry({ constant: true, order: 100 });
+    const normal = importanceFromLorebookEntry({ constant: false, order: 100 });
+    assert.ok(constant > normal, `constant entry (${constant}) must outscore a normal one (${normal})`);
+});
+
+test('importanceFromLorebookEntry() treats HIGHER order as MORE important — real ST sorts entries by "b.order - a.order" (descending)', () => {
+    const highOrder = importanceFromLorebookEntry({ constant: false, order: 200 });
+    const neutralOrder = importanceFromLorebookEntry({ constant: false, order: 100 });
+    const lowOrder = importanceFromLorebookEntry({ constant: false, order: 0 });
+    assert.ok(highOrder > neutralOrder, `order 200 (${highOrder}) must outscore neutral order 100 (${neutralOrder})`);
+    assert.ok(neutralOrder > lowOrder, `neutral order 100 (${neutralOrder}) must outscore order 0 (${lowOrder})`);
+});
+
+test('importanceFromLorebookEntry() clamps to [0, 10] and tolerates a missing/non-numeric order (ST default is 100 = neutral, no field at all must not crash)', () => {
+    const missingOrder = importanceFromLorebookEntry({ constant: true });
+    assert.ok(missingOrder >= 0 && missingOrder <= 10);
+    const extreme = importanceFromLorebookEntry({ constant: true, order: 999999 });
+    assert.ok(extreme <= 10);
+    const negative = importanceFromLorebookEntry({ constant: false, order: -999999 });
+    assert.ok(negative >= 0);
+});
+
+test('applyConnectionBonus() adds degree to the base importance, clamped at 10 — a heavily-mentioned node must not exceed the scale', () => {
+    assert.equal(applyConnectionBonus(3, 2), 5);
+    assert.equal(applyConnectionBonus(9, 5), 10, 'must clamp at the ceiling, not overflow past 10');
+    assert.equal(applyConnectionBonus(3, 0), 3, 'zero connections leaves the base signal untouched');
 });
