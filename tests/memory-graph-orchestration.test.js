@@ -151,12 +151,18 @@ test('load() resolves WITHOUT waiting for a slow bootstrap — the engine must n
 });
 
 test('bootstrapFromLorebook() does nothing when the player has no active lorebook — leaves the graph empty for the "new world" SideCar-hint path instead', async () => {
-    const { graphCore, caller } = buildEngine({ lorebookEntries: null });
+    const { engine, graphCore, caller } = buildEngine({ lorebookEntries: null });
+    const started = [];
+    const finished = [];
+    engine.events.subscribe('memoryGraph.bootstrapStarted', payload => started.push(payload));
+    engine.events.subscribe('memoryGraph.bootstrapFinished', payload => finished.push(payload));
     await graphCore.load();
     await graphCore.waitForBootstrap();
 
     const nodes = await call(caller, 'memoryGraph.nodes');
     assert.deepEqual(nodes.value, []);
+    assert.deepEqual(started, [], 'no lorebook at all — nothing to show progress for, "new world" hint path stays silent');
+    assert.deepEqual(finished, []);
 });
 
 test('bootstrapFromLorebook() sends an explicit maxTokens override on every Проход — the engine default (1000, cores/models/internal-engine.js) truncates the structured JSON reply for a real-size Lorebook (found live)', async () => {
@@ -245,6 +251,56 @@ test('bootstrapFromLorebook() respects configured bootstrapTemperature/bootstrap
         assert.equal(body.reasoning.enabled, true, 'reasoningMode is forced "enabled" inside the bootstrap — effort alone does nothing without it (see provider-request.js)');
         assert.equal(body.reasoning.effort, 'high');
     }
+});
+
+test('bootstrapFromLorebook() publishes started/progress/finished events around a successful run — real progress feedback while it works (решено с пользователем: "нет ивентов начала и конца построения WI... нет индикатора прогресса. Это очень плохо")', async () => {
+    const { engine, graphCore } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
+    });
+    const started = [];
+    const progress = [];
+    const finished = [];
+    engine.events.subscribe('memoryGraph.bootstrapStarted', payload => started.push(payload));
+    engine.events.subscribe('memoryGraph.bootstrapProgress', payload => progress.push(payload));
+    engine.events.subscribe('memoryGraph.bootstrapFinished', payload => finished.push(payload));
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    assert.equal(started.length, 1);
+    assert.equal(started[0].totalEntries, 1);
+    assert.ok(started[0].totalSteps > 0);
+
+    assert.ok(progress.length > 0, 'no progress ticks at all — the bar would sit dead at zero');
+    for (let i = 1; i < progress.length; i += 1) {
+        assert.ok(progress[i].done >= progress[i - 1].done, 'progress must never go BACKWARDS — a jumpy bar is worse than none');
+        assert.ok(progress[i].done <= progress[i].total, 'done must never exceed total — the bar must never overshoot 100%');
+    }
+    assert.equal(progress.at(-1).done, progress.at(-1).total, 'the last tick before finishing should reach the estimated total — a bar stuck below 100% on success looks broken');
+
+    assert.equal(finished.length, 1);
+    assert.equal(finished[0].success, true);
+    assert.ok(finished[0].nodeCount >= 1);
+});
+
+test('bootstrapFromLorebook() still publishes bootstrapFinished with success:false (and no bootstrapped event) when Проход 1 aborts the whole bootstrap — the progress bar must not hang forever on failure', async () => {
+    const { engine, graphCore } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchReply: 'not valid json at all',
+    });
+    const started = [];
+    const finished = [];
+    const bootstrapped = [];
+    engine.events.subscribe('memoryGraph.bootstrapStarted', payload => started.push(payload));
+    engine.events.subscribe('memoryGraph.bootstrapFinished', payload => finished.push(payload));
+    engine.events.subscribe('memoryGraph.bootstrapped', payload => bootstrapped.push(payload));
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    assert.equal(started.length, 1, 'summaries were non-empty — real work was attempted, so it must have started');
+    assert.equal(finished.length, 1);
+    assert.equal(finished[0].success, false);
+    assert.deepEqual(bootstrapped, [], 'the graph never actually got built — no success event');
 });
 
 test('bootstrapFromLorebook() aborts entirely (graph stays empty) when Проход 1 (skeleton) produces no usable region at all', async () => {
