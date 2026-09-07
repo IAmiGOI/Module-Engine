@@ -7,7 +7,7 @@ import {
     computeNodeWeight, pickConfidentRegion, decideFirstPlacement, decideStagingStep,
     pickEvictionCandidate, jaccardOverlap, findMergeCandidate, wordsOf,
     scoreBeaconCandidate, pickBeacons, findShortestPath, buildBeaconRoute, renderMemoryPrompt,
-    gaussianRandom, pickNoiseNodes,
+    gaussianRandom, expandNoiseNodes,
     importanceFromLorebookEntry, applyConnectionBonus,
     buildRegionSkeletonPrompt, parseRegionSkeletonResponse,
     buildAdditionalCentersPrompt, parseAdditionalCentersResponse,
@@ -459,7 +459,14 @@ test('renderMemoryPrompt() does not tag a node "(noise)" if it is genuinely on t
     assert.ok(!text.includes('- B (noise)'), 'a node genuinely on the main route must never be mislabeled as noise');
 });
 
-// --- Шум: гауссова выборка + жадный набор по бюджету символов -------------
+// --- Шум: гауссова выборка + многошаговая экспансия фронта ---------------
+// ВТОРОЙ заход на ретрив (решено с пользователем явно): "как выберем пять
+// нод-маяков. Строим маршрут между ними. Затем по шуму берём несколько
+// соседних от каждой точки маршрута подключений. Потом шум применяем к ним
+// и так далее. Пока не соберётся около 20 нод." — раньше был один плоский
+// слой соседей маршрута, набираемый по бюджету СИМВОЛОВ; теперь —
+// итеративное расширение фронта, бюджет чисто по КОЛИЧЕСТВУ узлов
+// (маяки+маршрут+шум вместе), символьный лимит убран совсем.
 
 test('gaussianRandom() computes the Box-Muller transform correctly for known inputs', () => {
     const seq = [Math.exp(-0.5), 0]; // u1, u2 -> sqrt(-2*ln(u1))=1, cos(0)=1 -> 1
@@ -474,41 +481,74 @@ test('gaussianRandom() never produces NaN/Infinity even when random() returns ex
     assert.ok(Number.isFinite(gaussianRandom(random)));
 });
 
-test('pickNoiseNodes() only considers OFF-route neighbors — a route node\'s edge to ANOTHER route node is never noise', () => {
+test('expandNoiseNodes() only considers OFF-route neighbors — a route node\'s edge to ANOTHER route node is never noise', () => {
     const nodesById = {
         r1: { edges: [{ to: 'r2', type: 'mentions' }, { to: 'n1', type: 'mentions' }] },
         r2: { edges: [{ to: 'r1', type: 'mentions' }] },
         n1: { label: 'Noise One', content: 'a stranger passing through.', edges: [] },
     };
-    const accepted = pickNoiseNodes(nodesById, ['r1', 'r2'], { charBudget: 1000, random: () => 0.5 });
+    const accepted = expandNoiseNodes(nodesById, ['r1', 'r2'], { targetTotal: 10, fanoutPerNode: 5, random: () => 0.5 });
     assert.deepEqual(accepted, [{ from: 'r1', to: 'n1', type: 'mentions' }]);
 });
 
-test('pickNoiseNodes() never includes the same off-route node twice, even reachable from two different route anchors', () => {
+test('expandNoiseNodes() never includes the same off-route node twice, even reachable from two different route anchors', () => {
     const nodesById = {
         r1: { edges: [{ to: 'n1', type: 'mentions' }] },
         r2: { edges: [{ to: 'n1', type: 'knows' }] },
         n1: { label: 'Shared', content: 'reachable from both.', edges: [] },
     };
-    const accepted = pickNoiseNodes(nodesById, ['r1', 'r2'], { charBudget: 1000, random: () => 0.5 });
+    const accepted = expandNoiseNodes(nodesById, ['r1', 'r2'], { targetTotal: 10, fanoutPerNode: 5, random: () => 0.5 });
     assert.equal(accepted.length, 1);
 });
 
-test('pickNoiseNodes() keeps trying smaller LATER candidates after a bigger one does not fit — greedy packing, not stop-at-first-miss', () => {
+test('expandNoiseNodes() never takes more than fanoutPerNode neighbors from a single frontier node, even when more are available', () => {
     const nodesById = {
-        r1: { edges: [{ to: 'big', type: 'mentions' }, { to: 'small', type: 'mentions' }] },
-        big: { label: 'Big', content: 'x'.repeat(100), edges: [] },
-        small: { label: 'Small', content: 'y', edges: [] },
+        r1: { edges: [{ to: 'a', type: 'mentions' }, { to: 'b', type: 'mentions' }, { to: 'c', type: 'mentions' }] },
+        a: { label: 'A', content: 'x', edges: [] },
+        b: { label: 'B', content: 'x', edges: [] },
+        c: { label: 'C', content: 'x', edges: [] },
     };
-    // Same score for both (constant random) -> stable sort keeps edge-array
-    // order: "big" tried first (rejected, too large), "small" tried next.
-    const accepted = pickNoiseNodes(nodesById, ['r1'], { charBudget: 10, random: () => 0.5 });
-    assert.deepEqual(accepted, [{ from: 'r1', to: 'small', type: 'mentions' }], 'a real `break` here would have rejected "small" too, just because "big" came first and did not fit');
+    const accepted = expandNoiseNodes(nodesById, ['r1'], { targetTotal: 10, fanoutPerNode: 2, random: () => 0.5 });
+    assert.equal(accepted.length, 2, 'fanoutPerNode=2 must cap r1\'s own contribution at 2, even though it has 3 off-route neighbors');
 });
 
-test('pickNoiseNodes() returns nothing when the character budget is 0', () => {
+test('expandNoiseNodes() stops growing the instant targetTotal is reached, even mid-round with more candidates available', () => {
+    const nodesById = {
+        r1: { edges: [{ to: 'a', type: 'mentions' }, { to: 'b', type: 'mentions' }, { to: 'c', type: 'mentions' }] },
+        a: { label: 'A', content: 'x', edges: [] },
+        b: { label: 'B', content: 'x', edges: [] },
+        c: { label: 'C', content: 'x', edges: [] },
+    };
+    // route already has 1 node (r1) -> targetTotal 2 leaves room for exactly ONE more.
+    const accepted = expandNoiseNodes(nodesById, ['r1'], { targetTotal: 2, fanoutPerNode: 5, random: () => 0.5 });
+    assert.equal(accepted.length, 1);
+});
+
+test('expandNoiseNodes() expands into a SECOND hop when the first hop alone does not reach targetTotal — this is the actual "and so on" multi-step behavior', () => {
+    const nodesById = {
+        r1: { edges: [{ to: 'hop1', type: 'mentions' }] },
+        hop1: { label: 'Hop1', content: 'x', edges: [{ to: 'hop2', type: 'mentions' }] },
+        hop2: { label: 'Hop2', content: 'x', edges: [] },
+    };
+    const accepted = expandNoiseNodes(nodesById, ['r1'], { targetTotal: 3, fanoutPerNode: 5, random: () => 0.5 });
+    assert.deepEqual(accepted, [
+        { from: 'r1', to: 'hop1', type: 'mentions' },
+        { from: 'hop1', to: 'hop2', type: 'mentions' },
+    ], 'hop2 is only reachable THROUGH hop1, one edge off the route — it must still be picked up by continuing the expansion from the previous round\'s new nodes');
+});
+
+test('expandNoiseNodes() terminates gracefully (does not hang, does not throw) when the frontier runs dry before reaching targetTotal — a small graph is not an error', () => {
+    const nodesById = {
+        r1: { edges: [{ to: 'only', type: 'mentions' }] },
+        only: { label: 'Only', content: 'x', edges: [] }, // dead end — no further edges to expand into
+    };
+    const accepted = expandNoiseNodes(nodesById, ['r1'], { targetTotal: 100, fanoutPerNode: 5, random: () => 0.5 });
+    assert.deepEqual(accepted, [{ from: 'r1', to: 'only', type: 'mentions' }], 'must return what it found, not fail just because it fell short of a target far bigger than the whole reachable graph');
+});
+
+test('expandNoiseNodes() returns nothing when the route already meets or exceeds targetTotal — no room left to grow', () => {
     const nodesById = { r1: { edges: [{ to: 'n1', type: 'mentions' }] }, n1: { label: 'N', content: 'x', edges: [] } };
-    assert.deepEqual(pickNoiseNodes(nodesById, ['r1'], { charBudget: 0, random: () => 0.5 }), []);
+    assert.deepEqual(expandNoiseNodes(nodesById, ['r1'], { targetTotal: 1, fanoutPerNode: 5, random: () => 0.5 }), []);
 });
 
 // --- importanceFromLorebookEntry() / applyConnectionBonus() — auto importance for bootstrap (решено с пользователем) ---
