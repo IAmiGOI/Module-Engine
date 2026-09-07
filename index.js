@@ -57,22 +57,31 @@ function getContext() {
  * opens the panel) — the rest are empty `stme-launcher-dock-slot`s reserved
  * for future quick actions, kept the same visual size so the dock's shape
  * doesn't change when a second real action arrives.
+ *
+ * Wrapped in a `.stme-launcher-dock-zone` — a stationary hover hitbox, NOT
+ * the pill itself. An earlier version put `:hover` directly on the sliding
+ * pill: moving the mouse to the very edge made the pill slide out from under
+ * the cursor, dropping `:hover`, sliding back under it, re-triggering
+ * `:hover` — a visible vibration (caught live). The zone never moves; only
+ * the pill inside it does.
  */
 function addLauncherDock(panel) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
-    const dock = document.createElement('div');
-    dock.id = 'stmeBetaLauncherDock';
-    dock.className = 'stme-launcher-dock';
-    dock.innerHTML = `
-        <button type="button" class="stme-launcher-dock-btn" title="Open ST Module Engine (Beta)" data-i18n="[title]Open ST Module Engine (Beta)">
-            <i class="fa-solid fa-flask fa-fw"></i>
-        </button>
-        <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
-        <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
-        <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
-        <div class="stme-launcher-dock-slot" aria-hidden="true"></div>`;
-    dock.querySelector('button').addEventListener('click', () => panel.toggle());
-    document.body.append(dock);
+    const zone = document.createElement('div');
+    zone.id = 'stmeBetaLauncherDock';
+    zone.className = 'stme-launcher-dock-zone';
+    zone.innerHTML = `
+        <div class="stme-launcher-dock">
+            <button type="button" class="stme-launcher-dock-btn" title="Open ST Module Engine (Beta)" data-i18n="[title]Open ST Module Engine (Beta)">
+                <i class="fa-solid fa-flask fa-fw"></i>
+            </button>
+            <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+            <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+            <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+            <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+        </div>`;
+    zone.querySelector('button').addEventListener('click', () => panel.toggle());
+    document.body.append(zone);
 }
 
 async function init() {

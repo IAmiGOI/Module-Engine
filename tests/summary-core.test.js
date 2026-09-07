@@ -209,6 +209,42 @@ test('a later batch failing mid-cascade does NOT lose an earlier batch already f
     assert.equal(context.chat[2].is_system, false, 'the second (failed) batch\'s messages must NOT have been hidden');
 });
 
+test('a later batch failing mid-cascade still announces summary.folded for the earlier batch that DID save — the panel only ever refreshes off this event, so a swallowed announcement left saved data invisible until the next page load', async () => {
+    let calls = 0;
+    const fetchOnceThenFail = async () => {
+        calls += 1;
+        if (calls === 1) return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: 'First batch summary.' } }] }) };
+        return { status: 401, ok: false, headers: { entries: () => [] }, text: async () => 'Unauthorized' };
+    };
+    const chat = makeChat(6); // same setup as the "does NOT lose an earlier batch" test above
+    const { engine, caller, summaryCore } = buildEngine({ chat, fetch: fetchOnceThenFail });
+    await summaryCore.load();
+    await call(caller, 'summary.configure', { levels: [{ batchSize: 2 }], protectedWindow: 1 });
+    const foldedEvents = [];
+    engine.events.subscribe('summary.folded', payload => foldedEvents.push(payload));
+
+    await call(caller, 'summary.check');
+
+    assert.equal(foldedEvents.length, 1, 'the first batch\'s save must be announced even though the second batch afterward failed');
+    assert.equal(foldedEvents[0].count, 1);
+});
+
+test('checkAndFold() announces summary.foldFailed with the real error message on failure — the automatic pipeline path has no other way to surface it to the user', async () => {
+    const failingFetch = async () => ({ status: 401, ok: false, headers: { entries: () => [] }, text: async () => 'Unauthorized' });
+    const chat = makeChat(5);
+    const { engine, caller, summaryCore } = buildEngine({ chat, fetch: failingFetch });
+    await summaryCore.load();
+    await call(caller, 'summary.configure', { levels: [{ batchSize: 3 }], protectedWindow: 2 });
+    const failures = [];
+    engine.events.subscribe('summary.foldFailed', payload => failures.push(payload));
+
+    const result = await call(caller, 'summary.check');
+
+    assert.equal(result.ok, false);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0].message, /HTTP 401/);
+});
+
 test('summary.update lets a person edit the generated text, and marks it edited', async () => {
     const chat = makeChat(5);
     const { caller, summaryCore } = buildEngine({ chat });
