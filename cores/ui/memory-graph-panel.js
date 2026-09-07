@@ -33,6 +33,7 @@ import {
 const MODULE_UI_NAMESPACE = 'core.ui.memoryGraph';
 const WINDOW_KEY = 'window';
 const CANVAS_ID = 'stme-memory-graph-canvas';
+const PREVIEW_ID = '__memory_graph_preview__';
 const MAX_RADIUS = 240;
 
 // --- Геометрия: региональная сетка ↔ экранные координаты (чистые функции) --
@@ -123,6 +124,13 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const selectedNodeId = signal(null);
     const creatingAt = signal(null); // {sector, ring} — задано кликом по канвасу в режиме создания
     const isCreating = signal(false);
+    // Точка клика В ПИКСЕЛЯХ (не sector/ring) — только для видимого маркера
+    // на канвасе. Найдено живьём: без него клик по канвасу давал только
+    // мелкий текст в сайдбаре, далеко от места клика — "не появляется"/
+    // "не нативно" (жалоба пользователя). Маркер даёт МГНОВЕННУЮ обратную
+    // связь ровно там, где кликнули, даже если реальный узел ляжет в центр
+    // региона, а не буквально в эту точку.
+    const previewPosition = signal(null);
 
     const formLabel = signal('');
     const formContent = signal('');
@@ -147,6 +155,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         selectedNodeId.set(null);
         isCreating.set(true);
         creatingAt.set({ sector, ring });
+        // Маркер появляется НЕМЕДЛЕННО, ещё до первого клика по канвасу —
+        // подтверждает, что режим создания реально включился, а не только
+        // сайдбар незаметно поменял текст.
+        previewPosition.set(regionLayoutPosition(sector, ring, {}));
         formLabel.set('');
         formContent.set('');
         formImportance.set(0);
@@ -157,6 +169,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         selectedNodeId.set(null);
         isCreating.set(false);
         creatingAt.set(null);
+        previewPosition.set(null);
     }
 
     async function submitForm() {
@@ -290,10 +303,25 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 { selector: 'node', style: { label: 'data(label)', 'background-color': '#4a9eff', color: '#fff', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4, width: 20, height: 20 } },
                 { selector: 'node[?protectedNode]', style: { 'background-color': '#ffb454', 'border-width': 2, 'border-color': '#fff' } },
                 { selector: 'edge', style: { width: 1.5, 'line-color': '#888', 'curve-style': 'bezier', label: 'data(type)', 'font-size': 7, color: '#aaa' } },
+                // Маркер места будущего узла в режиме создания — пунктир,
+                // не сплошная заливка, чтобы не путать с настоящим узлом;
+                // не кликабелен и не перетаскиваем (см. `grabbable`/`selectable` ниже).
+                {
+                    selector: `#${PREVIEW_ID}`,
+                    style: {
+                        label: 'data(label)', 'background-color': 'rgba(74,158,255,0.15)',
+                        'border-width': 2, 'border-style': 'dashed', 'border-color': '#4a9eff',
+                        color: '#4a9eff', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4,
+                        width: 24, height: 24,
+                    },
+                },
             ],
             wheelSensitivity: 0.2,
         });
-        cy.on('tap', 'node', event => openEditForm(nodes().find(node => node.id === event.target.id())));
+        cy.on('tap', 'node', event => {
+            if (event.target.id() === PREVIEW_ID) return; // не настоящий узел — нечего редактировать
+            openEditForm(nodes().find(node => node.id === event.target.id()));
+        });
         // Клик по ребру удаляет его СРАЗУ, без `confirm()` — тот же принцип,
         // что у Delete-кнопки узла и Remove у Lorebook в этом же движке:
         // нигде больше в проекте нет блокирующего нативного диалога.
@@ -307,8 +335,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // preset-layout не масштабирует их); иначе просто закрывает форму.
         cy.on('tap', event => {
             if (event.target !== cy) return;
-            if (isCreating()) creatingAt.set(pixelToRegion(event.position.x, event.position.y, {}));
-            else closeForm();
+            if (isCreating()) {
+                creatingAt.set(pixelToRegion(event.position.x, event.position.y, {}));
+                // Маркер садится РОВНО на клик (не на центр региона) — самая
+                // прямая обратная связь. Куда реально ляжет узел (центр
+                // региона) видно текстом рядом с формой, маркер здесь — про
+                // "я тебя услышал", не про финальную позицию.
+                previewPosition.set({ x: event.position.x, y: event.position.y });
+            } else closeForm();
         });
         cy.on('dragfree', 'node', event => {
             const node = nodes().find(item => item.id === event.target.id());
@@ -328,7 +362,15 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function syncCytoscape() {
         if (!cy) return;
         cy.elements().remove();
-        cy.add([...nodeElements(), ...edgeElements()]);
+        const elements = [...nodeElements(), ...edgeElements()];
+        if (isCreating() && previewPosition()) {
+            elements.push({
+                data: { id: PREVIEW_ID, label: formLabel() || 'New node' },
+                position: previewPosition(),
+                grabbable: false, selectable: false,
+            });
+        }
+        cy.add(elements);
         cy.layout({ name: 'preset' }).run();
     }
 
@@ -454,7 +496,12 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             if (!panelVisible() || cy) return;
             waitForContainer().then(container => { if (container) ensureCytoscape(); });
         });
-        effect(() => { nodes(); regions(); syncCytoscape(); });
+        // `isCreating()`/`previewPosition()`/`formLabel()` — тоже читаются
+        // здесь ЯВНО (не только внутри `syncCytoscape()`, где чтение тоже
+        // подписало бы этот эффект, но не так наглядно): маркер должен
+        // появляться/двигаться/переименовываться СРАЗУ, без ожидания
+        // следующего изменения самого графа.
+        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); syncCytoscape(); });
     }
 
     function show() {
