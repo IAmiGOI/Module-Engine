@@ -130,9 +130,41 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         return summaries;
     }
 
+    /**
+     * Перезагрузка при смене активного чата — ТА ЖЕ гонка, что задокументирована
+     * у Модуля «Notebook» (modules/notebook/index.js, doc-comment на
+     * `st.chatChanged`): `load()` выполняется один раз при старте движка, часто
+     * ДО того, как ST успел подгрузить `chatMetadata` текущего чата — первый
+     * `loadSummaries()` видел пустоту. Но если у Notebook устаревший пустой
+     * список лишь «прятал» заметки от панели, здесь пустой `summaries` ещё и
+     * ЗАПИСЫВАЕТСЯ НАЗАД: следующий `checkAndFold()` собирает `list` из
+     * устаревшего (пустого) массива и `saveSummaries()` затирает на диске ВСЕ
+     * старые саммари одним новым — реальная жалоба пользователя, «пропадали не
+     * только свежие, но и старые саммари». Тот же приём, что у Notebook,
+     * Tracker'а и reloadForActiveChat() Ядра графа памяти: подписка на
+     * `st.chatChanged` (ловит и самый первый чат после перезагрузки страницы).
+     * Перезагрузка идёт ЧЕРЕЗ `enqueueWrite()` — иначе параллельный с ней фолд
+     * мог бы начать с предсменного списка и записать его уже ПОСЛЕ перезагрузки.
+     */
+    function reloadSummariesForChat() {
+        return enqueueWrite(async () => {
+            await loadSummaries();
+        });
+    }
+
     async function saveSummaries(next) {
         summaries = next;
         await call('storage.chatMemory.set', { namespace: MEMORY_NAMESPACE, key: SUMMARIES_KEY, value: next });
+        // Явный flush сразу после записи — тот же фикс, что уже стоит у Ядра
+        // графа памяти после бутстрапа (cores/memory-graph/index.js). Обычный
+        // `set()` лишь взводит ST-шный debounce (saveMetadataDebounced, 1000ms);
+        // перезагрузка страницы в течение этой секунды после фолда теряла
+        // саммари молча — при этом скрытые сообщения УЖЕ реально сохранены
+        // (foldRawUnits() ходит через chatHistory.hide → context.saveChat()),
+        // и после релоада оставалась обратная дыра: сообщения спрятаны, а
+        // саммари для них нет. flush() идёт через ту же очередь Ядра памяти,
+        // так что порядок с параллельными фолдами сохраняется.
+        await call('storage.chatMemory.flush');
     }
 
     /** Тихий вызов модели — тот же контракт и та же форма запроса, что у cores/tracking/index.js's poll() (workerId пиннит на конкретный сайдкар). Здесь ответ — голый текст, не JSON: свёртке нечего парсить. */
@@ -342,6 +374,8 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         host.own.register('summary.delete', params => deleteSummary(params)),
     ];
 
+    const unsubscribeChatChanged = host.events.subscribe('st.chatChanged', () => { reloadSummariesForChat(); });
+
     return {
         load,
         checkAndFold,
@@ -350,6 +384,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         unregister: async () => {
             await call('pipeline.stages.remove', { pipelineId: PREPARE_PIPELINE, stageId: FOLD_STAGE_ID }).catch(() => {});
             await call('pipeline.stages.remove', { pipelineId: BEFORE_SEND_PIPELINE, stageId: INJECT_STAGE_ID }).catch(() => {});
+            unsubscribeChatChanged();
             for (const unregister of unregisters) unregister();
         },
     };
