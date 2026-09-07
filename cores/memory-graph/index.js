@@ -2085,30 +2085,126 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * (`askSideCarForNode`'s `isFirstNode`) сработает сама на первом же
      * настоящем `checkAndPlace()`, отдельный код бутстрапа для этого пути
      * не нужен вовсе.
+     *
+     * Реальный вопрос пользователя (после добавления `st.chatChanged` →
+     * `reloadForActiveChat()`, п. 19): "регенерация начиналась ещё и сама
+     * по себе. Оно не будет пересекаться?" — обоснованно. Изначальный
+     * `load()`-бутстрап (при старте страницы) и `st.chatChanged`-бутстрап
+     * (при смене чата) — ДВА независимых автоматических триггера, и оба
+     * зовут именно эту функцию. Без защиты возможна гонка: оба видят
+     * `Object.keys(nodes).length === 0` ДО того, как первый успел
+     * положить хоть один узел (оба вызова стартуют, ни один ещё не дошёл
+     * до своего первого `await` внутри `bootstrapFromLorebook()`) — и оба
+     * реально запускают ПОЛНЫЙ LLM-бутстрап, дублируя весь граф (сама
+     * `bootstrapFromLorebook()` НЕ проверяет "уже не пусто ли" внутри —
+     * это осознанно: ручной debug-контракт `memoryGraph.bootstrapFromLorebook`
+     * должен уметь пересобрать граф ДАЖE непустой, независимо от этой
+     * авто-проверки, см. его собственный тест).
+     *
+     * Простой синхронный флаг, не `enqueueWrite()`: `bootstrapFromLorebook()`
+     * САМА уже оборачивает себя в `enqueueWrite()` — вложенный
+     * `enqueueWrite(() => ... await enqueueWrite(...) ...)` был бы
+     * дедлоком (внешняя задача ждёт промис, который появится в очереди
+     * только ПОСЛЕ того, как внешняя задача сама освободит очередь, а
+     * освободить её раньше своего конца она не может). Флаг же ставится
+     * СИНХРОННО, без единого `await` между проверкой и установкой — в
+     * однопоточном JS это гарантированно атомарно относительно ЛЮБОГО
+     * другого кода, включая второй параллельный вызов этой же функции.
      */
+    let bootstrapInFlight = false;
+
     async function bootstrapIfEmpty() {
+        if (bootstrapInFlight) return; // другой вызов уже решает/бутстрапит — не дублируем
         if (Object.keys(nodes).length > 0) return;
-        await bootstrapFromLorebook();
+        bootstrapInFlight = true;
+        try {
+            await bootstrapFromLorebook();
+        } finally {
+            bootstrapInFlight = false;
+        }
     }
 
     /**
-     * Промис ТЕКУЩЕГО (или последнего) фонового бутстрапа — решено с
-     * пользователем: "зависание при bootstrap... вынеси его отдельно".
-     * `load()` больше НЕ ждёт `bootstrapIfEmpty()` сама — при большом
-     * Lorebook (десятки записей, у каждой свой вызов реальной ONNX-модели
-     * эмбеддинга) это реально ДОЛГО, а `load()` до сих пор awaited напрямую
-     * в `harness/engine-wiring.js`'s главной цепочке — весь движок (панель,
-     * докер запуска) висел за ОДНИМ этим `await`, пока бутстрап не
-     * закончится. Экспортируется как `waitForBootstrap()` на возвращаемом
-     * объекте Ядра — тестам и любому коду, которому ДЕЙСТВИТЕЛЬНО нужно
-     * дождаться результата (а не просто не блокировать остальных), есть
-     * явный способ это сделать; `load()` этот промис сама не ждёт.
+     * Промис ТЕКУЩЕГО (или последнего) фонового бутстрапа/перезагрузки —
+     * решено с пользователем: "зависание при bootstrap... вынеси его
+     * отдельно". `load()` больше НЕ ждёт `bootstrapIfEmpty()` сама — при
+     * большом Lorebook (десятки записей, у каждой свой вызов реальной
+     * ONNX-модели эмбеддинга) это реально ДОЛГО, а `load()` до сих пор
+     * awaited напрямую в `harness/engine-wiring.js`'s главной цепочке —
+     * весь движок (панель, докер запуска) висел за ОДНИМ этим `await`,
+     * пока бутстрап не закончится. Экспортируется как `waitForBootstrap()`
+     * на возвращаемом объекте Ядра — тестам и любому коду, которому
+     * ДЕЙСТВИТЕЛЬНО нужно дождаться результата (а не просто не блокировать
+     * остальных), есть явный способ это сделать; `load()` этот промис сама
+     * не ждёт.
+     *
+     * С добавлением `reloadForActiveChat()` (реакция на `st.chatChanged`,
+     * см. её doc-comment) этот же промис накрывает и ПЕРЕЗАГРУЗКУ
+     * настроек+состояния при смене чата, не только буквальный
+     * первоначальный бутстрап — переприсваивается СИНХРОННО в обработчике
+     * события (не внутри самой `reloadForActiveChat()`), так что
+     * `waitForBootstrap()`, позванный сразу после смены чата, гарантированно
+     * видит НОВЫЙ промис, а не устаревший от прошлого чата.
      */
     let bootstrapPromise = Promise.resolve();
 
     function waitForBootstrap() {
         return bootstrapPromise;
     }
+
+    /**
+     * Перечитывает настройки+состояние ТЕКУЩЕГО активного чата и триггерит
+     * бутстрап, если он пуст — отдельная функция от `load()`, чтобы её
+     * можно было звать ПОВТОРНО на `st.chatChanged`, не трогая
+     * одноразовую регистрацию контракта/этапов пайплайна (см. `load()`).
+     *
+     * Реальный баг, найден живьём (жалоба пользователя): "при перезагрузке
+     * и заходе в чат — граф строится заново с LLM, а не подгружается".
+     * Причина — `load()` раньше звалась РОВНО ОДИН раз, при старте
+     * страницы (`harness/engine-wiring.js`), и `nodes`/`regions`/... в
+     * замыкании оставались тем, что было на тот момент, НАВСЕГДА — даже
+     * когда пользователь переключался на другой чат уже ПОСЛЕ старта
+     * страницы. `chatMetadata` у настоящей ST меняется под капотом на
+     * каждый `st.chatChanged` (переключение чата — SPA-навигация, не
+     * перезагрузка страницы, проверено по настоящему исходнику
+     * `public/script.js`'s `eventSource.emit(event_types.CHAT_CHANGED, ...)`),
+     * но БЕЗ этой подписки никто не говорил Ядру графа перечитать её
+     * заново — старое состояние (пустое, если старт страницы застал
+     * "нет чата"/чужой чат) молча оставалось висеть, и `bootstrapIfEmpty()`
+     * при следующем удобном случае доверчиво считал его настоящим пустым
+     * графом и перестраивал целиком через LLM, хотя у РЕАЛЬНОГО активного
+     * чата persisted-граф мог всё это время спокойно лежать в его
+     * `chatMetadata`. Тот же класс проблемы, что `cores/lorebook/index.js`
+     * уже решило подпиской на `st.chatChanged` — здесь тот же приём.
+     */
+    /**
+     * `loadSettings()`+`loadState()` идут ЧЕРЕЗ `enqueueWrite()` — та же
+     * очередь, что и у `checkAndPlace()`/`bootstrapFromLorebook()`/ручного
+     * CRUD. Без этого возможна гонка: `st.chatChanged` может прилететь,
+     * пока предыдущий чат ещё дописывает свой ход (`checkAndPlace()` уже
+     * стоит в очереди/выполняется) — `loadState()` присваивает
+     * `nodes = <свежее из хранилища>` НАПРЯМУЮ, и если это происходит
+     * ПОСЕРЕДИНЕ чужой мутации того же объекта, either половина изменений
+     * теряется (перезаписана свежим чтением), либо чужая мутация продолжает
+     * править уже ОТСОЕДИНЁННый от персиста объект. Через очередь —
+     * `loadState()` гарантированно ждёт, пока предыдущая запись полностью
+     * не осядет (включая её персист), и только потом читает.
+     */
+    async function loadStateEnqueued() {
+        return enqueueWrite(async () => {
+            await loadSettings();
+            await loadState();
+        });
+    }
+
+    async function reloadForActiveChat() {
+        await loadStateEnqueued();
+        await bootstrapIfEmpty().catch(error => {
+            console.warn('[memoryGraph] background bootstrap failed:', error);
+        });
+    }
+
+    let unsubscribeChatChanged = () => {};
 
     /**
      * Phase 2 — этап `generation.beforeSend`, живая мутация `chat` (тот же
@@ -2145,8 +2241,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     async function load() {
-        await loadSettings();
-        await loadState();
+        await loadStateEnqueued();
         // Регистрация этапов пайплайна — БЫСТРАЯ, идёт ДО бутстрапа (раньше
         // шла после — бутстрап мог задержать даже это). Без неё граф вообще
         // не участвовал бы в генерации, даже с уже загруженными данными.
@@ -2158,6 +2253,21 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         await call('pipeline.stages.add', {
             pipelineId: BEFORE_SEND_PIPELINE,
             stage: { id: INJECT_STAGE_ID, contract: INJECT_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' },
+        });
+        // Подписка на смену активного чата — РОВНО один раз, здесь (не в
+        // `reloadForActiveChat()` самой — иначе на каждый `st.chatChanged`
+        // заводили бы ЕЩЁ одну подписку поверх старой, они не заменяют друг
+        // друга, см. `contract-bus.js`'s `register()`/`subscribe()`).
+        // `reloadForActiveChat()`'s doc-comment — реальная жалоба
+        // пользователя, которую эта подписка чинит.
+        unsubscribeChatChanged = host.events.subscribe('st.chatChanged', () => {
+            // Присвоено СИНХРОННО (не внутри reloadForActiveChat() самой) —
+            // waitForBootstrap() должен увидеть НОВЫЙ промис сразу, в том
+            // же тике, что и само событие, а не только после того, как
+            // reloadForActiveChat() дойдёт до своего первого await.
+            bootstrapPromise = reloadForActiveChat().catch(error => {
+                console.warn('[memoryGraph] reload on chat change failed:', error);
+            });
         });
         // Бутстрап — ПОСЛЕДНИМ и НЕ awaited здесь (решено с пользователем,
         // см. `waitForBootstrap()`'s doc-comment). Ошибка ловится и
@@ -2215,6 +2325,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         unregister: async () => {
             await call('pipeline.stages.remove', { pipelineId: PREPARE_PIPELINE, stageId: 'memory-graph:place' }).catch(() => {});
             await call('pipeline.stages.remove', { pipelineId: BEFORE_SEND_PIPELINE, stageId: INJECT_STAGE_ID }).catch(() => {});
+            unsubscribeChatChanged();
             for (const unregister of unregisters) unregister();
         },
     };
