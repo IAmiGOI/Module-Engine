@@ -158,7 +158,7 @@ function buildEngine({ rights } = {}) {
         ],
     });
 
-    return { engine, tools, notifications, pipelineCore, module: createNotebookModule(moduleHost) };
+    return { engine, tools, notifications, pipelineCore, settingsContext, module: createNotebookModule(moduleHost) };
 }
 
 const invoke = (tools, args) => tools.get('Notebook').action(args);
@@ -306,6 +306,34 @@ test('deleting a note from the panel removes it for the tool too — one list, n
     assert.deepEqual(module.notes(), []);
     const result = await invoke(tools, { action: 'update', note_id: id, title: 'y' });
     assert.match(result, /no note with id/);
+});
+
+test('st.chatChanged reloads notes from chat memory — a Module booted before ST finished loading chatMetadata must not get stuck showing an empty notebook', async () => {
+    const { engine, module, settingsContext } = buildEngine();
+    await module.load(); // boots against an EMPTY chatMetadata, as if it ran before ST hydrated it
+
+    // Something else (ST finishing its own chat load, or a manual chat switch)
+    // populates the real chatMetadata AFTER our module already loaded.
+    settingsContext.chatMetadata = { stme_memory: { [MODULE_ID]: { notes: [{ id: 'note_1', title: 'Plan', content: 'Sneak in at dusk', updated: 1 }] } } };
+
+    assert.deepEqual(module.notes(), [], 'sanity check: the stale load really did leave notes empty');
+
+    engine.events.emit('st.chatChanged');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(module.notes().map(note => note.title), ['Plan'], 'chatChanged must re-read chat memory, not leave the Module stuck on its first (empty) load');
+});
+
+test('stop() also drops the st.chatChanged subscription — a disabled Module must not keep reloading notes for chats it no longer owns', async () => {
+    const { engine, module, settingsContext } = buildEngine();
+    await module.load();
+
+    module.stop();
+    settingsContext.chatMetadata = { stme_memory: { [MODULE_ID]: { notes: [{ id: 'note_1', title: 'Plan', content: 'x', updated: 1 }] } } };
+    engine.events.emit('st.chatChanged');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(module.notes(), [], 'a stopped Module must not react to further chat changes');
 });
 
 test('stop() removes the stage and the tool — a disabled Module leaves no trail in either the pipeline or ST\'s tool list', async () => {
