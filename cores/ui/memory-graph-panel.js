@@ -36,7 +36,7 @@ const CANVAS_ID = 'stme-memory-graph-canvas';
 const BG_ID = 'stme-memory-graph-region-bg';
 const BG_SVG_ID = 'stme-memory-graph-region-bg-svg';
 const PREVIEW_ID = '__memory_graph_preview__';
-const MAX_RADIUS = 480; // x2 от исходных 240 — узлы стали в 10 раз меньше визуально, ближний вид "слипался"
+export const MAX_RADIUS = 480; // x2 от исходных 240 — узлы стали в 10 раз меньше визуально, ближний вид "слипался"
 
 // --- Геометрия: региональная сетка ↔ экранные координаты (чистые функции) --
 
@@ -191,6 +191,39 @@ export function renderRegionBackgroundSvg({ sectors = 5, rings = 3, maxRadius = 
 }
 
 /**
+ * Реальный баг, найден по жалобе пользователя ("точка отсчета не верная" —
+ * скриншот показал дартборд-подложку, видную только в углу канваса, вместо
+ * центра). `regionWedgePath()`'s геометрический центр (где сходятся все
+ * клинья) лежит в ЛОКАЛЬНЫХ SVG-координатах `(maxRadius, maxRadius)`, а не
+ * `(0, 0)` — `<svg>` рисуется от `viewBox="0 0 ${2*maxRadius} ${2*maxRadius}"`
+ * (см. `renderRegionBackgroundSvg()`). Модельные же координаты Cytoscape
+ * (где считаются позиции нод — `regionLayoutPosition()`/
+ * `fallbackSemanticPosition()`) центрированы на MODEL `(0, 0)`. Старый код
+ * применял к `<svg>` ТОЧНО тот же `translate(pan.x, pan.y) scale(zoom)`, что
+ * и у самого Cytoscape для модельных координат — это верно ТОЛЬКО если
+ * SVG-локальный `(0,0)` совпадает с MODEL `(0,0)`, а у него на самом деле
+ * есть постоянное смещение на `(maxRadius, maxRadius)`. Итог: центр
+ * подложки рендерился на экране в точке `(pan.x + maxRadius*zoom, pan.y +
+ * maxRadius*zoom)` — на `maxRadius*zoom` пикселей правее/ниже, чем
+ * настоящий MODEL `(0,0)` (который рендерится ровно в `(pan.x, pan.y)`).
+ * При типичном `zoom≈0.5` для канваса 480px это ~240px — почти вся
+ * подложка уезжала за пределы видимой области, что и видно на скриншоте
+ * (клинья — только в углу).
+ *
+ * Исправление — тот же трюк, что нужен был бы для ноды, сидящей в MODEL
+ * `(-maxRadius, -maxRadius)`: вычитаем это смещение (в экранных пикселях,
+ * то есть ПОСЛЕ домножения на zoom) из `pan` перед подстановкой в
+ * `translate()`. Чистая функция — сам `<svg>`-элемент недоступен вне DOM,
+ * поэтому тестируется именно возвращаемая строка трансформа, не побочный
+ * эффект на реальном элементе.
+ */
+export function backgroundTransformCss(pan, zoom, maxRadius = MAX_RADIUS) {
+    const offsetX = pan.x - maxRadius * zoom;
+    const offsetY = pan.y - maxRadius * zoom;
+    return `translate(${offsetX}px, ${offsetY}px) scale(${zoom})`;
+}
+
+/**
  * ВРЕМЕННАЯ защита, не полноценная визуализация (решено с пользователем
  * явно — раскладка UI для семантических регионов бутстрапа, MEMORY_GRAPH.md,
  * "LLM-driven семантические регионы" — отдельный заход). У семантического
@@ -199,37 +232,64 @@ export function renderRegionBackgroundSvg({ sectors = 5, rings = 3, maxRadius = 
  * дал бы `NaN`-координаты (не краш, но нода рендерилась бы в
  * непредсказуемом/невидимом месте).
  *
- * Раньше — угол по ХЭШУ строки региона (у похожих коротких имён хэши
- * ложились рядом друг с другом — жалоба пользователя со скриншотом: узлы
- * сбиты в мелкий тесный ком в одном углу канваса, вместо разбросанных
- * "лучей", как у дартборд-регионов) плюс КВАДРАТНАЯ сетка смещений (5 в
- * ряд, шаг 20px — плотный квадратик, а не органичный радиальный разброс).
- * Из-за этого `fit`-масштаб Cytoscape (считает bounding box ПО ВСЕМ узлам,
- * включая далёкие дартборд-ноды `checkAndPlace()`) растягивал пустой холст
- * вокруг одного крошечного плотного пятна — узлы выглядели мелкими и
- * сбитыми в один угол.
+ * История правок (реальные жалобы пользователя со скриншотами, по порядку):
+ * 1) угол по ХЭШУ строки региона (похожие имена ложились рядом) плюс
+ *    КВАДРАТНАЯ сетка смещений — узлы были сбиты в тесный ком в одном углу.
+ * 2) заменено на равномерное угловое распределение (`2π/N`) по ФИКСИРОВАННОМУ
+ *    радиусу (`0.75*MAX_RADIUS`) — независимо от числа регионов. При МАЛОМ
+ *    N (типично 3-5 регионов) это раскидывало якоря региона на сотни
+ *    пикселей друг от друга ("регионы далеко друг от друга"), а разброс
+ *    ВНУТРИ региона (16/8/150 — те же числа, что у дартборда) при небольшом
+ *    числе нод в регионе едва выходит за первое кольцо (радиус ~16-24px) —
+ *    "внутри региона слишком близко". Плюс размер ноды (3px) откровенно
+ *    мелкий на таком масштабе.
  *
- * Теперь: РАВНОМЕРНОЕ угловое распределение по ЧИСЛУ реальных
- * семантических регионов (`semanticRegionIds`, тот же приём, что у секторов
- * дартборда — `2π/N` на регион, радиус той же шкалы, что у дартборд-нод) —
- * регионы больше не толкутся в одной стороне канваса. Разброс ВНУТРИ
- * региона — тот же `packOffsetInRegion()`, что и у дартборд-нод (те же
- * гарантии дистанций 16/8px), не квадратная сетка — органичные
- * концентрические кольца, дальний потолок ощутимо выше дартбордного (там
- * кольцо ограничено узкой клиновидной ячейкой — здесь у "клина" целого
- * региона нет, есть простор до соседних якорей). Экспортирована (как и
- * остальная геометрия этого файла) для прямого юнит-теста.
+ * Сейчас: радиус якоря РАССЧИТЫВАЕТСЯ от числа регионов
+ * (`semanticAnchorRadius()`) так, чтобы соседние регионы едва не касались
+ * друг друга (зазор `SEMANTIC_REGION_GAP` между их дальними краями), а не
+ * раскидывались на фиксированную долю канваса — регионы больше не "далеко
+ * друг от друга" сильнее, чем нужно для их же собственного разброса.
+ * Разброс ВНУТРИ региона — свои, ЗНАЧИТЕЛЬНО более крупные шаги
+ * (`SEMANTIC_MIN_ANCHOR_DISTANCE`/`SEMANTIC_MIN_POINT_DISTANCE`), чем у
+ * дартборда: там 16/8px были откалиброваны под клиновидную ячейку и до 23
+ * нод в регионе; здесь даже 3-5 нод одного региона уже видимо расходятся
+ * кольцом, а не жмутся точкой у центра.
  */
-export const SEMANTIC_ANCHOR_RADIUS = MAX_RADIUS * 0.75;
-export const SEMANTIC_MAX_ANCHOR_DISTANCE = MAX_ANCHOR_DISTANCE * 5;
+export const SEMANTIC_MIN_ANCHOR_DISTANCE = 36;
+export const SEMANTIC_MIN_POINT_DISTANCE = 24;
+export const SEMANTIC_MAX_ANCHOR_DISTANCE = 160;
+export const SEMANTIC_REGION_GAP = 30; // зазор МЕЖДУ дальними краями (maxAnchorDistance) двух соседних регионов, не между их центрами
+
+/**
+ * Радиус, на котором лежат якоря N семантических регионов, равномерно
+ * распределённых по кругу (`2π/N`). Хорда между двумя СОСЕДНИМИ якорями —
+ * `2*radius*sin(π/N)` — подбирается так, чтобы она равнялась
+ * `2*SEMANTIC_MAX_ANCHOR_DISTANCE + SEMANTIC_REGION_GAP` (края разброса
+ * двух соседних регионов едва не соприкасаются, с небольшим зазором), а не
+ * бралась произвольной долей канваса. Зажато снизу (регион не жмётся к
+ * центру уже при N=2-3) и сверху `MAX_RADIUS` (при большом N — та же
+ * теснота, что у дартборда при переполнении: единственное кольцо регионов
+ * не резиновое, но это плавная деградация, не обрыв/наложение в одну точку).
+ */
+export function semanticAnchorRadius(regionCount) {
+    const count = Math.max(1, Math.floor(regionCount) || 0);
+    const desiredChord = 2 * SEMANTIC_MAX_ANCHOR_DISTANCE + SEMANTIC_REGION_GAP;
+    const minRadius = SEMANTIC_MAX_ANCHOR_DISTANCE + SEMANTIC_REGION_GAP;
+    if (count <= 1) return minRadius; // один регион — сравнивать не с кем, просто разумный отступ от центра
+    const radius = desiredChord / (2 * Math.sin(Math.PI / count));
+    return Math.min(MAX_RADIUS - SEMANTIC_MAX_ANCHOR_DISTANCE, Math.max(minRadius, radius));
+}
 
 export function fallbackSemanticPosition(regionId, indexInRegion, semanticRegionIds) {
     const count = Math.max(1, semanticRegionIds.length);
     const idx = Math.max(0, semanticRegionIds.indexOf(regionId));
     const centerAngle = (idx / count) * 2 * Math.PI - Math.PI / 2; // регион 0 начинается сверху, как и сектор 0 у дартборда
-    const anchorX = Math.cos(centerAngle) * SEMANTIC_ANCHOR_RADIUS;
-    const anchorY = Math.sin(centerAngle) * SEMANTIC_ANCHOR_RADIUS;
-    const offset = packOffsetInRegion(indexInRegion, { maxAnchorDistance: SEMANTIC_MAX_ANCHOR_DISTANCE });
+    const anchorRadius = semanticAnchorRadius(count);
+    const anchorX = Math.cos(centerAngle) * anchorRadius;
+    const anchorY = Math.sin(centerAngle) * anchorRadius;
+    const offset = packOffsetInRegion(indexInRegion, {
+        minAnchorDistance: SEMANTIC_MIN_ANCHOR_DISTANCE, minPointDistance: SEMANTIC_MIN_POINT_DISTANCE, maxAnchorDistance: SEMANTIC_MAX_ANCHOR_DISTANCE,
+    });
     const globalAngle = centerAngle + offset.angle;
     return {
         x: Math.round(anchorX + Math.cos(globalAngle) * offset.radius),
@@ -472,9 +532,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (!cy) return;
         const svg = document.getElementById(BG_SVG_ID);
         if (!svg) return;
-        const pan = cy.pan();
-        const zoom = cy.zoom();
-        svg.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+        svg.style.transform = backgroundTransformCss(cy.pan(), cy.zoom());
     }
 
     async function ensureCytoscape() {
@@ -501,18 +559,17 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 // который вешает/снимает `mouseover`/`mouseout` ниже.
                 // Цвет — по важности (решено с пользователем: "чем важнее,
                 // тем зеленее, чем менее важна, тем краснее"), линейная
-                // интерполяция по шкале 0..10. Размер 2px→3px (жалоба
-                // пользователя: "мелкий") — вместе с раскладкой семантических
-                // регионов на полный радиус (см. `fallbackSemanticPosition()`)
-                // компенсирует тесное скучивание, из-за которого узлы
-                // выглядели крошечными на фоне почти пустого холста.
-                { selector: 'node', style: { 'background-color': 'mapData(importance, 0, 10, #e74c3c, #2ecc71)', color: '#fff', width: 3, height: 3 } },
+                // интерполяция по шкале 0..10. Размер 2px→3px→7px (повторная
+                // жалоба пользователя: "они все очень мелкие, увеличь размер"
+                // — 3px оказалось всё ещё недостаточно на реальном масштабе
+                // канваса).
+                { selector: 'node', style: { 'background-color': 'mapData(importance, 0, 10, #e74c3c, #2ecc71)', color: '#fff', width: 7, height: 7 } },
                 { selector: 'node.hovered', style: { label: 'data(label)', 'font-size': 0.9, 'text-valign': 'bottom', 'text-margin-y': 4 } },
                 // Защищённые (центр/под-центр региона) — та же заливка по
                 // важности, только БЕЛАЯ ОБВОДКА поверх отличает их роль,
                 // не отдельный цвет заливки (иначе он бы спорил со шкалой
                 // важности).
-                { selector: 'node[?protectedNode]', style: { 'border-width': 2, 'border-color': '#fff' } },
+                { selector: 'node[?protectedNode]', style: { 'border-width': 1.5, 'border-color': '#fff' } },
                 // Без подписи типа ребра — при реальном графе ("mentions"
                 // почти на каждом ребре) текст сплошным нагромождением
                 // покрывал весь холст (жалоба пользователя).
