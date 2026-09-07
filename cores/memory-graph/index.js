@@ -103,26 +103,36 @@ export const DEFAULT_SETTINGS = Object.freeze({
     decayHalfLifeTurns: 20,
     importanceWeight: 1,
     degreeWeight: 1,
-    // Phase 2 — маяки+маршрут (MEMORY_GRAPH.md, решено с пользователем):
-    // 3 маяка на ход, отбор — релевантность (косинус к контексту) ПЛЮС вес
-    // важности (`computeNodeWeight()`, "не менее подцентра региона" —
-    // слабый/забытый узел не должен побеждать по одной лишь тематической
-    // близости). `beaconWeightFactor` — множитель веса в комбинированном
-    // счёте, тот же принцип, что `keywordWeight` у логитов региона.
-    beaconCount: 3,
+    // Phase 2 — маяки+маршрут (MEMORY_GRAPH.md, решено с пользователем).
+    // Изначально было 3 маяка на ход — поднято до 5 (решено с пользователем
+    // явно, вторым заходом на ретрив: "как выберем пять нод-маяков"), отбор —
+    // релевантность (косинус к контексту) ПЛЮС вес важности
+    // (`computeNodeWeight()`, "не менее подцентра региона" — слабый/забытый
+    // узел не должен побеждать по одной лишь тематической близости).
+    // `beaconWeightFactor` — множитель веса в комбинированном счёте, тот же
+    // принцип, что `keywordWeight` у логитов региона.
+    beaconCount: 5,
     beaconWeightFactor: 1,
-    // Маршрут — цепочка маяк0→маяк1→маяк2 по СУЩЕСТВУЮЩИМ рёбрам (кратчайший
-    // путь, без Steiner-дерева). `routeMaxHops` — защита от патологически
-    // длинного пути в разросшемся графе, не эмпирический параметр дизайна,
-    // а простой предохранитель.
+    // Маршрут — цепочка маяк0→маяк1→маяк2→... по СУЩЕСТВУЮЩИМ рёбрам
+    // (кратчайший путь, без Steiner-дерева). `routeMaxHops` — защита от
+    // патологически длинного пути в разросшемся графе, не эмпирический
+    // параметр дизайна, а простой предохранитель.
     routeMaxHops: 6,
-    // Шумные ответвления (решено с пользователем): узлы вне маршрута, но
-    // на ОДНО ребро от узла НА маршруте — не случайный процент на ребро, а
-    // гауссов "счёт" на каждого кандидата (`gaussianRandom()`), отсортировано
-    // по счёту убывающе, набирается ЖАДНО, пока не будет исчерпан бюджет —
-    // именно СИМВОЛОВ, не число узлов (решено явно пользователем: богатый
-    // регион не должен раздувать промпт числом мелких узлов).
-    noiseCharBudget: 400,
+    // Шумные ответвления — ВТОРОЙ заход (решено с пользователем явно, тремя
+    // уточняющими вопросами): раньше был ОДИН плоский слой соседей маршрута,
+    // жадно набираемый по бюджету СИМВОЛОВ. Теперь — МНОГОШАГОВАЯ экспансия
+    // (`expandNoiseNodes()`): с каждого узла ТЕКУЩЕГО фронта берём
+    // `noiseFanoutPerNode` соседей (гауссов счёт `gaussianRandom()`, лучшие
+    // по счёту), они становятся СЛЕДУЮЩИМ фронтом, и так далее — пока общее
+    // число узлов (маяки+маршрут+шум) не достигнет `retrievalTargetNodes`
+    // (~20) или пока фронт не иссякнет раньше цели (это нормальный исход,
+    // не ошибка — граф вокруг маршрута мог оказаться меньше). Бюджет ТЕПЕРЬ
+    // чисто по КОЛИЧЕСТВУ узлов, не по символам — решено с пользователем
+    // явно: "убрать совсем — только количество нод" (символьный лимит
+    // подряд мог давать очень разный по фактическому охвату промпт в
+    // зависимости от длины content'а попавшихся узлов).
+    retrievalTargetNodes: 20,
+    noiseFanoutPerNode: 2,
     // LLM-driven семантические регионы бутстрапа (решено с пользователем,
     // MEMORY_GRAPH.md — "80% нод без связи" на старом дартборд-бутстрапе):
     // `baseRegionNames` — ЕДИНСТВЕННЫЙ источник регионов для Прохода 1
@@ -195,7 +205,8 @@ export function clampGraphSettings(values = {}) {
         beaconCount: clampInt(values.beaconCount, 1, 20, DEFAULT_SETTINGS.beaconCount),
         beaconWeightFactor: clampInt(values.beaconWeightFactor * 10, 0, 100, DEFAULT_SETTINGS.beaconWeightFactor * 10) / 10,
         routeMaxHops: clampInt(values.routeMaxHops, 1, 50, DEFAULT_SETTINGS.routeMaxHops),
-        noiseCharBudget: clampInt(values.noiseCharBudget, 0, 5000, DEFAULT_SETTINGS.noiseCharBudget),
+        retrievalTargetNodes: clampInt(values.retrievalTargetNodes, 1, 200, DEFAULT_SETTINGS.retrievalTargetNodes),
+        noiseFanoutPerNode: clampInt(values.noiseFanoutPerNode, 1, 20, DEFAULT_SETTINGS.noiseFanoutPerNode),
         baseRegionNames: Array.isArray(values.baseRegionNames) && values.baseRegionNames.length
             ? values.baseRegionNames.map(name => String(name).trim()).filter(Boolean)
             : DEFAULT_SETTINGS.baseRegionNames,
@@ -435,12 +446,19 @@ export function buildBeaconRoute(nodesById, beaconIds, { maxHops = DEFAULT_SETTI
     return { segments, standalone };
 }
 
-// --- Шумные ответвления от маршрута (решено с пользователем) --------------
-// Узлы вне маршрута, но на ОДНО ребро от узла НА маршруте — "для
-// серендипности/текстуры" (MEMORY_GRAPH.md). НЕ фиксированный процент на
-// ребро — гауссов "счёт" на каждого кандидата, отсортировано убывающе,
-// набирается ЖАДНО, пока не исчерпан бюджет СИМВОЛОВ (не число узлов —
-// решено явно, богатый регион не должен раздувать промпт количеством).
+// --- Шумные ответвления от маршрута — многошаговая экспансия --------------
+// ВТОРОЙ заход на ретрив (решено с пользователем явно, три уточняющих
+// вопроса): "как выберем пять нод-маяков. Строим маршрут между ними. Затем
+// по шуму берём несколько соседних от каждой точки маршрута подключений.
+// Потом шум применяем к ним и так далее. Пока не соберётся около 20 нод."
+// Раньше был ОДИН плоский слой соседей маршрута, жадно набираемый по
+// бюджету СИМВОЛОВ (400). Теперь — ИТЕРАТИВНОЕ расширение фронта: с каждого
+// узла ТЕКУЩЕГО фронта берём `noiseFanoutPerNode` соседей (по гауссову
+// счёту), они становятся СЛЕДУЮЩИМ фронтом — и так далее, пока не наберётся
+// `retrievalTargetNodes` (маяки+маршрут+шум ВМЕСТЕ) или фронт не иссякнет
+// раньше цели (нормальный исход — граф вокруг маршрута может быть меньше
+// цели, не ошибка). Бюджет ТЕПЕРЬ чисто по КОЛИЧЕСТВУ узлов, символьный
+// лимит убран совсем (решено явно пользователем).
 
 /** Box-Muller — стандартная нормальная выборка (mean 0, stddev 1) из инжектированного `random()`, тем же приёмом, что `makeId()` уже использует `random`/`now` для тестируемости. */
 export function gaussianRandom(random = Math.random) {
@@ -450,38 +468,47 @@ export function gaussianRandom(random = Math.random) {
 }
 
 /**
- * `routeNodeIds` — узлы, УЖЕ на маршруте (сегменты+standalone), из них не
- * набираем шум и на них не выходим повторно. Кандидат — любой сосед ПО
- * РЕБРУ любого узла маршрута, ведущий НАРУЖУ. Каждому кандидату — гауссов
- * счёт, сортировка по убыванию, жадный набор по бюджету СИМВОЛОВ
- * (рендер-строка "Label: content", та же формула, что в `renderMemoryPrompt`).
- * `continue`, не `break`, на нехватке места — более короткий кандидат
- * дальше по списку всё ещё может поместиться (не строгий top-N по счёту).
- * Один и тот же узел не берётся дважды, даже если достижим от нескольких
- * якорей на маршруте.
+ * `routeNodeIds` — узлы, УЖЕ на маршруте (сегменты+standalone) — входят в
+ * `targetTotal` с самого начала (не набираются заново) и не набираются как
+ * шум повторно. Каждый РАУНД: для каждого узла ТЕКУЩЕГО фронта — кандидаты
+ * это соседи ПО РЕБРУ, ведущие НАРУЖУ уже принятого набора; гауссов счёт
+ * каждому, берём топ-`fanoutPerNode` ИМЕННО ЭТОГО узла (не глобальный топ-N
+ * по всему раунду — иначе один "богатый" узел фронта забрал бы всю квоту
+ * раунда, обделив остальных). Принятые в этом раунде узлы становятся
+ * фронтом СЛЕДУЮЩЕГО раунда — так шум расходится вглубь графа, а не только
+ * на одно ребро от маршрута. Один и тот же узел не берётся дважды, даже
+ * достижимый от нескольких разных узлов фронта.
+ *
+ * Возвращает плоский список рёбер `{from, to, type}` — `from` может быть
+ * ЛЮБЫМ уже принятым узлом (маршрутным ИЛИ шумовым из предыдущего раунда),
+ * это и есть многошаговость; `renderMemoryPrompt()` уже рендерит рёбра
+ * шума общим списком независимо от того, откуда они, правок не потребовалось.
  */
-export function pickNoiseNodes(nodesById, routeNodeIds, { charBudget = DEFAULT_SETTINGS.noiseCharBudget, random = Math.random } = {}) {
-    const onRoute = new Set(routeNodeIds);
-    const candidates = [];
-    for (const id of routeNodeIds) {
-        for (const edge of nodesById[id]?.edges ?? []) {
-            if (onRoute.has(edge.to) || !nodesById[edge.to]) continue;
-            candidates.push({ from: id, to: edge.to, type: edge.type, score: gaussianRandom(random) });
-        }
-    }
-    candidates.sort((a, b) => b.score - a.score);
-
+export function expandNoiseNodes(nodesById, routeNodeIds, { targetTotal = DEFAULT_SETTINGS.retrievalTargetNodes, fanoutPerNode = DEFAULT_SETTINGS.noiseFanoutPerNode, random = Math.random } = {}) {
+    const included = new Set(routeNodeIds);
     const accepted = [];
-    const seenTo = new Set();
-    let usedChars = 0;
-    for (const candidate of candidates) {
-        if (seenTo.has(candidate.to)) continue;
-        const node = nodesById[candidate.to];
-        const cost = `${node.label}: ${node.content}`.length;
-        if (usedChars + cost > charBudget) continue;
-        usedChars += cost;
-        seenTo.add(candidate.to);
-        accepted.push({ from: candidate.from, to: candidate.to, type: candidate.type });
+    let frontier = [...routeNodeIds];
+
+    while (frontier.length && included.size < targetTotal) {
+        const nextFrontier = [];
+        for (const id of frontier) {
+            if (included.size >= targetTotal) break;
+            const candidates = (nodesById[id]?.edges ?? [])
+                .filter(edge => !included.has(edge.to) && nodesById[edge.to])
+                .map(edge => ({ from: id, to: edge.to, type: edge.type, score: gaussianRandom(random) }))
+                .sort((a, b) => b.score - a.score);
+
+            let takenForThisNode = 0;
+            for (const candidate of candidates) {
+                if (takenForThisNode >= fanoutPerNode || included.size >= targetTotal) break;
+                if (included.has(candidate.to)) continue; // уже принят ДРУГИМ узлом этого же раунда
+                included.add(candidate.to);
+                accepted.push({ from: candidate.from, to: candidate.to, type: candidate.type });
+                nextFrontier.push(candidate.to);
+                takenForThisNode += 1;
+            }
+        }
+        frontier = nextFrontier;
     }
     return accepted;
 }
@@ -1657,6 +1684,32 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
             const gameTime = await readGameTime();
             const result = placeNewNode({ ...proposal, embedding, gameTime }, { coords, vectorProbs });
+
+            // Зеркалим свежую органическую ноду в WI (решено с пользователем:
+            // "по идее вся инфраструктура есть" — `lorebook.createEntry()`
+            // уже полностью реализован, cores/lorebook/index.js). Область —
+            // ТОЛЬКО этот путь (решено явно уточняющими вопросами): ручное
+            // создание в UI-редакторе и импорт карточки персонажа НЕ
+            // зеркалятся — тот контент и так виден пользователю напрямую
+            // (форма создания, сама карточка). `disable: true` — решено
+            // явно: граф УЖЕ инжектирует этот факт через beacon+route+noise
+            // в `generation.beforeSend`; активная WI-запись рисковала бы
+            // задвоить тот же факт в промпте через нативную
+            // keyword-активацию ST поверх инъекции графа — запись только
+            // видимая/редактируемая, не второй живой канал ретрива. Первый
+            // проход — ТОЛЬКО создание при рождении ноды (решено явно):
+            // правка/слияние/реконсолидация/эвикшн/удаление в графе НЕ
+            // синхронизируются в WI дальше — меньше связности между Ядрами,
+            // можно расширить отдельным заходом, если понадобится. Отказ
+            // (нет активного Lorebook вообще, или сбой записи) НЕ блокирует
+            // и не откатывает саму ноду — WI-запись лишь зеркало, не
+            // источник истины для графа.
+            const node = nodes[result.nodeId];
+            if (node) {
+                const wiResult = await call('lorebook.createEntry', { patch: { comment: proposal.label, content: proposal.content, disable: true } });
+                if (wiResult.ok) { node.wiUid = wiResult.value.uid; node.wiBook = wiResult.value.book; }
+            }
+
             // attachToRegion() (внутри placeNewNode) может завести запись в
             // mergeQueue/reconsolidationQueue (detectMergeCandidate/
             // tryQueueReconsolidation) — персистим ВСЕ пять хранилищ, не
@@ -2083,7 +2136,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
         const route = buildBeaconRoute(nodes, beaconIds, { maxHops: settings.routeMaxHops });
         const routeNodeIds = [...new Set([...route.segments.flatMap(step => [step.from, step.to]), ...route.standalone])];
-        const noise = pickNoiseNodes(nodes, routeNodeIds, { charBudget: settings.noiseCharBudget, random });
+        const noise = expandNoiseNodes(nodes, routeNodeIds, { targetTotal: settings.retrievalTargetNodes, fanoutPerNode: settings.noiseFanoutPerNode, random });
         const text = renderMemoryPrompt({ ...route, noise }, nodes);
         if (!text) return true;
 
