@@ -100,6 +100,22 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
     lorebookHost.own.register('lorebook.books', () => books);
     lorebookHost.own.register('lorebook.find', () => (lorebookEntries ?? []).map(e => ({ uid: e.uid, book: 'Demo Lore', name: e.comment })));
     lorebookHost.own.register('lorebook.get', params => (lorebookEntries ?? []).find(e => e.uid === params?.uid));
+    // Зеркало checkAndPlace() -> WI (см. cores/memory-graph/index.js's
+    // checkAndPlace()): та же ошибка, что у настоящего lorebook.createEntry()
+    // на отсутствие активной книги ("no lorebook active"), брошенная —
+    // конвертируется Шиной в ok:false, тот же контракт на ошибки, что и
+    // везде. `lorebookEntries: []` (пустой массив, НЕ null) даёт "книга
+    // активна, но пуста" — bootstrapFromLorebook() тогда честно ничего не
+    // делает (0 записей), а createEntry уже может писать, ровно то, что
+    // нужно тестам на органический рост через checkAndPlace().
+    const createEntryCalls = [];
+    let nextWiUid = 0;
+    lorebookHost.own.register('lorebook.createEntry', params => {
+        if (!books.length) throw new Error('lorebook.createEntry: no lorebook active for this chat/character, and none was given explicitly.');
+        const entry = { uid: nextWiUid++, book: books[0], disable: false, ...params?.patch };
+        createEntryCalls.push(entry);
+        return entry;
+    });
 
     // Фейковая карточка активного персонажа — управляется параметром теста
     // (тем же принципом, что и lorebookEntries выше). `null` — "нет
@@ -122,7 +138,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
         ],
     });
 
-    return { engine, graphCore, caller, context, pipelineCore };
+    return { engine, graphCore, caller, context, pipelineCore, createEntryCalls };
 }
 
 function call(caller, contract, params) {
@@ -962,6 +978,70 @@ test('an already-populated graph does NOT re-run the lorebook bootstrap on load(
     assert.equal(afterSecondLoad.value.length, 1, 'load() must be idempotent — it must not re-import into an already-populated graph');
 });
 
+test('st.chatChanged makes the graph re-read the (possibly DIFFERENT) active chat\'s own persisted storage — real bug reported live: "при перезагрузке и заходе в чат — граф строится заново с LLM, а не подгружается"', async () => {
+    const { engine, graphCore, context } = buildEngine(); // no lorebookEntries -> starts empty, nothing to bootstrap
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    assert.deepEqual(graphCore.nodes(), [], 'sanity: nothing to bootstrap from, graph starts empty');
+
+    // Simulate what real ST does under the hood on a chat switch: the
+    // active chat's chatMetadata silently becomes a DIFFERENT object,
+    // already carrying a real, previously-persisted graph — nothing calls
+    // graphCore directly, exactly like a real page-reload-then-open-chat
+    // sequence. Before this fix, the Core's own `nodes`/`regions` closure
+    // state never re-read this — it just kept whatever was loaded once at
+    // boot, so a later empty-graph check would wrongly trigger a full LLM
+    // rebuild instead of picking up what was already here.
+    const persistedNode = {
+        id: 'node_existing', label: 'Existing', content: 'Already persisted before this session.',
+        embedding: [1, 0, 0, 0], importance: 5, degree: 0, createdAt: 0, createdTurn: 0, lastTouchedTurn: 0,
+        protectedNode: false, regionId: '0:0', edges: [], gameTime: null,
+    };
+    context.chatMetadata = {
+        stme_memory: {
+            'core.memoryGraph': {
+                nodes: { node_existing: persistedNode },
+                regions: { '0:0': { sector: 0, ring: 0, centerNodeId: 'node_existing', subCenterIds: [], nodeIds: ['node_existing'], wordProfile: {} } },
+            },
+        },
+    };
+
+    engine.events.emit('st.chatChanged', 'some-other-chat-id');
+    await graphCore.waitForBootstrap(); // now covers the WHOLE reload triggered by chatChanged, not just a literal bootstrap — see its own doc-comment
+
+    const nodes = graphCore.nodes();
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].id, 'node_existing', 'must have picked up the OTHER chat\'s real persisted graph on chatChanged, not stayed stuck on stale in-memory state from before the switch');
+});
+
+test('multiple automatic bootstrap triggers firing close together (load()\'s own kickoff + repeated st.chatChanged) never lose or double the graph — real concern raised by the user: "регенерация начиналась ещё и сама по себе. Оно не будет пересекаться?"', async () => {
+    // Real failure mode caught live while building this test (bypassing
+    // `loadStateEnqueued()`'s `enqueueWrite()` reproduced it): NOT
+    // duplication — a concurrent, un-queued `loadState()` tore the
+    // in-flight bootstrap's own write, and the graph ended up EMPTY (0
+    // nodes), not doubled. `enqueueWrite()` around `loadSettings()`+
+    // `loadState()` (`loadStateEnqueued()`) is what actually prevents
+    // this — `bootstrapIfEmpty()`'s own `bootstrapInFlight` reentrancy
+    // guard is a second, independent layer on top, for a caller that
+    // might ever reach it WITHOUT going through `loadStateEnqueued()` first.
+    const entries = [{ uid: 0, comment: 'A', content: 'something worth remembering.' }];
+    const { engine, graphCore, caller } = buildEngine({
+        lorebookEntries: entries,
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', '[{"region":"World","centerUid":0}]'],
+    });
+
+    await graphCore.load(); // kicks off its own background bootstrap, fire-and-forget (bootstrapPromise)
+    // Fire TWO chat-change events back to back, right while that bootstrap
+    // may still be in flight — the same shape of overlap the user asked
+    // about: one automatic trigger racing against another.
+    engine.events.emit('st.chatChanged', 'chat-a');
+    engine.events.emit('st.chatChanged', 'chat-b');
+    await graphCore.waitForBootstrap();
+
+    const nodes = await call(caller, 'memoryGraph.nodes');
+    assert.equal(nodes.value.length, 1, 'exactly ONE bootstrap\'s worth of nodes must survive — overlapping automatic triggers must neither lose the graph (a torn concurrent loadState()) nor double it (a duplicate bootstrap run)');
+});
+
 // --- checkAndPlace() end-to-end -------------------------------------------
 
 test('checkAndPlace() creates a node via SideCar on the very first call (no baseline yet, always "strong")', async () => {
@@ -976,6 +1056,39 @@ test('checkAndPlace() creates a node via SideCar on the very first call (no base
     assert.equal(nodes.value.length, 1);
     assert.equal(nodes.value[0].label, 'Test Fact');
     assert.equal(nodes.value[0].gameTime, null, 'RP Time is "disabled" in this test setup — gameTime must degrade to null, not throw');
+});
+
+test('checkAndPlace() mirrors a freshly-placed node into the active Lorebook as a DISABLED entry (решено с пользователем: "по идее вся инфраструктура есть" — lorebook.createEntry() уже реализован)', async () => {
+    // lorebookEntries: [] — активная книга ЕСТЬ (createEntry может писать),
+    // но записей нет (bootstrapFromLorebook честно ничего не делает — 0
+    // записей), так что граф стартует пустым для органического роста.
+    const { graphCore, caller, createEntryCalls } = buildEngine({ lorebookEntries: [] });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('The player enters a dark cave and finds an old sword.');
+
+    assert.equal(createEntryCalls.length, 1, 'exactly one WI entry must have been created for the one new node');
+    assert.equal(createEntryCalls[0].comment, 'Test Fact', 'WI entry title must be the node\'s own label');
+    assert.equal(createEntryCalls[0].content, 'Something notable happened.', 'WI entry body must be the node\'s own content');
+    assert.equal(createEntryCalls[0].disable, true, 'must be DISABLED — the graph already injects this fact via beacon+route+noise in beforeSend; an ACTIVE WI entry would risk double-injecting the same fact through native ST keyword activation');
+
+    const nodes = await call(caller, 'memoryGraph.nodes');
+    assert.equal(nodes.value[0].wiUid, createEntryCalls[0].uid, 'the node must remember which WI entry mirrors it');
+    assert.equal(nodes.value[0].wiBook, 'Demo Lore');
+});
+
+test('checkAndPlace() still creates the graph node when there is no active Lorebook at all — the WI mirror is best-effort, never blocking (реальный вызов lorebook.createEntry() бросает "no lorebook active", Шина превращает это в ok:false)', async () => {
+    const { graphCore, caller, createEntryCalls } = buildEngine(); // no lorebookEntries -> no active book at all
+
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    const result = await graphCore.checkAndPlace('The player enters a dark cave and finds an old sword.');
+
+    assert.equal(result.status, 'placed', 'the graph node itself must still be created — a missing/failed WI mirror is not a reason to lose the fact');
+    assert.deepEqual(createEntryCalls, []);
+    const nodes = await call(caller, 'memoryGraph.nodes');
+    assert.equal(nodes.value[0].wiUid, undefined, 'no WI entry exists — nothing to link to');
 });
 
 test('checkAndPlace() creates NO node when SideCar judges the context purely short-term/situational — {"skip": true} takes precedence even if label/content are also (stray-)present (реальная жалоба: "мелкие краткосрочные договорённости" захватывались как память)', async () => {
@@ -1159,8 +1272,12 @@ test('a node off the beacon route, but one edge from it, gets pulled in as noise
     // Ruins стали бы под-центрами (subCentersPerRegion: 2 по умолчанию) и
     // получили бы бесконечный вес в scoreBeaconCandidate() наравне с
     // Marcus, что тривиально проталкивало бы ВСЕХ троих в маяки и ломало
-    // саму предпосылку теста ("Ruins не выбран маяком").
-    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
+    // саму предпосылку теста ("Ruins не выбран маяком"). `beaconCount: 3`
+    // задан ЯВНО (не полагаемся на текущий дефолт — он поднят до 5, см.
+    // DEFAULT_SETTINGS): при 4 кандидатах и 5 слотах ВСЕ стали бы маяками,
+    // и шуму просто неоткуда было бы взяться — премисса теста ("Ruins не
+    // выбран маяком") держится именно на том, что слотов МЕНЬШЕ кандидатов.
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 3 });
     await graphCore.load();
     await graphCore.waitForBootstrap();
 
@@ -1170,6 +1287,37 @@ test('a node off the beacon route, but one edge from it, gets pulled in as noise
     const text = outgoing[0].mes;
     assert.ok(text.includes('Ruins (noise)'), 'Ruins was never selected as a beacon (only 3 slots, 4 candidates) but sits one edge off the route via Elena, so it must surface as noise');
     assert.ok(text.includes('- Ruins (noise): Elena explores Ruins searching for lost artifacts.'), 'its real content must be visible, not just its label');
+});
+
+test('a node TWO edges off the beacon route, reachable only through a first-hop noise node, still gets pulled in — the real "and so on" multi-step expansion wired through the whole beforeSend pipeline, not just the pure function (решено с пользователем: "шум применяем к ним и так далее")', async () => {
+    const entries = [
+        { uid: 0, comment: 'Marcus', content: 'Marcus runs the old tavern near the market square.' },
+        { uid: 1, comment: 'Elena', content: 'Elena often visits Marcus to trade rare herbs.' }, // edge to Marcus — on the beacon route
+        { uid: 2, comment: 'Ruins', content: 'Elena explores Ruins searching for lost artifacts.' }, // edge to Elena — reachable only via a first-hop expansion from the route
+        { uid: 3, comment: 'DeepClue', content: 'A strange rune found deep inside the Ruins hints at their true age.' }, // edge to Ruins — reachable ONLY via a second-hop expansion, through Ruins
+    ];
+    let seed = 1;
+    const seededRandom = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+
+    const { graphCore, pipelineCore, caller } = buildEngine({
+        lorebookEntries: entries, random: seededRandom,
+        fetchReplies: ['[{"region":"Story","subCenterUids":[1]}]', '[{"region":"Story","centerUid":0}]', '[]'],
+    });
+    // beaconCount:2 keeps ONLY Marcus+Elena as beacons (4 real candidates
+    // otherwise, same trap as the test above); retrievalTargetNodes:10 and
+    // the default fanout leave plenty of room for expansion to actually
+    // reach two hops deep, past whatever the route itself already covers.
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 2, retrievalTargetNodes: 10 });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const outgoing = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+
+    const text = outgoing[0].mes;
+    assert.ok(text.includes('Ruins (noise)'), 'Ruins (one hop off the route) must be reached first');
+    assert.ok(text.includes('DeepClue (noise)'), 'DeepClue is only reachable BY expanding again from Ruins, the previous round\'s own noise pick — this is the multi-hop "and so on" behavior, not just a single flat layer off the route');
+    assert.ok(text.includes('- DeepClue (noise): A strange rune found deep inside the Ruins hints at their true age.'), 'its real content must be visible, not just its label');
 });
 
 // --- Ручное редактирование графа (UI-редактор): CRUD нод/рёбер -----------
