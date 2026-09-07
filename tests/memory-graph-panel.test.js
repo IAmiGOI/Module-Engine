@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pixelToRegion, regionLayoutPosition, packOffsetInRegion, regionWedgePath, renderRegionBackgroundSvg } from '../cores/ui/memory-graph-panel.js';
+import { pixelToRegion, regionLayoutPosition, packOffsetInRegion, regionWedgePath, renderRegionBackgroundSvg, fallbackSemanticPosition, SEMANTIC_ANCHOR_RADIUS } from '../cores/ui/memory-graph-panel.js';
 
 // --- pixelToRegion() / regionLayoutPosition() — geometry round-trips ------
 
@@ -108,6 +108,67 @@ test('packOffsetInRegion() never places a node beyond maxAnchorDistance (30px de
         const { radius } = packOffsetInRegion(i);
         assert.ok(radius <= 30 + 1e-9, `index ${i} got radius ${radius}, past the 30px ceiling`);
     }
+});
+
+// --- fallbackSemanticPosition() — semantic (bootstrap) regions, no sector:ring ---
+// Реальная жалоба пользователя со скриншотом: узлы сбиты в мелкий тесный ком
+// в одном углу канваса вместо разброса по всему кругу, как у дартборд-нод.
+
+test('fallbackSemanticPosition() spreads distinct regions EVENLY around the full circle, not clustered in one hashed direction', () => {
+    const regionIds = ['Locations', 'Main Characters', 'Factions', 'Extra'];
+    const anchorAngles = regionIds.map((_, i) => {
+        // node #0 of a region sits AT its anchor (packOffsetInRegion's ring 0 has zero extra angle for index 0).
+        const { x, y } = fallbackSemanticPosition(regionIds[i], 0, regionIds);
+        return Math.atan2(y, x);
+    });
+    // 4 regions must land ~90° apart (2π/4) — not bunched together like the old hash-based angle could.
+    for (let i = 0; i < anchorAngles.length; i += 1) {
+        for (let j = i + 1; j < anchorAngles.length; j += 1) {
+            let delta = Math.abs(anchorAngles[i] - anchorAngles[j]);
+            if (delta > Math.PI) delta = 2 * Math.PI - delta;
+            assert.ok(delta > 1.0, `regions ${regionIds[i]}/${regionIds[j]} landed only ${delta.toFixed(2)} rad apart — should be spread ~${(2 * Math.PI / 4).toFixed(2)} rad apart`);
+        }
+    }
+});
+
+test('fallbackSemanticPosition() places every region\'s FIRST node at the SAME distance from the canvas center — a real radial spread, not a hash-picked point that could land anywhere', () => {
+    // Node #0 sits `minAnchorDistance` (16px) further out than the anchor
+    // itself (same convention as regionLayoutPosition(), see its own
+    // doc-comment) — so this checks all regions AGREE with each other, not
+    // against a hardcoded absolute number tied to that offset.
+    const regionIds = ['Locations', 'Main Characters', 'Factions'];
+    const distances = regionIds.map(regionId => {
+        const { x, y } = fallbackSemanticPosition(regionId, 0, regionIds);
+        return Math.hypot(x, y);
+    });
+    for (const distance of distances) {
+        assert.ok(Math.abs(distance - distances[0]) < 1, `regions landed at inconsistent distances from center: ${distances.join(', ')}`);
+    }
+    assert.ok(distances[0] > SEMANTIC_ANCHOR_RADIUS * 0.9, 'the anchor radius itself must be a real, substantial fraction of the canvas — not a tiny huddle near the center');
+});
+
+test('fallbackSemanticPosition() keeps every PAIR of nodes within the SAME region roughly minPointDistance apart, even for a large region — no square-grid clumping', () => {
+    // Tolerance accounts for the function's own `Math.round()` to integer
+    // screen pixels (both packOffsetInRegion()'s own tests assert on the
+    // RAW, unrounded radius/angle — this one goes through the rounded x/y
+    // this function actually returns, so up to ~1.4px of combined rounding
+    // slack on TWO independently-rounded points is expected, not a bug).
+    const regionIds = ['Locations'];
+    const points = [];
+    for (let i = 0; i < 23; i += 1) points.push(fallbackSemanticPosition('Locations', i, regionIds));
+    for (let i = 0; i < points.length; i += 1) {
+        for (let j = i + 1; j < points.length; j += 1) {
+            const distance = Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y);
+            assert.ok(distance >= 6.5, `nodes #${i}/#${j} of the same region are only ${distance.toFixed(2)}px apart — real clumping, not rounding slack`);
+        }
+    }
+});
+
+test('fallbackSemanticPosition() is deterministic — the same regionId/index/list always lands on the same spot (no per-render jitter)', () => {
+    const regionIds = ['Locations', 'Factions'];
+    const first = fallbackSemanticPosition('Factions', 3, regionIds);
+    const second = fallbackSemanticPosition('Factions', 3, regionIds);
+    assert.deepEqual(first, second);
 });
 
 // --- regionWedgePath() / renderRegionBackgroundSvg() — the faint per-region background fill ---
