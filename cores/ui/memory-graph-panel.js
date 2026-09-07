@@ -385,6 +385,28 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         return elements;
     }
 
+    /**
+     * ВРЕМЕННАЯ защита, не полноценная визуализация (решено с пользователем
+     * явно — раскладка UI для семантических регионов бутстрапа, MEMORY_GRAPH.md,
+     * "LLM-driven семантические регионы" — отдельный заход). У семантического
+     * `regionId` (например "Locations") нет "sector:ring" — без этой ветки
+     * `regionId.split(':').map(Number)` дал бы `NaN`-координаты (не краш,
+     * но нода рендерилась бы в непредсказуемом/невидимом месте). Хэш
+     * строки региона в стабильный угол — детерминированно, разные
+     * регионы не накладываются друг на друга, не более того.
+     */
+    function fallbackSemanticPosition(regionId, indexInRegion) {
+        let hash = 0;
+        for (let i = 0; i < regionId.length; i += 1) hash = (hash * 31 + regionId.charCodeAt(i)) % 360;
+        const angle = (hash / 360) * 2 * Math.PI;
+        const radius = MAX_RADIUS * 0.6;
+        const spread = 20;
+        return {
+            x: Math.round(Math.cos(angle) * radius + (indexInRegion % 5) * spread),
+            y: Math.round(Math.sin(angle) * radius + Math.floor(indexInRegion / 5) * spread),
+        };
+    }
+
     function nodeElements() {
         const perRegion = new Map();
         for (const node of nodes()) {
@@ -397,8 +419,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             members.forEach((node, index) => {
                 let position = { x: 0, y: 0 };
                 if (regionId !== 'staged') {
-                    const [sector, ring] = regionId.split(':').map(Number);
-                    position = regionLayoutPosition(sector, ring, { indexInRegion: index });
+                    position = /^\d+:\d+$/.test(regionId)
+                        ? regionLayoutPosition(...regionId.split(':').map(Number), { indexInRegion: index })
+                        : fallbackSemanticPosition(regionId, index);
                 }
                 elements.push({
                     data: { id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode), importance: node.importance ?? 0 },
