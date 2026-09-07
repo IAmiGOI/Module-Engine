@@ -2114,6 +2114,32 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let bootstrapInFlight = false;
 
     async function bootstrapIfEmpty() {
+        // ВРЕМЕННО ОТКЛЮЧЕНО (решено с пользователем: "удали все, кроме
+        // кнопки"/"не удаляй, просто закоменти") — автозапуск бутстрапа
+        // (из `load()` при старте и из `reloadForActiveChat()` на
+        // `st.chatChanged`) оказался ненадёжным триггером: расследование
+        // показало, что `lorebook.books()` может вернуть непустой список
+        // ДАЖЕ когда реальные данные текущего чата ещё не устаканились —
+        // `resolveBookNames()` (libraries/core/lorebook-sources.js) кладёт
+        // `snapshot.selectedWorldInfo` (ГЛОБАЛЬНО выбранный World Info в
+        // настройках ST) в список активных книг БЕЗУСЛОВНО, независимо от
+        // того, готов ли `chat_metadata` текущего чата — пользователь сам
+        // верно предположил причину: "Может потому что LB выбран в
+        // активных?". Расширение грузится по `jQuery(ready)`
+        // (`index.js`), без гарантии, что ST уже закончила подгружать
+        // РЕАЛЬНЫЙ активный чат к этому моменту — итог живьём: пустое
+        // (ещё не прочитанное) `nodes` + глобально активный Lorebook =>
+        // ложный "пустой граф, пора бутстрапить" и весь Lorebook улетает
+        // в SideCar без спроса.
+        //
+        // На время расследования точного условия готовности чата —
+        // ЕДИНСТВЕННЫЙ путь бутстрапа теперь ручная кнопка
+        // ("bootstrapFromLorebook" в дебаг-блоке графового редактора,
+        // `memoryGraph.bootstrapFromLorebook` контракт) — она зовёт
+        // `bootstrapFromLorebook()` НАПРЯМУЮ, в обход этой функции,
+        // так что продолжает работать без изменений.
+        return;
+        // eslint-disable-next-line no-unreachable
         if (bootstrapInFlight) return; // другой вызов уже решает/бутстрапит — не дублируем
         if (Object.keys(nodes).length > 0) return;
         bootstrapInFlight = true;
@@ -2316,6 +2342,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     return {
         load, waitForBootstrap,
         checkAndPlace, sweepStaging, sweepMergeQueue, sweepReconsolidationQueue, injectIntoPrompt,
+        // Автозапуск бутстрапа временно отключён (см. `bootstrapIfEmpty()`'s
+        // doc-comment) — ручной путь (`memoryGraph.bootstrapFromLorebook`
+        // контракт, дебаг-кнопка редактора) продолжает работать напрямую,
+        // экспортирован и здесь для того же прямого доступа из тестов.
+        bootstrapFromLorebook,
         settings: () => settings,
         nodes: () => Object.values(nodes),
         regions: () => Object.values(regions),
