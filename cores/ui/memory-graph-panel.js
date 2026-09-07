@@ -34,7 +34,7 @@ const MODULE_UI_NAMESPACE = 'core.ui.memoryGraph';
 const WINDOW_KEY = 'window';
 const CANVAS_ID = 'stme-memory-graph-canvas';
 const PREVIEW_ID = '__memory_graph_preview__';
-const MAX_RADIUS = 240;
+const MAX_RADIUS = 480; // x2 от исходных 240 — узлы стали в 10 раз меньше визуально, ближний вид "слипался"
 
 // --- Геометрия: региональная сетка ↔ экранные координаты (чистые функции) --
 
@@ -300,9 +300,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             elements: [...nodeElements(), ...edgeElements()],
             layout: { name: 'preset' },
             style: [
-                { selector: 'node', style: { label: 'data(label)', 'background-color': '#4a9eff', color: '#fff', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4, width: 20, height: 20 } },
+                { selector: 'node', style: { label: 'data(label)', 'background-color': '#4a9eff', color: '#fff', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4, width: 2, height: 2 } },
                 { selector: 'node[?protectedNode]', style: { 'background-color': '#ffb454', 'border-width': 2, 'border-color': '#fff' } },
-                { selector: 'edge', style: { width: 1.5, 'line-color': '#888', 'curve-style': 'bezier', label: 'data(type)', 'font-size': 7, color: '#aaa' } },
+                { selector: 'edge', style: { width: 1, 'line-color': '#888', 'curve-style': 'bezier', label: 'data(type)', 'font-size': 7, color: '#aaa' } },
                 // Маркер места будущего узла в режиме создания — пунктир,
                 // не сплошная заливка, чтобы не путать с настоящим узлом;
                 // не кликабелен и не перетаскиваем (см. `grabbable`/`selectable` ниже).
@@ -312,7 +312,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                         label: 'data(label)', 'background-color': 'rgba(74,158,255,0.15)',
                         'border-width': 2, 'border-style': 'dashed', 'border-color': '#4a9eff',
                         color: '#4a9eff', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4,
-                        width: 24, height: 24,
+                        width: 2.4, height: 2.4,
                     },
                 },
             ],
