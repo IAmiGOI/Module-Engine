@@ -9,6 +9,10 @@ import {
     scoreBeaconCandidate, pickBeacons, findShortestPath, buildBeaconRoute, renderMemoryPrompt,
     gaussianRandom, pickNoiseNodes,
     importanceFromLorebookEntry, applyConnectionBonus,
+    buildRegionSkeletonPrompt, parseRegionSkeletonResponse,
+    buildAdditionalCentersPrompt, parseAdditionalCentersResponse,
+    pickNearestRegion,
+    buildRegionEdgesPrompt, parseRegionEdgesResponse,
 } from '../cores/memory-graph/index.js';
 
 // --- Физика регионов --------------------------------------------------
@@ -536,4 +540,102 @@ test('applyConnectionBonus() adds degree to the base importance, clamped at 10 �
     assert.equal(applyConnectionBonus(3, 2), 5);
     assert.equal(applyConnectionBonus(9, 5), 10, 'must clamp at the ceiling, not overflow past 10');
     assert.equal(applyConnectionBonus(3, 0), 3, 'zero connections leaves the base signal untouched');
+});
+
+// --- LLM-driven семантические регионы бутстрапа (решено с пользователем) ---
+
+test('buildRegionSkeletonPrompt() includes EVERY entry, numbered, and the base region names as a starting point', () => {
+    const entries = [
+        { uid: 5, label: 'Alpha', content: 'first fact' },
+        { uid: 9, label: 'Beta', content: 'second fact' },
+    ];
+    const prompt = buildRegionSkeletonPrompt(entries, ['Locations', 'Factions']);
+    assert.ok(prompt.includes('5. Alpha: first fact'));
+    assert.ok(prompt.includes('9. Beta: second fact'));
+    assert.ok(prompt.includes('Locations'));
+    assert.ok(prompt.includes('Factions'));
+});
+
+test('parseRegionSkeletonResponse() drops a region with no valid sub-center uid, but keeps other valid regions', () => {
+    const entries = [{ uid: 1 }, { uid: 2 }, { uid: 3 }];
+    const parsed = [
+        { region: 'Good', subCenterUids: [1, 2] },
+        { region: 'Bad', subCenterUids: [999] }, // uid 999 does not exist
+        { region: '', subCenterUids: [3] }, // no name at all
+    ];
+    const result = parseRegionSkeletonResponse(parsed, entries);
+    assert.deepEqual(result, [{ name: 'Good', subCenterUids: [1, 2] }]);
+});
+
+test('parseRegionSkeletonResponse() never assigns the SAME uid as a sub-center twice across different regions', () => {
+    const entries = [{ uid: 1 }, { uid: 2 }];
+    const parsed = [
+        { region: 'First', subCenterUids: [1, 2] },
+        { region: 'Second', subCenterUids: [1] }, // uid 1 already claimed by "First"
+    ];
+    const result = parseRegionSkeletonResponse(parsed, entries);
+    assert.equal(result.length, 1, 'a region left with zero valid sub-centers after dedup must be dropped entirely');
+    assert.deepEqual(result[0].subCenterUids, [1, 2]);
+});
+
+test('parseRegionSkeletonResponse() returns nothing for a non-array response — model.generate is defensive, never throws on bad JSON', () => {
+    assert.deepEqual(parseRegionSkeletonResponse(undefined, []), []);
+    assert.deepEqual(parseRegionSkeletonResponse({ not: 'an array' }, []), []);
+});
+
+test('buildAdditionalCentersPrompt() names the existing regions and the target region count', () => {
+    const entries = [{ uid: 1, label: 'A', content: 'x' }];
+    const prompt = buildAdditionalCentersPrompt(entries, ['Locations', 'Factions'], 5, 20);
+    assert.ok(prompt.includes('Locations'));
+    assert.ok(prompt.includes('Factions'));
+    assert.ok(prompt.includes('5'), 'the target total region count must appear in the prompt');
+});
+
+test('parseAdditionalCentersResponse() dedups by BOTH region name and center uid — a model reusing either must not double-count', () => {
+    const entries = [{ uid: 1 }, { uid: 2 }, { uid: 3 }];
+    const parsed = [
+        { region: 'A', centerUid: 1 },
+        { region: 'A', centerUid: 2 }, // same region name again — dropped
+        { region: 'B', centerUid: 1 }, // same uid already used by "A" — dropped
+        { region: 'C', centerUid: 3 },
+        { region: 'D', centerUid: 999 }, // invalid uid — dropped
+    ];
+    const result = parseAdditionalCentersResponse(parsed, entries);
+    assert.deepEqual(result, [{ name: 'A', centerUid: 1 }, { name: 'C', centerUid: 3 }]);
+});
+
+test('pickNearestRegion() returns the region of the anchor with the HIGHEST cosine similarity, ignoring anchors with no embedding/regionId', () => {
+    const anchors = [
+        { regionId: 'Far', embedding: [1, 0, 0, 0] },
+        { regionId: 'Close', embedding: [0, 1, 0, 0] },
+        { regionId: 'Broken', embedding: null }, // must not crash, just skipped
+    ];
+    const embedding = [0, 0.9, 0.1, 0]; // clearly closer to "Close"'s direction
+    assert.equal(pickNearestRegion(embedding, anchors), 'Close');
+});
+
+test('pickNearestRegion() returns null when there are no usable anchors at all', () => {
+    assert.equal(pickNearestRegion([1, 0, 0, 0], []), null);
+    assert.equal(pickNearestRegion([1, 0, 0, 0], [{ regionId: null, embedding: [1, 0, 0, 0] }]), null);
+});
+
+test('buildRegionEdgesPrompt() lists every node by its REAL graph id (a string), not a lorebook uid', () => {
+    const nodes = [{ id: 'node_abc', label: 'Alice', content: 'hero' }, { id: 'node_xyz', label: 'Bob', content: 'sidekick' }];
+    const prompt = buildRegionEdgesPrompt(nodes);
+    assert.ok(prompt.includes('node_abc. Alice: hero'));
+    assert.ok(prompt.includes('node_xyz. Bob: sidekick'));
+});
+
+test('parseRegionEdgesResponse() filters to valid ids only, drops self-loops, and dedups an unordered pair', () => {
+    const nodes = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    const parsed = [
+        { from: 'a', to: 'b' },
+        { from: 'b', to: 'a' }, // same unordered pair as above — must not duplicate
+        { from: 'a', to: 'a' }, // self-loop — dropped
+        { from: 'a', to: 'zzz' }, // 'zzz' not in this region — dropped
+        { from: 'b', to: 'c' },
+    ];
+    const result = parseRegionEdgesResponse(parsed, nodes);
+    const keys = result.map(e => [e.from, e.to].sort().join('|')).sort();
+    assert.deepEqual(keys, ['a|b', 'b|c']);
 });
