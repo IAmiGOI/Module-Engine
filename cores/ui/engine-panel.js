@@ -117,6 +117,17 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     const lorebookEntries = signal([]);
     const lorebookBooks = signal([]);
     const memoryGraphNodeCount = signal(0);
+    // Прогресс бутстрапа из Lorebook (решено с пользователем: "нет ивентов
+    // начала и конца построения WI... нет индикатора прогресса. Это очень
+    // плохо" + следом "добавь прогресс-бар"). `memoryGraphFlash` — та же
+    // пульсация обводки, что у "Test" воркера/проверки обновления (см.
+    // `flash()` ниже), только выставляется НАПРЯМУЮ (не автогаснущим
+    // `flash()`) на всё время бутстрапа — гаснет сама только на `finished`.
+    // `memoryGraphProgress` — null, когда бутстрап не идёт; `{done, total,
+    // phase}` — грубая, но живая оценка (`cores/memory-graph/index.js`'s
+    // `bootstrapFromLorebook()` тикает её по ходу дела), не точный процент.
+    const memoryGraphFlash = signal('');
+    const memoryGraphProgress = signal(null);
     const summaries = signal([]);
     const summaryLevels = signal([]);
     const summaryProtectedWindow = signal(20);
@@ -806,9 +817,40 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
      * решено с пользователем: "полноценный UI... окно, а не узкая секция") —
      * счётчик узлов и кнопка, сам граф эта карточка не рисует вообще.
      */
+    /** Ярлык фазы бутстрапа для текста над полосой прогресса — `phase` приходит с бэкенда (`cores/memory-graph/index.js`'s `tick()`), словами, не сырым техническим именем. */
+    function memoryGraphProgressPhaseLabel(phase) {
+        switch (phase) {
+            case 'reading': return 'reading Lorebook';
+            case 'skeleton': return 'laying out regions';
+            case 'centers': return 'adding region centers';
+            case 'placing': return 'placing entries';
+            case 'linking': return 'linking regions';
+            case 'finalizing': return 'finalizing';
+            default: return 'building';
+        }
+    }
+
+    /** Полоса прогресса бутстрапа — видна только пока `memoryGraphProgress()` не null (решено с пользователем: "нет индикатора прогресса. Это очень плохо" → "добавь прогресс-бар"). Проценты — грубая оценка (see `bootstrapFromLorebook()`'s doc-comment), не точный расчёт, этого достаточно, чтобы полоска реально двигалась, а не стояла мёртвым нулём. */
+    function memoryGraphProgressBar() {
+        return computed(() => {
+            const progress = memoryGraphProgress();
+            if (!progress) return null;
+            const percent = Math.min(100, Math.round((progress.done / progress.total) * 100));
+            return h('div', { class: 'stme-progress' },
+                h('div', { class: 'stme-progress-track' }, h('div', { class: 'stme-progress-fill', style: { width: `${percent}%` } })),
+                h('small', { class: 'stme-progress-label' }, `Building memory graph — ${memoryGraphProgressPhaseLabel(progress.phase)}… ${percent}%`),
+            );
+        });
+    }
+
     function memoryGraphCard() {
-        return Card('Memory Graph', { ...collapse.bind('card:memoryGraph'), subtitle: computed(() => `${memoryGraphNodeCount()} node${memoryGraphNodeCount() === 1 ? '' : 's'}`) },
+        return Card('Memory Graph', {
+            ...collapse.bind('card:memoryGraph'),
+            subtitle: computed(() => `${memoryGraphNodeCount()} node${memoryGraphNodeCount() === 1 ? '' : 's'}`),
+            className: computed(() => (memoryGraphFlash() ? `stme-flash stme-flash-${memoryGraphFlash()}` : '')),
+        },
             h('p', { class: 'stme-summary-help' }, 'Long-term memory as a mind-map — facts as nodes, typed edges between them, retrieved by relevance instead of recency.'),
+            memoryGraphProgressBar(),
             Row(Button('Open Graph Editor', () => openMemoryGraphPanel?.())),
         );
     }
@@ -914,6 +956,23 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
                 'memoryGraph.nodeCreated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeEvicted',
                 'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
             ].map(event => host.events.subscribe(event, () => loadMemoryGraphCount())),
+            // Бутстрап-прогресс — отдельная тройка событий (`started`
+            // подтверждает, что реальная работа НАЧАЛАСЬ — `bootstrapMax
+            // Tokens`-размера Lorebook может идти десятки секунд; `progress`
+            // тикает по ходу; `finished` гасит пульсацию БЕЗУСЛОВНО — и на
+            // успехе, и на любом раннем отказе, иначе индикатор завис бы
+            // навсегда при пустом Проходе 1/2).
+            host.events.subscribe('memoryGraph.bootstrapStarted', payload => {
+                memoryGraphFlash.set('testing');
+                memoryGraphProgress.set({ done: 0, total: Math.max(1, payload?.totalSteps ?? 1), phase: 'reading' });
+            }),
+            host.events.subscribe('memoryGraph.bootstrapProgress', payload => {
+                memoryGraphProgress.set({ done: payload?.done ?? 0, total: Math.max(1, payload?.total ?? 1), phase: payload?.phase ?? '' });
+            }),
+            host.events.subscribe('memoryGraph.bootstrapFinished', payload => {
+                memoryGraphProgress.set(null);
+                flash(memoryGraphFlash, payload?.success ? 'ok' : 'error');
+            }),
             // Тот же автоматический фолд может и упасть (провайдер ответил,
             // но `chatHistory.hide` или следующий батж каскада — нет) — в
             // отличие от ручного «Fold now» (`forceSummaryFold()` ниже,

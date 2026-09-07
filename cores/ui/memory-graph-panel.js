@@ -190,6 +190,53 @@ export function renderRegionBackgroundSvg({ sectors = 5, rings = 3, maxRadius = 
     return `<svg id="${BG_SVG_ID}" style="position:absolute;left:0;top:0;transform-origin:0 0;" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${cells.join('')}</svg>`;
 }
 
+/**
+ * ВРЕМЕННАЯ защита, не полноценная визуализация (решено с пользователем
+ * явно — раскладка UI для семантических регионов бутстрапа, MEMORY_GRAPH.md,
+ * "LLM-driven семантические регионы" — отдельный заход). У семантического
+ * `regionId` (например "Locations") нет "sector:ring" — без ветки, которая
+ * зовёт эту функцию в `nodeElements()`, `regionId.split(':').map(Number)`
+ * дал бы `NaN`-координаты (не краш, но нода рендерилась бы в
+ * непредсказуемом/невидимом месте).
+ *
+ * Раньше — угол по ХЭШУ строки региона (у похожих коротких имён хэши
+ * ложились рядом друг с другом — жалоба пользователя со скриншотом: узлы
+ * сбиты в мелкий тесный ком в одном углу канваса, вместо разбросанных
+ * "лучей", как у дартборд-регионов) плюс КВАДРАТНАЯ сетка смещений (5 в
+ * ряд, шаг 20px — плотный квадратик, а не органичный радиальный разброс).
+ * Из-за этого `fit`-масштаб Cytoscape (считает bounding box ПО ВСЕМ узлам,
+ * включая далёкие дартборд-ноды `checkAndPlace()`) растягивал пустой холст
+ * вокруг одного крошечного плотного пятна — узлы выглядели мелкими и
+ * сбитыми в один угол.
+ *
+ * Теперь: РАВНОМЕРНОЕ угловое распределение по ЧИСЛУ реальных
+ * семантических регионов (`semanticRegionIds`, тот же приём, что у секторов
+ * дартборда — `2π/N` на регион, радиус той же шкалы, что у дартборд-нод) —
+ * регионы больше не толкутся в одной стороне канваса. Разброс ВНУТРИ
+ * региона — тот же `packOffsetInRegion()`, что и у дартборд-нод (те же
+ * гарантии дистанций 16/8px), не квадратная сетка — органичные
+ * концентрические кольца, дальний потолок ощутимо выше дартбордного (там
+ * кольцо ограничено узкой клиновидной ячейкой — здесь у "клина" целого
+ * региона нет, есть простор до соседних якорей). Экспортирована (как и
+ * остальная геометрия этого файла) для прямого юнит-теста.
+ */
+export const SEMANTIC_ANCHOR_RADIUS = MAX_RADIUS * 0.75;
+export const SEMANTIC_MAX_ANCHOR_DISTANCE = MAX_ANCHOR_DISTANCE * 5;
+
+export function fallbackSemanticPosition(regionId, indexInRegion, semanticRegionIds) {
+    const count = Math.max(1, semanticRegionIds.length);
+    const idx = Math.max(0, semanticRegionIds.indexOf(regionId));
+    const centerAngle = (idx / count) * 2 * Math.PI - Math.PI / 2; // регион 0 начинается сверху, как и сектор 0 у дартборда
+    const anchorX = Math.cos(centerAngle) * SEMANTIC_ANCHOR_RADIUS;
+    const anchorY = Math.sin(centerAngle) * SEMANTIC_ANCHOR_RADIUS;
+    const offset = packOffsetInRegion(indexInRegion, { maxAnchorDistance: SEMANTIC_MAX_ANCHOR_DISTANCE });
+    const globalAngle = centerAngle + offset.angle;
+    return {
+        x: Math.round(anchorX + Math.cos(globalAngle) * offset.radius),
+        y: Math.round(anchorY + Math.sin(globalAngle) * offset.radius),
+    };
+}
+
 export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function call(contract, params) {
         return request(host.own, contract, { params });
@@ -385,28 +432,6 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         return elements;
     }
 
-    /**
-     * ВРЕМЕННАЯ защита, не полноценная визуализация (решено с пользователем
-     * явно — раскладка UI для семантических регионов бутстрапа, MEMORY_GRAPH.md,
-     * "LLM-driven семантические регионы" — отдельный заход). У семантического
-     * `regionId` (например "Locations") нет "sector:ring" — без этой ветки
-     * `regionId.split(':').map(Number)` дал бы `NaN`-координаты (не краш,
-     * но нода рендерилась бы в непредсказуемом/невидимом месте). Хэш
-     * строки региона в стабильный угол — детерминированно, разные
-     * регионы не накладываются друг на друга, не более того.
-     */
-    function fallbackSemanticPosition(regionId, indexInRegion) {
-        let hash = 0;
-        for (let i = 0; i < regionId.length; i += 1) hash = (hash * 31 + regionId.charCodeAt(i)) % 360;
-        const angle = (hash / 360) * 2 * Math.PI;
-        const radius = MAX_RADIUS * 0.6;
-        const spread = 20;
-        return {
-            x: Math.round(Math.cos(angle) * radius + (indexInRegion % 5) * spread),
-            y: Math.round(Math.sin(angle) * radius + Math.floor(indexInRegion / 5) * spread),
-        };
-    }
-
     function nodeElements() {
         const perRegion = new Map();
         for (const node of nodes()) {
@@ -414,6 +439,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             if (!perRegion.has(key)) perRegion.set(key, []);
             perRegion.get(key).push(node);
         }
+        // Отсортировано — тот же список семантических регионов даёт тот же
+        // угол при каждой перерисовке (иначе порядок Map's insertion, который
+        // зависит от порядка ПРИХОДА нод, мог бы тасовать углы регионов
+        // между собой на каждый refresh()).
+        const semanticRegionIds = [...perRegion.keys()].filter(key => key !== 'staged' && !/^\d+:\d+$/.test(key)).sort();
         const elements = [];
         for (const [regionId, members] of perRegion) {
             members.forEach((node, index) => {
@@ -421,7 +451,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 if (regionId !== 'staged') {
                     position = /^\d+:\d+$/.test(regionId)
                         ? regionLayoutPosition(...regionId.split(':').map(Number), { indexInRegion: index })
-                        : fallbackSemanticPosition(regionId, index);
+                        : fallbackSemanticPosition(regionId, index, semanticRegionIds);
                 }
                 elements.push({
                     data: { id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode), importance: node.importance ?? 0 },
@@ -465,14 +495,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             elements: [...nodeElements(), ...edgeElements()],
             layout: { name: 'preset' },
             style: [
-                // Подпись СКРЫТА по умолчанию — при таком размере ноды (2px)
-                // текст на весь холст был нечитаемым нагромождением (жалоба
+                // Подпись СКРЫТА по умолчанию — при таком размере ноды текст
+                // на весь холст был нечитаемым нагромождением (жалоба
                 // пользователя). Показывается только классом `.hovered`,
                 // который вешает/снимает `mouseover`/`mouseout` ниже.
                 // Цвет — по важности (решено с пользователем: "чем важнее,
                 // тем зеленее, чем менее важна, тем краснее"), линейная
-                // интерполяция по шкале 0..10.
-                { selector: 'node', style: { 'background-color': 'mapData(importance, 0, 10, #e74c3c, #2ecc71)', color: '#fff', width: 2, height: 2 } },
+                // интерполяция по шкале 0..10. Размер 2px→3px (жалоба
+                // пользователя: "мелкий") — вместе с раскладкой семантических
+                // регионов на полный радиус (см. `fallbackSemanticPosition()`)
+                // компенсирует тесное скучивание, из-за которого узлы
+                // выглядели крошечными на фоне почти пустого холста.
+                { selector: 'node', style: { 'background-color': 'mapData(importance, 0, 10, #e74c3c, #2ecc71)', color: '#fff', width: 3, height: 3 } },
                 { selector: 'node.hovered', style: { label: 'data(label)', 'font-size': 0.9, 'text-valign': 'bottom', 'text-margin-y': 4 } },
                 // Защищённые (центр/под-центр региона) — та же заливка по
                 // важности, только БЕЛАЯ ОБВОДКА поверх отличает их роль,
