@@ -122,6 +122,36 @@ test('bootstrapFromLorebook() imports every lorebook entry as a graph node, WITH
     assert.deepEqual(nodes.value.map(n => n.label).sort(), ['Giadian Empire', 'Revolution Festival', 'The Continent']);
 });
 
+test('bootstrapFromLorebook() gives a curated ("constant": true) entry a higher auto-importance than an ordinary one — read straight from the WI entry, no SideCar call (решено с пользователем: "читаем из LB поля")', async () => {
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: [
+            { uid: 0, comment: 'Core Fact', content: 'the foundational rule of this world.', constant: true, order: 100 },
+            { uid: 1, comment: 'Minor Fact', content: 'a small unrelated detail nobody cares about.', constant: false, order: 100 },
+        ],
+    });
+    await graphCore.load();
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const core = nodes.find(n => n.label === 'Core Fact');
+    const minor = nodes.find(n => n.label === 'Minor Fact');
+    assert.ok(core.importance > minor.importance, `constant entry (${core.importance}) must outscore a non-constant one (${minor.importance})`);
+});
+
+test('bootstrapFromLorebook() boosts importance for a node other entries actually mention, on top of its base WI-field score (решено с пользователем: "смотрим на количество соединений и проверяем")', async () => {
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: [
+            { uid: 0, comment: 'Alice', content: 'Alice is the hero of this land.' },
+            { uid: 1, comment: 'Lonely', content: 'a quiet corner nobody talks about.' },
+            { uid: 2, comment: 'Bob', content: 'Bob talks to Alice every day in the market.' },
+        ],
+    });
+    await graphCore.load();
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const alice = nodes.find(n => n.label === 'Alice');
+    const lonely = nodes.find(n => n.label === 'Lonely');
+    assert.ok(alice.degree > 0, "Alice must actually end up mentioned by Bob's entry — otherwise this test proves nothing");
+    assert.ok(alice.importance > lonely.importance, `a mentioned node (${alice.importance}) must outscore an unconnected one (${lonely.importance}), same base WI fields on both`);
+});
+
 test('bootstrapFromLorebook() places the FIRST imported entry as its region\'s protected center', async () => {
     const { graphCore, caller } = buildEngine({
         lorebookEntries: [{ uid: 0, comment: 'The Continent', content: 'A vast land split into three subcontinents, teeming with leviathans.' }],

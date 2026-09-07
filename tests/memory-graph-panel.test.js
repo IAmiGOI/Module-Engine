@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pixelToRegion, regionLayoutPosition, packOffsetInRegion } from '../cores/ui/memory-graph-panel.js';
+import { pixelToRegion, regionLayoutPosition, packOffsetInRegion, regionWedgePath, renderRegionBackgroundSvg } from '../cores/ui/memory-graph-panel.js';
 
 // --- pixelToRegion() / regionLayoutPosition() — geometry round-trips ------
 
@@ -99,6 +99,37 @@ test('packOffsetInRegion() keeps every PAIR of nodes at least 8px apart, up to a
 });
 
 test('packOffsetInRegion() honors custom minAnchorDistance/minPointDistance overrides', () => {
-    const { radius } = packOffsetInRegion(0, { minAnchorDistance: 100, minPointDistance: 50 });
+    const { radius } = packOffsetInRegion(0, { minAnchorDistance: 100, minPointDistance: 50, maxAnchorDistance: 200 });
     assert.equal(radius, 100);
+});
+
+test('packOffsetInRegion() never places a node beyond maxAnchorDistance (30px default), even far past a full region\'s worth of nodes', () => {
+    for (let i = 0; i < 60; i += 1) {
+        const { radius } = packOffsetInRegion(i);
+        assert.ok(radius <= 30 + 1e-9, `index ${i} got radius ${radius}, past the 30px ceiling`);
+    }
+});
+
+// --- regionWedgePath() / renderRegionBackgroundSvg() — the faint per-region background fill ---
+
+test('regionWedgePath() returns a well-formed SVG path (starts with M, ends with Z) for every one of the 15 regions', () => {
+    for (let sector = 0; sector < 5; sector += 1) {
+        for (let ring = 0; ring < 3; ring += 1) {
+            const d = regionWedgePath(sector, ring);
+            assert.ok(d.startsWith('M '), `region ${sector}:${ring} path did not start with a moveto: ${d}`);
+            assert.ok(d.trim().endsWith('Z'), `region ${sector}:${ring} path did not close: ${d}`);
+        }
+    }
+});
+
+test('regionWedgePath() for ring 0 starts exactly at the canvas center (a solid wedge, no degenerate zero-radius arc)', () => {
+    const d = regionWedgePath(0, 0, { screenRadius: 240 });
+    assert.ok(d.startsWith('M 240.00,240.00'), `expected ring 0 to start at the center (240,240): ${d}`);
+});
+
+test('renderRegionBackgroundSvg() emits exactly 15 path cells (5 sectors x 3 rings) inside a single <svg>', () => {
+    const svg = renderRegionBackgroundSvg();
+    assert.ok(svg.startsWith('<svg'));
+    const pathCount = (svg.match(/<path /g) ?? []).length;
+    assert.equal(pathCount, 15);
 });
