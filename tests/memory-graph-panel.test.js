@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pixelToRegion, regionLayoutPosition } from '../cores/ui/memory-graph-panel.js';
+import { pixelToRegion, regionLayoutPosition, packOffsetInRegion } from '../cores/ui/memory-graph-panel.js';
 
 // --- pixelToRegion() / regionLayoutPosition() — geometry round-trips ------
 
@@ -47,17 +47,58 @@ test('pixelToRegion() at a ring boundary radius resolves to exactly ONE of the t
     assert.ok(result.ring === 0 || result.ring === 1);
 });
 
-test('regionLayoutPosition() fans multiple nodes in the SAME region across different angles, so they do not overlap', () => {
-    const first = regionLayoutPosition(1, 1, { indexInRegion: 0, countInRegion: 3 });
-    const middle = regionLayoutPosition(1, 1, { indexInRegion: 1, countInRegion: 3 });
-    const last = regionLayoutPosition(1, 1, { indexInRegion: 2, countInRegion: 3 });
+test('regionLayoutPosition() spreads multiple nodes in the SAME region across different positions, so they do not overlap', () => {
+    const first = regionLayoutPosition(1, 1, { indexInRegion: 0 });
+    const middle = regionLayoutPosition(1, 1, { indexInRegion: 1 });
+    const last = regionLayoutPosition(1, 1, { indexInRegion: 2 });
     assert.notDeepEqual(first, middle);
     assert.notDeepEqual(middle, last);
     assert.notDeepEqual(first, last);
 });
 
-test('regionLayoutPosition() places a SINGLE node at the exact angular center of its region (no jitter needed when alone)', () => {
-    const solo = regionLayoutPosition(0, 0, { indexInRegion: 0, countInRegion: 1 });
-    const alsoSolo = regionLayoutPosition(0, 0, {}); // default indexInRegion/countInRegion
+test('regionLayoutPosition() ignores countInRegion entirely — an EARLIER node\'s position must not shift when a LATER node joins the same region', () => {
+    // Старый угловой веер пересчитывал ВСЕ позиции при каждой вставке
+    // (раствор веера зависел от countInRegion) — новая раскладка кольцами
+    // не должна: у ноды #0 позиция одна и та же, сколько бы соседей потом
+    // ни добавилось.
+    const withOneNeighbour = regionLayoutPosition(2, 0, { indexInRegion: 0, countInRegion: 2 });
+    const withManyNeighbours = regionLayoutPosition(2, 0, { indexInRegion: 0, countInRegion: 20 });
+    assert.deepEqual(withOneNeighbour, withManyNeighbours);
+});
+
+test('regionLayoutPosition() places node #0 sixteen pixels out along the SAME ray as the region\'s own anchor point (no angular deviation for the default case)', () => {
+    const solo = regionLayoutPosition(0, 0, { indexInRegion: 0 });
+    const alsoSolo = regionLayoutPosition(0, 0, {}); // default indexInRegion
     assert.deepEqual(solo, alsoSolo);
+});
+
+// --- packOffsetInRegion() — the two hard distances the user specified explicitly:
+// "минимальная дистанция от точки привязки - 16 пикселей, минимальная
+// дистанция до любой другой точки - 8 пикселей" ----------------------------
+
+test('packOffsetInRegion() keeps EVERY node at least 16px from the anchor point (radius never below minAnchorDistance)', () => {
+    for (let i = 0; i < 60; i += 1) {
+        const { radius } = packOffsetInRegion(i);
+        assert.ok(radius >= 16 - 1e-9, `index ${i} got radius ${radius}, below the 16px floor`);
+    }
+});
+
+test('packOffsetInRegion() keeps every PAIR of nodes at least 8px apart, up to a full region (23 = maxNodesPerRegion)', () => {
+    const points = Array.from({ length: 23 }, (_, i) => {
+        const { radius, angle } = packOffsetInRegion(i);
+        return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+    });
+    for (let i = 0; i < points.length; i += 1) {
+        for (let j = i + 1; j < points.length; j += 1) {
+            const dx = points[i].x - points[j].x;
+            const dy = points[i].y - points[j].y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            assert.ok(distance >= 8 - 1e-9, `nodes #${i} and #${j} are only ${distance}px apart`);
+        }
+    }
+});
+
+test('packOffsetInRegion() honors custom minAnchorDistance/minPointDistance overrides', () => {
+    const { radius } = packOffsetInRegion(0, { minAnchorDistance: 100, minPointDistance: 50 });
+    assert.equal(radius, 100);
 });
