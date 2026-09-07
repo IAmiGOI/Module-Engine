@@ -1644,150 +1644,188 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const summariesResult = await call('lorebook.find', {});
             if (!summariesResult.ok || !summariesResult.value?.length) return false;
 
-            // 1. Читаем ВСЕ записи целиком, БЕЗ немедленного размещения —
-            // Проходу 1 нужен полный текст Lorebook сразу, не по одной штуке.
-            const rawEntries = [];
-            const entryByUid = new Map();
-            for (const summary of summariesResult.value) {
-                const fullResult = await call('lorebook.get', { uid: summary.uid, book: summary.book });
-                if (!fullResult.ok) continue;
-                const entry = fullResult.value;
-                const label = String(entry.comment ?? '').trim() || `WI #${entry.uid}`;
-                const content = String(entry.content ?? '').trim();
-                if (!content) continue; // пустая запись — нечего эмбедить и нечего класть в граф
-                const record = { uid: summary.uid, label, content, raw: entry };
-                rawEntries.push(record);
-                entryByUid.set(summary.uid, record);
+            // Реальная работа подтверждена (непустой Lorebook, дальше пойдут
+            // потенциально МЕДЛЕННЫЕ шаги — чтение по одной записи, 2+N
+            // LLM-вызовов, эмбединг каждой записи) — решено с пользователем:
+            // "нет ивентов начала и конца построения WI... нет индикатора
+            // прогресса. Это очень плохо". `totalSteps`/`tick()` — ГРУБАЯ,
+            // заранее посчитанная оценка (реальное число регионов Прохода 3
+            // узнаётся только после Прохода 2, здесь его ещё нет — берём
+            // целевую плотность `entriesPerRegionCenter` как прикидку), не
+            // точный процент — прогресс-бар не обязан быть математически
+            // безупречным, только не стоять мёртвым нулём и не заезжать за
+            // 100% (см. `tick()`'s clamp). `finally` ниже гарантирует
+            // `bootstrapFinished` на ЛЮБОМ пути — и успешном, и любом раннем
+            // `return false` (тот же принцип "started/finished
+            // безусловно", что уже описан в MEMORY_GRAPH.md).
+            const totalSummaries = summariesResult.value.length;
+            const estimatedRegions = Math.max(1, Math.round(totalSummaries / settings.entriesPerRegionCenter));
+            const totalSteps = totalSummaries * 2 + 2 + estimatedRegions + 1; // читаем + размещаем по разу на запись, 2 общих LLM-прохода, Проход 3 по региону, финализация
+            let doneSteps = 0;
+            let succeeded = false;
+            function tick(phase) {
+                doneSteps = Math.min(doneSteps + 1, totalSteps);
+                publishEvent('memoryGraph.bootstrapProgress', { done: doneSteps, total: totalSteps, phase });
             }
-            if (!rawEntries.length) return false;
+            publishEvent('memoryGraph.bootstrapStarted', { totalEntries: totalSummaries, totalSteps });
 
-            // 2. Проход 1 — базовый скелет (Locations/Main Characters/
-            // Factions или свои варианты) + 2 под-центра на каждый.
-            const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
-            const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
-            if (!skeletonResult.ok) return false;
-            const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
-            if (!skeletonRegions.length) return false;
-
-            // 3. Проход 2 — центр для КАЖДОГО региона из Прохода 1, плюс
-            // новые регионы сверх них, до целевой плотности
-            // (entriesPerRegionCenter). Отказ здесь ТОЖЕ прерывает бутстрап
-            // целиком (решено с пользователем — как и Проход 1, не как
-            // мягкий откат Прохода 3 ниже).
-            const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
-            const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
-            const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
-            if (!centersResult.ok) return false;
-            const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
-            if (!centerAssignments.length) return false;
-
-            // Сшиваем Проход 1 (под-центры) и Проход 2 (центры) по имени
-            // региона; регион без реального, валидного центра — не заводим
-            // (регион-калека хуже отсутствующего региона).
-            const regionPlans = new Map();
-            for (const region of skeletonRegions) regionPlans.set(region.name, { name: region.name, subCenterUids: region.subCenterUids, centerUid: null });
-            for (const assignment of centerAssignments) {
-                const existing = regionPlans.get(assignment.name);
-                if (existing) existing.centerUid = assignment.centerUid;
-                else regionPlans.set(assignment.name, { name: assignment.name, subCenterUids: [], centerUid: assignment.centerUid });
-            }
-            const finalRegionPlans = [...regionPlans.values()].filter(region => region.centerUid != null && entryByUid.has(region.centerUid));
-            if (!finalRegionPlans.length) return false;
-
-            async function buildNodeFromEntry(entry) {
-                const embeddingResult = await callService('embedding.compute', { text: `${entry.label}: ${entry.content}`, kind: 'passage' });
-                if (!embeddingResult.ok) return null;
-                return {
-                    id: makeId('node', now, random),
-                    label: entry.label, content: entry.content, embedding: embeddingResult.value,
-                    importance: importanceFromLorebookEntry(entry.raw),
-                    degree: 0, createdAt: now(), createdTurn: 0, lastTouchedTurn: turnCounter,
-                    protectedNode: false, regionId: null, edges: [], gameTime: null,
-                };
-            }
-
-            function placeInRegion(node, regionName, forceRole) {
-                nodes[node.id] = node;
-                attachToRegionByKey(node, regionName, {
-                    createRegion: () => ({ name: regionName, centerNodeId: null, subCenterIds: [], nodeIds: [], wordProfile: {} }),
-                    forceRole,
-                });
-            }
-
-            // 4. Размещаем центры/под-центров — роль ЯВНАЯ (LLM уже решила),
-            // не по порядку прибытия.
-            const usedUids = new Set();
-            const bootstrappedIds = [];
-            for (const region of finalRegionPlans) {
-                if (usedUids.has(region.centerUid)) continue; // тот же uid уже занят другим регионом — не дублируем ноду
-                usedUids.add(region.centerUid);
-                const centerNode = await buildNodeFromEntry(entryByUid.get(region.centerUid));
-                if (!centerNode) continue;
-                placeInRegion(centerNode, region.name, 'center');
-                bootstrappedIds.push(centerNode.id);
-
-                for (const subUid of region.subCenterUids) {
-                    if (usedUids.has(subUid) || !entryByUid.has(subUid)) continue;
-                    usedUids.add(subUid);
-                    const subNode = await buildNodeFromEntry(entryByUid.get(subUid));
-                    if (!subNode) continue;
-                    placeInRegion(subNode, region.name, 'subCenter');
-                    bootstrappedIds.push(subNode.id);
+            try {
+                // 1. Читаем ВСЕ записи целиком, БЕЗ немедленного размещения —
+                // Проходу 1 нужен полный текст Lorebook сразу, не по одной штуке.
+                const rawEntries = [];
+                const entryByUid = new Map();
+                for (const summary of summariesResult.value) {
+                    const fullResult = await call('lorebook.get', { uid: summary.uid, book: summary.book });
+                    tick('reading');
+                    if (!fullResult.ok) continue;
+                    const entry = fullResult.value;
+                    const label = String(entry.comment ?? '').trim() || `WI #${entry.uid}`;
+                    const content = String(entry.content ?? '').trim();
+                    if (!content) continue; // пустая запись — нечего эмбедить и нечего класть в граф
+                    const record = { uid: summary.uid, label, content, raw: entry };
+                    rawEntries.push(record);
+                    entryByUid.set(summary.uid, record);
                 }
-            }
+                if (!rawEntries.length) return false;
 
-            // 5. Присвоение остальных записей — argmax косинуса к уже
-            // размещённым центрам/под-центрам (pickNearestRegion). Всегда
-            // находит дом — нет "накопителя" для этого пути.
-            const regionAnchors = bootstrappedIds.map(id => nodes[id]).filter(Boolean);
-            for (const entry of rawEntries) {
-                if (usedUids.has(entry.uid)) continue;
-                const node = await buildNodeFromEntry(entry);
-                if (!node) continue;
-                const bestRegionName = pickNearestRegion(node.embedding, regionAnchors);
-                if (!bestRegionName) continue; // якорей нет вовсе (Проход 2 не дал ни одного валидного центра) — запись пропускается
-                placeInRegion(node, bestRegionName, 'ordinary'); // НЕ null — иначе подхватывает авто-детекцию под-центра по порядку вставки (реальный баг, см. attachToRegionByKey()'s doc-comment)
-                bootstrappedIds.push(node.id);
-            }
+                // 2. Проход 1 — базовый скелет (Locations/Main Characters/
+                // Factions или свои варианты) + 2 под-центра на каждый.
+                const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
+                const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
+                tick('skeleton');
+                if (!skeletonResult.ok) return false;
+                const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
+                if (!skeletonRegions.length) return false;
 
-            // 6. Проход 3 — связи ВНУТРИ каждого региона, по одному вызову
-            // на регион. Отказ здесь НЕ прерывает бутстрап — пропускает
-            // связи только для ЭТОГО региона, остальные продолжаются
-            // (тот же принцип, что у escalateToSideCar). Межрегиональные
-            // связи — старый extractCharacterNames(), уже отработал внутри
-            // attachToRegionByKey() выше, для КАЖДОЙ размещённой ноды.
-            for (const region of finalRegionPlans) {
-                const liveRegion = regions[region.name];
-                if (!liveRegion || liveRegion.nodeIds.length < 2) continue;
-                const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
-                const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })));
-                const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
-                if (!edgesResult.ok) continue;
-                const proposedEdges = parseRegionEdgesResponse(parseModelJson(edgesResult.value), regionNodes.map(node => ({ id: node.id })));
-                for (const edge of proposedEdges) {
-                    const from = nodes[edge.from];
-                    const to = nodes[edge.to];
-                    if (!from || !to) continue;
-                    if ((from.edges ?? []).some(existingEdge => existingEdge.to === to.id)) continue; // уже связаны (например, mentions выше)
-                    from.edges = [...(from.edges ?? []), { to: to.id, type: 'related' }];
-                    to.edges = [...(to.edges ?? []), { to: from.id, type: 'related' }];
-                    from.degree = (from.degree ?? 0) + 1;
-                    to.degree = (to.degree ?? 0) + 1;
+                // 3. Проход 2 — центр для КАЖДОГО региона из Прохода 1, плюс
+                // новые регионы сверх них, до целевой плотности
+                // (entriesPerRegionCenter). Отказ здесь ТОЖЕ прерывает бутстрап
+                // целиком (решено с пользователем — как и Проход 1, не как
+                // мягкий откат Прохода 3 ниже).
+                const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
+                const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
+                const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
+                tick('centers');
+                if (!centersResult.ok) return false;
+                const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
+                if (!centerAssignments.length) return false;
+
+                // Сшиваем Проход 1 (под-центры) и Проход 2 (центры) по имени
+                // региона; регион без реального, валидного центра — не заводим
+                // (регион-калека хуже отсутствующего региона).
+                const regionPlans = new Map();
+                for (const region of skeletonRegions) regionPlans.set(region.name, { name: region.name, subCenterUids: region.subCenterUids, centerUid: null });
+                for (const assignment of centerAssignments) {
+                    const existing = regionPlans.get(assignment.name);
+                    if (existing) existing.centerUid = assignment.centerUid;
+                    else regionPlans.set(assignment.name, { name: assignment.name, subCenterUids: [], centerUid: assignment.centerUid });
                 }
-            }
+                const finalRegionPlans = [...regionPlans.values()].filter(region => region.centerUid != null && entryByUid.has(region.centerUid));
+                if (!finalRegionPlans.length) return false;
 
-            // 7. Бэкбон — ДО бонуса важности за связи ниже: досозданные
-            // `backbone`-рёбра тоже должны учитываться в итоговой degree.
-            enforceBackboneConnectivity();
-            for (const nodeId of bootstrappedIds) {
-                const node = nodes[nodeId];
-                if (node) node.importance = applyConnectionBonus(node.importance, node.degree);
+                async function buildNodeFromEntry(entry) {
+                    const embeddingResult = await callService('embedding.compute', { text: `${entry.label}: ${entry.content}`, kind: 'passage' });
+                    if (!embeddingResult.ok) return null;
+                    return {
+                        id: makeId('node', now, random),
+                        label: entry.label, content: entry.content, embedding: embeddingResult.value,
+                        importance: importanceFromLorebookEntry(entry.raw),
+                        degree: 0, createdAt: now(), createdTurn: 0, lastTouchedTurn: turnCounter,
+                        protectedNode: false, regionId: null, edges: [], gameTime: null,
+                    };
+                }
+
+                function placeInRegion(node, regionName, forceRole) {
+                    nodes[node.id] = node;
+                    attachToRegionByKey(node, regionName, {
+                        createRegion: () => ({ name: regionName, centerNodeId: null, subCenterIds: [], nodeIds: [], wordProfile: {} }),
+                        forceRole,
+                    });
+                }
+
+                // 4. Размещаем центры/под-центров — роль ЯВНАЯ (LLM уже решила),
+                // не по порядку прибытия.
+                const usedUids = new Set();
+                const bootstrappedIds = [];
+                for (const region of finalRegionPlans) {
+                    if (usedUids.has(region.centerUid)) continue; // тот же uid уже занят другим регионом — не дублируем ноду
+                    usedUids.add(region.centerUid);
+                    const centerNode = await buildNodeFromEntry(entryByUid.get(region.centerUid));
+                    tick('placing');
+                    if (!centerNode) continue;
+                    placeInRegion(centerNode, region.name, 'center');
+                    bootstrappedIds.push(centerNode.id);
+
+                    for (const subUid of region.subCenterUids) {
+                        if (usedUids.has(subUid) || !entryByUid.has(subUid)) continue;
+                        usedUids.add(subUid);
+                        const subNode = await buildNodeFromEntry(entryByUid.get(subUid));
+                        tick('placing');
+                        if (!subNode) continue;
+                        placeInRegion(subNode, region.name, 'subCenter');
+                        bootstrappedIds.push(subNode.id);
+                    }
+                }
+
+                // 5. Присвоение остальных записей — argmax косинуса к уже
+                // размещённым центрам/под-центрам (pickNearestRegion). Всегда
+                // находит дом — нет "накопителя" для этого пути.
+                const regionAnchors = bootstrappedIds.map(id => nodes[id]).filter(Boolean);
+                for (const entry of rawEntries) {
+                    if (usedUids.has(entry.uid)) continue;
+                    const node = await buildNodeFromEntry(entry);
+                    tick('placing');
+                    if (!node) continue;
+                    const bestRegionName = pickNearestRegion(node.embedding, regionAnchors);
+                    if (!bestRegionName) continue; // якорей нет вовсе (Проход 2 не дал ни одного валидного центра) — запись пропускается
+                    placeInRegion(node, bestRegionName, 'ordinary'); // НЕ null — иначе подхватывает авто-детекцию под-центра по порядку вставки (реальный баг, см. attachToRegionByKey()'s doc-comment)
+                    bootstrappedIds.push(node.id);
+                }
+
+                // 6. Проход 3 — связи ВНУТРИ каждого региона, по одному вызову
+                // на регион. Отказ здесь НЕ прерывает бутстрап — пропускает
+                // связи только для ЭТОГО региона, остальные продолжаются
+                // (тот же принцип, что у escalateToSideCar). Межрегиональные
+                // связи — старый extractCharacterNames(), уже отработал внутри
+                // attachToRegionByKey() выше, для КАЖДОЙ размещённой ноды.
+                for (const region of finalRegionPlans) {
+                    tick('linking'); // тикаем на КАЖДЫЙ регион, даже пропущенный ниже — это тоже "рассмотренный" шаг оценки
+                    const liveRegion = regions[region.name];
+                    if (!liveRegion || liveRegion.nodeIds.length < 2) continue;
+                    const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
+                    const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })));
+                    const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
+                    if (!edgesResult.ok) continue;
+                    const proposedEdges = parseRegionEdgesResponse(parseModelJson(edgesResult.value), regionNodes.map(node => ({ id: node.id })));
+                    for (const edge of proposedEdges) {
+                        const from = nodes[edge.from];
+                        const to = nodes[edge.to];
+                        if (!from || !to) continue;
+                        if ((from.edges ?? []).some(existingEdge => existingEdge.to === to.id)) continue; // уже связаны (например, mentions выше)
+                        from.edges = [...(from.edges ?? []), { to: to.id, type: 'related' }];
+                        to.edges = [...(to.edges ?? []), { to: from.id, type: 'related' }];
+                        from.degree = (from.degree ?? 0) + 1;
+                        to.degree = (to.degree ?? 0) + 1;
+                    }
+                }
+
+                // 7. Бэкбон — ДО бонуса важности за связи ниже: досозданные
+                // `backbone`-рёбра тоже должны учитываться в итоговой degree.
+                enforceBackboneConnectivity();
+                for (const nodeId of bootstrappedIds) {
+                    const node = nodes[nodeId];
+                    if (node) node.importance = applyConnectionBonus(node.importance, node.degree);
+                }
+                tick('finalizing');
+                // См. комментарий в checkAndPlace() — то же самое: attachToRegionByKey()
+                // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
+                await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
+                publishEvent('memoryGraph.bootstrapped', { source: 'lorebook', nodeCount: Object.keys(nodes).length });
+                succeeded = true;
+                return true;
+            } finally {
+                publishEvent('memoryGraph.bootstrapFinished', { success: succeeded, nodeCount: Object.keys(nodes).length });
             }
-            // См. комментарий в checkAndPlace() — то же самое: attachToRegionByKey()
-            // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
-            await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
-            publishEvent('memoryGraph.bootstrapped', { source: 'lorebook', nodeCount: Object.keys(nodes).length });
-            return true;
         });
     }
 

@@ -296,6 +296,18 @@
 }
 
 
+/* Прогресс-бар бутстрапа Memory Graph (решено с пользователем: "нет индикатора прогресса. Это очень плохо" → "добавь прогресс-бар") — рядом с пульсацией обводки самой карточки (`.stme-flash-testing`), не вместо неё: пульсация видна и свёрнутой, полоса — только раскрытой. */
+.stme-progress { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+.stme-progress-track {
+    height: 6px; border-radius: 999px; overflow: hidden;
+    background: color-mix(in srgb, var(--stme-accent) 12%, rgba(0, 0, 0, .3));
+}
+.stme-progress-fill {
+    height: 100%; border-radius: 999px; background: var(--stme-accent);
+    transition: width .3s ease-out;
+}
+.stme-progress-label { opacity: .7; font-size: 11px; }
+
 .stme-contract-list { display: flex; flex-wrap: wrap; gap: 4px; max-height: 160px; overflow-y: auto; }
 .stme-contract {
     padding: 1px 7px; border-radius: 999px;
