@@ -10,13 +10,6 @@
    (chat, sidebar) stays visible but softened, the way a real glass pane would look. The earlier version used a 95%-opaque wash with no blur at all, which hid the page rather than glazing it. */
 .stmeBeta-fullscreen {
     position: fixed;
-    /* НЕ `inset: 0`: Android-браузеры/WebView младше Chrome 87 сокращение не
-       понимают — фиксированный элемент оставался со статическими координатами.
-       И НЕ `height: 100%`/`bottom: 0` вдобавок: на реальном телефоне они тоже
-       не дали высоты (панель сжималась в шапку ~30px — скриншот пользователя).
-       Высота задаётся ЖЁСТКО во вьюпортных единицах: vh понимают все, dvh
-       (динамический вьюпорт с учётом адресной строки) — надёжный запасной
-       слой поверх vh. */
     top: 0;
     left: 0;
     width: 100%;
@@ -31,10 +24,6 @@
     color: var(--SmartThemeBodyColor, #dfe3ea);
     font-family: var(--mainFontFamily, inherit);
 }
-/* A plain class selector's own `display` always beats the UA [hidden] rule
-   at equal specificity — without this the overlay stays laid out and
-   visible regardless of the `hidden` property (same trap Alpha's own
-   .stme-fullscreen[hidden] already documents). */
 .stmeBeta-fullscreen[hidden] { display: none; }
 .stmeBeta-fullscreen-head {
     display: flex;
@@ -45,14 +34,6 @@
     background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .16));
 }
 .stmeBeta-fullscreen-head strong { flex: 1; font-size: 1.05em; letter-spacing: .02em; }
-/* Прокручивается ВСЯ ширина оверлея, а по центру ограничено только
-   содержимое. Раньше `max-width` стоял на самом прокручиваемом элементе, и
-   слева/справа от него оставались мёртвые поля: колесо там доставалось
-   странице за оверлеем, которой ехать некуда, — прокрутка «отскакивала».
-   `min-height: 0` — чтобы флекс-элемент не рос под содержимое вместо
-   прокрутки (по умолчанию `min-height: auto` этого не даёт).
-   `overscroll-behavior: contain` — чтобы докрутив до конца, не начать
-   листать чат ST под панелью. */
 .stmeBeta-fullscreen-body {
     flex: 1;
     min-height: 0;
@@ -64,31 +45,34 @@
 }
 .stmeBeta-fullscreen-body > * { max-width: 1100px; margin: 0 auto; }
 
-/* GPU fix for the activity-light shimmer.
-   `panel.css` used to animate `background-position` on the gradient of
-   `.stme-launcher-dock::before`. That is a paint animation: the gradient has
-   to be repainted as it moves. The white notify state is cheap because it
-   animates only opacity. Keep the exact same 0→100% gradient travel, but make
-   the gradient a static 300%-tall layer and move that layer with transform,
-   which the compositor can handle without repainting the gradient every frame. */
+/* GPU fix: the activity-light strip must not be an animated paint target.
+   Keep the gradient static and animate only opacity. No transform, no
+   background-position animation, and no glow/box-shadow on the strip. */
 .stme-launcher-dock::before {
-    top: 0;
-    bottom: auto;
-    height: 300%;
+    top: 10%;
+    bottom: 10%;
+    height: auto;
+    left: 0;
+    width: 4px;
+    border-radius: 999px;
+    --stme-light: #5b8dff;
+    background: linear-gradient(180deg, var(--stme-light), color-mix(in srgb, var(--stme-light) 55%, #ffffff), color-mix(in srgb, var(--stme-light) 70%, #000000), var(--stme-light));
     background-size: 100% 100%;
     background-position: 0 0;
-    will-change: transform;
-    animation: stme-dock-shimmer-transform 3s ease-in-out infinite;
+    box-shadow: none;
+    animation: stme-dock-breathe 2.4s ease-in-out infinite;
+    opacity: .9;
+    transition: opacity .35s ease, background .35s ease;
 }
 
-@keyframes stme-dock-shimmer-transform {
-    0%, 100% { transform: translate3d(0, 0, 0); }
-    50%      { transform: translate3d(0, -66.6667%, 0); }
+@keyframes stme-dock-breathe {
+    0%, 100% { opacity: .65; }
+    50%      { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
     .stme-launcher-dock::before {
         animation: none;
-        transform: none;
+        opacity: 1;
     }
 }
