@@ -209,19 +209,27 @@ export function FloatingPanel(title, { position, size, collapsed, onToggle, onCl
  * «(not established yet)», ни прочерк, ни прошлое значение, выдающее себя за
  * свежее.
  */
-export function StatBlock(label, valueSignal, { icon = '◷' } = {}) {
+export function StatBlock(label, valueSignal, { icon = '◷', onClick, title, showLabel = true, showValue = true } = {}) {
     const read = () => (typeof valueSignal === 'function' ? valueSignal() : valueSignal);
-    const pending = computed(() => !String(read() ?? '').trim());
-    return h('div', {
-        class: computed(() => `stme-stat${pending() ? ' stme-stat-pending' : ''}`),
-        title: computed(() => (pending() ? 'Waiting for the first update…' : '')),
-    },
+    // Без строки значения нет и «ожидания»: pending-пульс — состояние показания,
+    // а не пустого места (кликабельная пилюля значение не показывает вовсе).
+    const pending = showValue ? computed(() => !String(read() ?? '').trim()) : null;
+    const parts = [
         h('div', { class: 'stme-stat-head' },
             h('span', { class: 'stme-stat-icon' }, icon),
-            h('span', { class: 'stme-stat-label' }, label),
+            showLabel ? h('span', { class: 'stme-stat-label' }, label) : null,
         ),
-        h('div', { class: 'stme-stat-value' }, computed(() => (pending() ? '' : read()))),
-    );
+        // Скрытое значение — не «ничего»: невидимый `&nbsp;` держит высоту строки,
+        // поэтому компактные варианты остаются в высоту обычного StatBlock'а.
+        showValue
+            ? h('div', { class: 'stme-stat-value' }, computed(() => (pending() ? '' : read())))
+            : h('div', { class: 'stme-stat-value stme-stat-value-ghost' }, '\u00a0'),
+    ];
+    return h(onClick ? 'button' : 'div', {
+        class: computed(() => `stme-stat${pending?.() ? ' stme-stat-pending' : ''}`),
+        title: title ?? (pending ? computed(() => (pending() ? 'Waiting for the first update…' : '')) : undefined),
+        ...(onClick ? { type: 'button', 'on:click': onClick } : {}),
+    }, parts);
 }
 
 /** Маленькая кликабельная метка. У Alpha ими вставлялись токены полей в шаблон — приём хороший, поэтому переехал в общую библиотеку, а не остался внутри одного модуля. */
