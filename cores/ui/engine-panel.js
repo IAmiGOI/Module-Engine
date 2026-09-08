@@ -972,8 +972,18 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
             host.events.subscribe('lorebook.scanned', () => loadLorebook()),
             // Свёртка происходит САМА на каждой генерации (`generation.prepare`
             // держит порог) — панель узнаёт о новых/пропавших саммари тем же
-            // событием, без ручного Rescan.
-            host.events.subscribe('summary.folded', () => loadSummaries()),
+            // событием, без ручного Rescan. Тост здесь — для АВТОМАТИЧЕСКОЙ
+            // свёртки: пользователь должен видеть, что часть истории только что
+            // свернулась (ручная «Fold now» тостится сама в forceSummaryFold()).
+            host.events.subscribe('summary.folded', payload => {
+                loadSummaries();
+                notify('ok', `Summary folded — ${payload?.count ?? '?'} active now`);
+            }),
+            // Зашли в другой чат — Ядро саммари перечитало свой список
+            // (`summary.reloaded`), панель обязана показать саммари УЖЕ ТЕКУЩЕГО
+            // чата сразу, без ручного нажатия Fold (тот же класс бага, что
+            // уже ловили у лорбука выше).
+            host.events.subscribe('summary.reloaded', () => loadSummaries()),
             ...[
                 'memoryGraph.nodeCreated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeEvicted',
                 'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
