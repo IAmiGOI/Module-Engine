@@ -34,10 +34,14 @@ import { COMPLETED_PIPELINE } from '../../cores/generation/index.js';
  *    pass** (та же карточка, что у трекеров и «RP Time»): функционально
  *    богаче профиля — ризонинг настраивается рядом с сэмплером.
  *  - chat-badges в `message.extra` → **аннотации Ядра истории чата +
- *    слот `center` подвала** (`ui.messageFooter.claim`). Alpha хранила
- *    trace в `message.extra` — то есть писала в данные чата; здесь бейдж
- *    живёт в DOM и per-chat хранилище аннотаций, `message.mes` не
- *    касается.
+ *    узкая кнопка в слоте `center` подвала** (`ui.messageFooter.claim`).
+ *    Alpha хранила trace в `message.extra` — то есть писала в данные чата;
+ *    здесь кнопка живёт в DOM и per-chat хранилище аннотаций, `message.mes`
+ *    не касается. Фабрика слота отдаёт null под сообщением без готового
+ *    trace: Ядро строит ячейку сетки только под непустые фабрики, поэтому
+ *    соседний блок времени больше не сжимается под сообщениями, где
+ *    postturn ничего не менял (реальный регресс, лечён именно этим).
+ *    Кнопка открывает всплывающее окно с word-diff'ом каждого pass'а.
  *  - Словесный diff, сборка запроса pass'а и санитизация списка pass'ов —
  *    портированы как чистые функции (экспортируются для тестов) без
  *    изменений в поведении.
@@ -331,6 +335,7 @@ export function createPostprocessModule(host) {
         if (!replaced.ok) throw new Error(replaced.error?.message ?? 'chatHistory.replaceText failed');
         await call('chatHistory.annotate', { namespace: HISTORY_NAMESPACE, mesid: value.mesid, value: entry });
         badges.set({ ...badges.peek(), [value.mesid]: entry });
+        refreshFooter();
         return true;
     }
 
@@ -385,8 +390,15 @@ export function createPostprocessModule(host) {
                 onExhausted: 'flag',
             }],
         ]);
+        // Пересборка ВСЕГДА с нуля, а не «добавь недостающее»: состав этапов —
+        // функция текущих настроек, и старая регистрация может устареть. Так
+        // было: модуль грузится без pass'ов → `apply` встал с `needs: []` →
+        // первый Save добавил pass'ы, но `continue` не дал перерегистрировать
+        // `apply` с новым графом — и на `generation.completed` цепочка
+        // исполнялась в порядке begin → apply → pass, то есть замена текста
+        // происходила ДО переписывания и честно находила «нечего менять».
+        // Кнопка при этом работала: она этапы пайплайна не использует.
         for (const stageId of [...registeredStages]) {
-            if (wanted.has(stageId)) continue;
             await call('pipeline.stages.remove', { pipelineId: COMPLETED_PIPELINE, stageId });
             registeredStages.delete(stageId);
         }
@@ -416,26 +428,53 @@ export function createPostprocessModule(host) {
     }
 
     /**
-     * Фабрика слота `center` подвала: null под сообщением без trace — так
-     * Ядро подвала и устроено (см. его doc-комментарий про фабрики).
-     * Реактивность — сигналом В СЛОТЕ ДЕТЕЙ (голый computed корнем Ядро
-     * не разрешает): `badges()` обновился — дерево переразличилось само,
-     * не дожидаясь чужой перерисовки сообщения.
+     * Фабрика слота `center` подвала: узел-кнопка ТОЛЬКО под сообщением, у
+     * которого есть готовый trace, под остальными — null. Раньше корнем был
+     * computed, который всегда возвращал обёртку: Ядро подвала честно строило
+     * под ним ячейку сетки, и блок времени сжимался вдвое под КАЖДЫМ
+     * сообщением, даже где postturn ничего не менял. Ядро создаёт ячейку
+     * только под непустые фабрики (см. его fillSlots), поэтому пустота должна
+     * быть именно null. Смена «пусто ↔ есть» — на самом модуле: его данные
+     * изменились, он и зовёт `ui.messageFooter.attach`.
      */
     function footerWidget(message) {
-        return h('div', { class: 'stme-postprocess-badge-root' }, computed(() => {
-            const entry = badges()[String(message.mesid)];
-            if (!entry) return null;
-            const done = (entry.trace ?? []).filter(step => !step.skipped).length;
-            return h('details', { class: 'stme-postprocess-badge' },
-                h('summary', {}, `✎ Post-processed (${done} pass${done === 1 ? '' : 'es'})`),
-                h('div', { class: 'stme-postprocess-diff' }, (entry.trace ?? []).map(step => passRow(step))));
-        }));
+        const entry = badges()[String(message.mesid)];
+        if (!entry) return null;
+        const done = (entry.trace ?? []).filter(step => !step.skipped).length;
+        const popup = h('div', { class: 'stme-postprocess-popup', style: 'display:none' },
+            h('div', { class: 'stme-postprocess-popup-head' },
+                h('strong', {}, 'Post-Turn changes'),
+                h('button', { type: 'button', class: 'stme-postprocess-popup-close', 'on:click': () => { popup.style.display = 'none'; } }, '✕')),
+            h('div', { class: 'stme-postprocess-diff' }, (entry.trace ?? []).map(step => passRow(step))));
+        const pill = h('button', {
+            type: 'button',
+            class: 'stme-stat stme-postprocess-pill',
+            'on:click': () => {
+                const showing = popup.style.display !== 'none';
+                if (!showing) {
+                    const rect = pill.getBoundingClientRect();
+                    popup.style.top = `${rect.bottom + 6}px`;
+                    popup.style.left = `${Math.max(8, Math.min(rect.left, (window.innerWidth ?? 1024) - 480))}px`;
+                }
+                popup.style.display = showing ? 'none' : 'block';
+            },
+        },
+            h('div', { class: 'stme-stat-head' },
+                h('span', { class: 'stme-stat-icon' }, '✎'),
+                h('span', { class: 'stme-stat-label' }, 'Post-turn')),
+            h('div', { class: 'stme-stat-value' }, String(done)));
+        return h('div', { class: 'stme-postprocess-cell' }, pill, popup);
     }
 
     async function loadBadges() {
         const result = await call('chatHistory.annotations', { namespace: HISTORY_NAMESPACE });
         badges.set(result.ok ? result.value ?? {} : {});
+        refreshFooter();
+    }
+
+    /** Состав отметок изменился → «пусто ↔ кнопка» знает только Ядро подвала; просим его пересмотреть фабрики. */
+    function refreshFooter() {
+        call('ui.messageFooter.attach', {});
     }
 
     async function clearBadge(mesid) {
@@ -445,6 +484,7 @@ export function createPostprocessModule(host) {
         delete next[key];
         badges.set(next);
         await call('chatHistory.annotate', { namespace: HISTORY_NAMESPACE, mesid: key, value: null });
+        refreshFooter();
     }
 
     // --- Настройки и панель ------------------------------------------------------
