@@ -1,7 +1,7 @@
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
-import { Button, TextInput, TextArea, Select, Toggle, Slider, Field, Row, EditableList, EmptyState } from '../../libraries/shared/widgets.js';
+import { Button, TextInput, TextArea, Select, Toggle, Slider, Field, Row, EditableList, EmptyState, StatBlock } from '../../libraries/shared/widgets.js';
 import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
 import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCustomPreset } from '../../cores/models/internal-engine.js';
 
@@ -419,13 +419,14 @@ export function createPostprocessModule(host) {
                 h('strong', {}, 'Post-Turn changes'),
                 h('button', { type: 'button', class: 'stme-postprocess-popup-close', 'on:click': () => { open.set(false); } }, '✕')),
             h('div', { class: 'stme-postprocess-diff' }, (entry.trace ?? []).map(step => passRow(step))));
-        const pill = h('button', {
-            type: 'button',
-            class: 'stme-stat stme-postprocess-pill',
+        const pill = StatBlock('Post-Turn changes', '', {
+            icon: '✎',
+            onClick: () => open.set(!open.peek()),
             title: 'Post-Turn changes',
-            'on:click': () => open.set(!open.peek()),
-        },
-            h('span', { class: 'stme-stat-icon' }, '✎'));
+            showLabel: false,
+            showValue: false,
+        });
+        pill.props.class = computed(() => `stme-stat stme-postprocess-pill${open() ? ' stme-postprocess-open' : ''}`);
         return h('div', { class: computed(() => `stme-postprocess-cell${open() ? ' stme-postprocess-open' : ''}`) }, pill, popup);
     }
 

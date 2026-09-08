@@ -966,25 +966,29 @@
 .stme-postprocess-help { margin: 0; line-height: 1.4; opacity: .85; }
 .stme-postprocess-pass { display: flex; flex-direction: column; gap: 10px; padding: 8px; border: 1px solid var(--border, #4444); border-radius: 6px; }
 
-/* Кнопка — один в один по форме с карточкой времени (StatBlock), но заметно уже: узкий вертикальный скруглённый прямоугольник.
-   Внутри — только крупная иконка, по центру (ни текста, ни счётчика). */
+/* Кнопка — один в один по форме с карточкой времени (StatBlock): та же внутренняя
+   структура (head со строкой значения), поэтому и высота совпадает. Отличия: уже
+   (64px) и всё содержимое по центру — видна только крупная иконка. */
 .stme-postprocess-cell { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .stme-postprocess-pill {
     width: 64px;
     min-height: 0;
-    padding: 10px 0 11px;
+    padding: 10px 8px 11px;
     cursor: pointer;
     font-family: inherit;
 }
-.stme-postprocess-pill .stme-stat-icon { font-size: 20px; line-height: 1; }
+.stme-postprocess-pill .stme-stat-head { justify-content: center; margin-bottom: 4px; }
+.stme-postprocess-pill .stme-stat-icon { width: 26px; height: 26px; font-size: 16px; }
+.stme-stat-value-ghost { visibility: hidden; }
+.stme-postprocess-pill .stme-stat-value { text-align: center; }
 
 /* Всплывающее окно с изменениями: закрывается крестиком, живёт поверх содержимого.
-   Позиционирование чистым CSS — absolute от ячейки кнопки, с упором в правый край
-   экрана (кнопка прижата вправо); никаких getBoundingClientRect из модуля. */
+   К сообщению не привязано вовсе — position: fixed по центру экрана. */
 .stme-postprocess-popup {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     z-index: 50;
     width: min(460px, calc(100vw - 24px));
     max-height: 60vh;
