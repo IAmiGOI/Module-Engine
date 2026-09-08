@@ -42,66 +42,17 @@
 }
 .stmeBeta-fullscreen-body > * { max-width: 1100px; margin: 0 auto; }
 
-/* GPU isolation / diagnostic fix:
-   The activity strip is now deliberately a completely static paint target.
-   No gradient, no background-position animation, no transform, no opacity
-   animation, and no box-shadow. The state still changes its solid color via
-   --stme-light. This is intentionally the minimal rendering path so we can
-   distinguish the strip itself from the surrounding dock/glass layer. */
-.stme-launcher-dock::before {
-    top: 10%;
-    bottom: 10%;
-    height: auto;
-    left: 0;
-    width: 4px;
-    border-radius: 999px;
-    --stme-light: #5b8dff;
-    background: var(--stme-light);
-    background-image: none;
-    box-shadow: none;
-    animation: none;
-    transform: none;
-    will-change: auto;
-    opacity: 1;
-    transition: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .stme-launcher-dock::before {
-        animation: none;
-        transform: none;
-        opacity: 1;
-    }
-}
-/* ST Module Engine — GPU-safe activity-light patch
- *
- * Root cause:
- *   The animated light was a pseudo-element INSIDE .stme-launcher-dock.
- *   That dock owns a backdrop-filter layer. Even compositor-friendly
- *   animation on a descendant can keep invalidating/recompositing the
- *   backdrop-filter surface.
- *
- * Fix:
- *   1) Kill the old .stme-launcher-dock::before completely.
- *   2) Put the animated light on the stationary .stme-launcher-dock-zone.
- *      The zone has no backdrop-filter.
- *   3) Animate only opacity on a tiny solid bar. No gradient, shadow,
- *      background-position, filter, transform, or will-change.
- *
- * Load this AFTER style.css / harness/panel.css.
- */
-
+/* GPU-safe activity light:
+   - Disable the old animated pseudo-element inside the blurred dock.
+   - Re-create the indicator on the stationary hover zone instead.
+   - Animate opacity only; no gradient, shadow, transform, filter, or
+     background-position animation. */
 .stme-launcher-dock::before {
     content: none !important;
     animation: none !important;
     box-shadow: none !important;
 }
 
-/*
- * The zone already spans the full hidden/revealed hover target and never moves.
- * The light is therefore visually anchored to the screen edge while the pill
- * slides independently.
- */
 .stme-launcher-dock-zone::before {
     content: '';
     position: absolute;
@@ -122,21 +73,29 @@
     z-index: 0;
 }
 
-/* Keep the real pill above the light. */
 .stme-launcher-dock {
     z-index: 1;
 }
 
-/* State colors stay driven by the existing activity-state classes. */
-.stme-light-working::before { --stme-light: #e8a13c; }
-.stme-light-success::before { --stme-light: #4fae7f; }
-.stme-light-warning::before { --stme-light: #d9c545; }
-.stme-light-error::before   { --stme-light: #e5453f; }
+/* Activity state colors are applied to the stationary zone's pseudo-element. */
+.stme-launcher-dock-zone.stme-light-idle::before {
+    --stme-light: #5b8dff;
+}
+.stme-launcher-dock-zone.stme-light-working::before {
+    --stme-light: #e8a13c;
+}
+.stme-launcher-dock-zone.stme-light-success::before {
+    --stme-light: #4fae7f;
+}
+.stme-launcher-dock-zone.stme-light-warning::before {
+    --stme-light: #d9c545;
+}
+.stme-launcher-dock-zone.stme-light-error::before {
+    --stme-light: #e5453f;
+}
 
-/*
- * Notify stays a hard white blink, but now it is also outside the blurred dock.
- */
-.stme-light-notify::before {
+/* Notify remains a hard white blink, but it now lives outside the blurred pill. */
+.stme-launcher-dock-zone.stme-light-notify::before {
     --stme-light: #ffffff;
     opacity: 1;
     animation: stme-zone-light-blink .9s steps(1) infinite;
@@ -152,9 +111,7 @@
     50%      { opacity: .12; }
 }
 
-/*
- * When the pill opens, hide the edge indicator exactly as before.
- */
+/* Hide the edge indicator while the pill is open/hovered. */
 .stme-launcher-dock-zone:hover::before,
 .stme-launcher-dock-zone:focus-within::before,
 .stme-launcher-dock-zone.stme-launcher-dock-open::before {
@@ -162,13 +119,17 @@
     animation: none;
 }
 
-/* Touch surface: no edge indicator in the permanent mobile pill mode. */
+/* Touch surface: the pill is permanently visible, so don't show the edge strip. */
 .stme-launcher-dock-zone.stme-launcher-dock-touch::before {
     content: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .stme-launcher-dock-zone::before,
+    .stme-launcher-dock-zone::before {
+        animation: none;
+        opacity: 1;
+    }
+
     .stme-launcher-dock-zone.stme-light-notify::before {
         animation: none;
         opacity: 1;
