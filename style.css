@@ -5,8 +5,20 @@
 /* Page-width overlay (harness/full-screen-panel.js) — only used inside real
    ST (the standalone browser harness has no narrow-drawer problem to solve,
    so it never creates one). Same shape as Alpha's own .stme-fullscreen. */
+/* Жидкое стекло — a real frosted-glass overlay, not a near-opaque wash: a
+   light tint over `backdrop-filter: blur()` so the actual ST page behind it
+   (chat, sidebar) stays visible but softened, the way a real glass pane
+   would look. The earlier version used a 95%-opaque wash with no blur at
+   all, which hid the page rather than glazing it. */
 .stmeBeta-fullscreen {
     position: fixed;
+    /* НЕ `inset: 0`: Android-браузеры/WebView младше Chrome 87 сокращение не
+       понимают — фиксированный элемент оставался со статическими координатами.
+       И НЕ `height: 100%`/`bottom: 0` вдобавок: на реальном телефоне они тоже
+       не дали высоты (панель сжималась в шапку ~30px — скриншот пользователя).
+       Высота задаётся ЖЁСТКО во вьюпортных единицах: vh понимают все, dvh
+       (динамический вьюпорт с учётом адресной строки) — надёжный запасной
+       слой поверх vh. */
     top: 0;
     left: 0;
     width: 100%;
@@ -21,6 +33,10 @@
     color: var(--SmartThemeBodyColor, #dfe3ea);
     font-family: var(--mainFontFamily, inherit);
 }
+/* A plain class selector's own `display` always beats the UA [hidden] rule
+   at equal specificity — without this the overlay stays laid out and
+   visible regardless of the `hidden` property (same trap Alpha's own
+   .stme-fullscreen[hidden] already documents). */
 .stmeBeta-fullscreen[hidden] { display: none; }
 .stmeBeta-fullscreen-head {
     display: flex;
@@ -31,6 +47,14 @@
     background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .16));
 }
 .stmeBeta-fullscreen-head strong { flex: 1; font-size: 1.05em; letter-spacing: .02em; }
+/* Прокручивается ВСЯ ширина оверлея, а по центру ограничено только
+   содержимое. Раньше `max-width` стоял на самом прокручиваемом элементе, и
+   слева/справа от него оставались мёртвые поля: колесо там доставалось
+   странице за оверлеем, которой ехать некуда, — прокрутка «отскакивала».
+   `min-height: 0` — чтобы флекс-элемент не рос под содержимое вместо
+   прокрутки (по умолчанию `min-height: auto` этого не даёт).
+   `overscroll-behavior: contain` — чтобы докрутив до конца, не начать
+   листать чат ST под панелью. */
 .stmeBeta-fullscreen-body {
     flex: 1;
     min-height: 0;
@@ -41,97 +65,3 @@
     box-sizing: border-box;
 }
 .stmeBeta-fullscreen-body > * { max-width: 1100px; margin: 0 auto; }
-
-/* GPU-safe activity light:
-   - Disable the old animated pseudo-element inside the blurred dock.
-   - Re-create the indicator on the stationary hover zone instead.
-   - Animate opacity only; no gradient, shadow, transform, filter, or
-     background-position animation. */
-.stme-launcher-dock::before {
-    content: none !important;
-    animation: none !important;
-    box-shadow: none !important;
-}
-
-.stme-launcher-dock-zone::before {
-    content: '';
-    position: absolute;
-    right: 10px;
-    top: 50%;
-    width: 4px;
-    height: 208px;
-    margin-top: -104px;
-    border-radius: 999px;
-
-    --stme-light: #5b8dff;
-    background: var(--stme-light);
-
-    opacity: .72;
-    animation: stme-zone-light-breathe 2.4s ease-in-out infinite;
-
-    pointer-events: none;
-    z-index: 0;
-}
-
-.stme-launcher-dock {
-    z-index: 1;
-}
-
-/* Activity state colors are applied to the stationary zone's pseudo-element. */
-.stme-launcher-dock-zone.stme-light-idle::before {
-    --stme-light: #5b8dff;
-}
-.stme-launcher-dock-zone.stme-light-working::before {
-    --stme-light: #e8a13c;
-}
-.stme-launcher-dock-zone.stme-light-success::before {
-    --stme-light: #4fae7f;
-}
-.stme-launcher-dock-zone.stme-light-warning::before {
-    --stme-light: #d9c545;
-}
-.stme-launcher-dock-zone.stme-light-error::before {
-    --stme-light: #e5453f;
-}
-
-/* Notify remains a hard white blink, but it now lives outside the blurred pill. */
-.stme-launcher-dock-zone.stme-light-notify::before {
-    --stme-light: #ffffff;
-    opacity: 1;
-    animation: stme-zone-light-blink .9s steps(1) infinite;
-}
-
-@keyframes stme-zone-light-breathe {
-    0%, 100% { opacity: .45; }
-    50%      { opacity: 1; }
-}
-
-@keyframes stme-zone-light-blink {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: .12; }
-}
-
-/* Hide the edge indicator while the pill is open/hovered. */
-.stme-launcher-dock-zone:hover::before,
-.stme-launcher-dock-zone:focus-within::before,
-.stme-launcher-dock-zone.stme-launcher-dock-open::before {
-    opacity: 0;
-    animation: none;
-}
-
-/* Touch surface: the pill is permanently visible, so don't show the edge strip. */
-.stme-launcher-dock-zone.stme-launcher-dock-touch::before {
-    content: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .stme-launcher-dock-zone::before {
-        animation: none;
-        opacity: 1;
-    }
-
-    .stme-launcher-dock-zone.stme-light-notify::before {
-        animation: none;
-        opacity: 1;
-    }
-}
