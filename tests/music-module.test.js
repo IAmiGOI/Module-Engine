@@ -58,6 +58,20 @@ function buildEngine({ chat = [] } = {}) {
     engine.buses.services.register('audio.get', ({ id }) => blobs.get(String(id)) ?? null);
     engine.buses.services.register('audio.delete', ({ id }) => blobs.delete(String(id)) || true);
 
+    // Сервис воспроизведения — фейк над тем же контрактом (реальный владеет
+    // <audio> и URL.createObjectURL, недоступными в Node).
+    const playback = { id: null, playing: false, playCalls: 0, onEnded: null };
+    engine.buses.services.register('audio.playback.play', ({ id, blob, onEnded }) => {
+        if (!blob) return { ok: false };
+        playback.id = id ?? null;
+        playback.playing = true;
+        playback.playCalls += 1;
+        playback.onEnded = typeof onEnded === 'function' ? onEnded : null;
+        return { ok: true };
+    });
+    engine.buses.services.register('audio.playback.pause', () => { playback.playing = false; return { ok: true }; });
+    engine.buses.services.register('audio.playback.state', () => ({ ok: true, value: { id: playback.id, playing: playback.playing } }));
+
     // Эмбединг-фейк: вектор — СУММА осей, чьи имена встретились в тексте
     // (нормированная). Детерминированно, «ничего не встретилось» — фон города.
     engine.buses.services.register('embedding.compute', ({ text }) => {
@@ -80,7 +94,9 @@ function buildEngine({ chat = [] } = {}) {
         tier: 'community',
         allowedContracts: [
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
-            'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete', 'embedding.compute',
+            'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
+            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state',
+            'embedding.compute',
         ],
     });
     const rawNotify = moduleHost.cores.subscribe.bind(moduleHost.cores);
@@ -89,19 +105,9 @@ function buildEngine({ chat = [] } = {}) {
         return rawNotify(contract, options, callback);
     };
 
-    // Фейковый audio-элемент: ровно та поверхность, которую трогает Модуль.
-    const audio = {
-        src: null, volume: 0.7, playing: false,
-        play: async function () { this.playing = true; },
-        pause: function () { this.playing = false; },
-        listeners: {},
-        addEventListener(name, fn) { this.listeners[name] = fn; },
-    };
-
     const module = createMusicModule(moduleHost);
-    module.attachAudio(audio);
 
-    return { engine, module, audio, blobs, notifications };
+    return { engine, module, audio: playback, blobs, notifications };
 }
 
 test('load() restores tracks from settings; import computes vectors and persists both bytes and metadata', async () => {
