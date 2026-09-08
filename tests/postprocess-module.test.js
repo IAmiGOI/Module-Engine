@@ -155,6 +155,7 @@ function buildEngine({ replies, modelFn } = {}) {
     footerHost.own.register('ui.messageFooter.claim', params => { claims.push(params); return params.slot; });
     footerHost.own.register('ui.messageFooter.release', () => true);
     footerHost.own.register('ui.messageFooter.liveMesid', () => live.mesid);
+    footerHost.own.register('ui.messageFooter.attach', () => true);
 
     const stageCalls = [];
     const stages = new Map();
@@ -185,26 +186,37 @@ function buildEngine({ replies, modelFn } = {}) {
             'model.generate',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'pipeline.stages.add', 'pipeline.stages.remove',
-            'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.liveMesid',
+            'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.liveMesid', 'ui.messageFooter.attach',
         ],
     });
     const module = createPostprocessModule(moduleHost);
 
-    /** Полный прогон fold-цепочки — как это сделал бы сам Ядро пайплайнов на `generation.completed`: вход — снимок прогона, каждый этап — resolveAs() под правами владельца этапа, выход становится переносимым значением. */
+    /**
+     * Полный прогон fold-цепочки — как это сделал бы сам Ядро пайплайнов на
+     * `generation.completed`: вход — снимок прогона, каждый этап — resolveAs()
+     * под правами владельца этапа, выход становится переносимым значением.
+     * Порядок этапов ВЫВОДИТСЯ ИЗ `needs` (уровни, как в computeStageLevels;
+     * внутри уровня — порядок регистрации), а не захардкожен: захардкоженный
+     * порядок однажды скрыл реальный баг — `apply`, зарегистрированный до
+     * появления pass'ов, исполнялся РАНЬШЕ них.
+     */
     async function runCompletedPipeline() {
         let value = { runId: 'run_1', stage: 'completed' };
-        const order = ['postprocess:begin',
-            ...[...stages.keys()].filter(id => id.startsWith('postprocess:pass:')).sort(),
-            'postprocess:apply'];
-        for (const stageId of order) {
-            const stage = stages.get(stageId);
-            if (!stage) continue;
-            const params = stage.params ?? {};
-            const resolved = {};
-            for (const [key, val] of Object.entries(params)) resolved[key] = (val && val.$from === '$value') ? value : val;
-            // Реальный вызов этапа — resolveAs() под правами модуля-владельца.
-            const result = await engine.resolveAs(MODULE_ID, stage.contract, resolved);
-            if (result.ok) value = result.value;
+        const remaining = new Map(stages);
+        const executed = new Set();
+        while (remaining.size) {
+            const level = [...remaining.values()].filter(stage => (stage.needs ?? []).every(need => executed.has(need)));
+            if (!level.length) throw new Error(`runCompletedPipeline: unresolvable needs: ${[...remaining.keys()].join(', ')}`);
+            for (const stage of level) {
+                remaining.delete(stage.id);
+                const params = stage.params ?? {};
+                const resolved = {};
+                for (const [key, val] of Object.entries(params)) resolved[key] = (val && val.$from === '$value') ? value : val;
+                // Реальный вызов этапа — resolveAs() под правами модуля-владельца.
+                const result = await engine.resolveAs(MODULE_ID, stage.contract, resolved);
+                if (result.ok) value = result.value;
+                executed.add(stage.id);
+            }
         }
         return value;
     }
@@ -255,8 +267,28 @@ test('the trace lands in the annotations and a no-op result writes nothing', asy
     assert.equal(Object.keys(annotations.value ?? {}).length, 0);
 });
 
+test('passes added AFTER the first registration still run before apply — the save-time resync must rebuild the graph', async () => {
+    // Регресс на реальный баг авто-запуска: модуль грузится БЕЗ pass'ов
+    // (register с needs: [] у apply), затем пользователь заводит pass и жмёт
+    // Save. Прежний syncStages пропускал уже зарегистрированный apply — и на
+    // живом generation.completed цепочка шла begin → apply → pass: замена
+    // происходила ДО переписывания, «нечего менять», авто-запуск молчал.
+    const { module, calls, live, settingsContext, runCompletedPipeline, stages } = buildEngine({ replies: [' REWRITTEN TEXT '] });
+    await module.load(); // первое переключение состава — ещё без pass'ов
+
+    module.passes.set([ONE_PASS]);
+    await module.save(); // второе переключение состава — pass появился
+
+    // Граф обязан быть пересобран: apply зависит от pass-этапа.
+    assert.deepEqual(stages.get('postprocess:apply').needs, ['postprocess:pass:p1']);
+
+    live.mesid = '1';
+    await runCompletedPipeline();
+    assert.equal(calls.length, 1, 'the model pass must actually run');
+    assert.equal(settingsContext.chat[1].mes, 'REWRITTEN TEXT', 'the rewrite must land BEFORE the replace step');
+});
+
 test('a failed pass does not abort the chain — the next pass still runs', async () => {
-    // Два pass'а: у первого вызов модели бросает, второй отвечает текстом.
     const { module, calls, live, settingsContext, runCompletedPipeline } = buildEngine({
         modelFn: (params, callNumber) => {
             if (callNumber === 1) throw new Error('worker unreachable');
