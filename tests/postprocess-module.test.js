@@ -157,20 +157,6 @@ function buildEngine({ replies, modelFn } = {}) {
     footerHost.own.register('ui.messageFooter.liveMesid', () => live.mesid);
     footerHost.own.register('ui.messageFooter.attach', () => true);
 
-    const stageCalls = [];
-    const stages = new Map();
-    const pipelineHost = engine.registerCaller('core.pipeline', 'cores', { tier: 'official' });
-    pipelineHost.own.register('pipeline.stages.add', params => {
-        stageCalls.push(['add', params.stageId ?? params.stage?.id]);
-        stages.set(params.stage?.id, { ...params.stage, params: params.stage?.params ?? {} });
-        return params.stage?.id;
-    });
-    pipelineHost.own.register('pipeline.stages.remove', params => {
-        stageCalls.push(['remove', params.stageId]);
-        stages.delete(params.stageId);
-        return true;
-    });
-
     const storageHost = engine.registerCaller('core.storage', 'cores', { tier: 'official' });
     const store = new Map();
     storageHost.own.register('storage.settings.get', params => ({ ok: true, value: store.get(`${params.namespace}:${params.key}`) ?? params.fallback ?? null }));
@@ -185,67 +171,46 @@ function buildEngine({ replies, modelFn } = {}) {
             'chatHistory.messages', 'chatHistory.replaceText', 'chatHistory.annotate', 'chatHistory.annotations',
             'model.generate',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
-            'pipeline.stages.add', 'pipeline.stages.remove',
             'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.liveMesid', 'ui.messageFooter.attach',
         ],
     });
     const module = createPostprocessModule(moduleHost);
 
     /**
-     * Полный прогон fold-цепочки — как это сделал бы сам Ядро пайплайнов на
-     * `generation.completed`: вход — снимок прогона, каждый этап — resolveAs()
-     * под правами владельца этапа, выход становится переносимым значением.
-     * Порядок этапов ВЫВОДИТСЯ ИЗ `needs` (уровни, как в computeStageLevels;
-     * внутри уровня — порядок регистрации), а не захардкожен: захардкоженный
-     * порядок однажды скрыл реальный баг — `apply`, зарегистрированный до
-     * появления pass'ов, исполнялся РАНЬШЕ них.
+     * Прогон авто-цепочки тем же путём, что и вживую: эмит `generation.completed`
+     * на Шину событий — ровно то, что публикует Ядро генерации в settle().
+     * Подписка модуля отвечает асинхронно, поэтому ждём завершения: busy поднялся
+     * → спал до его снятия (аналог await у «RP Time» в тестах).
      */
-    async function runCompletedPipeline() {
-        let value = { runId: 'run_1', stage: 'completed' };
-        const remaining = new Map(stages);
-        const executed = new Set();
-        while (remaining.size) {
-            const level = [...remaining.values()].filter(stage => (stage.needs ?? []).every(need => executed.has(need)));
-            if (!level.length) throw new Error(`runCompletedPipeline: unresolvable needs: ${[...remaining.keys()].join(', ')}`);
-            for (const stage of level) {
-                remaining.delete(stage.id);
-                const params = stage.params ?? {};
-                const resolved = {};
-                for (const [key, val] of Object.entries(params)) resolved[key] = (val && val.$from === '$value') ? value : val;
-                // Реальный вызов этапа — resolveAs() под правами модуля-владельца.
-                const result = await engine.resolveAs(MODULE_ID, stage.contract, resolved);
-                if (result.ok) value = result.value;
-                executed.add(stage.id);
-            }
+    async function emitGenerationCompleted() {
+        engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'ended', toolCalls: 0 });
+        for (let i = 0; i < 200 && module.busy.peek(); i += 1) {
+            await new Promise(resolve => setTimeout(resolve, 5));
         }
-        return value;
+        if (module.busy.peek()) throw new Error('emitGenerationCompleted: the auto-run chain did not finish');
     }
 
-    return { engine, module, calls, answers, claims, stages, live, modelFn, settingsContext, runCompletedPipeline };
+    return { engine, module, calls, answers, claims, live, modelFn, settingsContext, emitGenerationCompleted };
 }
 
-test('module loads, claims the center slot, and registers its stages', async () => {
-    const { module, claims, stages } = buildEngine();
+test('module loads and claims the center slot', async () => {
+    const { module, claims } = buildEngine();
     await module.load();
 
     assert.equal(claims.length, 1);
     assert.equal(claims[0].slot, 'center');
     assert.equal(claims[0].ownerId, MODULE_ID);
     assert.equal(typeof claims[0].node, 'function');
-    // begin + apply; pass-этапов нет, потому что pass'ов нет.
-    assert.ok(stages.has('postprocess:begin'));
-    assert.ok(stages.has('postprocess:apply'));
-    assert.equal(stages.size, 2);
 });
 
-test('a fresh reply is rewritten through the whole fold chain', async () => {
-    const { module, calls, live, settingsContext, runCompletedPipeline } = buildEngine({ replies: [' REWRITTEN TEXT '] });
+test('a fresh reply is rewritten through the whole chain on generation.completed', async () => {
+    const { module, calls, live, settingsContext, emitGenerationCompleted } = buildEngine({ replies: [' REWRITTEN TEXT '] });
     await module.load();
     module.passes.set([ONE_PASS]);
     await module.save();
 
     live.mesid = '1';
-    await runCompletedPipeline();
+    await emitGenerationCompleted();
 
     const message = settingsContext.chat[1];
     assert.equal(message.mes, 'REWRITTEN TEXT');
@@ -254,11 +219,11 @@ test('a fresh reply is rewritten through the whole fold chain', async () => {
 });
 
 test('the trace lands in the annotations and a no-op result writes nothing', async () => {
-    const { engine, module, live, settingsContext, runCompletedPipeline } = buildEngine({ replies: ['The sun climbs as the road unwinds.'] });
+    const { engine, module, live, settingsContext, emitGenerationCompleted } = buildEngine({ replies: ['The sun climbs as the road unwinds.'] });
     await module.load();
 
     live.mesid = '1';
-    await runCompletedPipeline();
+    await emitGenerationCompleted();
 
     const message = settingsContext.chat[1];
     assert.equal(message.mes, 'The sun climbs as the road unwinds.');
@@ -267,29 +232,24 @@ test('the trace lands in the annotations and a no-op result writes nothing', asy
     assert.equal(Object.keys(annotations.value ?? {}).length, 0);
 });
 
-test('passes added AFTER the first registration still run before apply — the save-time resync must rebuild the graph', async () => {
-    // Регресс на реальный баг авто-запуска: модуль грузится БЕЗ pass'ов
-    // (register с needs: [] у apply), затем пользователь заводит pass и жмёт
-    // Save. Прежний syncStages пропускал уже зарегистрированный apply — и на
-    // живом generation.completed цепочка шла begin → apply → pass: замена
-    // происходила ДО переписывания, «нечего менять», авто-запуск молчал.
-    const { module, calls, live, settingsContext, runCompletedPipeline, stages } = buildEngine({ replies: [' REWRITTEN TEXT '] });
-    await module.load(); // первое переключение состава — ещё без pass'ов
-
+test('a second generation.completed does not reprocess the same reply', async () => {
+    // Двойной прогон безопасен: begin видит аннотацию «уже обработано» и уходит
+    // в skip — модель зовётся ровно один раз, текст перезаписывается один раз.
+    const { module, calls, live, settingsContext, emitGenerationCompleted } = buildEngine({ replies: [' REWRITTEN TEXT '] });
+    await module.load();
     module.passes.set([ONE_PASS]);
-    await module.save(); // второе переключение состава — pass появился
-
-    // Граф обязан быть пересобран: apply зависит от pass-этапа.
-    assert.deepEqual(stages.get('postprocess:apply').needs, ['postprocess:pass:p1']);
+    await module.save();
 
     live.mesid = '1';
-    await runCompletedPipeline();
-    assert.equal(calls.length, 1, 'the model pass must actually run');
-    assert.equal(settingsContext.chat[1].mes, 'REWRITTEN TEXT', 'the rewrite must land BEFORE the replace step');
+    await emitGenerationCompleted();
+    await emitGenerationCompleted();
+
+    assert.equal(calls.length, 1);
+    assert.equal(settingsContext.chat[1].mes, 'REWRITTEN TEXT');
 });
 
 test('a failed pass does not abort the chain — the next pass still runs', async () => {
-    const { module, calls, live, settingsContext, runCompletedPipeline } = buildEngine({
+    const { module, calls, live, settingsContext, emitGenerationCompleted } = buildEngine({
         modelFn: (params, callNumber) => {
             if (callNumber === 1) throw new Error('worker unreachable');
             return ' SECOND PASS OUTPUT ';
@@ -300,11 +260,10 @@ test('a failed pass does not abort the chain — the next pass still runs', asyn
         { id: 'p1', name: 'Failing', prompt: 'p1', workerId: '', enabled: true, includeContext: false, contextDepth: 6, samplerPreset: '', temperature: 0.7, topP: 1, topK: 0, maxTokens: 1000, reasoningMode: 'inherit', reasoningEffort: 'low', reasoningBudget: 0 },
         { id: 'p2', name: 'Working', prompt: 'p2', workerId: '', enabled: true, includeContext: false, contextDepth: 6, samplerPreset: '', temperature: 0.7, topP: 1, topK: 0, maxTokens: 1000, reasoningMode: 'inherit', reasoningEffort: 'low', reasoningBudget: 0 },
     ]);
-    // Синхронизировать этапы под новые pass'ы — в живом движке это делает save().
     await module.save();
 
     live.mesid = '1';
-    await runCompletedPipeline();
+    await emitGenerationCompleted();
 
     // Оба pass'а реально вызывались, провал первого не остановил второй.
     assert.equal(calls.length, 2);
@@ -313,13 +272,13 @@ test('a failed pass does not abort the chain — the next pass still runs', asyn
 });
 
 test('the badge annotation is stored and cleared on reroll via messageDeleted', async () => {
-    const { engine, module, live, runCompletedPipeline } = buildEngine({ replies: [' REWRITTEN '] });
+    const { engine, module, live, emitGenerationCompleted } = buildEngine({ replies: [' REWRITTEN '] });
     await module.load();
     module.passes.set([ONE_PASS]);
     await module.save();
 
     live.mesid = '1';
-    await runCompletedPipeline();
+    await emitGenerationCompleted();
     const annotations = await engine.resolveAs(MODULE_ID, 'chatHistory.annotations', { namespace: MODULE_ID });
     assert.ok((annotations.value ?? {})['1'], 'trace annotation written for the processed message');
 
