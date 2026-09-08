@@ -117,7 +117,7 @@ const DEFINITIONS = [{
             // Свои этапы на `generation.completed` — то же право на состав
             // пайплайнов, что у остальных, и бейдж в слоте подвала.
             'pipeline.stages.add', 'pipeline.stages.remove',
-            'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.liveMesid',
+            'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.liveMesid', 'ui.messageFooter.attach',
         ],
     },
     create: host => createPostprocessModule(host),

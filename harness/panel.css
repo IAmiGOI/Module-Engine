@@ -962,13 +962,45 @@
 .stme-note-meta { flex-shrink: 0; opacity: .55; font-size: 10.5px; }
 .stme-note-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; opacity: .9; line-height: 1.5; }
 
-/* Модуль «Post-Turn Processor»: панель pass'ов и бейдж в подвале сообщения. */
+/* Модуль «Post-Turn Processor»: панель pass'ов и кнопка в подвале сообщения. */
 .stme-postprocess-help { margin: 0; line-height: 1.4; opacity: .85; }
 .stme-postprocess-pass { display: flex; flex-direction: column; gap: 10px; padding: 8px; border: 1px solid var(--border, #4444); border-radius: 6px; }
-.stme-postprocess-badge { margin-top: 4px; font-size: .85em; }
-.stme-postprocess-badge summary { cursor: pointer; opacity: .8; user-select: none; }
-.stme-postprocess-badge summary:hover { opacity: 1; }
-.stme-postprocess-diff { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+
+/* Кнопка — один в один по форме с карточкой времени (StatBlock), но заметно уже: узкий вертикальный скруглённый прямоугольник. */
+.stme-postprocess-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.stme-postprocess-pill {
+    width: 64px;
+    min-height: 0;
+    padding: 10px 8px 11px;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+}
+.stme-postprocess-pill .stme-stat-head { justify-content: center; margin-bottom: 2px; }
+.stme-postprocess-pill .stme-stat-label { font-size: 8.5px; letter-spacing: .06em; }
+.stme-postprocess-pill .stme-stat-value { text-align: center; font-size: 13px; }
+
+/* Всплывающее окно с изменениями: закрывается крестиком, живёт поверх содержимого.
+   position: fixed — координаты выставляются из getBoundingClientRect() кнопки (viewport). */
+.stme-postprocess-popup {
+    position: fixed;
+    z-index: 50;
+    width: min(460px, calc(100vw - 24px));
+    max-height: 60vh;
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 60%, var(--SmartThemeBorderColor, #444));
+    border-radius: 10px;
+    background: var(--SmartThemeBlurTintColor, #1c1e26);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
+}
+.stme-postprocess-popup-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.stme-postprocess-popup-close {
+    border: none; background: transparent; color: inherit; cursor: pointer;
+    font-size: 14px; line-height: 1; opacity: .7; padding: 2px 4px;
+}
+.stme-postprocess-popup-close:hover { opacity: 1; }
+.stme-postprocess-diff { display: flex; flex-direction: column; gap: 8px; }
 .stme-postprocess-step strong { display: block; margin-bottom: 2px; font-size: .9em; opacity: .85; }
 .stme-postprocess-step-skipped { opacity: .6; }
 .stme-postprocess-skip-reason { font-style: italic; }
