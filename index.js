@@ -1,6 +1,7 @@
 import { wireEngine } from './harness/engine-wiring.js';
 import { createFullScreenPanel } from './harness/full-screen-panel.js';
 import { isMobileSurface } from './cores/ui/final-ui-android.js';
+import { effect } from './cores/ui/reactive.js';
 
 /**
  * Real SillyTavern entry point — verification-only, NOT the real Раннер
@@ -70,7 +71,7 @@ function getContext() {
  * `:hover` — a visible vibration (caught live). The zone never moves; only
  * the pill inside it does.
  */
-function addLauncherDock(panel, { openMemoryGraphPanel } = {}) {
+function addLauncherDock(panel, { openMemoryGraphPanel, activityState } = {}) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
     const zone = document.createElement('div');
     zone.id = 'stmeBetaLauncherDock';
@@ -110,6 +111,21 @@ function addLauncherDock(panel, { openMemoryGraphPanel } = {}) {
             if (!zone.contains(event.target)) zone.classList.remove('stme-launcher-dock-open');
         });
     }
+    // Светофор активности: полоска пилюли — «лампочка» состояния движка
+    // (cores/ui/activity-light.js сводит события всех Ядер в одно состояние).
+    // Сигналы этой кодовой базы не знают .subscribe() — живое чтение тут
+    // называется effect(): функция перезапускается при каждом изменении.
+    // Класс состояния добавляем ДОБАВЛЕНИЕМ (а не переприсвоением className —
+    // та ошибка затёрла бы touch/open классы), предыдущий снимаем.
+    if (activityState) {
+        let previousClass = null;
+        effect(() => {
+            const next = `stme-light-${activityState()}`;
+            if (previousClass) zone.classList.remove(previousClass);
+            zone.classList.add(next);
+            previousClass = next;
+        });
+    }
     document.body.append(zone);
 }
 
@@ -118,7 +134,7 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, selfUpdate, memoryGraphPanel } = await wireEngine({
+    const { engine, panelUi, selfUpdate, memoryGraphPanel, activityLight } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
@@ -142,7 +158,7 @@ async function init() {
     panel.body.append(panelUi.getRoot());
 
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => panel.open());
-    addLauncherDock(panel, { openMemoryGraphPanel: () => memoryGraphPanel.show() });
+    addLauncherDock(panel, { openMemoryGraphPanel: () => memoryGraphPanel.show(), activityState: activityLight.state });
 
     window.STModuleEngineBeta = engine;
     console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the floating launcher dock.');
