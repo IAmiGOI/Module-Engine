@@ -733,8 +733,17 @@
     bottom: 10%;
     width: 4px;
     border-radius: 999px;
-    --stme-light: #5b8dff;
-    /* Статичный градиент (НЕ анимируется больше сам по себе — см. ниже) —
+    /* НАШЁЛСЯ РЕАЛЬНЫЙ БАГ (не в анимации): здесь СТОЯЛО `--stme-light:
+       #5b8dff;` — локальное объявление ПРЯМО на ::before. Custom property
+       с локальным значением НЕ наследуется от родителя вообще — у ::before
+       был свой захардкоженный синий, который .stme-light-working/success/
+       warning/error на РОДИТЕЛЕ (.stme-launcher-dock) физически не мог
+       перебить (наследование просто не участвовало). Поэтому светящийся
+       контур (box-shadow, у него цвет ЗАШИТ отдельно по каждому классу
+       ниже) менял цвет верно, а сама заливка полоски — никогда, даже до
+       всех правок с анимацией. Убрано — теперь ::before честно наследует
+       переменную от .stme-launcher-dock (дефолт ниже) и её же перебивают
+       .stme-light-* правила. Статичный градиент (НЕ анимируется больше сам по себе — см. ниже) —
        переливка теперь целиком через opacity, тот же compositor-only
        механизм, что у mигания (`stme-dock-blink`), уже доказанно дешёвого
        (0% GPU). Раньше "переливалось" через `animation-name:
@@ -778,6 +787,12 @@
 .stme-light-notify .stme-launcher-dock { --stme-light: #ffffff; }
 .stme-light-notify .stme-launcher-dock::before {
     box-shadow: 0 0 14px rgba(255, 255, 255, .95);
+    /* КОНЕЧНОЕ мигание — не `infinite`. Именно бесконечный цикл (не
+       конкретное свойство/тайминг/блюр) грузил GPU — 3 коротких мигания
+       (~2.7s) физически ЗАВЕРШАЮТСЯ и оставляют полоску статичной белой
+       до конца NOTIFY_HOLD_MS (5000ms, cores/ui/activity-light.js), а не
+       тикают вечно. */
+    animation: stme-dock-blink .9s steps(1) 3;
 }
 /* При наведении/раскрытии прячем полоску ::before. Блюр-слой ::after НЕ
    трогаем: это СТЕКЛО пилюли, оно видно всегда — раньше здесь был селектор
@@ -822,9 +837,16 @@
 .stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock::before {
     content: none;
 }
-/* ::before/::after у дока больше не анимируются (см. doc-comment у
-   ::before) — отдельного prefers-reduced-motion правила для них не нужно,
-   статика и так не двигается. */
+/* ::after у дока статичен, ::before — статичен, КРОМЕ notify (см. doc-comment
+   там же) — тому нужно 3 конечных мигания, поэтому reduced-motion для него
+   оставлен явно. */
+@media (prefers-reduced-motion: reduce) {
+    .stme-light-notify .stme-launcher-dock::before { animation: none; }
+}
+@keyframes stme-dock-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .12; }
+}
 .stme-launcher-dock-btn {
     width: 37px;
     height: 37px;
