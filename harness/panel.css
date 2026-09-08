@@ -672,7 +672,8 @@
     transition: right .25s ease;
 }
 .stme-launcher-dock-zone:hover .stme-launcher-dock,
-.stme-launcher-dock-zone:focus-within .stme-launcher-dock {
+.stme-launcher-dock-zone:focus-within .stme-launcher-dock,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock {
     right: 16px;
 }
 /* Полоска на краю в закрытом состоянии — та же часть пилюли, что торчит из-за
@@ -695,7 +696,35 @@
     transition: opacity .35s ease;
 }
 .stme-launcher-dock-zone:hover .stme-launcher-dock::before,
-.stme-launcher-dock-zone:focus-within .stme-launcher-dock::before {
+.stme-launcher-dock-zone:focus-within .stme-launcher-dock::before,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before {
+    opacity: 0;
+}
+/* ===== Android / мобильная поверхность =====
+   Пилюля создаётся index.js МИМО движка (у неё нет дерева из Android-ядра
+   финального UI), поэтому платформу определяет и помечает сам index.js
+   классом `stme-launcher-dock-touch` на ЗОНЕ (см. addLauncherDock()).
+   Прятать пилюлю за край на телефоне нельзя вовсе: :hover не существует,
+   а 10px торчащей щели пальцем не нащупать (край экрана к тому же часто
+   отдан системным жестам «назад»). Поэтому на тач-поверхности пилюля ЖИВЁТ
+   ПОЛНОСТЬЮ ВИДИМОЙ — прижата к правому краю, приглушена до полупрозрачности,
+   чтобы не висеть над чатом как яркая плашка; полоска-мерцание ей не нужна
+   (нет «свёрнутого» состояния). Тап по пилюле раскрывает её целиком
+   (`stme-launcher-dock-open` — правее от края, полная непрозрачность),
+   тап по кнопке выполняет действие, тап мимо — закрывает. */
+.stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock {
+    right: 0;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    opacity: .75;
+    transition: opacity .2s ease, right .25s ease;
+}
+.stme-launcher-dock-zone.stme-launcher-dock-touch.stme-launcher-dock-open .stme-launcher-dock {
+    right: 12px;
+    opacity: 1;
+}
+.stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock::before {
+    animation: none;
     opacity: 0;
 }
 @media (prefers-reduced-motion: reduce) {
