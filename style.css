@@ -73,3 +73,104 @@
         opacity: 1;
     }
 }
+/* ST Module Engine — GPU-safe activity-light patch
+ *
+ * Root cause:
+ *   The animated light was a pseudo-element INSIDE .stme-launcher-dock.
+ *   That dock owns a backdrop-filter layer. Even compositor-friendly
+ *   animation on a descendant can keep invalidating/recompositing the
+ *   backdrop-filter surface.
+ *
+ * Fix:
+ *   1) Kill the old .stme-launcher-dock::before completely.
+ *   2) Put the animated light on the stationary .stme-launcher-dock-zone.
+ *      The zone has no backdrop-filter.
+ *   3) Animate only opacity on a tiny solid bar. No gradient, shadow,
+ *      background-position, filter, transform, or will-change.
+ *
+ * Load this AFTER style.css / harness/panel.css.
+ */
+
+.stme-launcher-dock::before {
+    content: none !important;
+    animation: none !important;
+    box-shadow: none !important;
+}
+
+/*
+ * The zone already spans the full hidden/revealed hover target and never moves.
+ * The light is therefore visually anchored to the screen edge while the pill
+ * slides independently.
+ */
+.stme-launcher-dock-zone::before {
+    content: '';
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    width: 4px;
+    height: 208px;
+    margin-top: -104px;
+    border-radius: 999px;
+
+    --stme-light: #5b8dff;
+    background: var(--stme-light);
+
+    opacity: .72;
+    animation: stme-zone-light-breathe 2.4s ease-in-out infinite;
+
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* Keep the real pill above the light. */
+.stme-launcher-dock {
+    z-index: 1;
+}
+
+/* State colors stay driven by the existing activity-state classes. */
+.stme-light-working::before { --stme-light: #e8a13c; }
+.stme-light-success::before { --stme-light: #4fae7f; }
+.stme-light-warning::before { --stme-light: #d9c545; }
+.stme-light-error::before   { --stme-light: #e5453f; }
+
+/*
+ * Notify stays a hard white blink, but now it is also outside the blurred dock.
+ */
+.stme-light-notify::before {
+    --stme-light: #ffffff;
+    opacity: 1;
+    animation: stme-zone-light-blink .9s steps(1) infinite;
+}
+
+@keyframes stme-zone-light-breathe {
+    0%, 100% { opacity: .45; }
+    50%      { opacity: 1; }
+}
+
+@keyframes stme-zone-light-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .12; }
+}
+
+/*
+ * When the pill opens, hide the edge indicator exactly as before.
+ */
+.stme-launcher-dock-zone:hover::before,
+.stme-launcher-dock-zone:focus-within::before,
+.stme-launcher-dock-zone.stme-launcher-dock-open::before {
+    opacity: 0;
+    animation: none;
+}
+
+/* Touch surface: no edge indicator in the permanent mobile pill mode. */
+.stme-launcher-dock-zone.stme-launcher-dock-touch::before {
+    content: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .stme-launcher-dock-zone::before,
+    .stme-launcher-dock-zone.stme-light-notify::before {
+        animation: none;
+        opacity: 1;
+    }
+}
