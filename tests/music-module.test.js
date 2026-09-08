@@ -71,7 +71,8 @@ function buildEngine({ chat = [] } = {}) {
     });
     engine.buses.services.register('audio.playback.pause', () => { playback.playing = false; return { ok: true }; });
     engine.buses.services.register('audio.playback.volume', ({ value }) => { if (Number.isFinite(value)) playback.volume = value; return { ok: true }; });
-    engine.buses.services.register('audio.playback.state', () => ({ ok: true, value: { id: playback.id, playing: playback.playing } }));
+    // ВАЖНО: шина сама оборачивает ответ в {ok, value} — фейк возвращает голый снимок, как реальный Сервис (см. audio-playback.js).
+    engine.buses.services.register('audio.playback.state', () => ({ id: playback.id, playing: playback.playing }));
 
     // Эмбединг-фейк: вектор — СУММА осей, чьи имена встретились в тексте
     // (нормированная). Детерминированно, «ничего не встретилось» — фон города.
