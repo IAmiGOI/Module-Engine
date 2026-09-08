@@ -62,6 +62,12 @@ const NOTIFY_HOLD_MS = 5000;
  */
 const EVENT_MAP = Object.freeze({
     // --- генерация (Ядро генерации) ---
+    // Начало генерации основной LLM ловим ПРЯМО с мостированного
+    // `st.generationStarted`: живой прогон показал, что на обычной генерации
+    // полоска оставалась синей до ToolCall, если полагаться только на
+    // `generation.beforeSend`. Третий аргумент события ST — `dryRun` (сухой
+    // прогон, конца у него не бывает) — рабочим состоянием не считается.
+    'st.generationStarted': payload => (payload?.args?.[2] ? null : { state: 'working' }),
     'generation.beforeSend': { state: 'working' },
     'generation.sending': { state: 'working' },
     'generation.toolCall': { state: 'working' },
