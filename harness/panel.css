@@ -744,19 +744,22 @@
        из прошлой правки — мимо цели). `background-position` сам пользователь
        и вычислил как виновника, сравнив с миганием на opacity — тот вывод
        и применён здесь напрямую. */
+    /* АНИМАЦИЯ УБРАНА СОВСЕМ (09.09, четвёртая попытка) — реальный вывод
+       пользователя, проверенный на живом стенде: заглушка со СТАТИЧНЫМ
+       цветом (никакого `animation`, никакого `@keyframes`) полностью
+       снимает нагрузку. Три предыдущих захода (смена свойства
+       background-position→opacity, смена тайминга ease-in-out→steps(90),
+       удаление backdrop-filter у соседа) НЕ помогли, потому что все они
+       сохраняли САМ ФАКТ бесконечно тикающего `animation` на этом
+       элементе — а именно он держит браузер в режиме "перерисовывать
+       каждый кадр" независимо от того, ЧТО и КАК анимируется. Цвет теперь
+       меняется ТОЛЬКО при смене состояния (класс `stme-light-*`), обычным
+       `transition`, не бесконечным циклом — "светофор" стал в буквальном
+       смысле светофором: держит цвет, не мигает и не переливается. */
     background: linear-gradient(180deg, var(--stme-light), color-mix(in srgb, var(--stme-light) 55%, #ffffff), color-mix(in srgb, var(--stme-light) 70%, #000000), var(--stme-light));
-    background-size: 100% 300%;
-    box-shadow: 0 0 10px rgba(91, 141, 255, .7);
     box-shadow: 0 0 10px var(--stme-light);
-    /* ease-in-out = браузер обязан пересчитывать кадр на КАЖДОЙ отрисовке
-       дисплея — на 120/144Гц мониторе это 120-144 пересчёта/сек, не 60,
-       независимо от свойства (opacity здесь не помогла именно поэтому —
-       дело было не в paint vs compositor, а в самой частоте пересчёта).
-       steps(90) на 3s = ровно 30 шагов/сек, жёстко — GPU считает 30 раз в
-       секунду, что бы ни показывал дисплей. */
-    animation: stme-dock-shimmer 3s steps(90) infinite;
     opacity: 1;
-    transition: background .35s ease;
+    transition: background .35s ease, box-shadow .35s ease, opacity .35s ease;
 }
 /* idle — синий (дефолт выше); дальше — состояния Ядра. Переменная ставится
    на САМ док: её наследуют ::before (полоска) — цвет светофора единый. */
@@ -769,12 +772,12 @@
 .stme-light-success .stme-launcher-dock::before { box-shadow: 0 0 10px rgba(79, 174, 127, .75); }
 .stme-light-warning .stme-launcher-dock::before { box-shadow: 0 0 10px rgba(217, 197, 69, .75); }
 .stme-light-error   .stme-launcher-dock::before { box-shadow: 0 0 12px rgba(229, 69, 63, .85); }
-/* Уведомление — единственное МИГАНИЕ: белый, резко, без переливки.
-   (Определение @keyframes stme-dock-blink — ниже, у media-reduce блока.) */
+/* Уведомление — было единственное МИГАНИЕ, теперь тоже статичный белый
+   (та же причина, см. doc-comment у ::before выше — ЛЮБОЙ бесконечный
+   `animation` рядом с этим доком грузит GPU, независимо от свойства). */
 .stme-light-notify .stme-launcher-dock { --stme-light: #ffffff; }
 .stme-light-notify .stme-launcher-dock::before {
     box-shadow: 0 0 14px rgba(255, 255, 255, .95);
-    animation: stme-dock-blink .9s steps(1) infinite;
 }
 /* При наведении/раскрытии прячем полоску ::before. Блюр-слой ::after НЕ
    трогаем: это СТЕКЛО пилюли, оно видно всегда — раньше здесь был селектор
@@ -819,19 +822,9 @@
 .stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock::before {
     content: none;
 }
-@media (prefers-reduced-motion: reduce) {
-    .stme-launcher-dock::before { animation: none; opacity: 1; }
-    /* Стекло ::after не анимируется по умолчанию — правило тут лишь на случай будущих правок. */
-    .stme-launcher-dock::after { animation: none; }
-}
-@keyframes stme-dock-shimmer {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: .55; }
-}
-@keyframes stme-dock-blink {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: .12; }
-}
+/* ::before/::after у дока больше не анимируются (см. doc-comment у
+   ::before) — отдельного prefers-reduced-motion правила для них не нужно,
+   статика и так не двигается. */
 .stme-launcher-dock-btn {
     width: 37px;
     height: 37px;
