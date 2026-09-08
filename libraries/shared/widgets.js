@@ -149,7 +149,7 @@ export function FloatingStack(itemsSignal, { corner = 'top-left', renderItem } =
  * сообщений, панель — ПОСТОЯННОЕ окно с содержимым. Общее у них только то,
  * что оба плавают.
  */
-export function FloatingPanel(title, { position, size, collapsed, onToggle, onClose, onResize, drag } = {}, ...children) {
+export function FloatingPanel(title, { position, size, collapsed, onToggle, onClose, onResize, resizable = Boolean(onResize), drag } = {}, ...children) {
     // Ключ попадает в стиль ТОЛЬКО когда значение есть. Пустая строка здесь
     // означала бы «сбросить», а размер окну задаёт сам браузер через
     // `resize: both` — записав width: '' на любой перерисовке, мы отменяли бы
@@ -162,6 +162,9 @@ export function FloatingPanel(title, { position, size, collapsed, onToggle, onCl
         if (top !== undefined) next.top = `${top}px`;
         if (width) next.width = `${width}px`;
         if (height) next.height = `${height}px`;
+        // Неизменяемое окно: CSS `resize: both` из panel.css бьётся инлайном
+        // `resize: none` (инлайн специфичнее любого правила таблицы).
+        if (!resizable) next.resize = 'none';
         return next;
     });
 
@@ -170,8 +173,10 @@ export function FloatingPanel(title, { position, size, collapsed, onToggle, onCl
         style,
         // Растягивание заканчивается отпусканием указателя над самим окном.
         // Читаем размер у события — тот же приём, что и с координатами при
-        // перетаскивании, никакого поиска узлов.
-        'on:pointerup': onResize
+        // перетаскивании, никакого поиска узлов. У неизменяемого окна
+        // обработчика нет вовсе — не только ручка скрыта, но и размер
+        // не персистится.
+        'on:pointerup': onResize && resizable
             ? event => {
                 const box = event.currentTarget?.getBoundingClientRect?.();
                 if (box) onResize({ width: Math.round(box.width), height: Math.round(box.height) });

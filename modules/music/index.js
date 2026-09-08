@@ -315,11 +315,9 @@ export function createMusicModule(host) {
                     savePlayer();
                 },
             }),
-            onResize: next => {
-                if (next.width === hudSize.peek().width && next.height === hudSize.peek().height) return;
-                hudSize.set(next);
-                savePlayer();
-            },
+            // Окно плеера НЕизменяемое: onResize не передаём — виджет
+            // сам ставит resize:none и не вешает обработчик растяжения
+            // (см. FloatingPanel в libraries/shared/widgets.js).
         },
             h('div', { class: 'stme-music-now' }, label),
             Row(
