@@ -145,10 +145,16 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
      * `st.chatChanged` (ловит и самый первый чат после перезагрузки страницы).
      * Перезагрузка идёт ЧЕРЕЗ `enqueueWrite()` — иначе параллельный с ней фолд
      * мог бы начать с предсменного списка и записать его уже ПОСЛЕ перезагрузки.
+     *
+     * После перезагрузки публикуется `summary.reloaded` — панель движка
+     * перечитывает список по этому событию и показывает саммари УЖЕ ТЕКУЩЕГО
+     * чата сразу при заходе в него, без ручного «Fold now» (тот же паттерн
+     * «Ядро объявляет факт — слушатели решают сами», что и `summary.folded`).
      */
     function reloadSummariesForChat() {
         return enqueueWrite(async () => {
             await loadSummaries();
+            publishEvent('summary.reloaded', { count: activeSummaries(summaries).length });
         });
     }
 
