@@ -1,5 +1,5 @@
 import { h } from '../../cores/ui/tree.js';
-import { signal, computed } from '../../cores/ui/reactive.js';
+import { signal, computed, effect } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { selectTrack, shouldSwitch } from '../../libraries/core/track-selection.js';
 import { clampToViewport, createDragHandlers } from '../../libraries/shared/draggable.js';
@@ -129,6 +129,12 @@ export function createMusicModule(host) {
         return true;
     }
 
+    /** Громкость: сигнал → Сервис. Слайдер крутится и на уже играющем треке. */
+    effect(() => {
+        const value = volume.peek();
+        void request(host.services, 'audio.playback.volume', { params: { value } });
+    });
+
     function setNowPlaying(patch) {
         nowPlaying.set({ ...nowPlaying.peek(), ...patch });
     }
@@ -157,7 +163,7 @@ export function createMusicModule(host) {
         const stateResult = await request(host.services, 'audio.playback.state', {});
         if (!stateResult?.ok) return;
         const { id, playing } = stateResult.value ?? {};
-        if (!playing) {
+        if (!playing && !userPaused) {
             setNowPlaying({ playing: false, blocked: Boolean(id) });
         }
     }
@@ -166,6 +172,13 @@ export function createMusicModule(host) {
         userPaused = true;
         void request(host.services, 'audio.playback.pause', {});
         setNowPlaying({ playing: false, blocked: false });
+    }
+
+    function resume() {
+        const track = tracks.peek().find(item => item.id === nowPlaying.peek().trackId);
+        if (!track) return skip();
+        userPaused = false;
+        return playTrack(track, nowPlaying.peek().similarity);
     }
 
     /** Вручную перебросить на следующий подходящий трек (Skip) — без порога и гистерезиса: пользователь попросил сам. */
@@ -312,9 +325,7 @@ export function createMusicModule(host) {
             Row(
                 Button(computed(() => (state().playing ? '⏸' : '▶')), () => {
                     if (state().playing) { pause(); return; }
-                    const track = tracks.peek().find(item => item.id === state().trackId);
-                    if (track) playTrack(track, state().similarity);
-                    else skip();
+                    resume();
                 }),
                 Button('⏭', skip),
             ),
@@ -408,6 +419,12 @@ export function createMusicModule(host) {
         }
     }
 
+    /** Кнопка дока вызвала показ HUD-окна (generic-канал Раннера — см. requestHud в engine-wiring.js). Отсутствует у Модуля без hud — Раннер честно вернёт false. */
+    function setHudVisible(value) {
+        hudVisible.set(Boolean(value));
+        savePlayer();
+    }
+
     return {
         id: MODULE_ID,
         title: 'Music',
@@ -420,8 +437,10 @@ export function createMusicModule(host) {
         busy,
         volume,
         hudVisible,
+        setHudVisible,
         playTrack,
         pause,
+        resume,
         skip,
         onGenerationCompleted,
         importFiles,

@@ -136,7 +136,7 @@ const DEFINITIONS = [{
             // Аудио-байты — только через Сервис хранилища (indexedDB).
             'audio.put', 'audio.get', 'audio.delete',
             // Звук — только через Сервис воспроизведения (единственный владелец <audio>).
-            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state',
+            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume',
             // Вектор сцены и вектора треков — локальный эмбединг.
             'embedding.compute', 'embedding.similarity',
         ],
@@ -249,10 +249,27 @@ function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, stor
         return true;
     }
 
+    /**
+     * Попросить Модуль показать/спрятать его HUD-окно. GENERIC-канал для
+     * точек входа мимо панели (например, кнопки в лаунчере-доке): вызывающий
+     * знает только id Модуля и НЕ знает, есть ли у того hud-дерево вообще —
+     * вернётся false, и кнопка не сделает вид, что что-то открыла. Никакого
+     * хардкода «открыть именно Music» ни в доке, ни здесь.
+     */
+    function requestHud(id) {
+        const entry = live.get(id);
+        if (!entry) return false;
+        const instance = entry.instance;
+        if (typeof instance?.setHudVisible !== 'function') return false;
+        instance.setHudVisible(true);
+        return true;
+    }
+
     return {
         list: () => DEFINITIONS.map(({ id, title, description }) => ({ id, title, description })),
         enabled: () => [...live.keys()],
         instance: id => live.get(id)?.instance,
+        requestHud,
         enable,
         disable,
         restore,

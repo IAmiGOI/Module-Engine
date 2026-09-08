@@ -36,7 +36,7 @@ export function registerAudioPlaybackService(bus) {
     }
 
     const unregisters = [
-        bus.register('audio.playback.play', ({ id, blob, onEnded, volume } = {}) => {
+        bus.register('audio.playback.play', async ({ id, blob, onEnded, volume } = {}) => {
             if (!blob) return { ok: false };
             const el = ensureElement();
             if (!id || id !== currentId) {
@@ -47,16 +47,30 @@ export function registerAudioPlaybackService(bus) {
             }
             endedListener = typeof onEnded === 'function' ? onEnded : null;
             if (Number.isFinite(volume)) el.volume = Math.min(1, Math.max(0, volume));
-            const playing = el.play();
-            if (playing) playing.catch(() => { /* autoplay-политика: честное состояние отдаёт state */ });
-            return { ok: true };
+            // Промис `play()` ждём ПО-НАСТОЯЩЕМУ: autoplay-политика браузера
+            // отклоняет его без жеста пользователя — и этот факт обязан дойти
+            // до вызывающего (`started: false`), а не теряться в проглоченном
+            // catch: по нему UI честно показывает «blocked», а не мёртвое
+            // «играет».
+            try {
+                await el.play();
+                return { ok: true, started: true };
+            } catch {
+                return { ok: true, started: false };
+            }
         }, { loadMetric: () => 1 }),
         bus.register('audio.playback.pause', () => {
             element?.pause();
             return { ok: true };
         }, { loadMetric: () => 0 }),
+        // Громкость — отдельным контрактом: она меняется ДОЛЖНА дойти и на
+        // уже играющем элементе, а не только при следующем play().
+        bus.register('audio.playback.volume', ({ value } = {}) => {
+            if (Number.isFinite(value)) element.volume = Math.min(1, Math.max(0, value));
+            return { ok: true };
+        }, { loadMetric: () => 0 }),
         bus.register('audio.playback.state', () => ({
-            ok: true, value: { id: currentId, playing: Boolean(element && !element.paused && !element.ended && element.readyState > 2) },
+            ok: true, value: { id: currentId, playing: Boolean(element && !element.paused && !element.ended) },
         }), { loadMetric: () => 0 }),
     ];
 
