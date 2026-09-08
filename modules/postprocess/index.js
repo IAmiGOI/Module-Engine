@@ -4,10 +4,7 @@ import { request } from '../../libraries/shared/request.js';
 import { Button, TextInput, TextArea, Select, Toggle, Slider, Field, Row, EditableList, EmptyState } from '../../libraries/shared/widgets.js';
 import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
 import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCustomPreset } from '../../cores/models/internal-engine.js';
-// Пайплайн, на который Модуль вешает свои этапы, — объявлен Ядром жизненного
-// цикла генерации. Импорт имени, а не строковый литерал: расхождение здесь
-// означало бы этапы на несуществующем пайплайне, и молча.
-import { COMPLETED_PIPELINE } from '../../cores/generation/index.js';
+
 
 /**
  * Модуль «Post-Turn Processor» — порт Alpha `modules/postprocess` на
@@ -19,12 +16,13 @@ import { COMPLETED_PIPELINE } from '../../cores/generation/index.js';
  * **Что и куда переехало относительно Alpha** (каждая строка — на то была
  * причина):
  *
- *  - `MESSAGE_RECEIVED` → **этапы fold-пайплайна `generation.completed`**.
- *    В Beta этот пайплайн так и задокументирован Ядром генерации («Post-
- *    processing chain over a finished run»), а режим `fold` — это ровно
- *    «цепочка переписывания одного значения»: выход этапа становится входом
- *    следующего. Порядок pass'ов — не договорённость, а граф зависимостей
- *    этапов.
+ *  - `MESSAGE_RECEIVED` → **прямая подписка на `generation.completed`**
+ *    (`host.events.subscribe`) — тот же триггер, что у «RP Time» и
+ *    generic-трекера. Раньше авто-запуск шёл через этапы fold-пайплайна
+ *    `generation.completed`; вживую этот путь так и не заработал (в
+ *    изоляции — работал), и «нормальные типы» на пайплайн для момента
+ *    «ответ готов» не опираются. Цепочка begin → pass'ы → apply та же,
+ *    что у кнопки «Process last reply now», — один код на оба пути.
  *  - Правка `context.chat` напрямую → **`chatHistory.replaceText`**
  *    (Ядро истории чата → Сервис `stChat.setText`). Alpha сама звала
  *    `updateMessageBlock`/`saveChatConditional`; здесь это знание живёт
@@ -46,13 +44,13 @@ import { COMPLETED_PIPELINE } from '../../cores/generation/index.js';
  *    портированы как чистые функции (экспортируются для тестов) без
  *    изменений в поведении.
  *
- * **Переносимое значение fold-цепочки** — `{ skip, mesid, original, text,
- * trace }`. Первый этап (`postprocess:begin`) его собирает (или честно
- * ставит `skip: true` — нечего обрабатывать), каждый pass-этап дописывает
- * свой шаг в `trace` и, если удался, подменяет `text`, последний
- * (`postprocess:apply`) применяет результат. Провал любого этапа помечен
- * `onExhausted: 'flag'`, а не abort: один плохой pass не отменяет ни
- * соседних, ни уже сделанного — тот же «skipped, не упал», что и у Alpha.
+ * **Переносимое значение цепочки** — `{ skip, mesid, original, text,
+ * trace }`. Шаг begin его собирает (или честно ставит `skip: true` —
+ * нечего обрабатывать), каждый pass дописывает свой шаг в `trace` и,
+ * если удался, подменяет `text`, шаг apply применяет результат. Провал
+ * pass'а превращается в запись «skipped» в trace, а не в краш: один
+ * плохой pass не отменяет ни соседних, ни уже сделанного — тот же
+ * «skipped, не упал», что и у Alpha.
  */
 
 export const MODULE_ID = 'module.postprocess';
@@ -73,15 +71,6 @@ const MESSAGE_CHARS = 900;
 const MAX_DIFF_TOKENS = 4000;
 /** Сколько последних сообщений запросить, когда pass просил контекст чата. */
 const CONTEXT_LIMIT = 50;
-
-// --- Идентификаторы этапов и контрактов -------------------------------------
-
-const BEGIN_STAGE = 'postprocess:begin';
-const PASS_STAGE_PREFIX = 'postprocess:pass:';
-const APPLY_STAGE = 'postprocess:apply';
-const BEGIN_CONTRACT = 'postprocess.begin';
-const PASS_CONTRACT = 'postprocess.pass';
-const APPLY_CONTRACT = 'postprocess.apply';
 
 // --- Чистые функции (экспортируются для тестов) ------------------------------
 
@@ -254,7 +243,6 @@ export function createPostprocessModule(host) {
     // Какой свайп был, генерации ещё не было — цель узнаём на beforeSend
     // (тот же приём, что у «RP Time»).
     let pendingSwipe = false;
-    const registeredStages = new Set();
 
     async function call(contract, params) {
         return request(host.cores, contract, { params });
@@ -361,51 +349,32 @@ export function createPostprocessModule(host) {
         }
     }
 
-    // --- Этапы пайплайна --------------------------------------------------------
-
     /**
-     * Синхронизация состава этапов с настройками. Порядок в fold-режиме
-     * задаётся ГРАФОМ (`needs`), а не порядком регистрации: каждый pass
-     * зависит от `begin`, `apply` — от всех pass'ов. Провал этапа — `flag`:
-     * один плохой pass не отменяет соседних (см. док-комментарий модуля).
+     * Авто-запуск по завершению генерации — прямая подписка на событие,
+     * ровно как у «RP Time» (`advance()`) и generic-трекера. Раньше это был
+     * набор этапов на fold-пайплайне `generation.completed`: в изоляции
+     * цепочка работала, но вживую ни разу не сработала, а «нормальные типы»
+     * событие «ответ готов» читают напрямую. Цепочка та же, что у кнопки
+     * «Process last reply now»; повторный вызов безопасен — begin видит
+     * аннотацию «уже обработано» и уходит в skip.
      */
-    async function syncStages() {
-        const passIds = sanitizePasses(settings.passes)
-            .filter(pass => pass.enabled !== false && pass.prompt)
-            .map(pass => pass.id);
-        const wanted = new Map([
-            [BEGIN_STAGE, { id: BEGIN_STAGE, contract: BEGIN_CONTRACT, onExhausted: 'flag' }],
-            ...passIds.map(id => [PASS_STAGE_PREFIX + id, {
-                id: PASS_STAGE_PREFIX + id,
-                contract: PASS_CONTRACT,
-                needs: [BEGIN_STAGE],
-                params: { passId: id, input: { $from: '$value' } },
-                onExhausted: 'flag',
-            }]),
-            [APPLY_STAGE, {
-                id: APPLY_STAGE,
-                contract: APPLY_CONTRACT,
-                needs: passIds.map(id => PASS_STAGE_PREFIX + id),
-                params: { input: { $from: '$value' } },
-                onExhausted: 'flag',
-            }],
-        ]);
-        // Пересборка ВСЕГДА с нуля, а не «добавь недостающее»: состав этапов —
-        // функция текущих настроек, и старая регистрация может устареть. Так
-        // было: модуль грузится без pass'ов → `apply` встал с `needs: []` →
-        // первый Save добавил pass'ы, но `continue` не дал перерегистрировать
-        // `apply` с новым графом — и на `generation.completed` цепочка
-        // исполнялась в порядке begin → apply → pass, то есть замена текста
-        // происходила ДО переписывания и честно находила «нечего менять».
-        // Кнопка при этом работала: она этапы пайплайна не использует.
-        for (const stageId of [...registeredStages]) {
-            await call('pipeline.stages.remove', { pipelineId: COMPLETED_PIPELINE, stageId });
-            registeredStages.delete(stageId);
-        }
-        for (const [stageId, stage] of wanted) {
-            if (registeredStages.has(stageId)) continue;
-            const result = await call('pipeline.stages.add', { pipelineId: COMPLETED_PIPELINE, stage });
-            if (result.ok) registeredStages.add(stageId);
+    async function runOnCompleted() {
+        if (busy.peek()) return;
+        if (settings.autoRun === false) return;
+        if (!sanitizePasses(settings.passes).some(pass => pass.enabled !== false && pass.prompt)) return;
+        busy.set(true);
+        try {
+            const start = await beginRun({ ignoreAutoRun: true });
+            if (start.skip) return;
+            let value = start;
+            for (const pass of sanitizePasses(settings.passes).filter(item => item.enabled !== false && item.prompt)) {
+                value = await runOnePass(value, pass);
+            }
+            await applyResult(value);
+        } catch (error) {
+            await notify('error', error?.message ?? String(error));
+        } finally {
+            busy.set(false);
         }
     }
 
@@ -550,7 +519,6 @@ export function createPostprocessModule(host) {
         });
         if (!result.ok) { await notify('error', result.error?.message ?? 'Could not save settings'); return false; }
         passes.set(sanitizePasses(settings.passes));
-        await syncStages();
         await notify('ok', 'Post-Turn Processor settings saved');
         return true;
     }
@@ -664,6 +632,8 @@ export function createPostprocessModule(host) {
     // --- Жизнь -------------------------------------------------------------------
 
     const subscriptions = [
+        // Авто-запуск — как у «нормальных типов»: событие, а не этапы пайплайна.
+        host.events.subscribe('generation.completed', () => { runOnCompleted(); }),
         // Реролл через «Regenerate»: ST укорачивает чат и шлёт MESSAGE_DELETED
         // (см. разбор в «RP Time») — бейдж старого варианта обязан уйти, иначе
         // «уже обработано» заблокирует новый ответ под тем же mesid.
@@ -699,10 +669,6 @@ export function createPostprocessModule(host) {
         await refreshCustomPresets();
         await loadBadges();
 
-        host.own.register(BEGIN_CONTRACT, () => beginRun());
-        host.own.register(PASS_CONTRACT, params => runOnePass(params?.input, sanitizePasses(settings.passes).find(pass => pass.id === params?.passId)));
-        host.own.register(APPLY_CONTRACT, params => applyResult(params?.input));
-        await syncStages();
         await call('ui.messageFooter.claim', { slot: 'center', ownerId: MODULE_ID, node: footerWidget });
     }
 
@@ -730,10 +696,6 @@ export function createPostprocessModule(host) {
         busy,
         stop: () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
-            for (const stageId of [...registeredStages]) {
-                call('pipeline.stages.remove', { pipelineId: COMPLETED_PIPELINE, stageId });
-            }
-            registeredStages.clear();
             passUi.clear();
             call('ui.messageFooter.release', { ownerId: MODULE_ID });
         },
