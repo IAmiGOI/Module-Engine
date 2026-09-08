@@ -659,11 +659,18 @@
     gap: 7px;
     width: 46px;
     padding: 9px 0;
+    /* ЗАПАСНЫЕ значения перед color-mix: старый Android WebView (тот же, что
+       не понял `inset`) не знает color-mix (Chrome <111) и выбрасывает ОБА
+       объявления разом, если fallback не объявить отдельно — пилюля
+       становилась полностью прозрачной («вообще не видно»). Каскад: старый
+       браузер берёт первую строку, современный — вторую. */
+    border: 2px solid rgba(141, 168, 255, .45);
     border: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 45%, transparent);
     /* Больше половины ширины — гарантированно даёт полностью скруглённые
        (полукруглые) верх и низ независимо от того, сколько мест реально
        занято, без пересчёта под высоту. */
     border-radius: 999px;
+    background: rgba(28, 30, 38, .82);
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1e26) 72%, transparent);
     backdrop-filter: blur(16px) saturate(160%);
     -webkit-backdrop-filter: blur(16px) saturate(160%);
@@ -690,6 +697,8 @@
     border-radius: 999px;
     background: linear-gradient(180deg, #5b8dff, #9db4ff, #3f6fe0, #8da8ff, #5b8dff);
     background-size: 100% 300%;
+    /* Fallback-тень для WebView без color-mix — см. комментарий у .stme-launcher-dock. */
+    box-shadow: 0 0 10px rgba(91, 141, 255, .7);
     box-shadow: 0 0 10px color-mix(in srgb, #5b8dff 70%, transparent);
     animation: stme-dock-shimmer 3s ease-in-out infinite;
     opacity: 1;
@@ -749,7 +758,11 @@
     cursor: pointer;
     transition: background .12s ease, color .12s ease;
 }
-.stme-launcher-dock-btn:hover { background: color-mix(in srgb, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)) 22%, transparent); color: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); }
+.stme-launcher-dock-btn:hover {
+    background: rgba(141, 168, 255, .22);
+    background: color-mix(in srgb, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)) 22%, transparent);
+    color: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff));
+}
 /* Пустые места — задел на будущее (другие быстрые действия движка), не
    декорация: тот же круглый слот, что у настоящей кнопки, просто притушенный
    и некликабельный, чтобы форма дока не менялась, когда там появится вторая
