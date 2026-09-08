@@ -36,7 +36,6 @@ import { createFinalUiPc } from '../cores/ui/final-ui-pc.js';
 import { createFinalUiAndroid, isMobileSurface } from '../cores/ui/final-ui-android.js';
 import { createUiModulesCore } from '../cores/ui/ui-modules.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
-import { createActivityLightCore } from '../cores/ui/activity-light.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
@@ -412,15 +411,6 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         { mount: node => uiEngine.mount('notifications', node) },
     );
 
-    // Светофор активности: слушает события начала/конца работы ВСЕХ Ядер
-    // (генерация, трекинг, саммари, самообновление) и уведомлений, сводит их
-    // в одно состояние — а полоску пилюли-дока красит по нему index.js
-    // (пилюля живёт мимо движка, поэтому ей отдаётся сам сигнал).
-    const activityLight = createActivityLightCore(
-        engine.registerCaller('core.ui.activityLight', 'cores', { tier: 'official' }),
-    );
-    activityLight.load();
-
     // Полоса под последним сообщением: три независимых виджета, во всю ширину
     // чата. Модель её не видит вовсе — она живёт только в DOM.
     const messageFooterHost = engine.registerCaller('core.ui.messageFooter', 'cores', { tier: 'official' });
@@ -540,5 +530,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
 }
