@@ -5,6 +5,7 @@ import { registerHttpService } from '../services/http.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerStChatService } from '../services/st-chat.js';
 import { registerEmbeddingService } from '../services/embedding.js';
+import { registerAudioStoreService } from '../services/audio-store.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
 import { registerFileService } from '../services/file.js';
 import { registerStMacrosService } from '../services/st-macros.js';
@@ -44,6 +45,7 @@ import { createTrackerModule, MODULE_ID as TRACKER_MODULE_ID } from '../modules/
 import { createTimeModule, MODULE_ID as TIME_MODULE_ID } from '../modules/time/index.js';
 import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../modules/notebook/index.js';
 import { createPostprocessModule, MODULE_ID as POSTPROCESS_MODULE_ID } from '../modules/postprocess/index.js';
+import { createMusicModule, MODULE_ID as MUSIC_MODULE_ID } from '../modules/music/index.js';
 
 /**
  * Реестр Модулей — временная замена настоящему Раннеру (ARCHITECTURE.md,
@@ -120,6 +122,23 @@ const DEFINITIONS = [{
         ],
     },
     create: host => createPostprocessModule(host),
+}, {
+    id: MUSIC_MODULE_ID,
+    title: 'Music',
+    description: 'Plays background music that matches the scene — chosen locally by embedding meaning, with no model calls.',
+    rights: {
+        tier: 'community',
+        allowedContracts: [
+            'storage.settings.get', 'storage.settings.set', 'ui.notify',
+            // Текст сцены — через общее Ядро истории чата, не напрямую в ST.
+            'chatHistory.messages',
+            // Аудио-байты — только через Сервис хранилища (indexedDB).
+            'audio.put', 'audio.get', 'audio.delete',
+            // Вектор сцены и вектора треков — локальный эмбединг.
+            'embedding.compute', 'embedding.similarity',
+        ],
+    },
+    create: host => createMusicModule(host),
 }];
 
 /** Где реестр помнит, что было включено. Неймспейс Раннера, а не Модуля: это состояние ЗАПУСКА, а не настройка кого-то из них. */
@@ -283,6 +302,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // весов модели идёт мимо нашего Гейта сети, это делает сторонняя
     // библиотека изнутри себя).
     registerEmbeddingService(engine.buses.services);
+    registerAudioStoreService(engine.buses.services);
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
     registerStMacrosService(engine.buses.services, { getContext });
