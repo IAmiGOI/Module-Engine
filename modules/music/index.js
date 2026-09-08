@@ -325,21 +325,35 @@ export function createMusicModule(host) {
     function trackRow(track) {
         const draft = signal(track.description);
         const input = TextArea(draft, { rows: 2, placeholder: 'Describe the mood, e.g. "tense urban fight at night"' });
-        input.addEventListener('change', () => { updateDescription(track.id, draft.peek()); });
+        // TextArea пишeт в сигнал сама (см. widgets.js); правка визитки
+        // коммитится по `change` (он всплывает от textarea до этой обёртки)
+        // через props `on:change` — у vnode нет addEventListener, слушатели
+        // ставит Сервис DOM при рендере.
+        const committed = h('div', { 'on:change': () => { if (draft.peek() !== track.description) updateDescription(track.id, draft.peek()); } }, input);
         return h('div', { class: 'stme-music-track' },
             Row(
                 h('strong', {}, track.name),
                 h('small', { class: 'stme-music-plays' }, `${track.playCount ?? 0} plays`),
                 Button('×', () => { removeTrack(track.id); }, { variant: 'danger' }),
             ),
-            Field('Mood description', input, { hint: track.vector ? 'Vector computed.' : 'Vector will be computed when embedding is available.' }),
+            Field('Mood description', committed, { hint: track.vector ? 'Vector computed.' : 'Vector will be computed when embedding is available.' }),
         );
     }
 
-    let fileInput = null;
     function tree() {
-        fileInput = h('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true });
-        fileInput.addEventListener('change', () => { importFiles(fileInput.files); fileInput.value = ''; });
+        // Внимание: `h()` даёт АБСТРАКТНОЕ дерево, у узла нет ни addEventListener,
+        // ни click() (в отличие от Alpha, где виджеты — настоящие DOM-узлы).
+        // Слушатели ставит Сервис DOM по props `on:*` при рендере — значит, и
+        // file-input обязан быть видимым элементом со своим `on:change`, а не
+        // скрытым, кликаемым из кнопки: кнопку «нажать» за vnode нечем.
+        const fileInput = h('input', {
+            type: 'file', accept: 'audio/*', multiple: true, class: 'stme-music-file',
+            'on:change': event => {
+                const input = event.target;
+                importFiles([...(input.files ?? [])].map(file => ({ name: file.name, blob: file })));
+                input.value = '';
+            },
+        });
         return h('div', { class: 'stme-module-body' },
             Row(
                 h('small', { class: 'stme-module-hint' }, 'Picks background music that matches the scene — locally, by meaning, with no model calls. Describe each track in words; the closer its description to what is happening in the chat, the more likely it plays.'),
@@ -351,7 +365,7 @@ export function createMusicModule(host) {
                 Slider('Min similarity', minSimilarity, { min: 0, max: 1, step: 0.05 }),
                 Slider('Switch margin', switchMargin, { min: 0, max: 0.5, step: 0.01 }),
             ),
-            Row(Button('Import audio files…', () => fileInput?.click()), fileInput),
+            Field('Import audio files', fileInput, { hint: 'Stored locally in this browser — metadata is portable, bytes are not.' }),
             h('div', { class: 'stme-music-list' },
                 computed(() => (tracks().length ? tracks().map(trackRow) : [EmptyState('No tracks yet — import audio files above.')])),
             ),
