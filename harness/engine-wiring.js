@@ -41,6 +41,7 @@ import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
 import { createTrackerModule, MODULE_ID as TRACKER_MODULE_ID } from '../modules/tracker/index.js';
 import { createTimeModule, MODULE_ID as TIME_MODULE_ID } from '../modules/time/index.js';
 import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../modules/notebook/index.js';
+import { createPostprocessModule, MODULE_ID as POSTPROCESS_MODULE_ID } from '../modules/postprocess/index.js';
 
 /**
  * Реестр Модулей — временная замена настоящему Раннеру (ARCHITECTURE.md,
@@ -103,6 +104,23 @@ const DEFINITIONS = [{
         ],
     },
     create: host => createNotebookModule(host),
+}, {
+    id: POSTPROCESS_MODULE_ID,
+    title: 'Post-Turn Processor',
+    description: 'Rewrites each fresh reply through a chain of independent model passes and replaces it with the final result.',
+    rights: {
+        tier: 'community',
+        allowedContracts: [
+            'chatHistory.messages', 'chatHistory.replaceText', 'chatHistory.annotate', 'chatHistory.annotations',
+            'model.generate',
+            'model.workers.get', 'model.presets.get', 'model.presets.set', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
+            // Свои этапы на `generation.completed` — то же право на состав
+            // пайплайнов, что у остальных, и бейдж в слоте подвала.
+            'pipeline.stages.add', 'pipeline.stages.remove',
+            'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.liveMesid',
+        ],
+    },
+    create: host => createPostprocessModule(host),
 }];
 
 /** Где реестр помнит, что было включено. Неймспейс Раннера, а не Модуля: это состояние ЗАПУСКА, а не настройка кого-то из них. */

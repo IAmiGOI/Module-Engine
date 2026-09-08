@@ -49,6 +49,12 @@ function requireAnnotationLocation(params) {
  * так что скрытие безопасно уживается с любыми чужими аннотациями на том же
  * сообщении.
  *
+ * **`chatHistory.replaceText`** — тонкий проброс к `stChat.setText`: полная
+ * замена текста НЕ-пользовательского сообщения с перерисовкой блока и
+ * сохранением чата. Именно здесь, а не у Модуля, потому что знание «как ST
+ * хранит и перерисовывает `mes`» — Сервисное; для Модулей это единственный
+ * легальный путь применить переписанный текст (Post-Turn Processor).
+ *
  * **Своя очередь на запись, отдельная от очереди `storage.chatMemory`.**
  * `annotate()` сам по себе read-modify-write — читает карту аннотаций целиком,
  * мутирует один `mesid`, пишет карту назад ОДНИМ `storage.chatMemory.set`.
@@ -72,6 +78,23 @@ export function createChatHistoryCore(host) {
         const mesid = params?.mesid === undefined || params?.mesid === null ? '' : String(params.mesid);
         if (!mesid) throw new Error('chatHistory.hide: "mesid" is required.');
         const result = await request(host.services, 'stChat.setHidden', { params: { mesid, hidden: Boolean(params?.hidden) } });
+        if (!result.ok) throw new Error(result.error.message);
+        return true;
+    }
+
+    /**
+     * Полная замена текста сообщения — то же «generic-операция НАД
+     * сообщением», что и `hide` выше, только правка, а не скрытие. Существует
+     * здесь по той же причине: Модули не ходят в Сервисы напрямую, а Post-Turn
+     * Processor (и любой будущий переписыватель) без этого контракта не смог
+     * бы применить свой результат вообще. Правка реплики ПОЛЬЗОВАТЕЛЯ
+     * запрещена на стороне Сервиса и здесь остаётся лишь честной ошибкой
+     * наверх.
+     */
+    async function replaceMessageText(params) {
+        const mesid = params?.mesid === undefined || params?.mesid === null ? '' : String(params.mesid);
+        if (!mesid) throw new Error('chatHistory.replaceText: "mesid" is required.');
+        const result = await request(host.services, 'stChat.setText', { params: { mesid, text: params?.text } });
         if (!result.ok) throw new Error(result.error.message);
         return true;
     }
@@ -127,6 +150,7 @@ export function createChatHistoryCore(host) {
     const unregisters = [
         host.own.register('chatHistory.messages', params => readMessages(params)),
         host.own.register('chatHistory.hide', params => hideMessage(params)),
+        host.own.register('chatHistory.replaceText', params => enqueue(() => replaceMessageText(params))),
         host.own.register('chatHistory.annotate', params => enqueue(() => annotate(params))),
         host.own.register('chatHistory.annotations', params => annotations(params)),
         host.own.register('chatHistory.clearAnnotations', params => enqueue(() => clearAnnotations(params))),
