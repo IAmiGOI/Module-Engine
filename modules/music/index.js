@@ -82,8 +82,6 @@ export function createMusicModule(host) {
     const hudPosition = signal({});
     const hudSize = signal({});
 
-    let audio = null;        // HTMLAudioElement — подключается хостом через сервис dom-точки (см. host.provideAudio в тестах)
-    let currentUrl = null;
     let currentTrackId = null;
     let currentSimilarity = null;
     let userPaused = false;
@@ -113,14 +111,22 @@ export function createMusicModule(host) {
         });
     }
 
-    /** Звук отдаётся хостом-окружением (реальный ST — через `host.provideAudio()` при mount), тесты — фейком. Так Модуль не трогает ни DOM, ни `new Audio()` сам. */
-    function ensureAudio() {
-        if (audio || !host.provideAudio) return;
-        audio = host.provideAudio();
-        audio.addEventListener?.('ended', () => {
-            if (!userPaused) replayCurrent();
+    /**
+     * Звук — только через Сервис `audio.playback.*`
+     * ([audio-playback.js](../../services/audio-playback.js)): Модуль не
+     * трогает ни DOM, ни `new Audio()`, ни `URL.createObjectURL`. Здесь же
+     * оптимистичное состояние: `play()` Сервиса не ждёт (autoplay-политика
+     * может молча отклонить промис) — настоящий факт «играет/нет» Модуль
+     * уточняет у `audio.playback.state` (см. refreshPlayingState).
+     */
+    async function servicePlay(blob, track, similarity) {
+        const result = await request(host.services, 'audio.playback.play', {
+            params: { id: track.id, blob, volume: volume.peek(), onEnded: () => { if (!userPaused) replayCurrent(); } },
         });
-        audio.volume = volume.peek();
+        if (!result?.ok) return false;
+        currentTrackId = track.id;
+        currentSimilarity = similarity;
+        return true;
     }
 
     function setNowPlaying(patch) {
@@ -128,36 +134,37 @@ export function createMusicModule(host) {
     }
 
     async function playTrack(track, similarity = null) {
-        ensureAudio();
-        if (!audio) return;
-        if (currentTrackId !== track.id) {
-            const blobResult = await request(host.services, 'audio.get', { params: { id: track.id } });
-            if (!blobResult.ok || !blobResult.value) {
-                await notify('error', `Audio for "${track.name}" is missing from this browser's storage — re-import it.`);
-                return;
-            }
-            if (currentUrl) URL.revokeObjectURL(currentUrl);
-            currentUrl = URL.createObjectURL(blobResult.value);
-            audio.src = currentUrl;
-            currentTrackId = track.id;
-            currentSimilarity = similarity;
+        const blobResult = await request(host.services, 'audio.get', { params: { id: track.id } });
+        if (!blobResult.ok || !blobResult.value) {
+            await notify('error', `Audio for "${track.name}" is missing from this browser's storage — re-import it.`);
+            return;
+        }
+        const started = await servicePlay(blobResult.value, track, similarity);
+        if (!started) return;
+        if (nowPlaying.peek().trackId !== track.id) {
+            // playCount растёт один раз на трек (не на каждый replay) — ровно тот контракт, что ловят тесты.
             const next = tracks.peek().map(item => (item.id === track.id ? { ...item, playCount: (item.playCount ?? 0) + 1 } : item));
             tracks.set(next);
             await saveTracks();
         }
         userPaused = false;
-        try {
-            await audio.play();
-            setNowPlaying({ trackId: track.id, name: track.name, playing: true, blocked: false, similarity });
-        } catch {
-            // autoplay-политика браузера: нужен жест пользователя — кнопка ▶
-            setNowPlaying({ trackId: track.id, name: track.name, playing: false, blocked: true, similarity });
+        setNowPlaying({ trackId: track.id, name: track.name, playing: true, blocked: false, similarity });
+        await refreshPlayingState();
+    }
+
+    /** Уточнить у Сервиса, реально ли звучит: autoplay мог отклонить play(). */
+    async function refreshPlayingState() {
+        const stateResult = await request(host.services, 'audio.playback.state', {});
+        if (!stateResult?.ok) return;
+        const { id, playing } = stateResult.value ?? {};
+        if (!playing) {
+            setNowPlaying({ playing: false, blocked: Boolean(id) });
         }
     }
 
     function pause() {
         userPaused = true;
-        audio?.pause();
+        void request(host.services, 'audio.playback.pause', {});
         setNowPlaying({ playing: false, blocked: false });
     }
 
@@ -399,7 +406,6 @@ export function createMusicModule(host) {
             hudPosition.set(player.value.player?.position ?? {});
             hudSize.set(player.value.player?.size ?? {});
         }
-        audio?.setAttribute?.('volume-hint', String(volume.peek()));
     }
 
     return {
@@ -414,8 +420,6 @@ export function createMusicModule(host) {
         busy,
         volume,
         hudVisible,
-        // Тестам и хосту: подсунуть настоящий/фейковый audio-элемент и играть вручную.
-        attachAudio: element => { audio = element; audio.volume = volume.peek(); },
         playTrack,
         pause,
         skip,
@@ -426,8 +430,7 @@ export function createMusicModule(host) {
         saveSettings,
         stop: () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
-            audio?.pause?.();
-            if (currentUrl) URL.revokeObjectURL(currentUrl);
+            void request(host.services, 'audio.playback.pause', {});
         },
     };
 }
