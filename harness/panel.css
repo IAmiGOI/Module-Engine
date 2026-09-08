@@ -768,6 +768,17 @@
     background: linear-gradient(180deg, var(--stme-light), color-mix(in srgb, var(--stme-light) 55%, #ffffff), color-mix(in srgb, var(--stme-light) 70%, #000000), var(--stme-light));
     box-shadow: 0 0 10px var(--stme-light);
     opacity: 1;
+    /* ПЯТАЯ попытка (09.09) — реальная находка через paint-flashing:
+       границы compositor-СЛОЯ (не paint-области) покрывали ВСЮ страницу —
+       ::before не получал свой отдельный слой, каждый тик анимации
+       пересобирал слой размером во весь документ, не 4px полоску. Прошлая
+       попытка изолировать слоями (`will-change`/`contain`) стояла на
+       ::after (статичный блюр-сосед), а не на САМОМ анимируемом элементе —
+       мимо цели. `will-change: opacity` + `transform: translateZ(0)` —
+       классический форс отдельного GPU-слоя ИМЕННО для этого элемента. */
+    will-change: opacity;
+    transform: translateZ(0);
+    animation: stme-dock-shimmer 3s ease-in-out infinite;
     transition: background .35s ease, box-shadow .35s ease, opacity .35s ease;
 }
 /* idle — синий (дефолт выше); дальше — состояния Ядра. Переменная ставится
@@ -837,11 +848,12 @@
 .stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock::before {
     content: none;
 }
-/* ::after у дока статичен, ::before — статичен, КРОМЕ notify (см. doc-comment
-   там же) — тому нужно 3 конечных мигания, поэтому reduced-motion для него
-   оставлен явно. */
 @media (prefers-reduced-motion: reduce) {
-    .stme-light-notify .stme-launcher-dock::before { animation: none; }
+    .stme-launcher-dock::before { animation: none; opacity: 1; }
+}
+@keyframes stme-dock-shimmer {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .55; }
 }
 @keyframes stme-dock-blink {
     0%, 100% { opacity: 1; }
