@@ -1,6 +1,5 @@
 import { signal } from './reactive.js';
 import { FloatingStack, Toast } from '../../libraries/shared/widgets.js';
-
 /**
  * Ядро уведомлений — одна общая плавающая полоса сообщений в углу ЭКРАНА.
  *
@@ -29,6 +28,10 @@ export function createNotificationsCore(host, { mount, timeoutMs = DEFAULT_TIMEO
     const items = signal([]);
     const timers = new Map(); // id -> timer
     let counter = 0;
+    // Объявление факта на Шину: Светофор активности красит по нему полоску
+    // пилюли в мигающий белый (см. cores/ui/activity-light.js). Пустой payload:
+    // слушателю важно САМО наличие уведомления, а не его текст.
+    const announce = (event, payload) => host.events?.emit?.(event, payload);
 
     function dismiss(id) {
         const timer = timers.get(id);
@@ -61,6 +64,7 @@ export function createNotificationsCore(host, { mount, timeoutMs = DEFAULT_TIMEO
         for (const dropped of next.slice(0, Math.max(0, next.length - MAX_VISIBLE))) dismiss(dropped.id);
         items.set(next.slice(-MAX_VISIBLE));
         timers.set(id, schedule(() => dismiss(id), ownTimeout ?? timeoutMs));
+        announce('notifications.shown', { tone, id });
         return id;
     }
 
