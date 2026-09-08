@@ -7,9 +7,7 @@
    so it never creates one). Same shape as Alpha's own .stme-fullscreen. */
 /* Жидкое стекло — a real frosted-glass overlay, not a near-opaque wash: a
    light tint over `backdrop-filter: blur()` so the actual ST page behind it
-   (chat, sidebar) stays visible but softened, the way a real glass pane
-   would look. The earlier version used a 95%-opaque wash with no blur at
-   all, which hid the page rather than glazing it. */
+   (chat, sidebar) stays visible but softened, the way a real glass pane would look. The earlier version used a 95%-opaque wash with no blur at all, which hid the page rather than glazing it. */
 .stmeBeta-fullscreen {
     position: fixed;
     /* НЕ `inset: 0`: Android-браузеры/WebView младше Chrome 87 сокращение не
@@ -65,3 +63,32 @@
     box-sizing: border-box;
 }
 .stmeBeta-fullscreen-body > * { max-width: 1100px; margin: 0 auto; }
+
+/* GPU fix for the activity-light shimmer.
+   `panel.css` used to animate `background-position` on the gradient of
+   `.stme-launcher-dock::before`. That is a paint animation: the gradient has
+   to be repainted as it moves. The white notify state is cheap because it
+   animates only opacity. Keep the exact same 0→100% gradient travel, but make
+   the gradient a static 300%-tall layer and move that layer with transform,
+   which the compositor can handle without repainting the gradient every frame. */
+.stme-launcher-dock::before {
+    top: 0;
+    bottom: auto;
+    height: 300%;
+    background-size: 100% 100%;
+    background-position: 0 0;
+    will-change: transform;
+    animation: stme-dock-shimmer-transform 3s ease-in-out infinite;
+}
+
+@keyframes stme-dock-shimmer-transform {
+    0%, 100% { transform: translate3d(0, 0, 0); }
+    50%      { transform: translate3d(0, -66.6667%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .stme-launcher-dock::before {
+        animation: none;
+        transform: none;
+    }
+}
