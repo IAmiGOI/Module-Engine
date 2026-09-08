@@ -65,4 +65,3 @@
     box-sizing: border-box;
 }
 .stmeBeta-fullscreen-body > * { max-width: 1100px; margin: 0 auto; }
-@import url('./stme-activity-light-gpu-fix.css');
