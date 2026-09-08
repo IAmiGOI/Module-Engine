@@ -221,13 +221,27 @@ test('FloatingPanel() offers both collapse and close — a window you cannot put
 test('FloatingPanel() writes NO width/height when none is set — the browser owns the size, and a re-render must not undo a resize', () => {
     const node = FloatingPanel('Tracked state', { position: signal({ left: 20, top: 30 }), size: signal({}) }, 'body');
 
-    assert.deepEqual(node.props.style(), { left: '20px', top: '30px' });
+    assert.deepEqual(node.props.style(), { left: '20px', top: '30px', resize: 'none' });
 });
 
 test('FloatingPanel() applies a stored size when there is one', () => {
     const node = FloatingPanel('T', { position: signal({}), size: signal({ width: 300, height: 200 }) }, 'body');
 
-    assert.deepEqual(node.props.style(), { width: '300px', height: '200px' });
+    assert.deepEqual(node.props.style(), { width: '300px', height: '200px', resize: 'none' });
+});
+
+test('FloatingPanel() without onResize is immutable — inline resize:none kills the CSS grip and no size is ever persisted', () => {
+    const node = FloatingPanel('Music', { position: signal({}), size: signal({}) }, 'body');
+
+    assert.equal(node.props.style().resize, 'none');
+    assert.equal(node.props['on:pointerup'], undefined);
+});
+
+test('FloatingPanel() with onResize but resizable:false is ALSO immutable — the caller decides, not the presence of the callback', () => {
+    const node = FloatingPanel('Music', { onResize: () => {}, resizable: false }, 'body');
+
+    assert.equal(node.props.style().resize, 'none');
+    assert.equal(node.props['on:pointerup'], undefined);
 });
 
 test('StatBlock() shows NOTHING and marks itself pending until a value arrives — no placeholder pretending to be data', () => {
