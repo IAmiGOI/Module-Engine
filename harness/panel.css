@@ -684,15 +684,18 @@
     right: 16px;
 }
 /* Полоска на краю в закрытом состоянии — та же часть пилюли, что торчит из-за
-   края экрана, просто с собственным мерцающим градиентом поверх стекла.
-   Растворяется при раскрытии, а не едет вместе с пилюлей и не пропадает
-   резко — она про СОСТОЯНИЕ «свёрнуто», а не постоянное украшение.
+   края экрана, цвет = состояние Светофора активности (cores/ui/activity-light.js):
+   Ядро кладёт класс stme-light-<state> на ЗОНУ, здесь цветом становится
+   CSS-переменная --stme-light. Мигание (blink) — только у notify.
 
-   И ещё она — «лампочка» Светофора активности (cores/ui/activity-light.js):
-   Ядро кладёт класс stme-light-<state> на ЗОНУ, здесь цветом градиента
-   становится CSS-переменная --stme-light. Переливка (shift фона) остаётся
-   для ВСЕХ состояний; мигание (blink) — только у notify. Синий = idle —
-   тот самый прежний «шмермер» постоянного индикатора. */
+   ПЕРЕЛИВКА И ЕЁ ЦЕНА (поймано вживую, 2026-09-09): переливка обязана остаться
+   визуально, но НЕ через анимацию background-position по градиенту — она
+   перекрашивала полоску каждый кадр поверх backdrop-filter: blur(16px),
+   композитор пересчитывал блюр пилюли 60 раз в секунду, GPU висел на ~80%,
+   а сворачивание браузера (rAF стоит) снимало нагрузку. Теперь бегущий блик —
+   отдельный слой ::after, анимированный ЧИСТЫМ transform (композитная анимация:
+   текстура блика просто едет по экрану, перерисовки и пересчёта блюра нет —
+   стоимость ≈ 0). Сам градиент полоски статичен. */
 .stme-launcher-dock::before {
     content: '';
     position: absolute;
@@ -701,34 +704,65 @@
     bottom: 10%;
     width: 4px;
     border-radius: 999px;
-    /* Fallback + цвет состояния: --stme-light задаётся ниже по классам зон. */
+    /* Статичный градиент глубины; ЦВЕТ по состоянию Светофора остаётся. */
     --stme-light: #5b8dff;
     background: linear-gradient(180deg, var(--stme-light), color-mix(in srgb, var(--stme-light) 55%, #ffffff), color-mix(in srgb, var(--stme-light) 70%, #000000), var(--stme-light));
     background-size: 100% 300%;
+    background-position: 0 50%;
     box-shadow: 0 0 10px rgba(91, 141, 255, .7);
     box-shadow: 0 0 10px var(--stme-light);
-    animation: stme-dock-shimmer 3s ease-in-out infinite;
     opacity: 1;
     transition: opacity .35s ease, background .35s ease;
 }
-/* idle — синий (дефолт выше); дальше — состояния Ядра. */
-.stme-light-working .stme-launcher-dock::before { --stme-light: #e8a13c; box-shadow: 0 0 10px rgba(232, 161, 60, .75); }
-.stme-light-success .stme-launcher-dock::before { --stme-light: #4fae7f; box-shadow: 0 0 10px rgba(79, 174, 127, .75); }
-.stme-light-warning .stme-launcher-dock::before { --stme-light: #d9c545; box-shadow: 0 0 10px rgba(217, 197, 69, .75); }
-.stme-light-error   .stme-launcher-dock::before { --stme-light: #e5453f; box-shadow: 0 0 12px rgba(229, 69, 63, .85); }
-/* Уведомление — единственное МИГАНИЕ: белый, резко, без переливки. */
+/* Бегущий блик переливки — СОСЕДНИЙ слой поверх полоски, не её фон.
+   Только transform => анимируется композитором, paint не вызывается,
+   backdrop-blur пилюли не пересчитывается (вся причина 80% GPU была в нём).
+   Высота блика = 20% пилюли, путь = 300% собственной высоты (60% пилюли):
+   от верха полоски (10%) до её низа (90%). Отдельный слой — will-change. */
+.stme-launcher-dock::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10%;
+    width: 4px;
+    height: 20%;
+    border-radius: 999px;
+    background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--stme-light, #5b8dff) 30%, #ffffff), transparent);
+    pointer-events: none;
+    will-change: transform;
+    animation: stme-dock-glint 3s ease-in-out infinite;
+    opacity: 1;
+    transition: opacity .35s ease;
+}
+@keyframes stme-dock-glint {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(300%); }
+}
+/* idle — синий (дефолт выше); дальше — состояния Ядра. Переменная ставится
+   на САМ док (не на ::before): её наследуют ОБА псевдослоя — и полоска, и
+   бегущий блик; псевдоэлементы — братья, друг от друга не наследуют. */
+.stme-launcher-dock { --stme-light: #5b8dff; }
+.stme-light-working .stme-launcher-dock { --stme-light: #e8a13c; }
+.stme-light-success .stme-launcher-dock { --stme-light: #4fae7f; }
+.stme-light-warning .stme-launcher-dock { --stme-light: #d9c545; }
+.stme-light-error   .stme-launcher-dock { --stme-light: #e5453f; }
+.stme-light-working .stme-launcher-dock::before { box-shadow: 0 0 10px rgba(232, 161, 60, .75); }
+.stme-light-success .stme-launcher-dock::before { box-shadow: 0 0 10px rgba(79, 174, 127, .75); }
+.stme-light-warning .stme-launcher-dock::before { box-shadow: 0 0 10px rgba(217, 197, 69, .75); }
+.stme-light-error   .stme-launcher-dock::before { box-shadow: 0 0 12px rgba(229, 69, 63, .85); }
+/* Уведомление — единственное МИГАНИЕ: белый, резко, без переливки.
+   (Определение @keyframes stme-dock-blink — ниже, у media-reduce блока.) */
+.stme-light-notify .stme-launcher-dock { --stme-light: #ffffff; }
 .stme-light-notify .stme-launcher-dock::before {
-    --stme-light: #ffffff;
     box-shadow: 0 0 14px rgba(255, 255, 255, .95);
     animation: stme-dock-blink .9s steps(1) infinite;
 }
-@keyframes stme-dock-blink {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: .12; }
-}
 .stme-launcher-dock-zone:hover .stme-launcher-dock::before,
 .stme-launcher-dock-zone:focus-within .stme-launcher-dock::before,
-.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before {
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before,
+.stme-launcher-dock-zone:hover .stme-launcher-dock::after,
+.stme-launcher-dock-zone:focus-within .stme-launcher-dock::after,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::after {
     opacity: 0;
 }
 /* ===== Мобильная поверхность: пилюля-док, независимая от наведения =====
@@ -767,11 +801,13 @@
     content: none;
 }
 @media (prefers-reduced-motion: reduce) {
-    .stme-launcher-dock::before { animation: none; background-position: 0 50%; }
+    .stme-launcher-dock::before,
+    .stme-launcher-dock::after { animation: none; }
+    .stme-launcher-dock::after { opacity: 0; }
 }
-@keyframes stme-dock-shimmer {
-    0%, 100% { background-position: 0 0%; }
-    50% { background-position: 0 100%; }
+@keyframes stme-dock-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .12; }
 }
 .stme-launcher-dock-btn {
     width: 37px;
@@ -1117,3 +1153,36 @@
 .stme-postprocess-diff-text { line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .stme-postprocess-add { background: color-mix(in srgb, #4caf50 35%, transparent); text-decoration: none; border-radius: 2px; }
 .stme-postprocess-remove { background: color-mix(in srgb, #f44336 30%, transparent); text-decoration: line-through; border-radius: 2px; opacity: .8; }
+
+/* --- Music: file input как настоящая кнопка ------------------------------
+   Голый <input type=file> рисует серую builtin-кнопку «Choose Files» и
+   «No file chosen» — пользователь видит «просто текст». Прячем builtin
+   видность через ::file-selector-button и ::after-обёртку НЕЛЬЗЯ (инпут —
+   заменяемый элемент), поэтому стиль задаём самому инпуту целиком: он
+   становится плиткой-кнопкой, builtin-кнопка внутри перекрашивается. */
+.stme-music-file {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 55%, var(--SmartThemeBorderColor, #444));
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, #1c1e26);
+    color: var(--SmartThemeBodyColor, #dfe3ea);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+.stme-music-file::file-selector-button {
+    border: 0;
+    border-radius: 6px;
+    margin-right: 10px;
+    padding: 5px 12px;
+    background: var(--stme-accent, #4c6fff);
+    color: #fff;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+.stme-music-file::file-selector-button:hover { filter: brightness(1.15); }
+.stme-music-file:hover { border-color: var(--SmartThemeQuoteColor, #8da8ff); }
