@@ -114,9 +114,6 @@ const DEFINITIONS = [{
             'chatHistory.messages', 'chatHistory.replaceText', 'chatHistory.annotate', 'chatHistory.annotations',
             'model.generate',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
-            // Свои этапы на `generation.completed` — то же право на состав
-            // пайплайнов, что у остальных, и бейдж в слоте подвала.
-            'pipeline.stages.add', 'pipeline.stages.remove',
             'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.liveMesid', 'ui.messageFooter.attach',
         ],
     },
