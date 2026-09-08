@@ -737,13 +737,23 @@
     width: 4px;
     border-radius: 999px;
     --stme-light: #5b8dff;
+    /* Статичный градиент (НЕ анимируется больше сам по себе — см. ниже) —
+       переливка теперь целиком через opacity, тот же compositor-only
+       механизм, что у mигания (`stme-dock-blink`), уже доказанно дешёвого
+       (0% GPU). Раньше "переливалось" через `animation-name:
+       stme-dock-shimmer` на `background-position`: PAINT-свойство —
+       браузер обязан перерисовывать растр градиента КАЖДЫЙ кадр, что бы ни
+       происходило вокруг (слои/изоляция это не лечат, will-change/contain
+       из прошлой правки — мимо цели). `background-position` сам пользователь
+       и вычислил как виновника, сравнив с миганием на opacity — тот вывод
+       и применён здесь напрямую. */
     background: linear-gradient(180deg, var(--stme-light), color-mix(in srgb, var(--stme-light) 55%, #ffffff), color-mix(in srgb, var(--stme-light) 70%, #000000), var(--stme-light));
     background-size: 100% 300%;
     box-shadow: 0 0 10px rgba(91, 141, 255, .7);
     box-shadow: 0 0 10px var(--stme-light);
     animation: stme-dock-shimmer 3s ease-in-out infinite;
     opacity: 1;
-    transition: opacity .35s ease, background .35s ease;
+    transition: background .35s ease;
 }
 /* idle — синий (дефолт выше); дальше — состояния Ядра. Переменная ставится
    на САМ док: её наследуют ::before (полоска) — цвет светофора единый. */
@@ -807,13 +817,13 @@
     content: none;
 }
 @media (prefers-reduced-motion: reduce) {
-    .stme-launcher-dock::before { animation: none; background-position: 0 50%; }
+    .stme-launcher-dock::before { animation: none; opacity: 1; }
     /* Стекло ::after не анимируется по умолчанию — правило тут лишь на случай будущих правок. */
     .stme-launcher-dock::after { animation: none; }
 }
 @keyframes stme-dock-shimmer {
-    0%, 100% { background-position: 0 0%; }
-    50%      { background-position: 0 100%; }
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .55; }
 }
 @keyframes stme-dock-blink {
     0%, 100% { opacity: 1; }
