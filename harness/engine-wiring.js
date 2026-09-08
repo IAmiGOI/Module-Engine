@@ -6,6 +6,7 @@ import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerStChatService } from '../services/st-chat.js';
 import { registerEmbeddingService } from '../services/embedding.js';
 import { registerAudioStoreService } from '../services/audio-store.js';
+import { registerAudioPlaybackService } from '../services/audio-playback.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
 import { registerFileService } from '../services/file.js';
 import { registerStMacrosService } from '../services/st-macros.js';
@@ -134,6 +135,8 @@ const DEFINITIONS = [{
             'chatHistory.messages',
             // Аудио-байты — только через Сервис хранилища (indexedDB).
             'audio.put', 'audio.get', 'audio.delete',
+            // Звук — только через Сервис воспроизведения (единственный владелец <audio>).
+            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state',
             // Вектор сцены и вектора треков — локальный эмбединг.
             'embedding.compute', 'embedding.similarity',
         ],
@@ -303,6 +306,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // библиотека изнутри себя).
     registerEmbeddingService(engine.buses.services);
     registerAudioStoreService(engine.buses.services);
+    registerAudioPlaybackService(engine.buses.services);
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
     registerStMacrosService(engine.buses.services, { getContext });
