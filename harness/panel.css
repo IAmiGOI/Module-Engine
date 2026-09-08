@@ -670,10 +670,11 @@
        (полукруглые) верх и низ независимо от того, сколько мест реально
        занято, без пересчёта под высоту. */
     border-radius: 999px;
-    background: rgba(28, 30, 38, .82);
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1e26) 72%, transparent);
-    backdrop-filter: blur(16px) saturate(160%);
-    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    /* Стекло (фон + блюр) переехало на статичный ::after ниже: backdrop-filter
+       НЕ должен жить на самом доке — пилюля содержит анимированную полоску,
+       и блюр в одном слое с ней пересчитывался бы каждый кадр (~80% GPU,
+       живые замеры 2026-09-09; правь слой, не возвращай блюр сюда). */
+    background: none;
     box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
     overflow: hidden;
     transition: right .25s ease;
@@ -686,16 +687,35 @@
 /* Полоска на краю в закрытом состоянии — та же часть пилюли, что торчит из-за
    края экрана, цвет = состояние Светофора активности (cores/ui/activity-light.js):
    Ядро кладёт класс stme-light-<state> на ЗОНУ, здесь цветом становится
-   CSS-переменная --stme-light. Мигание (blink) — только у notify.
+   CSS-переменная --stme-light. Переливка — старый shimmer (background-position
+   по градиенту), возвращённый как просил архитектор; мигание (blink) — только
+   у notify.
 
-   ПЕРЕЛИВКА И ЕЁ ЦЕНА (поймано вживую, 2026-09-09): переливка обязана остаться
-   визуально, но НЕ через анимацию background-position по градиенту — она
-   перекрашивала полоску каждый кадр поверх backdrop-filter: blur(16px),
-   композитор пересчитывал блюр пилюли 60 раз в секунду, GPU висел на ~80%,
-   а сворачивание браузера (rAF стоит) снимало нагрузку. Теперь бегущий блик —
-   отдельный слой ::after, анимированный ЧИСТЫМ transform (композитная анимация:
-   текстура блика просто едет по экрану, перерисовки и пересчёта блюра нет —
-   стоимость ≈ 0). Сам градиент полоски статичен. */
+   ПОЧЕМУ ПЕРЕЛИВКА БОЛЬШЕ НЕ ЖРЁТ GPU (живые замеры 2026-09-09): дорога была
+   не переливка, а её СОСЕДСТВО с backdrop-filter — любой repaint внутри
+   элемента с блюром заставлял композитор пересчитывать блюр каждый кадр
+   (~80% GPU; сворачивание браузера снимало — rAF стоит). Поэтому СТЕКЛО
+   с блюром вынесено на ОТДЕЛЬНЫЙ статичный слой ::after (z-index:-1 ниже):
+   он не анимируется вовсе, его блюр-текстура считается один раз и кэшится,
+   а полоска переливается поверх, не задевая его.
+   История провала первой попытки: правила для блюр-слоя и бегущего блика
+   ОБА описывали ::after — селекторы склеились, блюр оказался на двигающемся
+   ползунке, нагрузка не ушла (диагноз пользователя: «считается вместе
+   с ползунком»). */
+.stme-launcher-dock::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    /* ЗАПАСНЫЕ значения перед color-mix — см. комментарий у border выше. */
+    background: rgba(28, 30, 38, .82);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1c1e26) 72%, transparent);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    /* Под контентом, статично, без анимаций и переходов — так блюр-текстура
+       кэшируется композитором и не пересчитывается никогда. */
+    z-index: -1;
+}
 .stme-launcher-dock::before {
     content: '';
     position: absolute;
@@ -704,43 +724,17 @@
     bottom: 10%;
     width: 4px;
     border-radius: 999px;
-    /* Статичный градиент глубины; ЦВЕТ по состоянию Светофора остаётся. */
     --stme-light: #5b8dff;
     background: linear-gradient(180deg, var(--stme-light), color-mix(in srgb, var(--stme-light) 55%, #ffffff), color-mix(in srgb, var(--stme-light) 70%, #000000), var(--stme-light));
     background-size: 100% 300%;
-    background-position: 0 50%;
     box-shadow: 0 0 10px rgba(91, 141, 255, .7);
     box-shadow: 0 0 10px var(--stme-light);
+    animation: stme-dock-shimmer 3s ease-in-out infinite;
     opacity: 1;
     transition: opacity .35s ease, background .35s ease;
 }
-/* Бегущий блик переливки — СОСЕДНИЙ слой поверх полоски, не её фон.
-   Только transform => анимируется композитором, paint не вызывается,
-   backdrop-blur пилюли не пересчитывается (вся причина 80% GPU была в нём).
-   Высота блика = 20% пилюли, путь = 300% собственной высоты (60% пилюли):
-   от верха полоски (10%) до её низа (90%). Отдельный слой — will-change. */
-.stme-launcher-dock::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 10%;
-    width: 4px;
-    height: 20%;
-    border-radius: 999px;
-    background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--stme-light, #5b8dff) 30%, #ffffff), transparent);
-    pointer-events: none;
-    will-change: transform;
-    animation: stme-dock-glint 3s ease-in-out infinite;
-    opacity: 1;
-    transition: opacity .35s ease;
-}
-@keyframes stme-dock-glint {
-    0%, 100% { transform: translateY(0); }
-    50%      { transform: translateY(300%); }
-}
 /* idle — синий (дефолт выше); дальше — состояния Ядра. Переменная ставится
-   на САМ док (не на ::before): её наследуют ОБА псевдослоя — и полоска, и
-   бегущий блик; псевдоэлементы — братья, друг от друга не наследуют. */
+   на САМ док: её наследуют ::before (полоска) — цвет светофора единый. */
 .stme-launcher-dock { --stme-light: #5b8dff; }
 .stme-light-working .stme-launcher-dock { --stme-light: #e8a13c; }
 .stme-light-success .stme-launcher-dock { --stme-light: #4fae7f; }
@@ -757,12 +751,12 @@
     box-shadow: 0 0 14px rgba(255, 255, 255, .95);
     animation: stme-dock-blink .9s steps(1) infinite;
 }
+/* При наведении/раскрытии прячем полоску ::before. Блюр-слой ::after НЕ
+   трогаем: это СТЕКЛО пилюли, оно видно всегда — раньше здесь был селектор
+   ::after, потому что ::after был полоской-бликом; теперь это стекло. */
 .stme-launcher-dock-zone:hover .stme-launcher-dock::before,
 .stme-launcher-dock-zone:focus-within .stme-launcher-dock::before,
-.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before,
-.stme-launcher-dock-zone:hover .stme-launcher-dock::after,
-.stme-launcher-dock-zone:focus-within .stme-launcher-dock::after,
-.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::after {
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before {
     opacity: 0;
 }
 /* ===== Мобильная поверхность: пилюля-док, независимая от наведения =====
@@ -801,9 +795,13 @@
     content: none;
 }
 @media (prefers-reduced-motion: reduce) {
-    .stme-launcher-dock::before,
+    .stme-launcher-dock::before { animation: none; background-position: 0 50%; }
+    /* Стекло ::after не анимируется по умолчанию — правило тут лишь на случай будущих правок. */
     .stme-launcher-dock::after { animation: none; }
-    .stme-launcher-dock::after { opacity: 0; }
+}
+@keyframes stme-dock-shimmer {
+    0%, 100% { background-position: 0 0%; }
+    50%      { background-position: 0 100%; }
 }
 @keyframes stme-dock-blink {
     0%, 100% { opacity: 1; }
