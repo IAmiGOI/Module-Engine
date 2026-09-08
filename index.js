@@ -70,7 +70,7 @@ function getContext() {
  * `:hover` — a visible vibration (caught live). The zone never moves; only
  * the pill inside it does.
  */
-function addLauncherDock(panel, { openMemoryGraphPanel } = {}) {
+function addLauncherDock(panel, { openMemoryGraphPanel, activityState } = {}) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
     const zone = document.createElement('div');
     zone.id = 'stmeBetaLauncherDock';
@@ -110,6 +110,17 @@ function addLauncherDock(panel, { openMemoryGraphPanel } = {}) {
             if (!zone.contains(event.target)) zone.classList.remove('stme-launcher-dock-open');
         });
     }
+    // Светофор активности: полоска пилюли — «лампочка» состояния движка
+    // (cores/ui/activity-light.js сводит события всех Ядер в одно состояние).
+    // Сигнал читается подпиской и кладёт класс `stme-light-<state>` на ЗОНУ —
+    // цвет рисует CSS (panel.css), а не инлайновые стили отсюда.
+    if (activityState) {
+        activityState.subscribe(next => {
+            zone.className = `stme-launcher-dock-zone${isMobileSurface() ? ' stme-launcher-dock-touch' : ''}`
+                + (isMobileSurface() && zone.classList.contains('stme-launcher-dock-open') ? ' stme-launcher-dock-open' : '')
+                + ` stme-light-${next}`;
+        });
+    }
     document.body.append(zone);
 }
 
@@ -118,7 +129,7 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, selfUpdate, memoryGraphPanel } = await wireEngine({
+    const { engine, panelUi, selfUpdate, memoryGraphPanel, activityLight } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
@@ -142,7 +153,7 @@ async function init() {
     panel.body.append(panelUi.getRoot());
 
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => panel.open());
-    addLauncherDock(panel, { openMemoryGraphPanel: () => memoryGraphPanel.show() });
+    addLauncherDock(panel, { openMemoryGraphPanel: () => memoryGraphPanel.show(), activityState: activityLight.state });
 
     window.STModuleEngineBeta = engine;
     console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the floating launcher dock.');
