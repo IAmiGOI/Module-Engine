@@ -751,7 +751,13 @@
     background-size: 100% 300%;
     box-shadow: 0 0 10px rgba(91, 141, 255, .7);
     box-shadow: 0 0 10px var(--stme-light);
-    animation: stme-dock-shimmer 3s ease-in-out infinite;
+    /* ease-in-out = браузер обязан пересчитывать кадр на КАЖДОЙ отрисовке
+       дисплея — на 120/144Гц мониторе это 120-144 пересчёта/сек, не 60,
+       независимо от свойства (opacity здесь не помогла именно поэтому —
+       дело было не в paint vs compositor, а в самой частоте пересчёта).
+       steps(90) на 3s = ровно 30 шагов/сек, жёстко — GPU считает 30 раз в
+       секунду, что бы ни показывал дисплей. */
+    animation: stme-dock-shimmer 3s steps(90) infinite;
     opacity: 1;
     transition: background .35s ease;
 }
