@@ -69,8 +69,12 @@ export function registerAudioPlaybackService(bus) {
             if (Number.isFinite(value)) element.volume = Math.min(1, Math.max(0, value));
             return { ok: true };
         }, { loadMetric: () => 0 }),
+        // ВАЖНО: шина сама оборачивает ответ в {ok, value} — возвращать голый
+        // снимок, НЕ свой envelope. Двойная упаковка приводила к тому, что
+        // Модуль читал .value.value и видел id/playing = undefined: после
+        // каждого старта state-опрос «решал», что трек не играет (поймано вживую).
         bus.register('audio.playback.state', () => ({
-            ok: true, value: { id: currentId, playing: Boolean(element && !element.paused && !element.ended) },
+            id: currentId, playing: Boolean(element && !element.paused && !element.ended),
         }), { loadMetric: () => 0 }),
     ];
 

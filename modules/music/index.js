@@ -129,9 +129,9 @@ export function createMusicModule(host) {
         return true;
     }
 
-    /** Громкость: сигнал → Сервис. Слайдер крутится и на уже играющем треке. */
+    /** Громкость: сигнал → Сервис. Читаем ЧЕРЕЗ tracked-вызов `volume()`, а не `peek()`: peek не регистрирует зависимость, и эффект не перезапускался бы никогда — ползунок ходил, громкость стояла (поймано вживую). */
     effect(() => {
-        const value = volume.peek();
+        const value = volume();
         void request(host.services, 'audio.playback.volume', { params: { value } });
     });
 
