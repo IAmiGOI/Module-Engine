@@ -1,5 +1,6 @@
 import { wireEngine } from './harness/engine-wiring.js';
 import { createFullScreenPanel } from './harness/full-screen-panel.js';
+import { isMobileSurface } from './cores/ui/final-ui-android.js';
 
 /**
  * Real SillyTavern entry point — verification-only, NOT the real Раннер
@@ -88,6 +89,27 @@ function addLauncherDock(panel, { openMemoryGraphPanel } = {}) {
         </div>`;
     zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph)').addEventListener('click', () => panel.toggle());
     zone.querySelector('.stme-launcher-dock-btn-graph').addEventListener('click', () => openMemoryGraphPanel?.());
+    // На тач-экране :hover не существует — пилюля, спрятанная за край экрана
+    // (видны только 10px щели), для пальца НЕ СУЩЕСТВУЕТ, что и ловил
+    // пользователь: «вообще не видно». Поэтому платформа помечается классом
+    // `stme-launcher-dock-touch` на ЗОНЕ (пилюля живёт мимо движка, у неё нет
+    // дерева Android-ядра — см. panel.css), и на тач-поверхности пилюля
+    // постоянно видна: полупрозрачная у края, по тапу выезжает целиком
+    // и становится непрозрачной. Первый тап по кнопке только раскрывает,
+    // второй — выполняет действие (как у iOS-браузера с тулбаром).
+    if (isMobileSurface()) {
+        zone.classList.add('stme-launcher-dock-touch');
+        const pill = zone.querySelector('.stme-launcher-dock');
+        pill.addEventListener('click', event => {
+            if (!zone.classList.contains('stme-launcher-dock-open')) {
+                event.stopPropagation();
+                zone.classList.add('stme-launcher-dock-open');
+            }
+        }, true); // capture: перехватить клик кнопки ДО её собственного обработчика
+        document.addEventListener('click', event => {
+            if (!zone.contains(event.target)) zone.classList.remove('stme-launcher-dock-open');
+        });
+    }
     document.body.append(zone);
 }
 
