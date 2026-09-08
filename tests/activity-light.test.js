@@ -97,6 +97,18 @@ test('notify hold timer returns to idle; summary fold success maps to green', as
     assert.equal(core.state.peek(), 'success');
 });
 
+test('st.generationStarted (bridged from real ST) also drives working — dry run does not', () => {
+    const { engine, core } = setup();
+    // Форма payload — как её собирает мост Ядра событий: { event, args }.
+    // Третий аргумент события ST — dryRun, такой прогон не должен красить полоску.
+    engine.events.emit('st.generationStarted', { event: 'GENERATION_STARTED', args: ['normal', {}, false] });
+    assert.equal(core.state.peek(), 'working');
+
+    core.state.set('idle');
+    engine.events.emit('st.generationStarted', { event: 'GENERATION_STARTED', args: ['normal', {}, true] });
+    assert.equal(core.state.peek(), 'idle', 'dry run must not light the working state');
+});
+
 test('unknown events are ignored — adding a new source is opt-in via the map', () => {
     const { engine, core } = setup();
     engine.events.emit('st.chatChanged', {});
