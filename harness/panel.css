@@ -709,32 +709,40 @@
 .stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before {
     opacity: 0;
 }
-/* ===== Android / мобильная поверхность =====
-   Пилюля создаётся index.js МИМО движка (у неё нет дерева из Android-ядра
-   финального UI), поэтому платформу определяет и помечает сам index.js
-   классом `stme-launcher-dock-touch` на ЗОНЕ (см. addLauncherDock()).
-   Прятать пилюлю за край на телефоне нельзя вовсе: :hover не существует,
-   а 10px торчащей щели пальцем не нащупать (край экрана к тому же часто
-   отдан системным жестам «назад»). Поэтому на тач-поверхности пилюля ЖИВЁТ
-   ПОЛНОСТЬЮ ВИДИМОЙ — прижата к правому краю, приглушена до полупрозрачности,
-   чтобы не висеть над чатом как яркая плашка; полоска-мерцание ей не нужна
-   (нет «свёрнутого» состояния). Тап по пилюле раскрывает её целиком
-   (`stme-launcher-dock-open` — правее от края, полная непрозрачность),
-   тап по кнопке выполняет действие, тап мимо — закрывает. */
+/* ===== Мобильная поверхность: пилюля-док, независимая от наведения =====
+   Ранние попытки: прятать за край (как на ПК) — на телефоне «вообще не видно»
+   (hover нет, 10px щели пальцем не нащупать); fallback-цвета для color-mix не
+   помогли — проблема НЕ в цвете. Оставшаяся подозреваемая — сама геометрия
+   пилюли: top:50% + translateY(-50%) + отрицательный right на fixed-родителе.
+   Мобильный режим — НЕ рисовать пилюлю с этими трюками вовсе: зона сама
+   становится кнопкой-полоской, прижатой к правому краю, с явными координатами
+   и без transform. */
+.stme-launcher-dock-zone.stme-launcher-dock-touch {
+    top: auto;
+    bottom: 96px; /* над панелью ввода ST */
+    left: auto;
+    width: 52px;
+    height: auto;
+}
 .stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock {
-    right: 0;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-    opacity: .75;
-    transition: opacity .2s ease, right .25s ease;
+    position: static;
+    right: auto;
+    transform: none;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 0;
+    border: 2px solid rgba(141, 168, 255, .45);
+    border-right: 0;
+    border-radius: 999px 0 0 999px;
+    background: rgba(28, 30, 38, .9);
+    opacity: .85;
+    transition: opacity .2s ease;
 }
 .stme-launcher-dock-zone.stme-launcher-dock-touch.stme-launcher-dock-open .stme-launcher-dock {
-    right: 12px;
     opacity: 1;
 }
 .stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock::before {
-    animation: none;
-    opacity: 0;
+    content: none;
 }
 @media (prefers-reduced-motion: reduce) {
     .stme-launcher-dock::before { animation: none; background-position: 0 50%; }
