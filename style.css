@@ -12,7 +12,15 @@
    all, which hid the page rather than glazing it. */
 .stmeBeta-fullscreen {
     position: fixed;
-    inset: 0;
+    /* НЕ `inset: 0`: Android-браузеры/WebView младше Chrome 87 сокращение не
+       понимают — фиксированный элемент оставался со статическими координатами
+       и сжимался в полоску высотой с собственную шапку (~30px), растянутую на
+       всю ширину. Явные стороны понимает каждый. */
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 100%;
     z-index: 6000;
     display: flex;
     flex-direction: column;
