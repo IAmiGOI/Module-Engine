@@ -330,6 +330,34 @@ test('st.chatChanged re-reads summaries so a stale-empty core does not OVERWRITE
     assert.deepEqual(list.value.map(r => r.id).sort(), ['old_1', 'old_2'], 'pre-existing summaries must survive a fold cycle that started from a stale-empty core');
 });
 
+test('st.chatChanged publishes summary.reloaded with the fresh active count — the panel refreshes without a manual Fold', async () => {
+    // Панель движка перечитывает список ТОЛЬКО по событиям (doc-comment
+    // engine-panel.js на summary.folded). Без события после перезагрузки
+    // списка при смене чата она показывала саммари ПРОШЛОГО чата до ручного
+    // «Fold now» — сам тест краснеет, если убрать publishEvent('summary.
+    // reloaded') из reloadSummariesForChat().
+    const chat = makeChat(4);
+    const { engine, context, summaryCore } = buildEngine({ chat });
+    const reloaded = [];
+    engine.events.subscribe('summary.reloaded', payload => reloaded.push(payload));
+
+    // В чате уже лежат два старых саммари (об «активных»).
+    context.chatMetadata = { stme_memory: { 'core.summary': { summaries: [
+        { id: 'old_1', level: 1, coveredIds: ['0', '1'], startIndex: 0, endIndex: 1, startTime: null, endTime: null, text: 'Old one.', createdAt: 1, edited: false, folded: false },
+        { id: 'old_2', level: 1, coveredIds: ['2', '3'], startIndex: 2, endIndex: 3, startTime: null, endTime: null, text: 'Old two.', createdAt: 2, edited: false, folded: true },
+    ] } } };
+    await summaryCore.load();
+    // Загрузка при старте НЕ через chatChanged — события быть не должно.
+    assert.equal(reloaded.length, 0);
+
+    engine.events.emit('st.chatChanged', {});
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(reloaded.length, 1);
+    // Счётчик — по АКТИВНЫМ (не folded): один из двух записей скрыт уровнем выше.
+    assert.deepEqual(reloaded[0], { count: 1 });
+});
+
 // --- Proving the threshold guard actually guards (project discipline) -----
 // Verified during development, not just asserted here: temporarily reverting
 // shouldFold() to `unitCount >= protectedWindow` (dropping `+ batchSize`) made
