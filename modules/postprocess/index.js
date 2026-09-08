@@ -409,30 +409,24 @@ export function createPostprocessModule(host) {
     function footerWidget(message) {
         const entry = badges()[String(message.mesid)];
         if (!entry) return null;
+        // Открыт ли попап — сигнал: узлы здесь виртуальные (h()), реальный DOM
+        // создаёт Final UI, и прямыми style-правками из обработчика туда не
+        // достучаться (первая версия так и делала — клик «ничего не делал»).
+        const open = signal(false);
         const done = (entry.trace ?? []).filter(step => !step.skipped).length;
-        const popup = h('div', { class: 'stme-postprocess-popup', style: 'display:none' },
+        const popup = h('div', { class: 'stme-postprocess-popup', style: computed(() => (open() ? '' : 'display:none')) },
             h('div', { class: 'stme-postprocess-popup-head' },
                 h('strong', {}, 'Post-Turn changes'),
-                h('button', { type: 'button', class: 'stme-postprocess-popup-close', 'on:click': () => { popup.style.display = 'none'; } }, '✕')),
+                h('button', { type: 'button', class: 'stme-postprocess-popup-close', 'on:click': () => { open.set(false); } }, '✕')),
             h('div', { class: 'stme-postprocess-diff' }, (entry.trace ?? []).map(step => passRow(step))));
         const pill = h('button', {
             type: 'button',
             class: 'stme-stat stme-postprocess-pill',
-            'on:click': () => {
-                const showing = popup.style.display !== 'none';
-                if (!showing) {
-                    const rect = pill.getBoundingClientRect();
-                    popup.style.top = `${rect.bottom + 6}px`;
-                    popup.style.left = `${Math.max(8, Math.min(rect.left, (window.innerWidth ?? 1024) - 480))}px`;
-                }
-                popup.style.display = showing ? 'none' : 'block';
-            },
+            title: 'Post-Turn changes',
+            'on:click': () => open.set(!open.peek()),
         },
-            h('div', { class: 'stme-stat-head' },
-                h('span', { class: 'stme-stat-icon' }, '✎'),
-                h('span', { class: 'stme-stat-label' }, 'Post-turn')),
-            h('div', { class: 'stme-stat-value' }, String(done)));
-        return h('div', { class: 'stme-postprocess-cell' }, pill, popup);
+            h('span', { class: 'stme-stat-icon' }, '✎'));
+        return h('div', { class: computed(() => `stme-postprocess-cell${open() ? ' stme-postprocess-open' : ''}`) }, pill, popup);
     }
 
     async function loadBadges() {
