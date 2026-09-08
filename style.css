@@ -5,9 +5,6 @@
 /* Page-width overlay (harness/full-screen-panel.js) — only used inside real
    ST (the standalone browser harness has no narrow-drawer problem to solve,
    so it never creates one). Same shape as Alpha's own .stme-fullscreen. */
-/* Жидкое стекло — a real frosted-glass overlay, not a near-opaque wash: a
-   light tint over `backdrop-filter: blur()` so the actual ST page behind it
-   (chat, sidebar) stays visible but softened, the way a real glass pane would look. The earlier version used a 95%-opaque wash with no blur at all, which hid the page rather than glazing it. */
 .stmeBeta-fullscreen {
     position: fixed;
     top: 0;
@@ -45,9 +42,12 @@
 }
 .stmeBeta-fullscreen-body > * { max-width: 1100px; margin: 0 auto; }
 
-/* GPU fix: the activity-light strip must not be an animated paint target.
-   Keep the gradient static and animate only opacity. No transform, no
-   background-position animation, and no glow/box-shadow on the strip. */
+/* GPU isolation / diagnostic fix:
+   The activity strip is now deliberately a completely static paint target.
+   No gradient, no background-position animation, no transform, no opacity
+   animation, and no box-shadow. The state still changes its solid color via
+   --stme-light. This is intentionally the minimal rendering path so we can
+   distinguish the strip itself from the surrounding dock/glass layer. */
 .stme-launcher-dock::before {
     top: 10%;
     bottom: 10%;
@@ -56,23 +56,20 @@
     width: 4px;
     border-radius: 999px;
     --stme-light: #5b8dff;
-    background: linear-gradient(180deg, var(--stme-light), color-mix(in srgb, var(--stme-light) 55%, #ffffff), color-mix(in srgb, var(--stme-light) 70%, #000000), var(--stme-light));
-    background-size: 100% 100%;
-    background-position: 0 0;
+    background: var(--stme-light);
+    background-image: none;
     box-shadow: none;
-    animation: stme-dock-breathe 2.4s ease-in-out infinite;
-    opacity: .9;
-    transition: opacity .35s ease, background .35s ease;
-}
-
-@keyframes stme-dock-breathe {
-    0%, 100% { opacity: .65; }
-    50%      { opacity: 1; }
+    animation: none;
+    transform: none;
+    will-change: auto;
+    opacity: 1;
+    transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
     .stme-launcher-dock::before {
         animation: none;
+        transform: none;
         opacity: 1;
     }
 }
