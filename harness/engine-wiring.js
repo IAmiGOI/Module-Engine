@@ -33,6 +33,7 @@ import { createMemoryGraphCore } from '../cores/memory-graph/index.js';
 import { createUiEngineCore } from '../cores/ui/ui-engine.js';
 import { createEnginePanelCore } from '../cores/ui/engine-panel.js';
 import { createFinalUiPc } from '../cores/ui/final-ui-pc.js';
+import { createFinalUiAndroid, isMobileSurface } from '../cores/ui/final-ui-android.js';
 import { createUiModulesCore } from '../cores/ui/ui-modules.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
@@ -376,7 +377,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     });
 
     const uiHost = engine.registerCaller('core.ui.engine', 'cores', { tier: 'official' });
-    const uiEngine = createUiEngineCore(() => createFinalUiPc(uiHost));
+    // Один и тот же поток патчей — разные финальные рендереры по платформе
+    // (CORES.md): на мобильной поверхности работает Android-ядро, чей корень
+    // несёт `stme-android` и на которую CSS отвечает компактной вёрсткой.
+    const createFinalUi = isMobileSurface() ? () => createFinalUiAndroid(uiHost) : () => createFinalUiPc(uiHost);
+    const uiEngine = createUiEngineCore(createFinalUi);
 
     // Визуальный редактор графа памяти — своё `official`-Ядро, свой
     // floating-корень через `uiEngine.mount()`, тем же способом, что

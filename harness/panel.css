@@ -133,6 +133,34 @@
 }
 .stme-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
+/* ===== Android / мобильная поверхность (cores/ui/final-ui-android.js) =====
+   Ядро финального UI для Android помечает КАЖДЫЙ узел дерева классом
+   `stme-android`, поэтому здесь не нужны media/container-запросы: платформа
+   известна точно, а не по ширине окна. Сужаем основной экран движка: мельче
+   шрифты, уже паддинги, кнопки растягиваются на строку (на тач-экране узкая
+   кнопка рядом с такой же второй не попадает пальцем). */
+.stme-android {
+    font-size: 12px;
+    --stme-radius-card: 11px;
+    --stme-radius: 8px;
+    --stme-radius-sm: 6px;
+}
+.stme-android .stme-card-head { padding: 10px 12px; }
+.stme-android .stme-card-title strong { font-size: 13.5px; }
+.stme-android .stme-card-title small { font-size: 11px; }
+.stme-android .stme-card-body { padding: 12px; gap: 10px; }
+.stme-android .stme-card-actions { flex-direction: column; align-items: stretch; gap: 4px; }
+.stme-android .stme-card-actions .menu_button { width: 100%; }
+.stme-android .stme-row { flex-wrap: wrap; gap: 6px; }
+.stme-android .stme-row .menu_button { flex: 1 1 auto; }
+.stme-android .stme-section-head { padding: 8px 10px; }
+.stme-android .stme-section-body { padding: 10px; }
+.stme-android .stme-field-label { font-size: 11px; }
+.stme-android input.text_pole, .stme-android textarea.text_pole, .stme-android select {
+    font-size: 16px; /* <16px — iOS/Android зумят поле при фокусе */
+}
+.stme-android .stme-badge { font-size: 10.5px; }
+
 .stme-card {
     border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #444) 78%, var(--stme-accent));
     border-radius: var(--stme-radius-card);
