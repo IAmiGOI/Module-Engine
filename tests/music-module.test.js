@@ -60,16 +60,17 @@ function buildEngine({ chat = [] } = {}) {
 
     // Сервис воспроизведения — фейк над тем же контрактом (реальный владеет
     // <audio> и URL.createObjectURL, недоступными в Node).
-    const playback = { id: null, playing: false, playCalls: 0, onEnded: null };
+    const playback = { id: null, playing: false, playCalls: 0, onEnded: null, volume: 0.7 };
     engine.buses.services.register('audio.playback.play', ({ id, blob, onEnded }) => {
         if (!blob) return { ok: false };
         playback.id = id ?? null;
         playback.playing = true;
         playback.playCalls += 1;
         playback.onEnded = typeof onEnded === 'function' ? onEnded : null;
-        return { ok: true };
+        return { ok: true, started: true };
     });
     engine.buses.services.register('audio.playback.pause', () => { playback.playing = false; return { ok: true }; });
+    engine.buses.services.register('audio.playback.volume', ({ value }) => { if (Number.isFinite(value)) playback.volume = value; return { ok: true }; });
     engine.buses.services.register('audio.playback.state', () => ({ ok: true, value: { id: playback.id, playing: playback.playing } }));
 
     // Эмбединг-фейк: вектор — СУММА осей, чьи имена встретились в тексте
@@ -95,7 +96,7 @@ function buildEngine({ chat = [] } = {}) {
         allowedContracts: [
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
-            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state',
+            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume',
             'embedding.compute',
         ],
     });

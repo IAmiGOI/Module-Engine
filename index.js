@@ -55,11 +55,14 @@ function getContext() {
  * the SAME launcher whether or not that extension (or any other that
  * reorganizes the top bar) is installed.
  *
- * Five icon-sized slots by height — TWO of them real now
+ * Five icon-sized slots by height — THREE of them real now
  * (`stme-launcher-dock-btn`, opens the engine panel; `stme-launcher-dock-btn-graph`,
  * opens the Memory Graph editor's own floating window directly, without
  * detouring through the settings panel's card first — решено с пользователем:
- * "вынеси заход в граф в боковую панель тоже"), the rest stay empty
+ * "вынеси заход в граф в боковую панель тоже"; `stme-launcher-dock-btn-music`,
+ * показывает HUD-плеер Модуля «Music» через GENERIC `modules.requestHud(id)`
+ * Раннера — кнопка знает только id и не знает, включён ли Модуль: если нет,
+ * клик честно ничего не откроет), the rest stay empty
  * `stme-launcher-dock-slot`s reserved for future quick actions, kept the
  * same visual size so the dock's shape doesn't change when another real
  * action arrives.
@@ -71,7 +74,7 @@ function getContext() {
  * `:hover` — a visible vibration (caught live). The zone never moves; only
  * the pill inside it does.
  */
-function addLauncherDock(panel, { openMemoryGraphPanel, activityState } = {}) {
+function addLauncherDock(panel, { openMemoryGraphPanel, requestModuleHud, activityState } = {}) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
     const zone = document.createElement('div');
     zone.id = 'stmeBetaLauncherDock';
@@ -84,12 +87,18 @@ function addLauncherDock(panel, { openMemoryGraphPanel, activityState } = {}) {
             <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-graph" title="Open Memory Graph" data-i18n="[title]Open Memory Graph">
                 <i class="fa-solid fa-diagram-project fa-fw"></i>
             </button>
-            <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+            <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-music" title="Show Music player" data-i18n="[title]Show Music player">
+                <i class="fa-solid fa-music fa-fw"></i>
+            </button>
             <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
             <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
         </div>`;
-    zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph)').addEventListener('click', () => panel.toggle());
+    zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph):not(.stme-launcher-dock-btn-music)').addEventListener('click', () => panel.toggle());
     zone.querySelector('.stme-launcher-dock-btn-graph').addEventListener('click', () => openMemoryGraphPanel?.());
+    // GENERIC-канал: кнопка знает только id Модуля и просит Раннер показать
+    // его HUD. Модуль выключен — requestHud вернёт false, клик не сделает вид,
+    // что что-то открыл.
+    zone.querySelector('.stme-launcher-dock-btn-music').addEventListener('click', () => { requestModuleHud?.('module.music'); });
     // На тач-экране :hover не существует — пилюля, спрятанная за край экрана
     // (видны только 10px щели), для пальца НЕ СУЩЕСТВУЕТ, что и ловил
     // пользователь: «вообще не видно». Поэтому платформа помечается классом
@@ -134,7 +143,7 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, selfUpdate, memoryGraphPanel, activityLight } = await wireEngine({
+    const { engine, panelUi, selfUpdate, memoryGraphPanel, activityLight, modules } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
@@ -158,7 +167,11 @@ async function init() {
     panel.body.append(panelUi.getRoot());
 
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => panel.open());
-    addLauncherDock(panel, { openMemoryGraphPanel: () => memoryGraphPanel.show(), activityState: activityLight.state });
+    addLauncherDock(panel, {
+        openMemoryGraphPanel: () => memoryGraphPanel.show(),
+        requestModuleHud: id => modules.requestHud(id),
+        activityState: activityLight.state,
+    });
 
     window.STModuleEngineBeta = engine;
     console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the floating launcher dock.');
