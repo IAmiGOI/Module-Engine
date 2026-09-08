@@ -235,6 +235,8 @@ export function createPostprocessModule(host) {
     const workers = signal([]);
     const customPresets = signal([]);
     const busy = signal(false);
+    /** Открытый попап: mesid сообщения, чьи изменения показываем, либо null. */
+    const popupMesid = signal(null);
     /** Отметки `{ mesid: { original, trace, appliedAt } }` — источник бейджа, как у «RP Time». */
     const badges = signal({});
     // UI-сигналы каждого pass'а, лениво по pass.id (форма — ровно та, что
@@ -407,27 +409,43 @@ export function createPostprocessModule(host) {
      * изменились, он и зовёт `ui.messageFooter.attach`.
      */
     function footerWidget(message) {
-        const entry = badges()[String(message.mesid)];
+        const mesid = String(message.mesid);
+        const entry = badges()[mesid];
         if (!entry) return null;
-        // Открыт ли попап — сигнал: узлы здесь виртуальные (h()), реальный DOM
-        // создаёт Final UI, и прямыми style-правками из обработчика туда не
-        // достучаться (первая версия так и делала — клик «ничего не делал»).
-        const open = signal(false);
-        const done = (entry.trace ?? []).filter(step => !step.skipped).length;
-        const popup = h('div', { class: 'stme-postprocess-popup', style: computed(() => (open() ? '' : 'display:none')) },
-            h('div', { class: 'stme-postprocess-popup-head' },
-                h('strong', {}, 'Post-Turn changes'),
-                h('button', { type: 'button', class: 'stme-postprocess-popup-close', 'on:click': () => { open.set(false); } }, '✕')),
-            h('div', { class: 'stme-postprocess-diff' }, (entry.trace ?? []).map(step => passRow(step))));
+        // Кнопка — чистый StatBlock с дефолтными размерами виджета (как у блока
+        // времени); отличает её только класс-модификатор ширины. Попап в это
+        // дерево НЕ входит: fixed внутри подвала сообщения не работает (у предков
+        // ST есть transform), поэтому он живёт во втором дереве — hud().
         const pill = StatBlock('Post-Turn changes', '', {
             icon: '✎',
-            onClick: () => open.set(!open.peek()),
+            onClick: () => popupMesid.set(popupMesid.peek() === mesid ? null : mesid),
             title: 'Post-Turn changes',
             showLabel: false,
             showValue: false,
         });
-        pill.props.class = computed(() => `stme-stat stme-postprocess-pill${open() ? ' stme-postprocess-open' : ''}`);
-        return h('div', { class: computed(() => `stme-postprocess-cell${open() ? ' stme-postprocess-open' : ''}`) }, pill, popup);
+        pill.props.class = computed(() => `stme-stat stme-postprocess-pill${popupMesid() === mesid ? ' stme-postprocess-open' : ''}`);
+        return pill;
+    }
+
+    /**
+     * Второе дерево модуля — попап с изменениями, монтируется хостом прямо в
+     * `document.body` (тот же механизм, что у окна трекера). Поэтому он
+     * позиционируется от настоящего вьюпорта и всплывает по центру экрана,
+     * а не вверху чата.
+     */
+    function hud() {
+        return h('div', { class: 'stme-postprocess-hud-root' },
+            computed(() => {
+                const mesid = popupMesid();
+                if (!mesid) return null;
+                const entry = badges()[mesid];
+                if (!entry) return null;
+                return h('div', { class: 'stme-postprocess-popup' },
+                    h('div', { class: 'stme-postprocess-popup-head' },
+                        h('strong', {}, 'Post-Turn changes'),
+                        h('button', { type: 'button', class: 'stme-postprocess-popup-close', 'on:click': () => popupMesid.set(null) }, '✕')),
+                    h('div', { class: 'stme-postprocess-diff' }, (entry.trace ?? []).map(step => passRow(step))));
+            }));
     }
 
     async function loadBadges() {
@@ -673,6 +691,7 @@ export function createPostprocessModule(host) {
         description: 'Rewrites each fresh reply through a chain of independent model passes and replaces it with the final result.',
         load,
         tree,
+        hud,
         save,
         processNow,
         addPass,
