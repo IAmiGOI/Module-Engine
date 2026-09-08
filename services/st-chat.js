@@ -68,6 +68,39 @@ export function registerStChatService(bus, { getContext } = {}) {
     }
 
     /**
+     * Полная замена текста сообщения — единственный легальный путь Модуля к
+     * `message.mes`. В Alpha Post-Turn Processor лез в `context.chat`
+     * напрямую; здесь то же самое делает Сервис, потому что знания «как ST
+     * хранит и перерисовывает сообщение» — ST-шные и живут здесь, у Сервисов
+     * (см. заголовок файла). После правки текста блок перерисовывается тем же
+     * вызовом, каким это делает сама ST (`updateMessageBlock`), и чат
+     * сохраняется настоящим `saveChatConditional` (не дебаунснутым: результат
+     * пайплайна переписывания терять из-за секундного дебаунса нельзя —
+     * та же логика, что у `setHidden` выше).
+     */
+    async function setMessageText({ mesid, text } = {}) {
+        const context = getContext();
+        const chat = context?.chat;
+        const index = Number(mesid);
+        if (!Array.isArray(chat) || !Number.isInteger(index) || !chat[index]) {
+            throw new Error(`stChat.setText: no message at mesid "${mesid}".`);
+        }
+        const message = chat[index];
+        if (message.is_user) throw new Error(`stChat.setText: message "${mesid}" is a user message — rewriting it is not allowed.`);
+        const next = String(text ?? '');
+        if (!next.trim()) throw new Error(`stChat.setText: "text" is required.`);
+        message.mes = next;
+        // Перерисовка — тем же механизмом ST, каким она сама обновляет блок
+        // сообщения (RP Time/Tracker Alpha звали `context.updateMessageBlock`).
+        context.updateMessageBlock?.(index, message);
+        // `saveChatConditional` сначала, `saveChat` следом — оба, как у Alpha:
+        // в части сборок ST один из них может отсутствовать.
+        await context.saveChatConditional?.();
+        await context.saveChat?.();
+        return true;
+    }
+
+    /**
      * Куда именно ST рисует одно сообщение. Знание чисто ST-шное (её разметка
      * и атрибут `mesid`), поэтому живёт здесь, а не в общем Сервисе DOM: тот
      * умеет работать с любым узлом, но не обязан знать, как SillyTavern
@@ -84,6 +117,7 @@ export function registerStChatService(bus, { getContext } = {}) {
     const unregisters = [
         bus.register('stChat.messages', params => readChat(params), { loadMetric: () => 0 }),
         bus.register('stChat.setHidden', params => setMessageHidden(params), { loadMetric: () => 0 }),
+        bus.register('stChat.setText', params => setMessageText(params), { loadMetric: () => 0 }),
         bus.register('stChat.messageElement', params => messageElement(params?.mesid), { loadMetric: () => 0 }),
         /** Контейнер всего чата — за ним наблюдают, чтобы заметить перерисовку, о которой никто не сообщил. */
         bus.register('stChat.container', () => document.getElementById('chat'), { loadMetric: () => 0 }),
