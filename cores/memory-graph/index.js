@@ -2235,7 +2235,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     /**
      * Phase 2 — этап `generation.beforeSend`, живая мутация `chat` (тот же
      * приём, что `cores/summary/index.js`'s `injectIntoPrompt`/
-     * `modules/notebook/index.js`). Кандидаты в маяки — ТОЛЬКО размещённые
+     * `modules/tools/notebook.js`). Кандидаты в маяки — ТОЛЬКО размещённые
      * узлы (`regionId` не `null`): нода в накопителе невидима для ретрива
      * (решено в Phase 1). Мягкая деградация на каждом шаге (пустой граф,
      * пустой контекст, недоступный эмбединг, пустой маршрут) — `chat`
