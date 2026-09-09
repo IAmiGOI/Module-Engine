@@ -1054,13 +1054,43 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         );
     }
 
+    /**
+     * Модули с `folder` группируются в карточку-папку: сама папка НЕ
+     * Модуль — у неё нет тумблера и живого экземпляра, она только
+     * собирает карточки своих Модулей визуально (каждый включается
+     * СВОИМ тумблером, как раньше). Без папки — обычная карточка.
+     * Порядок: папки в порядке первого появления их Модулей в реестре,
+     * внутри папки — порядок реестра.
+     */
+    function groupedModuleEntries() {
+        const entries = modules();
+        const folders = [];
+        const byFolder = new Map();
+        const loose = [];
+        for (const entry of entries) {
+            if (entry.folder) {
+                if (!byFolder.has(entry.folder)) {
+                    byFolder.set(entry.folder, []);
+                    folders.push(entry.folder);
+                }
+                byFolder.get(entry.folder).push(entry);
+            } else {
+                loose.push(entry);
+            }
+        }
+        return [...loose.map(entry => ({ kind: 'module', entry })), ...folders.map(name => ({ kind: 'folder', name, entries: byFolder.get(name) }))];
+    }
+
     // Список Модулей раскрыт по умолчанию: это единственное место, где
     // пользователь что-то подключает, и прятать его за лишним кликом незачем.
     function modulesCard() {
         return Card('Modules', { ...collapse.bind('card:modules', { open: true }), subtitle: 'What you plug in yourself' },
-            computed(() => (modules().length
-                ? modules().map(moduleCard)
-                : [EmptyState('No modules installed. The engine runs without them — that is exactly what makes something a Module rather than a Core.')])),
+            computed(() => {
+                if (!modules().length) return [EmptyState('No modules installed. The engine runs without them — that is exactly what makes something a Module rather than a Core.')];
+                return groupedModuleEntries().map(group => (group.kind === 'folder'
+                    ? Section(group.name, { key: `folder:${group.name}`, subtitle: 'Tools the AI operates itself — each one enabled separately.' }, group.entries.map(moduleCard))
+                    : moduleCard(group.entry)));
+            }),
         );
     }
 

@@ -44,7 +44,8 @@ import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
 import { createTrackerModule, MODULE_ID as TRACKER_MODULE_ID } from '../modules/tracker/index.js';
 import { createTimeModule, MODULE_ID as TIME_MODULE_ID } from '../modules/time/index.js';
-import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../modules/notebook/index.js';
+import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../modules/tools/index.js';
+import { createSecretsModule, SECRETS_MODULE_ID as SECRETS_MODULE_ID } from '../modules/tools/index.js';
 import { createPostprocessModule, MODULE_ID as POSTPROCESS_MODULE_ID } from '../modules/postprocess/index.js';
 import { createMusicModule, MODULE_ID as MUSIC_MODULE_ID } from '../modules/music/index.js';
 
@@ -93,9 +94,14 @@ const DEFINITIONS = [{
     },
     create: host => createTimeModule(host),
 }, {
+    // «Tools» — НЕ Модуль, а ПАПКА в UI: инструменты, которыми модель
+    // пользуется сама, включаются КАЖДЫЙ СВОИМ тумблером. Папка — свойство
+    // `folder` определения; реестр и панель знают только это свойство,
+    // никакого «Модуля Tools» в живом составе нет.
     id: NOTEBOOK_MODULE_ID,
     title: 'Notebook',
-    description: 'A private notebook the AI can write to and read back — working memory for plans, secrets and goals.',
+    folder: 'Tools',
+    description: 'A private notebook the AI writes to and reads back — working memory for plans, secrets and goals.',
     rights: {
         tier: 'community',
         allowedContracts: [
@@ -109,6 +115,28 @@ const DEFINITIONS = [{
         ],
     },
     create: host => createNotebookModule(host),
+}, {
+    // Второй Tool папки «Tools» — устройство одно в один с блокнотом
+    // (см. modules/tools/secrets.js): структурированные секреты с
+    // обязательными «кто знает / название / содержимое» и действиями
+    // create/update/remove.
+    id: SECRETS_MODULE_ID,
+    title: 'Secrets',
+    folder: 'Tools',
+    description: 'A private list of the AI\'s secrets — hidden story facts, each tagged with who knows it.',
+    rights: {
+        tier: 'community',
+        allowedContracts: [
+            'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
+            'generation.registerTool', 'generation.unregisterTool',
+            // Этап на `generation.beforeSend` исполняется под ЕГО правами
+            // (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
+            // и снимает этап сам Модуль, отсюда — эти два права.
+            'pipeline.stages.add', 'pipeline.stages.remove',
+            'ui.notify',
+        ],
+    },
+    create: host => createSecretsModule(host),
 }, {
     id: POSTPROCESS_MODULE_ID,
     title: 'Post-Turn Processor',
@@ -300,7 +328,7 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
     }
 
     return {
-        list: () => DEFS.map(({ id, title, description }) => ({ id, title, description })),
+        list: () => DEFS.map(({ id, title, description, folder }) => ({ id, title, description, folder })),
         enabled: () => [...live.keys()],
         instance: id => live.get(id)?.instance,
         requestHud,

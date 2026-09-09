@@ -30,7 +30,7 @@ function clampInt(value, min, max, fallback) {
     return Math.max(min, Math.min(max, Math.round(n)));
 }
 
-/** Защитный клэмп — та же дисциплина, что у `clampNoteSettings()` (modules/notebook/index.js): ручная правка файла настроек не должна осесть как есть. */
+/** Защитный клэмп — та же дисциплина, что у `clampNoteSettings()` (modules/tools/notebook.js): ручная правка файла настроек не должна осесть как есть. */
 export function clampSummarySettings(values = {}) {
     const levels = Array.isArray(values.levels) && values.levels.length
         ? values.levels.map(level => ({ batchSize: clampInt(level?.batchSize, 2, 200, 5) }))
@@ -132,7 +132,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
 
     /**
      * Перезагрузка при смене активного чата — ТА ЖЕ гонка, что задокументирована
-     * у Модуля «Notebook» (modules/notebook/index.js, doc-comment на
+     * у Модуля «Notebook» (modules/tools/notebook.js, doc-comment на
      * `st.chatChanged`): `load()` выполняется один раз при старте движка, часто
      * ДО того, как ST успел подгрузить `chatMetadata` текущего чата — первый
      * `loadSummaries()` видел пустоту. Но если у Notebook устаревший пустой
@@ -338,7 +338,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
 
     /**
      * Инъекция — этап `generation.beforeSend`, живая мутация `chat` (тот же
-     * приём, что modules/notebook/index.js's injectIntoPrompt). Все активные
+     * приём, что modules/tools/notebook.js's injectIntoPrompt). Все активные
      * саммари ВСЕГДА старше любого оставшегося сырого сообщения (сворачиваются
      * только те, что уже вне защищённого окна) — поэтому их не нужно
      * вперемешку вставлять по всему массиву, достаточно вставить блоком в
