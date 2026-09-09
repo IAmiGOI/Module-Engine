@@ -32,6 +32,37 @@ function buildEngineWithBackupCore() {
     return { engine, context };
 }
 
+test('export({ sourceIds }) keeps only the named sources — preset export skips chat-scoped data', async () => {
+    // СВОЙ движок: контракт backup.export в этом файле уже зарегистрирован
+    // buildEngineWithBackupCore() — второй экземпляр Ядра на той же шине
+    // контракт не перехватит, и проверка гоняла бы не тот экземпляр.
+    const engine = createEngine();
+    const context = fakeContext({});
+    registerChatMetadataService(engine.buses.services, { getContext: () => context });
+    registerExtensionSettingsService(engine.buses.services, { getContext: () => context });
+    createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
+    createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
+    const backupHost = engine.registerCaller('core.backup.filter', 'cores', { tier: 'official' });
+    const backupCore2 = createBackupCore(backupHost);
+    backupCore2.registerSource('chatMemory', createChatMetadataBackupSource(backupHost));
+    backupCore2.registerSource('settings', createExtensionSettingsBackupSource(backupHost));
+
+    const runner = engine.registerCaller('core.runner.filter', 'cores', { tier: 'official' });
+    await new Promise(resolve => runner.own.subscribe('storage.settings.set', { params: { namespace: 'core.runner', key: 'enabledModules', value: ['module.music'] } }, resolve));
+    const mod = engine.registerCaller('module.filter', 'modules', { tier: 'official' });
+    await new Promise(resolve => mod.cores.subscribe('storage.chatMemory.set', { params: { namespace: 'module.notebook', key: 'notes', value: ['a'] } }, resolve));
+
+    // Полный экспорт — оба источника.
+    const full = await new Promise(resolve => backupHost.own.subscribe('backup.export', {}, resolve));
+    assert.ok(full.ok);
+    assert.deepEqual(Object.keys(full.value.sources).sort(), ['chatMemory', 'settings']);
+    // Пресет-экспорт — только settings, chatMemory не попадает.
+    const preset = await new Promise(resolve => backupHost.own.subscribe('backup.export', { params: { sourceIds: ['settings'] } }, resolve));
+    assert.ok(preset.ok);
+    assert.deepEqual(Object.keys(preset.value.sources), ['settings']);
+    assert.deepEqual(preset.value.sources.settings['core.runner'].enabledModules, ['module.music']);
+})
+
 test('export -> import round-trips real data written through Ядро внутренней памяти чата', async () => {
     const { engine, context } = buildEngineWithBackupCore();
     const module = engine.registerCaller('module.notebook', 'modules', { tier: 'official' });
