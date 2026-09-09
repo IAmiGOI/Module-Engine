@@ -171,9 +171,25 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     // легко было не заметить рядом с остальной панелью.
     const updateFlash = signal('');
     const eventCount = signal(0);
+    // Карточка Preset: та же вспышка обводки, что у проверки обновления, и
+    // флаг «идёт импорт» — импорт асинхронный (файл → снапшот → reconcile
+    // всех Модулей), и без него кнопка выглядела бы мёртвой на время работы.
+    const presetFlash = signal('');
+    const presetBusy = signal(false);
 
     async function call(contract, params) {
         return request(host.own, contract, { params });
+    }
+
+    /**
+     * Вызов СЕРВИСНОГО контракта — через Гейт (host.services), а не через
+     * host.own: file.* зарегистрированы на Шине сервисов, и домашняя Шина
+     * ядер их не видит в принципе. Каждый такой вызов проходит реальную
+     * проверку прав на пересечении домена (ARCHITECTURE.md: «даже когда
+     * резолвинг тривиален») — здесь это Ядро UI, tier official.
+     */
+    async function callService(contract, params) {
+        return request(host.services, contract, { params });
     }
 
     /**
@@ -906,6 +922,91 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     }
 
     /**
+     * Пресет — один файл со ВСЕЙ настройкой движка: экспорт и импорт
+     * снапшота Ядра бэкапа (`backup.export`/`backup.import`). В снапшот
+     * входят ОБА зарегистрированных источника: `settings`
+     * (extensionSettings — настройки всех Ядер и Модулей ВКЛЮЧАЯ
+     * `core.runner.enabledModules`, то есть состав Модулей) и `chatMemory`
+     * (chatMetadata — данные, привязанные к текущему чату). Никакой своей
+     * сборки здесь нет и быть не должно: панель — тонкая проводка, какие
+     * источники существуют, решает сборщик движка (engine-wiring.js).
+     *
+     * Экспорт: снапшот → `file.download` (Сервис файлового I/O). Имя файла
+     * несёт дату — пресеты скачиваются по нескольку раз, а содержимое
+     * снапшота уже само помнит `createdAt`.
+     *
+     * Импорт: файл пользователь выбирает САМ (виджет `h('input type=file')`
+     * со своим `on:change` — vnode нельзя «нажать» за него, см. тот же
+     * приём в Модуле Music) → `file.readText` (Сервис, а не FileReader
+     * напрямую) → JSON.parse → `backup.import` → потом СОСТАВ Модулей
+     * подводится к записанному в пресете через `moduleRegistry.reconcile()`
+     * — снапшот восстанавливает только ЗАПИСЬ `enabledModules`, живые
+     * экземпляры она сама не строит (см. reconcile()'s doc-comment). Затем
+     * карточки панели перечитывают свои списки: их конфигурация только что
+     * изменилась под ними.
+     */
+    async function exportPreset() {
+        const result = await call('backup.export');
+        if (!result.ok) { flash(presetFlash, 'error'); await notify('error', result.error.message); return; }
+        const stamp = new Date().toISOString().slice(0, 10);
+        const saved = await callService('file.download', { filename: `stme-preset-${stamp}.json`, content: JSON.stringify(result.value, null, 2) });
+        flash(presetFlash, saved.ok ? 'ok' : 'error');
+        await notify(saved.ok ? 'ok' : 'error',
+            saved.ok ? 'Preset downloaded — settings, modules and chat memory in one file.' : saved.error.message);
+    }
+
+    async function importPreset(file) {
+        if (!file) return;
+        presetBusy.set(true);
+        try {
+            const read = await callService('file.readText', { file });
+            if (!read.ok) { flash(presetFlash, 'error'); await notify('error', read.error.message); return; }
+            let snapshot;
+            try { snapshot = JSON.parse(read.value); }
+            catch (error) { flash(presetFlash, 'error'); await notify('error', `Not a valid preset file: ${error.message}`); return; }
+            const imported = await call('backup.import', { snapshot });
+            if (!imported.ok) { flash(presetFlash, 'error'); await notify('error', imported.error.message); return; }
+            // Снапшот вернул состав к записанному в нём — подводим живые
+            // экземпляры Модулей к этой записи (включить недостающих,
+            // выключить лишних) и перечитываем всё, что панель держит
+            // черновиками: конфигурация под карточками только что сменилась.
+            const enabledFromSettings = await call('storage.settings.get', { namespace: 'core.runner', key: 'enabledModules', fallback: [] });
+            await moduleRegistry?.reconcile(enabledFromSettings.ok ? enabledFromSettings.value ?? [] : []);
+            await Promise.all([loadWorkers(), loadMacros(), loadTrackerFields(), loadSummarySettings(), loadMemoryGraphSettings()]);
+            await Promise.all([loadLorebook(), loadSummaries(), loadMemoryGraphCount()]);
+            flash(presetFlash, 'ok');
+            await notify('ok', `Preset imported (sources: ${imported.value.join(', ') || 'none'}).`);
+        } finally {
+            presetBusy.set(false);
+        }
+    }
+
+    function presetCard() {
+        // file-input — видимый элемент со своим `on:change` (тот же приём,
+        // что в Модуле Music): vnode нельзя кликнуть из кода, слушатель
+        // ставит Сервис DOM при рендере.
+        const fileInput = h('input', {
+            type: 'file', accept: 'application/json,.json', class: 'stme-preset-file',
+            'on:change': event => {
+                const input = event.target;
+                importPreset(input.files?.[0]);
+                input.value = '';
+            },
+        });
+        return Card('Preset', {
+            ...collapse.bind('card:preset'),
+            subtitle: 'The whole setup in one file — settings, modules, chat memory',
+            className: computed(() => (presetFlash() ? `stme-flash stme-flash-${presetFlash()}` : '')),
+        },
+            h('p', { class: 'stme-summary-help' }, 'Export downloads everything the engine remembers; Import restores it on this (or any other) machine. Chat memory comes along only if the import happens in a chat — it is scoped per chat.'),
+            Row(
+                Button('Export preset file', exportPreset),
+                Field('Import from file', fileInput),
+            ),
+        );
+    }
+
+    /**
      * Правая половина — то, что подключает пользователь. Панель НЕ рисует
      * содержимое Модуля сама: у каждого включённого Модуля своё независимое
      * дерево и свой Final UI (см. Ядро UI модулей), а здесь только его
@@ -946,7 +1047,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     function tree() {
         return h('div', { class: 'stme-panel' },
             TwoColumn({
-                left: [statusCard(), modelsCard(), macrosCard(), lorebookCard(), summaryCard(), memoryGraphCard(), updatesCard()],
+                left: [statusCard(), modelsCard(), macrosCard(), lorebookCard(), summaryCard(), memoryGraphCard(), presetCard(), updatesCard()],
                 right: [modulesCard()],
             }),
         );
