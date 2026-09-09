@@ -1272,3 +1272,54 @@
     line-height: 1.4;
 }
 .stme-memory-graph-status:empty { display: none; }
+
+/* Кнопки плавающего окна графа — ТОТ ЖЕ вид, что в основной панели
+   (.stme-panel .menu_button выше): обводка вместо заливки, пульс на
+   наведении, danger-вариант. Панель графа — отдельное floating-окно с
+   корнем .stme-memory-graph-panel-root, ВНЕ скоупа .stme-panel, поэтому
+   без этого блока её кнопки получали голый ST-шный menu_button («уёбанные»,
+   по точной жалобе пользователя). Селекторы повторяют форму основных
+   (те же :not()-цепочки), чтобы специфичность совпадала 1:1. */
+.stme-memory-graph-panel-root .menu_button {
+    width: auto;
+    flex-shrink: 0;
+    padding: 7px 18px;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 70%, transparent);
+    border-radius: var(--stme-radius-sm);
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #dfe3ea);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.25;
+    transition: border-color .15s ease, color .15s ease;
+}
+.stme-memory-graph-panel-root .menu_button:not(.disabled):not([disabled]):hover,
+.stme-memory-graph-panel-root .menu_button:not(.disabled):not([disabled]).active,
+.stme-memory-graph-panel-root .menu_button:not(.disabled):not([disabled]):active,
+.stme-memory-graph-panel-root .menu_button:not(.disabled):not([disabled]):focus {
+    background-color: transparent;
+}
+.stme-memory-graph-panel-root .menu_button:not(.disabled):not([disabled]):hover {
+    border-color: var(--stme-accent);
+    color: var(--stme-accent);
+    animation: stme-pulse 1.5s ease-out infinite;
+}
+.stme-memory-graph-panel-root .menu_button:not(.disabled):not([disabled]):active { border-color: var(--stme-accent); animation: none; }
+.stme-memory-graph-panel-root .menu_button:focus-visible { outline: 2px solid var(--stme-accent); outline-offset: 2px; }
+.stme-memory-graph-panel-root .menu_button.stme-danger { border-color: var(--stme-danger); color: var(--SmartThemeBodyColor, #dfe3ea); }
+.stme-memory-graph-panel-root .menu_button.stme-danger:not(.disabled):not([disabled]):hover {
+    background-color: transparent;
+    border-color: var(--stme-danger-bright);
+    color: var(--stme-danger-bright);
+    animation-name: stme-pulse-danger;
+}
+.stme-memory-graph-panel-root .menu_button.stme-ok { border-color: var(--stme-ok); }
+.stme-memory-graph-panel-root .menu_button.stme-ok:not(.disabled):not([disabled]):hover {
+    background-color: transparent;
+    border-color: var(--stme-ok-bright);
+    color: var(--stme-ok-bright);
+    animation-name: stme-pulse-ok;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-memory-graph-panel-root .menu_button:hover { animation: none; }
+}
