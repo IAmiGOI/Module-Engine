@@ -976,17 +976,45 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     }
 
     function presetCard() {
-        // file-input — видимый элемент со своим `on:change` (тот же приём,
-        // что в Модуле Music): vnode нельзя кликнуть из кода, слушатель
-        // ставит Сервис DOM при рендере.
+        /**
+         * file-input НЕ рисуется как системная плитка «Choose file»: на части
+         * поверхностей встроенная кнопка выбора файла не отрисовывается вовсе
+         * (пользователь видел «просто текст»). Виджет у нас — `Button()`, а
+         * инпут нужен только как носитель диалога выбора: держим его
+         * СКРЫТЫМ рядом с кнопкой и кликаем программно из её обработчика —
+         * легально, потому что вызов идёт из пользовательского клика.
+         * Пара «кнопка + инпут» — СОСЕДИ под общим `<div>`: обработчик
+         * кнопки находит инпут запросом по этому div'у. Дерево — vnode'ы,
+         * слушатели ставит Сервис DOM на настоящие узлы, поэтому
+         * `querySelector` в обработчике честно находит живой инпут.
+         */
         const fileInput = h('input', {
-            type: 'file', accept: 'application/json,.json', class: 'stme-preset-file',
+            type: 'file', accept: 'application/json,.json', class: 'stme-preset-file-hidden',
             'on:change': event => {
                 const input = event.target;
                 importPreset(input.files?.[0]);
                 input.value = '';
             },
         });
+        const pickFile = h('div', { class: 'stme-preset-pick' },
+            Button('Import preset file…', event => {
+                // Настоящий DOM-клик по настоящему соседу-инпуту: слушатели
+                // уже поставлены Сервисом DOM (props on:*). Идём вверх от
+                // кнопки к общему родителю и ищем инпут там — в фейковом
+                // документе тестов querySelector() нет, поэтому поиск
+                // вручную по children, глубины 2 хватает с запасом.
+                let node = event.currentTarget;
+                for (let up = 0; node && up < 2; up++, node = node.parent) {
+                    const queue = [node];
+                    for (let i = 0; i < queue.length; i++) {
+                        const current = queue[i];
+                        if (current.tagName === 'input' && current.attributes?.type === 'file') { current.click(); return; }
+                        queue.push(...(current.children ?? []));
+                    }
+                }
+            }),
+            fileInput,
+        );
         return Card('Preset', {
             ...collapse.bind('card:preset'),
             subtitle: 'All settings + the module set, in one file',
@@ -995,7 +1023,7 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
             h('p', { class: 'stme-summary-help' }, 'Export downloads everything the engine remembers globally — all settings and which modules are enabled. Import restores it and reloads the page. Chat-scoped data (memory graph, summaries, per-chat notes) is not part of a preset.'),
             Row(
                 Button('Export preset file', exportPreset),
-                Field('Import from file', fileInput),
+                pickFile,
             ),
         );
     }

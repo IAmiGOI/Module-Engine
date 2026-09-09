@@ -1233,32 +1233,18 @@
 .stme-music-file::file-selector-button:hover { filter: brightness(1.15); }
 .stme-music-file:hover { border-color: var(--SmartThemeQuoteColor, #8da8ff); }
 
-/* --- Preset: file input как настоящая кнопка -----------------------------
-   Тот же приём, что у Music (.stme-music-file): инпут выбора файла пресета
-   — плитка-кнопка, а не голый «Choose Files / No file chosen». */
-.stme-preset-file {
-    display: block;
-    width: 100%;
-    box-sizing: border-box;
-    padding: 8px 10px;
-    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 55%, var(--SmartThemeBorderColor, #444));
-    border-radius: 8px;
-    background: var(--SmartThemeBlurTintColor, #1c1e26);
-    color: var(--SmartThemeBodyColor, #dfe3ea);
-    font-family: inherit;
-    font-size: 12px;
-    cursor: pointer;
-}
-.stme-preset-file::file-selector-button {
+/* --- Preset: импорт файла -----------------------------------------------
+   Системная кнопка выбора файла НЕ рисуется (пользователь видел «просто
+   текст»), поэтому виджет — наш Button, а <input type=file> держится
+   скрытым рядом: клик по кнопке программно кликает инпут (легально — из
+   пользовательского клика), инпут открывает диалог выбора. */
+.stme-preset-pick { display: flex; align-items: center; }
+.stme-preset-file-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
     border: 0;
-    border-radius: 6px;
-    margin-right: 10px;
-    padding: 5px 12px;
-    background: var(--stme-accent, #4c6fff);
-    color: #fff;
-    font-family: inherit;
-    font-size: 12px;
-    cursor: pointer;
+    padding: 0;
+    pointer-events: none;
 }
-.stme-preset-file::file-selector-button:hover { filter: brightness(1.15); }
-.stme-preset-file:hover { border-color: var(--SmartThemeQuoteColor, #8da8ff); }
