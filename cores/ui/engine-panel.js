@@ -996,23 +996,21 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
                 input.value = '';
             },
         });
-        const pickFile = h('div', { class: 'stme-preset-pick' },
-            Button('Import preset file…', event => {
-                // Настоящий DOM-клик по настоящему соседу-инпуту: слушатели
-                // уже поставлены Сервисом DOM (props on:*). Идём вверх от
-                // кнопки к общему родителю и ищем инпут там — в фейковом
-                // документе тестов querySelector() нет, поэтому поиск
-                // вручную по children, глубины 2 хватает с запасом.
-                let node = event.currentTarget;
-                for (let up = 0; node && up < 2; up++, node = node.parent) {
-                    const queue = [node];
-                    for (let i = 0; i < queue.length; i++) {
-                        const current = queue[i];
-                        if (current.tagName === 'input' && current.attributes?.type === 'file') { current.click(); return; }
-                        queue.push(...(current.children ?? []));
-                    }
+        const pickFile = h('div', {
+            class: 'stme-preset-pick',
+            // Слушатель на ОБЁРТКЕ, а не на кнопке: клик по кнопке всплывает
+            // сюда, и инпут — ПРЯМОЙ ребёнок этой обёртки, его поиск не
+            // зависит ни от `closest`/`parent` (у настоящих DOM-узлов нет
+            // `.parent` — ровно на этом первый вариант и сломался в реальном
+            // ST, хотя в фейковом документе тестов работал), ни от глубины.
+            'on:click': event => {
+                const wrapper = event.currentTarget;
+                for (const child of wrapper.children ?? []) {
+                    if (child.tagName === 'INPUT' && child.type === 'file') { child.click(); return; }
                 }
-            }),
+            },
+        },
+            Button('Import preset file…'),
             fileInput,
         );
         return Card('Preset', {
