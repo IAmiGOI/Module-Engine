@@ -1280,6 +1280,20 @@
    без этого блока её кнопки получали голый ST-шный menu_button («уёбанные»,
    по точной жалобе пользователя). Селекторы повторяют форму основных
    (те же :not()-цепочки), чтобы специфичность совпадала 1:1. */
+.stme-memory-graph-panel-root {
+    /* Переменные — ОБЯЗАТЕЛЬНО здесь: у окна графа нет предка с уже
+       объявленными --stme-*. Первый вариант без этого блока дал невалидный
+       color-mix (переменная пуста) — браузер отбросил border/color целиком,
+       и кнопки превратились в «пустой текст, но кликабельный» (вторая
+       жалоба пользователя). */
+    --stme-accent: var(--SmartThemeQuoteColor, #8da8ff);
+    --stme-danger: #f5232f;
+    --stme-danger-bright: #ff5a63;
+    --stme-ok: #3f9e72;
+    --stme-ok-bright: #57bb8c;
+    --stme-radius-sm: 7px;
+    accent-color: var(--stme-accent);
+}
 .stme-memory-graph-panel-root .menu_button {
     width: auto;
     flex-shrink: 0;
