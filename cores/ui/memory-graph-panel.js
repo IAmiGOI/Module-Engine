@@ -5,7 +5,7 @@ import { createDragHandlers, clampToViewport } from '../../libraries/shared/drag
 import { loadCytoscape } from '../../libraries/core/graph-rendering.js';
 import {
     FloatingPanel, Card, Section, Button, TextInput, TextArea, NumberInput, Toggle,
-    Details, Row, Field, EmptyState, Badge,
+    Details, Row, Field, EmptyState, Badge, Slider,
 } from '../../libraries/shared/widgets.js';
 
 /**
@@ -475,6 +475,30 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         }
     }
 
+    // --- Настройка извлечения -------------------------------------------
+    // Лимит узлов, собираемых ШУМОМ при извлечении: маяки + маршрут + шум
+    // ВМЕСТЕ не должны превысить это число (`retrievalTargetNodes`,
+    // DEFAULT_SETTINGS: 20). Ползунок пишется сразу при отпускании — не
+    // нужен отдельный Save: `memoryGraph.configure` клэмпит и сохраняет сам.
+    const retrievalTargetNodes = signal(20);
+    const retrievalBusy = signal(false);
+
+    async function loadRetrievalSettings() {
+        const result = await call('memoryGraph.settings');
+        if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
+    }
+
+    async function saveRetrievalTargetNodes() {
+        retrievalBusy.set(true);
+        try {
+            const result = await call('memoryGraph.configure', { retrievalTargetNodes: retrievalTargetNodes.peek() });
+            if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
+            statusText.set(result.ok ? `Retrieval limit saved: ${retrievalTargetNodes.peek()} nodes` : `Failed: ${result.error?.message}`);
+        } finally {
+            retrievalBusy.set(false);
+        }
+    }
+
     // --- Cytoscape: инициализация + синхронизация elements --------------
     let cy = null;
 
@@ -678,7 +702,40 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         );
     }
 
-    // --- Дебаг-блок: 5 существующих оркестрационных операций (решено с пользователем) --
+    /**
+     * Бутстрап — вынесен из Debug (решено с пользователем): это штатная
+     * операция первого построения графа, а не дебаг. Автозапуск временно
+     * отключён (см. `bootstrapIfEmpty()` в Ядре), поэтому кнопка —
+     * единственный путь. Прогресс идёт тем же механизмом, что и раньше:
+     * Ядро публикует `memoryGraph.bootstrapStarted/Progress/Finished`.
+     */
+    function bootstrapRow() {
+        return Section('Build from Lorebook', { open: true, className: 'stme-memory-graph-section' },
+            h('p', { class: 'stme-memory-graph-hint' }, 'Creates the first graph from your Lorebook entries — reading, two model passes, and an embedding per entry. Large books take a while; progress shows in the engine panel.'),
+            Row(
+                Button('Bootstrap from Lorebook', () => runDebugAction('memoryGraph.bootstrapFromLorebook'), { disabled: busy() }),
+            ),
+        );
+    }
+
+    /**
+     * Лимит извлечения: сколько узлов максимум (маяки + маршрут + шум
+     * вместе) собирается в промпт при каждом обращении к памяти. Пишется
+     * сразу — отдельный Save не нужен, Ядро клэмпит значение само.
+     */
+    function retrievalSection() {
+        return Section('Retrieval limit', { open: true, className: 'stme-memory-graph-section' },
+            Slider('Max nodes per retrieval', retrievalTargetNodes, { min: 1, max: 200, step: 1 }),
+            h('p', { class: 'stme-memory-graph-hint' }, 'Beacons + route + noise combined. Higher pulls more context per generation; lower keeps prompts tight.'),
+            Row(
+                Button(retrievalBusy() ? 'Saving…' : 'Save limit', saveRetrievalTargetNodes, { disabled: retrievalBusy() }),
+            ),
+        );
+    }
+
+    // --- Дебаг-блок: оставшиеся оркестрационные операции (решено с
+    // пользователем; bootstrap вынесен из этого блока в свою секцию выше —
+    // это штатная операция, а не дебаг) --
     function debugBlock() {
         return Details('Debug actions',
             Row(
@@ -690,7 +747,6 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 Button('sweepMergeQueue', () => runDebugAction('memoryGraph.sweepMergeQueue')),
                 Button('sweepReconsolidationQueue', () => runDebugAction('memoryGraph.sweepReconsolidationQueue')),
                 Button('sweepBackbone', () => runDebugAction('memoryGraph.sweepBackbone')),
-                Button('bootstrapFromLorebook', () => runDebugAction('memoryGraph.bootstrapFromLorebook')),
             ),
             computed(() => (mergeQueue().length ? Badge(`${mergeQueue().length} pending merge`, { tone: 'muted' }) : null)),
             computed(() => (reconsolidationQueue().length ? Badge(`${reconsolidationQueue().length} pending reconsolidation`, { tone: 'muted' }) : null)),
@@ -743,14 +799,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } }),
                     h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
                 ),
-                h('div', { class: 'stme-memory-graph-sidebar', style: { flex: '1', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' } },
+                h('div', { class: 'stme-memory-graph-sidebar' },
                     Row(
                         Button('+ Node', () => openCreateForm({ sector: 0, ring: 0 })),
                         Button('Refresh', refresh),
                     ),
-                    characterOriginRow(),
                     computed(() => (statusText() ? h('div', { class: 'stme-memory-graph-status' }, statusText()) : null)),
-                    nodeForm(),
+                    Section('Node', { open: true, className: 'stme-memory-graph-section' },
+                        characterOriginRow(),
+                        nodeForm(),
+                    ),
+                    bootstrapRow(),
+                    retrievalSection(),
                     debugBlock(),
                 ),
             ),
@@ -771,6 +831,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      */
     async function open() {
         await loadWindowState();
+        await loadRetrievalSettings();
         const finalUi = mount(tree());
         await finalUi.settled?.();
         await refresh();
