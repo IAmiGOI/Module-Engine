@@ -1248,3 +1248,27 @@
     padding: 0;
     pointer-events: none;
 }
+
+/* --- Memory Graph: сайдбар редактора ------------------------------------
+   Сайдбар собран из Section-виджетов («Node», «Build from Lorebook»,
+   «Retrieval limit») — им здесь только аккуратные отступы и тонкие
+   разделители, стили самих Section/Card общие (panel.css выше). */
+.stme-memory-graph-sidebar {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 2px 4px 6px 0;
+}
+.stme-memory-graph-section .stme-section-body { display: flex; flex-direction: column; gap: 6px; }
+.stme-memory-graph-hint { margin: 0; font-size: 11px; line-height: 1.45; opacity: .72; }
+.stme-memory-graph-status {
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--stme-accent, #4c6fff) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--stme-accent, #4c6fff) 35%, transparent);
+    font-size: 12px;
+    line-height: 1.4;
+}
+.stme-memory-graph-status:empty { display: none; }
