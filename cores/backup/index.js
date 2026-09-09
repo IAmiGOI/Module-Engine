@@ -32,8 +32,21 @@ export function createBackupCore(host) {
         return () => sources.delete(id);
     }
 
-    async function exportSnapshot() {
-        const entries = await Promise.all([...sources.entries()].map(async ([id, source]) => ({ id, raw: await source.readRaw() })));
+    /**
+     * `sourceIds` (опционально) — фильтр: взять только перечисленные
+     * источники. Потребитель — экспорт ПРЕСЕТА (карточка Preset панели):
+     * пресет = «настройки и модули одним файлом», а chat-scoped данные
+     * (граф памяти, саммари, аннотации — всё, что живёт в chatMemory)
+     * в пресете не нужны и могут весить десятки мегабайт. Полный экспорт
+     * (без фильтра) остаётся как был — это бэкап, а не пресет.
+     */
+    async function exportSnapshot({ sourceIds } = {}) {
+        const wanted = Array.isArray(sourceIds) && sourceIds.length ? new Set(sourceIds) : null;
+        const entries = await Promise.all(
+            [...sources.entries()]
+                .filter(([id]) => !wanted || wanted.has(id))
+                .map(async ([id, source]) => ({ id, raw: await source.readRaw() })),
+        );
         return buildSnapshot(entries);
     }
 
@@ -50,7 +63,7 @@ export function createBackupCore(host) {
         return restored;
     }
 
-    const unregisterExport = host.own.register('backup.export', () => exportSnapshot());
+    const unregisterExport = host.own.register('backup.export', params => exportSnapshot(params));
     const unregisterImport = host.own.register('backup.import', params => importSnapshot(params?.snapshot));
 
     return {
