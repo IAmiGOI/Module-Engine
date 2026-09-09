@@ -922,37 +922,35 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     }
 
     /**
-     * Пресет — один файл со ВСЕЙ настройкой движка: экспорт и импорт
-     * снапшота Ядра бэкапа (`backup.export`/`backup.import`). В снапшот
-     * входят ОБА зарегистрированных источника: `settings`
-     * (extensionSettings — настройки всех Ядер и Модулей ВКЛЮЧАЯ
-     * `core.runner.enabledModules`, то есть состав Модулей) и `chatMemory`
-     * (chatMetadata — данные, привязанные к текущему чату). Никакой своей
-     * сборки здесь нет и быть не должно: панель — тонкая проводка, какие
-     * источники существуют, решает сборщик движка (engine-wiring.js).
-     *
-     * Экспорт: снапшот → `file.download` (Сервис файлового I/O). Имя файла
-     * несёт дату — пресеты скачиваются по нескольку раз, а содержимое
-     * снапшота уже само помнит `createdAt`.
+     * Пресет — один файл со ВСЕЙ настройкой движка. Экспортируется ТОЛЬКО
+     * источник `settings` (extensionSettings — настройки всех Ядер и
+     * Модулей, включая `core.runner.enabledModules`, то есть состав
+     * Модулей): chat-scoped данные (граф памяти, саммари, аннотации —
+     * источник `chatMemory`) в пресете не нужны и могут весить десятки
+     * мегабайт. Никакой своей сборки здесь нет: набор источников решает
+     * сборщик движка (engine-wiring.js), панель лишь называет нужные.
      *
      * Импорт: файл пользователь выбирает САМ (виджет `h('input type=file')`
      * со своим `on:change` — vnode нельзя «нажать» за него, см. тот же
      * приём в Модуле Music) → `file.readText` (Сервис, а не FileReader
-     * напрямую) → JSON.parse → `backup.import` → потом СОСТАВ Модулей
-     * подводится к записанному в пресете через `moduleRegistry.reconcile()`
-     * — снапшот восстанавливает только ЗАПИСЬ `enabledModules`, живые
-     * экземпляры она сама не строит (см. reconcile()'s doc-comment). Затем
-     * карточки панели перечитывают свои списки: их конфигурация только что
-     * изменилась под ними.
+     * напрямую) → JSON.parse → `backup.import` → перезагрузка страницы.
+     *
+     * Почему перезагрузка, а не «перечитать в живые Ядра»: конфигурацию
+     * Ядра подняли из storage один раз при старте движка
+     * (`restoreWorkers()`/`load()`/...), повторный прогон этих путей
+     * небезопасен — `summaryCore.load()`, например, повторно регистрирует
+     * этапы пайплайна и подписки. Перезагрузка — тот же паттерн, что у
+     * самообновления: движок при старте восстанавливает всё из записанного
+     * пресетом состояния сам, каждый Ядро — своим собственным путём.
      */
     async function exportPreset() {
-        const result = await call('backup.export');
+        const result = await call('backup.export', { sourceIds: ['settings'] });
         if (!result.ok) { flash(presetFlash, 'error'); await notify('error', result.error.message); return; }
         const stamp = new Date().toISOString().slice(0, 10);
         const saved = await callService('file.download', { filename: `stme-preset-${stamp}.json`, content: JSON.stringify(result.value, null, 2) });
         flash(presetFlash, saved.ok ? 'ok' : 'error');
         await notify(saved.ok ? 'ok' : 'error',
-            saved.ok ? 'Preset downloaded — settings, modules and chat memory in one file.' : saved.error.message);
+            saved.ok ? 'Preset downloaded — all settings and the module set in one file.' : saved.error.message);
     }
 
     async function importPreset(file) {
@@ -966,16 +964,12 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
             catch (error) { flash(presetFlash, 'error'); await notify('error', `Not a valid preset file: ${error.message}`); return; }
             const imported = await call('backup.import', { snapshot });
             if (!imported.ok) { flash(presetFlash, 'error'); await notify('error', imported.error.message); return; }
-            // Снапшот вернул состав к записанному в нём — подводим живые
-            // экземпляры Модулей к этой записи (включить недостающих,
-            // выключить лишних) и перечитываем всё, что панель держит
-            // черновиками: конфигурация под карточками только что сменилась.
-            const enabledFromSettings = await call('storage.settings.get', { namespace: 'core.runner', key: 'enabledModules', fallback: [] });
-            await moduleRegistry?.reconcile(enabledFromSettings.ok ? enabledFromSettings.value ?? [] : []);
-            await Promise.all([loadWorkers(), loadMacros(), loadTrackerFields(), loadSummarySettings(), loadMemoryGraphSettings()]);
-            await Promise.all([loadLorebook(), loadSummaries(), loadMemoryGraphCount()]);
             flash(presetFlash, 'ok');
-            await notify('ok', `Preset imported (sources: ${imported.value.join(', ') || 'none'}).`);
+            const sources = imported.value.join(', ') || 'none';
+            await notify('ok', `Preset imported (sources: ${sources}) — reloading the page to apply it.`);
+            // Дать тосту дожить: страница уйдёт раньше, чем его увидят,
+            // если перезагрузить в тот же тик.
+            setTimeout(() => { window.location.reload(); }, 600);
         } finally {
             presetBusy.set(false);
         }
@@ -995,10 +989,10 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         });
         return Card('Preset', {
             ...collapse.bind('card:preset'),
-            subtitle: 'The whole setup in one file — settings, modules, chat memory',
+            subtitle: 'All settings + the module set, in one file',
             className: computed(() => (presetFlash() ? `stme-flash stme-flash-${presetFlash()}` : '')),
         },
-            h('p', { class: 'stme-summary-help' }, 'Export downloads everything the engine remembers; Import restores it on this (or any other) machine. Chat memory comes along only if the import happens in a chat — it is scoped per chat.'),
+            h('p', { class: 'stme-summary-help' }, 'Export downloads everything the engine remembers globally — all settings and which modules are enabled. Import restores it and reloads the page. Chat-scoped data (memory graph, summaries, per-chat notes) is not part of a preset.'),
             Row(
                 Button('Export preset file', exportPreset),
                 Field('Import from file', fileInput),
