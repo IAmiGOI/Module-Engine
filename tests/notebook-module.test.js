@@ -8,9 +8,9 @@ import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import {
-    createNotebookModule, clampNoteSettings, addNote, updateNote, removeNote,
-    buildNotebookPrompt, computeInsertIndex, MODULE_ID, DEFAULT_SETTINGS, NOTEBOOK_TOOL_SCHEMA,
-} from '../modules/notebook/index.js';
+    createNotebookSubmodule, clampNoteSettings, addNote, updateNote, removeNote,
+    buildNotebookPrompt, computeInsertIndex, NOTEBOOK_MODULE_ID as MODULE_ID, DEFAULT_SETTINGS, NOTEBOOK_TOOL_SCHEMA,
+} from '../modules/tools/notebook.js';
 
 // --- Чистые функции ---------------------------------------------------------
 
@@ -162,7 +162,7 @@ function buildEngine({ rights } = {}) {
         ],
     });
 
-    return { engine, tools, notifications, pipelineCore, settingsContext, module: createNotebookModule(moduleHost) };
+    return { engine, tools, notifications, pipelineCore, settingsContext, module: createNotebookSubmodule(moduleHost) };
 }
 
 const invoke = (tools, args) => tools.get('Notebook').action(args);
