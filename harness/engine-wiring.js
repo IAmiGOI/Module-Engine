@@ -148,8 +148,12 @@ const DEFINITIONS = [{
 const RUNNER_NAMESPACE = 'core.runner';
 const ENABLED_KEY = 'enabledModules';
 
-function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, storageHost, onChanged = () => {} }) {
+export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, storageHost, onChanged = () => {}, definitions = DEFINITIONS }) {
     const live = new Map(); // id -> { instance, finalUi }
+    // Локальная ссылка на состав: тестам (и только им) можно подсунуть свой
+    // список лёгких Модулей вместо настоящих DEFINITIONS — реестру нужен
+    // интерфейс Модуля (`create`/`load`/`tree`), не его начинка.
+    const DEFS = definitions;
 
     /**
      * Кладёт корни включённых Модулей в выделенные им слоты. Отдельным шагом и
@@ -199,7 +203,7 @@ function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, stor
         const result = await request(storageHost.own, 'storage.settings.get', {
             params: { namespace: RUNNER_NAMESPACE, key: ENABLED_KEY, fallback: [] },
         });
-        const wanted = (result.ok ? result.value ?? [] : []).filter(id => DEFINITIONS.some(item => item.id === id));
+        const wanted = (result.ok ? result.value ?? [] : []).filter(id => DEFS.some(item => item.id === id));
         for (const id of wanted) {
             try { await enable(id, { remember: false }); }
             catch (error) { console.warn(`[ST Module Engine (Beta)] Could not bring back module "${id}":`, error); }
@@ -209,7 +213,7 @@ function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, stor
 
     async function enable(id, { remember: shouldRemember = true } = {}) {
         if (live.has(id)) return true;
-        const definition = DEFINITIONS.find(item => item.id === id);
+        const definition = DEFS.find(item => item.id === id);
         if (!definition) throw new Error(`module "${id}" is not installed.`);
 
         const moduleHost = engine.registerCaller(definition.id, 'modules', definition.rights);
@@ -265,14 +269,45 @@ function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, stor
         return true;
     }
 
+    /**
+     * Подвести живой состав к ЖЕЛАЕМОМУ списку — включить недостающих,
+     * выключить лишних, одним вызовом. Потребитель — импорт пресета
+     * (карточка Preset панели движка): снапшот бэкапа восстанавливает
+     * `core.runner.enabledModules` внутри extensionSettings, но это лишь
+     * ЗАПИСЬ — живые экземпляры она сама не строит и не снимает. Ровно
+     * тот же разрез, что у `restore()` при старте: настройка — данные,
+     * состав — работа реестра.
+     *
+     * Незнакомые id из целевого списка молча пропускаются (сборка могла
+     * измениться — та же дисциплина, что в `restore()`); восстанавливать
+     * смысл не имеет: сохранение ИСТИННОГО состава делает сам
+     * enable/disable через remember(), и он совпадёт с целевым минус
+     * пропущенные.
+     */
+    async function reconcile(wantedIds = []) {
+        const wanted = (wantedIds ?? []).filter(id => DEFS.some(item => item.id === id));
+        const currentlyEnabled = [...live.keys()];
+        for (const id of wanted) {
+            if (!live.has(id)) {
+                try { await enable(id); }
+                catch (error) { console.warn(`[ST Module Engine (Beta)] Could not bring in module "${id}" during preset import:`, error); }
+            }
+        }
+        for (const id of currentlyEnabled) {
+            if (!wanted.includes(id)) await disable(id);
+        }
+        return { enabled: [...live.keys()] };
+    }
+
     return {
-        list: () => DEFINITIONS.map(({ id, title, description }) => ({ id, title, description })),
+        list: () => DEFS.map(({ id, title, description }) => ({ id, title, description })),
         enabled: () => [...live.keys()],
         instance: id => live.get(id)?.instance,
         requestHud,
         enable,
         disable,
         restore,
+        reconcile,
     };
 }
 
