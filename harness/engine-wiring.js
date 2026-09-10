@@ -570,6 +570,10 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // от чего Гейты и защищают.
     const enginePanel = createEnginePanelCore(engine.registerCaller('core.ui.panel', 'cores', { tier: 'official' }), {
         mount: node => uiEngine.mount('settings', node),
+        // Второе дерево Ядра — экран настроек (пресеты + апдейты, решено с
+        // пользователем) — монтируется СВОИМ ключом, иначе деревья
+        // столкнулись бы в одной карте реестра монтирований.
+        mountSettings: node => uiEngine.mount('settingsScreen', node),
         listContracts: () => [
             ...engine.buses.cores.contracts(),
             ...engine.buses.services.contracts(),

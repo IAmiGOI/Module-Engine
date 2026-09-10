@@ -109,7 +109,7 @@ function fromMacroRecord(record) {
  * править эндпоинты и ключи в обход Шины было бы ровно тем случаем, ради
  * которого Гейты и существуют.
  */
-export function createEnginePanelCore(host, { mount, listContracts, modules: moduleRegistry, openMemoryGraphPanel } = {}) {
+export function createEnginePanelCore(host, { mount, mountSettings, listContracts, modules: moduleRegistry, openMemoryGraphPanel } = {}) {
     // Что свёрнуто — помнится между сеансами. По умолчанию свёрнуто всё.
     const collapse = createCollapseState(host.own, { namespace: 'core.ui.panel' });
     const workers = signal([]);
@@ -1097,9 +1097,41 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
     function tree() {
         return h('div', { class: 'stme-panel' },
             TwoColumn({
-                left: [statusCard(), modelsCard(), macrosCard(), lorebookCard(), summaryCard(), memoryGraphCard(), presetCard(), updatesCard()],
+                // memoryGraphCard(), presetCard() и updatesCard() здесь БОЛЬШЕ
+                // НЕТ (решено с пользователем: граф — «уже есть в боковой
+                // панели, убери из основной»; пресеты и апдейты — «перенеси
+                // в экран настроек»). Граф живёт своим плавающим окном, вход —
+                // кнопка в доке-пилюле; пресеты и апдейты — на ОТДЕЛЬНОМ экране
+                // настроек (settingsTree() ниже, вход — шестерёнка в доке).
+                // Сигналы и подписки watch() остались здесь же НАРОЧНО: оба
+                // дерева — дети одного Ядра, и переезд не разорвал ни одну
+                // цепочку событий.
+                left: [modelsCard(), macrosCard(), lorebookCard(), summaryCard()],
                 right: [modulesCard()],
             }),
+        );
+    }
+
+    /**
+     * Второе дерево Ядра — ЭКРАН НАСТРОЕК (решено с пользователем: «перенеси
+     * в экран настроек раздел пресетов и апдейтов из основного меню»).
+     * Живёт в том же Ядре, что и основная панель, намеренно: presetCard() и
+     * updatesCard() держатся за общие сигналы (repository, presetFlash,
+     * updateFlash…) и общие `collapse`-памятки — выносить их в отдельное Ядро
+     * значило бы дублировать состояние. Монтируется СВОИМ ключом
+     * (`settingsScreen`), поэтому деревья не сталкиваются в реестре
+     * монтирований — тот же приём, что у `hud()` модулей.
+     */
+    function settingsTree() {
+        return h('div', { class: 'stme-panel' },
+            // statusCard() («Engine») тоже переехал сюда (решено с
+            // пользователем: «перенеси вкладку с названием Engine туда же»):
+            // список контрактов и показание генерации — служебные сведения о
+            // машине, им место рядом с пресетами и апдейтами, а не в основном
+            // экране работы.
+            statusCard(),
+            presetCard(),
+            updatesCard(),
         );
     }
 
@@ -1188,15 +1220,29 @@ export function createEnginePanelCore(host, { mount, listContracts, modules: mod
         if (repo.ok) repository.set({ owner: '', repo: '', extensionName: '', ...repo.value });
         modules.set(moduleRegistry?.list() ?? []);
         syncEnabled(moduleRegistry?.enabled() ?? []);
-        return mount(tree());
+        const ui = await mount(tree());
+        // Второе дерево — экран настроек — монтируется СВОИМ ключом рядом
+        // (см. settingsTree()): корень забирает index.js в body своего
+        // full-screen оверлея. Один `open()` поднимает ОБА дерева — данные у
+        // них общие, раздельный монтаж порождал бы два чтения конфигурации.
+        // `mountSettings` опционален: тесты/упрощённые хосты поднимают только
+        // основную панель, экран настроек тогда просто не существует.
+        settingsUi = mountSettings ? await mountSettings(settingsTree()) : null;
+        return ui;
     }
 
     const subscriptions = watch();
+    // Корень второго дерева (экран настроек) — забирает index.js. null, пока
+    // open() не отработал или хост не дал mountSettings.
+    let settingsUi = null;
 
     return {
         open,
         refresh: loadWorkers,
         refreshModules: () => { modules.set(moduleRegistry?.list() ?? []); syncEnabled(moduleRegistry?.enabled() ?? []); },
+        /** Корень дерева экрана настроек — null, если экран не поднимался. */
+        settingsRoot: () => settingsUi?.getRoot() ?? null,
+        settingsSettled: () => settingsUi?.settled() ?? Promise.resolve(),
         close: () => { for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
     };
 }
