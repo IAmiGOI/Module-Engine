@@ -232,6 +232,8 @@ async function init() {
         settingsPanel.open();
     };
     const openSettings = () => { panel.close(); settingsPanel.open(); };
+    // Flask в пилюле: закрыть настройки (если открыты) и тумблировать панель.
+    const toggleMain = () => { settingsPanel.close(); panel.toggle(); };
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => openMain());
     addLauncherDock(panel, {
         openMemoryGraphPanel: () => memoryGraphPanel.show(),
