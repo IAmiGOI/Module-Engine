@@ -180,7 +180,7 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, selfUpdate, memoryGraphPanel, activityLight, modules } = await wireEngine({
+    const { engine, panelUi, selfUpdate, memoryGraphPanel, activityLight, modules, enginePanel } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
