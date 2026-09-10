@@ -889,11 +889,19 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         saveWindowState();
     }
 
+    /** Спрятать окно — та же запись состояния, что и у крестика FloatingPanel (onClose выше): кнопка дока и крестик ведут себя одинаково. */
+    function hide() {
+        panelVisible.set(false);
+        saveWindowState();
+        if (cy) { cy.destroy(); cy = null; }
+    }
+
     return {
         tree,
         open,
         activate,
         show,
+        hide,
         refresh,
         isVisible: () => panelVisible.peek(),
         stop: () => { for (const unsubscribe of refreshUnsubscribers.splice(0)) unsubscribe(); },
