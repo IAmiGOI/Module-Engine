@@ -45,6 +45,18 @@ export function createEdgeDrag({
         get suppressClick() { return suppressClick; },
         'on:pointerdown': event => {
             if (event.pointerType === 'touch' || event.button !== 0) return;
+            if (event.target?.closest?.('button')) return;
+            // Кнопки внутри элемента драг НЕ начинают — двойная причина,
+            // обе пойманы живьём на пилюле-доке:
+            //  1) `setPointerCapture` перетягивает ВСЕ последующие события
+            //     на захвативший элемент, и собранный из пары down/up `click`
+            //     приходит ЗОНЕ, а не кнопке — кнопки переставали нажиматься
+            //     ВОВСЕ («любой ЛКМ считается за перетаскивание»);
+            //  2) микросдвиг руки >4px за время нажатия превращал клик в
+            //     драг, и `suppressClick` гасил легитимное нажатие.
+            // Тот же приём у draggable.js («не по кнопкам внутри шапки»).
+            // Тащить — хватаясь за тело пилюли, а не за её кнопки.
+            
             drag = {
                 startY: event.clientY,
                 // Текущий отступ снизу приходит ЗВОНИТЕЛЕМ (getBottom): сам
