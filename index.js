@@ -66,7 +66,12 @@ function getContext() {
  * клик честно ничего не откроет), the rest stay empty
  * `stme-launcher-dock-slot`s reserved for future quick actions, kept the
  * same visual size so the dock's shape doesn't change when another real
- * action arrives.
+ * action arrives. ВТОРОЙ пустой слот (нижний) заменён ШЕСТЕРЁНКОЙ
+ * (`stme-launcher-dock-btn-settings`) — решено с пользователем: Memory Graph
+ * из ОСНОВНОГО меню движка убран (он уже живёт своим плавающим окном, вход —
+ * здесь и в своей карточке… своей карточки больше нет, см.
+ * cores/ui/engine-panel.js), а вместо него в доке — отдельный экран настроек
+ * того же full-screen вида, что основная панель.
  *
  * Wrapped in a `.stme-launcher-dock-zone` — a stationary hover hitbox, NOT
  * the pill itself. An earlier version put `:hover` directly on the sliding
@@ -75,7 +80,7 @@ function getContext() {
  * `:hover` — a visible vibration (caught live). The zone never moves; only
  * the pill inside it does.
  */
-function addLauncherDock(panel, { openMemoryGraphPanel, requestModuleHud, activityState } = {}) {
+function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, requestModuleHud, activityState } = {}) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
     const zone = document.createElement('div');
     zone.id = 'stmeBetaLauncherDock';
@@ -91,11 +96,14 @@ function addLauncherDock(panel, { openMemoryGraphPanel, requestModuleHud, activi
             <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-music" title="Show Music player" data-i18n="[title]Show Music player">
                 <i class="fa-solid fa-music fa-fw"></i>
             </button>
-            <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
+            <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-settings" title="Open engine settings" data-i18n="[title]Open engine settings">
+                <i class="fa-solid fa-gear fa-fw"></i>
+            </button>
             <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
         </div>`;
-    zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph):not(.stme-launcher-dock-btn-music)').addEventListener('click', () => panel.toggle());
+    zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph):not(.stme-launcher-dock-btn-music):not(.stme-launcher-dock-btn-settings)').addEventListener('click', () => panel.toggle());
     zone.querySelector('.stme-launcher-dock-btn-graph').addEventListener('click', () => openMemoryGraphPanel?.());
+    zone.querySelector('.stme-launcher-dock-btn-settings').addEventListener('click', () => openSettingsPanel?.());
     // GENERIC-канал: кнопка знает только id Модуля и просит Раннер показать
     // его HUD. Модуль выключен — requestHud вернёт false, клик не сделает вид,
     // что что-то открыл.
@@ -195,9 +203,18 @@ async function init() {
     const panel = createFullScreenPanel({ title: 'ST Module Engine' });
     panel.body.append(panelUi.getRoot());
 
+    // Отдельный экран настроек — ТОТ ЖЕ full-screen вид, что основная панель
+    // (решено с пользователем: «чтобы вело на такой же экран по принципу и
+    // виду основной»). Содержимое рисует САМО Ядро панели вторым деревом
+    // (settingsTree: пресеты + апдейты, «перенеси в экран настроек раздел
+    // пресетов и апдейтов») — корень забирается здесь в body оверлея. Данные
+    // общие с основной панелью, потому что это то же Ядро.
+    const settingsPanel = createFullScreenPanel({ title: 'ST Module Engine — Settings' });
+    settingsPanel.body.append(enginePanel.settingsRoot());
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => panel.open());
     addLauncherDock(panel, {
         openMemoryGraphPanel: () => memoryGraphPanel.show(),
+        openSettingsPanel: () => settingsPanel.open(),
         requestModuleHud: id => modules.requestHud(id),
         activityState: activityLight.state,
     });
