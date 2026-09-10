@@ -2,6 +2,7 @@ import { wireEngine } from './harness/engine-wiring.js';
 import { createFullScreenPanel } from './harness/full-screen-panel.js';
 import { isMobileSurface } from './cores/ui/final-ui-android.js';
 import { effect } from './cores/ui/reactive.js';
+import { createEdgeDrag } from './libraries/shared/edge-drag.js';
 
 /**
  * Real SillyTavern entry point — verification-only, NOT the real Раннер
@@ -135,6 +136,34 @@ function addLauncherDock(panel, { openMemoryGraphPanel, requestModuleHud, activi
             previousClass = next;
         });
     }
+    // Вертикальное перетаскивание по правому краю — Библиотека
+    // ([edge-drag.js](./libraries/shared/edge-drag.js)), здесь только проводка.
+    // Двигается САМА зона (неподвижная по договору «анти-вибрации» выше — но
+    // ЦЕЛИКОМ и только ПОКА её тащат; пилюля внутри по-прежнему ездит одна,
+    // так что вибрации это не возвращает). Раскрытие по наведению не тронуто:
+    // `:hover` живёт на зоне и после отпускания пилюля сворачивается на новом
+    // месте сама, как только мышь уйдёт.
+    const edgeDrag = createEdgeDrag({
+        // localStorage, а не storage-Сервис движка: пилюля живёт МИМО дерева
+        // Ядер (см. panel.css) и до Раннера с его шинами не добирается — ей
+        // доступен только браузер.
+        storage: {
+            getItem: () => { try { return localStorage.getItem('stmeBetaLauncherDockY'); } catch { return null; } },
+            setItem: value => { try { localStorage.setItem('stmeBetaLauncherDockY', value); } catch { /* приватный режим — место просто не сохранится */ } },
+        },
+        getViewportHeight: () => window.innerHeight,
+        getHeight: () => zone.offsetHeight,
+        getBottom: () => window.innerHeight - zone.getBoundingClientRect().bottom,
+        setBottom: px => { zone.style.bottom = `${px}px`; },
+    });
+    edgeDrag.restore();
+    for (const handler of ['on:pointerdown', 'on:pointermove', 'on:pointerup', 'on:pointercancel']) {
+        zone.addEventListener(handler.slice(3).toLowerCase(), edgeDrag[handler]);
+    }
+    // Гашение досланного после драга клика — ДО обработчиков кнопок (capture).
+    zone.addEventListener('click', event => {
+        if (edgeDrag.suppressClick) { event.stopPropagation(); event.preventDefault(); }
+    }, true);
     document.body.append(zone);
 }
 
