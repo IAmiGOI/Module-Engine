@@ -219,12 +219,23 @@ async function init() {
     // `toggle()` у основной панели тоже проходит через это переключение:
     // клик по кнопке дока — самый частый путь, и он обязан гасить настройки.
     const openMain = () => { settingsPanel.close(); panel.open(); };
-    const toggleMain = () => { settingsPanel.close(); panel.toggle(); };
+    // Тумблер шестерёнки — зеркало `panel.toggle()` (решено с пользователем:
+    // «с настройками так не работает. Сделай так, чтобы работало»): Settings
+    // открыты → закрыть; закрыты → открыть (закрыв основную панель).
+    // Состояние читаем из DOM-флага `hidden` (единственный источник правды
+    // createFullScreenPanel): метода isOpen() у него нет и заводить его
+    // ради одной проверки здесь не нужно.
+    const settingsOpen = () => !settingsPanel.body.parentElement.hidden;
+    const toggleSettings = () => {
+        if (settingsOpen()) { settingsPanel.close(); return; }
+        panel.close();
+        settingsPanel.open();
+    };
     const openSettings = () => { panel.close(); settingsPanel.open(); };
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => openMain());
     addLauncherDock(panel, {
         openMemoryGraphPanel: () => memoryGraphPanel.show(),
-        openSettingsPanel: openSettings,
+        openSettingsPanel: toggleSettings,
         requestModuleHud: id => modules.requestHud(id),
         activityState: activityLight.state,
         // Пилюля знает только `panel` для своего toggle — обёртка ниже
