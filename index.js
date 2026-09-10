@@ -101,8 +101,17 @@ function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, toggl
             </button>
             <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
         </div>`;
+    // Graph и Music в доке — тоже ТУМБЛЕРЫ (решено с пользователем: «с
+    // музыкой и графом сделай также, чтобы закрывались»). Граф умеет
+    // show()/hide()/isVisible() — переключаем по его собственному ответу;
+    // Music идёт через GENERIC requestHud(id) Раннера, который сам стал
+    // тумблером (engine-wiring.js).
+    const toggleGraph = () => {
+        if (memoryGraphPanel?.isVisible?.()) { memoryGraphPanel.hide(); return; }
+        openMemoryGraphPanel?.();
+    };
     zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph):not(.stme-launcher-dock-btn-music):not(.stme-launcher-dock-btn-settings)').addEventListener('click', () => (toggleMain ?? (() => panel.toggle()))());
-    zone.querySelector('.stme-launcher-dock-btn-graph').addEventListener('click', () => openMemoryGraphPanel?.());
+    zone.querySelector('.stme-launcher-dock-btn-graph').addEventListener('click', toggleGraph);
     zone.querySelector('.stme-launcher-dock-btn-settings').addEventListener('click', () => openSettingsPanel?.());
     // GENERIC-канал: кнопка знает только id Модуля и просит Раннер показать
     // его HUD. Модуль выключен — requestHud вернёт false, клик не сделает вид,
