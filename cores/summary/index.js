@@ -174,8 +174,12 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     }
 
     /** Тихий вызов модели — тот же контракт и та же форма запроса, что у cores/tracking/index.js's poll() (workerId пиннит на конкретный сайдкар). Здесь ответ — голый текст, не JSON: свёртке нечего парсить. */
+    // `maxTokens: 5000` — явно, а не молчаливый дефолт Ядра моделей (1000):
+    // свёртка батча в 10 сообщений регулярно упиралась в потолок и обрезала
+    // саммари на полуслове. Реальная жалоба пользователя.
+    const FOLD_MAX_TOKENS = 5000;
     async function askModelToFold(systemPrompt, prompt) {
-        const result = await call('model.generate', { prompt, systemPrompt, workerId: settings.workerId ?? undefined });
+        const result = await call('model.generate', { prompt, systemPrompt, maxTokens: FOLD_MAX_TOKENS, workerId: settings.workerId ?? undefined });
         if (!result.ok) throw new Error(result.error.message);
         return String(result.value ?? '').trim();
     }

@@ -2,7 +2,8 @@ import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { fillTemplate } from '../../libraries/core/fill-template.js';
-import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, StatBlock } from '../../libraries/shared/widgets.js';
+import { createDragHandlers, clampToViewport } from '../../libraries/shared/draggable.js';
+import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, StatBlock, FloatingPanel } from '../../libraries/shared/widgets.js';
 import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
 import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCustomPreset } from '../../cores/models/internal-engine.js';
 
@@ -42,6 +43,10 @@ import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCus
 export const MODULE_ID = 'module.time';
 const SETTINGS_NAMESPACE = MODULE_ID;
 const TRACKER_ID = 'rp-time';
+// Отдельный ключ настроек для состояния плавающего окна — та же привычка,
+// что у Модуля «Трекер» (`HUD_KEY`): видимость/свёрнутость/позиция/размер
+// живут своей жизнью, не мешая основным настройкам формы.
+const HUD_KEY = 'hud';
 // `namespace` для Ядра истории чата — свой слот в его хранилище, отдельный от
 // настроек Модуля (`SETTINGS_NAMESPACE`, тот же `storage.settings`, но другой
 // Сервис под ним).
@@ -199,6 +204,22 @@ export function createTimeModule(host) {
     const fields = signal(TIME_PRESETS[0].fields.map(field => ({ ...field })));
     const workerId = signal('');
     const enabled = signal(true);
+    // Показывать ли бейдж времени в чате (полоса под сообщением). Скрытие —
+    // только ВИЗУАЛЬНОЕ: опросы, макрос и шкала живут дальше, как будто
+    // ничего не случилось — время всё так же доступно как `{{...}}` и в
+    // истории. Реальная просьба пользователя: панель в чате мешает, а модуль
+    // нужен. Персистится (см. save()/load()) — выбор не сбрасывается на
+    // каждый чат и перезагрузку страницы.
+    const showBadge = signal(true);
+    // Состояние плавающего окна с текущим временем — те же четыре сигнала,
+    // что у плавающей панели Модуля «Трекер»: куда перетащили, каким размером
+    // оставили, свернули ли — обязано пережить перезагрузку, иначе окно
+    // каждый раз возвращается в угол (реальная жалоба, из-за которой у
+    // Трекера вообще появилась персистентность позиции).
+    const hudVisible = signal(true);
+    const hudCollapsed = signal(false);
+    const hudPosition = signal({});
+    const hudSize = signal({});
     const workers = signal([]);
     // Пресет сэмплера/ризонинга — свойство ЭТОГО трекера, не воркера,
     // который его исполнит: тот же воркер может параллельно нести и
@@ -275,6 +296,33 @@ export function createTimeModule(host) {
 
     function notify(tone, text) {
         return call('ui.notify', { tone, text });
+    }
+
+    // --- Плавающее окно: состояние в своём ключе -----------------------------
+    // Тот же расклад, что у Модуля «Трекер» (`saveHudState`/`loadHudState`):
+    // позиция при загрузке подрезается по экрану — окно, оставленное у края,
+    // после смены размера окна браузера стало бы недостижимым.
+
+    async function saveHudState() {
+        return call('storage.settings.set', {
+            namespace: SETTINGS_NAMESPACE,
+            key: HUD_KEY,
+            value: { visible: hudVisible.peek(), collapsed: hudCollapsed.peek(), position: hudPosition.peek(), size: hudSize.peek() },
+        });
+    }
+
+    async function loadHudState() {
+        const result = await call('storage.settings.get', { namespace: SETTINGS_NAMESPACE, key: HUD_KEY, fallback: {} });
+        const saved = (result.ok ? result.value : null) ?? {};
+        hudVisible.set(saved.visible !== false);
+        hudCollapsed.set(Boolean(saved.collapsed));
+        hudSize.set(saved.size ?? {});
+        hudPosition.set(saved.position?.left === undefined ? {} : clampToViewport(saved.position, {
+            width: saved.size?.width ?? 220,
+            height: saved.size?.height ?? 120,
+            viewportWidth: globalThis.innerWidth ?? 1920,
+            viewportHeight: globalThis.innerHeight ?? 1080,
+        }));
     }
 
     // --- Шкала: через Ядро истории чата, не свой прямой storage.chatMemory --
@@ -392,7 +440,7 @@ export function createTimeModule(host) {
                 namespace: SETTINGS_NAMESPACE,
                 key: 'settings',
                 value: {
-                    preset: preset.peek(), startTime: startTime.peek(), displayTemplate: displayTemplate.peek(), fields: fields.peek(), workerId: workerId.peek(), enabled: enabled.peek(),
+                    preset: preset.peek(), startTime: startTime.peek(), displayTemplate: displayTemplate.peek(), fields: fields.peek(), workerId: workerId.peek(), enabled: enabled.peek(), showBadge: showBadge.peek(),
                     samplerPreset: samplerPreset.peek(), temperature: temperature.peek(), topP: topP.peek(), topK: topK.peek(), maxTokens: maxTokens.peek(),
                     reasoningMode: reasoningMode.peek(), reasoningEffort: reasoningEffort.peek(), reasoningBudget: reasoningBudget.peek(),
                 },
@@ -490,10 +538,69 @@ export function createTimeModule(host) {
      * роли сообщения.
      */
     function footerWidget(message) {
+        // Скрыто переключателем «Show in chat» — рисовать нечего. Возвращать
+        // null здесь безопасно: Ядро подвала (`fillSlots`) прибирает пустые
+        // слоты само, а `ui.messageFooter.attach` (см. подписку на Toggle
+        // ниже) идемпотентен и пере-раскладывает виджеты по запросу.
+        if (!showBadge()) return null;
         const hasValue = Object.prototype.hasOwnProperty.call(badges(), message.mesid);
         const isPending = pendingMesid() === message.mesid;
         if (!hasValue && !isPending) return null;
         return StatBlock('Current RP time', () => badges()[message.mesid] ?? '', { icon: '◷' });
+    }
+
+    /**
+     * Плавающее окно с текущим временем — второе дерево Модуля, ровно как у
+     * Модуля «Трекер»: Раннер (`harness/engine-wiring.js`) монтирует `hud()`
+     * ПРЯМО в `document.body`, где `position: fixed` считает от настоящего
+     * вьюпорта — внутри подвала сообщения тот же `fixed` уехал бы к началу
+     * чата (CSS `transform` у предка стал бы содержащим блоком; найдено
+     * живьём на попапе постобработки).
+     *
+     * Обёртка обязательна: корень смонтированного дерева должен быть узлом,
+     * а не сигналом; условным может быть только ребёнок.
+     */
+    function hud() {
+        return h('div', { class: 'stme-hud-root' }, computed(() => (hudVisible() ? hudPanel() : null)));
+    }
+
+    function hudPanel() {
+        return FloatingPanel('RP Time', {
+            position: hudPosition,
+            size: hudSize,
+            collapsed: hudCollapsed,
+            onToggle: value => { hudCollapsed.set(value); saveHudState(); },
+            // Крестик прячет окно, но НЕ выключает трекинг: время продолжает
+            // считаться и писать в макрос. Вернуть окно — тумблером в панели
+            // Модуля, иначе закрытие было бы необратимым.
+            onClose: () => { hudVisible.set(false); saveHudState(); },
+            drag: createDragHandlers(hudPosition, {
+                // Подрезаем при отпускании: окно, утащенное за край вместе с
+                // собственной шапкой, иначе нечем было бы вернуть.
+                onDrop: dropped => {
+                    hudPosition.set(clampToViewport(dropped, {
+                        width: hudSize.peek().width ?? 220,
+                        height: hudSize.peek().height ?? 120,
+                        viewportWidth: globalThis.innerWidth ?? 1920,
+                        viewportHeight: globalThis.innerHeight ?? 1080,
+                    }));
+                    saveHudState();
+                },
+            }),
+            onResize: next => {
+                if (next.width === hudSize.peek().width && next.height === hudSize.peek().height) return;
+                hudSize.set(next);
+                saveHudState();
+            },
+        },
+            // Одна строка «текущего» показания — то же значение, что в карточке
+            // «Current» выше и в бейдже последнего сообщения. Пустое (опрос
+            // идёт или чат новый) — честное прочерка, а не выдумка.
+            computed(() => h('div', { class: 'stme-hud-row' },
+                h('span', { class: 'stme-hud-name' }, 'Current'),
+                h('span', { class: 'stme-hud-value' }, label() || '—'),
+            )),
+        );
     }
 
     function tree() {
@@ -506,6 +613,18 @@ export function createTimeModule(host) {
                 Field('Preset', Select(preset, TIME_PRESETS.map(item => ({ value: item.id, label: item.name })))),
                 Field('Model connection', Select(workerId, workers)),
                 Toggle('Enabled', enabled),
+            ),
+            Row(
+                Toggle('Show in chat', showBadge, {
+                    hint: 'Hide the time badge under messages — tracking keeps running.',
+                    onChange: () => { call('ui.messageFooter.attach', {}); },
+                }),
+            ),
+            Row(
+                // Кнопка включения плавающего окна с текущим временем. Как и у
+                // «Трекера»: закрытие крестиком прячет окно, а не выключает
+                // трекинг — вернуть его можно только здесь.
+                Toggle('Floating time window', hudVisible, { onChange: saveHudState }),
             ),
             Row(Button('Apply preset', () => applyPreset(preset.peek()))),
             // Сэмплер/ризонинг — свойство ЭТОГО трекера, а не выбранного выше
@@ -646,6 +765,9 @@ export function createTimeModule(host) {
             fields.set(saved.value.fields ?? TIME_PRESETS[0].fields);
             workerId.set(saved.value.workerId ?? '');
             enabled.set(saved.value.enabled !== false);
+            // Настройка новая — у старых записей поля просто нет: показываем,
+            // как было всегда, вместо того чтобы молча спрятать панель.
+            showBadge.set(saved.value.showBadge !== false);
             samplerPreset.set(saved.value.samplerPreset ?? '');
             // Клэмп, а не значения с диска как есть — ручная правка файла
             // настроек или старая запись до появления этих полей не должны
@@ -662,6 +784,7 @@ export function createTimeModule(host) {
         }
         await refreshWorkers();
         await refreshCustomPresets();
+        await loadHudState();
 
         await loadHistory();
         label.set(history.peek().at(-1) ?? '');
@@ -679,6 +802,7 @@ export function createTimeModule(host) {
         description: 'Works out in-world time from the conversation and keeps it as a macro.',
         load,
         tree,
+        hud,
         advance,
         reset,
         save,
@@ -697,6 +821,10 @@ export function createTimeModule(host) {
         startTime,
         displayTemplate,
         enabled,
+        showBadge,
+        hudVisible,
+        hudPosition,
+        hudCollapsed,
         samplerPreset,
         temperature,
         topP,
