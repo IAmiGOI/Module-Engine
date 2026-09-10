@@ -39,17 +39,31 @@ function harness({ viewportHeight = 1000, height = 260, bottom = 140 } = {}) {
         releasePointerCapture: () => { state.capture = null; },
     };
     let id = 0;
-    const fire = (type, { clientY, pointerType = 'mouse', button = 0 } = {}) => {
+    const fire = (type, { clientY, pointerType = 'mouse', button = 0, onButton = false } = {}) => {
         const event = {
             pointerId: ++id, clientY, pointerType, button,
             currentTarget: element,
-            target: null,
+            // `onButton` имитирует нажатие, начавшееся НА КНОПКЕ пилюли:
+            // настоящая цель события — кнопка, и `closest('button')` у
+            // библиотеки должен её увидеть.
+            target: onButton ? { closest: () => ({}) } : null,
         };
         drag[`on:${type}`](event);
         return event;
     };
     return { drag, state, fire };
 }
+
+test('a press that starts ON A BUTTON never becomes a drag — the click reaches the button', () => {
+    const { drag, state, fire } = harness();
+    fire('pointerdown', { clientY: 500, onButton: true });
+    fire('pointermove', { clientY: 300 }); // даже БОЛЬШОЙ сдвиг — это не драг
+    fire('pointerup', { clientY: 300 });
+    assert.equal(state.bottom, 140, 'position untouched');
+    assert.equal(state.stored, null, 'nothing persisted');
+    assert.equal(drag.suppressClick, false, 'the click must reach the button');
+    assert.equal(state.capture, null, 'no pointer capture — the click event is not stolen from the button');
+});
 
 test('dragging along the edge moves bottom and stores the resting place', () => {
     const { state, fire } = harness({ bottom: 140 });
