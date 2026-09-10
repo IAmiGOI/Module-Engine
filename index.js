@@ -80,7 +80,7 @@ function getContext() {
  * `:hover` — a visible vibration (caught live). The zone never moves; only
  * the pill inside it does.
  */
-function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, requestModuleHud, activityState } = {}) {
+function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, toggleMain, requestModuleHud, activityState } = {}) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
     const zone = document.createElement('div');
     zone.id = 'stmeBetaLauncherDock';
@@ -101,7 +101,7 @@ function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, reque
             </button>
             <div class="stme-launcher-dock-slot" aria-hidden="true"></div>
         </div>`;
-    zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph):not(.stme-launcher-dock-btn-music):not(.stme-launcher-dock-btn-settings)').addEventListener('click', () => panel.toggle());
+    zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph):not(.stme-launcher-dock-btn-music):not(.stme-launcher-dock-btn-settings)').addEventListener('click', () => (toggleMain ?? (() => panel.toggle()))());
     zone.querySelector('.stme-launcher-dock-btn-graph').addEventListener('click', () => openMemoryGraphPanel?.());
     zone.querySelector('.stme-launcher-dock-btn-settings').addEventListener('click', () => openSettingsPanel?.());
     // GENERIC-канал: кнопка знает только id Модуля и просит Раннер показать
@@ -211,12 +211,25 @@ async function init() {
     // общие с основной панелью, потому что это то же Ядро.
     const settingsPanel = createFullScreenPanel({ title: 'ST Module Engine — Settings' });
     settingsPanel.body.append(enginePanel.settingsRoot());
-    document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => panel.open());
+    // Взаимное исключение (решено с пользователем: «если открыты настройки и
+    // ты открываешь основную панель — они накладываются друг на друга. Я
+    // хочу, чтобы они переключались»): оба оверлея — фиксированные слои на
+    // body, и открытие одного ДОЛЖНО закрывать другой, иначе они честно
+    // лежат друг на друге (тот, кто открыт последним, просто ниже по DOM).
+    // `toggle()` у основной панели тоже проходит через это переключение:
+    // клик по кнопке дока — самый частый путь, и он обязан гасить настройки.
+    const openMain = () => { settingsPanel.close(); panel.open(); };
+    const toggleMain = () => { settingsPanel.close(); panel.toggle(); };
+    const openSettings = () => { panel.close(); settingsPanel.open(); };
+    document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => openMain());
     addLauncherDock(panel, {
         openMemoryGraphPanel: () => memoryGraphPanel.show(),
-        openSettingsPanel: () => settingsPanel.open(),
+        openSettingsPanel: openSettings,
         requestModuleHud: id => modules.requestHud(id),
         activityState: activityLight.state,
+        // Пилюля знает только `panel` для своего toggle — обёртка ниже
+        // подменяет поведение, не трогая сам createFullScreenPanel.
+        toggleMain,
     });
 
     window.STModuleEngineBeta = engine;
