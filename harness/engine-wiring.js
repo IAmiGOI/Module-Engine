@@ -287,13 +287,23 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
      * знает только id Модуля и НЕ знает, есть ли у того hud-дерево вообще —
      * вернётся false, и кнопка не сделает вид, что что-то открыла. Никакого
      * хардкода «открыть именно Music» ни в доке, ни здесь.
+     *
+     * ТУМБЛЕР (решено с пользователем: «с музыкой и графом сделай также,
+     * чтобы закрывались»): если HUD уже виден — прячем, а не переоткрываем.
+     * Модуль отчитывается о видимости сам (`hudVisible`-сигнал или
+     * `isHudVisible()` — у Модулей нет единого канонического вида), поэтому
+     * здесь два защитных способа спросить; нет ни того, ни другого —
+     * считаем скрытым и просто показываем.
      */
     function requestHud(id) {
         const entry = live.get(id);
         if (!entry) return false;
         const instance = entry.instance;
         if (typeof instance?.setHudVisible !== 'function') return false;
-        instance.setHudVisible(true);
+        const visibleNow = typeof instance.isHudVisible === 'function'
+            ? Boolean(instance.isHudVisible())
+            : Boolean(instance.hudVisible?.peek?.());
+        instance.setHudVisible(!visibleNow);
         return true;
     }
 
