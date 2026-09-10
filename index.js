@@ -80,7 +80,7 @@ function getContext() {
  * `:hover` — a visible vibration (caught live). The zone never moves; only
  * the pill inside it does.
  */
-function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, toggleMain, requestModuleHud, activityState } = {}) {
+function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, toggleMain, requestModuleHud, activityState, memoryGraphPanel } = {}) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
     const zone = document.createElement('div');
     zone.id = 'stmeBetaLauncherDock';
@@ -249,6 +249,7 @@ async function init() {
         openSettingsPanel: toggleSettings,
         requestModuleHud: id => modules.requestHud(id),
         activityState: activityLight.state,
+        memoryGraphPanel,
         // Пилюля знает только `panel` для своего toggle — обёртка ниже
         // подменяет поведение, не трогая сам createFullScreenPanel.
         toggleMain,
