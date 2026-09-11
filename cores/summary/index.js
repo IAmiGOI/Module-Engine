@@ -363,28 +363,44 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
      * ответы» живёт ВНУТРИ одного объекта сообщения (`extra.tool_invocations`,
      * ST синтезирует `role:'tool'` строки из него при сборке payload), так
      * что вырезание одного элемента убирает и вызов, и его результат.
-     * Вырезаются только сообщения, ПОКРЫТЫЕ активным саммари (их mesid в
-     * [startIndex..endIndex] записи) — свежая история вне саммари не трогается.
+     *
+     * Граница «свежести» — от КОНЦА истории (решение архитектора 11.09):
+     * тул-колл рождается в ST уже системным, поэтому «скрыт саммари» и
+     * «просто свежий тул-колл» по is_system не различаются. Режутся скрытые
+     * тул-коллы только СТАРЕЕ защищённого окна (protectedWindow от конца
+     * истории); свежие вызовы внутри окна не трогаются никогда.
      */
-    function isCoveredByActiveSummaries(mesid, active) {
-        const index = Number(mesid);
-        return active.some(record => Number(record.startIndex) <= index && index <= Number(record.endIndex));
+    /**
+     * Заголовок саммари — ЯВНОЕ объявление «это саммари» + период, который оно
+     * замещает (запрос архитектора 11.09). Период берётся из record.startTime/
+     * endTime — а они у КАЖДОГО уровня привязаны к ПЕРВОМУ и ПОСЛЕДНЕМУ
+     * замещённому сообщению: уровень 1 пишет их из сырых сообщений батча,
+     * уровень N>1 — из крайних ДЕТЕЙ (foldChildSummaries), так что при
+     * слиянии слоёв период честно расширяется и остаётся привязанным к
+     * реальным сообщениям, а не к моменту свёртки.
+     */
+    function formatSummaryMessage(record) {
+        const from = record.startTime ? String(record.startTime) : 'unknown time';
+        const to = record.endTime ? String(record.endTime) : from;
+        return `[Summary of earlier messages #${record.startIndex}–#${record.endIndex}, covering ${from} → ${to}]\n${record.text}`;
     }
 
     async function injectIntoPrompt({ chat } = {}) {
         if (!Array.isArray(chat)) return true;
         const active = activeSummaries(summaries);
         if (active.length) {
-            // Сначала вырезание скрытых тул-коллов (пары целиком), потом unshift
-            // саммари: сплайс по ИСХОДНЫМ индексам, пока массив не сдвинут.
-            for (let i = chat.length - 1; i >= 0; i -= 1) {
-                const message = chat[i];
+            // Вырезание скрытых тул-коллов СТАРЕЕ защищённого окна (позиция
+            // считается ОТ КОНЦА — решение архитектора 11.09), затем unshift
+            // саммари. Один проход фильтром: у выживших индексы сдвигаются
+            // равномерно, поэтому «позиция от конца» считается по ИСХОДНОЙ
+            // длине массива.
+            const windowStart = chat.length - settings.protectedWindow; // всё < этого индекса — старая зона
+            const pruned = chat.filter((message, index) => {
                 const isToolCall = Array.isArray(message?.extra?.tool_invocations) && message.extra.tool_invocations.length > 0;
-                if (isToolCall && message.is_system && isCoveredByActiveSummaries(i, active)) {
-                    chat.splice(i, 1);
-                }
-            }
-            const messages = active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: record.text }));
+                return !(isToolCall && message.is_system && index < windowStart);
+            });
+            if (pruned.length !== chat.length) chat.splice(0, chat.length, ...pruned);
+            const messages = active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: formatSummaryMessage(record) }));
             chat.unshift(...messages);
         }
         return true;

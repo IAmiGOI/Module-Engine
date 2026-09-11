@@ -756,6 +756,38 @@ export function createTimeModule(host) {
         host.events.subscribe('model.workers.changed', () => refreshWorkers()),
     ];
 
+    // --- Инжект текущего времени в промпт ------------------------------------
+    //
+    // Отдельный этап на `generation.beforeSend` (DAG-режим Ядра пайплайнов —
+    // тот же приём, что у BasicSummary с его инъекцией саммари): перехватчик
+    // Ядра генерации отдаёт МУТИРУЕМУЮ КОПИЮ истории (`coreChat`), и unshift
+    // в её начало ставит сообщение ПЕРЕД всем чатом — это позиция «@0 в
+    // ChatHistory», не «@0 в SystemPrompt»: системные промпты ST живут выше
+    // истории и сюда не попадают, мы их не трогаем и не подменяем.
+    //
+    // Публикация ОТ SYSTEM: `is_system: true` + имя 'System' — ST собирает
+    // сообщение как системное, без префикса персонажа.
+    //
+    // Заголовок простой и ЯВНЫЙ (запрос архитектора 11.09): без него модель
+    // принимала строку времени за часть сцены. Если время ещё не считано ни
+    // разу (новый чат, опрос не бывал) — этап честно НЕ ВКЛАДЫВАЕТ ничего:
+    // «Current time: unknown» — шум, который модель начинает обыгрывать.
+    const TIME_INJECT_STAGE_ID = 'time:inject-current';
+    const TIME_INJECT_CONTRACT = 'time.injectCurrent';
+
+    function buildTimeInjectText() {
+        const current = label.peek() || history.peek().at(-1) || '';
+        if (!String(current).trim()) return null;
+        return `[Current in-world time]\n${current}`;
+    }
+
+    async function injectCurrentTime({ chat } = {}) {
+        if (!Array.isArray(chat)) return true;
+        const text = buildTimeInjectText();
+        if (text) chat.unshift({ is_user: false, is_system: true, name: 'System', mes: text });
+        return true;
+    }
+
     async function load() {
         const saved = await call('storage.settings.get', { namespace: SETTINGS_NAMESPACE, key: 'settings', fallback: null });
         if (saved.ok && saved.value) {
@@ -788,6 +820,15 @@ export function createTimeModule(host) {
 
         await loadHistory();
         label.set(history.peek().at(-1) ?? '');
+
+        // Этап инъекции времени — на каждый прогон, независимо от тумблера
+        // бейджа (скрытие бейджа — визуальное, инжект в промпт отдельное
+        // решение). При `enabled: false` сам текст пуст — этап уйдёт без
+        // вклада, отдельного снятия регистрации не требуется.
+        await call('pipeline.stages.add', {
+            pipelineId: 'generation.beforeSend',
+            stage: { id: TIME_INJECT_STAGE_ID, contract: TIME_INJECT_CONTRACT, onExhausted: 'flag' },
+        });
         // Трекер заводится в Ядре сразу: он должен существовать ещё до первого
         // опроса, иначе первый же ответ упёрся бы в «неизвестный трекер».
         const listed = await call('tracking.trackers');
