@@ -283,10 +283,9 @@ test('the beforeSend stage inserts every ACTIVE summary as its OWN chat message,
     const outgoing = [{ mes: 'line 3' }, { mes: 'line 4' }]; // what ST would send after its own is_system filter
     const result = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
 
-    assert.equal(result.ok, true);
     assert.equal(outgoing.length, 3);
-    assert.equal(outgoing[0].mes, 'S1');
     assert.equal(outgoing[0].is_system, true);
+    assert.match(outgoing[0].mes, /\[Summary of earlier messages #\d+–#\d+, covering .+ → .+\]\nS1$/, 'explicit Summary header with the replaced-messages period, then the text itself');
     assert.equal(outgoing[1].mes, 'line 3', 'the real tail must stay in place, right after the summary');
 });
 
@@ -309,6 +308,11 @@ test('the beforeSend stage CUTS hidden ToolCall messages covered by a summary �
     // прячет обычные сообщения, а тул-коллы остаются в промпте вместе с
     // содержимым. Пара «вызов + результат» живёт ВНУТРИ одного объекта
     // (`extra.tool_invocations`), вырезание убирает её целиком.
+    //
+    // Граница «свежести» — от КОНЦА истории (решение архитектора 11.09):
+    // тул-колл рождается в ST уже системным, «скрыт саммари» и «свежий
+    // тул-колл» по is_system не различаются. Режутся только СТАРЕЕ
+    // защищённого окна (protectedWindow = 2 единицы от конца).
     const chat = makeChat(6); // юниты: [0],[1,2],[3],[4],[5] (1 — тул-колл, тянет 2 в цепочку) → 5 = protectedWindow(2)+batchSize(3) → фолд покрывает 0..3
     chat[1].extra = { tool_invocations: [{ name: 'Notebook', parameters: '{"action":"write"}', result: 'Saved note.' }] }; // тул-колл ВНУТРИ сворачиваемого батча
     const { caller, summaryCore, pipelineCore } = buildEngine({ chat, fetchReply: 'S1' });
@@ -316,23 +320,25 @@ test('the beforeSend stage CUTS hidden ToolCall messages covered by a summary �
     await call(caller, 'summary.configure', { levels: [{ batchSize: 3 }], protectedWindow: 2 });
     await call(caller, 'summary.check'); // сворачивает 0..3, chatHistory.hide ставит is_system=true на 0..3
 
-    // Что ST отдал бы в перехватчик: скрывает is_system, но тул-коллы оставляет
+    // Что ST отдал бы в перехватчик: скрывает is_system, но тул-коллы оставляет.
+    // Второй тул-колл (line 4) — СВЕЖИЙ, внутри защищённого окна: его резать нельзя.
     const outgoing = [
         { mes: 'line 0', is_system: true },
         { mes: 'line 1', is_system: true, extra: { tool_invocations: [{ name: 'Notebook', parameters: '{}', result: 'Saved.' }] } },
         { mes: 'line 2', is_system: true },
         { mes: 'line 3', is_system: true },
-        { mes: 'line 4' },
+        { mes: 'line 4', is_system: true, extra: { tool_invocations: [{ name: 'Notebook', parameters: '{}', result: 'Fresh call.' }] } },
         { mes: 'line 5' },
     ];
     const result = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
 
     assert.equal(result.ok, true);
     const surviving = outgoing.filter(m => m.mes?.startsWith('line'));
-    assert.equal(surviving.some(m => m.mes === 'line 1'), false, 'hidden ToolCall message covered by the summary must be CUT entirely — call AND its results');
+    assert.equal(surviving.some(m => m.mes === 'line 1'), false, 'hidden ToolCall OLDER than the protected window must be CUT entirely — call AND its results');
+    assert.equal(surviving.some(m => m.mes === 'line 4'), true, 'a FRESH ToolCall inside the protected window (counted from the END) must never be cut');
     // Обычные скрытые (is_system) сообщения остаются в копии — ST сам их
     // отфильтрует; вырезать нужно ТОЛЬКО тул-коллы, иначе сломаем фильтр ST.
-    assert.equal(surviving.map(m => m.mes).join(','), 'line 0,line 2,line 3,line 4,line 5', 'ordinary hidden messages stay — ST filters them itself; ONLY toolcalls are cut');
+    assert.equal(surviving.map(m => m.mes).join(','), 'line 0,line 2,line 3,line 4,line 5', 'ordinary hidden messages stay — ST filters them itself; ONLY old toolcalls are cut');
 });
 
 test('st.chatChanged re-reads summaries so a stale-empty core does not OVERWRITE old records with a new fold — real complaint: summaries of the previous session vanished, not just the freshly folded one', async () => {

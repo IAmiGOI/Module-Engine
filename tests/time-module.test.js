@@ -130,6 +130,7 @@ function buildEngine({ replies, gate, fail = false } = {}) {
             'tracking.trackers', 'tracking.configure', 'tracking.poll', 'tracking.reset',
             'storage.settings.get', 'storage.settings.set',
             'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations',
+            'pipeline.stages.add', 'pipeline.stages.remove',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
@@ -497,6 +498,18 @@ test('a FAILED poll clears the pulsing entirely — no badge left stuck forever,
     assert.equal(await module.advance(), null);
 
     assert.equal(build({ mesid: '4', isUser: false, live: true }), null, 'провалившийся опрос не оставляет вечно пустой пульсации');
+});
+
+// --- Инъект текущего времени -------------------------------------------------
+
+test('the load() registers the time-inject stage on generation.beforeSend — the module contributes to the REAL prompt pipeline', async () => {
+    const { engine, module } = buildEngine();
+    await module.load();
+
+    const probe = engine.registerCaller('probe.pipeline', 'cores', { tier: 'official' });
+    const changed = await new Promise(resolve => engine.events.subscribe('pipeline.stagesChanged', resolve));
+    assert.equal(changed.pipelineId, 'generation.beforeSend');
+    assert.equal(changed.added, 'time:inject-current', 'этап инъекции времени зарегистрирован');
 });
 
 test('advancing marks the message it was LIVE under, and leaves the ones before it alone', async () => {
