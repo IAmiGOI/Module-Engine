@@ -801,7 +801,7 @@
        тикают вечно. */
     animation: stme-dock-blink .9s steps(1) 3;
 }
-/* При наведении/раскрытии прячем полоску ::before. Блюр-слой ::after НЕ
+/* При наведении/раскрытии прячем полоску. Блюр-слой ::after НЕ
    трогаем: это СТЕКЛО пилюли, оно видно всегда — раньше здесь был селектор
    ::after, потому что ::after был полоской-бликом; теперь это стекло. */
 .stme-launcher-dock-zone:hover .stme-launcher-dock::before,
@@ -809,6 +809,81 @@
 .stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before {
     opacity: 0;
 }
+/* ===== Светофор активности: CANVAS вместо ::before (2026-09-11) =====
+   Полоска рисуется cores/ui/activity-light-canvas.js: repaint'ы DOM (и
+   пересчёт backdrop-filter стекла) из-за переливки исчезают — канвас рисует
+   вне paint-конвейера. CSS-классы stme-light-* на зоне больше НЕ красят
+   полоску (цвет приходит сигналом внутрь канваса), но остаются рабочими
+   для всего остального, что на них завязано. ::before отключён display:none —
+   его градиент/box-shadow больше не рисуются вовсе.
+   ЗАПАС PAD=14px (см. activity-light-canvas.js): канвас шире/выше самой
+   полоски, в запасе рисуется свечение (бывший box-shadow 10-14px), иначе
+   оно обрезалось бы краем канваса. */
+/* ===== Светофор активности: ФИНАЛ — статичная DOM-полоска (11.09) =====
+   Решение архитектора: анимация полоски убрана совсем, вместо неё —
+   СТАТИЧНЫЙ, но красивый многослойный градиент на --stme-light. Цвет
+   состояния приходит сигналом: Ядро (cores/ui/activity-light.js) → класс
+   stme-light-<state> на ЗОНУ (cores/ui/activity-light-dom.js) → переменная
+   на доке → transition при смене. Ни бесконечного `animation`, ни canvas:
+   канвас-версия (activity-light-canvas.js) по замерам всё равно красила
+   пол-окна каждый кадр — в этом окружении (Thorium 138) любой canvas в DOM
+   инвалидирует paint вверх по дереву. Полоска — чистый светофор: горит
+   цветом фазы, плавно перекрашивается при смене (transition), единственная
+   анимация — конечное мигание notify (см. ниже).
+   Градиент (внутри цвета состояния, без белого «предмета»): верх —
+   lighten-блик, середина — сам цвет, низ — затемнение, всё с мягким
+   свечением box-shadow того же цвета. */
+.stme-launcher-dock::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10%;
+    bottom: 10%;
+    width: 4px;
+    border-radius: 999px;
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--stme-light) 82%, #ffffff),
+        var(--stme-light) 30%,
+        color-mix(in srgb, var(--stme-light) 72%, #000000) 82%,
+        color-mix(in srgb, var(--stme-light) 88%, #000000));
+    box-shadow: 0 0 10px var(--stme-light), 0 0 22px color-mix(in srgb, var(--stme-light) 55%, transparent);
+    opacity: 1;
+    transition: background .35s ease, box-shadow .35s ease, opacity .35s ease;
+}
+/* idle — синий (дефолт ниже); дальше — состояния Ядра. Переменная ставится
+   на САМ док: её наследуют ::before (полоска) — цвет светофора единый. */
+.stme-launcher-dock { --stme-light: #5b8dff; }
+.stme-light-working .stme-launcher-dock { --stme-light: #e8a13c; }
+.stme-light-success .stme-launcher-dock { --stme-light: #4fae7f; }
+.stme-light-warning .stme-launcher-dock { --stme-light: #d9c545; }
+.stme-light-error   .stme-launcher-dock { --stme-light: #e5453f; }
+/* Свечение перекрашивается ВМЕСТЕ с переменной: rgba-хардкоды цветов (были
+   по классам) больше не нужны — box-shadow цвета можно положить на
+   color-mix от переменной. */
+.stme-launcher-dock::before {
+    box-shadow: 0 0 10px var(--stme-light), 0 0 22px color-mix(in srgb, var(--stme-light) 55%, transparent);
+}
+/* Уведомление — конечное МИГАНИЕ (3 шага, не infinite — бесконечный цикл
+   рядом с блюром грузил GPU, конечный завершается) + статичный белый на
+   время удержания (NOTIFY_HOLD_MS, cores/ui/activity-light.js). По правке
+   11.09 мигание и смену цветов оставлено, убрана только бесконечная
+   переливка — вместо неё статичный градиент. */
+.stme-light-notify .stme-launcher-dock { --stme-light: #ffffff; }
+.stme-light-notify .stme-launcher-dock::before {
+    animation: stme-dock-blink .9s steps(1) 3;
+    box-shadow: 0 0 12px rgba(255, 255, 255, .95), 0 0 26px rgba(255, 255, 255, .55);
+}
+/* При наведении/раскрытии прячем полоску. Блюр-слой ::after НЕ
+   трогаем: это СТЕКЛО пилюли, оно видно всегда. */
+.stme-launcher-dock-zone:hover .stme-launcher-dock::before,
+.stme-launcher-dock-zone:focus-within .stme-launcher-dock::before,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before {
+    opacity: 0;
+}
+/* Canvas-версия полоски отключена (история: activity-light-canvas.js и
+   блок ниже удалены за бесполезностью — канвас в этом окружении грузит
+   paint так же, как CSS-анимация). Селекторы .stme-activity-light-canvas
+   оставлены пустыми НЕ были: блок удалён целиком. */
 /* ===== Мобильная поверхность: пилюля-док, независимая от наведения =====
    Ранние попытки: прятать за край (как на ПК) — на телефоне «вообще не видно»
    (hover нет, 10px щели пальцем не нащупать); fallback-цвета для color-mix не
@@ -1336,4 +1411,173 @@
 }
 @media (prefers-reduced-motion: reduce) {
     .stme-memory-graph-panel-root .menu_button:hover { animation: none; }
+}
+
+/* --- Плавающее окно «Картинка» (cores/ui/picture-panel.js) ----------------- */
+/*
+   Тот же случай, что у окна графа выше (1279-1296): корень висит на body ВНЕ
+   скоупа .stme-panel, поэтому --stme-* переменные ОБЯЗАТЕЛЬНО объявляются на
+   корне — без них кнопки превратились бы в «пустой кликабельный текст»
+   (инцидент окна графа). Содержимого пока нет, но каркас должен быть готов
+   принять его без правки этого блока. Пока нужен только accent.
+*/
+.stme-picture-panel-root {
+    --stme-accent: var(--SmartThemeQuoteColor, #8da8ff);
+    --stme-danger: #f5232f;
+    --stme-danger-bright: #ff5a63;
+    --stme-ok: #3f9e72;
+    --stme-ok-bright: #57bb8c;
+    --stme-radius-sm: 7px;
+    accent-color: var(--stme-accent);
+}
+
+/* Тело окна — зона приёма drop-а: занимает всё доступное место, flex-колонка.
+   Подсветка при перетаскивании НАД окном (dragover) — рамка в цвет акцента. */
+.stme-picture-dropzone {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: auto;
+    border: 2px dashed color-mix(in srgb, var(--stme-accent) 35%, transparent);
+    border-radius: var(--stme-radius-sm);
+    margin: 8px;
+    padding: 8px;
+    align-items: center;
+    justify-content: center;
+    transition: border-color .15s ease;
+}
+.stme-picture-dropzone.stme-picture-over {
+    border-color: var(--stme-accent);
+}
+/* Сама картинка: вписывается в окно, не растягивает его за пределы 3:4-размера. */
+.stme-picture-image {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: var(--stme-radius-sm);
+}
+.stme-picture-hint {
+    opacity: .55;
+    font-size: 11px;
+    padding: 6px 0 2px;
+    text-align: center;
+}
+
+/* --- Онбординг (шаг 1: сцена) --------------------------------------------- */
+/*
+   Первый запуск движка: жидкое стекло на всю страницу (как у обновляющего
+   оверлея .stme-overlay — страница видна, работать с ней нельзя) и пустое
+   окно-контейнер по центру. Содержимое окна придёт с настоящим сценарием.
+*/
+.stme-onboarding {
+    position: fixed;
+    /* Явные стороны вместо `inset: 0` — тот же Android-фикс, что у
+       .stme-overlay (WebView < Chrome 87 сокращение не понимает). */
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 9100; /* выше оверлея обновления: онбординг — самый передний слой */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Жидкое стекло, один в один с .stme-overlay */
+    background: linear-gradient(rgba(8, 9, 12, .55), rgba(8, 9, 12, .55));
+    backdrop-filter: blur(16px) saturate(140%);
+    font-family: var(--mainFontFamily, inherit);
+    color: var(--SmartThemeBodyColor, #eee);
+    /* Плавное появление */
+    opacity: 0;
+    transition: opacity .45s ease;
+}
+.stme-onboarding-visible { opacity: 1; }
+.stme-onboarding-window {
+    /* «Примерно 1/5 экрана»: окно среднего размера по центру. Реальную
+       высоту содержимому задаст сценарий позже. position: relative гасит
+       `right/bottom` дефолта FloatingPanel — окно центрирует flex-родитель. */
+    position: relative;
+    right: auto;
+    bottom: auto;
+    width: min(480px, calc(100vw - 40px));
+    min-height: 30vh;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-onboarding { transition: none; }
+}
+/* Вопрос онбординга: текст сверху, кнопки «Yes»/«No» — по ЛЕВОМУ и
+   ПРАВОМУ краю окна (space-between), не в куче по центру. */
+.stme-onboarding-question {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    height: 100%;
+    padding: 4px 6px;
+}
+.stme-onboarding-question-text {
+    text-align: center;
+    font-size: 15px;
+    line-height: 1.45;
+    margin: 0;
+}
+.stme-onboarding-buttons {
+    margin-top: auto; /* кнопки прижаты к низу окна: вопрос читается сверху */
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+/* Полноценные кнопки heбординга: library-Button рисует `menu_button` ST,
+   здесь добирается размах — во всю ширину своей половины, крупный текст,
+   заметная рамка и ховер в тему движка. */
+.stme-onboarding-buttons .menu_button {
+    flex: 1 1 0;          /* поровну делят строку: левый край — Yes, правый — No */
+    padding: 12px 18px;
+    font-size: 15px;
+    font-weight: 600;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 70%, transparent);
+    border-radius: var(--stme-radius-sm, 10px);
+    color: var(--SmartThemeBodyColor, #dfe3ea);
+    transition: border-color .15s ease, color .15s ease, background-color .15s ease;
+}
+.stme-onboarding-buttons .menu_button:hover,
+.stme-onboarding-buttons .menu_button:focus-visible {
+    border-color: var(--stme-accent);
+    color: var(--stme-accent);
+    background-color: color-mix(in srgb, var(--stme-accent) 12%, transparent);
+}
+/* Вариант шага «API key»: Yes и Local model — в РЯД (тот же расклад, что
+   Yes/No первого окна), а «Get one» — ПОД ними во всю ширину. Общий
+   контейнер .stme-onboarding-buttons задаёт кнопкам одинаковый размах. */
+.stme-onboarding-buttons-wide {
+    margin-top: 0; /* сразу под рядом Yes/Local model, не прижата к низу */
+}
+/* --- Онбординг, шаг 3: «прожектор» над вкладкой моделей ------------------- */
+/*
+   Четыре сегмента жидкого стекла вокруг ДЫРКИ над карточкой «Model
+   connections»: всё, кроме карточки, остаётся затемнено. Позиция сегментов
+   считается в index.js по getBoundingClientRect карточки и ставится
+   инлайновыми стилями — CSS задаёт только саму фактуру стекла и слои.
+*/
+.stme-onboarding-spotlight {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 9200; /* НАД панелью движка (6000) и НАД сценой (9100): панель видна только сквозь дырку */
+    pointer-events: none; /* стекло не ловит клики: панелью под ним пользоваться нельзя (сцена ниже ловит), но дырка не должна «съедать» события сама */
+}
+.stme-onboarding-spotlight-part {
+    position: absolute;
+    /* Тот же жидкий орк, что у сцены и .stme-overlay */
+    background: linear-gradient(rgba(8, 9, 12, .55), rgba(8, 9, 12, .55));
+    backdrop-filter: blur(16px) saturate(140%);
+}
+/* Карточка под дыркой пульсирует той же обводкой, что кнопка «Test»
+   подключения — узнаваемый «вот сюда» языка движка. */
+.stme-spotlight-target {
+    animation: stme-pulse 1.5s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-spotlight-target { animation: none; }
 }

@@ -18,6 +18,7 @@ import { registerStGenerationService } from '../services/st-generation.js';
 import { registerStExtensionsService } from '../services/st-extensions.js';
 import { registerSessionService } from '../services/session.js';
 import { createSelfUpdateCore } from '../cores/self-update/index.js';
+import { createFirstLoadCore, FIRST_LAUNCH_EVENT } from '../cores/first-load/index.js';
 import { deriveExtensionName } from '../libraries/core/update-check.js';
 import { createEventsCore } from '../cores/events/index.js';
 import { createGenerationCore } from '../cores/generation/index.js';
@@ -42,6 +43,7 @@ import { createActivityLightCore } from '../cores/ui/activity-light.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
+import { createPicturePanelCore } from '../cores/ui/picture-panel.js';
 import { createTrackerModule, MODULE_ID as TRACKER_MODULE_ID } from '../modules/tracker/index.js';
 import { createTimeModule, MODULE_ID as TIME_MODULE_ID } from '../modules/time/index.js';
 import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../modules/tools/index.js';
@@ -509,6 +511,17 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         engine.registerCaller('core.ui.memoryGraph', 'cores', { tier: 'official' }),
         { mount: node => uiEngine.mount('memoryGraph', node) },
     );
+
+    // Плавающее окно «Картинка» — та же форма официального UI-Ядра, что у
+    // окна графа выше (решено с пользователем: кнопка дока с видом картинки
+    // получает РАСШИРЯЕМУЮ плавающую панель, как у музыки/трекера, только
+    // крупнее — дефолт 3:4). Показывает перетащенный файл или картинку по
+    // ссылке; ссылка идёт ПОЛНЫМ МАРШРУТОМ: сетевой Гейт → Сервис HTTP —
+    // поэтому `networkAccess: true` (не подразумевается уровнем доверия).
+    const picturePanel = createPicturePanelCore(
+        engine.registerCaller('core.ui.picture', 'cores', { tier: 'official', networkAccess: true }),
+        { mount: node => uiEngine.mount('picture', node) },
+    );
     // У Модулей СВОЙ реестр UI, отдельный от слотов движка: у каждого
     // включённого Модуля свой независимый Final UI, иначе пути их деревьев
     // столкнулись бы в одной карте (см. ui-mount-registry.js).
@@ -534,6 +547,18 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         engine.registerCaller('core.ui.activityLight', 'cores', { tier: 'official' }),
     );
     activityLight.load();
+
+    // First Load — счётчик запусков движка. Само Ядро НЕ вызывает свой
+    // `load()` на конструкции: инкремент выполняется ниже, СТРОГО после
+    // восстановления конфигурации (см. comment у `Promise.all`), иначе
+    // «первый запуск» объявился бы раньше, чем на диске вообще что-то есть.
+    // Событие `firstLoad.firstLaunch` — подписка index.js'а на начало
+    // онбординга; само Ядро про UI не знает.
+    const firstLoad = createFirstLoadCore(
+        engine.registerCaller('core.firstLoad', 'cores', { tier: 'official' }),
+        { publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.firstLoad' }) },
+    );
+    void FIRST_LAUNCH_EVENT; // экспортируется наружу для подписчиков (см. return)
 
     // Полоса под последним сообщением: три независимых виджета, во всю ширину
     // чата. Модель её не видит вовсе — она живёт только в DOM.
@@ -617,6 +642,12 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // дождаться его результата (а не просто не блокировать остальных).
     await memoryGraphCore.load();
 
+    // Инкремент счётчика запусков — после того как ВСЯ конфигурация на диске
+    // восстановлена: событие `firstLoad.firstLaunch` обязано прийти к
+    // подписчикам, когда движок уже цел (панель открыта ниже, модули
+    // восстановлены) — онбординг стартует на живом движке, а не на пустом.
+    const firstLoadResult = await firstLoad.load();
+
     // Панель монтируется здесь же, а не у вызывающего: реестру Модулей нужно
     // уметь дождаться её перерисовки, чтобы положить дерево Модуля в слот.
     // Строго ПОСЛЕ восстановления: панель читает конфигурацию один раз при
@@ -648,6 +679,12 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     document.body.append(memoryGraphPanelUi.getRoot());
     memoryGraphPanel.activate();
 
+    // Окно «Картинка» — тот же порядок, что у графа выше: open() (дерево +
+    // loadWindowState), append корня в body после settled(), активации (CSS-
+    // инициализации) у окна нет — содержимого пока нет.
+    const picturePanelUi = await picturePanel.open();
+    document.body.append(picturePanelUi.getRoot());
+
     // Слух движка включается ПОСЛЕ восстановления конфигурации: иначе
     // событие ST могло бы прилететь трекеру, которого ещё нет.
     await eventsCore.bridge();
@@ -658,5 +695,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }

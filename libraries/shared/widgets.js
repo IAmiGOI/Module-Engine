@@ -176,8 +176,22 @@ export function FloatingPanel(title, { position, size, collapsed, onToggle, onCl
         // перетаскивании, никакого поиска узлов. У неизменяемого окна
         // обработчика нет вовсе — не только ручка скрыта, но и размер
         // не персистится.
+        //
+        // ПОКА СВЁРНУТО — размер НЕ пишется (поймано на живом окне «Картинка»,
+        // жалоба: «окна не запоминают размер до сворачивания, после
+        // разворачивания не разворачиваются обратно»). Механика бага:
+        // pointerup срабатывает РАНЬШЕ click, а state свёрнутости меняет
+        // click-обработчик кнопки «+» — значит, в момент pointerup при
+        // разворачивании окно ещё свёрнуто, и CSS-правило
+        // `.stme-floating-panel:has(> .stme-floating-panel-body[hidden])
+        // { height: auto !important }` сжало его до высоты шапки. Без этой
+        // проверки getBoundingClientRect() возвращал ~44px шапки, onResize
+        // сохранял её как новый размер, и развёрнутое окно оставалось
+        // высотой в шапку («разблокировалось, но не развернулось»), а
+        // запомненный до сворачивания размер был затёрт.
         'on:pointerup': onResize && resizable
             ? event => {
+                if (collapsed?.()) return;
                 const box = event.currentTarget?.getBoundingClientRect?.();
                 if (box) onResize({ width: Math.round(box.width), height: Math.round(box.height) });
             }

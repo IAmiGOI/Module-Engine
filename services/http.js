@@ -11,14 +11,22 @@
  * this closes).
  */
 export function registerHttpService(networkBus, { fetch: fetchImpl = globalThis.fetch?.bind(globalThis) } = {}) {
-    return networkBus.register('http.request', async ({ url, method = 'GET', headers, body }) => {
+    return networkBus.register('http.request', async ({ url, method = 'GET', headers, body, responseType }) => {
         const response = await fetchImpl(url, { method, headers, body });
-        const text = await response.text();
+        // responseType: 'blob' — БИНАРНЫЙ ответ (например, картинка для окна
+        // «Картинка», cores/ui/picture-panel.js). Дефолтный `text` прогоняет
+        // тело через UTF-8 декодер: байты картинки портятся безвозвратно
+        // (replacement character'ы), показывать такое нельзя. blob отдаёт
+        // тело живьём; в абстрактных тестах (node) остаётся тем же объектом,
+        // что вернул fetch, — конвертация в data:/objectURL — забота UI-ядра.
+        // Параметр ОПЦИОНАЛЬНЫЙ: без него поведение прежнее, весь остальной
+        // код движка не затронут.
+        const payload = responseType === 'blob' ? { blob: await response.blob() } : { text: await response.text() };
         return {
             status: response.status,
             ok: response.ok,
             headers: Object.fromEntries(response.headers?.entries?.() ?? []),
-            text,
+            ...payload,
         };
     }, { loadMetric: () => 0 });
 }
