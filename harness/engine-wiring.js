@@ -90,6 +90,10 @@ const DEFINITIONS = [{
             // сообщению — через общее Ядро истории чата, не напрямую в
             // `storage.chatMemory` (Модулю туда и нет прямого пути).
             'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations',
+            // Этап инъекции текущего времени на `generation.beforeSend` —
+            // исполняется под ПРАВАМИ ЭТОГО Модуля (см. cores/pipeline/index.js
+            // про `resolveAs`), регистрирует и снимает этап сам Модуль.
+            'pipeline.stages.add', 'pipeline.stages.remove',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
