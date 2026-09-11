@@ -2,6 +2,7 @@ import { wireEngine } from './harness/engine-wiring.js';
 import { createFullScreenPanel } from './harness/full-screen-panel.js';
 import { isMobileSurface } from './cores/ui/final-ui-android.js';
 import { effect } from './cores/ui/reactive.js';
+import { createActivityLightDom } from './cores/ui/activity-light-dom.js';
 import { h } from './cores/ui/tree.js';
 import { createEdgeDrag } from './libraries/shared/edge-drag.js';
 import { FloatingPanel, Button } from './libraries/shared/widgets.js';
@@ -154,18 +155,15 @@ function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, toggl
     }
     // Светофор активности: полоска пилюли — «лампочка» состояния движка
     // (cores/ui/activity-light.js сводит события всех Ядер в одно состояние).
-    // Сигналы этой кодовой базы не знают .subscribe() — живое чтение тут
-    // называется effect(): функция перезапускается при каждом изменении.
-    // Класс состояния добавляем ДОБАВЛЕНИЕМ (а не переприсвоением className —
-    // та ошибка затёрла бы touch/open классы), предыдущий снимаем.
+    // СТАТИЧНАЯ DOM-полоска (::before в panel.css, градиент + свечение на
+    // переменной --stme-light): Ядро кладёт класс stme-light-<state> на ЗОНУ
+    // (cores/ui/activity-light-dom.js), CSS перекрашивает переменную обычным
+    // transition. Никакого бесконечного animation и никакого canvas:
+    // канвас-версия (activity-light-canvas.js) по замерам всё равно красила
+    // пол-окна каждый кадр — в этом окружении любой canvas в DOM инвалидирует
+    // paint вверх по дереву (живые замеры 09.09–11.09).
     if (activityState) {
-        let previousClass = null;
-        effect(() => {
-            const next = `stme-light-${activityState()}`;
-            if (previousClass) zone.classList.remove(previousClass);
-            zone.classList.add(next);
-            previousClass = next;
-        });
+        createActivityLightDom(zone, activityState);
     }
     // Вертикальное перетаскивание по правому краю — Библиотека
     // ([edge-drag.js](./libraries/shared/edge-drag.js)), здесь только проводка.

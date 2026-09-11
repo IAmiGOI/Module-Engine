@@ -244,6 +244,33 @@ test('FloatingPanel() with onResize but resizable:false is ALSO immutable — th
     assert.equal(node.props['on:pointerup'], undefined);
 });
 
+test('FloatingPanel() pointerup does NOT persist the size while collapsed — the CSS has squashed the window to the header height, and saving it would shrink the expanded window to a header (caught live: expanded window stayed header-sized after un-collapse)', () => {
+    const saved = [];
+    const collapsed = signal(true);
+    const node = FloatingPanel('T', {
+        collapsed,
+        onToggle: () => {},
+        onResize: next => saved.push(next),
+        resizable: true,
+    }, 'body');
+
+    // Свёрнуто: клик по кнопке «+» (pointerup раньше click) — не пишем ничего.
+    node.props['on:pointerup']({ currentTarget: { getBoundingClientRect: () => ({ width: 300, height: 44 }) } });
+    assert.deepEqual(saved, [], 'collapsed pointerup must not overwrite the remembered pre-collapse size');
+
+    // Развёрнуто: обычный resize работает как раньше.
+    collapsed.set(false);
+    node.props['on:pointerup']({ currentTarget: { getBoundingClientRect: () => ({ width: 300, height: 200 }) } });
+    assert.deepEqual(saved, [{ width: 300, height: 200 }]);
+});
+
+test('FloatingPanel() WITHOUT collapsed signal keeps the pointerup behavior untouched — panels without a collapse button still persist sizes', () => {
+    const saved = [];
+    const node = FloatingPanel('T', { onResize: next => saved.push(next), resizable: true }, 'body');
+    node.props['on:pointerup']({ currentTarget: { getBoundingClientRect: () => ({ width: 10, height: 20 }) } });
+    assert.deepEqual(saved, [{ width: 10, height: 20 }]);
+});
+
 test('StatBlock() shows NOTHING and marks itself pending until a value arrives — no placeholder pretending to be data', () => {
     const value = signal('');
     const node = StatBlock('Current RP time', value);
