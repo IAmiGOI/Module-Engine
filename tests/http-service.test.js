@@ -65,3 +65,36 @@ test('registerHttpService()\'s returned unregister function retires the contract
 
     assert.equal(result.ok, false);
 });
+
+test('http.request with responseType:"blob" returns the body as a blob instead of text — text() would UTF-8-mangle image bytes (picture panel)', async () => {
+    const fakeBlob = { size: 3, type: 'image/webp' };
+    const { fetch, calls } = fakeFetch({
+        'https://example.com/pic.webp': {
+            status: 200,
+            body: fakeBlob, // фейковый fetch возвращает объект и как body, и как blob
+            headers: { 'content-type': 'image/webp' },
+        },
+    });
+    const bus = createContractBus();
+    registerHttpService(bus, { fetch: async (url, init) => ({ ...(await fetch(url, init)), blob: async () => fakeBlob }) });
+
+    const result = await new Promise(resolve =>
+        bus.subscribe('http.request', { params: { url: 'https://example.com/pic.webp', responseType: 'blob' } }, resolve));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.value.blob, fakeBlob, 'the blob comes back live, not through the UTF-8 text decoder');
+    assert.equal(result.value.text, undefined, 'no text field when a blob was requested — bytes must not round-trip through text');
+    assert.equal(calls[0].url, 'https://example.com/pic.webp');
+});
+
+test('http.request WITHOUT responseType keeps the default text behavior (optional parameter, zero regression for other callers)', async () => {
+    const { fetch } = fakeFetch({ 'https://example.com': { status: 200, body: 'hello' } });
+    const bus = createContractBus();
+    registerHttpService(bus, { fetch });
+
+    const result = await new Promise(resolve =>
+        bus.subscribe('http.request', { params: { url: 'https://example.com' } }, resolve));
+
+    assert.equal(result.value.text, 'hello');
+    assert.equal(result.value.blob, undefined);
+});
