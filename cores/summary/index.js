@@ -192,6 +192,29 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         return children.map(child => child.text).join('\n\n');
     }
 
+    /**
+     * Отметки RP Time для периода саммари. RP Time привязывает показания
+     * ВНУТРИГРОВОГО времени к сообщениям через `chatHistory.annotate`
+     * (namespace `module.time`) — тот же контракт Ядра истории чата, что и у
+     * всех. Никакого доступа к чужому неймспейсу мимо контракта: читается
+     * штатным `chatHistory.annotations`, прямо здесь, своим правом
+     * `official`.
+     */
+    const TIME_MARKS_NAMESPACE = 'module.time';
+
+    async function readTimeMarks() {
+        const result = await call('chatHistory.annotations', { namespace: TIME_MARKS_NAMESPACE });
+        return result.ok ? result.value ?? {} : {};
+    }
+
+    /** Отметки первого и последнего замещённого сообщения по их mesid (могут быть undefined — RP Time их ещё не считал). */
+    function firstLastTimeMarks(marks, mesids) {
+        const byTime = [...mesids].sort((a, b) => Number(a) - Number(b));
+        const first = marks[byTime[0]];
+        const last = marks[byTime[byTime.length - 1]];
+        return { first: first ?? undefined, last: last ?? undefined };
+    }
+
     /** Level-1: сворачивает `batchSize` старейших единиц СЫРЫХ сообщений в одно саммари и прячет их через chatHistory.hide (is_system=true — mesid не сдвигается, см. doc-comment services/st-chat.js). */
     async function foldRawUnits(units) {
         const flat = units.flat();
@@ -200,14 +223,25 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
             'Summarize the following conversation excerpt concisely, in third person, preserving important facts, character goals, and plot developments. Output ONLY the summary text, no preamble.',
             buildLevel1Prompt(units),
         );
+        // Период саммари — отметки RP Time (аннотации Ядра истории чата,
+        // namespace `module.time`), а не реальные даты ST (решение
+        // архитектора 11.09): заголовок саммари обязан говорить ВНУТРИГРОВОЕ
+        // время, которое отслеживает RP Time. Аннотации привязаны к mesid,
+        // значит период записи = отметка ПЕРВОГО и ПОСЛЕДНЕГО замещённого
+        // сообщения. Читается через Ядро истории чата (annotate-контракт),
+        // не напрямую в chat-memory. Отметки может не быть (опрос RP Time
+        // ещё не добирался до этих сообщений) — тогда fallback на реальные
+        // sendDate, чтобы период не пропадал совсем.
+        const marks = await readTimeMarks();
+        const inWorld = firstLastTimeMarks(marks, mesids);
         const record = {
             id: makeSummaryId(now, random),
             level: 1,
             coveredIds: mesids,
             startIndex: Math.min(...mesids.map(Number)),
             endIndex: Math.max(...mesids.map(Number)),
-            startTime: flat[0]?.sendDate ?? null,
-            endTime: flat[flat.length - 1]?.sendDate ?? null,
+            startTime: inWorld.first ?? flat[0]?.sendDate ?? null,
+            endTime: inWorld.last ?? flat[flat.length - 1]?.sendDate ?? null,
             text,
             createdAt: now(),
             edited: false,
