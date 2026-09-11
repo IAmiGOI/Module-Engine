@@ -9,6 +9,7 @@ import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createChatHistoryCore } from '../cores/chat-history/index.js';
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
+import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createTimeModule, buildTimeLabel, buildAnnotatedHistory, buildHistory, TIME_PRESETS, MODULE_ID } from '../modules/time/index.js';
 
 // --- Чистые функции ---------------------------------------------------------
@@ -113,6 +114,12 @@ function buildEngine({ replies, gate, fail = false } = {}) {
         onUserFieldRegistered: entry => macroWrites.push(entry),
     });
     createNotificationsCore(engine.registerCaller('core.ui.notifications', 'cores', { tier: 'official' }), { mount: node => node });
+
+    // Настоящее Ядро пайплайнов: этап инъекции времени регистрируется через
+    // `pipeline.stages.add`, и без этого Ядра запрос просто висел бы — не
+    // было бы НИКОГО, кто отвечает на контракт (зависание тестов 11.09).
+    const pipelineCore = createPipelineCore(engine.registerCaller('core.pipeline', 'cores', { tier: 'official' }), { resolveAs: engine.resolveAs });
+    pipelineCore.define({ id: 'generation.beforeSend', mode: 'collect' });
 
     const claims = [];
     // Живое сообщение — то, что настоящее Ядро подвала вычислило бы САМО из
@@ -504,12 +511,15 @@ test('a FAILED poll clears the pulsing entirely — no badge left stuck forever,
 
 test('the load() registers the time-inject stage on generation.beforeSend — the module contributes to the REAL prompt pipeline', async () => {
     const { engine, module } = buildEngine();
+    // Подписка ДО load(): событие эмитится ВНУТРИ load — подписчик после него
+    // его уже не увидит и тест висел бы вечно (живой факт, найден без прогона).
+    const added = [];
+    engine.events.subscribe('pipeline.stagesChanged', payload => added.push(payload));
+
     await module.load();
 
-    const probe = engine.registerCaller('probe.pipeline', 'cores', { tier: 'official' });
-    const changed = await new Promise(resolve => engine.events.subscribe('pipeline.stagesChanged', resolve));
-    assert.equal(changed.pipelineId, 'generation.beforeSend');
-    assert.equal(changed.added, 'time:inject-current', 'этап инъекции времени зарегистрирован');
+    const hit = added.find(entry => entry.pipelineId === 'generation.beforeSend' && entry.added === 'time:inject-current');
+    assert.ok(hit, 'этап инъекции времени зарегистрирован');
 });
 
 test('advancing marks the message it was LIVE under, and leaves the ones before it alone', async () => {
