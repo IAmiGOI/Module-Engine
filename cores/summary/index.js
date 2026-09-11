@@ -351,13 +351,42 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
      * заполняется от новых к старым и режет ровно на границе (проверено по
      * script.js), и только отдельные сообщения вытесняются по-настоящему
      * строго от старых к новым — слитый блок пришлось бы выкидывать целиком.
+     *
+     * СКРЫТЫЕ ТУЛ-КОЛЛЫ ВЫРЕЗАЮТСЯ, а не скрываются (живая проблема 11.09):
+     * ST при сборке промпта фильтрует `is_system`, но с ИСКЛЮЧЕНИЕМ для
+     * тул-коллов — `script.js`: `coreChat = chat.filter(x => !x.is_system ||
+     * (canUseTools && Array.isArray(x.extra?.tool_invocations)))`. Поэтому
+     * `chatHistory.hide` прячет обычные сообщения, а сообщения с
+     * `extra.tool_invocations` всё равно попадают в промпт — вместе со всем
+     * содержимым вызовов и результатов. Здесь они удаляются из мутируемой
+     * копии `chat` целиком: пара «assistant с tool_calls + role:'tool'
+     * ответы» живёт ВНУТРИ одного объекта сообщения (`extra.tool_invocations`,
+     * ST синтезирует `role:'tool'` строки из него при сборке payload), так
+     * что вырезание одного элемента убирает и вызов, и его результат.
+     * Вырезаются только сообщения, ПОКРЫТЫЕ активным саммари (их mesid в
+     * [startIndex..endIndex] записи) — свежая история вне саммари не трогается.
      */
+    function isCoveredByActiveSummaries(mesid, active) {
+        const index = Number(mesid);
+        return active.some(record => Number(record.startIndex) <= index && index <= Number(record.endIndex));
+    }
+
     async function injectIntoPrompt({ chat } = {}) {
         if (!Array.isArray(chat)) return true;
         const active = activeSummaries(summaries);
-        if (!active.length) return true;
-        const messages = active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: record.text }));
-        chat.unshift(...messages);
+        if (active.length) {
+            // Сначала вырезание скрытых тул-коллов (пары целиком), потом unshift
+            // саммари: сплайс по ИСХОДНЫМ индексам, пока массив не сдвинут.
+            for (let i = chat.length - 1; i >= 0; i -= 1) {
+                const message = chat[i];
+                const isToolCall = Array.isArray(message?.extra?.tool_invocations) && message.extra.tool_invocations.length > 0;
+                if (isToolCall && message.is_system && isCoveredByActiveSummaries(i, active)) {
+                    chat.splice(i, 1);
+                }
+            }
+            const messages = active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: record.text }));
+            chat.unshift(...messages);
+        }
         return true;
     }
 
