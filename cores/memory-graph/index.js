@@ -196,6 +196,23 @@ export const DEFAULT_SETTINGS = Object.freeze({
     bootstrapTemperature: 0.4,
     bootstrapReasoningEffort: 'low',
     workerId: null,
+    // Stall-restart + fallback (прямой запрос пользователя, продолжение уже
+    // введённого в cores/models/internal-engine.js механизма: "если за 5
+    // секунд ничего не пришло — перезапускать, плюс авто-fallback на другие
+    // сайдкары"). У Графа памяти самые длинные и самые дорогие звонки во
+    // всём движке — Проходы 1-4 бутстрапа шлют ВЕСЬ Lorebook целиком — и до
+    // этого шага не имели НИКАКОЙ защиты от зависания посреди стрима, кроме
+    // самого факта стриминга (он включён по умолчанию у `model.generate`,
+    // но `stallMs`/`fallbackWorkerIds` там осознанно opt-in — Граф их
+    // просто никогда не запрашивал). 5000мс — то самое число, которым сам
+    // же пользователь и задал требование к этому механизму изначально, не
+    // отдельная придуманная константа. `fallbackWorkerIds` пуст по
+    // умолчанию — Проход 3 (единственное место в этом файле, где реально
+    // может пригодиться несколько воркеров разом, см. ROADMAP.md 5.36) сам
+    // по себе не решает, что "запинить" на другой воркер — это явный выбор
+    // пользователя, каких именно.
+    stallMs: 5000,
+    fallbackWorkerIds: [],
 });
 
 function clampInt(value, min, max, fallback) {
@@ -241,6 +258,13 @@ export function clampGraphSettings(values = {}) {
         bootstrapTemperature: clampInt(values.bootstrapTemperature * 100, 0, 200, DEFAULT_SETTINGS.bootstrapTemperature * 100) / 100,
         bootstrapReasoningEffort: BOOTSTRAP_REASONING_EFFORTS.includes(values.bootstrapReasoningEffort) ? values.bootstrapReasoningEffort : DEFAULT_SETTINGS.bootstrapReasoningEffort,
         workerId: values.workerId ?? null,
+        // 0 — осознанно допустимое значение ("выключить стойку", тот же
+        // смысл, что falsy `stallMs` у internal-engine.js: `stallMs ||
+        // undefined`) — clampInt(..., 0, ...) уже пропускает 0 как есть.
+        stallMs: clampInt(values.stallMs, 0, 120000, DEFAULT_SETTINGS.stallMs),
+        fallbackWorkerIds: Array.isArray(values.fallbackWorkerIds)
+            ? values.fallbackWorkerIds.map(id => String(id).trim()).filter(Boolean)
+            : DEFAULT_SETTINGS.fallbackWorkerIds,
     };
 }
 
@@ -1708,7 +1732,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // имени, а не полагаться на то, что "он"/"это" было понятно в момент
         // экстракции.
         const prompt = `Recent story context:\n\n${contextText}\n\nDoes this contain a fact worth remembering LONG-TERM — something that will still matter dozens of turns from now (a lasting character trait, a place, an established relationship, a major event or revelation)? Do NOT extract a short-term or purely situational arrangement that resolves on its own within the next few messages (a plan to meet somewhere, a small trade, a scheduling detail, idle small talk) — those are plot mechanics, not memories.${bootstrapHint}\n\nExamples of the judgment call:\n- "The player agrees to meet the merchant at noon tomorrow." — resolves on its own within a few messages -> {"skip": true}\n- "Kira admits, quietly, that she is the last surviving heir to the Varekh throne." -> {"label": "Kira's heritage", "content": "Kira is the last surviving heir to the Varekh throne.", "importance": 9}\n- "Behind the waterfall the party finds a door that must lead into the old mine." -> {"label": "Hidden mine entrance", "content": "A hidden door behind the waterfall leads into the old mine.", "importance": 6}\n\nIf there is a genuine long-term fact, write "content" so it reads correctly on its OWN, weeks later, without the surrounding scene: name every person/place/thing explicitly instead of "he"/"she"/"it"/"this place", and state the concrete detail instead of a vague summary like "something important happened". Reply with ONLY a JSON object: {"label": short name, "content": the self-contained fact itself, "importance": a 0-10 score where 0-3 is minor/situational detail unlikely to matter again, 4-7 is a meaningful but secondary fact, and 8-10 permanently defines the character or world}. If nothing here rises to that bar, reply with ONLY: {"skip": true}.`;
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined });
+        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
         if (!parsed || typeof parsed !== 'object' || parsed.skip) return null;
@@ -1727,7 +1751,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function askSideCarForMerge(nodeA, nodeB) {
         const prompt = `These two memories may describe the same underlying fact:\n\n1. ${nodeA.label}: ${nodeA.content}\n2. ${nodeB.label}: ${nodeB.content}\n\nIf they are genuinely duplicates or near-duplicates, reply with ONLY a JSON object: {"label": short combined name, "content": one combined fact covering everything both said, "importance": 0-10}. If they actually describe DIFFERENT facts that should stay separate, reply with ONLY: {"distinct": true}.`;
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined });
+        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) return null;
         const parsed = parseModelJson(result.value);
         if (!parsed || typeof parsed !== 'object') return null;
@@ -1756,7 +1780,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // `parseModelJson()` тихо отдаёт `undefined`, реконсолидация просто
         // не срабатывает (узлы остаются как были — не потеря данных, но и
         // не то, ради чего очередь вообще заводилась).
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.reconsolidationMaxTokens });
+        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.reconsolidationMaxTokens, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) return null;
         const parsed = parseModelJson(result.value);
         if (!parsed || typeof parsed !== 'object' || !parsed.label || !parsed.content) return null;
@@ -1986,7 +2010,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // 2. Проход 1 — базовый скелет (Locations/Main Characters/
                 // Factions или свои варианты) + 2 под-центра на каждый.
                 const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
-                const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
+                const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                 tick('skeleton', `laying out regions from ${rawEntries.length} entries`);
                 if (!skeletonResult.ok) { failureReason = `Проход 1 (skeleton) call failed: ${skeletonResult.error?.message}`; return false; }
                 const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
@@ -2008,7 +2032,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // мягкий откат Прохода 3 ниже).
                 const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
                 const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
-                const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
+                const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                 tick('centers', `targeting ~${targetTotal} region${targetTotal === 1 ? '' : 's'}`);
                 if (!centersResult.ok) { failureReason = `Проход 2 (centers) call failed: ${centersResult.error?.message}`; return false; }
                 const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
@@ -2153,7 +2177,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     }
                     const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
                     const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })));
-                    const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
+                    const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                     linkDone += 1;
                     tick('linking', `linking regions (${linkDone}/${finalRegionPlans.length}) — "${region.name}"`);
                     if (!edgesResult.ok) return;
@@ -2195,7 +2219,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (orphanIds.length) {
                     const allBootstrappedNodes = bootstrappedIds.map(id => nodes[id]).filter(Boolean);
                     const connectPrompt = buildOrphanConnectionsPrompt(allBootstrappedNodes, orphanIds);
-                    const connectResult = await call('model.generate', { prompt: connectPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
+                    const connectResult = await call('model.generate', { prompt: connectPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                     tick('connecting');
                     // Отказ здесь НЕ прерывает бутстрап — тот же принцип,
                     // что у Прохода 3: граф уже целиком построен и рабочий
@@ -2287,7 +2311,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     async function escalateToSideCar(batch) {
         const listing = batch.map((node, i) => `${i + 1}. ${node.label}: ${node.content}`).join('\n');
         const prompt = `These ${batch.length} facts could not be automatically placed in the memory graph:\n\n${listing}\n\nFor each, reply with its number and either a short category label it clearly belongs to, or "DISCARD" if it fits nowhere. Format: one line per item, "N: label" or "N: DISCARD".`;
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined });
+        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) { for (const node of batch) delete nodes[node.id]; return; }
         // Phase 1: разбор ответа — по строкам "N: ..."; "DISCARD" (без учёта
         // регистра) отбрасывает ноду, всё остальное становится её label, и
