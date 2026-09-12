@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createEngine } from '../libraries/shared/engine.js';
 import {
     pixelToRegion, regionLayoutPosition, packOffsetInRegion, regionWedgePath, renderRegionBackgroundSvg,
     fallbackSemanticPosition, semanticAnchorRadius, SEMANTIC_MAX_ANCHOR_DISTANCE, SEMANTIC_REGION_GAP,
+    stagedNodePosition, STAGING_ANCHOR_DISTANCE,
     backgroundTransformCss, MAX_RADIUS,
+    createMemoryGraphPanelCore,
 } from '../cores/ui/memory-graph-panel.js';
 
 // --- pixelToRegion() / regionLayoutPosition() — geometry round-trips ------
@@ -175,6 +178,41 @@ test('fallbackSemanticPosition() is deterministic — the same regionId/index/li
     assert.deepEqual(first, second);
 });
 
+// --- stagedNodePosition() — the накопитель holding area, never {x:0,y:0} ---
+
+test('stagedNodePosition() does NOT collapse every staged node onto the same {x:0,y:0} point — real regression: they used to stack invisibly on top of each other', () => {
+    const positions = [0, 1, 2, 3, 4].map(stagedNodePosition);
+    const distinct = new Set(positions.map(p => `${p.x},${p.y}`));
+    assert.equal(distinct.size, positions.length, 'every staged node must get its own distinguishable spot');
+    for (const p of positions) assert.ok(p.x !== 0 || p.y !== 0, 'no staged node may sit exactly at the canvas origin, which already means something else (region 0:0\'s own anchor)');
+});
+
+test('stagedNodePosition() sits clearly OUTSIDE the dartboard (beyond MAX_RADIUS) — a visually separate holding area, not a disguised extra region', () => {
+    for (let i = 0; i < 10; i += 1) {
+        const { x, y } = stagedNodePosition(i);
+        const distanceFromOrigin = Math.hypot(x, y);
+        assert.ok(distanceFromOrigin > MAX_RADIUS, `staged node #${i} at distance ${distanceFromOrigin.toFixed(1)} must be past MAX_RADIUS (${MAX_RADIUS})`);
+    }
+});
+
+test('stagedNodePosition() is deterministic — the same index always lands on the same spot (no per-render jitter)', () => {
+    assert.deepEqual(stagedNodePosition(2), stagedNodePosition(2));
+});
+
+test('stagedNodePosition() keeps every PAIR of staged nodes at least minPointDistance apart, even for a large backlog — no clumping as the накопитель grows', () => {
+    const points = Array.from({ length: 20 }, (_, i) => stagedNodePosition(i));
+    for (let i = 0; i < points.length; i += 1) {
+        for (let j = i + 1; j < points.length; j += 1) {
+            const distance = Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y);
+            assert.ok(distance >= 20, `staged nodes #${i}/#${j} are only ${distance.toFixed(2)}px apart`);
+        }
+    }
+});
+
+test('STAGING_ANCHOR_DISTANCE sits past the dartboard\'s own outer edge, with a real gap', () => {
+    assert.ok(STAGING_ANCHOR_DISTANCE > MAX_RADIUS);
+});
+
 // --- semanticAnchorRadius() — region-to-region spacing scales with region count ---
 // Реальная жалоба пользователя: при фиксированном радиусе регионы оказывались
 // "далеко друг от друга" (при малом N — огромная хорда), а разброс ВНУТРИ
@@ -257,4 +295,42 @@ test('renderRegionBackgroundSvg() sizes the <svg> in EXPLICIT pixels equal to 2*
     assert.ok(svg.includes('height="600"'), svg);
     assert.ok(svg.includes('viewBox="0 0 600 600"'), svg);
     assert.ok(!svg.includes('width="100%"'), 'must not fall back to percentage sizing');
+});
+
+// --- createMemoryGraphPanelCore() — smoke test: opening the panel must not throw ---
+// Реальный найденный баг, который НИЧЕМ из тестов выше не ловится (они все
+// только про чистые геометрические функции): `Select` использовался в
+// `retrievalSection()`, но не был импортирован — ReferenceError при первом
+// же открытии панели (`panelVisible.set(true)` -> computed() внутри tree()
+// пересчитывается -> строит FloatingPanel целиком, включая эту секцию).
+// Ни один из юнит-тестов файла не строит настоящее дерево панели, поэтому
+// такой баг доживал бы до живого браузера. `mount: node => node` — тот же
+// приём, что уже используют tests/notifications-core.test.js/
+// tests/update-overlay-core.test.js: не трогает DOM/cytoscape вообще, но
+// `tree()`/`show()` всё равно выполняют РЕАЛЬНЫЙ код построения дерева
+// (Section/Field/Select/ProgressBar и т.д.) синхронно, тем же путём, что и
+// в браузере — ReferenceError здесь поймал бы ту же ошибку без единого
+// реального рендера.
+function buildPanel() {
+    const engine = createEngine();
+    const host = engine.registerCaller('core.ui.memoryGraph', 'cores', { tier: 'official' });
+    const core = createMemoryGraphPanelCore(host, { mount: node => node });
+    return { engine, core };
+}
+
+test('tree() + show() builds the WHOLE panel (sidebar, retrieval section with the Sticky balance Select, bootstrap section, debug block) without throwing', () => {
+    const { core } = buildPanel();
+    core.tree(); // panelVisible starts false — FloatingPanel branch not built yet
+
+    assert.doesNotThrow(() => core.show(), 'opening the panel must not throw a ReferenceError from a missing widget import');
+    assert.equal(core.isVisible(), true);
+});
+
+test('hide() after show() tears down cleanly — no leftover cytoscape instance to double-dispose', () => {
+    const { core } = buildPanel();
+    core.tree();
+    core.show();
+
+    assert.doesNotThrow(() => core.hide());
+    assert.equal(core.isVisible(), false);
 });

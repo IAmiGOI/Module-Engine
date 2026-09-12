@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveProviderFormat, buildProviderRequest, resolveProviderResponseText } from '../libraries/core/provider-request.js';
+import { resolveProviderFormat, buildProviderRequest, resolveProviderResponseText, resolveStreamDelta } from '../libraries/core/provider-request.js';
 
 const REQUEST = Object.freeze({ prompt: 'hello', systemPrompt: '', temperature: 0.5, maxTokens: 100, topP: 1, topK: 0, seed: 0 });
 
@@ -199,4 +199,57 @@ test('google "disabled" sends an explicit zero budget', () => {
     );
 
     assert.deepEqual(JSON.parse(built.body).generationConfig.thinkingConfig, { thinkingBudget: 0 });
+});
+
+// --- Стриминг: { stream: true } меняет тело/URL, resolveStreamDelta() читает фреймы ---
+
+test('buildProviderRequest() with { stream: true } sends stream: true for openai and anthropic, unchanged otherwise', () => {
+    const openai = buildProviderRequest({ endpoint: 'https://api.example.com/v1', format: 'openai' }, REQUEST, { stream: true });
+    const anthropic = buildProviderRequest({ endpoint: 'https://api.example.com', format: 'anthropic' }, REQUEST, { stream: true });
+
+    assert.equal(JSON.parse(openai.body).stream, true);
+    assert.equal(JSON.parse(anthropic.body).stream, true);
+});
+
+test('buildProviderRequest() without { stream: true } never sends a stream flag — existing non-streaming callers see byte-identical bodies', () => {
+    const openai = buildProviderRequest({ endpoint: 'https://api.example.com/v1', format: 'openai' }, REQUEST);
+    assert.equal('stream' in JSON.parse(openai.body), false);
+});
+
+test('buildProviderRequest() with { stream: true } for google switches to streamGenerateContent + alt=sse — Gemini has no body flag, only a different method', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://generativelanguage.googleapis.com/v1', apiKey: 'gk-1', model: 'gemini-test', format: 'google' },
+        REQUEST, { stream: true },
+    );
+
+    assert.equal(built.url, 'https://generativelanguage.googleapis.com/v1/gemini-test:streamGenerateContent?alt=sse&key=gk-1');
+});
+
+test('resolveStreamDelta() reads an openai delta frame and recognizes the [DONE] sentinel', () => {
+    const delta = resolveStreamDelta('openai', { data: JSON.stringify({ choices: [{ delta: { content: 'hi' } }] }) });
+    assert.deepEqual(delta, { delta: 'hi', done: false });
+    assert.deepEqual(resolveStreamDelta('openai', { data: '[DONE]' }), { delta: '', done: true });
+});
+
+test('resolveStreamDelta() reads anthropic content_block_delta text and stops on message_stop', () => {
+    const delta = resolveStreamDelta('anthropic', { event: 'content_block_delta', data: JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } }) });
+    assert.deepEqual(delta, { delta: 'hi', done: false });
+    assert.deepEqual(resolveStreamDelta('anthropic', { event: 'message_stop', data: JSON.stringify({ type: 'message_stop' }) }), { delta: '', done: true });
+});
+
+test('resolveStreamDelta() ignores non-text anthropic events (message_start, ping, content_block_stop) without throwing', () => {
+    assert.deepEqual(resolveStreamDelta('anthropic', { event: 'ping', data: JSON.stringify({ type: 'ping' }) }), { delta: '', done: false });
+});
+
+test('resolveStreamDelta() reads a google partial GenerateContentResponse and flags done on finishReason', () => {
+    const delta = resolveStreamDelta('google', { data: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'hi' }] } }] }) });
+    assert.deepEqual(delta, { delta: 'hi', done: false });
+    const finished = resolveStreamDelta('google', { data: JSON.stringify({ candidates: [{ content: { parts: [{ text: '' }] }, finishReason: 'STOP' }] }) });
+    assert.equal(finished.done, true);
+});
+
+test('resolveStreamDelta() returns an empty, not-done delta for malformed JSON instead of throwing — one bad frame must not kill the stream', () => {
+    assert.deepEqual(resolveStreamDelta('openai', { data: 'not json' }), { delta: '', done: false });
+    assert.deepEqual(resolveStreamDelta('anthropic', { data: 'not json' }), { delta: '', done: false });
+    assert.deepEqual(resolveStreamDelta('google', { data: 'not json' }), { delta: '', done: false });
 });
