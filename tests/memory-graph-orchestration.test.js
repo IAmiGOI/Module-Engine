@@ -130,7 +130,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
         tier: 'community',
         allowedContracts: [
             'memoryGraph.settings', 'memoryGraph.configure', 'memoryGraph.nodes', 'memoryGraph.regions', 'memoryGraph.check',
-            'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue',
+            'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging',
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete',
@@ -559,6 +559,36 @@ test('checkAndPlace(): a genuinely UNRELATED second node can seed its OWN dartbo
     assert.notEqual(second.regionId, '0:0', 'an unrelated second topic must NOT be dragged into the first region just because it is the only one with a center yet');
 });
 
+test('a node that lands in a genuine tie (no confident region, graph no longer empty) is exposed via memoryGraph.staging — not silently invisible ("каскад не проходит" reported live)', async () => {
+    // Тот же фикстур, что и "ВАЖНО" тест выше: с ПОЛНОСТЬЮ ортогональными
+    // словами и пустым словарём региона у второй темы, логит-формула даёт
+    // РОВНО одинаковую вероятность у всех 15 регионов (region 0:0's центр
+    // ортогонален новому эмбедингу ровно так же, как и 14 пустых регионов) —
+    // pickConfidentRegion() честно отказывается ("best >= second*1.5" не
+    // выполняется при точном равенстве), а isEmptyGraph уже false (у 0:0
+    // есть центр) — единственный оставшийся исход decideFirstPlacement()
+    // это 'staged'. Раньше эта нода была видна ТОЛЬКО как node.regionId===null
+    // внутри Ядра — никакой контракт её не отдавал.
+    const { graphCore, caller } = buildEngine({
+        fetchReplies: [
+            '{"label":"Topic Alpha","content":"alpha bravo charlie delta echo hotel juliet mike","importance":5}',
+            '{"label":"Topic Beta","content":"golf lima oscar quebec sierra yankee","importance":5}',
+        ],
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('alpha bravo charlie delta echo hotel juliet mike');
+    await graphCore.checkAndPlace('golf lima oscar quebec sierra yankee');
+
+    const second = graphCore.nodes().find(n => n.label === 'Topic Beta');
+    assert.equal(second.regionId, null, 'a genuine tie across all 15 regions must not force an arbitrary placement');
+
+    const staging = (await call(caller, 'memoryGraph.staging')).value;
+    assert.equal(staging.length, 1, 'the tied node must show up in the accumulator contract, not just vanish from view');
+    assert.equal(staging[0].nodeId, second.id);
+});
+
 test('a region past capacity (23) queues its weakest CLUSTER for reconsolidation instead of evicting immediately — reconsolidation is preferred, it preserves more information than outright deletion', async () => {
     const entries = Array.from({ length: 24 }, (_, i) => ({ uid: i, comment: `Entry ${i}`, content: `Distinct lore fact number ${i} about the world, unrelated to the others.` }));
     const { graphCore, caller } = buildEngine({
@@ -622,7 +652,8 @@ test('askSideCarForReconsolidation() sends an explicit maxTokens override, not t
     const replies = [
         '[{"region":"Big","subCenterUids":[1,2]}]',
         '[{"region":"Big","centerUid":0}]',
-        '[]',
+        '[]', // Проход 3 — намеренно ничего не связывает, поэтому следующий (условный Проход 4) реально срабатывает
+        '[]', // Проход 4 — ничего не предлагает, разбирается как пустой список без ошибок
         '{"label":"Folded Entries","content":"A compressed summary of several minor facts.","importance":2}',
     ];
     const requestBodies = [];
@@ -638,7 +669,7 @@ test('askSideCarForReconsolidation() sends an explicit maxTokens override, not t
     for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
     await graphCore.sweepReconsolidationQueue();
 
-    assert.equal(requestBodies.length, 4, 'sanity: bootstrap Проход 1/2/3 + the reconsolidation call itself must all have fired');
+    assert.equal(requestBodies.length, 5, 'sanity: bootstrap Проход 1/2/3/4 + the reconsolidation call itself must all have fired');
     assert.equal(requestBodies.at(-1).max_tokens, 2000, `askSideCarForReconsolidation() must override the 1000-token engine default: ${JSON.stringify(requestBodies.at(-1))}`);
 });
 
@@ -789,6 +820,67 @@ test('a manually-created node does NOT get backbone-filled automatically — swe
     }
     const nodes = (await call(caller, 'memoryGraph.nodes')).value;
     assert.ok(nodes.every(n => (n.degree ?? 0) === 0), 'manual creation alone must not invoke enforceBackboneConnectivity()');
+});
+
+test('bootstrapFromLorebook(): when Проход 3 + backbone leave an ordinary entry with ZERO connections, the conditional Проход 4 fires and wires it up (реальная жалоба: "проходила внутренняя проверка, все ли ноды подключены... создавался ещё один SideCar call")', async () => {
+    const entries = [
+        { uid: 0, comment: 'Center', content: 'the defining entry of this region.' },
+        { uid: 1, comment: 'Sub', content: 'a supporting entry, no name overlap with anything else here.' },
+        { uid: 2, comment: 'Orphan', content: 'an unrelated ordinary entry, no name overlap with anything else either.' },
+    ];
+    let graphCoreRef;
+    let callIndex = 0;
+    // Тот же приём, что у теста "a SUCCESSFUL Проход 3 response..." выше —
+    // Проход 4's ответ должен ссылаться на РЕАЛЬНЫЙ id ноды-сироты, известный
+    // только ПОСЛЕ размещения, поэтому fetch читает текущее состояние графа
+    // налету через замыкание на graphCoreRef.
+    const fetchOverride = async () => {
+        const index = callIndex;
+        callIndex += 1;
+        if (index === 0) return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '[{"region":"Region","subCenterUids":[1]}]' } }] }) };
+        if (index === 1) return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '[{"region":"Region","centerUid":0}]' } }] }) };
+        if (index === 2) return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '[]' } }] }) }; // Проход 3 — намеренно никого не связывает
+        const orphan = graphCoreRef.nodes().find(n => n.label === 'Orphan');
+        const center = graphCoreRef.nodes().find(n => n.label === 'Center');
+        const reply = JSON.stringify([{ id: orphan.id, connectTo: [center.id] }]);
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    const { graphCore } = buildEngine({ lorebookEntries: entries, fetchOverride });
+    graphCoreRef = graphCore;
+
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    const orphan = graphCore.nodes().find(n => n.label === 'Orphan');
+    const center = graphCore.nodes().find(n => n.label === 'Center');
+    assert.equal(orphan.degree, 1, 'the conditional Проход 4 must have connected the entry that Проход 3 + backbone both left isolated');
+    assert.equal(orphan.edges[0].to, center.id);
+    assert.equal(orphan.edges[0].type, 'related');
+    assert.equal(callIndex, 4, 'exactly Проход 1/2/3 plus the one conditional Проход 4 call must have fired');
+});
+
+test('bootstrapFromLorebook(): when NOTHING is left disconnected after Проход 3 + backbone, the conditional Проход 4 does NOT fire at all — no wasted SideCar call', async () => {
+    const entries = [
+        { uid: 0, comment: 'Center', content: 'the defining entry of this tiny region.' },
+        { uid: 1, comment: 'Sub', content: 'the only other entry — backbone connects it straight to Center, nothing is left orphaned.' },
+    ];
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        const index = requestBodies.length - 1;
+        const replyFor = index === 0 ? '[{"region":"Region","subCenterUids":[1]}]'
+            : index === 1 ? '[{"region":"Region","centerUid":0}]'
+                : '[]'; // Проход 3 — no edges either, backbone is the only thing connecting this pair
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: replyFor } }] }) };
+    };
+    const { graphCore } = buildEngine({ lorebookEntries: entries, fetchOverride });
+
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    const nodes = graphCore.nodes();
+    assert.ok(nodes.every(n => (n.degree ?? 0) > 0), 'sanity: Center and Sub are the only two backbone-eligible nodes, so they must have wired to each other');
+    assert.equal(requestBodies.length, 3, 'only Проход 1/2/3 may fire — nothing was left orphaned, so the conditional Проход 4 must be skipped entirely');
 });
 
 test('a near-duplicate pair detected on insertion is queued for SideCar merge, NOT merged immediately — matures after mergeQueueMaxTurns and combines into one node', async () => {
@@ -1075,6 +1167,22 @@ test('checkAndPlace() creates a node via SideCar on the very first call (no base
     assert.equal(nodes.value[0].gameTime, null, 'RP Time is "disabled" in this test setup — gameTime must degrade to null, not throw');
 });
 
+test('checkAndPlace() stores the node\'s OWN label+content embedding, not the triggering context\'s — merge-detection/beacon-scoring/backbone all read node.embedding as the truth about what the node says', async () => {
+    const { graphCore } = buildEngine({
+        fetchReply: '{"label":"Sword","content":"An ancient enchanted blade.","importance":6}',
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('The player enters a dark cave and finds an old sword.');
+
+    const node = graphCore.nodes()[0];
+    assert.deepEqual(node.embedding, fakeEmbed('Sword: An ancient enchanted blade.'),
+        'node.embedding must come from the node\'s own label+content (the same passage-embedding call every other creation path makes), not be left over from the placement-only context embedding');
+    assert.notDeepEqual(node.embedding, fakeEmbed('The player enters a dark cave and finds an old sword.'),
+        'node.embedding must NOT be the raw triggering context text — that vector is a placement signal only');
+});
+
 test('checkAndPlace() mirrors a freshly-placed node into the active Lorebook as a DISABLED entry (решено с пользователем: "по идее вся инфраструктура есть" — lorebook.createEntry() уже реализован)', async () => {
     // lorebookEntries: [] — активная книга ЕСТЬ (createEntry может писать),
     // но записей нет (bootstrapFromLorebook честно ничего не делает — 0
@@ -1135,6 +1243,24 @@ test('askSideCarForNode()\'s prompt gives the model an explicit escape hatch and
     assert.match(prompt, /skip.*true/is, 'the model must be told it may decline entirely, not forced to invent a fact from thin context');
     assert.match(prompt, /short-term|situational/i, 'the prompt must explicitly steer away from fleeting, plot-mechanic arrangements');
     assert.match(prompt, /0-3|4-7|8-10/, 'importance must have anchored bands, not a bare unexplained 0-10 range the model has no reason to actually spread across');
+});
+
+test('askSideCarForNode()\'s prompt teaches SELF-CONTAINED phrasing with worked examples — not just an abstract long-term/situational rule (реальная жалоба: "качество поиска фактов весьма грустное")', async () => {
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"skip": true}' } }] }) };
+    };
+    const { graphCore } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    await graphCore.checkAndPlace('The player agrees to meet the merchant at noon tomorrow.');
+
+    const prompt = requestBodies[0].messages.at(-1).content;
+    assert.match(prompt, /example/i, 'a bare definition is not enough to calibrate the judgment call — the prompt must show worked examples');
+    assert.match(prompt, /"he"|"she"|"it"/i, 'the prompt must explicitly warn against dangling pronouns with no antecedent — content is read weeks later, out of context');
+    assert.match(prompt, /on its own|without the surrounding scene|self-contained/i, 'the prompt must require content to stand on its own, not lean on the scene that produced it');
+    assert.match(prompt, /vague|something important happened/i, 'the prompt must explicitly reject vague, non-specific summaries, not just require SOME fact');
 });
 
 test('checkAndPlace() with blank context text is skipped — nothing to embed', async () => {
@@ -1339,6 +1465,89 @@ test('a node TWO edges off the beacon route, reachable only through a first-hop 
     assert.ok(text.includes('Ruins (noise)'), 'Ruins (one hop off the route) must be reached first');
     assert.ok(text.includes('DeepClue (noise)'), 'DeepClue is only reachable BY expanding again from Ruins, the previous round\'s own noise pick — this is the multi-hop "and so on" behavior, not just a single flat layer off the route');
     assert.ok(text.includes('- DeepClue (noise): A strange rune found deep inside the Ruins hints at their true age.'), 'its real content must be visible, not just its label');
+});
+
+// --- Sticky balance ретрива: injectIntoPrompt() end-to-end ---------------
+
+test('injectIntoPrompt() sticky balance: an UNCHANGED context reuses the exact same block on the second call — noise\'s own randomness never gets consulted again (реальная жалоба: "чтобы не руинить Кэш-хиты")', async () => {
+    const entries = [
+        { uid: 0, comment: 'Marcus', content: 'Marcus runs the old tavern near the market square.' },
+        { uid: 1, comment: 'Elena', content: 'Elena often visits Marcus to trade rare herbs.' },
+        { uid: 2, comment: 'Ruins', content: 'Elena explores Ruins searching for lost artifacts.' },
+        { uid: 3, comment: 'Whiskers', content: 'Marcus keeps a cat named Whiskers who naps by the door.' },
+    ];
+    let randomCalls = 0;
+    const countingRandom = () => { randomCalls += 1; return Math.random(); };
+    const { graphCore, pipelineCore, caller } = buildEngine({
+        lorebookEntries: entries, random: countingRandom,
+        fetchReplies: ['[{"region":"Story","subCenterUids":[1]}]', '[{"region":"Story","centerUid":0}]', '[]'],
+    });
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 3 });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    const outgoing1 = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing1 } });
+    const callsAfterFirst = randomCalls;
+    assert.ok(callsAfterFirst > 0, 'sanity: the FIRST call must actually consult randomness for noise expansion');
+
+    const outgoing2 = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing2 } });
+
+    assert.equal(randomCalls, callsAfterFirst, 'the second call must NOT touch randomness at all — the sticky block is reused verbatim, route/noise are not recomputed from scratch');
+    assert.equal(outgoing2[0].mes, outgoing1[0].mes, 'the injected text must be byte-identical across turns while the sticky block wins — this is what actually preserves an LLM provider\'s prompt cache');
+});
+
+test('injectIntoPrompt() sticky balance: a genuinely stronger fresh candidate set replaces the WHOLE sticky block, not a merge of old and new', async () => {
+    const { graphCore, pipelineCore, caller } = buildEngine();
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    // subCentersPerRegion:0 — иначе Alpha/Beta сами стали бы под-центрами
+    // (защищённые, Infinity-вес в pickBeacons()'s ПЕРВОНАЧАЛЬНОМ отборе,
+    // не в scoreBeaconSet() — она уже игнорирует защиту намеренно) и
+    // тематическое различие между ними перестало бы на что-либо влиять.
+    // "Filler" — первый узел региона, забирает на себя автоматическую роль
+    // центра (защищён), Alpha/Beta становятся обычными ("ordinary").
+    await call(caller, 'memoryGraph.configure', { beaconCount: 2, subCentersPerRegion: 0 });
+    // Слова проверены заранее по fakeEmbed()'s собственному хэшу (4 корзины) —
+    // "Filler"/foxtrot/kilo/november/uniform/xray хэшируются ЦЕЛИКОМ в
+    // корзину 0, "Alpha"/alpha/bravo/charlie/delta/echo — в корзину 1, а
+    // "golf/lima/oscar/quebec/sierra" (без слова "Beta" самого лейбла,
+    // которое падает в корзину 3) — в корзину 2: три набора без пересечений
+    // ни с одной другой корзиной, тот же приём, что и в "ВАЖНО" тесте выше
+    // ("checkAndPlace(): a genuinely UNRELATED second node...").
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Filler', content: 'foxtrot kilo november uniform xray', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Alpha', content: 'alpha bravo charlie delta echo', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Beta', content: 'golf lima oscar quebec sierra', sector: 0, ring: 0 });
+
+    const outgoing1 = [{ mes: 'alpha bravo charlie delta echo' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing1 } });
+    assert.ok(outgoing1[0].mes.includes('Alpha'), 'sanity: the first turn must pin the Alpha-topic beacon');
+    assert.ok(!outgoing1[0].mes.includes('Beta'), 'sanity: Beta must not have been picked at all on the first turn');
+
+    const outgoing2 = [{ mes: 'golf lima oscar quebec sierra' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing2 } });
+    assert.ok(outgoing2[0].mes.includes('Beta'), 'a genuinely different topic must displace the sticky block — it must not keep showing Alpha forever');
+    assert.ok(!outgoing2[0].mes.includes('Alpha'), 'the swap is WHOLE-BLOCK — the old block is fully replaced, never merged one slot at a time with the new one');
+});
+
+test('injectIntoPrompt() sticky balance: a sticky beacon that disappeared from the graph (deleted/merged/evicted) forces an IMMEDIATE full refresh, even though the conversation itself did not change', async () => {
+    const { graphCore, pipelineCore, caller } = buildEngine();
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    await call(caller, 'memoryGraph.configure', { beaconCount: 1, retrievalStability: 'sticky' }); // max stickiness — proves the refresh comes from the dangling reference, not from a topic drift the margin would have allowed anyway
+    const alpha = await call(caller, 'memoryGraph.nodes.create', { label: 'Alpha', content: 'alpha bravo charlie delta echo', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Beta', content: 'golf hotel india juliet kilo', sector: 1, ring: 0 });
+
+    const outgoing1 = [{ mes: 'alpha bravo charlie delta echo' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing1 } });
+    assert.ok(outgoing1[0].mes.includes('Alpha'), 'sanity: Alpha is pinned first');
+
+    await call(caller, 'memoryGraph.nodes.delete', { id: alpha.value.nodeId });
+
+    const outgoing2 = [{ mes: 'alpha bravo charlie delta echo' }]; // SAME context text as before — a topic-drift swap would not apply here
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing2 } });
+    assert.ok(!outgoing2[0].mes.includes('Alpha'), 'the deleted node can no longer appear — the dangling sticky reference must trigger an unconditional refresh, "sticky" stability notwithstanding');
 });
 
 // --- Ручное редактирование графа (UI-редактор): CRUD нод/рёбер -----------

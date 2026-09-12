@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { signal, computed } from '../cores/ui/reactive.js';
-import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock } from '../libraries/shared/widgets.js';
+import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock, ProgressBar } from '../libraries/shared/widgets.js';
 
 /**
  * Виджеты — чистые функции «данные → дерево», поэтому проверяются как
@@ -296,4 +296,20 @@ test('StatBlock() separates the label from the value — they were one run of te
     assert.equal(head.children[0].children[0], '♥');
     assert.equal(head.children[1].children[0], 'Health');
     assert.ok(node.children.some(child => child?.props?.class === 'stme-stat-value'));
+});
+
+test('ProgressBar() clamps and rounds the percent into [0,100] — a caller\'s raw done/total math must not produce a bar past full or a negative width', () => {
+    const fillWidth = bar => bar.children[0].children[0].props.style.width;
+    assert.equal(fillWidth(ProgressBar(150, 'x')), '100%');
+    assert.equal(fillWidth(ProgressBar(-10, 'x')), '0%');
+    assert.equal(fillWidth(ProgressBar(42.6, 'x')), '43%');
+});
+
+test('ProgressBar() renders the caller\'s own label text as-is, and omits the label node entirely when none is given', () => {
+    const withLabel = ProgressBar(50, 'Building… 50%');
+    assert.equal(withLabel.children[1].props.class, 'stme-progress-label');
+    assert.equal(withLabel.children[1].children[0], 'Building… 50%');
+
+    const withoutLabel = ProgressBar(50);
+    assert.equal(withoutLabel.children.length, 1, 'no label given -> no second child at all, not an empty one');
 });
