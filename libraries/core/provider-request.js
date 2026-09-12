@@ -43,12 +43,18 @@ export function resolveProviderFormat(format) {
  * systemPrompt, temperature, maxTokens, topP, topK, seed }. Returns
  * `{ url, method, headers, body }` — everything `http.request` needs, with
  * `body` already JSON-stringified (matching services/http.js's contract).
+ *
+ * `stream` (opt-in, default `false` — existing callers untouched) shapes the
+ * request so the provider replies with SSE instead of one JSON blob: OpenAI/
+ * Anthropic take a body flag, Google instead needs a DIFFERENT endpoint
+ * (`streamGenerateContent` vs `generateContent` — its REST API has no
+ * `stream` body field at all, this isn't a stylistic choice).
  */
-export function buildProviderRequest(worker, request) {
+export function buildProviderRequest(worker, request, { stream = false } = {}) {
     const format = resolveProviderFormat(worker.format);
-    if (format === 'anthropic') return buildAnthropicRequest(worker, request);
-    if (format === 'google') return buildGoogleRequest(worker, request);
-    return buildOpenAiRequest(worker, request);
+    if (format === 'anthropic') return buildAnthropicRequest(worker, request, stream);
+    if (format === 'google') return buildGoogleRequest(worker, request, stream);
+    return buildOpenAiRequest(worker, request, stream);
 }
 
 /** OpenRouter — единственный openai-формат, чей unified `reasoning` мы знаем и на который согласны положиться (см. doc-comment файла). */
@@ -74,7 +80,7 @@ function buildOpenAiReasoning(worker, request) {
     };
 }
 
-function buildOpenAiRequest(worker, request) {
+function buildOpenAiRequest(worker, request, stream) {
     const url = /\/chat\/completions$/.test(worker.endpoint) ? worker.endpoint : `${trimTrailingSlash(worker.endpoint)}/chat/completions`;
     const headers = { 'Content-Type': 'application/json' };
     if (worker.apiKey) headers.Authorization = `Bearer ${worker.apiKey}`;
@@ -88,6 +94,7 @@ function buildOpenAiRequest(worker, request) {
             ...(request.topK ? { top_k: request.topK } : {}),
             ...(request.seed ? { seed: request.seed } : {}),
             ...buildOpenAiReasoning(worker, request),
+            ...(stream ? { stream: true } : {}),
         }),
     };
 }
@@ -112,7 +119,7 @@ function buildAnthropicThinking(request) {
     return { thinking: { type: 'enabled', budget_tokens: budget } };
 }
 
-function buildAnthropicRequest(worker, request) {
+function buildAnthropicRequest(worker, request, stream) {
     const url = /\/messages$/.test(worker.endpoint) ? worker.endpoint : `${trimTrailingSlash(worker.endpoint)}/messages`;
     return {
         url, method: 'POST',
@@ -123,6 +130,7 @@ function buildAnthropicRequest(worker, request) {
             system: request.systemPrompt || undefined,
             messages: [{ role: 'user', content: request.prompt }],
             ...buildAnthropicThinking(request),
+            ...(stream ? { stream: true } : {}),
         }),
     };
 }
@@ -134,8 +142,14 @@ function buildGoogleThinking(request) {
     return { thinkingConfig: { thinkingBudget: request.reasoningBudget > 0 ? request.reasoningBudget : -1 } };
 }
 
-function buildGoogleRequest(worker, request) {
-    const url = `${trimTrailingSlash(worker.endpoint)}/${encodeURIComponent(worker.model)}:generateContent?key=${encodeURIComponent(worker.apiKey ?? '')}`;
+function buildGoogleRequest(worker, request, stream) {
+    // Google's REST API has no `stream` body flag — streaming is a DIFFERENT
+    // method (`streamGenerateContent`) on the same resource, and `alt=sse`
+    // is required to get real SSE frames back instead of one JSON array
+    // delivered in a single response (the method's default framing).
+    const apiMethod = stream ? 'streamGenerateContent' : 'generateContent';
+    const query = stream ? `alt=sse&key=${encodeURIComponent(worker.apiKey ?? '')}` : `key=${encodeURIComponent(worker.apiKey ?? '')}`;
+    const url = `${trimTrailingSlash(worker.endpoint)}/${encodeURIComponent(worker.model)}:${apiMethod}?${query}`;
     const text = request.systemPrompt ? `${request.systemPrompt}\n\n---\n\n${request.prompt}` : request.prompt;
     return {
         url, method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -152,6 +166,49 @@ function buildGoogleRequest(worker, request) {
 
 function trimTrailingSlash(url) {
     return String(url ?? '').replace(/\/+$/, '');
+}
+
+/**
+ * Defensive reader over ONE already-parsed SSE frame (`{ event, data }` from
+ * [sse-stream.js](sse-stream.js)) — same contract as `resolveProviderResponseText()`:
+ * garbage/unexpected shape yields an empty, not-done delta rather than
+ * throwing mid-stream (a single malformed frame must not kill the whole
+ * response). Every format signals completion differently:
+ *  - **openai** — sentinel frame `data: [DONE]`, no JSON body at all.
+ *  - **anthropic** — a real event stream (`message_start`/`content_block_delta`/
+ *    `message_stop`/...); only `content_block_delta` carries text, `message_stop`
+ *    ends it. Reads the frame's OWN `type` field (always mirrors `event` per
+ *    Anthropic's docs) rather than trusting `event` alone, in case a provider
+ *    ever omits the named field but keeps the JSON honest.
+ *  - **google** — no sentinel; each frame is a full (partial) `GenerateContentResponse`,
+ *    same shape as the non-streaming reply. Done is inferred from `finishReason`
+ *    showing up, not from the transport — the stream's real end is the caller's
+ *    (http.js's) job once the reader itself reports done.
+ */
+export function resolveStreamDelta(format, frame) {
+    const resolvedFormat = resolveProviderFormat(format);
+    const data = frame?.data ?? '';
+    if (resolvedFormat === 'openai') {
+        if (data.trim() === '[DONE]') return { delta: '', done: true };
+        try {
+            const json = JSON.parse(data);
+            return { delta: String(json?.choices?.[0]?.delta?.content ?? ''), done: false };
+        } catch { return { delta: '', done: false }; }
+    }
+    if (resolvedFormat === 'anthropic') {
+        try {
+            const json = JSON.parse(data);
+            if (json?.type === 'message_stop') return { delta: '', done: true };
+            if (json?.type === 'content_block_delta') return { delta: String(json?.delta?.text ?? ''), done: false };
+            return { delta: '', done: false };
+        } catch { return { delta: '', done: false }; }
+    }
+    // google
+    try {
+        const json = JSON.parse(data);
+        const candidate = json?.candidates?.[0];
+        return { delta: String(candidate?.content?.parts?.[0]?.text ?? ''), done: Boolean(candidate?.finishReason) };
+    } catch { return { delta: '', done: false }; }
 }
 
 /** Defensive reader — a malformed/unexpected response body yields '' rather than throwing, matching `resolveX()`'s contract. */

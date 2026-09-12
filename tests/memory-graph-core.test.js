@@ -13,6 +13,8 @@ import {
     buildAdditionalCentersPrompt, parseAdditionalCentersResponse,
     pickNearestRegion,
     buildRegionEdgesPrompt, parseRegionEdgesResponse,
+    buildOrphanConnectionsPrompt, parseOrphanConnectionsResponse,
+    scoreBeaconSet, shouldReplaceStickySet, RETRIEVAL_STABILITY_MARGINS,
 } from '../cores/memory-graph/index.js';
 
 // --- Физика регионов --------------------------------------------------
@@ -311,6 +313,25 @@ test('clampGraphSettings() keeps maxNodesPerRegion at the resolved capacity (23 
     assert.equal(DEFAULT_SETTINGS.maxNodesPerRegion, 23);
 });
 
+test('clampGraphSettings() defaults stallMs to 5000 — the exact number the user specified for stall-restart ("если за 5 секунд ничего не пришло")', () => {
+    assert.equal(DEFAULT_SETTINGS.stallMs, 5000);
+});
+
+test('clampGraphSettings() treats stallMs:0 as a deliberate "disable it" value, not garbage to fall back from — same meaning as falsy stallMs in internal-engine.js', () => {
+    assert.equal(clampGraphSettings({ stallMs: 0 }).stallMs, 0);
+});
+
+test('clampGraphSettings() clamps a garbage/out-of-range stallMs back to the default, and caps it at 120000ms', () => {
+    assert.equal(clampGraphSettings({ stallMs: 'nope' }).stallMs, DEFAULT_SETTINGS.stallMs);
+    assert.equal(clampGraphSettings({ stallMs: 999999 }).stallMs, 120000);
+});
+
+test('clampGraphSettings() sanitizes fallbackWorkerIds to a clean list of trimmed, non-empty strings, and falls back to [] for garbage', () => {
+    assert.deepEqual(clampGraphSettings({ fallbackWorkerIds: [' worker-b ', '', 'worker-c', 42] }).fallbackWorkerIds, ['worker-b', 'worker-c', '42']);
+    assert.deepEqual(clampGraphSettings({ fallbackWorkerIds: 'not-an-array' }).fallbackWorkerIds, []);
+    assert.deepEqual(DEFAULT_SETTINGS.fallbackWorkerIds, []);
+});
+
 // --- Phase 2: отбор маяков и маршрут ---------------------------------------
 
 test('scoreBeaconCandidate() lets a protected node outscore a topically closer one — "не менее подцентра региона"', () => {
@@ -337,6 +358,62 @@ test('pickBeacons() returns the top-N ids, best first, and never more than there
     ];
     assert.deepEqual(pickBeacons(candidates, context, { count: 2, settings: DEFAULT_SETTINGS, turnCounter: 0 }), ['strong', 'medium']);
     assert.equal(pickBeacons(candidates, context, { count: 10, settings: DEFAULT_SETTINGS, turnCounter: 0 }).length, 3, 'must not ask for more than exist');
+});
+
+// --- Sticky balance ретрива: scoreBeaconSet()/shouldReplaceStickySet() ----
+
+test('scoreBeaconSet() sums PURE similarity (shifted to [0,1]) over the whole set — not the full importance-weighted scoreBeaconCandidate()', () => {
+    const context = [1, 0, 0];
+    const nodesById = {
+        a: { id: 'a', embedding: [1, 0, 0], importance: 0, degree: 0, protectedNode: false, createdTurn: 0 }, // identical direction -> similarity 1 -> shifted 1
+        b: { id: 'b', embedding: [0, 1, 0], importance: 0, degree: 0, protectedNode: false, createdTurn: 0 }, // orthogonal -> similarity 0 -> shifted 0.5
+    };
+    assert.equal(scoreBeaconSet(['a', 'b'], nodesById, context), 1.5);
+});
+
+test('scoreBeaconSet() ignores importance/protection entirely — summing full scoreBeaconCandidate() would let one Infinity-weighted protected node poison the whole aggregate forever', () => {
+    const context = [1, 0, 0];
+    const nodesById = {
+        protectedNode: { id: 'protectedNode', embedding: [0, 1, 0], importance: 0, degree: 0, protectedNode: true, createdTurn: 0 }, // orthogonal AND protected — would be Infinity via scoreBeaconCandidate()
+        ordinary: { id: 'ordinary', embedding: [1, 0, 0], importance: 0, degree: 0, protectedNode: false, createdTurn: 0 },
+    };
+    const total = scoreBeaconSet(['protectedNode', 'ordinary'], nodesById, context);
+    assert.ok(Number.isFinite(total), 'a protected member must not make the whole set score Infinity');
+    assert.equal(total, 1.5); // 0.5 (orthogonal, shifted) + 1 (identical, shifted)
+});
+
+test('scoreBeaconSet() returns null when ANY id in the set is missing — a whole-set dangling reference, not a partial score', () => {
+    const context = [1, 0, 0];
+    const nodesById = { a: { id: 'a', embedding: [1, 0, 0], importance: 0, degree: 0, protectedNode: false, createdTurn: 0 } };
+    assert.equal(scoreBeaconSet(['a', 'gone'], nodesById, context), null);
+});
+
+test('shouldReplaceStickySet() always replaces when there is no sticky score at all (first turn, or a dangling reference)', () => {
+    assert.equal(shouldReplaceStickySet({ stickyScore: null, freshScore: 0, stability: 'sticky' }), true);
+    assert.equal(shouldReplaceStickySet({ stickyScore: undefined, freshScore: -5, stability: 'sticky' }), true);
+});
+
+test('shouldReplaceStickySet() keeps the sticky set on an EXACT tie — "лучше, а не также" (решено с пользователем явно)', () => {
+    assert.equal(shouldReplaceStickySet({ stickyScore: 10, freshScore: 10, stability: 'often' }), false);
+});
+
+test('shouldReplaceStickySet() rejects a fresh candidate that is only marginally better than the sticky score, under EVERY stability level except a big enough win', () => {
+    // 5% better clears "often" (margin 1.02) but not "balanced" (1.15) or "sticky" (1.4).
+    assert.equal(shouldReplaceStickySet({ stickyScore: 10, freshScore: 10.5, stability: 'often' }), true);
+    assert.equal(shouldReplaceStickySet({ stickyScore: 10, freshScore: 10.5, stability: 'balanced' }), false);
+    assert.equal(shouldReplaceStickySet({ stickyScore: 10, freshScore: 10.5, stability: 'sticky' }), false);
+});
+
+test('shouldReplaceStickySet() accepts a fresh candidate once it clears the configured level\'s own margin', () => {
+    for (const level of ['often', 'balanced', 'sticky']) {
+        const margin = RETRIEVAL_STABILITY_MARGINS[level];
+        assert.equal(shouldReplaceStickySet({ stickyScore: 10, freshScore: 10 * margin + 0.01, stability: level }), true, `${level} must accept a win past its own margin`);
+        assert.equal(shouldReplaceStickySet({ stickyScore: 10, freshScore: 10 * margin - 0.01, stability: level }), false, `${level} must reject a win just short of its own margin`);
+    }
+});
+
+test('shouldReplaceStickySet() falls back to "balanced" for an unrecognized stability value, rather than crashing or always-replacing', () => {
+    assert.equal(shouldReplaceStickySet({ stickyScore: 10, freshScore: 10.5, stability: 'not-a-real-level' }), false);
 });
 
 test('findShortestPath() returns an empty path for start === end, without touching edges', () => {
@@ -685,4 +762,49 @@ test('parseRegionEdgesResponse() filters to valid ids only, drops self-loops, an
     const result = parseRegionEdgesResponse(parsed, nodes);
     const keys = result.map(e => [e.from, e.to].sort().join('|')).sort();
     assert.deepEqual(keys, ['a|b', 'b|c']);
+});
+
+// --- buildOrphanConnectionsPrompt()/parseOrphanConnectionsResponse() — Проход 4 (условный связующий проход) ---
+
+test('buildOrphanConnectionsPrompt() lists the WHOLE graph by id, but names only the disconnected ones as needing a connection', () => {
+    const allNodes = [
+        { id: 'node_a', label: 'Alice', content: 'hero' },
+        { id: 'node_b', label: 'Bob', content: 'sidekick' },
+        { id: 'node_c', label: 'Cave', content: 'a dark place' },
+    ];
+    const prompt = buildOrphanConnectionsPrompt(allNodes, ['node_c']);
+    assert.ok(prompt.includes('node_a. Alice: hero'), 'the full listing must include EVERY node, not just the orphans, so the model has real candidates to connect to');
+    assert.ok(prompt.includes('node_b. Bob: sidekick'));
+    assert.ok(prompt.includes('node_c'));
+    assert.match(prompt, /without exception/i, 'the model must be told it cannot skip any of the disconnected entries — unlike every other SideCar prompt in this file');
+});
+
+test('buildOrphanConnectionsPrompt() gives NO escape hatch — no skip/decline wording, unlike askSideCarForNode()/askSideCarForMerge()', () => {
+    const prompt = buildOrphanConnectionsPrompt([{ id: 'a', label: 'A', content: 'x' }], ['a']);
+    assert.doesNotMatch(prompt, /"skip"|"distinct"|"discard"/i, 'a disconnected node is worse than an imperfectly-connected one — this prompt must never offer a decline path');
+});
+
+test('parseOrphanConnectionsResponse() only accepts edges FOR a requested orphan id — it cannot smuggle in a connection for some other node', () => {
+    const allNodes = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    const parsed = [
+        { id: 'c', connectTo: ['a'] }, // 'c' IS the requested orphan — accepted
+        { id: 'b', connectTo: ['a'] }, // 'b' was never asked about — must be dropped entirely
+    ];
+    const result = parseOrphanConnectionsResponse(parsed, allNodes, ['c']);
+    assert.deepEqual(result, [{ from: 'c', to: 'a' }]);
+});
+
+test('parseOrphanConnectionsResponse() filters to valid ids, drops self-loops, and dedups per orphan — same discipline as parseRegionEdgesResponse()', () => {
+    const allNodes = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    const parsed = [
+        { id: 'c', connectTo: ['a', 'a', 'c', 'zzz', 'b'] }, // dup 'a', self-loop 'c', unknown 'zzz', real 'b'
+    ];
+    const result = parseOrphanConnectionsResponse(parsed, allNodes, ['c']);
+    const keys = result.map(e => [e.from, e.to].sort().join('|')).sort();
+    assert.deepEqual(keys, ['a|c', 'b|c']);
+});
+
+test('parseOrphanConnectionsResponse() returns nothing for a non-array response, same tolerance as every other SideCar parser in this file', () => {
+    assert.deepEqual(parseOrphanConnectionsResponse({ not: 'an array' }, [{ id: 'a' }], ['a']), []);
+    assert.deepEqual(parseOrphanConnectionsResponse(null, [{ id: 'a' }], ['a']), []);
 });

@@ -108,3 +108,86 @@ test('the least-loaded worker is always picked — a worker with 0 running is pr
 async function flushMicrotasks(rounds = 10) {
     for (let i = 0; i < rounds; i++) await Promise.resolve();
 }
+
+// --- enqueueWithFallback(): цепочка попыток по РАЗНЫМ пулам, поверх enqueue() -----
+
+test('enqueueWithFallback() with a single tier behaves exactly like a bare enqueue() — no regression for a caller with no fallback configured', async () => {
+    const queue = createDispatchQueue();
+
+    const result = await queue.enqueueWithFallback([{ workers: [{ id: 'a' }] }], worker => Promise.resolve(`ran on ${worker.id}`));
+
+    assert.equal(result, 'ran on a');
+});
+
+test('enqueueWithFallback() moves to the next tier when the first tier\'s run() rejects', async () => {
+    const queue = createDispatchQueue();
+    const tiers = [{ workers: [{ id: 'primary' }] }, { workers: [{ id: 'backup' }] }];
+
+    const result = await queue.enqueueWithFallback(tiers, worker =>
+        worker.id === 'primary' ? Promise.reject(new Error('primary is down')) : Promise.resolve(`ran on ${worker.id}`));
+
+    assert.equal(result, 'ran on backup');
+});
+
+test('enqueueWithFallback() moves to the next tier when a tier\'s timeoutMs is exceeded, even though the first attempt never actually rejects', async () => {
+    const queue = createDispatchQueue();
+    const stuck = deferred();
+    const tiers = [{ workers: [{ id: 'primary' }], timeoutMs: 20 }, { workers: [{ id: 'backup' }] }];
+
+    const result = await queue.enqueueWithFallback(tiers, worker => worker.id === 'primary' ? stuck.promise : Promise.resolve('ran on backup'));
+
+    assert.equal(result, 'ran on backup');
+});
+
+test('enqueueWithFallback() calls onAttemptFailed with the tier index and error BEFORE moving on — this is what lets a caller turn a fallback hop into an observable event', async () => {
+    const queue = createDispatchQueue();
+    const failures = [];
+    const tiers = [{ workers: [{ id: 'primary' }] }, { workers: [{ id: 'backup' }] }];
+
+    await queue.enqueueWithFallback(
+        tiers,
+        worker => worker.id === 'primary' ? Promise.reject(new Error('boom')) : Promise.resolve('ok'),
+        { onAttemptFailed: failure => failures.push(failure) },
+    );
+
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].tierIndex, 0);
+    assert.match(failures[0].error.message, /boom/);
+});
+
+test('enqueueWithFallback() rejects with the LAST tier\'s error once every tier is exhausted', async () => {
+    const queue = createDispatchQueue();
+    const tiers = [{ workers: [{ id: 'a' }] }, { workers: [{ id: 'b' }] }];
+
+    await assert.rejects(
+        queue.enqueueWithFallback(tiers, worker => Promise.reject(new Error(`${worker.id} failed`))),
+        /b failed/,
+    );
+});
+
+test('enqueueWithFallback() with an empty tiers list rejects immediately instead of hanging', async () => {
+    const queue = createDispatchQueue();
+
+    await assert.rejects(queue.enqueueWithFallback([], () => Promise.resolve('unreachable')), /no tiers/);
+});
+
+test('enqueueWithFallback() still load-balances WITHIN one tier\'s pool — a fallback tier with several workers is not pinned to just the first', async () => {
+    const queue = createDispatchQueue();
+    const dBusy = deferred();
+    const backupPool = [{ id: 'b1' }, { id: 'b2' }];
+    const tiers = [{ workers: [{ id: 'primary' }] }, { workers: backupPool }];
+
+    queue.enqueue(backupPool, worker => worker.id === 'b1' ? dBusy.promise : Promise.resolve('busy-b2'));
+    await flushMicrotasks();
+
+    const picks = [];
+    const result = await queue.enqueueWithFallback(tiers, worker => {
+        if (worker.id === 'primary') return Promise.reject(new Error('primary down'));
+        picks.push(worker.id);
+        return Promise.resolve(`ran on ${worker.id}`);
+    });
+
+    assert.deepEqual(picks, ['b2'], 'b1 was already busy from the unrelated enqueue() above — the tier must still pick the idle one');
+    assert.equal(result, 'ran on b2');
+    dBusy.resolve('done');
+});
