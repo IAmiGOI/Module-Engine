@@ -840,7 +840,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 const progress = bootstrapProgress();
                 if (!progress) return null;
                 const percent = Math.min(100, Math.round((progress.done / progress.total) * 100));
-                return ProgressBar(percent, `${bootstrapPhaseLabel(progress.phase)}… ${percent}%`);
+                // `detail` (реальная жалоба: "прогресс бар довольно мало
+                // информативный") — Ядро теперь шлёт реальный счёт ("computing
+                // embeddings (7/40)"), особенно важно раз шаги внутри фазы идут
+                // ПАРАЛЛЕЛЬНО: без счёта пользователь видел бы одно и то же
+                // слово "placing" неопределённое время, не отличая живой
+                // прогон от зависшего.
+                const label = progress.detail ? `${bootstrapPhaseLabel(progress.phase)} — ${progress.detail}` : bootstrapPhaseLabel(progress.phase);
+                return ProgressBar(percent, `${label}… ${percent}%`);
             }),
         );
     }
@@ -1002,7 +1009,16 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             }),
             host.events.subscribe('memoryGraph.bootstrapProgress', payload => {
                 bootstrapRunning.set(true); // подстраховка на случай, если `started` пришёл ДО открытия этого окна
-                bootstrapProgress.set({ done: payload?.done ?? 0, total: Math.max(1, payload?.total ?? 1), phase: payload?.phase ?? '' });
+                bootstrapProgress.set({ done: payload?.done ?? 0, total: Math.max(1, payload?.total ?? 1), phase: payload?.phase ?? '', detail: payload?.detail ?? null });
+                // Реальная жалоба: "канвас графа обновляется редко и не очень
+                // ясно, что происходит" — бутстрап мутирует `nodes`/`regions`
+                // НАПРЯМУЮ по ходу дела (не по одной ноде через
+                // `nodeCreated` — это был бы спам событий на сотни записей),
+                // так что без этого канвас просто стоял бы статичным до
+                // самого конца, а потом резко показывал всё разом.
+                // `refresh()` — 5 дешёвых локальных чтений, не сеть и не
+                // эмбединг — звать его на каждый тик безопасно.
+                refresh();
             }),
             host.events.subscribe('memoryGraph.bootstrapFinished', payload => {
                 bootstrapRunning.set(false);

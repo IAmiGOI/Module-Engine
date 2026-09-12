@@ -1938,20 +1938,40 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // событие — та же дисциплина, что уже была решена пользователем
             // для прогресса ("нет индикатора... это очень плохо").
             let failureReason = null;
-            function tick(phase) {
+            // `detail` — реальная жалоба пользователя: "прогресс бар довольно
+            // мало информативный". Раньше — только имя фазы ("placing"),
+            // теперь опциональная человекочитаемая строка с реальным счётом
+            // ("computing embeddings (7/40)") — особенно важно ТЕПЕРЬ, когда
+            // шаги ниже идут ПАРАЛЛЕЛЬНО (см. Promise.all): без счётчика
+            // "сколько из скольких уже готово" пользователь видел бы только
+            // "placing" неопределённое время, никак не отличая живой прогон
+            // от зависшего.
+            function tick(phase, detail = null) {
                 doneSteps = Math.min(doneSteps + 1, totalSteps);
-                publishEvent('memoryGraph.bootstrapProgress', { done: doneSteps, total: totalSteps, phase });
+                publishEvent('memoryGraph.bootstrapProgress', { done: doneSteps, total: totalSteps, phase, detail });
             }
             publishEvent('memoryGraph.bootstrapStarted', { totalEntries: totalSummaries, totalSteps });
 
             try {
                 // 1. Читаем ВСЕ записи целиком, БЕЗ немедленного размещения —
-                // Проходу 1 нужен полный текст Lorebook сразу, не по одной штуке.
+                // Проходу 1 нужен полный текст Lorebook сразу, не по одной
+                // штуке. РАСПАРАЛЛЕЛЕНО (реальная жалоба: "построение занимает
+                // нереально долго") — раньше каждый `lorebook.get()` ждал
+                // предыдущий, хотя чтение ОДНОЙ записи никак не зависит от
+                // чтения любой другой. Порядок готовности значения не имеет:
+                // `rawEntries`/`entryByUid` строятся ПОСЛЕ, синхронно, каждая
+                // строка Прохода 1/2 всё равно подписана СВОИМ `uid`, а не
+                // позицией в массиве.
+                let readDone = 0;
+                const readResults = await Promise.all(summariesResult.value.map(async summary => {
+                    const fullResult = await call('lorebook.get', { uid: summary.uid, book: summary.book });
+                    readDone += 1;
+                    tick('reading', `reading Lorebook (${readDone}/${totalSummaries})`);
+                    return { summary, fullResult };
+                }));
                 const rawEntries = [];
                 const entryByUid = new Map();
-                for (const summary of summariesResult.value) {
-                    const fullResult = await call('lorebook.get', { uid: summary.uid, book: summary.book });
-                    tick('reading');
+                for (const { summary, fullResult } of readResults) {
                     if (!fullResult.ok) continue;
                     const entry = fullResult.value;
                     const label = String(entry.comment ?? '').trim() || `WI #${entry.uid}`;
@@ -1967,7 +1987,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // Factions или свои варианты) + 2 под-центра на каждый.
                 const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
                 const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
-                tick('skeleton');
+                tick('skeleton', `laying out regions from ${rawEntries.length} entries`);
                 if (!skeletonResult.ok) { failureReason = `Проход 1 (skeleton) call failed: ${skeletonResult.error?.message}`; return false; }
                 const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
                 if (!skeletonRegions.length) {
@@ -1989,7 +2009,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
                 const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
                 const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
-                tick('centers');
+                tick('centers', `targeting ~${targetTotal} region${targetTotal === 1 ? '' : 's'}`);
                 if (!centersResult.ok) { failureReason = `Проход 2 (centers) call failed: ${centersResult.error?.message}`; return false; }
                 const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
                 if (!centerAssignments.length) {
@@ -2011,12 +2031,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 const finalRegionPlans = [...regionPlans.values()].filter(region => region.centerUid != null && entryByUid.has(region.centerUid));
                 if (!finalRegionPlans.length) { failureReason = 'no region ended up with both a valid skeleton entry AND a valid center assignment — Проход 1/2 disagreed entirely'; return false; }
 
-                async function buildNodeFromEntry(entry) {
-                    const embeddingResult = await callService('embedding.compute', { text: `${entry.label}: ${entry.content}`, kind: 'passage' });
-                    if (!embeddingResult.ok) return null;
+                function buildNodeFromEmbedding(entry, embedding) {
                     return {
                         id: makeId('node', now, random),
-                        label: entry.label, content: entry.content, embedding: embeddingResult.value,
+                        label: entry.label, content: entry.content, embedding,
                         importance: importanceFromLorebookEntry(entry.raw),
                         degree: 0, createdAt: now(), createdTurn: 0, lastTouchedTurn: turnCounter,
                         protectedNode: false, regionId: null, edges: [], gameTime: null,
@@ -2031,25 +2049,55 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     });
                 }
 
+                // Предрешаем, КАКИЕ uid станут центром/под-центром — синхронно,
+                // без единого эмбединга — чтобы посчитать эмбединги ВООБЩЕ ВСЕХ
+                // участвующих записей (центры/под-центры шага 4 И обычные шага
+                // 5) ОДНИМ параллельным батчем, а не по одной записи за раз
+                // (реальная жалоба: "построение занимает нереально долго").
+                // Порядок РАЗМЕЩЕНИЯ ниже (кто становится чем, в каком порядке
+                // попадает в регион — важно для merge-detection/capacity)
+                // НЕ меняется: меняется только КОГДА считается эмбединг —
+                // заранее, не инлайново по ходу цикла.
+                const preselectedUids = new Set();
+                for (const region of finalRegionPlans) {
+                    if (!preselectedUids.has(region.centerUid)) preselectedUids.add(region.centerUid);
+                    for (const subUid of region.subCenterUids) {
+                        if (!preselectedUids.has(subUid) && entryByUid.has(subUid)) preselectedUids.add(subUid);
+                    }
+                }
+                const ordinaryEntries = rawEntries.filter(entry => !preselectedUids.has(entry.uid));
+                const embedTargets = [...preselectedUids].map(uid => entryByUid.get(uid)).filter(Boolean).concat(ordinaryEntries);
+
+                let embedDone = 0;
+                const embeddingByUid = new Map();
+                await Promise.all(embedTargets.map(async entry => {
+                    const embeddingResult = await callService('embedding.compute', { text: `${entry.label}: ${entry.content}`, kind: 'passage' });
+                    embedDone += 1;
+                    tick('placing', `computing embeddings (${embedDone}/${embedTargets.length})`);
+                    if (embeddingResult.ok) embeddingByUid.set(entry.uid, embeddingResult.value);
+                }));
+
                 // 4. Размещаем центры/под-центров — роль ЯВНАЯ (LLM уже решила),
-                // не по порядку прибытия.
+                // не по порядку прибытия. Полностью синхронно теперь (эмбединги
+                // уже готовы в `embeddingByUid`) — тот же порядок, что и раньше.
                 const usedUids = new Set();
                 const bootstrappedIds = [];
                 for (const region of finalRegionPlans) {
                     if (usedUids.has(region.centerUid)) continue; // тот же uid уже занят другим регионом — не дублируем ноду
                     usedUids.add(region.centerUid);
-                    const centerNode = await buildNodeFromEntry(entryByUid.get(region.centerUid));
-                    tick('placing');
-                    if (!centerNode) continue;
-                    placeInRegion(centerNode, region.name, 'center');
-                    bootstrappedIds.push(centerNode.id);
+                    const centerEmbedding = embeddingByUid.get(region.centerUid);
+                    if (centerEmbedding) {
+                        const centerNode = buildNodeFromEmbedding(entryByUid.get(region.centerUid), centerEmbedding);
+                        placeInRegion(centerNode, region.name, 'center');
+                        bootstrappedIds.push(centerNode.id);
+                    }
 
                     for (const subUid of region.subCenterUids) {
                         if (usedUids.has(subUid) || !entryByUid.has(subUid)) continue;
                         usedUids.add(subUid);
-                        const subNode = await buildNodeFromEntry(entryByUid.get(subUid));
-                        tick('placing');
-                        if (!subNode) continue;
+                        const subEmbedding = embeddingByUid.get(subUid);
+                        if (!subEmbedding) continue;
+                        const subNode = buildNodeFromEmbedding(entryByUid.get(subUid), subEmbedding);
                         placeInRegion(subNode, region.name, 'subCenter');
                         bootstrappedIds.push(subNode.id);
                     }
@@ -2061,9 +2109,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 const regionAnchors = bootstrappedIds.map(id => nodes[id]).filter(Boolean);
                 for (const entry of rawEntries) {
                     if (usedUids.has(entry.uid)) continue;
-                    const node = await buildNodeFromEntry(entry);
-                    tick('placing');
-                    if (!node) continue;
+                    const embedding = embeddingByUid.get(entry.uid);
+                    if (!embedding) continue;
+                    const node = buildNodeFromEmbedding(entry, embedding);
                     const bestRegionName = pickNearestRegion(node.embedding, regionAnchors);
                     if (!bestRegionName) continue; // якорей нет вовсе (Проход 2 не дал ни одного валидного центра) — запись пропускается
                     placeInRegion(node, bestRegionName, 'ordinary'); // НЕ null — иначе подхватывает авто-детекцию под-центра по порядку вставки (реальный баг, см. attachToRegionByKey()'s doc-comment)
@@ -2071,19 +2119,44 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 }
 
                 // 6. Проход 3 — связи ВНУТРИ каждого региона, по одному вызову
-                // на регион. Отказ здесь НЕ прерывает бутстрап — пропускает
-                // связи только для ЭТОГО региона, остальные продолжаются
-                // (тот же принцип, что у escalateToSideCar). Межрегиональные
-                // связи — старый extractCharacterNames(), уже отработал внутри
+                // на регион. РАСПАРАЛЛЕЛЕНО (реальная жалоба: "построение
+                // занимает нереально долго" — при десятке регионов это было
+                // десять ПОСЛЕДОВАТЕЛЬНЫХ сетевых круговых рейсов подряд,
+                // самая дорогая часть всего каскада). Безопасно: каждый регион
+                // мутирует ТОЛЬКО рёбра СВОИХ СОБСТВЕННЫХ узлов — регионы по
+                // определению не пересекаются по составу, гонки на запись
+                // между двумя параллельными ветками нет физически. Отказ
+                // здесь НЕ прерывает бутстрап — пропускает связи только для
+                // ЭТОГО региона, остальные продолжаются (тот же принцип, что
+                // у escalateToSideCar). Межрегиональные связи —
+                // extractCharacterNames(), уже отработал внутри
                 // attachToRegionByKey() выше, для КАЖДОЙ размещённой ноды.
-                for (const region of finalRegionPlans) {
-                    tick('linking'); // тикаем на КАЖДЫЙ регион, даже пропущенный ниже — это тоже "рассмотренный" шаг оценки
+                //
+                // **Реальный потолок этого ускорения — число воркеров, не
+                // Promise.all.** `dispatch-queue.js`'s `enqueue()` даёт
+                // КАЖДОМУ воркеру исполнять ровно один запрос за раз, очередь
+                // поглощает остальное (см. её doc-comment — решение "как в
+                // Alpha", не случайность). С ОДНИМ воркером эти вызовы
+                // сериализуются САМОЙ очередью независимо от того, что здесь
+                // написано Promise.all — выигрыш от этого шага реален только
+                // если у Графа настроено НЕСКОЛЬКО воркеров (или общий пул с
+                // 2+ воркерами, если `workerId` не запинен на один конкретный).
+                // Проверено сравнительным тестом (1 воркер vs 2) в
+                // tests/memory-graph-orchestration.test.js.
+                let linkDone = 0;
+                await Promise.all(finalRegionPlans.map(async region => {
                     const liveRegion = regions[region.name];
-                    if (!liveRegion || liveRegion.nodeIds.length < 2) continue;
+                    if (!liveRegion || liveRegion.nodeIds.length < 2) {
+                        linkDone += 1;
+                        tick('linking', `linking regions (${linkDone}/${finalRegionPlans.length})`);
+                        return;
+                    }
                     const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
                     const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })));
                     const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
-                    if (!edgesResult.ok) continue;
+                    linkDone += 1;
+                    tick('linking', `linking regions (${linkDone}/${finalRegionPlans.length}) — "${region.name}"`);
+                    if (!edgesResult.ok) return;
                     const proposedEdges = parseRegionEdgesResponse(parseModelJson(edgesResult.value), regionNodes.map(node => ({ id: node.id })));
                     for (const edge of proposedEdges) {
                         const from = nodes[edge.from];
@@ -2095,7 +2168,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                         from.degree = (from.degree ?? 0) + 1;
                         to.degree = (to.degree ?? 0) + 1;
                     }
-                }
+                }));
 
                 // 7. Бэкбон — ДО бонуса важности за связи ниже: досозданные
                 // `backbone`-рёбра тоже должны учитываться в итоговой degree.
