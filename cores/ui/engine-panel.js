@@ -869,7 +869,8 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             const progress = memoryGraphProgress();
             if (!progress) return null;
             const percent = Math.min(100, Math.round((progress.done / progress.total) * 100));
-            return ProgressBar(percent, `Building memory graph — ${memoryGraphProgressPhaseLabel(progress.phase)}… ${percent}%`);
+            const phase = progress.detail ? `${memoryGraphProgressPhaseLabel(progress.phase)} — ${progress.detail}` : memoryGraphProgressPhaseLabel(progress.phase);
+            return ProgressBar(percent, `Building memory graph — ${phase}… ${percent}%`);
         });
     }
 
@@ -1180,7 +1181,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
                 memoryGraphProgress.set({ done: 0, total: Math.max(1, payload?.totalSteps ?? 1), phase: 'reading' });
             }),
             host.events.subscribe('memoryGraph.bootstrapProgress', payload => {
-                memoryGraphProgress.set({ done: payload?.done ?? 0, total: Math.max(1, payload?.total ?? 1), phase: payload?.phase ?? '' });
+                memoryGraphProgress.set({ done: payload?.done ?? 0, total: Math.max(1, payload?.total ?? 1), phase: payload?.phase ?? '', detail: payload?.detail ?? null });
             }),
             host.events.subscribe('memoryGraph.bootstrapFinished', payload => {
                 memoryGraphProgress.set(null);
