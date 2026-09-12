@@ -313,6 +313,25 @@ test('clampGraphSettings() keeps maxNodesPerRegion at the resolved capacity (23 
     assert.equal(DEFAULT_SETTINGS.maxNodesPerRegion, 23);
 });
 
+test('clampGraphSettings() defaults stallMs to 5000 — the exact number the user specified for stall-restart ("если за 5 секунд ничего не пришло")', () => {
+    assert.equal(DEFAULT_SETTINGS.stallMs, 5000);
+});
+
+test('clampGraphSettings() treats stallMs:0 as a deliberate "disable it" value, not garbage to fall back from — same meaning as falsy stallMs in internal-engine.js', () => {
+    assert.equal(clampGraphSettings({ stallMs: 0 }).stallMs, 0);
+});
+
+test('clampGraphSettings() clamps a garbage/out-of-range stallMs back to the default, and caps it at 120000ms', () => {
+    assert.equal(clampGraphSettings({ stallMs: 'nope' }).stallMs, DEFAULT_SETTINGS.stallMs);
+    assert.equal(clampGraphSettings({ stallMs: 999999 }).stallMs, 120000);
+});
+
+test('clampGraphSettings() sanitizes fallbackWorkerIds to a clean list of trimmed, non-empty strings, and falls back to [] for garbage', () => {
+    assert.deepEqual(clampGraphSettings({ fallbackWorkerIds: [' worker-b ', '', 'worker-c', 42] }).fallbackWorkerIds, ['worker-b', 'worker-c', '42']);
+    assert.deepEqual(clampGraphSettings({ fallbackWorkerIds: 'not-an-array' }).fallbackWorkerIds, []);
+    assert.deepEqual(DEFAULT_SETTINGS.fallbackWorkerIds, []);
+});
+
 // --- Phase 2: отбор маяков и маршрут ---------------------------------------
 
 test('scoreBeaconCandidate() lets a protected node outscore a topically closer one — "не менее подцентра региона"', () => {

@@ -1285,6 +1285,36 @@ test.skip('multiple automatic bootstrap triggers firing close together (load()\'
 
 // --- checkAndPlace() end-to-end -------------------------------------------
 
+test('checkAndPlace() falls back to a configured secondary worker when the PINNED primary one keeps failing — fallbackWorkerIds actually reaches model.generate, not just sits recorded in settings (прямой запрос пользователя, продолжение stall-restart/fallback у cores/models/internal-engine.js)', async () => {
+    const fetchOverride = async url => {
+        if (url.includes('primary')) return { status: 500, ok: false, headers: { entries: () => [] }, text: async () => 'boom' };
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"label":"Sword","content":"An ancient enchanted blade.","importance":6}' } }] }) };
+    };
+    const { graphCore, caller } = buildEngine({
+        fetchOverride,
+        workers: [
+            { id: 'primary', endpoint: 'https://primary.example.com', model: 'm1', format: 'openai' },
+            { id: 'backup', endpoint: 'https://backup.example.com', model: 'm1', format: 'openai' },
+        ],
+    });
+    // `workerId` запинен на заведомо неисправный "primary" — тот же
+    // реальный сценарий, что у Ядра трекинга ("каждый трекер привязан к
+    // сайдкару"): без fallbackWorkerIds здесь не было бы вообще никакого
+    // другого пути к успеху, значит успешный результат ниже — прямое
+    // доказательство, что fallback реально сработал, а не просто записан
+    // в настройках без эффекта.
+    await call(caller, 'memoryGraph.configure', { workerId: 'primary', fallbackWorkerIds: ['backup'] });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const result = await graphCore.checkAndPlace('The player enters a dark cave and finds an old sword.');
+
+    assert.equal(result.status, 'placed', 'the primary worker fails every single call — this can only succeed if the configured fallback worker actually picked up the request');
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].label, 'Sword');
+});
+
 test('checkAndPlace() creates a node via SideCar on the very first call (no baseline yet, always "strong")', async () => {
     const { graphCore, caller } = buildEngine();
     await graphCore.load();
