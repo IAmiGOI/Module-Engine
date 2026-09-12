@@ -1,7 +1,14 @@
 import { createDispatchQueue } from '../../libraries/core/dispatch-queue.js';
-import { buildProviderRequest, resolveProviderResponseText } from '../../libraries/core/provider-request.js';
+import { buildProviderRequest, resolveProviderResponseText, resolveStreamDelta } from '../../libraries/core/provider-request.js';
 import { createPersistedList } from '../../libraries/core/persisted-list.js';
 import { request } from '../../libraries/shared/request.js';
+
+let requestCounter = 0;
+/** Own counter, not `crypto.randomUUID()` — this Ядро already runs in both the real ST page and a bare `node --test`; a monotonic counter needs nothing from either environment and is trivially readable in logs/events ("request #7"), where a UUID would only add noise. */
+function generateRequestId() {
+    requestCounter += 1;
+    return `gen-${requestCounter}`;
+}
 
 const PERSISTENCE_NAMESPACE = 'core.models.internal';
 
@@ -223,11 +230,42 @@ export function createInternalEngineModelsCore(host, { publish } = {}) {
     }
     const restorePresets = presetsPersisted.restore;
 
-    async function dispatchToWorker(worker, generateRequest) {
-        const providerRequest = buildProviderRequest(worker, generateRequest);
-        const result = await request(host.network, 'http.request', { params: providerRequest });
+    /**
+     * `stream`/`onChunk`/`stallMs` — опциональны, дефолт стриминга `true`:
+     * все три формата ([provider-request.js](../../libraries/core/provider-request.js))
+     * умеют SSE. Если провайдер по факту проигнорировал `stream: true` и
+     * вернул один JSON-блоб (кастомный "openai-совместимый" эндпоинт — не
+     * редкость), `onChunk` не позовётся ни разу — тогда добираем текст
+     * защитным `resolveProviderResponseText()` НАД сырым телом ответа,
+     * которое [services/http.js](../../services/http.js) в любом случае
+     * возвращает целиком (`text`), стримился он или нет. Без этого фоллбэка
+     * такой эндпоинт молча отвечал бы пустой строкой — silent regression
+     * ровно там, где аддитивность контракта была обещана.
+     */
+    async function dispatchToWorker(worker, generateRequest, { onChunk, stallMs, stream = true } = {}) {
+        const providerRequest = buildProviderRequest(worker, generateRequest, { stream });
+        let accumulated = '';
+        const result = await request(host.network, 'http.request', {
+            params: {
+                ...providerRequest, stream, stallMs,
+                onChunk: stream ? frame => {
+                    const { delta } = resolveStreamDelta(worker.format, frame);
+                    if (!delta) return;
+                    accumulated += delta;
+                    onChunk?.(delta, accumulated);
+                } : undefined,
+            },
+            // Нестриминговый путь не читается чанками — тут ждём весь ответ
+            // разом, тем же `timeoutMs`, что уже применён у самообновления
+            // (см. ROADMAP.md 5.17): "дать вызывающему сдаться", а не реально
+            // оборвать fetch — стриминговый путь абортит по-настоящему сам,
+            // внутри http.js, именно потому что там watchdog должен реально
+            // остановить зависший поток, а не просто перестать его ждать.
+            timeoutMs: stream ? undefined : stallMs,
+        });
         if (!result.ok) throw new Error(result.error.message);
         if (!result.value.ok) throw new Error(`Model worker "${worker.id}" replied with HTTP ${result.value.status}.`);
+        if (accumulated) return accumulated;
         return resolveProviderResponseText(worker.format, result.value.text);
     }
 
@@ -239,10 +277,50 @@ export function createInternalEngineModelsCore(host, { publish } = {}) {
     // on the SAME configured worker every time, not whichever is least busy.
     // An unknown `workerId` naturally reaches the existing "No worker is
     // available" failure below — no special-casing needed for that case.
+    //
+    // `fallbackWorkerIds`/`restartOnStall`/`stallMs` — ВСЕ opt-in, default
+    // off (see doc-comment above `resolveGenerateRequest()` re: pinning being
+    // a deliberate invariant, not an oversight). A pinned tracker that never
+    // passes `fallbackWorkerIds` behaves EXACTLY as before: one worker, one
+    // attempt. An UNPINNED caller with no fallback list also behaves exactly
+    // as before — the "full pool, load-balanced" tier is still just one tier.
     const unregisters = [
         host.own.register('model.generate', params => {
-            const candidates = params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers;
-            return dispatchQueue.enqueue(candidates, worker => dispatchToWorker(worker, resolveGenerateRequest(params, worker)));
+            const requestId = params?.requestId ?? generateRequestId();
+            const primaryPool = params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers;
+            const stallMs = params?.stallMs || undefined;
+            const restartOnStall = stallMs && params?.restartOnStall !== false;
+            const fallbackPools = (params?.fallbackWorkerIds ?? [])
+                .map(id => workers.filter(worker => worker.id === id))
+                .filter(pool => pool.length);
+            const tiers = [
+                { workers: primaryPool, timeoutMs: stallMs },
+                ...(restartOnStall ? [{ workers: primaryPool, timeoutMs: stallMs }] : []),
+                ...fallbackPools.map(pool => ({ workers: pool, timeoutMs: stallMs })),
+            ];
+
+            publishEvent('model.generate.started', { requestId, workerId: params?.workerId });
+            let lastWorkerId = params?.workerId;
+            return dispatchQueue.enqueueWithFallback(
+                tiers,
+                worker => {
+                    lastWorkerId = worker.id;
+                    return dispatchToWorker(worker, resolveGenerateRequest(params, worker), {
+                        stream: params?.stream !== false,
+                        stallMs,
+                        onChunk: (delta, text) => publishEvent('model.generate.chunk', { requestId, workerId: worker.id, delta, text }),
+                    });
+                },
+                {
+                    onAttemptFailed: ({ tierIndex, error }) => publishEvent('model.generate.retrying', {
+                        requestId, failedWorkerId: lastWorkerId, reason: error.message,
+                        nextWorkerId: tiers[tierIndex + 1]?.workers?.[0]?.id,
+                    }),
+                },
+            ).then(
+                text => { publishEvent('model.generate.finished', { requestId, workerId: lastWorkerId, text }); return text; },
+                error => { publishEvent('model.generate.failed', { requestId, error: { message: error.message } }); throw error; },
+            );
         }),
         // Configuration as real CONTRACTS, not just the plain `configureWorkers()`
         // method below: the engine's own UI is a Модуль, and a Модуль editing
