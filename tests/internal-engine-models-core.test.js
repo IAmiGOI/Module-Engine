@@ -407,3 +407,216 @@ test('custom presets really persist via storage.settings — restorePresets() on
     assert.equal(restored[0].id, 'custom:persisted-preset');
     assert.equal(restored[0].temperature, 0.15);
 });
+
+// --- Стриминг, stall-restart, fallback: events + сохранение пиннинга -------
+
+/** Отвечает по одному behavior(init) на каждый вызов fetch (последний behavior переиспользуется, если вызовов больше). */
+function openAiStreamingFakeFetch(behaviors) {
+    const calls = [];
+    let index = 0;
+    return {
+        calls,
+        fetch: async (url, init) => {
+            calls.push({ url, ...init });
+            const behavior = behaviors[Math.min(index, behaviors.length - 1)];
+            index += 1;
+            return behavior(init);
+        },
+    };
+}
+
+/** Настоящий SSE-ответ — по одному фрейму на строку, отдаётся сразу, без задержек. */
+function sseResponse(frames, { status = 200 } = {}) {
+    return () => {
+        let i = 0;
+        const encoder = new TextEncoder();
+        const body = new ReadableStream({
+            pull(controller) {
+                if (i >= frames.length) { controller.close(); return; }
+                controller.enqueue(encoder.encode(frames[i]));
+                i += 1;
+            },
+        });
+        return { status, ok: status >= 200 && status < 300, headers: { entries: () => [] }, body };
+    };
+}
+
+/** Ответ, который никогда не пришлёт ни байта, пока его не абортят — ровно то, что должен ловить watchdog. */
+function stallForever() {
+    return init => {
+        const body = new ReadableStream({
+            start(controller) {
+                init.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+            },
+            pull: () => new Promise(() => {}),
+        });
+        return { status: 200, ok: true, headers: { entries: () => [] }, body };
+    };
+}
+
+/** Ответ без потокового тела вовсе (ошибка транспорта) — идёт через тот же откат на `response.text()`, что и настоящий не-стримящий провайдер. */
+function failedResponse(status, text) {
+    return async () => ({ status, ok: false, headers: { entries: () => [] }, text: async () => text });
+}
+
+function buildStreamingEngine(fetch) {
+    const engine = createEngine();
+    registerHttpService(engine.buses.network, { fetch });
+    const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
+    registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
+    createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
+    const modelsCore = createInternalEngineModelsCore(engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true }));
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+    const generate = params => new Promise(resolve => module.cores.subscribe('model.generate', { params }, resolve));
+    return { engine, modelsCore, generate };
+}
+
+test('model.generate publishes started/chunk/finished carrying requestId/workerId/text — the live-progress path a future UI widget subscribes to, with zero changes needed in Tracker/RP Time/Post-Turn Processor', async () => {
+    const { fetch } = openAiStreamingFakeFetch([sseResponse([
+        'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+        'data: [DONE]\n\n',
+    ])]);
+    const { engine, modelsCore, generate } = buildStreamingEngine(fetch);
+    modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com', model: 'm', format: 'openai' }]);
+    const started = [], chunks = [], finished = [];
+    engine.events.subscribe('model.generate.started', p => started.push(p));
+    engine.events.subscribe('model.generate.chunk', p => chunks.push(p));
+    engine.events.subscribe('model.generate.finished', p => finished.push(p));
+
+    const result = await generate({ prompt: 'hi', requestId: 'req-1' });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.value, 'Hello');
+    assert.deepEqual(started, [{ requestId: 'req-1', workerId: undefined }]);
+    assert.deepEqual(chunks.map(c => c.delta), ['Hel', 'lo']);
+    assert.equal(chunks[0].text, 'Hel');
+    assert.equal(chunks[1].text, 'Hello');
+    assert.deepEqual(finished, [{ requestId: 'req-1', workerId: 'w1', text: 'Hello' }]);
+});
+
+test('model.generate makes up its own requestId when the caller does not supply one, so events are still correlatable', async () => {
+    const { fetch } = openAiStreamingFakeFetch([sseResponse(['data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'])]);
+    const { engine, modelsCore, generate } = buildStreamingEngine(fetch);
+    modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com', model: 'm', format: 'openai' }]);
+    const started = [];
+    engine.events.subscribe('model.generate.started', p => started.push(p));
+
+    await generate({ prompt: 'hi' });
+
+    assert.equal(started.length, 1);
+    assert.equal(typeof started[0].requestId, 'string');
+    assert.ok(started[0].requestId.length > 0);
+});
+
+test('a stream that stalls past stallMs restarts on the SAME pinned worker by default, publishing model.generate.retrying first, and still succeeds', async () => {
+    const { fetch, calls } = openAiStreamingFakeFetch([
+        stallForever(),
+        sseResponse(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']),
+    ]);
+    const { engine, modelsCore, generate } = buildStreamingEngine(fetch);
+    modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com', model: 'm', format: 'openai' }]);
+    const retrying = [];
+    engine.events.subscribe('model.generate.retrying', p => retrying.push(p));
+
+    const result = await generate({ prompt: 'hi', workerId: 'w1', stallMs: 20 });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.value, 'ok');
+    assert.equal(calls.length, 2, 'must have re-attempted the SAME worker, not given up after one stall');
+    assert.equal(retrying.length, 1);
+    assert.equal(retrying[0].failedWorkerId, 'w1');
+    assert.equal(retrying[0].nextWorkerId, 'w1');
+    assert.match(retrying[0].reason, /stalled/);
+});
+
+test('model.generate falls back to an explicit fallbackWorkerIds worker once the primary fails outright, and finishes with the backup\'s reply', async () => {
+    const { fetch, calls } = openAiStreamingFakeFetch([
+        failedResponse(500, 'boom'),
+        sseResponse(['data: {"choices":[{"delta":{"content":"backup reply"}}]}\n\n']),
+    ]);
+    const { engine, modelsCore, generate } = buildStreamingEngine(fetch);
+    modelsCore.configureWorkers([
+        { id: 'w1', endpoint: 'https://api.one.example.com', model: 'm1', format: 'openai' },
+        { id: 'w2', endpoint: 'https://api.two.example.com', model: 'm2', format: 'openai' },
+    ]);
+    const retrying = [];
+    engine.events.subscribe('model.generate.retrying', p => retrying.push(p));
+
+    const result = await generate({ prompt: 'hi', workerId: 'w1', fallbackWorkerIds: ['w2'] });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.value, 'backup reply');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].url, 'https://api.two.example.com/chat/completions');
+    assert.equal(retrying.length, 1);
+    assert.equal(retrying[0].failedWorkerId, 'w1');
+    assert.equal(retrying[0].nextWorkerId, 'w2');
+});
+
+test('a worker that is genuinely DEAD (fetch itself rejects — connection refused, DNS failure) falls back INSTANTLY, with no stallMs configured at all — dying is not the same failure mode as going silent, and must not need a timer to detect', async () => {
+    const { fetch, calls } = openAiStreamingFakeFetch([
+        async () => { throw new Error('fetch failed: ECONNREFUSED'); },
+        sseResponse(['data: {"choices":[{"delta":{"content":"backup reply"}}]}\n\n']),
+    ]);
+    const { engine, modelsCore, generate } = buildStreamingEngine(fetch);
+    modelsCore.configureWorkers([
+        { id: 'w1', endpoint: 'https://api.one.example.com', model: 'm1', format: 'openai' },
+        { id: 'w2', endpoint: 'https://api.two.example.com', model: 'm2', format: 'openai' },
+    ]);
+    const retrying = [];
+    engine.events.subscribe('model.generate.retrying', p => retrying.push(p));
+
+    // Deliberately NO stallMs anywhere in these params — proves the fallback
+    // hop does not depend on, or wait for, the stall watchdog at all.
+    const result = await generate({ prompt: 'hi', workerId: 'w1', fallbackWorkerIds: ['w2'] });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.value, 'backup reply');
+    assert.equal(calls.length, 2);
+    assert.match(retrying[0].reason, /ECONNREFUSED/, 'the real connection error must reach the event, not a generic/stall message');
+});
+
+test('WITHOUT fallbackWorkerIds, a pinned worker\'s failure never silently moves to another idle worker — pinning stays the default, fallback is opt-in only', async () => {
+    const { fetch, calls } = openAiStreamingFakeFetch([failedResponse(500, 'boom')]);
+    const { modelsCore, generate } = buildStreamingEngine(fetch);
+    modelsCore.configureWorkers([
+        { id: 'w1', endpoint: 'https://api.one.example.com', model: 'm1', format: 'openai' },
+        { id: 'w2', endpoint: 'https://api.two.example.com', model: 'm2', format: 'openai' },
+    ]);
+
+    const result = await generate({ prompt: 'hi', workerId: 'w1' });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error.message, /w1/);
+    assert.equal(calls.length, 1, 'must never have reached w2 — no fallback was configured for this call');
+});
+
+test('model.generate publishes model.generate.failed with the LAST error once every tier, including the fallback, is exhausted', async () => {
+    const { fetch } = openAiStreamingFakeFetch([failedResponse(500, 'boom1'), failedResponse(500, 'boom2')]);
+    const { engine, modelsCore, generate } = buildStreamingEngine(fetch);
+    modelsCore.configureWorkers([
+        { id: 'w1', endpoint: 'https://api.one.example.com', model: 'm1', format: 'openai' },
+        { id: 'w2', endpoint: 'https://api.two.example.com', model: 'm2', format: 'openai' },
+    ]);
+    const failed = [];
+    engine.events.subscribe('model.generate.failed', p => failed.push(p));
+
+    const result = await generate({ prompt: 'hi', workerId: 'w1', fallbackWorkerIds: ['w2'] });
+
+    assert.equal(result.ok, false);
+    assert.equal(failed.length, 1);
+    assert.match(failed[0].error.message, /w2/);
+});
+
+test('model.generate with stream:false explicitly still works end to end, unchanged — the streaming default must not be forced on a caller that opts out', async () => {
+    const { fetch, calls } = openAiFakeFetch('non-streamed reply');
+    const { modelsCore, generate } = buildStreamingEngine(fetch);
+    modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com', model: 'm', format: 'openai' }]);
+
+    const result = await generate({ prompt: 'hi', stream: false });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.value, 'non-streamed reply');
+    assert.equal(calls.length, 1);
+});

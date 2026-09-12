@@ -3,7 +3,7 @@ import { signal, computed } from './reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import {
     Button, TextInput, TextArea, NumberInput, Select, Toggle, Slider, Chip, Details,
-    Field, Row, Card, Section, Badge, EmptyState, TwoColumn, EditableList,
+    Field, Row, Card, Section, Badge, EmptyState, TwoColumn, EditableList, ProgressBar,
 } from '../../libraries/shared/widgets.js';
 import { createCollapseState } from '../../libraries/shared/collapse-state.js';
 import { TRIGGER_MODES, computeTriggers, resolveTriggerMode } from '../../libraries/core/trigger-modes.js';
@@ -857,6 +857,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             case 'centers': return 'adding region centers';
             case 'placing': return 'placing entries';
             case 'linking': return 'linking regions';
+            case 'connecting': return 'connecting isolated entries';
             case 'finalizing': return 'finalizing';
             default: return 'building';
         }
@@ -868,10 +869,8 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             const progress = memoryGraphProgress();
             if (!progress) return null;
             const percent = Math.min(100, Math.round((progress.done / progress.total) * 100));
-            return h('div', { class: 'stme-progress' },
-                h('div', { class: 'stme-progress-track' }, h('div', { class: 'stme-progress-fill', style: { width: `${percent}%` } })),
-                h('small', { class: 'stme-progress-label' }, `Building memory graph — ${memoryGraphProgressPhaseLabel(progress.phase)}… ${percent}%`),
-            );
+            const phase = progress.detail ? `${memoryGraphProgressPhaseLabel(progress.phase)} — ${progress.detail}` : memoryGraphProgressPhaseLabel(progress.phase);
+            return ProgressBar(percent, `Building memory graph — ${phase}… ${percent}%`);
         });
     }
 
@@ -1182,7 +1181,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
                 memoryGraphProgress.set({ done: 0, total: Math.max(1, payload?.totalSteps ?? 1), phase: 'reading' });
             }),
             host.events.subscribe('memoryGraph.bootstrapProgress', payload => {
-                memoryGraphProgress.set({ done: payload?.done ?? 0, total: Math.max(1, payload?.total ?? 1), phase: payload?.phase ?? '' });
+                memoryGraphProgress.set({ done: payload?.done ?? 0, total: Math.max(1, payload?.total ?? 1), phase: payload?.phase ?? '', detail: payload?.detail ?? null });
             }),
             host.events.subscribe('memoryGraph.bootstrapFinished', payload => {
                 memoryGraphProgress.set(null);

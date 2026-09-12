@@ -35,6 +35,41 @@
 [libraries/core/provider-request.js](libraries/core/provider-request.js),
 чистые функции, без сети.
 
+**Стриминг, stall-restart и fallback у Ядра внутренних моделей —
+реализовано** (ROADMAP.md 5.33, прямой запрос пользователя). Всё —
+опционально по `params` у `model.generate`, дефолт = прежнее поведение один
+воркер/один шанс, ничего не сломано ни для Ядра трекинга, ни для Модулей
+«RP Time»/«Post-Turn Processor»:
+- **Стриминг** — `stream` (default `true`, все три формата умеют SSE).
+  Читает `services/http.js` через `response.body`, кадрует
+  [libraries/core/sse-stream.js](libraries/core/sse-stream.js) (чистый
+  инкрементальный SSE-парсер, без HTTP), дельту из кадра по формату достаёт
+  `resolveStreamDelta()` в provider-request.js. Идёт **через Шину событий**,
+  не через сам контракт (`model.generate.started`/`.chunk`/`.finished`/
+  `.failed`/`.retrying`, с `requestId` для группировки) — контракт резолвит
+  ОДИН раз по архитектуре (см. ARCHITECTURE.md), множественная доставка
+  существует только на Шине событий. Провайдер, молча проигнорировавший
+  `stream: true` (или тестовый двойник `fetch` без `response.body`) —
+  честный откат на `resolveProviderResponseText()` над сырым телом целиком,
+  не пустая строка.
+- **Stall-restart** — `stallMs` (default: без таймаута). Таймер в
+  `services/http.js` взводится заново на каждый реально полученный чанк
+  (не на весь запрос) и по истечении реально абортит поток настоящим
+  `AbortController` — не просто "перестать ждать", как `timeoutMs` у
+  [request.js](libraries/shared/request.js) (тот применяется только к
+  нестримящему пути). `restartOnStall` (default `true` при заданном
+  `stallMs`) — один самоповтор ТЕМ ЖЕ пулом воркеров прежде, чем переходить
+  к fallback.
+- **Fallback** — `fallbackWorkerIds` (default `[]`, **opt-in**). Пиннинг
+  трекера ("каждый трекер привязан к сайдкару" — cores/tracking/index.js)
+  остаётся дефолтом: без явного списка провалившийся запиненный воркер
+  НИКОГДА молча не подменяется другим. Реализовано как
+  `dispatchQueue.enqueueWithFallback(tiers, run)` — новая функция ПОВЕРХ
+  `enqueue()` (сам `enqueue()` не тронут), цепочка попыток по РАЗНЫМ пулам с
+  таймаутом на попытку, тот же generic-паттерн, что уже проверен в
+  [pipeline-runner.js](libraries/core/pipeline-runner.js)'s `fallbacks`
+  (прямая параллель Alpha-кейсу "второй воркер → главная модель ST").
+
 ## UI Ядра (тоже разделено — не одно "Ядро UI")
 
 | Ядро | Приоритет | Назначение |
