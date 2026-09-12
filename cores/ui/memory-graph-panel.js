@@ -552,12 +552,21 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      * `bootstrapProgress`/`bootstrapRunning` (см. подписки в `open()`).
      * Клик НЕ ждёт результата сам — событийная лента уже показывает ход
      * вживую, а собственная кнопка блокируется своим состоянием
-     * (`bootstrapRunning`), не общим `busy`.
+     * (`bootstrapRunning`), не общим `busy`. Реальный баг, найденный по
+     * жалобе "после первого этапа bootstrap не идут следующие": этот
+     * `.then()` раньше САМ писал generic "Lorebook is empty" на ЛЮБОЙ
+     * `result.value === false` — включая случай, когда Проход 1/2 реально
+     * СЛОМАЛСЯ (пустой Lorebook там ни при чём), и эта неверная фраза
+     * побеждала гонку с куда более точным сообщением из
+     * `memoryGraph.bootstrapFinished` ниже (тот приходит РАНЬШЕ — событие
+     * летит из `finally` самого Ядра, до того как промис успевает
+     * резолвиться сюда). Единственная забота этого колбэка теперь —
+     * отказ на уровне самого КОНТРАКТА (Гейт/сеть); что случилось ВНУТРИ
+     * успешно завершившегося прогона — целиком за событием ниже.
      */
     function runBootstrap() {
         call('memoryGraph.bootstrapFromLorebook').then(result => {
             if (!result.ok) statusText.set(`Bootstrap failed: ${result.error?.message}`);
-            else if (!result.value) statusText.set('Nothing to import — the active Lorebook is empty, or the graph already has data.');
         });
     }
 
@@ -998,7 +1007,16 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             host.events.subscribe('memoryGraph.bootstrapFinished', payload => {
                 bootstrapRunning.set(false);
                 bootstrapProgress.set(null);
-                statusText.set(payload?.success ? `Bootstrap complete — ${payload?.nodeCount ?? nodes().length} nodes.` : 'Bootstrap finished without building anything — see status above.');
+                // `reason` — новое поле Ядра (жалоба: "после первого этапа
+                // не идут следующие... только один запрос к SideCar"):
+                // раньше отказ на середине каскада (Проход 1/2 звонок упал,
+                // ИЛИ ответ разобрался в пустой список) был неотличим от
+                // "нечего импортировать" — оба давали один и тот же немой
+                // "ничего не построено". Теперь Ядро само знает и сообщает,
+                // на чём именно остановилось.
+                statusText.set(payload?.success
+                    ? `Bootstrap complete — ${payload?.nodeCount ?? nodes().length} nodes.`
+                    : `Bootstrap stopped: ${payload?.reason ?? 'nothing to import — Lorebook is empty, unreadable, or already imported'}.`);
             }),
         ];
         return finalUi;
