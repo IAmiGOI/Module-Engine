@@ -1928,6 +1928,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const totalSteps = totalSummaries * 2 + 2 + estimatedRegions + 1 + 1; // читаем + размещаем по разу на запись, 2 общих LLM-прохода, Проход 3 по региону, условный Проход 4 связности (не больше одного вызова), финализация
             let doneSteps = 0;
             let succeeded = false;
+            // Реальная жалоба пользователя: "после первого этапа bootstrap
+            // не идут следующие... только один запрос к SideCar" — до этого
+            // ЛЮБОЙ из шести `return false` ниже (звонок SideCar не удался,
+            // ИЛИ ответ разобрался в пустой список) молча гасил весь
+            // бутстрап, и `bootstrapFinished` нёс только `success: false`,
+            // без единой зацепки, НА ЧЁМ именно всё остановилось. Теперь
+            // причина ловится в `finally` и уходит и в консоль, и в само
+            // событие — та же дисциплина, что уже была решена пользователем
+            // для прогресса ("нет индикатора... это очень плохо").
+            let failureReason = null;
             function tick(phase) {
                 doneSteps = Math.min(doneSteps + 1, totalSteps);
                 publishEvent('memoryGraph.bootstrapProgress', { done: doneSteps, total: totalSteps, phase });
@@ -1951,16 +1961,25 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     rawEntries.push(record);
                     entryByUid.set(summary.uid, record);
                 }
-                if (!rawEntries.length) return false;
+                if (!rawEntries.length) { failureReason = 'no-content: every Lorebook entry was empty or unreadable'; return false; }
 
                 // 2. Проход 1 — базовый скелет (Locations/Main Characters/
                 // Factions или свои варианты) + 2 под-центра на каждый.
                 const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
                 const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
                 tick('skeleton');
-                if (!skeletonResult.ok) return false;
+                if (!skeletonResult.ok) { failureReason = `Проход 1 (skeleton) call failed: ${skeletonResult.error?.message}`; return false; }
                 const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
-                if (!skeletonRegions.length) return false;
+                if (!skeletonRegions.length) {
+                    // Звонок УДАЛСЯ (skeletonResult.ok), но разбор дал пустой
+                    // список — модель ответила не тем JSON'ом, который ждёт
+                    // parseRegionSkeletonResponse() (не массив, нет валидных
+                    // subCenterUids, и т.п.). Сырой ответ — в консоль целиком:
+                    // единственный способ понять, ЧТО именно модель прислала.
+                    failureReason = 'Проход 1 (skeleton) response parsed to zero usable regions';
+                    console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw model reply:`, skeletonResult.value);
+                    return false;
+                }
 
                 // 3. Проход 2 — центр для КАЖДОГО региона из Прохода 1, плюс
                 // новые регионы сверх них, до целевой плотности
@@ -1971,9 +1990,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
                 const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
                 tick('centers');
-                if (!centersResult.ok) return false;
+                if (!centersResult.ok) { failureReason = `Проход 2 (centers) call failed: ${centersResult.error?.message}`; return false; }
                 const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
-                if (!centerAssignments.length) return false;
+                if (!centerAssignments.length) {
+                    failureReason = 'Проход 2 (centers) response parsed to zero usable center assignments';
+                    console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw model reply:`, centersResult.value);
+                    return false;
+                }
 
                 // Сшиваем Проход 1 (под-центры) и Проход 2 (центры) по имени
                 // региона; регион без реального, валидного центра — не заводим
@@ -1986,7 +2009,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     else regionPlans.set(assignment.name, { name: assignment.name, subCenterUids: [], centerUid: assignment.centerUid });
                 }
                 const finalRegionPlans = [...regionPlans.values()].filter(region => region.centerUid != null && entryByUid.has(region.centerUid));
-                if (!finalRegionPlans.length) return false;
+                if (!finalRegionPlans.length) { failureReason = 'no region ended up with both a valid skeleton entry AND a valid center assignment — Проход 1/2 disagreed entirely'; return false; }
 
                 async function buildNodeFromEntry(entry) {
                     const embeddingResult = await callService('embedding.compute', { text: `${entry.label}: ${entry.content}`, kind: 'passage' });
@@ -2149,7 +2172,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 succeeded = true;
                 return true;
             } finally {
-                publishEvent('memoryGraph.bootstrapFinished', { success: succeeded, nodeCount: Object.keys(nodes).length });
+                if (!succeeded && failureReason) console.warn(`[memoryGraph] bootstrap stopped: ${failureReason}`);
+                publishEvent('memoryGraph.bootstrapFinished', { success: succeeded, nodeCount: Object.keys(nodes).length, reason: failureReason });
             }
         });
     }
