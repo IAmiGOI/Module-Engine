@@ -325,6 +325,35 @@ test('bootstrapFromLorebook() still publishes bootstrapFinished with success:fal
     assert.equal(finished.length, 1);
     assert.equal(finished[0].success, false);
     assert.deepEqual(bootstrapped, [], 'the graph never actually got built — no success event');
+    assert.match(finished[0].reason, /Проход 1.*skeleton.*zero usable regions/i, 'реальная жалоба: "после первого этапа bootstrap не идут следующие" — the finished event must say WHERE it stopped, not just that it failed');
+});
+
+test('bootstrapFromLorebook() reports a Проход 1 CALL failure differently from a Проход 1 PARSE failure — both abort, but for different, distinguishable reasons', async () => {
+    const { engine, graphCore } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchOverride: async () => ({ status: 500, ok: false, headers: { entries: () => [] }, text: async () => 'server error' }),
+    });
+    const finished = [];
+    engine.events.subscribe('memoryGraph.bootstrapFinished', payload => finished.push(payload));
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    assert.equal(finished[0].success, false);
+    assert.match(finished[0].reason, /Проход 1.*call failed/i);
+});
+
+test('bootstrapFromLorebook() reports a Проход 2 (centers) failure distinctly from a Проход 1 failure — the reason names the RIGHT pass', async () => {
+    const { engine, graphCore } = buildEngine({
+        lorebookEntries: [{ uid: 0, comment: 'A', content: 'something worth remembering.' }],
+        fetchReplies: ['[{"region":"World","subCenterUids":[0]}]', 'not valid json at all'],
+    });
+    const finished = [];
+    engine.events.subscribe('memoryGraph.bootstrapFinished', payload => finished.push(payload));
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    assert.equal(finished[0].success, false);
+    assert.match(finished[0].reason, /Проход 2.*centers.*zero usable center assignments/i);
 });
 
 test('bootstrapFromLorebook() forces a REAL, immediate chatMetadata save before publishing success — an ordinary set() only debounces (реальный баг: перезагрузка страницы сразу после бутстрапа теряла весь только что построенный граф)', async () => {
