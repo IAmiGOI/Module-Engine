@@ -59,7 +59,7 @@ function fakeEmbed(text) {
     return vec.map(v => v / norm);
 }
 
-function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', fetchReplies = null, fetchOverride = null, lorebookEntries = null, random, embeddingGate = Promise.resolve(), character = null, workerEndpoint = 'https://fast.example.com', workerFormat = 'openai' } = {}) {
+function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', fetchReplies = null, fetchOverride = null, lorebookEntries = null, random, embeddingGate = Promise.resolve(), onEmbeddingCall = null, character = null, workerEndpoint = 'https://fast.example.com', workerFormat = 'openai', workers = null } = {}) {
     const engine = createEngine();
     const context = {};
     // `fetchOverride` — полный контроль над fetch (нужно, например, чтобы
@@ -76,7 +76,12 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
 
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
     const modelsCore = createInternalEngineModelsCore(modelsHost);
-    modelsCore.configureWorkers([{ id: 'fast', endpoint: workerEndpoint, model: 'm1', format: workerFormat }]);
+    // `workers` — опционально несколько воркеров (нужно тестам на реальную
+    // МЕЖ-воркерную конкурентность dispatch-queue.js: "воркер исполняет
+    // ровно ОДИН запрос за раз, очередь поглощает остальное" — с ОДНИМ
+    // воркером Проход 3 региональные звонки физически не могут пойти
+    // параллельно, сколько бы Promise.all ни было на стороне Ядра).
+    modelsCore.configureWorkers(workers ?? [{ id: 'fast', endpoint: workerEndpoint, model: 'm1', format: workerFormat }]);
 
     const pipelineCore = createPipelineCore(engine.registerCaller('core.pipeline', 'cores', { tier: 'official' }), { resolveAs: engine.resolveAs });
     pipelineCore.define({ id: 'generation.prepare', mode: 'collect' });
@@ -86,9 +91,12 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
     // `embeddingGate` (по умолчанию уже разрешённый промис — НИКАКОГО
     // поведения для существующих тестов) даёт управляемо ЗАДЕРЖАТЬ каждый
     // вызов — единственный способ доказать неблокирующий бутстрап, не
-    // полагаясь на хрупкий замер реального времени в тесте.
+    // полагаясь на хрупкий замер реального времени в тесте. `onEmbeddingCall`
+    // (тоже опционально, ничего не меняет по умолчанию) — синхронный хук
+    // ПЕРЕД ожиданием ворот, нужен тестам на РЕАЛЬНЫЙ параллелизм (сколько
+    // вызовов оказались "в полёте" ОДНОВРЕМЕННО, а не по одному за раз).
     const embeddingHost = engine.registerCaller('service.embedding', 'services', { tier: 'official' });
-    embeddingHost.own.register('embedding.compute', async params => { await embeddingGate; return fakeEmbed(params?.text); });
+    embeddingHost.own.register('embedding.compute', async params => { onEmbeddingCall?.(params); await embeddingGate; return fakeEmbed(params?.text); });
 
     // Фейковый RP Time — по умолчанию "выключен" (как requireTracker() бросает в реальном Ядре трекинга).
     const trackingHost = engine.registerCaller('core.tracking', 'cores', { tier: 'official' });
@@ -172,6 +180,39 @@ test.skip('load() resolves WITHOUT waiting for a slow bootstrap — the engine m
     await graphCore.waitForBootstrap();
     const nodesAfterBootstrap = await call(caller, 'memoryGraph.nodes');
     assert.equal(nodesAfterBootstrap.value.length, 1, 'once actually awaited, the background bootstrap must still complete correctly');
+});
+
+test('bootstrapFromLorebook() computes embeddings for the WHOLE batch CONCURRENTLY, not one entry at a time — реальная жалоба: "построение занимает нереально долго"', async () => {
+    let releaseEmbeddings;
+    const embeddingGate = new Promise(resolve => { releaseEmbeddings = resolve; });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const entries = [
+        { uid: 0, comment: 'Center', content: 'the region center.' },
+        { uid: 1, comment: 'Second', content: 'an ordinary entry, number two.' },
+        { uid: 2, comment: 'Third', content: 'an ordinary entry, number three.' },
+    ];
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: entries,
+        embeddingGate,
+        onEmbeddingCall: () => { inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight); },
+        fetchReplies: ['[{"region":"Region","subCenterUids":[1]}]', '[{"region":"Region","centerUid":0}]', '[]'],
+    });
+
+    const bootstrapPromise = graphCore.bootstrapFromLorebook();
+    // Ни одного реального таймера/сети в этой цепочке — только микрозадачи,
+    // так что прокрутка `await Promise.resolve()` детерминирована (не гонка
+    // с реальным временем): достаточно итераций, чтобы Проход 1/2 (уже
+    // отвеченные fetchReplies) и запуск батча эмбедингов гарантированно
+    // случились, но эмбединги при этом остаются висеть на `embeddingGate`.
+    for (let i = 0; i < 50 && inFlight < 3; i += 1) await Promise.resolve();
+
+    assert.equal(maxInFlight, 3, 'all 3 entries\' embeddings must be in flight AT THE SAME TIME — a sequential loop (the old behavior) would never exceed 1');
+
+    releaseEmbeddings();
+    await bootstrapPromise;
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes.length, 3, 'bootstrap must still complete correctly once the gate opens — parallel batching must not lose or corrupt any entry');
 });
 
 test('bootstrapFromLorebook() does nothing when the player has no active lorebook — leaves the graph empty for the "new world" SideCar-hint path instead', async () => {
@@ -434,6 +475,68 @@ test('bootstrapFromLorebook(): a Проход 3 failure for ONE region does not 
     const a1 = nodes.find(n => n.label === 'A1');
     const a2 = nodes.find(n => n.label === 'A2');
     assert.equal(a1.degree + a2.degree, 0, 'RegionA got no "related" edges — its Проход 3 call failed');
+});
+
+test('bootstrapFromLorebook() runs Проход 3 (region edges) for ALL regions CONCURRENTLY, not one region at a time — реальная жалоба: "построение занимает нереально долго"', async () => {
+    let releaseLinking;
+    const linkingGate = new Promise(resolve => { releaseLinking = resolve; });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let callIndex = 0;
+    const entries = [
+        { uid: 0, comment: 'A1', content: 'first region anchor.' },
+        { uid: 1, comment: 'A2', content: 'first region second entry.' },
+        { uid: 2, comment: 'B1', content: 'second region anchor.' },
+        { uid: 3, comment: 'B2', content: 'second region second entry.' },
+    ];
+    const fetchOverride = async () => {
+        const index = callIndex;
+        callIndex += 1;
+        // index 0/1 — Проход 1/2, отвечают сразу (не участвуют в замере
+        // конкурентности — только Проход 3 региональные звонки, index >= 2).
+        if (index < 2) {
+            const replies = [
+                '[{"region":"RegionA","subCenterUids":[1]},{"region":"RegionB","subCenterUids":[3]}]',
+                '[{"region":"RegionA","centerUid":0},{"region":"RegionB","centerUid":2}]',
+            ];
+            return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: replies[index] } }] }) };
+        }
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await linkingGate;
+        inFlight -= 1;
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '[]' } }] }) };
+    };
+    // ДВА воркера — реальное условие для настоящей конкурентности здесь:
+    // dispatch-queue.js's `enqueue()` даёт КАЖДОМУ воркеру исполнять ровно
+    // один запрос за раз, очередь поглощает остальное (см. её doc-comment) —
+    // с одним воркером оба региональных звонка Прохода 3 физически
+    // сериализовались бы САМОЙ очередью, сколько Promise.all ни пиши на
+    // стороне Ядра. Промежуточные эмбединги (шаг 4/5) сюда не попадают —
+    // они идут не через dispatch-queue, а напрямую в `embedding.compute`.
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: entries, fetchOverride,
+        workers: [
+            { id: 'fast-a', endpoint: 'https://a.example.com', model: 'm1', format: 'openai' },
+            { id: 'fast-b', endpoint: 'https://b.example.com', model: 'm1', format: 'openai' },
+        ],
+    });
+    await call(caller, 'memoryGraph.configure', { centerMinBackboneDegree: 0, subCenterMinDegree: 0 });
+    await graphCore.load();
+
+    const bootstrapPromise = graphCore.bootstrapFromLorebook();
+    // Больше итераций, чем у эмбединг-теста выше — между Проходом 2 и
+    // Проходом 3 здесь ещё стоит целый параллельный батч эмбедингов (4
+    // записи), сам по себе несколько микрозадач в глубину; всё ещё без
+    // единого реального таймера/сети, так что прокрутка детерминирована.
+    for (let i = 0; i < 200 && inFlight < 2; i += 1) await Promise.resolve();
+
+    assert.equal(maxInFlight, 2, 'both regions\' Проход 3 calls must be in flight AT THE SAME TIME — a sequential loop (the old behavior) would never exceed 1');
+
+    releaseLinking();
+    await bootstrapPromise;
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes.length, 4, 'bootstrap must still complete correctly once both region calls resolve');
 });
 
 test('bootstrapFromLorebook(): a SUCCESSFUL Проход 3 response creates a real "related" edge between two region members that never mention each other by name', async () => {
