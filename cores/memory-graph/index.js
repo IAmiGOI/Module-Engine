@@ -10,6 +10,7 @@ const STAGING_KEY = 'staging';
 const MERGE_QUEUE_KEY = 'mergeQueue';
 const RECONSOLIDATION_QUEUE_KEY = 'reconsolidationQueue';
 const STATS_KEY = 'distanceStats';
+const STICKY_KEY = 'stickyRetrieval';
 const PREPARE_PIPELINE = 'generation.prepare';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const CHECK_CONTRACT = 'memoryGraph.check';
@@ -24,6 +25,18 @@ export const RINGS = 3;
 // импортируем оттуда напрямую (Ядра друг друга не знают, только через
 // Гейты), просто дублируем закрытый список валидных значений для клэмпа.
 const BOOTSTRAP_REASONING_EFFORTS = ['low', 'medium', 'high'];
+
+// Sticky balance ретрива (решено с пользователем явно: "не даём
+// настраиваемые параметры для этого напрямую. Просто три значения. Often ->
+// Balanced -> Sticky") — три готовые точки вместо одного откручиваемого
+// числа, тот же принцип, что SAMPLER_PRESETS/TIME_PRESETS в другом месте
+// движка. Во сколько раз свежий набор-кандидат обязан ПРЕВЗОЙТИ
+// агрегированный счёт закреплённого набора, чтобы вытеснить его ЦЕЛИКОМ —
+// см. shouldReplaceStickySet(). Не откалиброванные протоколом числа, как и
+// другие некалиброванные пороги в этом файле (mergeWordOverlapThreshold и
+// т.п.) — первый проход, подлежит эмпирической подстройке.
+export const RETRIEVAL_STABILITY_LEVELS = ['often', 'balanced', 'sticky'];
+export const RETRIEVAL_STABILITY_MARGINS = Object.freeze({ often: 1.02, balanced: 1.15, sticky: 1.4 });
 
 export const DEFAULT_SETTINGS = Object.freeze({
     // Множитель адаптивного порога "сильного изменения" — MEMORY_GRAPH.md:
@@ -133,6 +146,18 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // зависимости от длины content'а попавшихся узлов).
     retrievalTargetNodes: 20,
     noiseFanoutPerNode: 2,
+    // Sticky balance (решено с пользователем явно, прямой запрос: "каждая
+    // нода закрепляется с прошлого прогона... новые ноды выдаются только
+    // если они подходят СИЛЬНЕЕ... и не по отдельности, а весь блок...
+    // чтобы не руинить кэш-хиты"). `injectIntoPrompt()` не пересчитывает
+    // маяки+маршрут+шум заново вслепую на каждый ход — весь ПРОШЛЫЙ блок
+    // (буквально тот же рендер) переживает ход, пока свежий набор-кандидат
+    // не обгонит его агрегированный счёт с запасом RETRIEVAL_STABILITY_MARGINS
+    // (см. выше) — иначе кэш провайдера рвался бы от статистического шума
+    // на каждом ходу без всякой пользы. `often` — низкий запас, блок
+    // меняется охотно; `sticky` — высокий запас, блок держится, пока
+    // сцена/тема разговора не изменится реально ощутимо.
+    retrievalStability: 'balanced',
     // LLM-driven семантические регионы бутстрапа (решено с пользователем,
     // MEMORY_GRAPH.md — "80% нод без связи" на старом дартборд-бутстрапе):
     // `baseRegionNames` — ЕДИНСТВЕННЫЙ источник регионов для Прохода 1
@@ -207,6 +232,7 @@ export function clampGraphSettings(values = {}) {
         routeMaxHops: clampInt(values.routeMaxHops, 1, 50, DEFAULT_SETTINGS.routeMaxHops),
         retrievalTargetNodes: clampInt(values.retrievalTargetNodes, 1, 200, DEFAULT_SETTINGS.retrievalTargetNodes),
         noiseFanoutPerNode: clampInt(values.noiseFanoutPerNode, 1, 20, DEFAULT_SETTINGS.noiseFanoutPerNode),
+        retrievalStability: RETRIEVAL_STABILITY_LEVELS.includes(values.retrievalStability) ? values.retrievalStability : DEFAULT_SETTINGS.retrievalStability,
         baseRegionNames: Array.isArray(values.baseRegionNames) && values.baseRegionNames.length
             ? values.baseRegionNames.map(name => String(name).trim()).filter(Boolean)
             : DEFAULT_SETTINGS.baseRegionNames,
@@ -407,6 +433,57 @@ export function pickBeacons(candidates, contextEmbedding, { count = DEFAULT_SETT
         .sort((a, b) => b.score - a.score)
         .slice(0, count)
         .map(entry => entry.id);
+}
+
+// --- Sticky balance ретрива (MEMORY_GRAPH.md / решено с пользователем
+// явно) — не вариация pickBeacons(), а отдельный слой ПОВЕРХ него:
+// решает, стоит ли вообще МЕНЯТЬ прошлый набор маяков на свежий, целиком,
+// одним да/нет на весь блок сразу. ------------------------------------
+
+/**
+ * Агрегированная РЕЛЕВАНТНОСТЬ целого набора маяков текущему контексту —
+ * сумма чистого косинуса (сдвинутого в [0,1], тот же приём, что у
+ * `scoreBeaconCandidate()`), а НЕ полный `scoreBeaconCandidate()`.
+ * Намеренно: важность/защищённость уже сделали своё дело при ПЕРВОНАЧАЛЬНОМ
+ * отборе `pickBeacons()` (и для закреплённого, и для свежего набора) — этот
+ * счёт отвечает только на вопрос "подходит ли СЦЕНА сильнее", не
+ * переоценивает важность заново. Суммировать полный счёт было бы реальным
+ * багом: защищённый узел даёт `Infinity`, и стоит ему попасть в ОБА
+ * набора (закреплённый и свежий — а он туда почти всегда попадает, раз
+ * `pickBeacons()` всегда выбирает защищённые первыми) — сравнение
+ * `Infinity > Infinity * margin` вырождается в `false` всегда, набор
+ * замерзает НАВСЕГДА независимо от реальной смены темы.
+ *
+ * `null`, если ХОТЬ ОДНОЙ ноды из набора больше нет в графе (`nodesById` —
+ * слияние/эвикшн/ручное удаление сделали ссылку "висячей") — набор
+ * невалиден ЦЕЛИКОМ, латать один слот вместо всего блока не имеет смысла
+ * (см. `shouldReplaceStickySet()`).
+ */
+export function scoreBeaconSet(nodeIds, nodesById, contextEmbedding) {
+    let total = 0;
+    for (const id of nodeIds) {
+        const node = nodesById[id];
+        if (!node) return null;
+        total += (cosineSimilarity(contextEmbedding, node.embedding) + 1) / 2;
+    }
+    return total;
+}
+
+/**
+ * Решение "держим закреплённый набор или переключаемся на свежий ЦЕЛИКОМ".
+ * `stickyScore` — `null` (первый ход вообще без закреплённого набора, ИЛИ
+ * висячая ссылка внутри него, см. `scoreBeaconSet()`) всегда отдаёт
+ * свежий немедленно, без всякого сравнения. Иначе — свежий побеждает,
+ * ТОЛЬКО если его счёт СТРОГО превосходит закреплённый с запасом
+ * `RETRIEVAL_STABILITY_MARGINS[stability]` — "не так же", а именно
+ * СИЛЬНЕЕ (решено с пользователем явно: "если весь новый блок ретрива
+ * целиком совпадает лучше, а не также. То мы меняем"); равный или почти
+ * равный счёт — не повод рвать кэш ради статистического шума.
+ */
+export function shouldReplaceStickySet({ stickyScore, freshScore, stability = 'balanced' }) {
+    if (stickyScore === null || stickyScore === undefined) return true;
+    const margin = RETRIEVAL_STABILITY_MARGINS[stability] ?? RETRIEVAL_STABILITY_MARGINS.balanced;
+    return freshScore > stickyScore * margin;
 }
 
 /** BFS-кратчайший путь по `.edges` (уже двунаправленные — при связывании обе стороны сами добавляют свою запись, MEMORY_GRAPH.md). Возвращает массив шагов `{from, to, type}` от `startId` до `endId` (пустой массив, если start===end), или `null`, если недостижимо в пределах `maxHops`. */
@@ -814,6 +891,48 @@ export function parseRegionEdgesResponse(parsed, regionNodes) {
 }
 
 /**
+ * Проход 4 (условный — только если после Прохода 3 + бэкбона реально
+ * остались узлы без единой связи) — жалоба пользователя: Проход 3
+ * НАМЕРЕННО необязателен ("not every pair needs one", пустой массив — тоже
+ * валидный ответ), а `enforceBackboneConnectivity()` гарантирует минимум
+ * только центрам/под-центрам, не обычным узлам. Итог — ноды всё ещё МОГУТ
+ * остаться полностью изолированными, ровно та же "80% нод без единой связи"
+ * проблема Alpha, ради которой весь LLM-бутстрап и затевался. В отличие от
+ * ВСЕХ остальных SideCar-промптов файла (у каждого есть путь отказа —
+ * `{"skip"/"distinct"/"DISCARD"}`), здесь отказа НЕТ НАМЕРЕННО: узел без
+ * связи хуже узла с неидеальной связью, поэтому модели явно запрещено
+ * пропустить хоть один запрошенный id.
+ */
+export function buildOrphanConnectionsPrompt(allNodes, orphanIds) {
+    const listing = allNodes.map(node => `${node.id}. ${node.label}: ${node.content}`).join('\n');
+    return `This is the full memory graph built so far (${allNodes.length} entries, by id):\n\n${listing}\n\nThe following entries currently have NO connection to anything else in the graph at all: ${orphanIds.join(', ')}.\n\nFor EVERY ONE of these disconnected entries, WITHOUT EXCEPTION, pick at least one OTHER entry from the full list above that it should connect to — the best genuine fit, even if the connection is loose. A disconnected entry is worse than one with an imperfect connection, so do not leave any of them out. Reply with ONLY a JSON array covering ALL ${orphanIds.length} disconnected entries, one item per entry: [{"id": "the disconnected entry's own id", "connectTo": ["id", ...]}, ...]`;
+}
+
+/** Разбор ответа Прохода 4 — отвечаем ТОЛЬКО за реально запрошенных сирот (модель не может попутно приписать связь кому-то ещё через этот путь), фильтрует к валидным id, без петель на себя, без дублей. */
+export function parseOrphanConnectionsResponse(parsed, allNodes, orphanIds) {
+    if (!Array.isArray(parsed)) return [];
+    const validIds = new Set(allNodes.map(node => node.id));
+    const orphanSet = new Set(orphanIds);
+    const seen = new Set();
+    const edges = [];
+    for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+        const from = String(item.id ?? '');
+        if (!orphanSet.has(from)) continue;
+        const targets = Array.isArray(item.connectTo) ? item.connectTo : [];
+        for (const target of targets) {
+            const to = String(target ?? '');
+            if (!validIds.has(to) || to === from) continue;
+            const key = [from, to].sort().join('|');
+            if (seen.has(key)) continue;
+            seen.add(key);
+            edges.push({ from, to });
+        }
+    }
+    return edges;
+}
+
+/**
  * Ядро графа памяти (MEMORY_GRAPH.md, Phase 1) — "TopTier" долгосрочная
  * память, физически параллельная BasicSummary ("LowTier"); Tier-переключатель
  * и их взаимоисключение — Phase 3, здесь Ядро всегда активно безусловно.
@@ -839,6 +958,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let mergeQueue = {};
     let reconsolidationQueue = {};
     let distanceStats = null;
+    let stickyRetrieval = null; // {beaconIds, text} | null — sticky balance, см. injectIntoPrompt()
     let turnCounter = 0;
 
     async function call(contract, params) {
@@ -873,13 +993,14 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     async function loadState() {
-        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult] = await Promise.all([
+        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult] = await Promise.all([
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: REGIONS_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STAGING_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: MERGE_QUEUE_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: RECONSOLIDATION_QUEUE_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STATS_KEY, fallback: null }),
+            call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, fallback: null }),
         ]);
         nodes = nodesResult.ok ? nodesResult.value ?? {} : {};
         regions = regionsResult.ok ? regionsResult.value ?? {} : {};
@@ -887,6 +1008,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         mergeQueue = mergeQueueResult.ok ? mergeQueueResult.value ?? {} : {};
         reconsolidationQueue = reconsolidationQueueResult.ok ? reconsolidationQueueResult.value ?? {} : {};
         distanceStats = statsResult.ok ? statsResult.value : null;
+        stickyRetrieval = stickyResult.ok ? stickyResult.value : null;
     }
 
     async function persistNodes() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, value: nodes }); }
@@ -895,6 +1017,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     async function persistMergeQueue() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: MERGE_QUEUE_KEY, value: mergeQueue }); }
     async function persistReconsolidationQueue() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: RECONSOLIDATION_QUEUE_KEY, value: reconsolidationQueue }); }
     async function persistStats() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STATS_KEY, value: distanceStats }); }
+    async function persistStickyRetrieval() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, value: stickyRetrieval }); }
 
     /**
      * Внутриигровые дата/время (обязательное поле ноды, по прямому запросу
@@ -1568,7 +1691,23 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const bootstrapHint = isFirstNode
             ? ' This is the very first memory in a fresh graph — consider whether the protagonist, another character, or a location is the most natural starting point, but decide freely.'
             : '';
-        const prompt = `Recent story context:\n\n${contextText}\n\nDoes this contain a fact worth remembering LONG-TERM — something that will still matter dozens of turns from now (a lasting character trait, a place, an established relationship, a major event or revelation)? Do NOT extract a short-term or purely situational arrangement that resolves on its own within the next few messages (a plan to meet somewhere, a small trade, a scheduling detail, idle small talk) — those are plot mechanics, not memories.${bootstrapHint}\n\nIf there is a genuine long-term fact, reply with ONLY a JSON object: {"label": short name, "content": the fact itself, "importance": a 0-10 score where 0-3 is minor/situational detail unlikely to matter again, 4-7 is a meaningful but secondary fact, and 8-10 permanently defines the character or world}. If nothing here rises to that bar, reply with ONLY: {"skip": true}.`;
+        // Жалоба пользователя: качество извлечённых фактов "весьма грустное".
+        // Абстрактного определения "долгосрочно/ситуативно" мало — модель без
+        // калибровки регулярно даёт либо строгий отказ там, где не надо, либо
+        // содержимое, которое пересказывает СЦЕНУ, а не сам факт: местоимения
+        // без антецедента ("he"/"it"/"this place") и общие фразы вроде
+        // "something important happened", которые ничего не говорят читателю
+        // через 50 ходов, когда сама сцена уже забыта. Два добавления,
+        // тот же приём, что уже сработал для схемы инструмента Notebook
+        // (конкретные примеры + явное "зачем", не только формальное правило):
+        // (1) три отработанных примера на каждый исход (skip/средняя
+        // важность/высокая важность) калибруют саму границу лучше, чем один
+        // абзац определения; (2) прямое требование самодостаточной
+        // формулировки `content` — она читается ОТДЕЛЬНО от контекста, тем же
+        // способом, что и запись Lorebook, и обязана называть участников по
+        // имени, а не полагаться на то, что "он"/"это" было понятно в момент
+        // экстракции.
+        const prompt = `Recent story context:\n\n${contextText}\n\nDoes this contain a fact worth remembering LONG-TERM — something that will still matter dozens of turns from now (a lasting character trait, a place, an established relationship, a major event or revelation)? Do NOT extract a short-term or purely situational arrangement that resolves on its own within the next few messages (a plan to meet somewhere, a small trade, a scheduling detail, idle small talk) — those are plot mechanics, not memories.${bootstrapHint}\n\nExamples of the judgment call:\n- "The player agrees to meet the merchant at noon tomorrow." — resolves on its own within a few messages -> {"skip": true}\n- "Kira admits, quietly, that she is the last surviving heir to the Varekh throne." -> {"label": "Kira's heritage", "content": "Kira is the last surviving heir to the Varekh throne.", "importance": 9}\n- "Behind the waterfall the party finds a door that must lead into the old mine." -> {"label": "Hidden mine entrance", "content": "A hidden door behind the waterfall leads into the old mine.", "importance": 6}\n\nIf there is a genuine long-term fact, write "content" so it reads correctly on its OWN, weeks later, without the surrounding scene: name every person/place/thing explicitly instead of "he"/"she"/"it"/"this place", and state the concrete detail instead of a vague summary like "something important happened". Reply with ONLY a JSON object: {"label": short name, "content": the self-contained fact itself, "importance": a 0-10 score where 0-3 is minor/situational detail unlikely to matter again, 4-7 is a meaningful but secondary fact, and 8-10 permanently defines the character or world}. If nothing here rises to that bar, reply with ONLY: {"skip": true}.`;
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined });
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
@@ -1669,9 +1808,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
             const embeddingResult = await callService('embedding.compute', { text: contextText, kind: 'query' });
             if (!embeddingResult.ok) return { status: 'skipped', error: embeddingResult.error.message };
-            const embedding = embeddingResult.value;
+            const contextEmbedding = embeddingResult.value; // ТОЛЬКО сигнал размещения — см. комментарий у passage-эмбединга ниже, почему это не то же самое, что node.embedding.
 
-            const { coords, probs: vectorProbs } = vectorProbsForAllRegions(embedding);
+            const { coords, probs: vectorProbs } = vectorProbsForAllRegions(contextEmbedding);
             const nearestSimilarity = Math.max(...coords.map((_, i) => vectorProbs[i]), 0);
             const distance = 1 - nearestSimilarity;
             const wasStrong = isStrongChange(distance, distanceStats, settings.thresholdK);
@@ -1682,8 +1821,29 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const proposal = await askSideCarForNode(contextText, { isFirstNode: Object.keys(nodes).length === 0 });
             if (!proposal) return { status: 'sidecar-empty' };
 
+            // node.embedding — ЭТО ТОТ ЖЕ passage-эмбединг label+content, что
+            // считают createNodeManually()/createNodeFromCharacterCard()/
+            // bootstrapFromLorebook() (см. их вызовы `embedding.compute`
+            // ниже по файлу): findMergeCandidate()/scoreBeaconCandidate()/
+            // enforceBackboneConnectivity() читают `node.embedding` как
+            // источник истины о СОДЕРЖИМОМ узла (тот же принцип, что уже
+            // явно записан в doc-comment updateNodeManually()). `contextEmbedding`
+            // выше — kind:'query' сырого контекста, который его вызвал, и
+            // годится ТОЛЬКО для решения "в какой регион класть" (см. тест
+            // "a genuinely UNRELATED second node..." — эмбединг для РАЗМЕЩЕНИЯ
+            // намеренно берётся из аргумента checkAndPlace(), а не из ответа
+            // SideCar); использовать его же для постоянного node.embedding
+            // означало бы сравнивать будущие ноды по тексту сцены, которая
+            // навела на факт, а не по самому факту — и, для E5, query-vs-query
+            // вместо ожидаемого протоколом query-vs-passage/passage-vs-passage.
+            // Второй вызов дёшев: SideCar уже был единственным дорогим шагом
+            // на этом пути, эмбединг — локальный WASM-инференс той же уже
+            // загруженной модели.
+            const nodeEmbeddingResult = await callService('embedding.compute', { text: `${proposal.label}: ${proposal.content}`, kind: 'passage' });
+            if (!nodeEmbeddingResult.ok) return { status: 'skipped', error: nodeEmbeddingResult.error.message };
+
             const gameTime = await readGameTime();
-            const result = placeNewNode({ ...proposal, embedding, gameTime }, { coords, vectorProbs });
+            const result = placeNewNode({ ...proposal, embedding: nodeEmbeddingResult.value, gameTime }, { coords, vectorProbs });
 
             // Зеркалим свежую органическую ноду в WI (решено с пользователем:
             // "по идее вся инфраструктура есть" — `lorebook.createEntry()`
@@ -1727,7 +1887,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * семантические регионы (решено с пользователем, MEMORY_GRAPH.md: старый
      * дартборд-бутстрап давал ~80% нод без единой связи). Три прогона
      * SideCar (весь Lorebook целиком видит модель, не по одной записи) +
-     * эмбединг-присвоение остальных записей + региональные связи. Дартборд
+     * эмбединг-присвоение остальных записей + региональные связи, плюс
+     * УСЛОВНЫЙ четвёртый прогон (только если после всего этого + бэкбона
+     * реально остались изолированные узлы — см. шаг 7.5 внутри), который
+     * обязан связать их ВСЕХ, без права пропустить кого-то. Дартборд
      * (`vectorProbsForAllRegions`/`decideFirstPlacement`/`placeNewNode`) НЕ
      * трогается — он по-прежнему полностью обслуживает `checkAndPlace()`
      * (органический рост во время игры остаётся на нём, решено явно: цена
@@ -1762,7 +1925,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // безусловно", что уже описан в MEMORY_GRAPH.md).
             const totalSummaries = summariesResult.value.length;
             const estimatedRegions = Math.max(1, Math.round(totalSummaries / settings.entriesPerRegionCenter));
-            const totalSteps = totalSummaries * 2 + 2 + estimatedRegions + 1; // читаем + размещаем по разу на запись, 2 общих LLM-прохода, Проход 3 по региону, финализация
+            const totalSteps = totalSummaries * 2 + 2 + estimatedRegions + 1 + 1; // читаем + размещаем по разу на запись, 2 общих LLM-прохода, Проход 3 по региону, условный Проход 4 связности (не больше одного вызова), финализация
             let doneSteps = 0;
             let succeeded = false;
             function tick(phase) {
@@ -1913,7 +2076,52 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
                 // 7. Бэкбон — ДО бонуса важности за связи ниже: досозданные
                 // `backbone`-рёбра тоже должны учитываться в итоговой degree.
+                // Гарантирует минимум связей ТОЛЬКО центрам/под-центрам —
+                // обычные узлы им не затронуты вовсе (см. doc-comment
+                // enforceBackboneConnectivity()), поэтому именно ПОСЛЕ него
+                // проверка на шаге 7.5 ловит только реальный остаток, а не
+                // то, что и так закрыл бы бэкбон.
                 enforceBackboneConnectivity();
+
+                // 7.5. Проверка связности + условный Проход 4 (жалоба
+                // пользователя: Проход 3 выше НАМЕРЕННО необязателен —
+                // "not every pair needs one", пустой массив тоже валидный
+                // ответ, — а бэкбон только что отработал для
+                // центров/под-центров, не для обычных узлов). Кто ОСТАЛСЯ
+                // с degree:0 после всего этого — генуинно изолирован, и это
+                // именно та "80% нод без единой связи" проблема Alpha, ради
+                // которой весь LLM-бутстрап затевался. Один-единственный
+                // досоздающий вызов на ВЕСЬ график (не по региону, как
+                // Проход 3) — buildOrphanConnectionsPrompt() явно запрещает
+                // модели пропустить хоть один запрошенный id, в отличие от
+                // любого другого SideCar-промпта файла.
+                const orphanIds = bootstrappedIds.filter(id => (nodes[id]?.degree ?? 0) === 0);
+                if (orphanIds.length) {
+                    const allBootstrappedNodes = bootstrappedIds.map(id => nodes[id]).filter(Boolean);
+                    const connectPrompt = buildOrphanConnectionsPrompt(allBootstrappedNodes, orphanIds);
+                    const connectResult = await call('model.generate', { prompt: connectPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT });
+                    tick('connecting');
+                    // Отказ здесь НЕ прерывает бутстрап — тот же принцип,
+                    // что у Прохода 3: граф уже целиком построен и рабочий
+                    // без этого шага, оставшиеся изолированные узлы просто
+                    // остаются как есть до следующего повода их тронуть.
+                    if (connectResult.ok) {
+                        const proposedEdges = parseOrphanConnectionsResponse(parseModelJson(connectResult.value), allBootstrappedNodes, orphanIds);
+                        for (const edge of proposedEdges) {
+                            const from = nodes[edge.from];
+                            const to = nodes[edge.to];
+                            if (!from || !to) continue;
+                            if ((from.edges ?? []).some(existingEdge => existingEdge.to === to.id)) continue;
+                            from.edges = [...(from.edges ?? []), { to: to.id, type: 'related' }];
+                            to.edges = [...(to.edges ?? []), { to: from.id, type: 'related' }];
+                            from.degree = (from.degree ?? 0) + 1;
+                            to.degree = (to.degree ?? 0) + 1;
+                        }
+                    }
+                } else {
+                    tick('connecting'); // ничего звать не пришлось — шаг всё равно "рассмотрен", как и пропущенные регионы Прохода 3
+                }
+
                 for (const nodeId of bootstrappedIds) {
                     const node = nodes[nodeId];
                     if (node) node.importance = applyConnectionBonus(node.importance, node.degree);
@@ -2240,30 +2448,58 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * (решено в Phase 1). Мягкая деградация на каждом шаге (пустой граф,
      * пустой контекст, недоступный эмбединг, пустой маршрут) — `chat`
      * просто не трогается, генерация никогда не блокируется этим этапом.
+     *
+     * **Sticky balance** (решено с пользователем явно, прямой запрос: "не
+     * руинить кэш-хиты"). Маршрут+шум пересчитывать заново на каждый ход
+     * вслепую нельзя — `expandNoiseNodes()` сама по себе недетерминирована
+     * (`Math.random()`), так что даже НЕИЗМЕННЫЙ набор маяков давал бы
+     * РАЗНЫЙ текст блока каждый ход, рвя кэш провайдера без всякой пользы.
+     * Поэтому ЗАКРЕПЛЯЕТСЯ не набор id, а буквально готовый ТЕКСТ прошлого
+     * блока целиком — переиспользуется байт в байт, пока свежий
+     * набор-кандидат не обгонит закреплённый по агрегированному счёту
+     * (`scoreBeaconSet`/`shouldReplaceStickySet`) С ЗАПАСОМ. Обёрнуто в
+     * `enqueueWrite` — теперь пишет `stickyRetrieval`, та же дисциплина,
+     * что у остальных мутаций состояния этого Ядра.
      */
     async function injectIntoPrompt({ chat } = {}) {
         if (!Array.isArray(chat)) return true;
-        const candidates = Object.values(nodes).filter(node => node.regionId);
-        if (!candidates.length) return true;
+        return enqueueWrite(async () => {
+            const candidates = Object.values(nodes).filter(node => node.regionId);
+            if (!candidates.length) return true;
 
-        const contextText = extractLatestText(chat);
-        if (!contextText.trim()) return true;
-        const embeddingResult = await callService('embedding.compute', { text: contextText, kind: 'query' });
-        if (!embeddingResult.ok) return true;
+            const contextText = extractLatestText(chat);
+            if (!contextText.trim()) return true;
+            const embeddingResult = await callService('embedding.compute', { text: contextText, kind: 'query' });
+            if (!embeddingResult.ok) return true;
+            const contextEmbedding = embeddingResult.value;
 
-        const beaconIds = pickBeacons(candidates, embeddingResult.value, {
-            count: settings.beaconCount, weightFactor: settings.beaconWeightFactor, settings, turnCounter,
+            const freshBeaconIds = pickBeacons(candidates, contextEmbedding, {
+                count: settings.beaconCount, weightFactor: settings.beaconWeightFactor, settings, turnCounter,
+            });
+            if (!freshBeaconIds.length) return true;
+
+            const stickyScore = stickyRetrieval ? scoreBeaconSet(stickyRetrieval.beaconIds, nodes, contextEmbedding) : null;
+
+            if (stickyRetrieval && !shouldReplaceStickySet({
+                stickyScore, freshScore: scoreBeaconSet(freshBeaconIds, nodes, contextEmbedding), stability: settings.retrievalStability,
+            })) {
+                // Закреплённый блок побеждает — переиспользуем ЕГО ТЕКСТ как
+                // есть, не трогая маршрут/шум заново (см. doc-comment выше).
+                chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: stickyRetrieval.text });
+                return true;
+            }
+
+            const route = buildBeaconRoute(nodes, freshBeaconIds, { maxHops: settings.routeMaxHops });
+            const routeNodeIds = [...new Set([...route.segments.flatMap(step => [step.from, step.to]), ...route.standalone])];
+            const noise = expandNoiseNodes(nodes, routeNodeIds, { targetTotal: settings.retrievalTargetNodes, fanoutPerNode: settings.noiseFanoutPerNode, random });
+            const text = renderMemoryPrompt({ ...route, noise }, nodes);
+            if (!text) return true;
+
+            stickyRetrieval = { beaconIds: freshBeaconIds, text };
+            await persistStickyRetrieval();
+            chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: text });
+            return true;
         });
-        if (!beaconIds.length) return true;
-
-        const route = buildBeaconRoute(nodes, beaconIds, { maxHops: settings.routeMaxHops });
-        const routeNodeIds = [...new Set([...route.segments.flatMap(step => [step.from, step.to]), ...route.standalone])];
-        const noise = expandNoiseNodes(nodes, routeNodeIds, { targetTotal: settings.retrievalTargetNodes, fanoutPerNode: settings.noiseFanoutPerNode, random });
-        const text = renderMemoryPrompt({ ...route, noise }, nodes);
-        if (!text) return true;
-
-        chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: text });
-        return true;
     }
 
     async function load() {
@@ -2320,6 +2556,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.regions', () => Object.values(regions)),
         host.own.register('memoryGraph.mergeQueue', () => Object.values(mergeQueue)),
         host.own.register('memoryGraph.reconsolidationQueue', () => Object.values(reconsolidationQueue)),
+        // Узлы, которые каскад НЕ смог уверенно разместить (см. placeNewNode()/
+        // decideFirstPlacement()) — раньше были видны только внутри Ядра,
+        // никакому UI/тесту нечем было отличить "узел завис в накопителе" от
+        // "узел вообще не создался". Тот же принцип, что у mergeQueue/
+        // reconsolidationQueue выше — сырой снимок очереди.
+        host.own.register('memoryGraph.staging', () => Object.values(staging)),
         host.own.register('memoryGraph.check', params => manualCheck(extractLatestText(params?.chat))),
         // Ручное редактирование графа (UI-редактор) — CRUD нод/рёбер.
         host.own.register('memoryGraph.nodes.create', params => createNodeManually(params ?? {})),

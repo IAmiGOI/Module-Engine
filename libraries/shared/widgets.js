@@ -370,6 +370,24 @@ export function EmptyState(text) {
     return h('p', { class: 'stme-empty' }, text);
 }
 
+/**
+ * Полоса прогресса — процент зажимается в [0,100] и округляется здесь, а не
+ * у каждого вызывающего по отдельности (найдено по факту: первый
+ * потребитель считал `Math.min(100, Math.round(...))` сам, второй грозил
+ * повторить ту же арифметику один в один — LIBRARIES.md, второй реальный
+ * потребитель одного и того же паттерна). `label` — уже готовый
+ * человекочитаемый текст ("Building… 42%"), эта функция сама ничего не
+ * форматирует и не знает о процентах в тексте — вызывающий решает
+ * формулировку, здесь только геометрия полосы.
+ */
+export function ProgressBar(percent, label) {
+    const clamped = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    return h('div', { class: 'stme-progress' },
+        h('div', { class: 'stme-progress-track' }, h('div', { class: 'stme-progress-fill', style: { width: `${clamped}%` } })),
+        label ? h('small', { class: 'stme-progress-label' }, label) : null,
+    );
+}
+
 /** Ключёванный список: `renderItem` обязан проставить `key` — по нему diff.js и опознаёт элементы при перестановке. */
 export function List(itemsSignal, renderItem) {
     return computed(() => itemsSignal().map(renderItem));

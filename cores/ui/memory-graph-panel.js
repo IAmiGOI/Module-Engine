@@ -5,7 +5,7 @@ import { createDragHandlers, clampToViewport } from '../../libraries/shared/drag
 import { loadCytoscape } from '../../libraries/core/graph-rendering.js';
 import {
     FloatingPanel, Card, Section, Button, TextInput, TextArea, NumberInput, Toggle,
-    Details, Row, Field, EmptyState, Badge, Slider,
+    Details, Row, Field, EmptyState, Badge, Slider, Select, ProgressBar,
 } from '../../libraries/shared/widgets.js';
 
 /**
@@ -297,6 +297,43 @@ export function fallbackSemanticPosition(regionId, indexInRegion, semanticRegion
     };
 }
 
+/**
+ * Позиция узла, застрявшего в накопителе (`node.regionId === null` — каскад
+ * `cores/memory-graph/index.js`'s `placeNewNode()` не нашёл уверенного
+ * региона). Раньше ВСЕ такие узлы рисовались буквально в `{x:0, y:0}` —
+ * не отдельной ячейкой, а одной и той же точкой для любого их количества,
+ * так что живьём это выглядело так, будто узел вообще не появился ("каскад
+ * не проходит" — реальная жалоба пользователя). Якорь — за пределами
+ * ПОСЛЕДНЕГО кольца дартборда (`MAX_RADIUS + SEMANTIC_REGION_GAP`), не
+ * десятый регион и не центр канваса: визуально сразу видно, что это
+ * ОТДЕЛЬНАЯ, временная зона, а не часть дерева регионов. Тот же
+ * `packOffsetInRegion()`, что и у семантических регионов, — узлы реально
+ * разносятся друг от друга по мере роста очереди, не наслаиваются.
+ */
+// + SEMANTIC_MAX_ANCHOR_DISTANCE (не только + GAP) — packOffsetInRegion()
+// раскладывает узлы ПО ВСЕМ углам вокруг якоря, а не только наружу от
+// начала координат; узел, чей офсет пришёлся почти точно НАВСТРЕЧУ якорю
+// (максимальный радиус кольца, угол ~180° от направления на якорь), иначе
+// мог бы придвинуться обратно внутрь дартборда. Гарантия: даже в этом
+// худшем случае итоговое расстояние от центра канваса — не меньше
+// MAX_RADIUS + SEMANTIC_REGION_GAP, то есть накопитель НИКОГДА визуально не
+// перекрывается с последним кольцом дартборда, для любого узла в очереди.
+export const STAGING_ANCHOR_DISTANCE = MAX_RADIUS + SEMANTIC_MAX_ANCHOR_DISTANCE + SEMANTIC_REGION_GAP;
+const STAGING_ANCHOR_ANGLE = Math.PI / 2; // "юг" канваса, прямо под дартбордом — тот же угол-от-начала-координат, что anchorX/anchorY у regionLayoutPosition/fallbackSemanticPosition
+
+export function stagedNodePosition(indexInRegion) {
+    const anchorX = Math.cos(STAGING_ANCHOR_ANGLE) * STAGING_ANCHOR_DISTANCE;
+    const anchorY = Math.sin(STAGING_ANCHOR_ANGLE) * STAGING_ANCHOR_DISTANCE;
+    const offset = packOffsetInRegion(indexInRegion, {
+        minAnchorDistance: SEMANTIC_MIN_ANCHOR_DISTANCE, minPointDistance: SEMANTIC_MIN_POINT_DISTANCE, maxAnchorDistance: SEMANTIC_MAX_ANCHOR_DISTANCE,
+    });
+    const globalAngle = STAGING_ANCHOR_ANGLE + offset.angle;
+    return {
+        x: Math.round(anchorX + Math.cos(globalAngle) * offset.radius),
+        y: Math.round(anchorY + Math.sin(globalAngle) * offset.radius),
+    };
+}
+
 export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function call(contract, params) {
         return request(host.own, contract, { params });
@@ -333,17 +370,46 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const regions = signal([]);
     const mergeQueue = signal([]);
     const reconsolidationQueue = signal([]);
+    const staging = signal([]);
     const busy = signal(false);
     const statusText = signal('');
 
     async function refresh() {
-        const [nodesResult, regionsResult, mergeResult, reconResult] = await Promise.all([
-            call('memoryGraph.nodes'), call('memoryGraph.regions'), call('memoryGraph.mergeQueue'), call('memoryGraph.reconsolidationQueue'),
+        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult] = await Promise.all([
+            call('memoryGraph.nodes'), call('memoryGraph.regions'), call('memoryGraph.mergeQueue'), call('memoryGraph.reconsolidationQueue'), call('memoryGraph.staging'),
         ]);
         if (nodesResult.ok) nodes.set(nodesResult.value);
         if (regionsResult.ok) regions.set(regionsResult.value);
         if (mergeResult.ok) mergeQueue.set(mergeResult.value);
         if (reconResult.ok) reconsolidationQueue.set(reconResult.value);
+        if (stagingResult.ok) staging.set(stagingResult.value);
+    }
+
+    // --- Прогресс бутстрапа (реальная жалоба пользователя: "невозможно в
+    // реальном времени понять процесс построения графа из-за подвисания") —
+    // Ядро уже публикует `memoryGraph.bootstrapStarted/Progress/Finished`
+    // (тот же механизм, что раньше был виден ТОЛЬКО в отдельной панели
+    // движка — cores/ui/engine-panel.js — а не здесь, в самом окне графа,
+    // где пользователь реально нажимает кнопку и смотрит на канвас). `phase`
+    // приходит с бэкенда словами технических шагов — тот же словарь, что и
+    // у engine-panel.js's `memoryGraphProgressPhaseLabel()`, продублирован
+    // намеренно, не импортирован оттуда: Ядра/UI-Ядра друг друга напрямую
+    // не знают (тот же принцип, что уже применён к BOOTSTRAP_REASONING_EFFORTS
+    // в cores/memory-graph/index.js).
+    const bootstrapProgress = signal(null); // {done, total, phase} | null
+    const bootstrapRunning = signal(false);
+
+    function bootstrapPhaseLabel(phase) {
+        switch (phase) {
+            case 'reading': return 'reading Lorebook';
+            case 'skeleton': return 'laying out regions';
+            case 'centers': return 'adding region centers';
+            case 'placing': return 'placing entries';
+            case 'linking': return 'linking regions';
+            case 'connecting': return 'connecting isolated entries';
+            case 'finalizing': return 'finalizing';
+            default: return 'building';
+        }
     }
 
     // --- Выбор/создание -----------------------------------------------
@@ -475,6 +541,26 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         }
     }
 
+    /**
+     * Бутстрап — НЕ через `runDebugAction()`/общий `busy` (реальная жалоба:
+     * "невозможно... подвисания" + "нужен... отдельный процесс, чтобы не
+     * висло"). `bootstrapFromLorebook()` реально может идти минутами на
+     * большом Lorebook (эмбединг каждой записи + несколько LLM-вызовов) —
+     * блокировать ВЕСЬ остальной редактор графа (создание/правку узлов,
+     * дебаг-кнопки) на всё это время общим флагом было бы неоправданно,
+     * когда своя, точная обратная связь уже есть через
+     * `bootstrapProgress`/`bootstrapRunning` (см. подписки в `open()`).
+     * Клик НЕ ждёт результата сам — событийная лента уже показывает ход
+     * вживую, а собственная кнопка блокируется своим состоянием
+     * (`bootstrapRunning`), не общим `busy`.
+     */
+    function runBootstrap() {
+        call('memoryGraph.bootstrapFromLorebook').then(result => {
+            if (!result.ok) statusText.set(`Bootstrap failed: ${result.error?.message}`);
+            else if (!result.value) statusText.set('Nothing to import — the active Lorebook is empty, or the graph already has data.');
+        });
+    }
+
     // --- Настройка извлечения -------------------------------------------
     // Лимит узлов, собираемых ШУМОМ при извлечении: маяки + маршрут + шум
     // ВМЕСТЕ не должны превысить это число (`retrievalTargetNodes`,
@@ -482,10 +568,20 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // нужен отдельный Save: `memoryGraph.configure` клэмпит и сохраняет сам.
     const retrievalTargetNodes = signal(20);
     const retrievalBusy = signal(false);
+    // Sticky balance (решено с пользователем явно) — три готовые точки, не
+    // откручиваемое число (см. RETRIEVAL_STABILITY_LEVELS/_MARGINS в
+    // cores/memory-graph/index.js за самой математикой).
+    const retrievalStability = signal('balanced');
+    const RETRIEVAL_STABILITY_OPTIONS = Object.freeze([
+        { value: 'often', label: 'Often — swap readily' },
+        { value: 'balanced', label: 'Balanced' },
+        { value: 'sticky', label: 'Sticky — hold the block' },
+    ]);
 
     async function loadRetrievalSettings() {
         const result = await call('memoryGraph.settings');
         if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
+        if (result.ok && result.value?.retrievalStability) retrievalStability.set(result.value.retrievalStability);
     }
 
     async function saveRetrievalTargetNodes() {
@@ -494,6 +590,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             const result = await call('memoryGraph.configure', { retrievalTargetNodes: retrievalTargetNodes.peek() });
             if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
             statusText.set(result.ok ? `Retrieval limit saved: ${retrievalTargetNodes.peek()} nodes` : `Failed: ${result.error?.message}`);
+        } finally {
+            retrievalBusy.set(false);
+        }
+    }
+
+    /** Пишется сразу по выбору (Select()'s onChange) — как и остальные пресет-подобные настройки движка, отдельного Save не нужно. */
+    async function saveRetrievalStability(value) {
+        retrievalBusy.set(true);
+        try {
+            const result = await call('memoryGraph.configure', { retrievalStability: value });
+            if (result.ok && result.value?.retrievalStability) retrievalStability.set(result.value.retrievalStability);
+            statusText.set(result.ok ? `Sticky balance saved: ${retrievalStability.peek()}` : `Failed: ${result.error?.message}`);
         } finally {
             retrievalBusy.set(false);
         }
@@ -531,12 +639,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         const elements = [];
         for (const [regionId, members] of perRegion) {
             members.forEach((node, index) => {
-                let position = { x: 0, y: 0 };
-                if (regionId !== 'staged') {
-                    position = /^\d+:\d+$/.test(regionId)
+                const position = regionId === 'staged'
+                    ? stagedNodePosition(index)
+                    : (/^\d+:\d+$/.test(regionId)
                         ? regionLayoutPosition(...regionId.split(':').map(Number), { indexInRegion: index })
-                        : fallbackSemanticPosition(regionId, index, semanticRegionIds);
-                }
+                        : fallbackSemanticPosition(regionId, index, semanticRegionIds));
                 elements.push({
                     data: { id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode), importance: node.importance ?? 0 },
                     position,
@@ -697,8 +804,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // отдельная защита от двойного клика не нужна.
     function characterOriginRow() {
         return Row(
-            Button('Character already in Lorebook', () => statusText.set('Noted — no separate node created.')),
-            Button('Only in character card — import', () => runDebugAction('memoryGraph.nodes.createFromCharacterCard')),
+            h('p', { class: 'stme-memory-graph-hint' }, 'Where does your main character live? Neither option touches the graph by itself — the first just confirms nothing extra is needed, the second imports a node from the character card.'),
+            Row(
+                Button('Character already in Lorebook', () => statusText.set('Noted — no separate node created.')),
+                Button('Only in character card — import', () => runDebugAction('memoryGraph.nodes.createFromCharacterCard')),
+            ),
         );
     }
 
@@ -706,15 +816,23 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      * Бутстрап — вынесен из Debug (решено с пользователем): это штатная
      * операция первого построения графа, а не дебаг. Автозапуск временно
      * отключён (см. `bootstrapIfEmpty()` в Ядре), поэтому кнопка —
-     * единственный путь. Прогресс идёт тем же механизмом, что и раньше:
-     * Ядро публикует `memoryGraph.bootstrapStarted/Progress/Finished`.
+     * единственный путь. Прогресс теперь виден ПРЯМО ЗДЕСЬ (реальная жалоба:
+     * раньше он показывался только в отдельной панели движка, а это самое
+     * окно — где пользователь реально жмёт кнопку — молчало и выглядело
+     * зависшим).
      */
     function bootstrapRow() {
         return Section('Build from Lorebook', { open: true, className: 'stme-memory-graph-section' },
-            h('p', { class: 'stme-memory-graph-hint' }, 'Creates the first graph from your Lorebook entries — reading, two model passes, and an embedding per entry. Large books take a while; progress shows in the engine panel.'),
+            h('p', { class: 'stme-memory-graph-hint' }, 'Creates the first graph from your Lorebook entries — reading, two model passes, and an embedding per entry. Large books take a while, but the rest of this window (editing, debug actions) stays usable while it runs.'),
             Row(
-                Button('Bootstrap from Lorebook', () => runDebugAction('memoryGraph.bootstrapFromLorebook'), { disabled: busy() }),
+                Button(computed(() => (bootstrapRunning() ? 'Building…' : 'Bootstrap from Lorebook')), runBootstrap, { disabled: bootstrapRunning }),
             ),
+            computed(() => {
+                const progress = bootstrapProgress();
+                if (!progress) return null;
+                const percent = Math.min(100, Math.round((progress.done / progress.total) * 100));
+                return ProgressBar(percent, `${bootstrapPhaseLabel(progress.phase)}… ${percent}%`);
+            }),
         );
     }
 
@@ -730,6 +848,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             Row(
                 Button(retrievalBusy() ? 'Saving…' : 'Save limit', saveRetrievalTargetNodes, { disabled: retrievalBusy() }),
             ),
+            Field('Sticky balance', Select(retrievalStability, RETRIEVAL_STABILITY_OPTIONS, { onChange: saveRetrievalStability })),
+            h('p', { class: 'stme-memory-graph-hint' }, 'How eagerly a new, more relevant memory block replaces the WHOLE previous one. The same block reused turn-to-turn keeps your LLM provider\'s prompt cache warm; a more eager setting swaps sooner at the cost of that cache.'),
         );
     }
 
@@ -738,18 +858,26 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // это штатная операция, а не дебаг) --
     function debugBlock() {
         return Details('Debug actions',
+            h('p', { class: 'stme-memory-graph-hint' }, 'Everything here already runs automatically during play, on its own schedule. These buttons just force a step right now — useful to test a change or unstick something, never required for the graph to keep working.'),
             Row(
                 Field('Context text', TextInput(debugText, { placeholder: 'story context…' })),
-                Button('checkAndPlace', () => runDebugAction('memoryGraph.checkAndPlace', { text: debugText() })),
+                Button('Check this text now', () => runDebugAction('memoryGraph.checkAndPlace', { text: debugText() })),
             ),
+            h('p', { class: 'stme-memory-graph-hint' }, 'Runs the same "is this worth remembering?" check the engine runs after every reply — against the text typed above instead of the real chat.'),
             Row(
-                Button('sweepStaging', () => runDebugAction('memoryGraph.sweepStaging')),
-                Button('sweepMergeQueue', () => runDebugAction('memoryGraph.sweepMergeQueue')),
-                Button('sweepReconsolidationQueue', () => runDebugAction('memoryGraph.sweepReconsolidationQueue')),
-                Button('sweepBackbone', () => runDebugAction('memoryGraph.sweepBackbone')),
+                Button('Retry stuck entries', () => runDebugAction('memoryGraph.sweepStaging')),
+                Button('Resolve near-duplicates', () => runDebugAction('memoryGraph.sweepMergeQueue')),
+                Button('Compress weak clusters', () => runDebugAction('memoryGraph.sweepReconsolidationQueue')),
+                Button('Rebuild backbone links', () => runDebugAction('memoryGraph.sweepBackbone')),
             ),
+            h('p', { class: 'stme-memory-graph-hint' },
+                '"Retry stuck entries" (sweepStaging) — nodes with no confident region yet, see "awaiting placement" below. ' +
+                '"Resolve near-duplicates" (sweepMergeQueue) — pairs flagged as likely duplicates, see "pending merge" below. ' +
+                '"Compress weak clusters" (sweepReconsolidationQueue) — low-priority nodes queued to be folded into one, see "pending reconsolidation" below. ' +
+                '"Rebuild backbone links" (sweepBackbone) — connects region centers to each other; only used during Lorebook import, not during normal play.'),
             computed(() => (mergeQueue().length ? Badge(`${mergeQueue().length} pending merge`, { tone: 'muted' }) : null)),
             computed(() => (reconsolidationQueue().length ? Badge(`${reconsolidationQueue().length} pending reconsolidation`, { tone: 'muted' }) : null)),
+            computed(() => (staging().length ? Badge(`${staging().length} awaiting placement`, { tone: 'muted' }) : null)),
         );
     }
 
@@ -791,17 +919,26 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 onResize: next => { panelSize.set(next); saveWindowState(); },
             },
             h('div', { class: 'stme-memory-graph-body', style: { display: 'flex', gap: '8px', minWidth: '680px', minHeight: '480px' } },
-                // Обёртка — position:relative, ДВА слоя внутри: фон региона
-                // (SVG, рисуется напрямую в DOM, см. ensureCytoscape()) и
-                // сам канвас Cytoscape поверх с прозрачным фоном, чтобы
-                // подложка была видна сквозь него.
-                h('div', { style: { position: 'relative', width: '480px', height: '480px', background: '#1a1a1a', borderRadius: '8px', flexShrink: '0', overflow: 'hidden' } },
-                    h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } }),
-                    h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
+                // Обёртка — колонка: канвас + легенда под ним, тем же
+                // приёмом, что hint-параграфы у остальных секций (реальная
+                // жалоба: "очень плохой UI... ноль объяснений" — сам канвас
+                // до этого не объяснял НИ ОДНОГО своего взаимодействия:
+                // клик, драг узла, драг рёбер-хендла).
+                h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', flexShrink: '0' } },
+                    // position:relative, ДВА слоя внутри: фон региона (SVG,
+                    // рисуется напрямую в DOM, см. ensureCytoscape()) и сам
+                    // канвас Cytoscape поверх с прозрачным фоном, чтобы
+                    // подложка была видна сквозь него.
+                    h('div', { style: { position: 'relative', width: '480px', height: '480px', background: '#1a1a1a', borderRadius: '8px', overflow: 'hidden' } },
+                        h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } }),
+                        h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
+                    ),
+                    h('p', { class: 'stme-memory-graph-hint', style: { width: '480px', boxSizing: 'border-box' } },
+                        'Click a node to edit it. Drag a node onto a different dartboard cell to move it into that region. Drag from a node\'s edge handle to another node to connect them. Click "+ Node", then click empty canvas, to place a new one.'),
                 ),
                 h('div', { class: 'stme-memory-graph-sidebar' },
                     Row(
-                        Button('+ Node', () => openCreateForm({ sector: 0, ring: 0 })),
+                        Button('+ Node — click canvas to place it', () => openCreateForm({ sector: 0, ring: 0 })),
                         Button('Refresh', refresh),
                     ),
                     computed(() => (statusText() ? h('div', { class: 'stme-memory-graph-status' }, statusText()) : null)),
@@ -836,10 +973,34 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         await finalUi.settled?.();
         await refresh();
         refreshUnsubscribers = [
-            'memoryGraph.nodeCreated', 'memoryGraph.nodeUpdated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeMoved',
-            'memoryGraph.nodeEvicted', 'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
-            'memoryGraph.edgeCreated', 'memoryGraph.edgeDeleted',
-        ].map(event => host.events.subscribe(event, () => refresh()));
+            ...[
+                'memoryGraph.nodeCreated', 'memoryGraph.nodeUpdated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeMoved',
+                'memoryGraph.nodeEvicted', 'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
+                'memoryGraph.edgeCreated', 'memoryGraph.edgeDeleted',
+            ].map(event => host.events.subscribe(event, () => refresh())),
+            // Бутстрап-прогресс — та же тройка событий, тем же смыслом, что
+            // уже подписан cores/ui/engine-panel.js: `started` подтверждает,
+            // что работа реально НАЧАЛАСЬ (может идти десятки секунд/минуты
+            // на большом Lorebook), `progress` тикает по ходу, `finished`
+            // гасит индикатор БЕЗУСЛОВНО — и на успехе, и на любом раннем
+            // отказе, иначе полоса зависла бы навсегда. `bootstrapRunning`
+            // — отдельный от `busy` сигнал (см. `runBootstrap()`'s doc-comment
+            // за причиной), поэтому ставится здесь, по факту события, а не
+            // по факту того, что чей-то клик всё ещё ждёт свой промис.
+            host.events.subscribe('memoryGraph.bootstrapStarted', payload => {
+                bootstrapRunning.set(true);
+                bootstrapProgress.set({ done: 0, total: Math.max(1, payload?.totalSteps ?? 1), phase: 'reading' });
+            }),
+            host.events.subscribe('memoryGraph.bootstrapProgress', payload => {
+                bootstrapRunning.set(true); // подстраховка на случай, если `started` пришёл ДО открытия этого окна
+                bootstrapProgress.set({ done: payload?.done ?? 0, total: Math.max(1, payload?.total ?? 1), phase: payload?.phase ?? '' });
+            }),
+            host.events.subscribe('memoryGraph.bootstrapFinished', payload => {
+                bootstrapRunning.set(false);
+                bootstrapProgress.set(null);
+                statusText.set(payload?.success ? `Bootstrap complete — ${payload?.nodeCount ?? nodes().length} nodes.` : 'Bootstrap finished without building anything — see status above.');
+            }),
+        ];
         return finalUi;
     }
 
