@@ -69,6 +69,19 @@ test('non-generation sources work too: tracking poll and selfUpdate', () => {
     assert.equal(core.state.peek(), 'success');
 });
 
+test('memory graph bootstrap drives working -> success/error, same as any other long-running source (реальная жалоба: "боковой бар не показывает построение графа дефолтным для генерации оранжевым")', () => {
+    const { engine, core } = setup();
+    engine.events.emit('memoryGraph.bootstrapStarted', { totalEntries: 40 });
+    assert.equal(core.state.peek(), 'working');
+
+    engine.events.emit('memoryGraph.bootstrapFinished', { success: true, nodeCount: 12 });
+    assert.equal(core.state.peek(), 'success');
+
+    engine.events.emit('memoryGraph.bootstrapStarted', { totalEntries: 40 });
+    engine.events.emit('memoryGraph.bootstrapFinished', { success: false, reason: 'Проход 1 (skeleton) call failed: HTTP 500' });
+    assert.equal(core.state.peek(), 'error', '`bootstrapStarted` only fires once real work is confirmed, so a false finish here is a genuine failure, not a benign no-op — red, not yellow');
+});
+
 test('notification (notify) overrides anything and BLINKS — and a working event cannot steal the blink', () => {
     const { engine, core } = setup();
     engine.events.emit('generation.beforeSend', {});
