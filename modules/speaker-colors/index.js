@@ -92,9 +92,27 @@ export function createSpeakerColorsModule(host) {
         if (result.ok) cast.set(result.value);
     }
 
+    /**
+     * Refreshes the preset list AND keeps `selectedPresetId` pointed at a
+     * REAL entry — found live: a native `<select>` with no `<option selected>`
+     * (i.e. `selectedPresetId` still `''`, before the user ever clicks the
+     * dropdown) falls back to showing its FIRST option highlighted, purely a
+     * browser default. That left the signal at `''` while the dropdown
+     * visually showed a preset "selected" — clicking Apply/Delete then
+     * silently no-op'd (`if (!selectedPresetId()) return;`), which is
+     * exactly the bug reported ("если выбран пресет — его нельзя
+     * редактировать и персонажи не отображаются"): nothing was ever ACTUALLY
+     * selected, only drawn that way. Snapping the signal to match the first
+     * real preset (or back to `''` when the list is empty) the moment the
+     * list loads keeps the signal truthful to what's visually shown.
+     */
     async function refreshPresets() {
         const result = await call('speaker.presets.get', {});
-        if (result.ok) presets.set(result.value);
+        if (!result.ok) return;
+        presets.set(result.value);
+        if (!result.value.some(preset => preset.id === selectedPresetId())) {
+            selectedPresetId.set(result.value[0]?.id ?? '');
+        }
     }
 
     /** Assigns and PERSISTS an auto color for a character added without one — rotation index is how many cast members already carry a color, so re-painting never reassigns an already-colored character a different hue. */
