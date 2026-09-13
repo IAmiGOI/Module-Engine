@@ -10,14 +10,10 @@ import { createSpeakerColorsModule, MODULE_ID } from '../modules/speaker-colors/
 
 /**
  * Scenario level (TESTING.md) — real engine, real speaker Core (real
- * detection + registry + persistence), real Гейт-checked dispatch. Only the
- * ST-facing DOM/`stChat` SEAM is faked, the same discipline every other
- * scenario test in this repo already uses for `getContext()` — a "node" here
- * is just an opaque per-message marker object, and the fake `dom.*`
- * services record what the Module asked for instead of touching real DOM
- * (there is no real `document` in this Node test environment at all, and
- * neither services/dom.js's nor services/st-chat.js's DOM-querying paths are
- * exercised by ANY existing test in this repo for that same reason).
+ * detection + cast + persistence), real Гейт-checked dispatch. Only the
+ * ST-facing DOM/`stChat` SEAM is faked — a "node" here is just an opaque
+ * per-message marker object, and the fake `dom.*` services record what the
+ * Module asked for instead of touching real DOM.
  */
 function buildEngine() {
     const engine = createEngine();
@@ -56,7 +52,7 @@ function buildModuleHost(engine) {
     return engine.registerCaller(MODULE_ID, 'modules', {
         tier: 'community',
         allowedContracts: [
-            'speaker.resolve', 'speaker.registry.get', 'speaker.setColor', 'speaker.rename',
+            'speaker.resolve', 'speaker.cast.list', 'speaker.cast.add', 'speaker.cast.remove', 'speaker.cast.update',
             'speaker.presets.get', 'speaker.presets.save', 'speaker.presets.delete', 'speaker.presets.apply',
             'stChat.rendered', 'stChat.messageTextElement', 'stChat.messages',
             'dom.textContent', 'dom.paintTextRuns', 'dom.clearPaintedRuns', 'dom.readCssVariable',
@@ -64,43 +60,62 @@ function buildModuleHost(engine) {
     });
 }
 
-test('load() paints the ONE rendered message\'s dialogue run with an auto-assigned color derived from the ST theme accent', async () => {
+test('load() with an EMPTY cast paints nothing and adds NOBODY — the exact bug the owner reported must not happen even on a real repaint pass', async () => {
+    const { engine, speakerCore } = buildEngine();
+    await speakerCore.restore();
+    const { paintCalls } = wireFakeChatDom(engine, {
+        messages: [{ mesid: '3', text: 'Not gentle. Looks back. Pauses. Holds your hand. "Half a day," she says.' }],
+    });
+    const moduleHost = buildModuleHost(engine);
+    const moduleInstance = createSpeakerColorsModule(moduleHost);
+
+    await moduleInstance.load();
+
+    assert.deepEqual(paintCalls[0].runs, [], 'nothing resolves with an empty cast — no run is painted');
+    const cast = await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.list', {}, resolve));
+    assert.deepEqual(cast.value, [], 'the cast must stay empty — no character was invented from the prose');
+});
+
+test('load() paints a quote for a character the user ALREADY ADDED to the cast, with an auto-assigned color', async () => {
     const { engine, speakerCore } = buildEngine();
     await speakerCore.restore();
     const { paintCalls } = wireFakeChatDom(engine, {
         messages: [{ mesid: '3', text: 'Lisawoo looks back. "Half a day," she says.' }],
         accent: '#3f51b5',
     });
-    const moduleInstance = createSpeakerColorsModule(buildModuleHost(engine));
-
-    await moduleInstance.load();
-
-    assert.equal(paintCalls.length, 1);
-    assert.equal(paintCalls[0].mesid, '3');
-    assert.equal(paintCalls[0].runs.length, 1, 'exactly one dialogue run — the resolved quote');
-    assert.match(paintCalls[0].runs[0].color, /^#[0-9a-f]{6}$/);
-});
-
-test('load() persists the auto-assigned color into the real speaker registry, not just the paint call', async () => {
-    const { engine, speakerCore } = buildEngine();
-    await speakerCore.restore();
-    wireFakeChatDom(engine, { messages: [{ mesid: '1', text: 'Lisawoo walks ahead. "Half a day."' }] });
     const moduleHost = buildModuleHost(engine);
+    await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
     const moduleInstance = createSpeakerColorsModule(moduleHost);
 
     await moduleInstance.load();
 
-    const registry = await new Promise(resolve => moduleHost.cores.subscribe('speaker.registry.get', {}, resolve));
-    const lisawoo = registry.value.find(entity => entity.name === 'Lisawoo');
-    assert.ok(lisawoo, 'the speaker discovered while painting must land in the persisted registry');
-    assert.ok(lisawoo.color, 'and it must already carry the auto-assigned color, not null');
+    assert.equal(paintCalls[0].mesid, '3');
+    assert.equal(paintCalls[0].runs.length, 1);
+    assert.match(paintCalls[0].runs[0].color, /^#[0-9a-f]{6}$/);
 });
 
-test('a re-render event (e.g. a swipe) triggers a full repaint again, through the SAME subscription mechanism as message-footer\'s own redraw guard', async () => {
+test('a message whose OWN text never names its speaker still gets its pronoun-only quote painted, using the ST message card name — but ONLY because that name is already in the user-entered cast', async () => {
+    const { engine, speakerCore } = buildEngine();
+    await speakerCore.restore();
+    const { paintCalls } = wireFakeChatDom(engine, {
+        messages: [{ mesid: '7', name: 'Lisawoo', text: 'She looks at you. "Burden." She repeats the word like she\'s tasting something spoiled.' }],
+    });
+    const moduleHost = buildModuleHost(engine);
+    await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
+    const moduleInstance = createSpeakerColorsModule(moduleHost);
+
+    await moduleInstance.load();
+
+    assert.equal(paintCalls[0].runs.length, 1, 'the pronoun-only quote must resolve via the ALREADY-KNOWN cast member, not stay unattributed');
+});
+
+test('a re-render event (e.g. a swipe) triggers a full repaint again', async () => {
     const { engine, speakerCore } = buildEngine();
     await speakerCore.restore();
     const { paintCalls } = wireFakeChatDom(engine, { messages: [{ mesid: '1', text: 'Lisawoo walks ahead. "Half a day."' }] });
-    const moduleInstance = createSpeakerColorsModule(buildModuleHost(engine));
+    const moduleHost = buildModuleHost(engine);
+    await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
+    const moduleInstance = createSpeakerColorsModule(moduleHost);
     await moduleInstance.load();
     assert.equal(paintCalls.length, 1);
 
@@ -110,23 +125,7 @@ test('a re-render event (e.g. a swipe) triggers a full repaint again, through th
     assert.equal(paintCalls.length, 2, 'the swipe event must trigger a second full repaint pass');
 });
 
-test('a message whose OWN text never names its speaker still gets its pronoun-only quote painted, using the ST message card\'s own name as the fallback', async () => {
-    const { engine, speakerCore } = buildEngine();
-    await speakerCore.restore();
-    const { paintCalls } = wireFakeChatDom(engine, {
-        messages: [{ mesid: '7', name: 'Lisawoo', text: 'She looks at you. "Burden." She repeats the word like she\'s tasting something spoiled.' }],
-    });
-    const moduleHost = buildModuleHost(engine);
-    const moduleInstance = createSpeakerColorsModule(moduleHost);
-
-    await moduleInstance.load();
-
-    assert.equal(paintCalls[0].runs.length, 1, 'the pronoun-only quote must still resolve via the message card fallback, not stay unattributed');
-    const registry = await new Promise(resolve => moduleHost.cores.subscribe('speaker.registry.get', {}, resolve));
-    assert.ok(registry.value.some(entity => entity.name === 'Lisawoo'));
-});
-
-test('a message with NO recoverable speaker (no quote at all) is cleared, not left with a stale paint from a previous version of the text', async () => {
+test('a message with NO recoverable speaker at all (no quote) is cleared, not left with a stale paint from a previous version of the text', async () => {
     const { engine, speakerCore } = buildEngine();
     await speakerCore.restore();
     const { clearCalls } = wireFakeChatDom(engine, { messages: [{ mesid: '5', text: '' }] });
@@ -141,7 +140,9 @@ test('module.stop() unsubscribes every redraw listener — a repaint no longer f
     const { engine, speakerCore } = buildEngine();
     await speakerCore.restore();
     const { paintCalls } = wireFakeChatDom(engine, { messages: [{ mesid: '1', text: 'Lisawoo walks ahead. "Half a day."' }] });
-    const moduleInstance = createSpeakerColorsModule(buildModuleHost(engine));
+    const moduleHost = buildModuleHost(engine);
+    await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
+    const moduleInstance = createSpeakerColorsModule(moduleHost);
     await moduleInstance.load();
     const countAfterLoad = paintCalls.length;
 
