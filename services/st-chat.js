@@ -114,11 +114,24 @@ export function registerStChatService(bus, { getContext } = {}) {
         return root?.querySelector('.mes_block') ?? root ?? null;
     }
 
+    /**
+     * The rendered TEXT column of one message (`.mes_text`) — narrower than
+     * `messageElement()`'s `.mes_block` on purpose. Speaker-coloring paints
+     * runs of the message's own rendered text (services/dom.js's
+     * `dom.paintTextRuns`); the footer bar and other `.mes_block` siblings
+     * must never be walked as if they were message prose.
+     */
+    function messageTextElement(mesid) {
+        const root = document.querySelector(`#chat .mes[mesid="${mesid}"]`) ?? document.querySelector(`.mes[mesid="${mesid}"]`);
+        return root?.querySelector('.mes_text') ?? null;
+    }
+
     const unregisters = [
         bus.register('stChat.messages', params => readChat(params), { loadMetric: () => 0 }),
         bus.register('stChat.setHidden', params => setMessageHidden(params), { loadMetric: () => 0 }),
         bus.register('stChat.setText', params => setMessageText(params), { loadMetric: () => 0 }),
         bus.register('stChat.messageElement', params => messageElement(params?.mesid), { loadMetric: () => 0 }),
+        bus.register('stChat.messageTextElement', params => messageTextElement(params?.mesid), { loadMetric: () => 0 }),
         /** Контейнер всего чата — за ним наблюдают, чтобы заметить перерисовку, о которой никто не сообщил. */
         bus.register('stChat.container', () => document.getElementById('chat'), { loadMetric: () => 0 }),
         /** Идентификаторы всех сообщений, что сейчас в DOM. */

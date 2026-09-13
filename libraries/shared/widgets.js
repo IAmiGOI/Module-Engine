@@ -69,6 +69,43 @@ export function NumberInput(valueSignal, { min, max, step = 1 } = {}) {
 }
 
 /**
+ * Выбор цвета — нативный `<input type="color">` (родной пикер браузера/ОС,
+ * без своей палитры и без стороннего кода) плюс текстовое поле рядом с тем
+ * же hex-значением: пикер удобен мышью, поле — когда цвет нужно ввести/
+ * скопировать точно (например из сохранённого пресета). Оба читают/пишут
+ * ОДИН сигнал, как `TextInput`/`NumberInput` — виджет не решает, что
+ * произойдёт с записанным значением (сохранить, применить сразу), это
+ * решение потребителя.
+ *
+ * `<input type="color">` отдаёт и принимает только полный 6-значный hex
+ * (`#rrggbb`) — `resolveColorValue()` защищает виджет от пустого/`null`/
+ * трёхзначного сигнала (например ещё не назначенный цвет говорящего),
+ * подставляя нейтральный дефолт, а не давая браузеру молча откатиться на
+ * произвольное собственное значение.
+ */
+function resolveColorValue(raw) {
+    return typeof raw === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : '#888888';
+}
+
+export function ColorPicker(valueSignal, { onChange } = {}) {
+    return h('span', { class: 'stme-color-picker' },
+        h('input', {
+            type: 'color',
+            class: 'stme-color-swatch',
+            value: computed(() => resolveColorValue(valueSignal())),
+            'on:input': event => { valueSignal.set(event.target.value); onChange?.(event.target.value); },
+        }),
+        h('input', {
+            type: 'text',
+            class: 'text_pole stme-color-hex',
+            value: valueSignal,
+            placeholder: '#rrggbb',
+            'on:input': event => { valueSignal.set(event.target.value); onChange?.(event.target.value); },
+        }),
+    );
+}
+
+/**
  * Ползунок с живым числом справа от подписи — форма из Alpha (`SliderField`).
  * Для «каждый N-й ответ» он честно лучше поля ввода: диапазон видно целиком,
  * промахнуться мимо допустимых значений нельзя, и подкрутить можно не целясь

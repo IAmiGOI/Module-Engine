@@ -61,6 +61,129 @@ function removeProp(el, key) {
     setProp(el, key, key === 'class' ? '' : null);
 }
 
+const PAINT_CLASS = 'stme-speaker-paint';
+const PAINT_MARK_ATTR = 'data-stme-paint';
+
+/** Every real Text node under `node`, in document order — walks real `childNodes`/`nodeType`, not the virtual-dom `h()` tree from cores/ui/tree.js. */
+function collectTextNodes(node, acc = []) {
+    for (const child of node.childNodes ?? []) {
+        if (child.nodeType === 3) acc.push(child);
+        else if (child.nodeType === 1) collectTextNodes(child, acc);
+    }
+    return acc;
+}
+
+/** Undoes a previous paintTextRuns() pass — unwraps every `[data-stme-paint]` span back to its own plain text node. Never touches anything else, so re-painting is always safe to call blind (see message-footer.js's own "idempotent attach()" precedent). */
+function clearPaintedRuns(container) {
+    const spans = [];
+    (function walk(node) {
+        for (const child of [...(node.childNodes ?? [])]) {
+            if (child.nodeType === 1 && child.getAttribute?.(PAINT_MARK_ATTR) != null) spans.push(child);
+            else if (child.nodeType === 1) walk(child);
+        }
+    }(container));
+    for (const span of spans) {
+        const parent = span.parentNode;
+        const inner = span.childNodes?.[0];
+        if (parent && inner) { parent.insertBefore(inner, span); span.remove(); }
+        else span.remove();
+    }
+}
+
+/**
+ * `computeX` — pure derivation, no DOM: for each text node (`{ index, start,
+ * end, text }`, offsets over the CONCATENATION of every text node under the
+ * container), works out which sub-slices fall under a paint run and which
+ * stay plain. Exported so the splitting logic is tested as data, same
+ * discipline as widgets.js — `paintTextRuns()` below is just this plan
+ * executed against real nodes.
+ *
+ * A text node with no overlapping run at all is left out of the result
+ * entirely (the caller must leave it untouched) — rebuilding a node that
+ * needs no change would be a needless DOM write for every repaint.
+ */
+export function computeTextNodePaintPlan(nodeInfos, runs) {
+    const sortedRuns = (runs ?? []).filter(run => run.end > run.start).sort((a, b) => a.start - b.start);
+    const plans = [];
+    for (const info of nodeInfos) {
+        const overlapping = sortedRuns.filter(run => run.start < info.end && run.end > info.start);
+        if (overlapping.length === 0) continue;
+
+        const breakpoints = new Set([0, info.text.length]);
+        for (const run of overlapping) {
+            breakpoints.add(Math.max(0, Math.min(info.text.length, run.start - info.start)));
+            breakpoints.add(Math.max(0, Math.min(info.text.length, run.end - info.start)));
+        }
+        const sorted = [...breakpoints].sort((a, b) => a - b);
+
+        const pieces = [];
+        for (let i = 0; i < sorted.length - 1; i += 1) {
+            const from = sorted[i];
+            const to = sorted[i + 1];
+            if (to <= from) continue;
+            const globalFrom = info.start + from;
+            const globalTo = info.start + to;
+            const covering = overlapping.find(run => run.start <= globalFrom && run.end >= globalTo);
+            pieces.push({ text: info.text.slice(from, to), color: covering ? covering.color : null });
+        }
+        plans.push({ index: info.index, pieces });
+    }
+    return plans;
+}
+
+/**
+ * Wraps character ranges of `container`'s rendered text in colored
+ * `<span data-stme-paint>` — the DOM-only mechanism the project owner asked
+ * for explicitly: it mutates the RENDERED node ST already drew, never
+ * `message.mes`/the chat array, so nothing here can leak into the model
+ * context (see cores/ui/message-footer.js's own "the model never sees this"
+ * precedent, same guarantee, different surface).
+ *
+ * `runs` — `[{ start, end, color }]` in offsets over the PLAIN TEXT
+ * concatenation of `container`'s current text nodes (exactly what
+ * `libraries/core/speaker-detection.js`'s segments already use). Always
+ * starts by undoing any earlier paint (`clearPaintedRuns`) so calling this
+ * again after ST re-renders the message is always safe and idempotent —
+ * never doubles up spans, never leaves a stale color from a previous resolve.
+ *
+ * Markup INSIDE the message (bold/italic/links from ST's own markdown
+ * rendering) is never touched beyond the individual text node it already
+ * owns — a run crossing a `<b>` boundary simply becomes two separate colored
+ * spans, one per original text node, so existing formatting survives untouched.
+ */
+function paintTextRuns(container, runs, doc) {
+    clearPaintedRuns(container);
+    const textNodes = collectTextNodes(container);
+    let cursor = 0;
+    const nodeInfos = textNodes.map((node, index) => {
+        const text = String(node.textContent ?? '');
+        const info = { index, start: cursor, end: cursor + text.length, text };
+        cursor += text.length;
+        return info;
+    });
+
+    const plans = computeTextNodePaintPlan(nodeInfos, runs);
+    for (const plan of plans) {
+        const node = textNodes[plan.index];
+        const parent = node.parentNode;
+        if (!parent) continue;
+        for (const piece of plan.pieces) {
+            if (piece.color) {
+                const span = doc.createElement('span');
+                span.className = PAINT_CLASS;
+                span.setAttribute(PAINT_MARK_ATTR, '1');
+                span.style.color = piece.color;
+                span.append(doc.createTextNode(piece.text));
+                parent.insertBefore(span, node);
+            } else {
+                parent.insertBefore(doc.createTextNode(piece.text), node);
+            }
+        }
+        node.remove();
+    }
+    return true;
+}
+
 /**
  * Registers every `dom.*` contract on `servicesBus` (a Service caller's
  * `.own` bus — see engine.js's registerCaller()). `document` is injected so
@@ -76,9 +199,19 @@ export function registerDomService(servicesBus, { document: doc = globalThis.doc
         servicesBus.register('dom.append', ({ parent, child }) => parent.append(child), { loadMetric: () => 0 }),
         servicesBus.register('dom.remove', ({ node }) => node.remove(), { loadMetric: () => 0 }),
         servicesBus.register('dom.replaceWith', ({ oldNode, newNode }) => oldNode.replaceWith(newNode), { loadMetric: () => 0 }),
+        servicesBus.register('dom.paintTextRuns', ({ container, runs }) => paintTextRuns(container, runs, doc), { loadMetric: () => 0 }),
+        servicesBus.register('dom.clearPaintedRuns', ({ container }) => { clearPaintedRuns(container); return true; }, { loadMetric: () => 0 }),
+        /** Read-only text extraction — the one property read a Модуль is never allowed to take directly off a node it was handed (see ARCHITECTURE.md: no exceptions for "just a read"). */
+        servicesBus.register('dom.textContent', ({ node }) => String(node?.textContent ?? ''), { loadMetric: () => 0 }),
+        /** Reads a CSS custom property off `documentElement` — the same theme accent ST itself exposes (`--SmartThemeQuoteColor`), used by Модуль «Speaker Colors» to derive its auto palette from the user's actual theme rather than a hardcoded color. */
+        servicesBus.register('dom.readCssVariable', ({ name }) => {
+            const source = doc.documentElement ?? doc.body;
+            const value = (doc.defaultView ?? globalThis).getComputedStyle?.(source)?.getPropertyValue(name);
+            return String(value ?? '').trim();
+        }, { loadMetric: () => 0 }),
     ];
     return () => { for (const unregister of unregisters) unregister(); };
 }
 
 /** Exported for services/dom.test.js's own unit-level coverage of the raw DOM logic, independent of the contract/Gate plumbing. */
-export const domOperations = { setProp, removeProp };
+export const domOperations = { setProp, removeProp, paintTextRuns, clearPaintedRuns };
