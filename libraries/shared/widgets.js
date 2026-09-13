@@ -409,10 +409,20 @@ export function ProgressBar(percent, label) {
  */
 export function HoldButton(label, onConfirm, { holdMs = 1200, variant = 'danger', disabled = false } = {}) {
     let timer = null;
-    const release = event => {
+    // `event.currentTarget` — ТОЛЬКО на время диспетчеризации самого события,
+    // браузер сбрасывает его в `null` сразу после выхода из обработчика
+    // (спецификация DOM, не баг браузера). Настоящий баг, найден живьём:
+    // `setTimeout()`-колбэк читал `event.currentTarget` спустя целый
+    // `holdMs` — к этому моменту он уже `null`, `.classList` бросал
+    // TypeError молча (нигде не пойманный), поэтому и заливка застревала
+    // на 100% (снимающая её строка так и не выполнялась), и `onConfirm()`
+    // после неё тоже никогда не доходил до вызова. Фикс — брать элемент
+    // из `currentTarget` СРАЗУ, в момент самого `pointerdown`, и держать
+    // ссылку в замыкании, а не перечитывать её из события позже.
+    const release = element => {
         clearTimeout(timer);
         timer = null;
-        event.currentTarget.classList.remove('stme-holding');
+        element.classList.remove('stme-holding');
     };
     return h('button', {
         type: 'button',
@@ -421,15 +431,16 @@ export function HoldButton(label, onConfirm, { holdMs = 1200, variant = 'danger'
         style: { '--stme-hold-ms': `${holdMs}ms` },
         'on:pointerdown': event => {
             if (disabled) return;
-            event.currentTarget.classList.add('stme-holding');
+            const element = event.currentTarget;
+            element.classList.add('stme-holding');
             timer = setTimeout(() => {
-                event.currentTarget.classList.remove('stme-holding');
+                element.classList.remove('stme-holding');
                 onConfirm();
             }, holdMs);
         },
-        'on:pointerup': release,
-        'on:pointerleave': release,
-        'on:pointercancel': release,
+        'on:pointerup': event => release(event.currentTarget),
+        'on:pointerleave': event => release(event.currentTarget),
+        'on:pointercancel': event => release(event.currentTarget),
     },
         h('span', { class: 'stme-hold-button-fill' }),
         h('span', { class: 'stme-hold-button-label' }, label),
