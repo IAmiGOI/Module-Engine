@@ -30,6 +30,7 @@ import { createSettingsCore } from '../cores/settings/index.js';
 import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource } from '../cores/backup/index.js';
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createMacrosCore } from '../cores/macros/index.js';
+import { createSpeakerCore } from '../cores/speaker/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
 import { createBasicSummaryCore } from '../cores/summary/index.js';
 import { createMemoryGraphCore } from '../cores/memory-graph/index.js';
@@ -50,6 +51,7 @@ import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../module
 import { createSecretsModule, SECRETS_MODULE_ID as SECRETS_MODULE_ID } from '../modules/tools/index.js';
 import { createPostprocessModule, MODULE_ID as POSTPROCESS_MODULE_ID } from '../modules/postprocess/index.js';
 import { createMusicModule, MODULE_ID as MUSIC_MODULE_ID } from '../modules/music/index.js';
+import { createSpeakerColorsModule, MODULE_ID as SPEAKER_COLORS_MODULE_ID } from '../modules/speaker-colors/index.js';
 
 /**
  * Реестр Модулей — временная замена настоящему Раннеру (ARCHITECTURE.md,
@@ -176,6 +178,20 @@ const DEFINITIONS = [{
         ],
     },
     create: host => createMusicModule(host),
+}, {
+    id: SPEAKER_COLORS_MODULE_ID,
+    title: 'Speaker Colors',
+    description: 'Colors each character\'s dialogue by speaker, detected locally — never touches the message text sent to the model.',
+    rights: {
+        tier: 'community',
+        allowedContracts: [
+            'speaker.resolve', 'speaker.registry.get', 'speaker.setColor', 'speaker.rename',
+            'speaker.presets.get', 'speaker.presets.save', 'speaker.presets.delete', 'speaker.presets.apply',
+            'stChat.rendered', 'stChat.messageTextElement', 'stChat.messages',
+            'dom.textContent', 'dom.paintTextRuns', 'dom.clearPaintedRuns', 'dom.readCssVariable',
+        ],
+    },
+    create: host => createSpeakerColorsModule(host),
 }];
 
 /** Где реестр помнит, что было включено. Неймспейс Раннера, а не Модуля: это состояние ЗАПУСКА, а не настройка кого-то из них. */
@@ -478,6 +494,14 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // `st.chatChanged` (уже смощённые Ядром событий выше — без единой
     // строчки моста с нашей стороны) и публикует записи через Ядро macros —
     // строится после обоих.
+    // Реестр говорящих (CORES.md) — та же переиспользуемая-инфраструктура
+    // трактовка, что уже принята для Ядра трекинга: сейчас единственный
+    // потребитель — Модуль «Speaker Colors», но контракт публичный, не
+    // спрятанный внутри одного Модуля.
+    const speakerCore = createSpeakerCore(engine.registerCaller('core.speaker', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.speaker' }),
+    });
+
     const lorebookCore = createLorebookCore(engine.registerCaller('core.lorebook', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.lorebook' }),
     });
@@ -634,7 +658,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // silently leaving a real, non-empty Lorebook's graph bootstrap empty
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
-    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), lorebookCore.scan(), summaryCore.load()]);
+    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), lorebookCore.scan(), summaryCore.load()]);
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
     // отдельно" — при большом Lorebook эмбединг каждой записи по
