@@ -7,7 +7,7 @@ import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createSpeakerCore } from '../cores/speaker/index.js';
 
-/** Scenario level (TESTING.md) — real engine, real Гейты, real dispatch; only the ST-facing `getContext()` boundary is faked. */
+/** Scenario level (TESTING.md) — real engine, real Гейты, real dispatch through the Шина ядер and the Шина сервисов; only the ST-facing `getContext()` boundary is faked. */
 function buildEngine() {
     const engine = createEngine();
     const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
@@ -27,89 +27,115 @@ function moduleCaller(engine, contracts) {
     return engine.registerCaller('module.paint', 'modules', { tier: 'community', allowedContracts: contracts });
 }
 
-test('speaker.resolve discovers a new speaker from real prose and speaker.registry.get reflects it', async () => {
+test('speaker.cast.add adds a character with an explicit name+gender, and speaker.cast.list reflects it', async () => {
     const { engine, speakerCore } = buildEngine();
     await speakerCore.restore();
-    const module = moduleCaller(engine, ['speaker.resolve', 'speaker.registry.get']);
+    const module = moduleCaller(engine, ['speaker.cast.add', 'speaker.cast.list']);
+
+    const added = await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
+    const list = await new Promise(resolve => module.cores.subscribe('speaker.cast.list', {}, resolve));
+
+    assert.equal(added.ok, true);
+    assert.equal(added.value.name, 'Lisawoo');
+    assert.equal(added.value.gender, 'F');
+    assert.deepEqual(list.value, [added.value]);
+});
+
+test('speaker.resolve NEVER adds anyone to the cast on its own — running it against prose full of ordinary capitalized words changes nothing', async () => {
+    const { engine, speakerCore } = buildEngine();
+    await speakerCore.restore();
+    const module = moduleCaller(engine, ['speaker.resolve', 'speaker.cast.list']);
+
+    await new Promise(resolve => module.cores.subscribe('speaker.resolve', {
+        params: { text: 'Not gentle. Looks back. Pauses. Holds your hand. Tighter than yesterday. "Stop calling yourself a burden."' },
+    }, resolve));
+    const list = await new Promise(resolve => module.cores.subscribe('speaker.cast.list', {}, resolve));
+
+    assert.deepEqual(list.value, [], 'the cast must stay EMPTY — this is the exact bug the owner reported');
+});
+
+test('speaker.resolve attributes a quote to an ALREADY-ADDED cast member by name in the text', async () => {
+    const { engine, speakerCore } = buildEngine();
+    await speakerCore.restore();
+    const module = moduleCaller(engine, ['speaker.cast.add', 'speaker.resolve']);
+    const added = await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
 
     const resolved = await new Promise(resolve => module.cores.subscribe('speaker.resolve', { params: { text: 'Lisawoo looks back. "Half a day," she says.' } }, resolve));
-    const registry = await new Promise(resolve => module.cores.subscribe('speaker.registry.get', {}, resolve));
 
     assert.equal(resolved.ok, true);
-    assert.equal(resolved.value.segments.some(segment => segment.speaker?.name === 'Lisawoo'), true);
-    assert.equal(registry.value.some(entity => entity.name === 'Lisawoo'), true);
+    assert.equal(resolved.value.segments.find(segment => segment.type === 'dialogue').speaker.id, added.value.id);
 });
 
-test('speaker.resolve publishes speaker.registryChanged ONLY when a genuinely NEW speaker is discovered, not on every call', async () => {
+test('speaker.cast.update changes gender/color of an EXISTING character without creating a new one', async () => {
     const { engine, speakerCore } = buildEngine();
     await speakerCore.restore();
-    const module = moduleCaller(engine, ['speaker.resolve']);
-    const events = [];
-    engine.events.subscribe('speaker.registryChanged', () => events.push(1));
+    const module = moduleCaller(engine, ['speaker.cast.add', 'speaker.cast.update', 'speaker.cast.list']);
+    const added = await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Sasha', gender: 'unknown' } }, resolve));
 
-    await new Promise(resolve => module.cores.subscribe('speaker.resolve', { params: { text: 'Lisawoo walks. "Half a day."' } }, resolve));
-    await new Promise(resolve => module.cores.subscribe('speaker.resolve', { params: { text: 'Lisawoo looks back. "You will know."' } }, resolve));
+    await new Promise(resolve => module.cores.subscribe('speaker.cast.update', { params: { id: added.value.id, gender: 'M', color: '#123456' } }, resolve));
+    const list = await new Promise(resolve => module.cores.subscribe('speaker.cast.list', {}, resolve));
 
-    assert.equal(events.length, 1, 'the second call resolves the SAME already-known speaker and must not re-fire the discovery event');
+    assert.equal(list.value.length, 1);
+    assert.equal(list.value[0].gender, 'M');
+    assert.equal(list.value[0].color, '#123456');
 });
 
-test('speaker.setColor persists the color, and it survives a fresh registry read (through the real Гейт -> Ядро памяти чата -> Сервис chain)', async () => {
+test('speaker.cast.remove removes a character, and a later resolve() no longer attributes to them', async () => {
     const { engine, speakerCore } = buildEngine();
     await speakerCore.restore();
-    const module = moduleCaller(engine, ['speaker.resolve', 'speaker.setColor', 'speaker.registry.get']);
-    await new Promise(resolve => module.cores.subscribe('speaker.resolve', { params: { text: 'Lisawoo walks. "Half a day."' } }, resolve));
-    const before = await new Promise(resolve => module.cores.subscribe('speaker.registry.get', {}, resolve));
-    const speakerId = before.value.find(entity => entity.name === 'Lisawoo').id;
+    const module = moduleCaller(engine, ['speaker.cast.add', 'speaker.cast.remove', 'speaker.resolve']);
+    const added = await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
 
-    await new Promise(resolve => module.cores.subscribe('speaker.setColor', { params: { id: speakerId, color: '#ff8800' } }, resolve));
-    const after = await new Promise(resolve => module.cores.subscribe('speaker.registry.get', {}, resolve));
+    await new Promise(resolve => module.cores.subscribe('speaker.cast.remove', { params: { id: added.value.id } }, resolve));
+    const resolved = await new Promise(resolve => module.cores.subscribe('speaker.resolve', { params: { text: 'Lisawoo looks back. "Half a day."' } }, resolve));
 
-    assert.equal(after.value.find(entity => entity.id === speakerId).color, '#ff8800');
+    assert.equal(resolved.value.segments.find(segment => segment.type === 'dialogue').speaker, null);
 });
 
-test('speaker.presets.save then speaker.presets.apply reproduces the same named speaker (with its saved color) in a DIFFERENT, otherwise-empty chat registry', async () => {
+test('the cast persists through the real Гейт -> Ядро памяти чата -> Сервис chain, surviving a fresh speaker.cast.list read', async () => {
+    const { engine, speakerCore } = buildEngine();
+    await speakerCore.restore();
+    const module = moduleCaller(engine, ['speaker.cast.add', 'speaker.cast.list']);
+    await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F', color: '#ff8800' } }, resolve));
+
+    const list = await new Promise(resolve => module.cores.subscribe('speaker.cast.list', {}, resolve));
+
+    assert.equal(list.value[0].color, '#ff8800');
+});
+
+test('speaker.presets.save then speaker.presets.apply reproduces the same named+gendered character in a DIFFERENT, otherwise-empty chat cast', async () => {
     const { engine, speakerCore, chatContext } = buildEngine();
     await speakerCore.restore();
-    const module = moduleCaller(engine, [
-        'speaker.resolve', 'speaker.setColor', 'speaker.registry.get', 'speaker.presets.save', 'speaker.presets.apply',
-    ]);
-    await new Promise(resolve => module.cores.subscribe('speaker.resolve', { params: { text: 'Lisawoo walks. "Half a day."' } }, resolve));
-    const registered = await new Promise(resolve => module.cores.subscribe('speaker.registry.get', {}, resolve));
-    const speakerId = registered.value.find(entity => entity.name === 'Lisawoo').id;
-    await new Promise(resolve => module.cores.subscribe('speaker.setColor', { params: { id: speakerId, color: '#123456' } }, resolve));
+    const module = moduleCaller(engine, ['speaker.cast.add', 'speaker.cast.list', 'speaker.presets.save', 'speaker.presets.apply']);
+    await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F', color: '#123456' } }, resolve));
     const saved = await new Promise(resolve => module.cores.subscribe('speaker.presets.save', { params: { name: 'My Cast' } }, resolve));
 
-    // Simulate switching to a DIFFERENT, otherwise-empty chat: swap the
-    // chatMetadata object under the SAME chat-memory core and fire the real
-    // `st.chatChanged` event this Core already subscribes to — the preset,
-    // being global `storage.settings` state, survives the swap untouched.
+    // Simulate switching to a DIFFERENT, otherwise-empty chat.
     Object.keys(chatContext.chatMetadata).forEach(key => delete chatContext.chatMetadata[key]);
     engine.events.emit('st.chatChanged', {});
-    await new Promise(resolve => setTimeout(resolve, 0)); // let the async reload settle
+    await new Promise(resolve => setTimeout(resolve, 0));
 
-    const emptyRegistry = await new Promise(resolve => module.cores.subscribe('speaker.registry.get', {}, resolve));
-    assert.deepEqual(emptyRegistry.value, [], 'the new chat must start with no speakers of its own');
+    const emptyCast = await new Promise(resolve => module.cores.subscribe('speaker.cast.list', {}, resolve));
+    assert.deepEqual(emptyCast.value, []);
 
     const applied = await new Promise(resolve => module.cores.subscribe('speaker.presets.apply', { params: { id: saved.value.id } }, resolve));
     assert.equal(applied.ok, true);
     const lisawoo = applied.value.find(entity => entity.name === 'Lisawoo');
-    assert.ok(lisawoo, 'applying the preset must (re)create the speaker in the new chat');
-    assert.equal(lisawoo.color, '#123456', 'the color saved into the preset must come along with it');
+    assert.ok(lisawoo);
+    assert.equal(lisawoo.gender, 'F');
+    assert.equal(lisawoo.color, '#123456');
 });
 
-test('speaker.rename changes the canonical display name without discarding the entity\'s already-accumulated gender votes', async () => {
+test('speaker.castChanged is published on add/update/remove, so the panel knows to refresh', async () => {
     const { engine, speakerCore } = buildEngine();
     await speakerCore.restore();
-    const module = moduleCaller(engine, ['speaker.resolve', 'speaker.rename', 'speaker.registry.get']);
-    await new Promise(resolve => module.cores.subscribe('speaker.resolve', { params: { text: 'Her tail streams behind her as Lisawoo walks. "Stay close."' } }, resolve));
-    const before = await new Promise(resolve => module.cores.subscribe('speaker.registry.get', {}, resolve));
-    const entity = before.value.find(item => item.name === 'Lisawoo');
-    assert.equal(entity.gender, 'F');
+    const module = moduleCaller(engine, ['speaker.cast.add', 'speaker.cast.update', 'speaker.cast.remove']);
+    const events = [];
+    engine.events.subscribe('speaker.castChanged', () => events.push(1));
 
-    await new Promise(resolve => module.cores.subscribe('speaker.rename', { params: { id: entity.id, name: 'Lisa' } }, resolve));
-    const after = await new Promise(resolve => module.cores.subscribe('speaker.registry.get', {}, resolve));
+    const added = await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
+    await new Promise(resolve => module.cores.subscribe('speaker.cast.update', { params: { id: added.value.id, gender: 'F', color: '#fff' } }, resolve));
+    await new Promise(resolve => module.cores.subscribe('speaker.cast.remove', { params: { id: added.value.id } }, resolve));
 
-    const renamed = after.value.find(item => item.id === entity.id);
-    assert.equal(renamed.name, 'Lisa');
-    assert.equal(renamed.gender, 'F', 'renaming must not reset the gender signal already accumulated for this entity');
+    assert.equal(events.length, 3);
 });

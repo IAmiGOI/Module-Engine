@@ -1,63 +1,81 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    createEmptySpeakerRegistry, registerSpeakerEntity, resolveEntityByName, addSpeakerAlias,
-    applyGenderSignal, computeEntityGender, detectSpeakers, parseExplicitTag,
-    findSpeechVerbSubject, findSentenceSubject, findVocativeAddressee, splitIntoSentences,
+    createEmptySpeakerCast, addCastMember, removeCastMember, updateCastMember, resolveEntityByName,
+    findKnownMention, detectSpeakers, parseExplicitTag, findSpeechVerbSubject, findSentenceSubject,
+    findVocativeAddressee, splitIntoSentences,
 } from '../libraries/core/speaker-detection.js';
 
-test('registerSpeakerEntity adds a new entity once and resolveEntityByName finds it case-insensitively', () => {
-    const empty = createEmptySpeakerRegistry();
-    const { registry, id } = registerSpeakerEntity(empty, 'Lisawoo');
+function castWith(...members) {
+    let cast = createEmptySpeakerCast();
+    const ids = {};
+    for (const member of members) {
+        const result = addCastMember(cast, member);
+        cast = result.cast;
+        ids[member.name] = result.id;
+    }
+    return { cast, ids };
+}
 
-    assert.equal(resolveEntityByName(registry, 'lisawoo'), id);
-    assert.equal(registry.entities[id].canonicalName, 'Lisawoo');
+test('addCastMember adds a new entity and resolveEntityByName finds it case-insensitively', () => {
+    const empty = createEmptySpeakerCast();
+    const { cast, id } = addCastMember(empty, { name: 'Lisawoo', gender: 'F' });
+
+    assert.equal(resolveEntityByName(cast, 'lisawoo'), id);
+    assert.equal(cast.entities[id].canonicalName, 'Lisawoo');
+    assert.equal(cast.entities[id].gender, 'F');
 });
 
-test('registerSpeakerEntity called twice with the same name returns the SAME id, never a duplicate entity', () => {
-    const empty = createEmptySpeakerRegistry();
-    const first = registerSpeakerEntity(empty, 'Sasha');
-    const second = registerSpeakerEntity(first.registry, 'Sasha');
-
-    assert.equal(second.id, first.id);
-    assert.equal(Object.keys(second.registry.entities).length, 1);
+test('addCastMember throws when the name already exists (case-insensitively) — the caller decides how to handle a duplicate, this never silently merges', () => {
+    const { cast } = castWith({ name: 'Sasha', gender: 'M' });
+    assert.throws(() => addCastMember(cast, { name: 'sasha', gender: 'M' }), /already in the cast/);
 });
 
-test('addSpeakerAlias refuses an alias already claimed by a DIFFERENT entity, so two characters can never merge by accident', () => {
-    const empty = createEmptySpeakerRegistry();
-    const a = registerSpeakerEntity(empty, 'Alex');
-    const b = registerSpeakerEntity(a.registry, 'Maria');
-
-    const attempted = addSpeakerAlias(b.registry, b.id, 'Alex');
-
-    assert.deepEqual(attempted.entities[b.id].aliases, ['Maria']);
+test('addCastMember defaults gender to "unknown" when not given, rather than guessing', () => {
+    const { cast, id } = addCastMember(createEmptySpeakerCast(), { name: 'Rowan' });
+    assert.equal(cast.entities[id].gender, 'unknown');
 });
 
-test('computeEntityGender resolves M/F from accumulated votes, majority wins, and a single contradicting vote does not flip an established gender', () => {
-    const empty = createEmptySpeakerRegistry();
-    const { registry, id } = registerSpeakerEntity(empty, 'Lisawoo');
-    let withVotes = applyGenderSignal(registry, id, 'F');
-    withVotes = applyGenderSignal(withVotes, id, 'F');
-    withVotes = applyGenderSignal(withVotes, id, 'M'); // one stray contradiction
-
-    const result = computeEntityGender(withVotes.entities[id]);
-
-    assert.equal(result.gender, 'F');
+test('removeCastMember removes an entity, and removing an unknown id is a harmless no-op', () => {
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' });
+    const removed = removeCastMember(cast, ids.Alex);
+    assert.equal(resolveEntityByName(removed, 'Alex'), null);
+    assert.deepEqual(removeCastMember(removed, 'nonexistent'), removed);
 });
 
-test('computeEntityGender reports "they" only when there is no M/F signal at all, never overriding a confirmed binary gender', () => {
-    const empty = createEmptySpeakerRegistry();
-    const { registry, id } = registerSpeakerEntity(empty, 'Rowan');
-    const theyOnly = applyGenderSignal(registry, id, 'they');
-
-    assert.equal(computeEntityGender(theyOnly.entities[id]).gender, 'they');
+test('updateCastMember changes gender/color without touching the name or aliases', () => {
+    const { cast, ids } = castWith({ name: 'Maria', gender: 'unknown' });
+    const updated = updateCastMember(cast, ids.Maria, { gender: 'F', color: '#ff0000' });
+    assert.equal(updated.entities[ids.Maria].gender, 'F');
+    assert.equal(updated.entities[ids.Maria].color, '#ff0000');
+    assert.equal(updated.entities[ids.Maria].canonicalName, 'Maria');
 });
 
-test('parseExplicitTag recognizes the "Name: \\"text\\"" format and rejects a plain narrative sentence', () => {
-    const tagged = parseExplicitTag('Sasha: "Speaking."');
-    assert.deepEqual(tagged, { name: 'Sasha', quote: 'Speaking.' });
+test('findKnownMention finds the EARLIEST known cast member mentioned in a sentence, ignoring any word that is not in the cast', () => {
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' }, { name: 'Maria', gender: 'F' });
+    const mention = findKnownMention('Not gentle. Maria stepped forward, then Alex spoke.', cast);
+    assert.equal(mention.id, ids.Maria);
+});
 
-    assert.equal(parseExplicitTag('The forest swallowed you both within twenty steps.'), null);
+test('findKnownMention returns null when NO known cast member is mentioned at all — it never guesses a stranger', () => {
+    const { cast } = castWith({ name: 'Alex', gender: 'M' });
+    assert.equal(findKnownMention('Looks back. Pauses. Not gentle. Holds your hand.', cast), null);
+});
+
+test('parseExplicitTag recognizes the "Name: \\"text\\"" format and resolves it against the cast', () => {
+    const { cast, ids } = castWith({ name: 'Sasha', gender: 'M' });
+    const tagged = parseExplicitTag('Sasha: "Speaking."', cast);
+    assert.deepEqual(tagged, { id: ids.Sasha, rawName: 'Sasha', quote: 'Speaking.' });
+});
+
+test('parseExplicitTag leaves the id null for a name NOT in the cast — it never auto-creates the character', () => {
+    const tagged = parseExplicitTag('Stranger: "Hello."', createEmptySpeakerCast());
+    assert.equal(tagged.id, null);
+    assert.equal(tagged.rawName, 'Stranger');
+});
+
+test('parseExplicitTag rejects a plain narrative sentence with no colon-quote format at all', () => {
+    assert.equal(parseExplicitTag('The forest swallowed you both within twenty steps.', createEmptySpeakerCast()), null);
 });
 
 test('splitIntoSentences does not break a sentence apart at a period sitting INSIDE a quoted line', () => {
@@ -66,128 +84,127 @@ test('splitIntoSentences does not break a sentence apart at a period sitting INS
     assert.equal(sentences[1].text.trim(), '"Stay close. Don\'t talk to anyone."');
 });
 
-test('findSpeechVerbSubject reads the subject from "Name said" word order', () => {
-    assert.equal(findSpeechVerbSubject('Alex said, "No."'), 'Alex');
+test('findSpeechVerbSubject reads the subject from "Name said" word order, matched against the cast', () => {
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' });
+    assert.equal(findSpeechVerbSubject('Alex said, "No."', cast), ids.Alex);
 });
 
 test('findSpeechVerbSubject reads the subject from the inverted "said Name" word order', () => {
-    assert.equal(findSpeechVerbSubject('"No," said Alex.'), 'Alex');
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' });
+    assert.equal(findSpeechVerbSubject('"No," said Alex.', cast), ids.Alex);
 });
 
-test('findSpeechVerbSubject returns null when the sentence has no speech verb at all, instead of guessing', () => {
-    assert.equal(findSpeechVerbSubject('Alex crossed his arms.'), null);
+test('findSpeechVerbSubject returns null when the sentence names nobody in the cast, even next to a real speech verb', () => {
+    const { cast } = castWith({ name: 'Alex', gender: 'M' });
+    assert.equal(findSpeechVerbSubject('Someone said, "No."', cast), null);
 });
 
-test('findSentenceSubject prefers a proper noun over a pronoun when both appear ("Alex crossed her arms" is about Alex, not some third "her")', () => {
-    const subject = findSentenceSubject('Alex crossed her arms and looked away.');
-    assert.equal(subject.kind, 'name');
-    assert.equal(subject.value, 'Alex');
+test('findSentenceSubject finds the known cast member even when a pronoun ALSO appears later in the sentence', () => {
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' });
+    const subject = findSentenceSubject('Alex crossed her arms and looked away.', cast);
+    assert.deepEqual(subject, { kind: 'name', id: ids.Alex });
 });
 
-test('findVocativeAddressee extracts a name addressed at the START of a quote, distinct from the speaker', () => {
-    assert.equal(findVocativeAddressee('Sasha, don\'t.'), 'Sasha');
+test('findSentenceSubject falls back to a bare pronoun when no known cast member is mentioned at all', () => {
+    const subject = findSentenceSubject('She crossed her arms and looked away.', createEmptySpeakerCast());
+    assert.deepEqual(subject, { kind: 'pronoun', value: 'She' });
 });
 
-test('findVocativeAddressee extracts a name addressed at the END of a quote', () => {
-    assert.equal(findVocativeAddressee('Enough of this, Sasha.'), 'Sasha');
+test('findVocativeAddressee resolves a name addressed at the START of a quote against the cast', () => {
+    const { cast, ids } = castWith({ name: 'Sasha', gender: 'M' });
+    assert.equal(findVocativeAddressee('Sasha, don\'t.', cast), ids.Sasha);
 });
 
-test('findVocativeAddressee returns null for a quote with no vocative at all', () => {
-    assert.equal(findVocativeAddressee('Stay close.'), null);
+test('findVocativeAddressee returns null for an addressed name that is NOT in the cast', () => {
+    assert.equal(findVocativeAddressee('Stranger, don\'t.', createEmptySpeakerCast()), null);
 });
 
-// --- End-to-end detectSpeakers() on real prose, including the paragraphs discussed with the project owner ---
+// --- End-to-end detectSpeakers() — the actual scenario the owner complained about ---
 
-test('detectSpeakers attributes an UNTAGGED quote to the subject of its own preceding action sentence, not to whoever spoke last', () => {
-    const text = 'She looks you over. "Stay close. Don\'t talk to anyone before I introduce you." She turns and walks into the tree line.';
-    const withName = 'Lisawoo looks you over. "Stay close. Don\'t talk to anyone before I introduce you." She turns and walks into the tree line.';
-    const { registry, segments } = detectSpeakers(withName);
+test('detectSpeakers NEVER creates a cast member — the returned segments carry only ids already present in the input cast', () => {
+    const text = 'Not gentle — efficient. Looks back. Pauses. Holds your hand. Tighter than yesterday. "Stop calling yourself a burden."';
+    const { segments } = detectSpeakers(text, createEmptySpeakerCast());
+
+    // No exception, no invented registry to inspect — the API doesn't even
+    // return one anymore. Every dialogue segment must be unattributed.
+    const dialogue = segments.filter(segment => segment.type === 'dialogue');
+    assert.equal(dialogue.length, 1);
+    assert.equal(dialogue[0].speakerId, null);
+    assert.equal(dialogue[0].confidence, 0);
+});
+
+test('detectSpeakers attributes an UNTAGGED quote to the KNOWN cast member named in its own preceding action sentence', () => {
+    const { cast, ids } = castWith({ name: 'Lisawoo', gender: 'F' });
+    const text = 'Lisawoo looks you over. "Stay close. Don\'t talk to anyone before I introduce you." She turns and walks into the tree line.';
+    const { segments } = detectSpeakers(text, cast);
 
     const dialogue = segments.find(segment => segment.type === 'dialogue');
-    assert.ok(dialogue);
-    assert.equal(registry.entities[dialogue.speakerId].canonicalName, 'Lisawoo');
+    assert.equal(dialogue.speakerId, ids.Lisawoo);
 });
 
-test('detectSpeakers resolves a LATER pronoun-tagged quote ("Half a day," she says) back to the same earlier-named subject, via gender-matched recency, not string identity', () => {
+test('detectSpeakers resolves a LATER pronoun-tagged quote ("Half a day," she says) back to the same earlier-named KNOWN cast member, via gender-matched recency', () => {
+    const { cast, ids } = castWith({ name: 'Lisawoo', gender: 'F' });
     const text = 'Lisawoo looks back. "Half a day," she says.';
-    const { registry, segments } = detectSpeakers(text);
+    const { segments } = detectSpeakers(text, cast);
 
     const dialogue = segments.find(segment => segment.type === 'dialogue');
-    assert.equal(registry.entities[dialogue.speakerId].canonicalName, 'Lisawoo');
-    assert.equal(dialogue.confidence > 0, true);
+    assert.equal(dialogue.speakerId, ids.Lisawoo);
 });
 
-test('detectSpeakers attributes THREE untagged quotes in ONE paragraph to three DIFFERENT speakers by local subject, not by alternating turns', () => {
+test('detectSpeakers attributes THREE untagged quotes in ONE paragraph to three DIFFERENT KNOWN cast members by local subject, not by alternating turns', () => {
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' }, { name: 'Maria', gender: 'F' }, { name: 'Sasha', gender: 'unknown' });
     const text = 'Alex crossed his arms. "No." Maria stepped forward. "Let him go." "Enough," Sasha snapped.';
-    const { registry, segments } = detectSpeakers(text);
+    const { segments } = detectSpeakers(text, cast);
 
-    const dialogues = segments.filter(segment => segment.type === 'dialogue');
-    const names = dialogues.map(segment => registry.entities[segment.speakerId]?.canonicalName);
-
-    assert.deepEqual(names, ['Alex', 'Maria', 'Sasha']);
+    const dialogueIds = segments.filter(segment => segment.type === 'dialogue').map(segment => segment.speakerId);
+    assert.deepEqual(dialogueIds, [ids.Alex, ids.Maria, ids.Sasha]);
 });
 
-test('detectSpeakers gives the explicit "Name: \\"text\\"" line format the maximum confidence (1) and does not run any heuristic on it', () => {
-    const { registry, segments } = detectSpeakers('Sasha: "Speaking."');
+test('detectSpeakers gives the explicit "Name: \\"text\\"" line format the maximum confidence (1) when the name is in the cast', () => {
+    const { cast, ids } = castWith({ name: 'Sasha', gender: 'M' });
+    const { segments } = detectSpeakers('Sasha: "Speaking."', cast);
+    assert.equal(segments[0].confidence, 1);
+    assert.equal(segments[0].speakerId, ids.Sasha);
+});
+
+test('detectSpeakers leaves a quote with NO recoverable KNOWN subject unattributed (speakerId null, confidence 0) rather than guessing', () => {
+    const { segments } = detectSpeakers('"Where did everyone go?"', createEmptySpeakerCast());
     const dialogue = segments[0];
-
-    assert.equal(dialogue.confidence, 1);
-    assert.equal(registry.entities[dialogue.speakerId].canonicalName, 'Sasha');
-});
-
-test('detectSpeakers folds a pronoun gender signal from surrounding narration into the registry, so a later resolver can tell the entity apart by gender', () => {
-    const text = 'Her tail streams behind her as Lisawoo walks. "Stay close."';
-    const { registry, segments } = detectSpeakers(text);
-    const dialogue = segments.find(segment => segment.type === 'dialogue');
-
-    assert.equal(computeEntityGender(registry.entities[dialogue.speakerId]).gender, 'F');
-});
-
-test('detectSpeakers leaves a quote with NO recoverable subject unattributed (speakerId null, confidence 0) rather than guessing via turn alternation', () => {
-    const { segments } = detectSpeakers('"Where did everyone go?"');
-    const dialogue = segments[0];
-
     assert.equal(dialogue.speakerId, null);
     assert.equal(dialogue.confidence, 0);
 });
 
-test('detectSpeakers falls back to defaultSpeakerName for a pronoun-only quote when the message NEVER names its speaker anywhere in its own text — the realistic case for a single-character reply excerpted mid-conversation', () => {
+test('detectSpeakers falls back to defaultSpeakerName ONLY when it already matches a known cast member — it never adds a new one', () => {
+    const { cast, ids } = castWith({ name: 'Lisawoo', gender: 'F' });
     const text = 'She looks at you. "Burden." She repeats the word like she\'s tasting something spoiled.';
-    const { registry, segments } = detectSpeakers(text, createEmptySpeakerRegistry(), { defaultSpeakerName: 'Lisawoo' });
+    const { segments } = detectSpeakers(text, cast, { defaultSpeakerName: 'Lisawoo' });
 
     const dialogue = segments.find(segment => segment.type === 'dialogue');
-    assert.equal(registry.entities[dialogue.speakerId]?.canonicalName, 'Lisawoo');
+    assert.equal(dialogue.speakerId, ids.Lisawoo);
 });
 
-test('detectSpeakers lets a name ACTUALLY found in the text win over defaultSpeakerName — the fallback is last resort, not an override', () => {
+test('detectSpeakers silently ignores a defaultSpeakerName that is NOT in the cast — no crash, no invented entity, just unresolved', () => {
+    const text = 'She looks at you. "Burden."';
+    const { segments } = detectSpeakers(text, createEmptySpeakerCast(), { defaultSpeakerName: 'Lisawoo' });
+
+    const dialogue = segments.find(segment => segment.type === 'dialogue');
+    assert.equal(dialogue.speakerId, null);
+});
+
+test('detectSpeakers lets a KNOWN name actually found in the text win over defaultSpeakerName — the fallback is last resort, not an override', () => {
+    const { cast, ids } = castWith({ name: 'Maria', gender: 'F' }, { name: 'Lisawoo', gender: 'F' });
     const text = 'Maria steps forward. "Let him go."';
-    const { registry, segments } = detectSpeakers(text, createEmptySpeakerRegistry(), { defaultSpeakerName: 'Lisawoo' });
+    const { segments } = detectSpeakers(text, cast, { defaultSpeakerName: 'Lisawoo' });
 
     const dialogue = segments.find(segment => segment.type === 'dialogue');
-    assert.equal(registry.entities[dialogue.speakerId]?.canonicalName, 'Maria');
+    assert.equal(dialogue.speakerId, ids.Maria);
 });
 
-test('detectSpeakers does NOT mint an entity for an ordinary sentence-initial capitalized word ("Looks back.", "Not now.") that merely happens to open a sentence — a real bug caught on live RP transcript excerpts', () => {
-    const text = 'She ducks under the first, steps over the second. Pauses. Looks back.\n"Half a day," she says.';
-    const { registry } = detectSpeakers(text);
+test('detectSpeakers matching against a cast with an alias attributes the quote correctly by the NICKNAME used in the text', () => {
+    const { cast, ids } = castWith({ name: 'Selanawoo', gender: 'F', aliases: ['Selanawoo', 'Sela'] });
+    const text = 'Sela laughs. "You came back."';
+    const { segments } = detectSpeakers(text, cast);
 
-    const names = Object.values(registry.entities).map(entity => entity.canonicalName);
-    assert.deepEqual(names, [], 'no entity should be minted from "Pauses"/"Looks" at all');
-});
-
-test('detectSpeakers does not mistake a pronoun CONTRACTION ("She\'ll ask...") for a proper-noun subject next to a speech verb', () => {
-    const text = 'She\'ll ask you questions. Direct ones.';
-    const { registry } = detectSpeakers(text);
-
-    assert.equal(Object.keys(registry.entities).length, 0);
-});
-
-test('detectSpeakers reuses the SAME entity id across multiple calls when the same registry is threaded through, instead of re-discovering a new one each time', () => {
-    const first = detectSpeakers('Lisawoo walks ahead. "Half a day."');
-    const second = detectSpeakers('Lisawoo looks back. "You will know."', first.registry);
-
-    const firstId = first.segments.find(segment => segment.type === 'dialogue').speakerId;
-    const secondId = second.segments.find(segment => segment.type === 'dialogue').speakerId;
-    assert.equal(firstId, secondId);
-    assert.equal(Object.keys(second.registry.entities).length, 1);
+    const dialogue = segments.find(segment => segment.type === 'dialogue');
+    assert.equal(dialogue.speakerId, ids.Selanawoo);
 });
