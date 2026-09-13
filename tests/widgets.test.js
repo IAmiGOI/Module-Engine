@@ -370,3 +370,27 @@ test('HoldButton() ignores pointerdown while disabled — the same guard Button(
     await new Promise(resolve => setTimeout(resolve, 30));
     assert.equal(confirmed, 0);
 });
+
+/**
+ * Реальный баг, найден живьём (жалоба пользователя: заливка доходит до 100%
+ * и там застревает, отпускание кнопки ничего не удаляет). Причина —
+ * `event.currentTarget` валиден ТОЛЬКО во время диспетчеризации самого
+ * события: браузер сбрасывает его в `null` сразу по возврату из обработчика
+ * (спецификация DOM), а старый код читал `event.currentTarget` СНОВА внутри
+ * `setTimeout()`-колбэка — то есть уже `null`, `.classList` бросал наружу,
+ * и до `onConfirm()` дело не доходило. Прежние fakeButtonEvent()-тесты
+ * этого не ловили: их поддельный объект держит `currentTarget` живым
+ * вечно, ровно та деталь настоящего DOM, которой не хватало. Здесь —
+ * тот же fake, но с явной симуляцией конца диспетчеризации.
+ */
+test('HoldButton() must NOT read event.currentTarget from inside its setTimeout callback — the real DOM resets it to null right after the handler returns, well before holdMs elapses', async () => {
+    let confirmed = 0;
+    const node = HoldButton('Hold', () => { confirmed += 1; }, { holdMs: 10 });
+    const event = fakeButtonEvent();
+
+    node.props['on:pointerdown'](event);
+    event.currentTarget = null; // конец диспетчеризации, тем же способом, что настоящий браузер
+
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(confirmed, 1, 'onConfirm must still fire — the element must have been captured at pointerdown time, not re-read later');
+});
