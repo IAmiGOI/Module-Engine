@@ -10,6 +10,7 @@
 export class FakeElement {
     constructor(tag) {
         this.tagName = tag;
+        this.nodeType = 1;
         this.children = [];
         this.parent = null;
         this.attributes = {};
@@ -20,11 +21,27 @@ export class FakeElement {
         this._listeners = new Map();
         this._clicked = 0;
     }
+    /** Aliases matching the REAL DOM names (`childNodes`/`parentNode`) — services/dom.js's paint helpers walk real nodes and must work unchanged against this fake. */
+    get childNodes() { return this.children; }
+    get parentNode() { return this.parent; }
+    /** Real `Element.textContent` recursively concatenates every descendant text node; the setter mirrors the real DOM's own behavior of REPLACING every existing child with one plain text node. */
+    get textContent() { return this.children.map(child => child.textContent ?? '').join(''); }
+    set textContent(value) { for (const child of [...this.children]) child.remove(); this.append(new FakeTextNode(String(value ?? ''))); }
     setAttribute(key, value) { this.attributes[key] = value; }
+    getAttribute(key) { return key in this.attributes ? this.attributes[key] : null; }
     removeAttribute(key) { delete this.attributes[key]; }
     addEventListener(type, fn) { this._listeners.set(type, fn); }
     removeEventListener(type, fn) { if (this._listeners.get(type) === fn) this._listeners.delete(type); }
     append(child) { child.parent?._detach(child); this.children.push(child); child.parent = this; }
+    /** Real `Node.insertBefore` semantics: `ref === null` appends at the end. */
+    insertBefore(child, ref) {
+        child.parent?._detach(child);
+        const index = ref ? this.children.indexOf(ref) : -1;
+        if (index === -1) this.children.push(child);
+        else this.children.splice(index, 0, child);
+        child.parent = this;
+        return child;
+    }
     remove() { this.parent?._detach(this); }
     // Real anchor-download flow (services/file.js) never dispatches a real
     // click event through this fake tree — just records that it happened,
@@ -45,7 +62,15 @@ export class FakeElement {
 }
 
 export class FakeTextNode {
-    constructor(text) { this.text = text; this.parent = null; }
+    constructor(text) { this._text = text; this.parent = null; this.nodeType = 3; }
+    get parentNode() { return this.parent; }
+    /** `nodeValue`/`textContent` both alias the same string on a real Text node. */
+    get nodeValue() { return this._text; }
+    set nodeValue(value) { this._text = value; }
+    get textContent() { return this._text; }
+    set textContent(value) { this._text = value; }
+    /** Kept for existing callers (dom-service.test.js reads `.text` directly). */
+    get text() { return this._text; }
     remove() { this.parent?._detach(this); }
 }
 
