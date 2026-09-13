@@ -185,7 +185,7 @@ const DEFINITIONS = [{
     rights: {
         tier: 'community',
         allowedContracts: [
-            'speaker.resolve', 'speaker.registry.get', 'speaker.setColor', 'speaker.rename',
+            'speaker.resolve', 'speaker.cast.list', 'speaker.cast.add', 'speaker.cast.remove', 'speaker.cast.update',
             'speaker.presets.get', 'speaker.presets.save', 'speaker.presets.delete', 'speaker.presets.apply',
             'stChat.rendered', 'stChat.messageTextElement', 'stChat.messages',
             'dom.textContent', 'dom.paintTextRuns', 'dom.clearPaintedRuns', 'dom.readCssVariable',

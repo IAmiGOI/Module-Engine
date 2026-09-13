@@ -3,46 +3,52 @@ import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { computeAutoSpeakerColor } from '../../libraries/shared/color-palette.js';
 import {
-    Button, TextInput, Select, Field, Row, Section, List, EmptyState, ColorPicker, Badge,
+    Button, TextInput, Select, Field, Row, Section, EmptyState, ColorPicker,
 } from '../../libraries/shared/widgets.js';
 
 export const MODULE_ID = 'module.speakerColors';
 
+/** Fixed choices — gender is a property the USER states about a character, never inferred from pronouns in prose (see file doc comment). */
+const GENDER_OPTIONS = [
+    { value: 'unknown', label: 'Unknown' },
+    { value: 'F', label: 'Female' },
+    { value: 'M', label: 'Male' },
+    { value: 'they', label: 'They' },
+];
+
 /**
  * Модуль «Speaker Colors» — покраска РЕПЛИК по говорящему прямо в ленте
- * чата, без единого байта, ушедшего в контекст модели. Пользователь
- * подключает/отключает его как обычный Модуль (критерий ARCHITECTURE.md:
- * движок прекрасно работает и без него) — вся тяжёлая часть (кто говорит,
- * реестр, персистентность) живёт в переиспользуемом
+ * чата, без единого байта, ушедшего в контекст модели. Вся тяжёлая часть
+ * (состав, резолвинг, персистентность) живёт в переиспользуемом
  * [Ядре определения говорящего](../../cores/speaker/index.js); этот файл —
- * только политика ПОКРАСКИ (какой цвет новому говорящему, когда перекрашивать)
- * и проводка к виджетам.
+ * только UI ввода состава, политика ПОКРАСКИ и проводка к виджетам.
+ *
+ * **Состав вводит ПОЛЬЗОВАТЕЛЬ, а не детектор.** Прямая формулировка
+ * владельца после того, как первая версия заводила отдельного "говорящего"
+ * на каждое капитализированное слово прозы: "Идёт персонаж. У него имя. И у
+ * него/неё пол. По этому ты определяешь, кто говорит. Просто пусть
+ * ПОЛЬЗОВАТЕЛЬ вводит персонажей." — секция ниже начинается с формы
+ * «Add character» (имя + пол), а `speaker.resolve` только СОПОСТАВЛЯЕТ
+ * текст с уже введённым составом (см. [speaker-detection.js](../../libraries/core/speaker-detection.js)'s
+ * doc comment за полной историей и ROADMAP.md 5.40).
  *
  * **Никакой правки `message.mes`.** Покраска идёт через
  * `stChat.messageTextElement` (реальный `.mes_text` узел, который ST УЖЕ
- * отрисовала) + `dom.paintTextRuns` (services/dom.js) — тот же класс
- * гарантии, что уже даёт cores/ui/message-footer.js: **движок не имеет
- * контракта на правку текста сообщения через этот путь вообще**, поэтому
- * подсветка физически не может просочиться в промпт следующего хода.
- * Раскраска детектируется НАД УЖЕ ОТРИСОВАННЫМ текстом (`dom.textContent`
- * узла), а не над сырым `mes` — иначе смещения от
- * [speaker-detection.js](../../libraries/core/speaker-detection.js) не
- * совпали бы с реальными текстовыми узлами там, где ST сама раскрасила
- * markdown (жирный/курсив превращаются в теги, а не остаются звёздочками).
+ * отрисовала) + `dom.paintTextRuns` (services/dom.js) — движок физически не
+ * имеет контракта на правку текста сообщения через этот путь, поэтому
+ * подсветка не может просочиться в промпт следующего хода. Детекция идёт
+ * над УЖЕ ОТРИСОВАННЫМ текстом (`dom.textContent` узла), а не над сырым
+ * `mes` — иначе смещения не совпали бы там, где ST раскрасила markdown.
  *
- * **Перекраска — не кооперативная**, тем же уроком, что уже оплачен Ядром
- * подвала сообщения: подписка на события ST, которые ЛЕГИТИМНО меняют
- * отрисованный текст (реролл, правка, стриминг, смена чата), плюс
- * `generation.completed` как финальный подчищающий проход — без единого
- * собственного таймера или счётчика ходов.
+ * **Перекраска — не кооперативная**: подписка на события ST, которые
+ * ЛЕГИТИМНО меняют отрисованный текст (свайп/правка/рендер/смена чата) плюс
+ * `generation.completed` финальным подчищающим проходом — без своих таймеров.
  *
- * **Автоцвет — из акцентного цвета темы ST** (`--SmartThemeQuoteColor`,
- * прочитан один раз при загрузке через `dom.readCssVariable`), по кругу
- * HSL ([color-palette.js](../../libraries/shared/color-palette.js)) —
- * решено с владельцем проекта явно (не жёсткая палитра, не только ручной
- * выбор). Ручная правка через `ColorPicker` (новый виджет библиотеки)
- * всегда побеждает и переживает автоцвет — `speaker.setColor` не различает
- * источник, оба пишут в тот же реестр.
+ * **Цвет — единственное, что этот Модуль ещё выбирает автоматически**
+ * (не имя, не пол — только косметика): новый персонаж БЕЗ явно заданного
+ * цвета получает следующий по кругу HSL от акцентного цвета темы ST
+ * ([color-palette.js](../../libraries/shared/color-palette.js)). Ручная
+ * правка через `ColorPicker` всегда побеждает.
  */
 
 const REDRAW_EVENTS = Object.freeze([
@@ -63,12 +69,13 @@ export function createSpeakerColorsModule(host) {
         return request(host.services, contract, { params });
     }
 
-    const entities = signal([]);
+    const cast = signal([]);
     const presets = signal([]);
+    const newCharacterName = signal('');
+    const newCharacterGender = signal('unknown');
     const newPresetName = signal('');
     const selectedPresetId = signal('');
     const colorSignals = new Map(); // speakerId -> signal(hex) — stable per id, see UI.md's "signal never created inside renderItem"
-    const nameSignals = new Map(); // speakerId -> signal(name) — same discipline, for the rename field
 
     /** ST's theme accent — read ONCE at load(), not on every repaint: the theme does not change mid-session, and a per-message round trip would be pure waste. */
     let baseAccentColor = '#3f51b5';
@@ -80,15 +87,9 @@ export function createSpeakerColorsModule(host) {
         return colorSignals.get(id);
     }
 
-    /** Created ONCE per id and never overwritten from a later registry refresh — unlike colorSignalFor, so an in-progress keystroke in the rename field is never clobbered by the very refresh that keystroke itself triggered. */
-    function nameSignalFor(id, initial) {
-        if (!nameSignals.has(id)) nameSignals.set(id, signal(initial));
-        return nameSignals.get(id);
-    }
-
-    async function refreshRegistry() {
-        const result = await call('speaker.registry.get', {});
-        if (result.ok) entities.set(result.value);
+    async function refreshCast() {
+        const result = await call('speaker.cast.list', {});
+        if (result.ok) cast.set(result.value);
     }
 
     async function refreshPresets() {
@@ -96,25 +97,22 @@ export function createSpeakerColorsModule(host) {
         if (result.ok) presets.set(result.value);
     }
 
-    /** Assigns and PERSISTS an auto color for a freshly-discovered speaker — rotation index is how many speakers already carry a color, so re-resolving the same chat never reassigns an already-colored speaker a different hue. */
+    /** Assigns and PERSISTS an auto color for a character added without one — rotation index is how many cast members already carry a color, so re-painting never reassigns an already-colored character a different hue. */
     async function assignAutoColor(id, coloredCountSoFar) {
         const color = computeAutoSpeakerColor(baseAccentColor, coloredCountSoFar);
-        await call('speaker.setColor', { id, color });
+        await call('speaker.cast.update', { id, color });
         return color;
     }
 
     /**
      * Repaints ONE message: resolves speakers over its OWN rendered text
-     * (never raw `mes`) and paints the result — see file doc-comment for why
-     * offsets must come from the same string that gets painted.
+     * (never raw `mes`) against the user-entered cast, and paints the
+     * result — see file doc-comment for why offsets must come from the same
+     * string that gets painted.
      *
      * `defaultSpeakerName` — that message's own ST card owner (`name` field
-     * off `stChat.messages`), forwarded to `speaker.resolve` as the fallback
-     * for a message that never names its speaker in its OWN text at all
-     * (the common case for a single-character reply: "She looks at you...",
-     * never "Lisawoo looks at you..." — the name was established many
-     * messages earlier). See libraries/core/speaker-detection.js's doc
-     * comment on `detectSpeakers()` for exactly how it's used.
+     * off `stChat.messages`) — only ever used as a fallback if it ALREADY
+     * matches a cast member the user added; never creates one.
      */
     async function repaintMessage(mesid, defaultSpeakerName) {
         const nodeResult = await callService('stChat.messageTextElement', { mesid });
@@ -128,8 +126,8 @@ export function createSpeakerColorsModule(host) {
         const resolved = await call('speaker.resolve', { text, mesid, defaultSpeakerName });
         if (!resolved.ok) return;
 
-        const registryResult = await call('speaker.registry.get', {});
-        const colorById = new Map((registryResult.ok ? registryResult.value : []).map(entity => [entity.id, entity.color]));
+        const castResult = await call('speaker.cast.list', {});
+        const colorById = new Map((castResult.ok ? castResult.value : []).map(entity => [entity.id, entity.color]));
         let coloredCount = [...colorById.values()].filter(Boolean).length;
 
         const runs = [];
@@ -145,7 +143,7 @@ export function createSpeakerColorsModule(host) {
         }
 
         await callService('dom.paintTextRuns', { container: node, runs });
-        await refreshRegistry();
+        await refreshCast();
     }
 
     async function repaintAll() {
@@ -156,11 +154,34 @@ export function createSpeakerColorsModule(host) {
         for (const message of rendered.value) await repaintMessage(message.mesid, nameByMesid.get(message.mesid));
     }
 
+    async function handleAddCharacter() {
+        const name = newCharacterName().trim();
+        if (!name) return;
+        const result = await call('speaker.cast.add', { name, gender: newCharacterGender() });
+        if (!result.ok) return; // duplicate name — Ядро already rejected it, nothing else to do here
+        newCharacterName.set('');
+        newCharacterGender.set('unknown');
+        await refreshCast();
+        await repaintAll();
+    }
+
+    async function handleRemoveCharacter(id) {
+        await call('speaker.cast.remove', { id });
+        await refreshCast();
+        await repaintAll();
+    }
+
+    async function handleGenderChange(id, gender) {
+        await call('speaker.cast.update', { id, gender });
+        await refreshCast();
+        await repaintAll(); // gender affects PRONOUN resolution — a change can reassign existing painted quotes
+    }
+
     async function handleColorChange(id, color) {
         colorSignalFor(id, color);
-        await call('speaker.setColor', { id, color });
-        await refreshRegistry();
-        await repaintAll(); // the color just changed — every existing painted span for this speaker must catch up immediately
+        await call('speaker.cast.update', { id, color });
+        await refreshCast();
+        await repaintAll(); // the color just changed — every existing painted span for this character must catch up immediately
     }
 
     async function handleSavePreset() {
@@ -174,7 +195,7 @@ export function createSpeakerColorsModule(host) {
     async function handleApplyPreset() {
         if (!selectedPresetId()) return;
         await call('speaker.presets.apply', { id: selectedPresetId() });
-        await refreshRegistry();
+        await refreshCast();
         await repaintAll();
     }
 
@@ -185,21 +206,27 @@ export function createSpeakerColorsModule(host) {
         await refreshPresets();
     }
 
-    function speakerRow(entity) {
+    function characterRow(entity) {
         return h('div', { key: entity.id, class: 'stme-speaker-row' },
             Row(
-                TextInput(nameSignalFor(entity.id, entity.name), {
-                    onInput: name => { void call('speaker.rename', { id: entity.id, name }); },
-                }),
-                Badge(entity.gender === 'unknown' ? '?' : entity.gender, { tone: 'muted' }),
+                h('span', { class: 'stme-speaker-name' }, entity.name),
+                Select(signal(entity.gender), GENDER_OPTIONS, { onChange: gender => { void handleGenderChange(entity.id, gender); } }),
                 ColorPicker(colorSignalFor(entity.id, entity.color ?? '#888888'), { onChange: color => { void handleColorChange(entity.id, color); } }),
+                Button('Remove', () => { void handleRemoveCharacter(entity.id); }, { variant: 'danger' }),
             ),
         );
     }
 
     function tree() {
         return Section('Speaker Colors', {},
-            computed(() => (entities().length ? entities().map(speakerRow) : [EmptyState('No speakers discovered yet — they appear as messages are painted.')])),
+            Field('Add character',
+                Row(
+                    TextInput(newCharacterName, { placeholder: 'Character name' }),
+                    Select(newCharacterGender, GENDER_OPTIONS),
+                    Button('Add', () => { void handleAddCharacter(); }),
+                ),
+            ),
+            computed(() => (cast().length ? cast().map(characterRow) : [EmptyState('No characters yet — add one above.')])),
             Field('Save current cast as preset',
                 Row(
                     TextInput(newPresetName, { placeholder: 'Preset name' }),
@@ -221,7 +248,7 @@ export function createSpeakerColorsModule(host) {
     async function load() {
         const accent = await callService('dom.readCssVariable', { name: ACCENT_CSS_VARIABLE });
         if (accent.ok && accent.value) baseAccentColor = accent.value;
-        await refreshRegistry();
+        await refreshCast();
         await refreshPresets();
         await repaintAll();
     }
@@ -229,7 +256,7 @@ export function createSpeakerColorsModule(host) {
     return {
         id: MODULE_ID,
         title: 'Speaker Colors',
-        description: 'Colors each character\'s dialogue by speaker, detected locally — never touches the message text sent to the model.',
+        description: 'Colors each character\'s dialogue by speaker — you enter the cast (name + gender), it never guesses new characters from prose.',
         load,
         tree,
         stop: () => { for (const unsubscribe of subscriptions) unsubscribe(); },
