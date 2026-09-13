@@ -336,6 +336,25 @@
 }
 .stme-progress-label { opacity: .7; font-size: 11px; }
 
+/* HoldButton (libraries/shared/widgets.js) — заливка поверх обычного
+   .menu_button (переиспользует уже готовую рамку/hover/danger-раскраску
+   из обоих scope'ов панели, здесь только сама механика удержания, без
+   привязки к конкретному окну). Заливка — CSS transition на ширину,
+   запускается добавлением .stme-holding на pointerdown; расчёт без него
+   стоит на 0% статично, никакого мигания при обычном клике мимо кнопки. */
+.stme-hold-button { position: relative; overflow: hidden; isolation: isolate; user-select: none; }
+.stme-hold-button-label { position: relative; z-index: 1; }
+.stme-hold-button-fill {
+    position: absolute; inset: 0; width: 0%;
+    background: color-mix(in srgb, var(--stme-accent) 40%, transparent);
+    z-index: 0;
+}
+.stme-hold-button.stme-danger .stme-hold-button-fill { background: color-mix(in srgb, var(--stme-danger) 45%, transparent); }
+.stme-hold-button.stme-holding .stme-hold-button-fill {
+    width: 100%;
+    transition: width var(--stme-hold-ms, 1200ms) linear;
+}
+
 .stme-contract-list { display: flex; flex-wrap: wrap; gap: 4px; max-height: 160px; overflow-y: auto; }
 .stme-contract {
     padding: 1px 7px; border-radius: 999px;
