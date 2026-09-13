@@ -612,6 +612,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         const result = await call('memoryGraph.settings');
         if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
         if (result.ok && result.value?.retrievalStability) retrievalStability.set(result.value.retrievalStability);
+        if (result.ok && Array.isArray(result.value?.fallbackWorkerIds)) fallbackWorkerIds.set(result.value.fallbackWorkerIds);
     }
 
     async function saveRetrievalTargetNodes() {
@@ -634,6 +635,43 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             statusText.set(result.ok ? `Sticky balance saved: ${retrievalStability.peek()}` : `Failed: ${result.error?.message}`);
         } finally {
             retrievalBusy.set(false);
+        }
+    }
+
+    /**
+     * Резервные воркеры для звонков SideCar Графа (`fallbackWorkerIds`,
+     * cores/memory-graph/index.js). Прямой запрос пользователя: "сделай
+     * несколько уровней fallback, перед настоящей отменой" — сам механизм
+     * (несколько тиров, каждый следующий воркер пробуется, только если
+     * предыдущий реально отказал) уже был у движка с ROADMAP 5.33/5.37, но
+     * НАСТРОИТЬ его было нечем — контракт принимал список, а окно графа
+     * ни разу не давало его заполнить. Список воркеров и порядок в нём —
+     * стабильный порядок `model.workers.get()` (тот же источник, что и
+     * «Worker» у Chat Summary в основной панели, `cores/ui/engine-panel.js`),
+     * а не порядок кликов — тянуть drag-переупорядочивание ради того же
+     * результата было бы лишней сложностью без ясной пользы: тиры и так
+     * пробуются один за другим по списку.
+     */
+    const availableWorkerIds = signal([]);
+    const fallbackWorkerIds = signal([]);
+    const fallbackBusy = signal(false);
+
+    async function loadWorkerIds() {
+        const result = await call('model.workers.get');
+        availableWorkerIds.set(result.ok ? (result.value ?? []).map(worker => worker.id) : []);
+    }
+
+    async function toggleFallbackWorker(id, checked) {
+        const selected = new Set(fallbackWorkerIds.peek());
+        if (checked) selected.add(id); else selected.delete(id);
+        const next = availableWorkerIds.peek().filter(workerId => selected.has(workerId));
+        fallbackBusy.set(true);
+        try {
+            const result = await call('memoryGraph.configure', { fallbackWorkerIds: next });
+            if (result.ok) fallbackWorkerIds.set(result.value.fallbackWorkerIds);
+            statusText.set(result.ok ? 'Fallback workers saved.' : `Failed: ${result.error?.message}`);
+        } finally {
+            fallbackBusy.set(false);
         }
     }
 
@@ -892,6 +930,36 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         );
     }
 
+    function fallbackWorkerRow(id) {
+        return h('label', { class: 'stme-switch' },
+            h('input', {
+                type: 'checkbox',
+                checked: computed(() => fallbackWorkerIds().includes(id)),
+                disabled: fallbackBusy(),
+                'on:change': event => toggleFallbackWorker(id, event.target.checked),
+            }),
+            h('span', { class: 'stme-switch-track' }),
+            h('span', { class: 'stme-switch-label' }, id),
+        );
+    }
+
+    /**
+     * Прямой запрос пользователя: "сделай несколько уровней fallback, перед
+     * настоящей отменой" — движок уже пробует их по очереди (один тир на
+     * каждый отмеченный id, `cores/models/internal-engine.js`'s
+     * `enqueueWithFallback()`), просто настроить список раньше было нечем.
+     * Отмечены — пробуются В ЭТОМ ПОРЯДКЕ, только если предыдущий тир (и
+     * собственный самоповтор графа при зависании) реально отказал целиком.
+     */
+    function fallbackWorkersSection() {
+        return Section('Fallback workers', { open: false, className: 'stme-memory-graph-section' },
+            h('p', { class: 'stme-memory-graph-hint' }, 'If a SideCar call stalls or fails, the graph retries once on the same connection, then tries each checked connection below in order, before finally giving up. Leave all unchecked to keep today\'s behavior (one connection, no fallback).'),
+            computed(() => (availableWorkerIds().length
+                ? availableWorkerIds().map(id => fallbackWorkerRow(id))
+                : EmptyState('No model connections configured yet — add one in the main engine panel first.'))),
+        );
+    }
+
     // --- Дебаг-блок: оставшиеся оркестрационные операции (решено с
     // пользователем; bootstrap вынесен из этого блока в свою секцию выше —
     // это штатная операция, а не дебаг) --
@@ -987,6 +1055,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     ),
                     bootstrapRow(),
                     retrievalSection(),
+                    fallbackWorkersSection(),
                     debugBlock(),
                 ),
             ),
@@ -1008,6 +1077,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function open() {
         await loadWindowState();
         await loadRetrievalSettings();
+        await loadWorkerIds();
         const finalUi = mount(tree());
         await finalUi.settled?.();
         await refresh();
