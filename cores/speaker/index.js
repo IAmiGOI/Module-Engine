@@ -1,11 +1,11 @@
 import { request } from '../../libraries/shared/request.js';
 import { createPersistedList } from '../../libraries/core/persisted-list.js';
 import {
-    createEmptySpeakerRegistry, detectSpeakers, computeEntityGender, resolveEntityByName,
+    createEmptySpeakerCast, addCastMember, removeCastMember, updateCastMember, detectSpeakers,
 } from '../../libraries/core/speaker-detection.js';
 
 const CHAT_NAMESPACE = 'core.speaker';
-const CHAT_REGISTRY_KEY = 'registry';
+const CHAT_CAST_KEY = 'cast';
 const PRESETS_NAMESPACE = 'core.speaker';
 const PRESETS_KEY = 'presets';
 
@@ -13,55 +13,46 @@ function slugifyPresetName(name) {
     return String(name ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'preset';
 }
 
-/** The shape a preset/registry entity is exposed as OUTSIDE this Core — resolved gender, no internal vote counters. */
+/** The shape a cast entity is exposed as OUTSIDE this Core — flat, no internal bookkeeping. */
 function toPublicEntity(id, entity) {
-    return {
-        id,
-        name: entity.canonicalName,
-        aliases: entity.aliases,
-        gender: computeEntityGender(entity).gender,
-        genderConfidence: computeEntityGender(entity).confidence,
-        color: entity.color ?? null,
-    };
+    return { id, name: entity.canonicalName, aliases: entity.aliases, gender: entity.gender, color: entity.color ?? null };
 }
 
 /**
- * Ядро определения говорящего (CORES.md) — по чату персистентный реестр
- * говорящих (regisrty из [libraries/core/speaker-detection.js](../../libraries/core/speaker-detection.js))
+ * Ядро определения говорящего (CORES.md) — по чату персистентный СОСТАВ
+ * (cast), который ВВОДИТ ПОЛЬЗОВАТЕЛЬ (имя + пол, [libraries/core/speaker-detection.js](../../libraries/core/speaker-detection.js)),
  * + переиспользуемые именованные пресеты состава, зеркалящие
- * `model.presets.get/set` у Ядра внутренних моделей (тот же
- * `createPersistedList` через `storage.settings`, то же имя события
- * `<домен>.presets.changed`).
+ * `model.presets.get/set` у Ядра внутренних моделей.
+ *
+ * **Поправка к первой версии (тот же день).** Первая версия сама
+ * "открывала" говорящих из прозы (proper-noun эвристики) и накапливала пол
+ * голосованием по местоимениям — на реальном транскрипте владельца это
+ * заводило отдельную запись пресета на КАЖДОЕ капитализированное слово
+ * ("Looks", "Holds", "Not"...). Прямая формулировка владельца: **"Идёт
+ * персонаж. У него имя. И у него/неё пол. По этому ты определяешь, кто
+ * говорит"** — состав известен ЗАРАНЕЕ, вводится пользователем через
+ * `speaker.cast.add`, и `speaker.resolve` только СОПОСТАВЛЯЕТ текст с этим
+ * составом. Ни один контракт этого Ядра больше не создаёт запись состава
+ * сам — `resolve()` теперь принимает cast как read-only вход и никогда не
+ * возвращает изменённый cast. См. ROADMAP.md 5.40.
  *
  * **Зачем отдельное Ядро, не часть одного Модуля.** Формально движок
- * работает и без единого говорящего, распознанного этим Ядром — не проходит
- * буквальный критерий CORES.md «без Ядра движок не работает». Но это ровно
- * тот же прецедент, что уже принят для Ядра трекинга: переиспользуемая
- * ИНФРАСТРУКТУРА (реестр+резолвинг+персистентность), которую способен
- * подключить БОЛЬШЕ ОДНОГО потребителя — сейчас только Модуль покраски
- * текста, но контракт публичный, а не спрятанный внутри одного Модуля,
- * ровно затем, чтобы будущий Модуль (например, TTS-озвучка по голосам)
- * получил тот же реестр бесплатно, без копирования логики.
+ * работает и без единого настроенного состава — не проходит буквальный
+ * критерий CORES.md «без Ядра движок не работает». Но тот же прецедент, что
+ * уже принят для Ядра трекинга: переиспользуемая ИНФРАСТРУКТУРА
+ * (состав+резолвинг+персистентность), которую способен подключить БОЛЬШЕ
+ * ОДНОГО потребителя — сейчас только Модуль покраски текста.
  *
- * **Что здесь НЕ живёт.** Ни DOM, ни выбор цвета из темы ST, ни собственно
- * покраска — то ЧТО подсвечивать и КАКИМ цветом решает Модуль поверх этого
- * Ядра (`color` здесь — плоское поле, которое Модуль пишет через
- * `speaker.setColor`; Ядро само никогда не придумывает цвет). Разделение то
- * же, что уже проведено между Ядром трекинга (значения+публикация) и
- * специализированным Модулем «RP Time» (что и как показывать).
- *
- * **Реестр — ПЕР ЧАТ**, персонаж «Sasha» в одном чате может получить другой
- * цвет/пол, чем «Sasha» в другом — та же дисциплина, что у натрекан­ных
- * значений Ядра трекинга (`storage.chatMemory`, перечитывается на
- * `st.chatChanged`). **Пресеты — ГЛОБАЛЬНЫЕ**, именованные, через
- * `storage.settings`: пользователь может сохранить состав говорящих текущего
- * чата под именем и применить его в другом чате — так же, как сэмплер-пресет
- * не привязан к конкретному воркеру.
+ * **Состав — ПЕР ЧАТ** (`storage.chatMemory`, перечитывается на
+ * `st.chatChanged`) — разные истории обычно разные действующие лица.
+ * **Пресеты — ГЛОБАЛЬНЫЕ**, именованные, через `storage.settings`:
+ * пользователь настраивает состав один раз (например, для серии связанных
+ * чатов) и применяет его в другом чате одной кнопкой.
  */
 export function createSpeakerCore(host, { publish } = {}) {
     const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
 
-    let registry = createEmptySpeakerRegistry();
+    let cast = createEmptySpeakerCast();
     let customPresets = [];
 
     const presetsPersisted = createPersistedList(host, {
@@ -69,84 +60,72 @@ export function createSpeakerCore(host, { publish } = {}) {
         apply: list => { customPresets = list ?? []; },
     });
 
-    /** Persists the CURRENT chat's registry — mirrors Ядро трекинга's `saveChatValues()`; silently stays in-memory if `storage.chatMemory` isn't wired (narrow tests). */
-    async function saveRegistry() {
-        await request(host.own, 'storage.chatMemory.set', { params: { namespace: CHAT_NAMESPACE, key: CHAT_REGISTRY_KEY, value: registry } });
+    /** Persists the CURRENT chat's cast — mirrors Ядро трекинга's `saveChatValues()`; silently stays in-memory if `storage.chatMemory` isn't wired (narrow tests). */
+    async function saveCast() {
+        await request(host.own, 'storage.chatMemory.set', { params: { namespace: CHAT_NAMESPACE, key: CHAT_CAST_KEY, value: cast } });
     }
 
-    /** Reloads the registry for whichever chat is CURRENT — called once at startup and again on every `st.chatChanged`, same discipline as tracked values. */
-    async function loadRegistryForCurrentChat() {
+    /** Reloads the cast for whichever chat is CURRENT — called once at startup and again on every `st.chatChanged`, same discipline as tracked values. */
+    async function loadCastForCurrentChat() {
         const result = await request(host.own, 'storage.chatMemory.get', {
-            params: { namespace: CHAT_NAMESPACE, key: CHAT_REGISTRY_KEY, fallback: null },
+            params: { namespace: CHAT_NAMESPACE, key: CHAT_CAST_KEY, fallback: null },
         });
-        registry = result.ok && result.value ? result.value : createEmptySpeakerRegistry();
+        cast = result.ok && result.value ? result.value : createEmptySpeakerCast();
     }
 
-    function listEntities() {
-        return Object.entries(registry.entities).map(([id, entity]) => toPublicEntity(id, entity));
+    function listCast() {
+        return Object.entries(cast.entities).map(([id, entity]) => toPublicEntity(id, entity));
+    }
+
+    /** The ONLY way a character enters the cast — a direct, explicit user action (the Модуль's "Add character" form), never something `resolve()` does on its own. */
+    async function addCharacter({ name, gender, aliases, color } = {}) {
+        const result = addCastMember(cast, { name, gender, aliases, color });
+        cast = result.cast;
+        await saveCast();
+        publishEvent('speaker.castChanged', {});
+        return toPublicEntity(result.id, cast.entities[result.id]);
+    }
+
+    async function removeCharacter({ id } = {}) {
+        cast = removeCastMember(cast, id);
+        await saveCast();
+        publishEvent('speaker.castChanged', {});
+        return true;
+    }
+
+    /** Generic partial edit (name/gender/aliases/color) — one contract, not a separate rename/setColor pair; unknown id is a no-op (matches `updateCastMember`'s own contract). */
+    async function updateCharacter({ id, ...patch } = {}) {
+        if (!cast.entities[id]) throw new Error(`speaker.cast.update: unknown speaker id "${id}".`);
+        cast = updateCastMember(cast, id, patch);
+        await saveCast();
+        publishEvent('speaker.castChanged', {});
+        return toPublicEntity(id, cast.entities[id]);
     }
 
     /**
-     * Runs detection over `text`, folding any newly-discovered speaker into
-     * the CURRENT chat's registry and persisting it — the only write path
-     * into the registry driven by real prose, as opposed to a manual
-     * `speaker.setColor`/`speaker.applyPreset` edit.
-     *
-     * `defaultSpeakerName` — optional, forwarded as-is to
-     * `detectSpeakers()`'s own fallback (see its doc comment): the ST
-     * message-card owner, for a caller that has it, so a message with no
-     * named speaker anywhere in ITS OWN text still resolves its pronoun-only
-     * quotes instead of staying `unknown`.
+     * Runs detection over `text` against the CURRENT chat's cast — read-only,
+     * never adds/changes a cast member. `defaultSpeakerName` is forwarded
+     * as-is to `detectSpeakers()`'s own fallback (see its doc comment): a
+     * resolution HINT only, ignored entirely if it doesn't already match
+     * someone in the cast.
      */
     async function resolve({ text, mesid, defaultSpeakerName } = {}) {
-        const before = new Set(Object.keys(registry.entities));
-        const { registry: nextRegistry, segments } = detectSpeakers(String(text ?? ''), registry, { defaultSpeakerName });
-        registry = nextRegistry;
-        const discovered = Object.keys(registry.entities).filter(id => !before.has(id));
-        if (discovered.length > 0) {
-            await saveRegistry();
-            publishEvent('speaker.registryChanged', { mesid, discoveredIds: discovered });
-        }
+        const { segments } = detectSpeakers(String(text ?? ''), cast, { defaultSpeakerName });
         return {
             mesid,
             segments: segments.map(segment => ({
                 ...segment,
-                speaker: segment.speakerId ? toPublicEntity(segment.speakerId, registry.entities[segment.speakerId]) : null,
+                speaker: segment.speakerId ? toPublicEntity(segment.speakerId, cast.entities[segment.speakerId]) : null,
             })),
         };
     }
 
-    /** Manual color assignment — the ONLY place `color` is ever written, whether the caller is a user pick or the Module's own auto-palette. */
-    async function setColor({ id, color } = {}) {
-        if (!registry.entities[id]) throw new Error(`speaker.setColor: unknown speaker id "${id}".`);
-        registry = { ...registry, entities: { ...registry.entities, [id]: { ...registry.entities[id], color: color ?? null } } };
-        await saveRegistry();
-        publishEvent('speaker.registryChanged', { discoveredIds: [] });
-        return toPublicEntity(id, registry.entities[id]);
-    }
-
-    /** Renames the canonical display name of an already-known speaker (e.g. detector guessed "Sasha" from a nickname, user corrects the display form) without losing accumulated gender votes/aliases. */
-    async function rename({ id, name } = {}) {
-        if (!registry.entities[id]) throw new Error(`speaker.rename: unknown speaker id "${id}".`);
-        const trimmed = String(name ?? '').trim();
-        if (!trimmed) throw new Error('speaker.rename: "name" is required.');
-        registry = { ...registry, entities: { ...registry.entities, [id]: { ...registry.entities[id], canonicalName: trimmed } } };
-        await saveRegistry();
-        publishEvent('speaker.registryChanged', { discoveredIds: [] });
-        return toPublicEntity(id, registry.entities[id]);
-    }
-
-    /**
-     * Saves the CURRENT chat's registry as a reusable named preset — same
-     * name updates the same preset (deterministic slug id), never plants a
-     * duplicate, same convention as `buildCustomPreset()` for sampler
-     * presets.
-     */
+    /** Saves the CURRENT chat's cast as a reusable named preset — same name updates the same preset (deterministic slug id), never plants a duplicate. */
     async function savePreset({ name } = {}) {
         const trimmed = String(name ?? '').trim();
         if (!trimmed) throw new Error('speaker.presets.save: "name" is required.');
         const id = slugifyPresetName(trimmed);
-        const preset = { id, name: trimmed, entities: listEntities().map(entity => ({ name: entity.name, aliases: entity.aliases, color: entity.color })) };
+        const preset = { id, name: trimmed, entities: listCast().map(entity => ({ name: entity.name, gender: entity.gender, aliases: entity.aliases, color: entity.color })) };
         const next = [...customPresets.filter(item => item.id !== id), preset];
         await presetsPersisted.save(next);
         publishEvent('speaker.presets.changed', { count: next.length });
@@ -161,45 +140,36 @@ export function createSpeakerCore(host, { publish } = {}) {
     }
 
     /**
-     * Applies a saved preset INTO the current chat's registry — entities are
-     * matched by name/alias against what's already known (so an entity the
-     * detector already discovered this chat keeps its id and gender votes),
-     * new ones from the preset are added fresh with the preset's color as a
-     * starting value.
+     * Applies a saved preset INTO the current chat's cast — entities already
+     * present (matched by name/alias) get their gender/color updated from
+     * the preset, ones not yet in this chat's cast are added fresh. Still a
+     * direct, explicit user action (clicking "Apply"), not automatic
+     * discovery — consistent with `addCharacter()` above.
      */
     async function applyPreset({ id } = {}) {
         const preset = customPresets.find(item => item.id === id);
         if (!preset) throw new Error(`speaker.presets.apply: unknown preset "${id}".`);
-        let next = registry;
         for (const presetEntity of preset.entities) {
-            const existingId = resolveEntityByName(next, presetEntity.name);
+            const existingId = Object.keys(cast.entities).find(entityId => cast.entities[entityId].aliases.some(alias => alias.toLowerCase() === presetEntity.name.toLowerCase()));
             if (existingId) {
-                next = { ...next, entities: { ...next.entities, [existingId]: { ...next.entities[existingId], color: presetEntity.color ?? next.entities[existingId].color } } };
+                cast = updateCastMember(cast, existingId, { gender: presetEntity.gender, color: presetEntity.color });
             } else {
-                const entity = {
-                    canonicalName: presetEntity.name,
-                    aliases: presetEntity.aliases?.length ? presetEntity.aliases : [presetEntity.name],
-                    genderVotes: { M: 0, F: 0 },
-                    theyVotes: 0,
-                    role: 'npc',
-                    color: presetEntity.color ?? null,
-                };
-                next = { nextId: next.nextId + 1, entities: { ...next.entities, [`speaker${next.nextId}`]: entity } };
+                cast = addCastMember(cast, { name: presetEntity.name, gender: presetEntity.gender, aliases: presetEntity.aliases, color: presetEntity.color }).cast;
             }
         }
-        registry = next;
-        await saveRegistry();
-        publishEvent('speaker.registryChanged', { discoveredIds: [] });
-        return listEntities();
+        await saveCast();
+        publishEvent('speaker.castChanged', {});
+        return listCast();
     }
 
-    const chatChangedUnsubscribe = host.events.subscribe('st.chatChanged', () => { void loadRegistryForCurrentChat(); });
+    const chatChangedUnsubscribe = host.events.subscribe('st.chatChanged', () => { void loadCastForCurrentChat(); });
 
     const unregisters = [
         host.own.register('speaker.resolve', params => resolve(params)),
-        host.own.register('speaker.registry.get', () => listEntities()),
-        host.own.register('speaker.setColor', params => setColor(params)),
-        host.own.register('speaker.rename', params => rename(params)),
+        host.own.register('speaker.cast.list', () => listCast()),
+        host.own.register('speaker.cast.add', params => addCharacter(params)),
+        host.own.register('speaker.cast.remove', params => removeCharacter(params)),
+        host.own.register('speaker.cast.update', params => updateCharacter(params)),
         host.own.register('speaker.presets.get', () => customPresets),
         host.own.register('speaker.presets.save', params => savePreset(params)),
         host.own.register('speaker.presets.delete', params => deletePreset(params)),
@@ -210,7 +180,7 @@ export function createSpeakerCore(host, { publish } = {}) {
         /** Explicit startup hook — mirrors `restoreTrackers()`: called ONCE by whoever assembles the engine, after storage is wired, never from inside this factory. */
         async restore() {
             await presetsPersisted.restore();
-            await loadRegistryForCurrentChat();
+            await loadCastForCurrentChat();
         },
         unregister: () => {
             for (const unregister of unregisters) unregister();
