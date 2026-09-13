@@ -388,6 +388,54 @@ export function ProgressBar(percent, label) {
     );
 }
 
+/**
+ * Кнопка, которую нужно ДЕРЖАТЬ, чтобы она сработала — визуальная замена
+ * `window.confirm()` для необратимых действий (прямой запрос пользователя:
+ * "кнопку, которую нужно держать, с анимацией заполнения, как виджет" — для
+ * удаления графа памяти, cores/ui/memory-graph-panel.js). Нативный
+ * блокирующий диалог сознательно убран из этого же места ранее
+ * (MEMORY_GRAPH.md: "единственное место во всём проекте с блокирующим
+ * нативным диалогом... исправлено на немедленное действие, для
+ * единообразия") — этот виджет держит то же единообразие (никакого
+ * `confirm()`), но всё равно требует осознанного усилия перед необратимым
+ * действием, показывая это заливкой, а не текстом плашки.
+ *
+ * Заливка — чистый CSS `transition: width`, не `setInterval`/`rAF`: класс
+ * `stme-holding` ставится на pointerdown, CSS сам анимирует ширину от 0 до
+ * 100% за `holdMs`. Единственный JS-таймер — ОДИН `setTimeout` на тот же
+ * `holdMs`, чтобы поймать момент, когда удержание длилось достаточно;
+ * отпускание раньше (`pointerup`/`pointerleave`/`pointercancel`) чистит его
+ * и снимает класс — заливка мгновенно откатывается, ничего не срабатывает.
+ */
+export function HoldButton(label, onConfirm, { holdMs = 1200, variant = 'danger', disabled = false } = {}) {
+    let timer = null;
+    const release = event => {
+        clearTimeout(timer);
+        timer = null;
+        event.currentTarget.classList.remove('stme-holding');
+    };
+    return h('button', {
+        type: 'button',
+        class: `menu_button stme-hold-button${variant === 'danger' ? ' stme-danger' : ''}`,
+        disabled,
+        style: { '--stme-hold-ms': `${holdMs}ms` },
+        'on:pointerdown': event => {
+            if (disabled) return;
+            event.currentTarget.classList.add('stme-holding');
+            timer = setTimeout(() => {
+                event.currentTarget.classList.remove('stme-holding');
+                onConfirm();
+            }, holdMs);
+        },
+        'on:pointerup': release,
+        'on:pointerleave': release,
+        'on:pointercancel': release,
+    },
+        h('span', { class: 'stme-hold-button-fill' }),
+        h('span', { class: 'stme-hold-button-label' }, label),
+    );
+}
+
 /** Ключёванный список: `renderItem` обязан проставить `key` — по нему diff.js и опознаёт элементы при перестановке. */
 export function List(itemsSignal, renderItem) {
     return computed(() => itemsSignal().map(renderItem));

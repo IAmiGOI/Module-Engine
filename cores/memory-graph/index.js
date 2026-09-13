@@ -204,14 +204,22 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // этого шага не имели НИКАКОЙ защиты от зависания посреди стрима, кроме
     // самого факта стриминга (он включён по умолчанию у `model.generate`,
     // но `stallMs`/`fallbackWorkerIds` там осознанно opt-in — Граф их
-    // просто никогда не запрашивал). 5000мс — то самое число, которым сам
-    // же пользователь и задал требование к этому механизму изначально, не
-    // отдельная придуманная константа. `fallbackWorkerIds` пуст по
-    // умолчанию — Проход 3 (единственное место в этом файле, где реально
-    // может пригодиться несколько воркеров разом, см. ROADMAP.md 5.36) сам
-    // по себе не решает, что "запинить" на другой воркер — это явный выбор
-    // пользователя, каких именно.
-    stallMs: 5000,
+    // просто никогда не запрашивал).
+    // ИСПРАВЛЕНО (реальный баг, жалоба пользователя: "вылезает ошибка по
+    // таймауту на первом проходе"): изначально здесь стояло 5000мс — число,
+    // взятое прямо из формулировки пользователя для самого МЕХАНИЗМА
+    // (`internal-engine.js`, ROADMAP 5.33), но та формулировка была про
+    // короткие звонки трекера/саммари, а не про Проходы бутстрапа. Проход
+    // 1-4 шлёт ВЕСЬ Lorebook целиком с `reasoningMode: 'enabled'` — модель
+    // может думать МНОГО дольше 5 секунд, прежде чем отдать хоть один
+    // чанк, и таймер стойки взводится ещё ДО ответа заголовков (см.
+    // doc-comment `dispatchStreamingRequest()` в services/http.js: "весь
+    // путь одним таймером — от отправки запроса"), так что каждый прогон
+    // ложно ловил "stream stalled" на честно работающем, просто небыстром
+    // звонке. 60000мс — с большим запасом на реальное время раздумья
+    // reasoning-модели над крупным промптом, при этом всё ещё ловит
+    // настоящее зависание (сервер не ответил вовсе).
+    stallMs: 60000,
     fallbackWorkerIds: [],
 });
 
@@ -1675,6 +1683,38 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     /**
+     * Полное удаление графа — реальная жалоба пользователя: "граф нельзя
+     * удалить". До этого шага единственный способ вернуть чат к пустому
+     * графу был удалить каждую ноду по одной через `memoryGraph.nodes.delete`
+     * — а `regions`/`mergeQueue`/`reconsolidationQueue`/`stickyRetrieval`
+     * при этом всё равно оставались висеть в `chatMemory`, так что "граф",
+     * даже с нулём нод, формально не был пустым для остального кода (та же
+     * `chatMemory`, что `loadState()` читает целиком). Очищает ВСЕ
+     * структуры состояния разом и персистит каждую тем же набором вызовов,
+     * что `loadState()` читает — единственный способ гарантировать, что
+     * следующий бутстрап реально стартует с чистого листа, а не подхватит
+     * осиротевший `region.centerNodeId`, указывающий на уже удалённую ноду.
+     */
+    async function resetGraph() {
+        return enqueueWrite(async () => {
+            nodes = {};
+            regions = {};
+            staging = {};
+            mergeQueue = {};
+            reconsolidationQueue = {};
+            distanceStats = null;
+            stickyRetrieval = null;
+            await Promise.all([
+                persistNodes(), persistRegions(), persistStaging(),
+                persistMergeQueue(), persistReconsolidationQueue(),
+                persistStats(), persistStickyRetrieval(),
+            ]);
+            publishEvent('memoryGraph.reset', {});
+            return { ok: true };
+        });
+    }
+
+    /**
      * Тихий вызов SideCar — тот же контракт/приём, что `tracking.poll()`/
      * BasicSummary. Отдаёт JSON `{label, content, importance}` для одной
      * ноды, разбирается через уже существующую parse-model-json.js.
@@ -2692,6 +2732,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.nodes.move', params => moveNodeManually(params ?? {})),
         host.own.register('memoryGraph.edges.create', params => createEdgeManually(params ?? {})),
         host.own.register('memoryGraph.edges.delete', params => deleteEdgeManually(params ?? {})),
+        host.own.register('memoryGraph.reset', () => resetGraph()),
         // "Вызов любой функции вручную" (решено с пользователем) — тонкие
         // обёртки над уже существующими оркестрационными операциями.
         host.own.register('memoryGraph.checkAndPlace', params => checkAndPlace(String(params?.text ?? ''))),

@@ -5,7 +5,7 @@ import { createDragHandlers, clampToViewport } from '../../libraries/shared/drag
 import { loadCytoscape } from '../../libraries/core/graph-rendering.js';
 import {
     FloatingPanel, Card, Section, Button, TextInput, TextArea, NumberInput, Toggle,
-    Details, Row, Field, EmptyState, Badge, Slider, Select, ProgressBar,
+    Details, Row, Field, EmptyState, Badge, Slider, Select, ProgressBar, HoldButton,
 } from '../../libraries/shared/widgets.js';
 
 /**
@@ -570,6 +570,27 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         });
     }
 
+    /**
+     * Полное удаление графа — реальная жалоба пользователя: "граф нельзя
+     * удалить". Гейт подтверждения — `HoldButton` (прямой запрос: "кнопку,
+     * которую нужно держать, с анимацией заполнения"), не `window.confirm()`
+     * — единообразно с остальным проектом (MEMORY_GRAPH.md уже убирал
+     * ровно такой диалог из этой же панели). Закрывает открытую форму и
+     * снимает выбор узла — оба всё равно ссылались бы на только что
+     * удалённые данные.
+     */
+    async function deleteGraph() {
+        busy.set(true);
+        try {
+            const result = await call('memoryGraph.reset');
+            statusText.set(result.ok ? 'Graph deleted.' : `Delete failed: ${result.error?.message}`);
+            closeForm();
+            await refresh();
+        } finally {
+            busy.set(false);
+        }
+    }
+
     // --- Настройка извлечения -------------------------------------------
     // Лимит узлов, собираемых ШУМОМ при извлечении: маяки + маршрут + шум
     // ВМЕСТЕ не должны превысить это число (`retrievalTargetNodes`,
@@ -835,7 +856,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             h('p', { class: 'stme-memory-graph-hint' }, 'Creates the first graph from your Lorebook entries — reading, two model passes, and an embedding per entry. Large books take a while, but the rest of this window (editing, debug actions) stays usable while it runs.'),
             Row(
                 Button(computed(() => (bootstrapRunning() ? 'Building…' : 'Bootstrap from Lorebook')), runBootstrap, { disabled: bootstrapRunning }),
+                HoldButton('Hold to delete graph', deleteGraph, { holdMs: 1200, variant: 'danger', disabled: busy() }),
             ),
+            h('p', { class: 'stme-memory-graph-hint' }, 'Deletes every node, region, and pending queue — everything, not just what\'s on screen. Cannot be undone.'),
             computed(() => {
                 const progress = bootstrapProgress();
                 if (!progress) return null;
@@ -992,7 +1015,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             ...[
                 'memoryGraph.nodeCreated', 'memoryGraph.nodeUpdated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeMoved',
                 'memoryGraph.nodeEvicted', 'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
-                'memoryGraph.edgeCreated', 'memoryGraph.edgeDeleted',
+                'memoryGraph.edgeCreated', 'memoryGraph.edgeDeleted', 'memoryGraph.reset',
             ].map(event => host.events.subscribe(event, () => refresh())),
             // Бутстрап-прогресс — та же тройка событий, тем же смыслом, что
             // уже подписан cores/ui/engine-panel.js: `started` подтверждает,
