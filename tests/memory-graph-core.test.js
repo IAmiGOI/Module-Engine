@@ -313,8 +313,8 @@ test('clampGraphSettings() keeps maxNodesPerRegion at the resolved capacity (23 
     assert.equal(DEFAULT_SETTINGS.maxNodesPerRegion, 23);
 });
 
-test('clampGraphSettings() defaults stallMs to 5000 — the exact number the user specified for stall-restart ("если за 5 секунд ничего не пришло")', () => {
-    assert.equal(DEFAULT_SETTINGS.stallMs, 5000);
+test('clampGraphSettings() defaults stallMs to 60000 — large enough that a reasoning-enabled bootstrap pass over a whole Lorebook is not falsely flagged as "stalled" before it ever gets a first chunk (реальный баг: "вылезает ошибка по таймауту на первом проходе" — the original 5000ms was borrowed from a different, much lighter feature)', () => {
+    assert.equal(DEFAULT_SETTINGS.stallMs, 60000);
 });
 
 test('clampGraphSettings() treats stallMs:0 as a deliberate "disable it" value, not garbage to fall back from — same meaning as falsy stallMs in internal-engine.js', () => {
