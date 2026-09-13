@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { signal, computed } from '../cores/ui/reactive.js';
-import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock, ProgressBar } from '../libraries/shared/widgets.js';
+import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock, ProgressBar, HoldButton } from '../libraries/shared/widgets.js';
 
 /**
  * Виджеты — чистые функции «данные → дерево», поэтому проверяются как
@@ -312,4 +312,61 @@ test('ProgressBar() renders the caller\'s own label text as-is, and omits the la
 
     const withoutLabel = ProgressBar(50);
     assert.equal(withoutLabel.children.length, 1, 'no label given -> no second child at all, not an empty one');
+});
+
+/** Двойник `event.currentTarget.classList` — только `add`/`remove`, ничего больше HoldButton не трогает. */
+function fakeButtonEvent() {
+    const classes = new Set();
+    return { currentTarget: { classList: { add: name => classes.add(name), remove: name => classes.delete(name) } }, classes };
+}
+
+test('HoldButton() defaults to the danger variant, carries menu_button chrome, and exposes holdMs as a CSS custom property for the fill\'s own transition duration', () => {
+    const node = HoldButton('Hold to delete graph', () => {}, { holdMs: 1200 });
+    assert.equal(node.tag, 'button');
+    assert.equal(node.props.class, 'menu_button stme-hold-button stme-danger');
+    assert.equal(node.props.style['--stme-hold-ms'], '1200ms');
+    assert.equal(node.children[0].props.class, 'stme-hold-button-fill');
+    assert.equal(node.children[1].props.class, 'stme-hold-button-label');
+    assert.equal(node.children[1].children[0], 'Hold to delete graph');
+});
+
+test('HoldButton() with variant:"default" does NOT carry the danger class — not every hold-to-confirm action is destructive', () => {
+    assert.equal(HoldButton('Hold to confirm', () => {}, { variant: 'default' }).props.class, 'menu_button stme-hold-button');
+});
+
+test('HoldButton() fires onConfirm only after being held for the full holdMs — a quick tap must not trigger an irreversible action', async () => {
+    let confirmed = 0;
+    const node = HoldButton('Hold', () => { confirmed += 1; }, { holdMs: 10 });
+    const event = fakeButtonEvent();
+
+    node.props['on:pointerdown'](event);
+    assert.equal(confirmed, 0, 'must not fire immediately on press');
+    assert.ok(event.classes.has('stme-holding'), 'fill animation class must be armed while held');
+
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(confirmed, 1);
+    assert.ok(!event.classes.has('stme-holding'), 'holding class comes off once the action actually fires');
+});
+
+test('HoldButton() releasing early (pointerup) cancels the pending confirm — the whole point of requiring a hold', async () => {
+    let confirmed = 0;
+    const node = HoldButton('Hold', () => { confirmed += 1; }, { holdMs: 10 });
+    const event = fakeButtonEvent();
+
+    node.props['on:pointerdown'](event);
+    node.props['on:pointerup'](event);
+    assert.ok(!event.classes.has('stme-holding'), 'releasing must immediately roll back the fill, not wait for holdMs');
+
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(confirmed, 0, 'a cancelled hold must never fire, even after the original holdMs would have elapsed');
+});
+
+test('HoldButton() ignores pointerdown while disabled — the same guard Button() already applies via the disabled prop, just also enforced in the handler', async () => {
+    let confirmed = 0;
+    const node = HoldButton('Hold', () => { confirmed += 1; }, { holdMs: 10, disabled: true });
+    assert.equal(node.props.disabled, true);
+
+    node.props['on:pointerdown'](fakeButtonEvent());
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(confirmed, 0);
 });

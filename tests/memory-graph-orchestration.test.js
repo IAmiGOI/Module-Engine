@@ -141,7 +141,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging',
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
             'memoryGraph.nodes.createFromCharacterCard',
-            'memoryGraph.edges.create', 'memoryGraph.edges.delete',
+            'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
             'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook',
         ],
     });
@@ -1907,6 +1907,46 @@ test('memoryGraph.edges.create/delete are symmetric and keep degree consistent o
     assert.equal(clearedB.degree, 0);
     assert.deepEqual(clearedA.edges, []);
     assert.deepEqual(clearedB.edges, []);
+});
+
+test('memoryGraph.reset wipes nodes, regions, and every pending queue ALL AT ONCE — реальная жалоба пользователя: "граф нельзя удалить" (deleting nodes one by one left regions/queues/sticky state behind, so an empty node list still wasn\'t an empty graph)', async () => {
+    const { caller } = buildEngine();
+    // Build up every piece of state resetGraph() has to clear, not just nodes.
+    await call(caller, 'memoryGraph.nodes.create', { label: 'A', content: 'first node, no relation yet.', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'B', content: 'second node, unrelated content, own region.', sector: 1, ring: 0 });
+    const [a, b] = (await call(caller, 'memoryGraph.nodes')).value;
+    await call(caller, 'memoryGraph.edges.create', { fromId: a.id, toId: b.id, type: 'knows' });
+
+    const result = await call(caller, 'memoryGraph.reset');
+
+    assert.equal(result.value.ok, true);
+    assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, []);
+    assert.deepEqual((await call(caller, 'memoryGraph.regions')).value, []);
+    assert.deepEqual((await call(caller, 'memoryGraph.mergeQueue')).value, []);
+    assert.deepEqual((await call(caller, 'memoryGraph.reconsolidationQueue')).value, []);
+    assert.deepEqual((await call(caller, 'memoryGraph.staging')).value, []);
+});
+
+test('memoryGraph.reset actually persists the wipe — a reload afterward must NOT bring the old nodes back from storage', async () => {
+    const { graphCore, caller } = buildEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'A', content: 'a node that must not survive reset+reload.', sector: 0, ring: 0 });
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.length, 1);
+
+    await call(caller, 'memoryGraph.reset');
+    await graphCore.load(); // re-reads persisted state, same path a fresh page load takes
+
+    assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, [], 'a stale persisted node would mean reset() only cleared in-memory state, not storage');
+});
+
+test('memoryGraph.reset publishes memoryGraph.reset so the graph editor\'s canvas can clear itself live, without a manual reload', async () => {
+    const { engine, caller } = buildEngine();
+    let fired = 0;
+    engine.events.subscribe('memoryGraph.reset', () => { fired += 1; });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'A', content: 'a node about to be wiped.', sector: 0, ring: 0 });
+
+    await call(caller, 'memoryGraph.reset');
+
+    assert.equal(fired, 1);
 });
 
 // --- "Вызов любой функции вручную" — 5 дебаг-контрактов --------------------
