@@ -57,14 +57,30 @@ const CONTEXT_LIMIT = 10;
 const MESSAGE_CHARS = 900;
 
 /**
- * Промпт специализирован под ШАГ времени.
+ * Промпт специализирован под ШАГ времени и держит ТРИ смысловых блока, хоть
+ * транспортом остаются два сообщения (Ядро трекинга умеет ровно два —
+ * `systemPromptTemplate`/`promptTemplate`, см. его doc-comment в
+ * [cores/tracking/index.js](../../cores/tracking/index.js); заводить третью
+ * половину ради этого Модуля значило бы тащить его частный случай в общее
+ * Ядро). Блоки 2 и 3 живут в `system` (инструкция, не меняется от опроса к
+ * опросу), блок 1 — в `user` (история, разная каждый раз):
  *
- * **Разделён на два сообщения** (Ядро трекинга умеет это с
- * `systemPromptTemplate` — см. doc-comment [cores/tracking/index.js](../../cores/tracking/index.js)):
- * `TIME_SYSTEM_PROMPT` — ИНСТРУКЦИЯ (что трекать, как оценивать шаг, последнее
- * известное время как якорь, в каком виде отвечать) — не меняется от опроса к
- * опросу, ей место в `system`. `TIME_PROMPT` — сама ИСТОРИЯ, то, что реально
- * разное на каждом опросе.
+ *  1. **История** (`TIME_PROMPT`) — сама переписка с метками.
+ *  2. **Как в целом определять и двигать время** (`TIME_SYSTEM_PROMPT`,
+ *     секция HOW TO JUDGE AND MOVE TIME) — оценивать шаг по тому, СКОЛЬКО
+ *     РЕАЛЬНО ЗАНЯЛИ описанные действия, а не по длине или точности
+ *     формулировки: длинный красочный абзац про удар не значит, что удар
+ *     занял минуты, и наоборот — скупая фраза не значит секунду. Раньше
+ *     формулировка требовала смотреть «ТОЛЬКО на новую реплику» безотносительно
+ *     того, что там физически происходит, и это давало либо вечные секунды,
+ *     либо случайные часы без всякой связи с содержанием.
+ *  3. **Как определять переход** (`TIME_SYSTEM_PROMPT`, секция HOW TO DETECT
+ *     A TRANSITION) — отдельный, явный список сигналов, которые ОПРАВДЫВАЮТ
+ *     большой скачок (явный маркер, смена сцены/локации, монтаж/пересказ,
+ *     целое действие вроде сна или дороги). Без этого списка резкие скачки
+ *     ничем не были обоснованы — модель могла передвинуть время на часы
+ *     просто потому, что так казалось «драматичнее», а не потому, что текст
+ *     содержал сигнал перехода.
  *
  * **Метка времени — ПЕРЕД каждой репликой, а не отдельным списком рядом.**
  * Раньше `{timeline}` (плоский список последних отметок) и `{context}`
@@ -83,16 +99,32 @@ export const TIME_SYSTEM_PROMPT =
     'You are an in-world time tracker for a roleplay chat. Track only the fields below, ' +
     'using each note to decide how to format it:\n{fields}\n\n' +
     'The last known in-world time is: {lastKnownTime}. Use it as your anchor point.\n\n' +
-    'Estimate the time step using ONLY the newest exchange (the character\'s latest reply, at the end ' +
-    'of the message history you are given): how long would plausibly pass for that one exchange to happen?\n\n' +
-    'Default to a SMALL step (seconds to a few minutes) unless the newest exchange explicitly signals ' +
-    'a skip (e.g. "the next morning", "hours later", "after the long walk") or a scene transition.\n\n' +
+    '## HOW TO JUDGE AND MOVE TIME\n' +
+    'Estimate the time step from what the described actions would PLAUSIBLY take in the real world — ' +
+    'not from how long or precise the wording is. A vividly written paragraph about a punch does not mean ' +
+    'the punch took minutes, and a terse line does not mean it took one second. Read the newest exchange ' +
+    '(the character\'s latest reply, at the end of the message history you are given), mentally list the ' +
+    'concrete actions/beats in it, add up how long each would realistically take, and move the clock by ' +
+    'that total — even when the phrasing is vague or approximate, make your best real-world estimate rather ' +
+    'than defaulting to a fixed number. Ordinary dialogue and small gestures are seconds to a couple of ' +
+    'minutes each; default to a SMALL step for an exchange like that.\n\n' +
+    '## HOW TO DETECT A TRANSITION (whether to jump time by a lot)\n' +
+    'Only take a LARGE step when the newest exchange gives you an actual reason to, such as:\n' +
+    '- an explicit time marker ("the next morning", "hours later", "after the long walk", "meanwhile")\n' +
+    '- a scene/location change that implies travel, waiting, or a break between beats\n' +
+    '- summarized or montage narration covering an unspecified stretch (e.g. "they spent the rest of the day exploring")\n' +
+    '- a whole activity that inherently takes real time even if barely described, like sleeping, eating a full meal, a journey, or a work shift\n\n' +
+    'If none of these are present, treat the exchange as continuing right where the last one left off and keep ' +
+    'the step small. Never take a large jump just because it would be dramatically convenient — every jump must ' +
+    'trace back to something actually stated or strongly implied in the newest exchange, not to assumption.\n\n' +
     'Return ONLY a JSON object with exactly these keys: {fieldsJson}. No markdown, no explanation.';
 
 export const TIME_PROMPT =
+    '## HISTORY\n' +
     'MESSAGE HISTORY, each reply marked with the in-world time recorded for it ("unknown" if not yet ' +
     'determined for that specific reply):\n{annotatedHistory}\n\n' +
-    'The character just responded — see the LAST line above. Work out how much time that reply took.';
+    'The character just responded — see the LAST line above. Work out how much time that reply took, ' +
+    'following the rules above.';
 
 export const TIME_PRESETS = Object.freeze([
     {
