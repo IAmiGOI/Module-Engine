@@ -75,12 +75,22 @@ const MESSAGE_CHARS = 900;
  *     того, что там физически происходит, и это давало либо вечные секунды,
  *     либо случайные часы без всякой связи с содержанием.
  *  3. **Как определять переход** (`TIME_SYSTEM_PROMPT`, секция HOW TO DETECT
- *     A TRANSITION) — отдельный, явный список сигналов, которые ОПРАВДЫВАЮТ
- *     большой скачок (явный маркер, смена сцены/локации, монтаж/пересказ,
- *     целое действие вроде сна или дороги). Без этого списка резкие скачки
- *     ничем не были обоснованы — модель могла передвинуть время на часы
- *     просто потому, что так казалось «драматичнее», а не потому, что текст
- *     содержал сигнал перехода.
+ *     A TRANSITION) — большой скачок оправдан только НАСТОЯЩИМ СОБЫТИЕМ,
+ *     которое отняло время (явный маркер, смена сцены с дорогой/ожиданием,
+ *     монтаж, реально описанный сон/еда/поездка). Слова, которые лишь
+ *     СООБЩАЮТ новое состояние — «стемнело», «за окном ночь», звуки леса,
+ *     «она вздрогнула спросонья» — списком отдельно объявлены НЕДОСТАТОЧНЫМИ
+ *     САМИ ПО СЕБЕ: они говорят, как выглядит мир, а не сколько занял переход
+ *     к этому виду. Реальный случай, из-за которого это добавлено: реплика
+ *     на минуту действия (она вскинулась, села, зажала лицо руками, пара
+ *     фраз) была обёрнута в атмосферу «стемнело… сейчас ночь» — и трекер
+ *     скакнул на 3 часа 45 минут (04:15 PM → 08:00 PM), хотя единственное, что
+ *     РЕАЛЬНО произошло на странице, укладывается в минуту. Слова не должны
+ *     ничего весить сами по себе — только фактически описанное действие/
+ *     событие. Если оснований для скачка всё же нет, шаг остаётся МАЛЕНЬКИМ
+ *     независимо от того, что утверждает атмосфера вокруг; если основания
+ *     есть, но длина не названа — берётся минимальный скачок, достаточный
+ *     для того, что реально было показано, а не круглое число «в тон».
  *
  * **Метка времени — ПЕРЕД каждой репликой, а не отдельным списком рядом.**
  * Раньше `{timeline}` (плоский список последних отметок) и `{context}`
@@ -100,23 +110,29 @@ export const TIME_SYSTEM_PROMPT =
     'using each note to decide how to format it:\n{fields}\n\n' +
     'The last known in-world time is: {lastKnownTime}. Use it as your anchor point.\n\n' +
     '## HOW TO JUDGE AND MOVE TIME\n' +
-    'Estimate the time step from what the described actions would PLAUSIBLY take in the real world — ' +
-    'not from how long or precise the wording is. A vividly written paragraph about a punch does not mean ' +
-    'the punch took minutes, and a terse line does not mean it took one second. Read the newest exchange ' +
-    '(the character\'s latest reply, at the end of the message history you are given), mentally list the ' +
-    'concrete actions/beats in it, add up how long each would realistically take, and move the clock by ' +
-    'that total — even when the phrasing is vague or approximate, make your best real-world estimate rather ' +
-    'than defaulting to a fixed number. Ordinary dialogue and small gestures are seconds to a couple of ' +
-    'minutes each; default to a SMALL step for an exchange like that.\n\n' +
+    'Estimate the time step from what physically HAPPENS in the newest exchange (the character\'s latest reply, ' +
+    'at the end of the message history you are given) — count only concrete actions and lines of dialogue, and ' +
+    'add up how long THOSE would realistically take. A few lines of speech, sitting up, pressing hands to a face, ' +
+    'a stomach growling — that whole beat is a MINUTE or two, no matter how the prose around it is dressed up. ' +
+    'Mood and scene-setting words carry NO weight of their own: "it\'s dark now", "the window went black", "she can ' +
+    'hear frogs", "it\'s night" are atmosphere, not a clock. They tell you what the world looks like, not how much ' +
+    'time it took to get there. Never let a word describing the current time-of-day or ambience add so much as a ' +
+    'minute by itself — it only matters if it is attached to an actual described event that takes time (see below). ' +
+    'Ordinary dialogue and small gestures default to a SMALL step (seconds to a couple of minutes).\n\n' +
     '## HOW TO DETECT A TRANSITION (whether to jump time by a lot)\n' +
-    'Only take a LARGE step when the newest exchange gives you an actual reason to, such as:\n' +
-    '- an explicit time marker ("the next morning", "hours later", "after the long walk", "meanwhile")\n' +
-    '- a scene/location change that implies travel, waiting, or a break between beats\n' +
-    '- summarized or montage narration covering an unspecified stretch (e.g. "they spent the rest of the day exploring")\n' +
-    '- a whole activity that inherently takes real time even if barely described, like sleeping, eating a full meal, a journey, or a work shift\n\n' +
-    'If none of these are present, treat the exchange as continuing right where the last one left off and keep ' +
-    'the step small. Never take a large jump just because it would be dramatically convenient — every jump must ' +
-    'trace back to something actually stated or strongly implied in the newest exchange, not to assumption.\n\n' +
+    'A large step needs an actual EVENT that takes time to have happened on the page — not a description asserting ' +
+    'a new state. Valid grounds for a large jump:\n' +
+    '- an explicit stated duration or marker ("the next morning", "three hours later", "after the long walk")\n' +
+    '- a scene/location change that itself required travel or waiting to happen\n' +
+    '- summarized or montage narration that itself describes a stretch of activity (e.g. "they spent the rest of the day exploring")\n' +
+    '- an activity that was actually narrated as happening and inherently takes real time, like a described stretch of sleep, a full meal, a journey, or a work shift\n\n' +
+    'NOT valid grounds by themselves: a line saying it is now a different time of day, darker, or nighttime; a ' +
+    'character waking up or seeming groggy; ambient sound or lighting description; anything that only tells you the ' +
+    'RESULT of time passing without narrating the passing itself. If the newest exchange is a short reaction — even ' +
+    'one framed as "waking up disoriented" — and nothing on the page actually depicts hours going by, keep the step ' +
+    'SMALL and let the "it is now night" line be flavor the writer added, not evidence you have to reconcile with a ' +
+    'multi-hour jump. When you do have real grounds for a jump but its exact length is never stated, pick the ' +
+    'smallest jump consistent with what was actually narrated, never a large round number chosen to match the mood.\n\n' +
     'Return ONLY a JSON object with exactly these keys: {fieldsJson}. No markdown, no explanation.';
 
 export const TIME_PROMPT =
