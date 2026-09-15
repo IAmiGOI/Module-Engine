@@ -642,3 +642,121 @@ export function EdgeDrawer(open, { onToggle, title = 'Settings' } = {}, ...child
         h('div', { class: 'stme-edge-drawer-body' }, children),
     );
 }
+
+// --- Chat Viewport chrome (план `chat-viewport`) --------------------------
+//
+// Хром — DOM-обвязка вокруг WebGL-текстуры тела сообщения (сам текст рисует
+// канвас, не эти виджеты): аватарка, шапка, действия, блок рассуждений.
+// Статичные, БЕЗ анимации (см. память feedback-no-animated-effects-reflow —
+// анимация рядом с чатом форсирует reflow, обхода в этом окружении нет).
+
+/**
+ * Аватарка сообщения — намеренно КРУПНЕЕ дефолтного размера в ST (~32-40px):
+ * прямое решение владельца при проектировании шапки Chat Viewport. `url`
+ * может быть пустым (нет аватара у этого спикера/сообщения) — тогда рисуется
+ * пустой кружок-заглушка с первой буквой имени, а не сломанная `<img>`.
+ */
+export function Avatar(url, { size = 56, name = '' } = {}) {
+    const style = { width: `${size}px`, height: `${size}px` };
+    if (!url) {
+        const initial = String(name ?? '').trim().charAt(0).toUpperCase() || '?';
+        return h('div', { class: 'stme-avatar stme-avatar-fallback', style, 'aria-hidden': 'true' }, initial);
+    }
+    return h('img', { class: 'stme-avatar', style, src: url, alt: name ? `${name}'s avatar` : '' });
+}
+
+/**
+ * Время сообщения — принимает УЖЕ готовую строку, а не сырую дату: формат
+ * ST (`send_date`) — не ISO (`"2024-01-01 @12h00m00s"`), парсить его здесь
+ * означало бы держать знание о чужом формате в общем виджете. Вызывающий
+ * (Ядро/Модуль) решает, как отформатировать; `title` — полное значение по
+ * наведению, когда `text` — сокращённое ("2 min ago").
+ */
+export function Timestamp(text, { title } = {}) {
+    return h('time', { class: 'stme-timestamp', title }, text);
+}
+
+/** Реальный SVG-глиф, не эмодзи — та же причина, что у иконок инструментов карты (ROADMAP.md 5.5x): эмодзи рендерится непредсказуемо/по-детски между платформами. */
+function editIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M3 21v-3.75L14.81 5.44l3.75 3.75L6.75 21H3zM18.71 4.04a1 1 0 0 1 1.41 0l1.84 1.84a1 1 0 0 1 0 1.41l-1.79 1.79-3.25-3.25 1.79-1.79z' }),
+    );
+}
+function deleteIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M6 7h12l-1 14H7L6 7zm3-4h6l1 2h4v2H2V5h4l1-2z' }),
+    );
+}
+function swipeLeftIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M15 6l-6 6 6 6', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
+    );
+}
+function swipeRightIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M9 6l6 6-6 6', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
+    );
+}
+function regenerateIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z' }),
+    );
+}
+
+/**
+ * Хедер сообщения — аватарка, имя, номер хода, время генерации (только у
+ * НЕ-пользовательских реплик, где оно вообще имеет смысл), время сообщения.
+ * `genDurationMs`/`timestampText` — уже готовые строки/числа от вызывающего;
+ * виджет ничего не вычисляет сам, только раскладывает.
+ */
+/**
+ * `actions` — уже готовое дерево (обычно `MessageActionsRow(...)`), кладётся
+ * в ТОТ ЖЕ ряд, что имя и бейджи, а не отдельной строкой ниже (владелец: "Любые
+ * кнопки должны быть в ряд с именем") — `margin-left: auto` в CSS прижимает
+ * его к правому краю ряда, не раздувая высоту шапки. Сам ряд несёт класс
+ * `stme-message-header-name-row`, под который и написано скрытие-по-наведению
+ * (см. panel.css) — виджет только даёт разметку, наведение целиком на CSS.
+ */
+export function MessageHeader({ name = '', avatarUrl, turnIndex, genDurationMs, timestampText, isUser = false, actions } = {}) {
+    return h('div', { class: 'stme-message-header' },
+        Avatar(avatarUrl, { name }),
+        h('div', { class: 'stme-message-header-info' },
+            h('div', { class: 'stme-message-header-name-row' },
+                h('strong', { class: 'stme-message-header-name' }, name || (isUser ? 'You' : 'Narrator')),
+                turnIndex != null ? Badge(`#${turnIndex}`, { tone: 'muted' }) : null,
+                !isUser && genDurationMs != null ? Badge(`${(genDurationMs / 1000).toFixed(1)}s`, { tone: 'muted' }) : null,
+                actions ?? null,
+            ),
+            timestampText ? Timestamp(timestampText) : null,
+        ),
+    );
+}
+
+/**
+ * Действия над сообщением — edit/delete/swipe/regenerate. Свайп и
+ * регенерация показываются, только если вызывающий вообще дал счётчик
+ * свайпов (`swipeCount`) — у сообщения пользователя свайпов не бывает, и
+ * рисовать нерабочие стрелки хуже, чем не рисовать ничего.
+ */
+export function MessageActionsRow({ onEdit, onDelete, onSwipeLeft, onSwipeRight, onRegenerate, swipeIndex, swipeCount } = {}) {
+    const canSwipe = Number.isFinite(swipeCount) && swipeCount > 1;
+    return h('div', { class: 'stme-message-actions' },
+        onEdit ? IconButton(editIcon(), onEdit, { title: 'Edit' }) : null,
+        onDelete ? IconButton(deleteIcon(), onDelete, { title: 'Delete' }) : null,
+        canSwipe ? IconButton(swipeLeftIcon(), onSwipeLeft, { title: 'Previous swipe' }) : null,
+        canSwipe ? h('span', { class: 'stme-message-swipe-counter' }, `${(swipeIndex ?? 0) + 1}/${swipeCount}`) : null,
+        canSwipe ? IconButton(swipeRightIcon(), onSwipeRight, { title: 'Next swipe' }) : null,
+        onRegenerate ? IconButton(regenerateIcon(), onRegenerate, { title: 'Regenerate' }) : null,
+    );
+}
+
+/**
+ * Блок рассуждений (CoT) — свёрнут по умолчанию (`Details()`, тот же родной
+ * `<details>`, что у остального движка — состояние/клавиатура/доступность
+ * бесплатно от браузера). `text` пуст/отсутствует — виджет не рисует НИЧЕГО,
+ * а не пустую пустую секцию: у сообщения без рассуждений это лишний шум.
+ */
+export function ReasoningBlock(text) {
+    if (!text) return null;
+    return Details('Reasoning', h('div', { class: 'stme-reasoning-text' }, text));
+}

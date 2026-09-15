@@ -2028,3 +2028,98 @@
 @media (prefers-reduced-motion: reduce) {
     .stme-spotlight-target { animation: none; }
 }
+
+/* Chat Viewport (план `chat-viewport`) — подавление нативного `#chat`, НЕ
+   удаление узла: `getContext().deleteMessage()` требует, чтобы `.mes[mesid]`
+   физически существовал в документе (см. doc-comment cores/ui/chat-viewport.js
+   и services/st-chat.js), поэтому `display: none`, а не `[hidden]`/remove().
+   Класс переключается самим Ядром (`applySuppression()`), никогда руками.
+   `#chat.class` — специфичностью, не `!important` (UI.md §4): `#chat` сам по
+   себе уже ID-селектор, этого достаточно перебить любое вероятное правило ST
+   на том же элементе без риска, что потом самим будет нечем это перекрыть. */
+#chat.stme-chat-viewport-suppress-native { display: none; }
+
+/* Chat Viewport — хром вокруг WebGL-текстуры тела сообщения (widgets.js:
+   Avatar/MessageHeader/MessageActionsRow/ReasoningBlock/Timestamp). НИКАКОЙ
+   анимации/transition здесь намеренно (feedback-no-animated-effects-reflow —
+   владелец проверил: анимация рядом с DOM чата форсирует reflow без обхода). */
+.stme-chat-viewport-row {
+    /* Контейнер хрома целиком pointer-events:none (см. harness/index.html) —
+       иначе прозрачные промежутки между строками перехватывали бы скролл/
+       клики, предназначенные канвасу под ними. Сама строка — auto, иначе
+       кнопки внутри неё вообще не кликались бы. */
+    pointer-events: auto;
+    box-sizing: border-box;
+    padding: 6px 10px;
+}
+.stme-message-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.stme-avatar {
+    border-radius: 50%;
+    object-fit: cover;
+    flex: none;
+}
+.stme-avatar-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--stme-accent) 35%, var(--SmartThemeBlurTintColor, #1c1e26));
+    color: var(--SmartThemeBodyColor, #dfe3ea);
+    font-weight: 600;
+}
+.stme-message-header-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+/* Кнопки живут В ЭТОМ ряду (владелец: "любые кнопки должны быть в ряд с
+   именем"), не отдельной строкой — .stme-message-actions ниже прижимается
+   вправо через margin-left:auto, имя/бейджи остаются слева. */
+.stme-message-header-name-row { display: flex; align-items: center; gap: 6px; }
+.stme-message-header-name { color: var(--SmartThemeBodyColor, #dfe3ea); }
+.stme-timestamp {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 60%, transparent);
+}
+.stme-message-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    /* Раскрываются ТОЛЬКО при наведении на строку целиком (владелец),
+       БЕЗ анимации/transition — мгновенный переключатель, а не плавное
+       появление (см. память feedback-no-animated-effects-reflow: анимация
+       рядом с чатом форсирует reflow в этом окружении без обхода).
+       visibility (не display) держит место в раскладке зарезервированным —
+       наведение не сдвигает имя/бейджи в сторону, когда кнопки появляются. */
+    visibility: hidden;
+}
+/* Зона наведения — весь `.stme-chat-viewport-row` (аватар + имя + бейджи +
+   блок рассуждений, если раскрыт), не узкая строка с именем — сама строка
+   НЕ имеет явной высоты (см. doc-comment `buildRowTree()` в
+   cores/ui/chat-viewport.js — циклическая зависимость измерения была
+   реальным багом), поэтому её реальная зона наведения — естественная
+   высота хрома. Тело сообщения рисуется на канвасе НИЖЕ этой зоны и в неё
+   не входит: у канваса нет DOM-присутствия, навести курсор "на текст" и
+   поймать hover нечем без отдельного невидимого слоя (открытый пункт). */
+.stme-chat-viewport-row:hover .stme-message-actions,
+.stme-chat-viewport-row:focus-within .stme-message-actions {
+    /* :focus-within — клавиатурная навигация (Tab на кнопку) должна открыть
+       её, а не оставить сфокусированную, но невидимую кнопку. */
+    visibility: visible;
+}
+/* Действия сообщения — компактнее общего .stme-icon-button (36px — размер
+   для плавающих палитр вроде карты, здесь их много в одной строке). */
+.stme-message-actions .stme-icon-button { width: 26px; height: 26px; border-width: 1px; }
+.stme-message-actions .stme-icon-svg { width: 14px; height: 14px; }
+.stme-message-swipe-counter {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 70%, transparent);
+    min-width: 28px;
+    text-align: center;
+}
+.stme-reasoning-text {
+    font-size: 12.5px;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 75%, transparent);
+    padding: 6px 0 0 2px;
+    white-space: pre-wrap;
+}
