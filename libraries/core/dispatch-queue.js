@@ -12,8 +12,20 @@
  * queue waits — no polling, `pump()` re-runs itself the moment any worker's
  * `run()` settles. A worker only ever runs ONE item at a time; the queue is
  * what absorbs everything beyond that, not concurrent dispatch per worker.
+ *
+ * **Приоритет — вторая, отдельная очередь, не поле сортировки.** `enqueue(workers,
+ * run, { priority: true })` кладёт item в `priorityQueue`; каждый `pump()`
+ * сперва выбирает из неё, и только потом — из обычной `queue`, на том, что
+ * осталось свободным. Найдено по реальной задаче Summary Core (BasicSummary
+ * verify, ROADMAP.md): фолд саммари ВСЕГДА на критическом пути ответа
+ * пользователю, а фоновая ЛЛМ-проверка более высокого уровня саммари — нет;
+ * без приоритета фолд мог бы застрять в очереди ЗА уже идущим фоновым
+ * verify-запросом на том же воркере. `priority: false`/не передан — старое
+ * поведение один в один (обе тестовые сюиты, что были до этого поля,
+ * реального изменения не видят, `priorityQueue` у них всегда пуст).
  */
 export function createDispatchQueue() {
+    const priorityQueue = [];
     const queue = [];
     const running = new Map(); // workerId -> count
 
@@ -25,12 +37,13 @@ export function createDispatchQueue() {
         return running.get(workerId) ?? 0;
     }
 
-    function pump() {
-        while (queue.length) {
-            const worker = pickWorker(queue[0].workers);
-            if (!worker) { queue.shift().reject(new Error('No worker is available.')); continue; }
+    /** Дренирует ОДИН список (приоритетный или обычный) — та же логика, что была у единственного `pump()` раньше, просто над конкретным списком. */
+    function pumpList(list) {
+        while (list.length) {
+            const worker = pickWorker(list[0].workers);
+            if (!worker) { list.shift().reject(new Error('No worker is available.')); continue; }
             if (runningCount(worker.id) > 0) return;
-            const item = queue.shift();
+            const item = list.shift();
             running.set(worker.id, runningCount(worker.id) + 1);
             item.run(worker).then(item.resolve, item.reject).finally(() => {
                 running.set(worker.id, runningCount(worker.id) - 1);
@@ -39,9 +52,15 @@ export function createDispatchQueue() {
         }
     }
 
-    /** Queues one item against the current `workers` list, and runs it via `run(worker)` once a worker is free. */
-    function enqueue(workers, run) {
-        return new Promise((resolve, reject) => { queue.push({ workers, run, resolve, reject }); pump(); });
+    /** Приоритетная очередь тянется первой на каждом прогоне — не "пока не опустеет", а на КАЖДОМ `pump()`, чтобы новый приоритетный item, пришедший, пока обычный уже крутится, всё равно получил следующий освободившийся воркер раньше остальных обычных. */
+    function pump() {
+        pumpList(priorityQueue);
+        pumpList(queue);
+    }
+
+    /** Queues one item against the current `workers` list, and runs it via `run(worker)` once a worker is free. `priority: true` — see doc-comment above. */
+    function enqueue(workers, run, { priority = false } = {}) {
+        return new Promise((resolve, reject) => { (priority ? priorityQueue : queue).push({ workers, run, resolve, reject }); pump(); });
     }
 
     /**
@@ -62,11 +81,11 @@ export function createDispatchQueue() {
      * exist. Empty/exhausted `tiers` rejects with the LAST attempt's error —
      * a single-tier call behaves identically to a bare `enqueue()`.
      */
-    async function enqueueWithFallback(tiers, run, { onAttemptFailed } = {}) {
+    async function enqueueWithFallback(tiers, run, { onAttemptFailed, priority = false } = {}) {
         let lastError = new Error('enqueueWithFallback(): no tiers were given.');
         for (const [tierIndex, tier] of (tiers ?? []).entries()) {
             try {
-                return await withTierTimeout(enqueue(tier.workers, run), tier.timeoutMs);
+                return await withTierTimeout(enqueue(tier.workers, run, { priority }), tier.timeoutMs);
             } catch (error) {
                 lastError = error;
                 onAttemptFailed?.({ tierIndex, error });
@@ -75,7 +94,7 @@ export function createDispatchQueue() {
         throw lastError;
     }
 
-    return { enqueue, enqueueWithFallback, runningCount, queueLength: () => queue.length };
+    return { enqueue, enqueueWithFallback, runningCount, queueLength: () => queue.length + priorityQueue.length };
 }
 
 /** Same tiny pure race pattern as `withTimeout()` in [pipeline-runner.js](pipeline-runner.js) — duplicated on purpose: that library is deliberately self-contained, and this is a handful of lines, not worth a shared abstraction for. */

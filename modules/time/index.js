@@ -5,7 +5,7 @@ import { fillTemplate } from '../../libraries/core/fill-template.js';
 import { createDragHandlers, clampToViewport } from '../../libraries/shared/draggable.js';
 import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, StatBlock, FloatingPanel } from '../../libraries/shared/widgets.js';
 import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
-import { SAMPLER_PRESETS, clampSamplerSettings, clampReasoningSettings, buildCustomPreset } from '../../cores/models/internal-engine.js';
+import { SAMPLER_PRESETS, REASONING_MODES, clampSamplerSettings, clampReasoningSettings, buildCustomPreset } from '../../cores/models/internal-engine.js';
 
 /**
  * Модуль «Время» — определитель внутриигрового времени, как в Alpha.
@@ -282,7 +282,13 @@ export function createTimeModule(host) {
     const topP = signal(defaultSampler.topP);
     const topK = signal(defaultSampler.topK);
     const maxTokens = signal(defaultSampler.maxTokens);
-    const reasoningMode = signal(defaultReasoning.reasoningMode);
+    // «Inherit» здесь ловушка: тогда `reasoning` вообще не уходит в запрос
+    // (см. buildOpenAiReasoning в provider-request.js), и ползунок
+    // Reasoning budget ниже ни на что не влияет — модель сама решает бюджет
+    // и на практике съедает его весь, ничего не оставляя на сам ответ. «RP
+    // Time» включает ризонинг явно по умолчанию, чтобы этот бюджет реально
+    // отправлялся и был управляем (резерв под completion — см. тот же файл).
+    const reasoningMode = signal('enabled');
     const reasoningEffort = signal(defaultReasoning.reasoningEffort);
     const reasoningBudget = signal(defaultReasoning.reasoningBudget);
     // Имя для «Save as preset» — своё поле формы, не персистится само по
@@ -858,7 +864,11 @@ export function createTimeModule(host) {
             topK.set(sampler.topK);
             maxTokens.set(sampler.maxTokens);
             const reasoning = clampReasoningSettings(saved.value);
-            reasoningMode.set(reasoning.reasoningMode);
+            // Старая запись без явного `reasoningMode` (до появления этих
+            // полей) обязана попасть на наш дефолт `enabled`, а не на общий
+            // `inherit` движка — та же причина, что у начального значения
+            // сигнала выше.
+            reasoningMode.set(REASONING_MODES.includes(saved.value.reasoningMode) ? reasoning.reasoningMode : 'enabled');
             reasoningEffort.set(reasoning.reasoningEffort);
             reasoningBudget.set(reasoning.reasoningBudget);
         }

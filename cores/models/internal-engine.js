@@ -142,6 +142,15 @@ export function resolveGenerateRequest(params, worker) {
     return {
         prompt: String(source.prompt ?? ''),
         systemPrompt: String(source.systemPrompt ?? REQUEST_DEFAULTS.systemPrompt),
+        // Multi-turn escape hatch, `openai` format only (see buildOpenAiRequest()
+        // in provider-request.js) — `null` (not `[]`) when absent so the openai
+        // builder can tell "no messages given" apart from "given but empty" and
+        // fall back to the prompt/systemPrompt sugar above unambiguously. First
+        // real caller: Summary Core's verify-expand/redo cycle (ROADMAP.md),
+        // which needs a real assistant turn (the previous draft) plus a second
+        // system turn (the reviewer's instruction) — something prompt/systemPrompt
+        // alone cannot express at all.
+        messages: Array.isArray(source.messages) && source.messages.length ? source.messages : null,
         temperature: Number.isFinite(source.temperature) ? source.temperature : samplerDefaults.temperature,
         maxTokens: Number.isFinite(source.maxTokens) ? source.maxTokens : samplerDefaults.maxTokens,
         topP: Number.isFinite(source.topP) ? source.topP : samplerDefaults.topP,
@@ -285,7 +294,7 @@ export function createInternalEngineModelsCore(host, { publish } = {}) {
     // attempt. An UNPINNED caller with no fallback list also behaves exactly
     // as before — the "full pool, load-balanced" tier is still just one tier.
     const unregisters = [
-        host.own.register('model.generate', params => {
+        host.own.register('model.generate', (params, meta) => {
             const requestId = params?.requestId ?? generateRequestId();
             const primaryPool = params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers;
             const stallMs = params?.stallMs || undefined;
@@ -312,6 +321,12 @@ export function createInternalEngineModelsCore(host, { publish } = {}) {
                     });
                 },
                 {
+                    // `meta.priority` — call-site flag, see request.js's doc-comment.
+                    // Only value it's meaningful for right now is `'pipeline'`
+                    // (Summary Core's `askModelToFold()`, always on the generation
+                    // critical path) — anything else (including undefined, the
+                    // normal case) is background, same as before this field existed.
+                    priority: meta?.priority === 'pipeline',
                     onAttemptFailed: ({ tierIndex, error }) => publishEvent('model.generate.retrying', {
                         requestId, failedWorkerId: lastWorkerId, reason: error.message,
                         nextWorkerId: tiers[tierIndex + 1]?.workers?.[0]?.id,

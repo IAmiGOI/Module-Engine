@@ -137,6 +137,8 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     const summaryLevels = signal([]);
     const summaryProtectedWindow = signal(20);
     const summaryWorkerId = signal('');
+    const summaryVerifyEnabled = signal(false);
+    const summaryVerifyWorkerId = signal('');
     // Список трекеров (с полями) для «Insert a value» под редактором кода —
     // источник, откуда пикер берёт настоящие `get "id:field"` ключи, а не
     // заставляет вводить их руками (реальный `id` трекера — не его название).
@@ -686,6 +688,8 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         summaryLevels.set(result.value.levels.map(toLevelRecord));
         summaryProtectedWindow.set(result.value.protectedWindow);
         summaryWorkerId.set(result.value.workerId ?? '');
+        summaryVerifyEnabled.set(Boolean(result.value.verifyEnabled));
+        summaryVerifyWorkerId.set(result.value.verifyWorkerId ?? '');
     }
 
     function addSummaryLevel() {
@@ -700,6 +704,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         const levels = summaryLevels.peek().map(record => ({ batchSize: record.batchSize.peek() }));
         const result = await call('summary.configure', {
             levels, protectedWindow: summaryProtectedWindow.peek(), workerId: summaryWorkerId.peek().trim() || null,
+            verifyEnabled: summaryVerifyEnabled.peek(), verifyWorkerId: summaryVerifyWorkerId.peek().trim() || null,
         });
         if (result.ok) {
             summaryLevels.set(result.value.levels.map(toLevelRecord));
@@ -770,6 +775,15 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             ),
             h('div', { class: 'stme-summary-levels' },
                 computed(() => summaryLevels().map((record, index) => summaryLevelRow(record, index))),
+            ),
+            Row(
+                Toggle('Verify level >1 summaries', summaryVerifyEnabled, {
+                    hint: 'After folding a summary of summaries, ask the model to double-check it against the original content one level further down before accepting it — catches drift the higher up the pyramid you go. Roughly doubles model calls for those folds; runs in the background, never delays a reply.',
+                }),
+                Field('Verify worker', Select(summaryVerifyWorkerId, computed(() => [
+                    { value: '', label: 'Same as fold worker' },
+                    ...workers().map(record => ({ value: record.id(), label: record.id() })),
+                ]))),
             ),
             Row(
                 Button('+ Add level', addSummaryLevel),

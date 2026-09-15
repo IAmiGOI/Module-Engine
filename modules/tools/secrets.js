@@ -8,6 +8,8 @@ import {
     pipelineStage,
     stTool,
 } from '../../libraries/shared/module-kit.js';
+import { computeInsertIndex } from '../../libraries/shared/chat-injection.js';
+export { computeInsertIndex }; // back-compat for existing importers/tests, per drop-classify.js's own precedent
 
 /**
  * Tool «Secrets» (папка «Tools») — приватный список секретов модели, один
@@ -187,11 +189,6 @@ export function buildSecretsPrompt(secrets) {
         '[Private secrets — your persistent list of hidden story facts, invisible to the player. Each secret names WHO KNOWS it: respect that knowledge — a character who does not know must not act as if they do. Update secrets by id as things change; remove one once it is no longer secret.]',
         ...secrets.map(secret => `- [${secret.id}] (known by: ${secret.characters}) ${secret.title}: ${secret.content}`),
     ].join('\n');
-}
-
-/** Куда в `chat` встаёт блок: `depth` сообщений от конца, depth 0 — «прямо перед ответом модели», как у блокнота. */
-export function computeInsertIndex(chatLength, depth) {
-    return Math.max(0, Math.min(chatLength, chatLength - Math.max(0, Number(depth) || 0)));
 }
 
 /**

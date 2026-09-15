@@ -60,7 +60,7 @@ export function GenerationSettingsPanel(record, presets, { onApplyPreset, onSave
             Slider('Temperature', record.temperature, { min: 0, max: 2, step: 0.05 }),
             Slider('Top P', record.topP, { min: 0, max: 1, step: 0.01 }),
             Slider('Top K', record.topK, { min: 0, max: 200, step: 1 }),
-            Slider('Max tokens', record.maxTokens, { min: 1, max: 4096, step: 1 }),
+            Slider('Max tokens', record.maxTokens, { min: 1, max: 32768, step: 1 }),
         ),
         Row(
             Field('Reasoning', Select(record.reasoningMode, REASONING_MODE_OPTIONS)),

@@ -8,8 +8,16 @@
  * ARCHITECTURE.md) — never a default. On timeout, resolves (never rejects)
  * with the same standard envelope any other failure uses — see "Контракт
  * на ошибки": nothing that crosses a bus boundary ever throws.
+ *
+ * `priority` — opt-in, threaded straight through to the handler's `meta`
+ * (see contract-bus.js's `resolve()`) next to `callerId`, same shape, no new
+ * primitive. Existing for exactly one real consumer so far: Summary Core's
+ * `askModelToFold()` marks itself `priority: 'pipeline'` so it doesn't queue
+ * behind an unrelated background verify call on the same model worker (see
+ * ARCHITECTURE.md's "Приоритет запросов" for why this is a call-site flag,
+ * not a contract-registration property, here).
  */
-export function request(bus, contract, { params, when, timeoutMs } = {}) {
+export function request(bus, contract, { params, when, timeoutMs, priority } = {}) {
     return new Promise(resolve => {
         let done = false;
         let timer = null;
@@ -20,7 +28,7 @@ export function request(bus, contract, { params, when, timeoutMs } = {}) {
         // hit it mid-initialization. The temporary no-op is harmless there —
         // nothing real is subscribed yet to tear down.
         let unsubscribe = () => {};
-        unsubscribe = bus.subscribe(contract, { params, when }, result => {
+        unsubscribe = bus.subscribe(contract, { params, when, priority }, result => {
             if (done) return;
             done = true;
             if (timer) clearTimeout(timer);

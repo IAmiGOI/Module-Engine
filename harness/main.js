@@ -184,7 +184,7 @@ const { engine } = wired;
 // сама модель, доступный из консоли для проверки любого зарегистрированного
 // инструмента без настоящей LLM под рукой.
 window.stmeBetaHarness = {
-    ...wired, interceptTarget, backendCalls,
+    ...wired, interceptTarget, backendCalls, stContext,
     invokeTool: (name, args) => stContext.functionTools.get(name)?.action(args),
 };
 

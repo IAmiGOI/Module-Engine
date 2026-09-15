@@ -8,6 +8,8 @@ import {
     pipelineStage,
     stTool,
 } from '../../libraries/shared/module-kit.js';
+import { computeInsertIndex } from '../../libraries/shared/chat-injection.js';
+export { computeInsertIndex }; // back-compat for existing importers/tests, per drop-classify.js's own precedent
 
 /**
  * Под-модуль «Notebook» Модуля «Tools» — приватный блокнот модели, как в
@@ -186,11 +188,6 @@ export function buildNotebookPrompt(notes) {
         '[Private notebook — your persistent working memory, invisible to the player. Keep it updated as things change: goals, needs, current state, secrets, plans. Reference a note by its id to update it instead of duplicating it.]',
         ...notes.map(note => `- [${note.id}] ${note.title}: ${note.content}`),
     ].join('\n');
-}
-
-/** Куда в `chat` встаёт заметка: `depth` сообщений от конца — depth 0 значит «прямо перед тем, что сейчас отвечает модель», как у Alpha's `@0`. */
-export function computeInsertIndex(chatLength, depth) {
-    return Math.max(0, Math.min(chatLength, chatLength - Math.max(0, Number(depth) || 0)));
 }
 
 /**

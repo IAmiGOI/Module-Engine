@@ -186,7 +186,15 @@ export function FloatingStack(itemsSignal, { corner = 'top-left', renderItem } =
  * сообщений, панель — ПОСТОЯННОЕ окно с содержимым. Общее у них только то,
  * что оба плавают.
  */
-export function FloatingPanel(title, { position, size, collapsed, onToggle, onClose, onResize, resizable = Boolean(onResize), drag } = {}, ...children) {
+export function FloatingPanel(title, {
+    position, size, collapsed, onToggle, onClose, onResize, resizable = Boolean(onResize), drag,
+    // `className` (extra CSS class, e.g. a fullscreen-default variant) and
+    // `minWidth`/`minHeight` (px, ALWAYS enforced — unlike width/height,
+    // which stay unset until the user actually resizes) added for the map
+    // module's window (ROADMAP.md 5.43): a window that opens near-fullscreen
+    // but must not be shrunk below a usable size.
+    className, minWidth, minHeight,
+} = {}, ...children) {
     // Ключ попадает в стиль ТОЛЬКО когда значение есть. Пустая строка здесь
     // означала бы «сбросить», а размер окну задаёт сам браузер через
     // `resize: both` — записав width: '' на любой перерисовке, мы отменяли бы
@@ -199,6 +207,8 @@ export function FloatingPanel(title, { position, size, collapsed, onToggle, onCl
         if (top !== undefined) next.top = `${top}px`;
         if (width) next.width = `${width}px`;
         if (height) next.height = `${height}px`;
+        if (minWidth) next.minWidth = `${minWidth}px`;
+        if (minHeight) next.minHeight = `${minHeight}px`;
         // Неизменяемое окно: CSS `resize: both` из panel.css бьётся инлайном
         // `resize: none` (инлайн специфичнее любого правила таблицы).
         if (!resizable) next.resize = 'none';
@@ -206,7 +216,7 @@ export function FloatingPanel(title, { position, size, collapsed, onToggle, onCl
     });
 
     return h('div', {
-        class: 'stme-floating-panel',
+        class: className ? `stme-floating-panel ${className}` : 'stme-floating-panel',
         style,
         // Растягивание заканчивается отпусканием указателя над самим окном.
         // Читаем размер у события — тот же приём, что и с координатами при
@@ -484,6 +494,24 @@ export function HoldButton(label, onConfirm, { holdMs = 1200, variant = 'danger'
     );
 }
 
+/**
+ * An icon-only button — a distinct affordance from `Button()` (which always
+ * carries ST's `menu_button` text-button chrome): a small round tool button
+ * showing just an icon (an inline SVG tree or, at a pinch, an emoji string),
+ * with an `active` state for toggle-style tool palettes (ROADMAP.md 5.47 —
+ * the map module's marker/region tool picker, floating over the canvas
+ * rather than sitting in a text-labelled top toolbar).
+ */
+export function IconButton(icon, onClick, { active = false, title, disabled = false } = {}) {
+    return h('button', {
+        type: 'button',
+        class: `stme-icon-button${active ? ' stme-icon-button-active' : ''}`,
+        title,
+        disabled,
+        'on:click': onClick,
+    }, icon);
+}
+
 /** Ключёванный список: `renderItem` обязан проставить `key` — по нему diff.js и опознаёт элементы при перестановке. */
 export function List(itemsSignal, renderItem) {
     return computed(() => itemsSignal().map(renderItem));
@@ -567,5 +595,50 @@ export function Banner(textSignal, { tone = 'warn', icon = '⚠', action, action
         h('span', { class: 'stme-banner-icon' }, icon),
         h('span', { class: 'stme-banner-text' }, textSignal),
         action ? computed(() => Button(busy && busy() ? 'Working…' : actionLabel, action, { disabled: Boolean(busy && busy()) })) : null,
+    );
+}
+
+/**
+ * A single round button fixed to the SCREEN, not tied to any panel/tab —
+ * for a Module that wants its own always-visible launch point independent
+ * of the shared launcher dock in `index.js` (ROADMAP.md 5.43, the map
+ * module's dock button: "Кнопка должна быть на экране в целом... кнопка
+ * дефолтно находится в правом нижнем углу и её можно перетягивать").
+ *
+ * Draggable by passing `drag` from [draggable.js](draggable.js)'s
+ * `createDragHandlers(positionSignal, { onDrop, onClick })` — `onClick`
+ * (not a plain `on:click`) is what tells a near-stationary release apart
+ * from an actual drag, since the same pointer handlers serve both.
+ */
+export function DockButton(icon, { position, drag, title } = {}) {
+    const style = computed(() => {
+        const { left, top } = (typeof position === 'function' ? position() : position) ?? {};
+        const next = {};
+        if (left !== undefined) next.left = `${left}px`;
+        if (top !== undefined) next.top = `${top}px`;
+        return next;
+    });
+    return h('button', { type: 'button', class: 'stme-dock-button', style, title, ...(drag ?? {}) }, icon);
+}
+
+/**
+ * A thin protruding tab at the edge of a container, clicked (not hovered —
+ * that reveal style is the SHARED launcher dock's own thing, see
+ * `index.js`'s `addLauncherDock`) to slide out a settings drawer alongside
+ * it. Built for the map module's window ("справа от карты — небольшой
+ * выступ, разворачивает полные настройки"), but generic: any floating
+ * window with occasional settings that shouldn't compete with its main
+ * content for space can reuse it.
+ *
+ * Pure, like every other widget here: `open` is a signal the CALLER owns,
+ * `onToggle` is how this widget asks for it to change — no state of its own.
+ */
+export function EdgeDrawer(open, { onToggle, title = 'Settings' } = {}, ...children) {
+    return h('div', { class: computed(() => `stme-edge-drawer${open() ? ' stme-edge-drawer-open' : ''}`) },
+        h('button', {
+            type: 'button', class: 'stme-edge-drawer-tab', title,
+            'on:click': () => onToggle?.(!open()),
+        }, computed(() => (open() ? '›' : '‹'))),
+        h('div', { class: 'stme-edge-drawer-body' }, children),
     );
 }

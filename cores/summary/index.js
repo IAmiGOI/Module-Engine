@@ -1,8 +1,10 @@
 import { request } from '../../libraries/shared/request.js';
+import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 
 const SETTINGS_NAMESPACE = 'core.summary';
 const MEMORY_NAMESPACE = 'core.summary';
 const SUMMARIES_KEY = 'summaries';
+const PENDING_KEY = 'pendingVerification';
 const PREPARE_PIPELINE = 'generation.prepare';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const FOLD_CONTRACT = 'summary.check';
@@ -11,6 +13,10 @@ const FOLD_STAGE_ID = 'summary:fold';
 const INJECT_STAGE_ID = 'summary:inject';
 /** Запас сверх protectedWindow+batchSize, который реально запрашивается у chatHistory.messages — цепочка ToolCall/сирота может съесть несколько сообщений, не дав ни одной новой единицы для подсчёта. */
 const FETCH_MARGIN = 30;
+/** Сколько раз ПЕРЕДЕЛАТЬ/РАСШИРИТЬ саммари, прежде чем принять как есть с пометкой (решение владельца: "не более двух отправок на переделку", один общий счётчик на оба вердикта, не раздельно). */
+const MAX_VERIFY_ATTEMPTS = 2;
+/** Сколько раз повторить САМ verify-вызов при сетевом сбое/непарсящемся ответе, прежде чем сдаться — это фон, ретраи почти бесплатны (решение владельца: "раз это в фоне — можем запрашивать повторные"). Не тратит попытку expand/redo. */
+const MAX_VERIFY_TRANSPORT_RETRIES = 3;
 
 export const DEFAULT_SETTINGS = Object.freeze({
     // Один уровень — один проход свёртки: N нижних элементов (сырых сообщений
@@ -22,6 +28,17 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // только за пределами этого окна накопился целый батч уровня 1.
     protectedWindow: 20,
     workerId: null,
+    // Проверка саммари уровня >1 вызовом ЛЛМ (ROADMAP.md) — выключена по
+    // умолчанию: удваивает-утраивает число вызовов модели на каждый фолд
+    // уровня >1, осознанный компромисс владельца проекта, но не то, что
+    // должно молча включиться всем существующим пользователям разом.
+    verifyEnabled: false,
+    // Отдельный воркер-ревьюер (решение владельца: "отдельного, без
+    // настроек, подберём оптимального по ходу") — если не задан, падает на
+    // тот же workerId, что и сам фолд, а не на пул целиком: ревьюер должен
+    // быть таким же ПРЕДСКАЗУЕМЫМ по стоимости/поведению, как фолд, просто
+    // отдельно перенастраиваемым.
+    verifyWorkerId: null,
 });
 
 function clampInt(value, min, max, fallback) {
@@ -39,7 +56,28 @@ export function clampSummarySettings(values = {}) {
         levels,
         protectedWindow: clampInt(values.protectedWindow, 1, 2000, DEFAULT_SETTINGS.protectedWindow),
         workerId: values.workerId ?? null,
+        verifyEnabled: Boolean(values.verifyEnabled),
+        verifyWorkerId: values.verifyWorkerId ?? null,
     };
+}
+
+/**
+ * Маркер «не до конца проверено» (BasicSummary verify, ROADMAP.md) — живёт
+ * ВНУТРИ `record.text` (не отдельным полем), потому что его нужно вырезать
+ * регексом в КАЖДОМ месте, где этот текст уходит СЛЕДУЮЩЕМУ сайдкар-вызову
+ * (обычный фолд следующего уровня читает чужого ребёнка через
+ * `buildLevelNPrompt()`, verify следующего уровня читает через
+ * `resolveOriginalContent()`) — для сайдкара это шум, не факт про историю.
+ * Только `formatSummaryMessage()` (путь к ОСНОВНОЙ ролевой модели,
+ * `injectIntoPrompt`) оставляет его как есть — решение владельца: "должно
+ * приниматься в сообщениях с пометкой... но не должно, если саммари
+ * считается точным".
+ */
+const UNVERIFIED_PREFIX = '[[UNVERIFIED]]This summary may be incomplete or slightly inaccurate — if the ongoing story or the user contradicts it, trust them over this summary.[[/UNVERIFIED]]\n\n';
+const UNVERIFIED_RE = /^\[\[UNVERIFIED\]\][\s\S]*?\[\[\/UNVERIFIED\]\]\n\n/;
+
+function stripUnverifiedMarker(text) {
+    return String(text ?? '').replace(UNVERIFIED_RE, '');
 }
 
 function makeSummaryId(now, random) {
@@ -96,9 +134,19 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
 
     let settings = clampSummarySettings(DEFAULT_SETTINGS);
     let summaries = []; // все саммари ТЕКУЩЕГО чата — и активные, и уже свёрнутые в уровень выше (история, не мусор)
+    // Черновики уровня >1, ожидающие verify (BasicSummary verify, ROADMAP.md)
+    // — НЕ часть `summaries`/`activeSummaries()` пока не промоутятся: их дети
+    // остаются active всё это время, поэтому окно не "пустеет" на время
+    // проверки. `{ draft, batchIds, prompt, attempts }` — `draft` та же форма,
+    // что обычная запись (без `folded`), `batchIds` — id детей этого батча
+    // (кого пометить `folded:true` при промоуте), `prompt` — тот самый
+    // `buildLevelNPrompt(batch)`, что породил `draft.text` (нужен дословно
+    // тем же, чтобы `refoldWithFeedback()` мог продолжить тот же "разговор").
+    let pending = [];
 
-    async function call(contract, params) {
-        return request(host.own, contract, { params });
+    /** `options` — сейчас только `{ priority }` (см. request.js) — форвардится как есть, необязателен. */
+    async function call(contract, params, options) {
+        return request(host.own, contract, { params, ...options });
     }
 
     // Своя очередь на запись — тот же приём, что у Ядра лорбука/истории чата:
@@ -130,6 +178,19 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         return summaries;
     }
 
+    /** Отдельный ключ, тот же неймспейс — переживает перезагрузку страницы посреди verify (см. `load()`/`reloadSummariesForChat()`, оба резюмируют оставшиеся записи). */
+    async function loadPending() {
+        const result = await call('storage.chatMemory.get', { namespace: MEMORY_NAMESPACE, key: PENDING_KEY, fallback: [] });
+        pending = result.ok ? result.value ?? [] : [];
+        return pending;
+    }
+
+    async function savePending(next) {
+        pending = next;
+        await call('storage.chatMemory.set', { namespace: MEMORY_NAMESPACE, key: PENDING_KEY, value: next });
+        await call('storage.chatMemory.flush');
+    }
+
     /**
      * Перезагрузка при смене активного чата — ТА ЖЕ гонка, что задокументирована
      * у Модуля «Notebook» (modules/tools/notebook.js, doc-comment на
@@ -154,7 +215,13 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     function reloadSummariesForChat() {
         return enqueueWrite(async () => {
             await loadSummaries();
+            await loadPending();
             publishEvent('summary.reloaded', { count: activeSummaries(summaries).length });
+            // Резюмируем verify для того, что не успело промоутиться до
+            // смены/перезагрузки чата — fire-and-forget, НЕ await: оно само
+            // дальше пишет через ту же enqueueWrite()-очередь, эта задача
+            // обязана освободить её сейчас, а не ждать целого цикла verify.
+            for (const entry of pending) runPendingVerification(entry.draft.id);
         });
     }
 
@@ -178,8 +245,9 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     // свёртка батча в 10 сообщений регулярно упиралась в потолок и обрезала
     // саммари на полуслове. Реальная жалоба пользователя.
     const FOLD_MAX_TOKENS = 5000;
+    /** `priority: 'pipeline'` — ВСЕГДА, у обоих вызывающих (`foldRawUnits()`/`foldChildSummaries()`): фолд всегда на критическом пути ответа пользователю (см. dispatch-queue.js), в отличие от фонового verify/refold ниже, который его НИКОГДА не передаёт — иначе фолд рисковал бы застрять в очереди воркера ЗА уже идущей фоновой проверкой. */
     async function askModelToFold(systemPrompt, prompt) {
-        const result = await call('model.generate', { prompt, systemPrompt, maxTokens: FOLD_MAX_TOKENS, workerId: settings.workerId ?? undefined });
+        const result = await call('model.generate', { prompt, systemPrompt, maxTokens: FOLD_MAX_TOKENS, workerId: settings.workerId ?? undefined }, { priority: 'pipeline' });
         if (!result.ok) throw new Error(result.error.message);
         return String(result.value ?? '').trim();
     }
@@ -188,8 +256,9 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         return units.flat().map(message => `${message.name || (message.isUser ? 'User' : 'Character')}: ${message.text}`).join('\n');
     }
 
+    /** `stripUnverifiedMarker()` — чужой ребёнок мог сам быть принят "как есть" после исчерпанных попыток verify; сайдкару, читающему его как источник для СЛЕДУЮЩЕГО уровня, эта пометка — шум, не факт истории (см. doc-comment над `UNVERIFIED_PREFIX`). */
     function buildLevelNPrompt(children) {
-        return children.map(child => child.text).join('\n\n');
+        return children.map(child => stripUnverifiedMarker(child.text)).join('\n\n');
     }
 
     /**
@@ -276,6 +345,162 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     }
 
     /**
+     * Проверка саммари уровня >1 вызовом ЛЛМ (BasicSummary verify,
+     * ROADMAP.md) — решение владельца проекта, полная раскладка в истории
+     * обсуждения, не только в этом doc-comment. Уровень 1 НЕ проверяется
+     * (он и так читает сырые сообщения напрямую). Ревьюер видит содержимое
+     * НА ОДИН УРОВЕНЬ НИЖЕ прямых детей («через один», grandparent-check):
+     * для уровня 2 это сырые сообщения (`coveredIds` детей-уровня-1 — mesid),
+     * для уровня 3 — тексты саммари уровня 1 (`coveredIds` детей-уровня-2).
+     * Дети уровня 1, даже уже свёрнутые в уровень 2 (`folded:true`), остаются
+     * в `summaries` НАВСЕГДА («история, не мусор» — см. doc-comment у самого
+     * поля `summaries`), поэтому их тексты всегда достижимы для более
+     * высокого уровня.
+     */
+    async function resolveOriginalContent(children) {
+        const parts = [];
+        for (const child of children) {
+            if (child.level === 1) {
+                const fetched = await call('chatHistory.messages', { mesids: child.coveredIds });
+                const messages = fetched.ok ? fetched.value ?? [] : [];
+                const byMesid = new Map(messages.map(message => [message.mesid, message]));
+                parts.push(child.coveredIds.map(mesid => {
+                    const message = byMesid.get(String(mesid));
+                    return message ? `${message.name || (message.isUser ? 'User' : 'Character')}: ${message.text}` : '[message unavailable — context may differ]';
+                }).join('\n'));
+            } else {
+                parts.push(child.coveredIds.map(id => {
+                    const found = summaries.find(record => record.id === id);
+                    return found ? stripUnverifiedMarker(found.text) : '[summary unavailable — context may differ]';
+                }).join('\n\n'));
+            }
+        }
+        return parts.join('\n\n');
+    }
+
+    /** Схема-клэмп ответа ревьюера — та же дисциплина, что `clampSummarySettings()`: неожиданная форма (модель сболтнула не то) никогда не долетает до вызывающего кода как есть. */
+    function clampVerifyVerdict(parsed) {
+        if (!parsed || typeof parsed !== 'object') return null;
+        if (parsed.verdict === 'ok') return { verdict: 'ok' };
+        if (parsed.verdict === 'expand' && parsed.instruction) return { verdict: 'expand', instruction: String(parsed.instruction) };
+        if (parsed.verdict === 'redo') return { verdict: 'redo', reason: parsed.reason ? String(parsed.reason) : undefined };
+        return null;
+    }
+
+    /** Вызов ревьюера — НИКОГДА `priority: 'pipeline'` (см. doc-comment над `askModelToFold()`): это фон, ему не место впереди реального фолда в очереди воркера. `verifyWorkerId` с фоллбэком на основной `workerId` — не отдельный пул по умолчанию, просто перенастраиваемый отдельно (см. DEFAULT_SETTINGS). Непарсящийся ответ — НЕ ошибка, просто "нет вердикта" вызывающему коду: это фон, вызывающий сам решает, сколько раз повторить. */
+    async function askModelToVerify(draft, originalContent) {
+        const prompt = `A higher-level summary was produced by condensing several lower-level summaries. Verify it against the ORIGINAL content it is supposed to represent.\n\nORIGINAL CONTENT:\n${originalContent}\n\nSUMMARY TO VERIFY:\n${stripUnverifiedMarker(draft.text)}\n\nReply with ONLY a JSON object, one of:\n- {"verdict":"ok"} — the summary faithfully represents the original; nothing important is missing or wrong.\n- {"verdict":"expand","instruction":"..."} — the summary is missing something important; "instruction" names exactly what to add.\n- {"verdict":"redo","reason":"..."} — the summary is significantly wrong or misleading and should be written from scratch.`;
+        const result = await call('model.generate', { prompt, maxTokens: FOLD_MAX_TOKENS, workerId: settings.verifyWorkerId ?? settings.workerId ?? undefined });
+        if (!result.ok) return { error: result.error.message };
+        const verdict = clampVerifyVerdict(parseModelJson(result.value));
+        return verdict ? { verdict } : { malformed: true };
+    }
+
+    const COMBINE_SYSTEM_PROMPT = 'Combine the following summaries into one, more condensed summary. Preserve important facts, character goals, and plot developments. Output ONLY the summary text, no preamble.';
+
+    /**
+     * Расширение/переделка — НЕ вызывает `foldChildSummaries()` заново (та
+     * форма промпта не несёт черновика/фидбека). N-turn контракт
+     * `model.generate` (`messages`, ROADMAP.md), только `openai`-формат —
+     * решение владельца: `[system, user, system]` для переделки (никакого
+     * прошлого текста — свежая генерация с нуля), `[system, user, agent,
+     * system]` для расширения (прошлый черновик — ассистентом, инструкция
+     * ревьюера — вторым system последним ходом). `originalPrompt` — тот же
+     * `buildLevelNPrompt(batch)`, что породил исходный черновик (см. `pending`
+     * doc-comment) — тот же "user"-ход, что и в первой попытке.
+     */
+    async function refoldWithFeedback(draft, verdict, originalPrompt) {
+        const messages = verdict.verdict === 'expand'
+            ? [
+                { role: 'system', content: COMBINE_SYSTEM_PROMPT },
+                { role: 'user', content: originalPrompt },
+                { role: 'assistant', content: stripUnverifiedMarker(draft.text) },
+                { role: 'system', content: `This summary is missing something important: ${verdict.instruction}. Expand it to include this, keeping everything else it already says. Output ONLY the full revised summary text, no preamble.` },
+              ]
+            : [
+                { role: 'system', content: COMBINE_SYSTEM_PROMPT },
+                { role: 'user', content: originalPrompt },
+                { role: 'system', content: `The previous attempt was discarded${verdict.reason ? ` — ${verdict.reason}` : ''}. Produce a fresh summary from scratch. Output ONLY the summary text, no preamble.` },
+              ];
+        const result = await call('model.generate', { messages, maxTokens: FOLD_MAX_TOKENS, workerId: settings.workerId ?? undefined });
+        if (!result.ok) throw new Error(result.error.message);
+        return String(result.value ?? '').trim();
+    }
+
+    /**
+     * НЕ обёрнута в `enqueueWrite()` — единственный вызывающий,
+     * `checkAndFold()`, уже выполняется ВНУТРИ своего собственного
+     * `enqueueWrite()`; обернуть ещё раз означало бы ждать задачу,
+     * поставленную ПОСЛЕ текущей в ту же очередь, из самой текущей задачи —
+     * дедлок. Взаимоисключение здесь уже обеспечено внешним `enqueueWrite()`.
+     */
+    async function pushPendingRaw(entry) {
+        await savePending([...pending, entry]);
+    }
+
+    async function savePendingEntry(entry) {
+        return enqueueWrite(async () => { await savePending(pending.map(item => (item.draft.id === entry.draft.id ? entry : item))); });
+    }
+
+    /** Промоут — дети батча помечаются `folded:true`, черновик уходит в `summaries` настоящей активной записью, запись убирается из буфера. `unreliable` — исчерпаны попытки (или сам verify не смог ответить вовсе) — добавляет `UNVERIFIED_PREFIX`, решение владельца п.16: "принимаем, но помечаем внутри самого саммари". */
+    async function promotePending(id, { unreliable }) {
+        return enqueueWrite(async () => {
+            const entry = pending.find(item => item.draft.id === id);
+            if (!entry) return; // уже промоутнута/удалена другим путём
+            const finalText = unreliable ? `${UNVERIFIED_PREFIX}${stripUnverifiedMarker(entry.draft.text)}` : entry.draft.text;
+            const record = { ...entry.draft, text: finalText };
+            const batchIds = new Set(entry.batchIds);
+            let next = summaries.map(item => (batchIds.has(item.id) ? { ...item, folded: true } : item));
+            next = [...next, record];
+            await saveSummaries(next);
+            await savePending(pending.filter(item => item.draft.id !== id));
+            publishEvent('summary.folded', { count: next.length });
+            publishEvent('summary.verify.completed', { id, verdict: unreliable ? 'accepted-unverified' : 'ok' });
+        });
+    }
+
+    /**
+     * Гоняется detached (fire-and-forget) — вызывающий код (checkAndFold()/
+     * load()/reloadSummariesForChat()) НИКОГДА её не ждёт: цикл фолда и ответ
+     * пользователю не должны ждать фоновую проверку (решение владельца:
+     * "проводить его когда есть свободное место" — настоящего сигнала
+     * "воркер свободен" строить не нужно, общая очередь и так это отражает,
+     * см. dispatch-queue.js). Каждая итерация сама коммитит прогресс через
+     * `savePendingEntry()`/`promotePending()` — переживает и обрыв прямо
+     * посреди цикла (следующий `load()`/`st.chatChanged` резюмирует с того
+     * же `attempts`/`draft.text`, не с нуля).
+     */
+    async function runPendingVerification(id) {
+        const entry = pending.find(item => item.draft.id === id);
+        if (!entry) return;
+
+        const children = entry.batchIds.map(childId => summaries.find(record => record.id === childId)).filter(Boolean);
+        const originalContent = await resolveOriginalContent(children);
+
+        for (;;) {
+            let verdict = null;
+            for (let attempt = 0; attempt < MAX_VERIFY_TRANSPORT_RETRIES && !verdict; attempt += 1) {
+                const outcome = await askModelToVerify(entry.draft, originalContent);
+                if (outcome.verdict) { verdict = outcome.verdict; break; }
+                publishEvent('summary.verify.failed', { id, reason: outcome.error ?? 'malformed verifier response' });
+            }
+            if (!verdict) { await promotePending(id, { unreliable: true }); return; }
+            if (verdict.verdict === 'ok') { await promotePending(id, { unreliable: false }); return; }
+            if (entry.attempts >= MAX_VERIFY_ATTEMPTS) { await promotePending(id, { unreliable: true }); return; }
+
+            entry.attempts += 1;
+            try {
+                entry.draft = { ...entry.draft, text: await refoldWithFeedback(entry.draft, verdict, entry.prompt) };
+            } catch (error) {
+                publishEvent('summary.verify.failed', { id, reason: error?.message ?? String(error) });
+                await promotePending(id, { unreliable: true }); // refold сам не смог ответить — не крутим цикл вечно
+                return;
+            }
+            await savePendingEntry(entry);
+        }
+    }
+
+    /**
      * Порог + каскад — этап `generation.prepare` (то же «освежить своё
      * состояние до ответа», что и у Tracker'а). Уровень 1 читает реальные
      * сообщения; каждый следующий уровень — уже готовые тексты уровня ниже,
@@ -328,12 +553,29 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
                     while (pool.length >= level.batchSize) {
                         const batch = pool.slice(0, level.batchSize);
                         const record = await foldChildSummaries(batch, parentLevel + 1);
-                        const batchIds = new Set(batch.map(child => child.id));
-                        list = list.map(item => (batchIds.has(item.id) ? { ...item, folded: true } : item));
-                        list = [...list, record];
                         pool = pool.slice(level.batchSize);
-                        await saveSummaries(list);
-                        publishEvent('summary.folded', { count: list.length });
+
+                        if (settings.verifyEnabled) {
+                            // НЕ идёт в `list`/`summaries` сразу и НЕ помечает
+                            // детей `folded` — черновик уходит в буфер, verify
+                            // гоняется detached (см. `runPendingVerification()`
+                            // doc-comment). Дети остаются active всё это время:
+                            // окно контекста не "пустеет" на время проверки, а
+                            // следующий уровень каскада (levelIndex+1) честно не
+                            // видит ещё не промоутнутый черновик — заберёт его
+                            // на СЛЕДУЮЩЕМ вызове `checkAndFold()`, когда он уже
+                            // будет в `summaries`.
+                            const entry = { draft: record, batchIds: batch.map(child => child.id), prompt: buildLevelNPrompt(batch), attempts: 0 };
+                            await pushPendingRaw(entry);
+                            publishEvent('summary.verify.started', { id: record.id, level: record.level });
+                            runPendingVerification(record.id); // fire-and-forget — см. doc-comment функции
+                        } else {
+                            const batchIds = new Set(batch.map(child => child.id));
+                            list = list.map(item => (batchIds.has(item.id) ? { ...item, folded: true } : item));
+                            list = [...list, record];
+                            await saveSummaries(list);
+                            publishEvent('summary.folded', { count: list.length });
+                        }
                     }
                 }
 
@@ -443,6 +685,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     async function load() {
         await loadSettings();
         await loadSummaries();
+        await loadPending();
         host.own.register(FOLD_CONTRACT, () => checkAndFold());
         host.own.register(INJECT_CONTRACT, params => injectIntoPrompt(params));
         await call('pipeline.stages.add', {
@@ -453,6 +696,10 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
             pipelineId: BEFORE_SEND_PIPELINE,
             stage: { id: INJECT_STAGE_ID, contract: INJECT_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' },
         });
+        // Резюмирует verify оставшееся с прошлого запуска движка (страница
+        // перезагрузилась/движок перезапустился посреди цикла) — тот же
+        // fire-and-forget, что и у `reloadSummariesForChat()`.
+        for (const entry of pending) runPendingVerification(entry.draft.id);
     }
 
     const unregisters = [
