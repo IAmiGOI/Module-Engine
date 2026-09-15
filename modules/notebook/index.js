@@ -2,6 +2,8 @@ import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { Button, TextInput, TextArea, Slider, Details, Row, Field, EmptyState } from '../../libraries/shared/widgets.js';
+import { computeInsertIndex } from '../../libraries/shared/chat-injection.js';
+export { computeInsertIndex }; // back-compat for existing importers/tests, per drop-classify.js's own precedent
 
 /**
  * Модуль «Notebook» — приватный блокнот модели, как в Alpha
@@ -225,11 +227,6 @@ export function buildNotebookPrompt(notes) {
         '[Private notebook — your persistent working memory, invisible to the player. Keep it updated as things change: goals, needs, current state, secrets, plans. Reference a note by its id to update it instead of duplicating it.]',
         ...notes.map(note => `- [${note.id}] ${note.title}: ${note.content}`),
     ].join('\n');
-}
-
-/** Куда в `chat` встаёт заметка: `depth` сообщений от конца — depth 0 значит «прямо перед тем, что сейчас отвечает модель», как у Alpha's `@0`. */
-export function computeInsertIndex(chatLength, depth) {
-    return Math.max(0, Math.min(chatLength, chatLength - Math.max(0, Number(depth) || 0)));
 }
 
 export function createNotebookModule(host) {

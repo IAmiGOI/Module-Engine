@@ -53,8 +53,16 @@ export function createContractBus(eventBus = createEventBus()) {
         return [...list].sort((a, b) => (a.loadMetric?.() ?? 0) - (b.loadMetric?.() ?? 0))[0];
     }
 
-    /** Resolves `contract` once against its current best supplier — never throws, always the standard envelope (see ARCHITECTURE.md's "Контракт на ошибки"). */
-    async function resolve(contract, params, callerId) {
+    /**
+     * Resolves `contract` once against its current best supplier — never
+     * throws, always the standard envelope (see ARCHITECTURE.md's "Контракт
+     * на ошибки"). `priority` rides alongside `callerId` in the same `meta`
+     * object — opt-in, declared by the CALLER at this one call (see
+     * request.js's doc-comment for why this specific field is a call-site
+     * flag rather than a contract-registration property); a handler that
+     * doesn't care about it (almost all of them) just never reads `meta.priority`.
+     */
+    async function resolve(contract, params, callerId, priority) {
         const supplier = pickSupplier(contract);
         if (!supplier) return { ok: false, error: { message: `No supplier registered for contract "${contract}".` } };
         try {
@@ -63,7 +71,7 @@ export function createContractBus(eventBus = createEventBus()) {
             // пайплайна), нельзя брать владельца из params: их пишет сам
             // вызывающий, и подделать чужое имя было бы тривиально. Директор —
             // единственный, кто знает настоящего отправителя.
-            const value = await supplier.handler(params, { callerId });
+            const value = await supplier.handler(params, { callerId, priority });
             return { ok: true, value };
         } catch (error) {
             return { ok: false, error: { message: error?.message ?? String(error) } };
@@ -79,13 +87,13 @@ export function createContractBus(eventBus = createEventBus()) {
      * filtering itself is [delivery-filters.js](delivery-filters.js), so the
      * same vocabulary is available to anything that subscribes.
      */
-    function subscribe(contract, { params, when, callerId } = {}, callback) {
+    function subscribe(contract, { params, when, callerId, priority } = {}, callback) {
         if (!when) {
-            resolve(contract, params, callerId).then(callback);
+            resolve(contract, params, callerId, priority).then(callback);
             return () => {};
         }
         if (when.every?.ms) {
-            const timer = setInterval(async () => { callback(await resolve(contract, params, callerId)); }, when.every.ms);
+            const timer = setInterval(async () => { callback(await resolve(contract, params, callerId, priority)); }, when.every.ms);
             return () => clearInterval(timer);
         }
 
@@ -102,7 +110,7 @@ export function createContractBus(eventBus = createEventBus()) {
         let unsubscribe = () => {};
         const filtered = applyDeliveryFilters(async () => {
             if (when.once) unsubscribe();
-            callback(await resolve(contract, params, callerId));
+            callback(await resolve(contract, params, callerId, priority));
         }, { every, debounceMs: when.debounceMs, throttleMs: when.throttleMs, dedupe: when.dedupe });
 
         const stop = eventBus.subscribe(eventName, payload => filtered.deliver(payload));

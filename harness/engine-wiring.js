@@ -6,6 +6,7 @@ import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerStChatService } from '../services/st-chat.js';
 import { registerEmbeddingService } from '../services/embedding.js';
 import { registerAudioStoreService } from '../services/audio-store.js';
+import { registerImageStoreService } from '../services/image-store.js';
 import { registerAudioPlaybackService } from '../services/audio-playback.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
 import { registerFileService } from '../services/file.js';
@@ -31,6 +32,8 @@ import { createBackupCore, createChatMetadataBackupSource, createExtensionSettin
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createMacrosCore } from '../cores/macros/index.js';
 import { createSpeakerCore } from '../cores/speaker/index.js';
+import { createMapCore } from '../cores/map/index.js';
+import { createMapNarrationCore } from '../cores/map-narration/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
 import { createBasicSummaryCore } from '../cores/summary/index.js';
 import { createMemoryGraphCore } from '../cores/memory-graph/index.js';
@@ -52,6 +55,7 @@ import { createSecretsModule, SECRETS_MODULE_ID as SECRETS_MODULE_ID } from '../
 import { createPostprocessModule, MODULE_ID as POSTPROCESS_MODULE_ID } from '../modules/postprocess/index.js';
 import { createMusicModule, MODULE_ID as MUSIC_MODULE_ID } from '../modules/music/index.js';
 import { createSpeakerColorsModule, MODULE_ID as SPEAKER_COLORS_MODULE_ID } from '../modules/speaker-colors/index.js';
+import { createMapModule, MODULE_ID as MAP_MODULE_ID } from '../modules/map/index.js';
 
 /**
  * Реестр Модулей — временная замена настоящему Раннеру (ARCHITECTURE.md,
@@ -192,6 +196,24 @@ const DEFINITIONS = [{
         ],
     },
     create: host => createSpeakerColorsModule(host),
+}, {
+    id: MAP_MODULE_ID,
+    title: 'Map',
+    description: 'A floating, full-screen map window with a settings drawer — opened from its own draggable button on screen, not from a tab.',
+    rights: {
+        tier: 'community',
+        allowedContracts: [
+            'storage.settings.get', 'storage.settings.set', 'ui.notify',
+            'map.settings.get', 'map.settings.update',
+            'map.rootImage.get', 'map.rootImage.set', 'map.rootImage.clear',
+            'image.put', 'image.get', 'image.delete',
+            'map.nodes.list', 'map.nodes.create', 'map.nodes.update', 'map.nodes.remove',
+            'map.edges.list', 'map.pathfind',
+            'map.position.get', 'map.position.set', 'map.position.move',
+            'map.movementLog.list', 'map.movementLog.clear',
+        ],
+    },
+    create: host => createMapModule(host),
 }];
 
 /** Где реестр помнит, что было включено. Неймспейс Раннера, а не Модуля: это состояние ЗАПУСКА, а не настройка кого-то из них. */
@@ -418,6 +440,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // библиотека изнутри себя).
     registerEmbeddingService(engine.buses.services);
     registerAudioStoreService(engine.buses.services);
+    registerImageStoreService(engine.buses.services);
     registerAudioPlaybackService(engine.buses.services);
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
@@ -501,6 +524,21 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     const speakerCore = createSpeakerCore(engine.registerCaller('core.speaker', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.speaker' }),
     });
+
+    // Ядро карты локаций (CORES.md, MAP.md) — backend-only так далеко (пока
+    // нет ни одного Модуля-потребителя, эта строка регистрирует его контракты
+    // на Шине ядер уже сейчас, чтобы дальнейшая работа над UI-редактором не
+    // требовала ничего менять здесь).
+    const mapCore = createMapCore(engine.registerCaller('core.map', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.map' }),
+    });
+
+    // Ядро «Навигация по упоминаниям» (ROADMAP.md, владелец: "добавь
+    // отдельное ядро парсинга сообщений") — намеренно ОТДЕЛЬНОЕ от Ядра
+    // карты, регистрирует свой собственный этап `generation.beforeSend`
+    // (та же живая мутация `chat`, что уже делают Notebook/Secrets/Summary),
+    // поэтому строится здесь же, рядом с остальными вкладчиками пайплайна.
+    const mapNarrationCore = createMapNarrationCore(engine.registerCaller('core.mapNarration', 'cores', { tier: 'official' }));
 
     const lorebookCore = createLorebookCore(engine.registerCaller('core.lorebook', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.lorebook' }),
@@ -658,7 +696,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // silently leaving a real, non-empty Lorebook's graph bootstrap empty
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
-    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), lorebookCore.scan(), summaryCore.load()]);
+    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), summaryCore.load()]);
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
     // отдельно" — при большом Lorebook эмбединг каждой записи по

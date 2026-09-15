@@ -23,6 +23,14 @@
  * here is resolved PER SENTENCE, never by alternating turns between two
  * speakers — that heuristic breaks the moment a third speaker joins
  * mid-paragraph.
+ *
+ * **Presence veto/departure (ROADMAP.md 5.41)** — a mention of a KNOWN cast
+ * member doesn't always mean they're present: "Maria thinks of Alex often."
+ * mentions Alex, but he isn't the one there. Ported (as an idea, not code —
+ * MIT) from ryzendigo's `scene-director` PresenceEngine, which scores
+ * arrival/action cues against a veto list of absence-context phrases; this
+ * file only needs the veto half; see `hasPresenceVeto()`/
+ * `findDepartureSubject()`.
  */
 
 const SPEECH_VERBS = [
@@ -34,6 +42,39 @@ const SPEECH_VERBS = [
     'whimper', 'whimpers', 'whimpered', 'add', 'adds', 'added', 'continue', 'continues', 'continued',
     'shrug', 'shrugs', 'shrugged', 'protest', 'protests', 'protested',
 ];
+
+/**
+ * Absence-context phrases — a KNOWN cast member mentioned inside one of
+ * these is being talked ABOUT, not established as present/speaking
+ * ("Maria thinks of Alex often." must not make Alex a candidate for the
+ * next unattributed quote). Ported from the scoring idea in ryzendigo's
+ * `scene-director` PresenceEngine (MIT) — its own veto-word list also
+ * covers `call`/`phone`/`text`/`message`, deliberately left OUT here: those
+ * verbs are too often a real speech/arrival action in RP prose ("calls out
+ * to her") to safely veto on word alone without the scoring machinery that
+ * extension builds around them. Phrase-level (not single words) to avoid
+ * "about" alone vetoing unrelated sentences.
+ */
+const PRESENCE_VETO_PHRASES = [
+    'think of', 'thinks of', 'thought of', 'thinking of',
+    'think about', 'thinks about', 'thought about', 'thinking about',
+    'miss', 'misses', 'missed', 'missing',
+    'remember', 'remembers', 'remembered',
+    'wonder', 'wonders', 'wondered',
+    'wish', 'wishes', 'wished',
+    'promise', 'promises', 'promised',
+];
+
+/** Explicit departure — a stronger, unconditional veto (see `findDepartureSubject`): once left, a cast member drops out of the subject stack entirely, not just for the current sentence. */
+const DEPARTURE_VERBS = [
+    'leaves', 'leave', 'left', 'departs', 'depart', 'departed',
+    'exits', 'exit', 'exited', 'walks out', 'walked out', 'walks away', 'walked away',
+];
+
+/** True if `sentenceText` contains an absence-context phrase — see `PRESENCE_VETO_PHRASES`. */
+export function hasPresenceVeto(sentenceText) {
+    return PRESENCE_VETO_PHRASES.some(phrase => new RegExp(`\\b${phrase.replace(' ', '\\s+')}\\b`, 'i').test(sentenceText));
+}
 
 function genderFromPronoun(word) {
     const w = word.toLowerCase();
@@ -128,6 +169,15 @@ export function findKnownMention(sentenceText, cast) {
     return best;
 }
 
+/** Title abbreviations — the period after one of these must NOT end the sentence ("Dr. Okumura" is one name, not "Dr." + "Okumura"). Found live: this exact case broke `findKnownMention()`'s match on "Dr. Okumura", ROADMAP.md 5.42. */
+const TITLE_ABBREVIATIONS = new Set(['mr', 'mrs', 'ms', 'mx', 'dr', 'prof', 'st', 'capt', 'lt', 'sgt', 'col', 'gen', 'rev', 'jr', 'sr']);
+
+/** True if the word immediately before `periodIndex` (the `.` itself, not counted) is a known title abbreviation. */
+function endsWithTitleAbbreviation(text, periodIndex) {
+    const wordMatch = text.slice(0, periodIndex).match(/([A-Za-z]+)$/);
+    return Boolean(wordMatch && TITLE_ABBREVIATIONS.has(wordMatch[1].toLowerCase()));
+}
+
 /**
  * Splits raw text into sentence-ish spans, one attribution unit each.
  *
@@ -138,6 +188,14 @@ export function findKnownMention(sentenceText, cast) {
  * `!`/`?` before the closing quote (`"No." Maria stepped forward.`) means
  * the quote is grammatically complete on its own — what follows is an
  * unrelated new sentence.
+ *
+ * A run of 2+ dots, or the single Unicode ellipsis character `…`, counts as
+ * ONE terminal mark (`…`/`...` both close a sentence exactly once) — found
+ * live: the single-character `…` wasn't recognized at all, silently fusing
+ * every ellipsis-separated narrative beat in a paragraph into one giant
+ * "sentence", which (among other things) fed `findSentenceSubject()` a
+ * blob wide enough to smuggle unrelated narration into a later quote's
+ * paint range. ROADMAP.md 5.42.
  */
 export function splitIntoSentences(text) {
     const sentences = [];
@@ -165,7 +223,12 @@ export function splitIntoSentences(text) {
             }
             continue;
         }
-        if (!inQuote && /[.!?]/.test(ch) && (i === text.length - 1 || /\s/.test(text[i + 1]))) {
+        // `…` (single-char ellipsis) added to the terminal-mark class — a run
+        // like "..." only ever fires HERE anyway, at its last character:
+        // every earlier dot in the run is followed by another dot, not
+        // whitespace, so the existing `(i === length-1 || /\s/.test(next))`
+        // check below already skips them without any extra run-detection.
+        if (!inQuote && /[.!?…]/.test(ch) && (i === text.length - 1 || /\s/.test(text[i + 1])) && !(ch === '.' && endsWithTitleAbbreviation(text, i))) {
             sentences.push({ text: text.slice(start, i + 1), start, end: i + 1 });
             start = i + 1;
             awaitingTag = false;
@@ -175,12 +238,28 @@ export function splitIntoSentences(text) {
     return sentences;
 }
 
-/** Explicit `Name: "quote"` line — the tag's name is matched against the cast like everything else; an unrecognized name here is left unattributed, not auto-added (see file doc comment). */
+/**
+ * Explicit `Name: "quote"` line — the tag's name is matched against the
+ * cast like everything else; an unrecognized name here is left
+ * unattributed, not auto-added (see file doc comment).
+ *
+ * `quoteStart`/`quoteEnd` — the QUOTE's own character offsets within
+ * `sentenceText`, `d`-flag (`hasIndices`) group positions, not a guess:
+ * `splitIntoSentences()` fuses the "Name:" prefix (and everything before it
+ * back to the previous sentence boundary — narration included, when a
+ * paragraph never hits real terminal punctuation) into the SAME unit as the
+ * quote, so `sentenceText` itself is almost always wider than the quote.
+ * The caller MUST use these, not the whole sentence span, when deciding
+ * what to paint — using the sentence span was a real bug (found live on a
+ * beta tester's transcript, ROADMAP.md 5.42): unrelated narration sitting
+ * in front of a "Name:" tag got colored along with the quote it precedes.
+ */
 export function parseExplicitTag(sentenceText, cast) {
-    const match = sentenceText.match(/^\s*([\w'’\- ]{1,30}):\s*["“](.+?)["”]?\s*$/);
+    const match = sentenceText.match(/^\s*([\w'’.\- ]{1,30}):\s*["“](.+?)["”]?\s*$/d);
     if (!match) return null;
     const id = resolveEntityByName(cast, match[1].trim());
-    return { id, rawName: match[1].trim(), quote: match[2] };
+    const [quoteStart, quoteEnd] = match.indices[2];
+    return { id, rawName: match[1].trim(), quote: match[2], quoteStart, quoteEnd };
 }
 
 /** Rule 1 — a speech verb adjacent to a KNOWN cast member's name in the SAME sentence: "Alex said" / "said Alex" / "Alex asked, ...". */
@@ -190,6 +269,23 @@ export function findSpeechVerbSubject(sentenceText, cast) {
         const esc = escapeRegExp(alias);
         if (new RegExp(`\\b${esc}\\b\\s+(?:${verbPattern})\\b`, 'i').test(sentenceText)) return id;
         if (new RegExp(`\\b(?:${verbPattern})\\b,?\\s+${esc}\\b`, 'i').test(sentenceText)) return id;
+    }
+    return null;
+}
+
+/**
+ * A KNOWN cast member adjacent to an explicit departure verb in THIS
+ * sentence ("Alex leaves." / "Alex walks out of the room.") — the caller
+ * removes them from the subject stack entirely once this fires, so a LATER
+ * pronoun or `nearestSubject` fallback can't attribute a quote to someone
+ * who has already left the scene. Same word-order pattern as
+ * `findSpeechVerbSubject` (name-then-verb is the overwhelmingly common
+ * order for this construction, so only that direction is checked).
+ */
+export function findDepartureSubject(sentenceText, cast) {
+    const verbPattern = DEPARTURE_VERBS.join('|');
+    for (const { id, alias } of listAliasEntries(cast)) {
+        if (new RegExp(`\\b${escapeRegExp(alias)}\\b\\s+(?:${verbPattern})\\b`, 'i').test(sentenceText)) return id;
     }
     return null;
 }
@@ -262,11 +358,25 @@ export function detectSpeakers(text, cast = createEmptySpeakerCast(), { defaultS
 
     const sentences = splitIntoSentences(text);
     for (const sentence of sentences) {
+        // Departure sweep — runs BEFORE anything else uses the stack this
+        // sentence: once someone's explicitly written as leaving, they can no
+        // longer be the implicit subject of a later pronoun/nearestSubject
+        // fallback, in THIS sentence or any that follow.
+        const departedId = findDepartureSubject(sentence.text, cast);
+        if (departedId) {
+            for (let i = subjectStack.length - 1; i >= 0; i -= 1) if (subjectStack[i] === departedId) subjectStack.splice(i, 1);
+            if (pendingAddressee === departedId) pendingAddressee = null;
+        }
+
         const explicit = parseExplicitTag(sentence.text, cast);
         if (explicit) {
             if (explicit.id) subjectStack.push(explicit.id);
+            // Paint range is the QUOTE ITSELF (`quoteStart`/`quoteEnd`, offset
+            // into `sentence.text` by `parseExplicitTag()`), never the whole
+            // fused sentence span — see that function's doc comment.
             segments.push({
-                type: 'dialogue', text: explicit.quote, start: sentence.start, end: sentence.end,
+                type: 'dialogue', text: explicit.quote,
+                start: sentence.start + explicit.quoteStart, end: sentence.start + explicit.quoteEnd,
                 speakerId: explicit.id, confidence: explicit.id ? 1 : 0, rule: 'explicitTag',
             });
             continue;
@@ -277,7 +387,7 @@ export function detectSpeakers(text, cast = createEmptySpeakerCast(), { defaultS
             // Pure narration — still worth mining for a subject, so the NEXT
             // sentence's quote (if any) has something to resolve a pronoun against.
             const subject = findSentenceSubject(sentence.text, cast);
-            if (subject?.kind === 'name') {
+            if (subject?.kind === 'name' && subject.id !== departedId && !hasPresenceVeto(sentence.text)) {
                 subjectStack.push(subject.id);
             } else if (subject?.kind === 'pronoun') {
                 const id = resolvePronounAgainstStack(subject.value, subjectStack, cast);
@@ -296,7 +406,7 @@ export function detectSpeakers(text, cast = createEmptySpeakerCast(), { defaultS
             rule = 'speechVerb';
         } else {
             const nonQuoteSubject = findSentenceSubject(sentence.text.replace(/["“][^"“”]+["”]?/g, ''), cast);
-            if (nonQuoteSubject?.kind === 'name') {
+            if (nonQuoteSubject?.kind === 'name' && nonQuoteSubject.id !== departedId && !hasPresenceVeto(sentence.text)) {
                 speakerId = nonQuoteSubject.id;
                 rule = 'adjacentAction';
             } else if (nonQuoteSubject?.kind === 'pronoun') {
@@ -314,15 +424,25 @@ export function detectSpeakers(text, cast = createEmptySpeakerCast(), { defaultS
 
         if (speakerId) subjectStack.push(speakerId);
 
-        const quoteText = quoteMatches[0][1];
+        // Paint range is the QUOTE ITSELF, never the whole `sentence` span —
+        // `sentence.text` can carry fused-in narration/tag prefix ahead of it
+        // (see splitIntoSentences()'s doc comment on the comma/colon merges;
+        // same bug class as parseExplicitTag()'s `quoteStart`/`quoteEnd`,
+        // found live, ROADMAP.md 5.42). `quoteMatch.index` is the position of
+        // the WHOLE match (opening quote mark included), so `+ 1` skips past
+        // that one character to the inner text `findVocativeAddressee()`/the
+        // returned `text` field already operate on.
+        const quoteMatch = quoteMatches[0];
+        const quoteText = quoteMatch[1];
+        const quoteStart = sentence.start + quoteMatch.index + 1;
         const addressee = findVocativeAddressee(quoteText, cast);
         pendingAddressee = addressee && addressee !== speakerId ? addressee : null;
 
         segments.push({
             type: 'dialogue',
             text: quoteText,
-            start: sentence.start,
-            end: sentence.end,
+            start: quoteStart,
+            end: quoteStart + quoteText.length,
             speakerId: speakerId ?? null,
             confidence: speakerId ? (rule === 'speechVerb' ? 0.95 : rule === 'adjacentAction' ? 0.85 : rule === 'pronounResolution' ? 0.7 : rule === 'vocativeResponse' ? 0.6 : 0.4) : 0,
             rule,

@@ -57,3 +57,21 @@ export function computeAutoSpeakerColor(baseHex, index) {
     const hue = (resolveBaseHue(baseHex) + HUE_STEP_DEGREES * Math.max(0, index)) % 360;
     return hslToHex(hue, 65, 55);
 }
+
+/**
+ * `hex` + `alphaFraction` (0..1) → an `rgba(...)` CSS color string — the
+ * same math CSS's own `color-mix()` does, computed in JS for callers
+ * inlining a semi-transparent version of a user-picked color directly as
+ * an element's own `style.fill` (map region shapes, ROADMAP.md 5.60) where
+ * no shared CSS custom property is wired up for it. Malformed `hex` falls
+ * back to fully transparent — paints nothing, never throws.
+ */
+export function hexToRgba(hex, alphaFraction) {
+    const match = String(hex ?? '').trim().match(/^#([0-9a-fA-F]{6})$/);
+    if (!match) return 'transparent';
+    const r = parseInt(match[1].slice(0, 2), 16);
+    const g = parseInt(match[1].slice(2, 4), 16);
+    const b = parseInt(match[1].slice(4, 6), 16);
+    const a = Math.max(0, Math.min(1, Number(alphaFraction) || 0));
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+}

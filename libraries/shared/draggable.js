@@ -16,14 +16,28 @@
  * перетаскивание, когда курсор ушёл за пределы ручки: без него окно
  * «прилипает» на месте, стоит дёрнуть мышью чуть быстрее.
  */
-export function createDragHandlers(positionSignal, { onDrop } = {}) {
+/**
+ * `onClick` (added for the map module's draggable dock button, ROADMAP.md
+ * 5.43) fires on release ONLY when the pointer barely moved from
+ * `pointerdown` — same handle serves both "drag to reposition" and "tap to
+ * open", and without a threshold every plain click would also register as
+ * a (zero-distance) drag. Purely additive: `onDrop` still fires on every
+ * release exactly as before, so existing header-drag callers are unaffected.
+ */
+export function createDragHandlers(positionSignal, { onDrop, onClick, clickThresholdPx = 4 } = {}) {
     let origin = null; // { pointerX, pointerY, left, top }
 
     return {
         'on:pointerdown': event => {
-            // Только основная кнопка и только не по кнопкам внутри шапки:
-            // иначе «свернуть» превращалось бы в микро-перетаскивание.
-            if (event.button !== 0 || event.target?.closest?.('button')) return;
+            // Только основная кнопка и только не по кнопкам ВНУТРИ ручки
+            // (`target !== currentTarget`) — иначе «свернуть» превращалось
+            // бы в микро-перетаскивание. Условие намеренно НЕ ловит случай,
+            // где ручка И ЕСТЬ сама кнопка (`DockButton`, ROADMAP.md 5.43) —
+            // `closest('button')` без сравнения с `currentTarget` считал бы
+            // такую кнопку "нажатием по кнопке внутри себя" и молча убивал
+            // вообще любое перетаскивание/клик по ней же (пойман живьём: в
+            // харнессе клик по кнопке дока карты не открывал окно вовсе).
+            if (event.button !== 0 || (event.target !== event.currentTarget && event.target?.closest?.('button'))) return;
             const saved = positionSignal.peek() ?? {};
             // Пока окно ни разу не двигали, у него нет своих left/top — оно
             // стоит там, куда его поставил CSS (например, прижато к правому
@@ -50,9 +64,11 @@ export function createDragHandlers(positionSignal, { onDrop } = {}) {
         },
         'on:pointerup': event => {
             if (!origin) return;
+            const travelled = Math.hypot(event.clientX - origin.pointerX, event.clientY - origin.pointerY);
             origin = null;
             event.currentTarget?.releasePointerCapture?.(event.pointerId);
             onDrop?.(positionSignal.peek());
+            if (onClick && travelled <= clickThresholdPx) onClick();
         },
     };
 }

@@ -62,6 +62,17 @@ function isOpenRouter(endpoint) {
     return /openrouter\.ai/i.test(String(endpoint ?? ''));
 }
 
+/**
+ * OpenRouter's `max_tokens` is a completion-only budget (prompt is billed
+ * separately against the context window — see OpenRouter's own Parameters
+ * doc), but for reasoning models that budget is SHARED between the model's
+ * thinking and its visible reply. Left unchecked, a model can spend the
+ * entire `max_tokens` on reasoning and return an empty completion. This
+ * reserve guarantees room for the actual reply regardless of what
+ * `reasoningBudget` asks for.
+ */
+const RESERVED_COMPLETION_TOKENS = 200;
+
 function buildOpenAiReasoning(worker, request) {
     // Молчим и на "не OpenRouter", и на что угодно, что НЕ прямое явное
     // enabled/disabled — `inherit`, отсутствующее поле, любой мусор. Раньше
@@ -71,21 +82,36 @@ function buildOpenAiReasoning(worker, request) {
     // ризонинг — ровно то, чего вызывающий никогда не просил.
     if (!isOpenRouter(worker.endpoint)) return {};
     if (request.reasoningMode !== 'enabled' && request.reasoningMode !== 'disabled') return {};
-    return {
-        reasoning: {
-            enabled: request.reasoningMode === 'enabled',
-            effort: request.reasoningEffort,
-            ...(request.reasoningBudget ? { max_tokens: request.reasoningBudget } : {}),
-        },
-    };
+    const reasoning = { enabled: request.reasoningMode === 'enabled', effort: request.reasoningEffort };
+    if (reasoning.enabled) {
+        const cap = Math.max(0, request.maxTokens - RESERVED_COMPLETION_TOKENS);
+        if (cap > 0) reasoning.max_tokens = request.reasoningBudget ? Math.min(request.reasoningBudget, cap) : cap;
+    }
+    return { reasoning };
+}
+
+/**
+ * `request.messages` — opt-in multi-turn escape hatch (see
+ * resolveGenerateRequest()'s doc-comment in internal-engine.js), `openai`
+ * format only: sent to the provider EXACTLY as given (any role, any order,
+ * any count) instead of the usual `prompt`+`systemPrompt` sugar. `google`/
+ * `anthropic` builders deliberately do NOT support this — legacy formats,
+ * frozen, not worth the real per-provider work (Anthropic has no in-conversation
+ * `system` role at all; Google has no multi-turn `contents` support here yet)
+ * for something about to be removed.
+ */
+function resolveOpenAiMessages(request) {
+    if (Array.isArray(request.messages) && request.messages.length) return request.messages;
+    const messages = request.systemPrompt ? [{ role: 'system', content: request.systemPrompt }] : [];
+    messages.push({ role: 'user', content: request.prompt });
+    return messages;
 }
 
 function buildOpenAiRequest(worker, request, stream) {
     const url = /\/chat\/completions$/.test(worker.endpoint) ? worker.endpoint : `${trimTrailingSlash(worker.endpoint)}/chat/completions`;
     const headers = { 'Content-Type': 'application/json' };
     if (worker.apiKey) headers.Authorization = `Bearer ${worker.apiKey}`;
-    const messages = request.systemPrompt ? [{ role: 'system', content: request.systemPrompt }] : [];
-    messages.push({ role: 'user', content: request.prompt });
+    const messages = resolveOpenAiMessages(request);
     return {
         url, method: 'POST', headers,
         body: JSON.stringify({

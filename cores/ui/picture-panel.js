@@ -3,28 +3,12 @@ import { signal, computed } from './reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { createDragHandlers, clampToViewport } from '../../libraries/shared/draggable.js';
 import { FloatingPanel, EmptyState } from '../../libraries/shared/widgets.js';
+import { isHttpUrl, classifyDrop } from '../../libraries/shared/drop-classify.js';
 
-// --- Чистые функции классификации drop-а (тестируются напрямую) -------------
-
-/** http(s) URL — единственное, что вообще можно запросить через Сервис HTTP. */
-export function isHttpUrl(url) {
-    try { const parsed = new URL(url); return parsed.protocol === 'http:' || parsed.protocol === 'https:'; }
-    catch { return false; }
-}
-
-/**
- * Классификация того, что пользователь бросил в окно. Перетащенная ССЫЛКА из
- * браузера приходит текстом (dataTransfer `text/uri-list`, фолбэк `text/plain`);
- * файл с диска — File в `files`. Смешанный drop — берём файл (он первичен).
- * Не ссылка и не файл — честное «none»: ничего не показываем, не гадаем.
- */
-export function classifyDrop({ files, text } = {}) {
-    const file = files?.[0];
-    if (file) return { kind: 'file', file };
-    const url = (text ?? '').trim().split(/\s+/)[0] || '';
-    if (url && isHttpUrl(url)) return { kind: 'url', url };
-    return { kind: 'none' };
-}
+// `isHttpUrl`/`classifyDrop` moved to libraries/shared/drop-classify.js
+// (ROADMAP.md 5.44) — re-exported here so nothing importing them from this
+// file (this Core was their only consumer until the map module) breaks.
+export { isHttpUrl, classifyDrop };
 
 /**
  * Плавающее окно «Картинка» (решено с пользователем: «пусть кнопка открывает
