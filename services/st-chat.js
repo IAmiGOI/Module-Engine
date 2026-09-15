@@ -36,10 +36,47 @@
  * неявно `true` — иначе уже скрытые Summary-фолдом сообщения (ровно то, ради
  * чего этот режим и нужен) никогда бы не вернулись.
  */
+/**
+ * Аватар сообщения — та же логика, что настоящая `updateMessageElement()`
+ * (script.js:2559): `force_avatar` (персона/переключение голоса — уже
+ * готовый URL) в приоритете; иначе, для НЕ-пользовательской реплики, аватар
+ * текущего персонажа (`context.characters[context.characterId]`) через
+ * `context.getThumbnailUrl('avatar', ...)`. Пользовательская реплика БЕЗ
+ * `force_avatar` возвращает `null` честно — глобальный `user_avatar`
+ * (аватар персоны по умолчанию) не экспортирован через `getContext()`,
+ * резолвить его отсюда нечем.
+ */
+function resolveAvatarUrl(message, context) {
+    if (message?.force_avatar) return String(message.force_avatar);
+    if (message?.is_user) return null;
+    const character = context?.characters?.[context?.characterId];
+    if (character && character.avatar && character.avatar !== 'none' && typeof context?.getThumbnailUrl === 'function') {
+        return context.getThumbnailUrl('avatar', character.avatar);
+    }
+    return null;
+}
+
+/**
+ * Время генерации — та же пара полей и то же вычитание, что родная
+ * `formatGenerationTimer()` (script.js:2681, там же через `moment().diff()`,
+ * здесь — обычным `Date`, так как `moment` — зависимость ST, а не наша).
+ * `null`, если ST не проставила хотя бы одно поле (сообщение пользователя,
+ * либо старый чат до этой пары полей) — не 0, который выглядел бы как
+ * настоящее мгновенное измерение.
+ */
+function computeGenDurationMs(message) {
+    if (!message?.gen_started || !message?.gen_finished) return null;
+    const start = new Date(message.gen_started).getTime();
+    const finish = new Date(message.gen_finished).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(finish) || finish < start) return null;
+    return finish - start;
+}
+
 export function registerStChatService(bus, { getContext } = {}) {
     /** `limit` — сколько ПОСЛЕДНИХ сообщений вернуть; `includeSystem` по умолчанию false, системные строки в контексте почти всегда шум. `mesids` — см. doc-comment файла. */
     function readChat({ limit = 10, includeSystem = false, mesids = null } = {}) {
-        const chat = getContext()?.chat;
+        const context = getContext();
+        const chat = context?.chat;
         if (!Array.isArray(chat)) return [];
         const wanted = Array.isArray(mesids) ? new Set(mesids.map(String)) : null;
         return chat
@@ -55,6 +92,17 @@ export function registerStChatService(bus, { getContext } = {}) {
                 sendDate: message?.send_date ?? null,
                 isToolCall: Array.isArray(message?.extra?.tool_invocations) && message.extra.tool_invocations.length > 0,
                 hasReasoning: Boolean(message?.extra?.reasoning),
+                reasoningText: String(message?.extra?.reasoning ?? ''),
+                // См. doc-comment `resolveAvatarUrl()`/`computeGenDurationMs()`
+                // выше файла — обе честно возвращают `null`, когда ST не дала
+                // достаточно данных, а не угадывают.
+                avatarUrl: resolveAvatarUrl(message, context),
+                genDurationMs: computeGenDurationMs(message),
+                // `swipes`/`swipe_id` — родные поля ST для алтернативных
+                // ответов; `swipeCount` всегда ≥ 1, даже когда `swipes` вовсе
+                // нет (ровно одна версия текста — не 0).
+                swipeIndex: Number.isInteger(message?.swipe_id) ? message.swipe_id : 0,
+                swipeCount: Array.isArray(message?.swipes) ? message.swipes.length : 1,
             }));
     }
 
@@ -88,6 +136,20 @@ export function registerStChatService(bus, { getContext } = {}) {
      * пайплайна переписывания терять из-за секундного дебаунса нельзя —
      * та же логика, что у `setHidden` выше).
      */
+    /**
+     * Пользовательские сообщения раньше были запрещены (написано под
+     * BasicSummary — переписыватель никогда не трогает реплики пользователя).
+     * Общее редактирование Chat Viewport этого ограничения не разделяет:
+     * пользователь редактирует и свои, и чужие реплики — запрет снят здесь, а
+     * не обойден по краю вызывающим кодом.
+     *
+     * Эмитит `MESSAGE_EDITED` ДО перерисовки и `MESSAGE_UPDATED` после — тем
+     * же порядком, что родная `messageEditDone()` (script.js) — без этого
+     * другие подписчики ST (перевод, память) не узнают, что текст поменялся.
+     * Не воспроизведён ровно один нюанс родной функции: она ПЕРЕЧИТЫВАЕТ
+     * `chat[id].mes` ПОСЛЕ `MESSAGE_EDITED` (на случай, если сам обработчик
+     * события правит текст ещё раз) — здесь то, что записали, то и рисуется.
+     */
     async function setMessageText({ mesid, text } = {}) {
         const context = getContext();
         const chat = context?.chat;
@@ -96,18 +158,106 @@ export function registerStChatService(bus, { getContext } = {}) {
             throw new Error(`stChat.setText: no message at mesid "${mesid}".`);
         }
         const message = chat[index];
-        if (message.is_user) throw new Error(`stChat.setText: message "${mesid}" is a user message — rewriting it is not allowed.`);
         const next = String(text ?? '');
         if (!next.trim()) throw new Error(`stChat.setText: "text" is required.`);
         message.mes = next;
+        await context.eventSource?.emit?.(context.eventTypes?.MESSAGE_EDITED, index);
         // Перерисовка — тем же механизмом ST, каким она сама обновляет блок
         // сообщения (RP Time/Tracker Alpha звали `context.updateMessageBlock`).
         context.updateMessageBlock?.(index, message);
+        await context.eventSource?.emit?.(context.eventTypes?.MESSAGE_UPDATED, index);
         // `saveChatConditional` сначала, `saveChat` следом — оба, как у Alpha:
         // в части сборок ST один из них может отсутствовать.
         await context.saveChatConditional?.();
         await context.saveChat?.();
         return true;
+    }
+
+    /**
+     * Удаление сообщения — тонкий проброс к `getContext().deleteMessage`
+     * (экспортирована самой ST, `st-context.js`). `askConfirmation: false`
+     * ВСЕГДА — подтверждение уже наше (Chat Viewport рисует свой диалог), а
+     * не родной `callGenericPopup` ST поверх спрятанного нативного чата.
+     *
+     * **Важное ограничение, найденное в реальном исходнике ST (не
+     * гипотетическое)**: `deleteMessage()` сначала ищет
+     * `chatElement.find('.mes[mesid="id"]')` и молча выходит, НИЧЕГО не
+     * удаляя, если элемент не найден в DOM — то есть родной `#chat` обязан
+     * оставаться в документе (пусть и скрытым по CSS), а не быть
+     * выброшенным. Это ещё одно, отдельное от стриминга, подтверждение
+     * решения "подавлять #chat, не удалять" из плана `chat-viewport`.
+     */
+    async function deleteMessage({ mesid } = {}) {
+        const context = getContext();
+        const index = Number(mesid);
+        if (!Number.isInteger(index)) throw new Error(`stChat.deleteMessage: invalid mesid "${mesid}".`);
+        if (typeof context?.deleteMessage !== 'function') throw new Error('stChat.deleteMessage: SillyTavern deleteMessage() is unavailable.');
+        await context.deleteMessage(index, undefined, false);
+        return true;
+    }
+
+    /**
+     * Свайп — тонкий проброс к `getContext().swipe_left`/`swipe_right`.
+     * `event: null` — обе функции ST принимают отсутствие реального
+     * DOM-события явно (`swipe_right(event = null, ...)` в её исходнике);
+     * `message` передаётся ЯВНО (само сообщение из `context.chat`, не индекс)
+     * — иначе обе функции по умолчанию свайпают ПОСЛЕДНЕЕ сообщение чата,
+     * что для виртуализированного списка неверно почти всегда.
+     */
+    async function swipeMessage({ mesid, direction } = {}) {
+        const context = getContext();
+        const chat = context?.chat;
+        const index = Number(mesid);
+        if (!Array.isArray(chat) || !Number.isInteger(index) || !chat[index]) {
+            throw new Error(`stChat.swipe: no message at mesid "${mesid}".`);
+        }
+        const fn = direction === 'left' ? context.swipe_left : context.swipe_right;
+        if (typeof fn !== 'function') throw new Error(`stChat.swipe: SillyTavern swipe_${direction} is unavailable.`);
+        await fn(null, { message: chat[index] });
+        return true;
+    }
+
+    /**
+     * Регенерация — тонкий проброс к `getContext().generate('regenerate')`.
+     * Без `mesid`: ST сама регенерирует последнее сообщение чата — родное
+     * поведение (`Generate('regenerate')`, тот же вызов, что использует сама
+     * ST для своей кнопки, script.js), Chat Viewport не переизобретает
+     * "какое сообщение считается текущим для регенерации".
+     */
+    async function regenerate() {
+        const context = getContext();
+        if (typeof context?.generate !== 'function') throw new Error('stChat.regenerate: SillyTavern generate() is unavailable.');
+        await context.generate('regenerate');
+        return true;
+    }
+
+    /**
+     * Тонкий проброс к родному `messageFormatting()` — тот же
+     * markdown/макро-рендер, каким ST рисует `.mes_text` сама. Существует
+     * здесь (а не в Ядре), потому что "как вызвать конкретно ЭТУ функцию ST с
+     * конкретно ЭТИМИ аргументами" — ST-шное знание, тот же принцип, что у
+     * остального файла. Поля сообщения (`name`/`isSystem`/`isUser`) читаются
+     * САМИ по `mesid`, а не передаются вызывающим — Ядру Chat Viewport не
+     * нужно знать форму `context.chat`, только `mesid`.
+     */
+    function formatMessage({ mesid, isReasoning = false } = {}) {
+        const context = getContext();
+        const chat = context?.chat;
+        const index = Number(mesid);
+        if (!Array.isArray(chat) || !Number.isInteger(index) || !chat[index]) {
+            throw new Error(`stChat.formatMessage: no message at mesid "${mesid}".`);
+        }
+        if (typeof context.messageFormatting !== 'function') throw new Error('stChat.formatMessage: SillyTavern messageFormatting() is unavailable.');
+        const message = chat[index];
+        return String(context.messageFormatting(
+            String(message?.mes ?? ''),
+            String(message?.name ?? ''),
+            Boolean(message?.is_system),
+            Boolean(message?.is_user),
+            index,
+            {},
+            Boolean(isReasoning),
+        ) ?? '');
     }
 
     /**
@@ -140,6 +290,10 @@ export function registerStChatService(bus, { getContext } = {}) {
         bus.register('stChat.messages', params => readChat(params), { loadMetric: () => 0 }),
         bus.register('stChat.setHidden', params => setMessageHidden(params), { loadMetric: () => 0 }),
         bus.register('stChat.setText', params => setMessageText(params), { loadMetric: () => 0 }),
+        bus.register('stChat.deleteMessage', params => deleteMessage(params), { loadMetric: () => 0 }),
+        bus.register('stChat.swipe', params => swipeMessage(params), { loadMetric: () => 0 }),
+        bus.register('stChat.regenerate', () => regenerate(), { loadMetric: () => 0 }),
+        bus.register('stChat.formatMessage', params => formatMessage(params), { loadMetric: () => 0 }),
         bus.register('stChat.messageElement', params => messageElement(params?.mesid), { loadMetric: () => 0 }),
         bus.register('stChat.messageTextElement', params => messageTextElement(params?.mesid), { loadMetric: () => 0 }),
         /** Контейнер всего чата — за ним наблюдают, чтобы заметить перерисовку, о которой никто не сообщил. */

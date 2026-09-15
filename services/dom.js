@@ -217,12 +217,95 @@ function paintTextRuns(container, runs, doc) {
 }
 
 /**
+ * `getBoundingClientRect()` возвращает "живой" DOMRect, у которого чтение
+ * полей ленивое и завязано на реальный layout — наружу отдаётся снятый
+ * снимок из простых чисел, чтобы вызывающий (Ядро Chat Viewport) мог
+ * держать его в сигнале без риска, что значения потом расползутся.
+ */
+function measureRect(el) {
+    const rect = el?.getBoundingClientRect?.() ?? {};
+    return {
+        width: Number(rect.width) || 0,
+        height: Number(rect.height) || 0,
+        top: Number(rect.top) || 0,
+        left: Number(rect.left) || 0,
+    };
+}
+
+function readScrollPosition(el) {
+    return { top: Number(el?.scrollTop) || 0, left: Number(el?.scrollLeft) || 0 };
+}
+
+function writeScrollPosition(el, { top, left } = {}) {
+    if (!el) return false;
+    if (Number.isFinite(top)) el.scrollTop = top;
+    if (Number.isFinite(left)) el.scrollLeft = left;
+    return true;
+}
+
+/**
+ * `ResizeObserver` — единственная браузерная возможность, которой в этом
+ * файле раньше не было ни одной обёртки: у Chat Viewport высота строки
+ * сообщения меняется постфактум (markdown/картинки/блок рассуждений
+ * докладываются уже ПОСЛЕ первого рендера), и только реальный
+ * `ResizeObserver` узнаёт об этом без опроса на каждый кадр. Инжектируется
+ * (`ResizeObserverCtor`) тем же приёмом, что `document` выше — тестам не
+ * нужен настоящий браузер.
+ *
+ * Подписка/отписка — ДВА отдельных контракта по ТОЙ ЖЕ ссылке на `handler`,
+ * не "subscribe возвращает функцию-отписку": ровно та же дисциплина, что уже
+ * у `stEvents.subscribe`/`unsubscribe` (см. doc-comment `st-events.js`) — Ядро
+ * само держит свою функцию и само решает, когда её снять, Сервис остаётся
+ * без собственного состояния поверх WeakMap "куда дели наблюдатель".
+ */
+const resizeObservers = new WeakMap(); // el -> Map(handler -> ResizeObserver)
+
+function observeResize(el, handler, ResizeObserverCtor) {
+    if (!el || typeof handler !== 'function' || typeof ResizeObserverCtor !== 'function') return false;
+    const observer = new ResizeObserverCtor(entries => {
+        for (const entry of entries) {
+            const box = entry.contentRect ?? {};
+            handler({ width: Number(box.width) || 0, height: Number(box.height) || 0 });
+        }
+    });
+    observer.observe(el);
+    if (!resizeObservers.has(el)) resizeObservers.set(el, new Map());
+    resizeObservers.get(el).set(handler, observer);
+    return true;
+}
+
+function unobserveResize(el, handler) {
+    const observer = resizeObservers.get(el)?.get(handler);
+    if (!observer) return false;
+    observer.disconnect();
+    resizeObservers.get(el).delete(handler);
+    return true;
+}
+
+/**
+ * Единственное место во всём движке, куда попадает уже готовый чужой HTML
+ * "как есть" — тело сообщения Chat Viewport, полученное через
+ * `stChat.formatMessage()` (родной `messageFormatting()` ST), для невидимого
+ * accessibility/selection-слоя (см. план `chat-viewport`). Не общий
+ * `dangerouslySetInnerHTML`-проп у `dom.setProp` намеренно: это ЕДИНСТВЕННЫЙ
+ * контракт, где чужая разметка вставляется без прохода через `h()`/diff.js,
+ * и Гейт должен видеть это как отдельно поименованную операцию, а не как
+ * ещё один случай `setProp`.
+ */
+function setInnerHtml(el, html) {
+    if (!el) return false;
+    el.innerHTML = String(html ?? '');
+    return true;
+}
+
+/**
  * Registers every `dom.*` contract on `servicesBus` (a Service caller's
  * `.own` bus — see engine.js's registerCaller()). `document` is injected so
  * tests never need a real browser; production wiring omits it (defaults to
- * `globalThis.document`).
+ * `globalThis.document`). `ResizeObserverCtor` is injected the same way, for
+ * the same reason.
  */
-export function registerDomService(servicesBus, { document: doc = globalThis.document } = {}) {
+export function registerDomService(servicesBus, { document: doc = globalThis.document, ResizeObserverCtor = globalThis.ResizeObserver } = {}) {
     const unregisters = [
         servicesBus.register('dom.createElement', ({ tag }) => createElement(doc, tag), { loadMetric: () => 0 }),
         servicesBus.register('dom.createTextNode', ({ text }) => doc.createTextNode(text), { loadMetric: () => 0 }),
@@ -241,9 +324,18 @@ export function registerDomService(servicesBus, { document: doc = globalThis.doc
             const value = (doc.defaultView ?? globalThis).getComputedStyle?.(source)?.getPropertyValue(name);
             return String(value ?? '').trim();
         }, { loadMetric: () => 0 }),
+        servicesBus.register('dom.measureRect', ({ el }) => measureRect(el), { loadMetric: () => 0 }),
+        servicesBus.register('dom.scrollPosition', ({ el }) => readScrollPosition(el), { loadMetric: () => 0 }),
+        servicesBus.register('dom.setScrollPosition', ({ el, top, left }) => writeScrollPosition(el, { top, left }), { loadMetric: () => 0 }),
+        servicesBus.register('dom.observeResize', ({ el, handler }) => observeResize(el, handler, ResizeObserverCtor), { loadMetric: () => 0 }),
+        servicesBus.register('dom.unobserveResize', ({ el, handler }) => unobserveResize(el, handler), { loadMetric: () => 0 }),
+        servicesBus.register('dom.setInnerHtml', ({ el, html }) => setInnerHtml(el, html), { loadMetric: () => 0 }),
     ];
     return () => { for (const unregister of unregisters) unregister(); };
 }
 
 /** Exported for services/dom.test.js's own unit-level coverage of the raw DOM logic, independent of the contract/Gate plumbing. */
-export const domOperations = { setProp, removeProp, paintTextRuns, clearPaintedRuns, createElement };
+export const domOperations = {
+    setProp, removeProp, paintTextRuns, clearPaintedRuns, createElement,
+    measureRect, readScrollPosition, writeScrollPosition, observeResize, unobserveResize, setInnerHtml,
+};
