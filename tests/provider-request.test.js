@@ -141,7 +141,12 @@ test('openai reasoning ONLY goes to a real OpenRouter endpoint — a generic Ope
     );
 
     assert.equal('reasoning' in JSON.parse(generic.body), false);
-    assert.deepEqual(JSON.parse(openRouter.body).reasoning, { enabled: true, effort: 'high', max_tokens: 2000 });
+    // `effort` AND `max_tokens` together is exactly what OpenRouter rejects
+    // with 400 ("Only one of \"reasoning.effort\" and \"reasoning.max_tokens\"
+    // can be specified" — found live via Ядро графа памяти's bootstrap, the
+    // one real caller that turns reasoning on). An explicit reasoningBudget
+    // wins and sends max_tokens ALONE.
+    assert.deepEqual(JSON.parse(openRouter.body).reasoning, { enabled: true, max_tokens: 2000 });
 });
 
 // OpenRouter's `max_tokens` is a completion-only budget SHARED between a
@@ -149,22 +154,24 @@ test('openai reasoning ONLY goes to a real OpenRouter endpoint — a generic Ope
 // separately against the context window — see OpenRouter's Parameters doc).
 // Left uncapped, `reasoningBudget` could consume the whole thing and leave
 // nothing for the actual answer, so a fixed reserve always survives it.
-test('openai reasoning budget is capped so at least 200 tokens survive for the actual completion, no matter how high reasoningBudget asks', () => {
+// `effort` is dropped entirely here — OpenRouter allows only one of
+// "reasoning.effort"/"reasoning.max_tokens" per request (found live, 400).
+test('openai reasoning budget is capped so at least 200 tokens survive for the actual completion, no matter how high reasoningBudget asks — and effort is dropped, not sent alongside max_tokens', () => {
     const built = buildProviderRequest(
         { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
         { ...REQUEST, maxTokens: 1000, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 999999 },
     );
 
-    assert.deepEqual(JSON.parse(built.body).reasoning, { enabled: true, effort: 'high', max_tokens: 800 });
+    assert.deepEqual(JSON.parse(built.body).reasoning, { enabled: true, max_tokens: 800 });
 });
 
-test('openai reasoning with no budget requested still reserves 200 tokens off max_tokens for the completion, rather than leaving the provider free to spend it all on thinking', () => {
+test('openai reasoning with NO explicit budget requested sends "effort" alone — no reservation to apply, since OpenRouter forbids combining effort with max_tokens (real 400, found live)', () => {
     const built = buildProviderRequest(
         { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
         { ...REQUEST, maxTokens: 1000, reasoningMode: 'enabled', reasoningEffort: 'high' },
     );
 
-    assert.deepEqual(JSON.parse(built.body).reasoning, { enabled: true, effort: 'high', max_tokens: 800 });
+    assert.deepEqual(JSON.parse(built.body).reasoning, { enabled: true, effort: 'high' });
 });
 
 test('openai reasoning with max_tokens too small to hold the 200-token reserve sends no max_tokens for reasoning at all, rather than starving the completion to 0', () => {

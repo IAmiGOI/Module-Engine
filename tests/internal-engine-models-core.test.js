@@ -348,8 +348,11 @@ test('a worker configured with reasoning enabled actually sends it to a REAL Ope
     // Worker leaves `maxTokens` unset, so it falls back to REQUEST_DEFAULTS'
     // 1000 (see resolveGenerateRequest) — reasoningBudget 2000 gets capped to
     // maxTokens(1000) minus the 200-token completion reserve (see
-    // buildOpenAiReasoning in provider-request.js).
-    assert.deepEqual(JSON.parse(calls[0].body).reasoning, { enabled: true, effort: 'high', max_tokens: 800 });
+    // buildOpenAiReasoning in provider-request.js). `effort` is dropped, not
+    // sent alongside `max_tokens` — real 400 hit live on OpenRouter ("Only
+    // one of \"reasoning.effort\" and \"reasoning.max_tokens\" can be
+    // specified"); an explicit reasoningBudget wins over effort.
+    assert.deepEqual(JSON.parse(calls[0].body).reasoning, { enabled: true, max_tokens: 800 });
 });
 
 // --- Свои пресеты: контракты + событие --------------------------------------
