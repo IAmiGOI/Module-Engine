@@ -196,7 +196,7 @@ export function resolveGenerateRequest(params, worker) {
  * даёт любому открытому экрану (карточке трекера, «RP Time») узнать о новом
  * пресете, сохранённом СОСЕДНИМ, без ручной перезагрузки страницы.
  */
-export function createInternalEngineModelsCore(host, { publish } = {}) {
+export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3000 } = {}) {
     const dispatchQueue = createDispatchQueue();
     let workers = [];
     let customPresets = [];
@@ -219,7 +219,20 @@ export function createInternalEngineModelsCore(host, { publish } = {}) {
         await persisted.save(list);
         publishEvent('model.workers.changed', { count: workers.length });
     }
-    const restoreWorkers = persisted.restore;
+    /**
+     * `restoreWorkers()` ТОЖЕ публикует `model.workers.changed`, не только
+     * `configureWorkers()` — реальная гонка при старте (harness/engine-wiring.js:
+     * `Promise.all([modelsCore.restoreWorkers(), ..., summaryCore.load()])`,
+     * оба идут ПАРАЛЛЕЛЬНО): без этого события `model.generate` на пустом
+     * ещё-не-восстановленном пуле не может дождаться момента, когда воркеры
+     * реально появятся — узнать об этом ему больше неоткуда (см.
+     * `waitForWorkersChangeOnce()` ниже).
+     */
+    async function restoreWorkers() {
+        const list = await persisted.restore();
+        publishEvent('model.workers.changed', { count: workers.length });
+        return list;
+    }
 
     const presetsPersisted = createPersistedList(host, {
         namespace: PERSISTENCE_NAMESPACE,
@@ -293,10 +306,47 @@ export function createInternalEngineModelsCore(host, { publish } = {}) {
     // passes `fallbackWorkerIds` behaves EXACTLY as before: one worker, one
     // attempt. An UNPINNED caller with no fallback list also behaves exactly
     // as before — the "full pool, load-balanced" tier is still just one tier.
+    /**
+     * Ждёт ОДИН `model.workers.changed` (или сдаётся по таймауту) — вызывается
+     * ТОЛЬКО когда пул для этого запроса прямо сейчас пуст. Закрывает
+     * реальную гонку старта (harness/engine-wiring.js: `restoreWorkers()` и
+     * `summaryCore.load()` идут в одном `Promise.all`, параллельно — фолд на
+     * первом ходу мог поймать момент ДО того, как воркеры восстановились) и
+     * заодно "юзер только что переименовал/добавил подключение" — без этого
+     * `model.generate` мгновенно и шумно падал бы `"No worker is available."`
+     * ровно тогда, когда воркер был на подходе. НЕ бесконечно — искренне
+     * отсутствующий воркер (опечатка, реально удалённое подключение) обязан
+     * дойти до настоящей ошибки, а не тихо повиснуть навсегда и застопорить
+     * всё, что сериализовано ЗА этим вызовом (Summary Core's `enqueueWrite()`,
+     * например).
+     */
+    function waitForWorkersChangeOnce(timeoutMs) {
+        return new Promise(resolve => {
+            let done = false;
+            const unsubscribe = host.events.subscribe('model.workers.changed', () => {
+                if (done) return;
+                done = true;
+                unsubscribe();
+                resolve();
+            });
+            setTimeout(() => {
+                if (done) return;
+                done = true;
+                unsubscribe();
+                resolve();
+            }, timeoutMs);
+        });
+    }
+
     const unregisters = [
-        host.own.register('model.generate', (params, meta) => {
+        host.own.register('model.generate', async (params, meta) => {
             const requestId = params?.requestId ?? generateRequestId();
-            const primaryPool = params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers;
+            const resolvePrimaryPool = () => (params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers);
+            let primaryPool = resolvePrimaryPool();
+            if (!primaryPool.length) {
+                await waitForWorkersChangeOnce(workerWaitMs);
+                primaryPool = resolvePrimaryPool();
+            }
             const stallMs = params?.stallMs || undefined;
             const restartOnStall = stallMs && params?.restartOnStall !== false;
             const fallbackPools = (params?.fallbackWorkerIds ?? [])
