@@ -68,11 +68,34 @@ function isOpenRouter(endpoint) {
  * doc), but for reasoning models that budget is SHARED between the model's
  * thinking and its visible reply. Left unchecked, a model can spend the
  * entire `max_tokens` on reasoning and return an empty completion. This
- * reserve guarantees room for the actual reply regardless of what
- * `reasoningBudget` asks for.
+ * reserve guarantees room for the actual reply — but ONLY applies when
+ * `reasoning.max_tokens` is actually the field being sent (see
+ * `buildOpenAiReasoning()` below: `effort` mode has no such protection to
+ * give, OpenRouter itself decides how much of the budget reasoning eats).
  */
 const RESERVED_COMPLETION_TOKENS = 200;
 
+/**
+ * `effort` and `max_tokens` are MUTUALLY EXCLUSIVE on OpenRouter — real error
+ * hit live: `"Only one of \"reasoning.effort\" and \"reasoning.max_tokens\"
+ * can be specified"` (400, found via Ядро графа памяти's bootstrap, the one
+ * caller that actually turns reasoning on). Both are legitimate, separately
+ * user-facing settings in this engine (`reasoningEffort`/`reasoningBudget`,
+ * the same two controls in [generation-settings-panel.js](generation-settings-panel.js)'s
+ * shared Tracker/RP Time preset UI) — sending both unconditionally (the
+ * previous behavior) worked for a while, presumably until OpenRouter
+ * tightened validation server-side, not from anything changed here.
+ *
+ * Resolution: an EXPLICIT, non-zero `reasoningBudget` (the caller actually
+ * moved that slider/passed that field) wins and sends `max_tokens` alone —
+ * that's a deliberate, precise ask. Otherwise `effort` is what's actually
+ * configured almost everywhere in this engine (worker/tracker presets,
+ * Граф памяти's `bootstrapReasoningEffort`) — that's the default, sent
+ * alone. There is no longer a way to ask for BOTH "this effort level" AND
+ * "reserve room for the completion" at once — OpenRouter's own API doesn't
+ * allow it; picking `max_tokens` when a real budget was asked for is the
+ * closer match to caller intent than silently dropping it.
+ */
 function buildOpenAiReasoning(worker, request) {
     // Молчим и на "не OpenRouter", и на что угодно, что НЕ прямое явное
     // enabled/disabled — `inherit`, отсутствующее поле, любой мусор. Раньше
@@ -82,12 +105,13 @@ function buildOpenAiReasoning(worker, request) {
     // ризонинг — ровно то, чего вызывающий никогда не просил.
     if (!isOpenRouter(worker.endpoint)) return {};
     if (request.reasoningMode !== 'enabled' && request.reasoningMode !== 'disabled') return {};
-    const reasoning = { enabled: request.reasoningMode === 'enabled', effort: request.reasoningEffort };
-    if (reasoning.enabled) {
+    const enabled = request.reasoningMode === 'enabled';
+    if (!enabled) return { reasoning: { enabled, effort: request.reasoningEffort } };
+    if (request.reasoningBudget) {
         const cap = Math.max(0, request.maxTokens - RESERVED_COMPLETION_TOKENS);
-        if (cap > 0) reasoning.max_tokens = request.reasoningBudget ? Math.min(request.reasoningBudget, cap) : cap;
+        if (cap > 0) return { reasoning: { enabled, max_tokens: Math.min(request.reasoningBudget, cap) } };
     }
-    return { reasoning };
+    return { reasoning: { enabled, effort: request.reasoningEffort } };
 }
 
 /**
