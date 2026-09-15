@@ -170,7 +170,11 @@ function buildEngineWithModelsCore({ networkAccess = true } = {}) {
     registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess });
-    const modelsCore = createInternalEngineModelsCore(modelsHost);
+    // `workerWaitMs: 0` — tests want an empty pool to fail INSTANTLY, not
+    // burn 3 real seconds waiting for a `model.workers.changed` that these
+    // tests never fire (see waitForWorkersChangeOnce()'s doc-comment for why
+    // production defaults to 3000ms instead).
+    const modelsCore = createInternalEngineModelsCore(modelsHost, { workerWaitMs: 0 });
     return { engine, calls, modelsCore };
 }
 
@@ -234,6 +238,40 @@ test('a workerId naming a worker that isn\'t configured fails the same way as "n
 
 test('configureWorkers() with no workers yields a clear "no worker" failure through the normal error envelope, not a hang', async () => {
     const { engine, modelsCore } = buildEngineWithModelsCore();
+    modelsCore.configureWorkers([]);
+
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+    const result = await new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hi' } }, resolve));
+
+    assert.equal(result.ok, false);
+    assert.match(result.error.message, /No worker is available/);
+});
+
+// Реальная жалоба пользователя: фолд саммари падал "No worker is available"
+// СРАЗУ ПОСЛЕ перезагрузки страницы, хотя воркер в настройках был настоящий.
+// Причина — гонка старта (harness/engine-wiring.js:
+// `Promise.all([modelsCore.restoreWorkers(), ..., summaryCore.load()])`,
+// оба параллельно): фолд мог поймать момент ДО того, как воркеры успели
+// восстановиться. `model.generate` на пустом пуле должен ПОДОЖДАТЬ
+// ближайший `model.workers.changed`, не падать мгновенно.
+test('model.generate on an EMPTY pool waits for the NEXT model.workers.changed instead of failing instantly — closes the real page-reload race where Summary\'s fold caught the worker list before restoreWorkers() finished', async () => {
+    const { engine, modelsCore, calls } = buildEngineWithModelsCore();
+    // Пул пуст — ничего не настроено ЕЩЁ (симулирует момент ДО restoreWorkers()).
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+
+    const pending = new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hi' } }, resolve));
+    await Promise.resolve(); // дать запросу дойти до пустого пула и начать ждать
+
+    // Воркер "восстановился" мгновение спустя — ровно та гонка, что и в реальности.
+    await modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com/v1', model: 'gpt-test', format: 'openai' }]);
+    const result = await pending;
+
+    assert.deepEqual(result, { ok: true, value: 'a generated reply' });
+    assert.equal(calls.length, 1, 'the request must have actually gone out once the worker appeared, not been abandoned');
+});
+
+test('model.generate on a pool that STAYS empty still fails eventually (bounded by workerWaitMs), never hangs the caller forever', async () => {
+    const { engine, modelsCore } = buildEngineWithModelsCore(); // workerWaitMs: 0 — see buildEngineWithModelsCore()
     modelsCore.configureWorkers([]);
 
     const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });

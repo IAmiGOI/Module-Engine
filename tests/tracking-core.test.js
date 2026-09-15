@@ -70,7 +70,7 @@ function buildEngine({ fetchReply = '{"health": 90}' } = {}) {
     registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
-    const modelsCore = createInternalEngineModelsCore(modelsHost);
+    const modelsCore = createInternalEngineModelsCore(modelsHost, { workerWaitMs: 0 });
     modelsCore.configureWorkers([
         { id: 'fast', endpoint: 'https://fast.example.com', model: 'm1', format: 'openai' },
         { id: 'slow', endpoint: 'https://slow.example.com', model: 'm2', format: 'openai' },
@@ -469,7 +469,7 @@ function buildEngineWithChatMemory({ fetchReply = '{"health": 90}' } = {}) {
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
     createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
-    const modelsCore = createInternalEngineModelsCore(modelsHost);
+    const modelsCore = createInternalEngineModelsCore(modelsHost, { workerWaitMs: 0 });
     modelsCore.configureWorkers([{ id: 'fast', endpoint: 'https://fast.example.com', model: 'm1', format: 'openai' }]);
     const trackingCore = createTrackingCore(engine.registerCaller('core.tracking', 'cores', { tier: 'official' }));
     return { engine, calls, trackingCore, settingsContext };

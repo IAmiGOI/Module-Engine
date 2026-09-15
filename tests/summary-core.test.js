@@ -96,7 +96,7 @@ function buildEngine({ chat = [], fetchReply = 'A concise summary of the excerpt
     createChatHistoryCore(engine.registerCaller('core.chatHistory', 'cores', { tier: 'official' }));
 
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
-    const modelsCore = createInternalEngineModelsCore(modelsHost);
+    const modelsCore = createInternalEngineModelsCore(modelsHost, { workerWaitMs: 0 });
     modelsCore.configureWorkers([{ id: 'fast', endpoint: 'https://fast.example.com', model: 'm1', format: 'openai' }]);
 
     const pipelineCore = createPipelineCore(engine.registerCaller('core.pipeline', 'cores', { tier: 'official' }), { resolveAs: engine.resolveAs });
