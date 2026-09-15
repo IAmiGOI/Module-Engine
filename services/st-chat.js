@@ -26,16 +26,26 @@
  * от простого сообщения при подсчёте порога свёртки. Поле проверено по
  * реальному ST: `extra.tool_invocations` — тот же признак, каким сама ST
  * фильтрует `coreChat` (script.js, `Generate()`).
+ *
+ * `mesids` — второй, ТОЧЕЧНЫЙ режим чтения, рядом с `limit` (BasicSummary
+ * verify, ROADMAP.md): когда задан, возвращает РОВНО эти сообщения по их
+ * `mesid`, в исходном порядке, полностью игнорируя `limit`/хвостовой срез —
+ * проверка саммари уровня 2 читает КОНКРЕТНЫЕ старые сообщения (из
+ * `coveredIds` давно свёрнутых детей уровня 1), которые почти всегда далеко
+ * за пределами любого разумного «последние N». `includeSystem` в этом режиме
+ * неявно `true` — иначе уже скрытые Summary-фолдом сообщения (ровно то, ради
+ * чего этот режим и нужен) никогда бы не вернулись.
  */
 export function registerStChatService(bus, { getContext } = {}) {
-    /** `limit` — сколько ПОСЛЕДНИХ сообщений вернуть; `includeSystem` по умолчанию false, системные строки в контексте почти всегда шум. */
-    function readChat({ limit = 10, includeSystem = false } = {}) {
+    /** `limit` — сколько ПОСЛЕДНИХ сообщений вернуть; `includeSystem` по умолчанию false, системные строки в контексте почти всегда шум. `mesids` — см. doc-comment файла. */
+    function readChat({ limit = 10, includeSystem = false, mesids = null } = {}) {
         const chat = getContext()?.chat;
         if (!Array.isArray(chat)) return [];
+        const wanted = Array.isArray(mesids) ? new Set(mesids.map(String)) : null;
         return chat
             .map((message, index) => ({ message, mesid: String(index) }))
-            .filter(({ message }) => includeSystem || !message?.is_system)
-            .slice(-Math.max(0, limit))
+            .filter(({ mesid, message }) => (wanted ? wanted.has(mesid) : (includeSystem || !message?.is_system)))
+            .slice(wanted ? 0 : -Math.max(0, limit))
             .map(({ message, mesid }) => ({
                 mesid,
                 isUser: Boolean(message?.is_user),
