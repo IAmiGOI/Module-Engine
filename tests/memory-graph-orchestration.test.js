@@ -75,7 +75,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
     createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
 
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
-    const modelsCore = createInternalEngineModelsCore(modelsHost);
+    const modelsCore = createInternalEngineModelsCore(modelsHost, { workerWaitMs: 0 });
     // `workers` — опционально несколько воркеров (нужно тестам на реальную
     // МЕЖ-воркерную конкурентность dispatch-queue.js: "воркер исполняет
     // ровно ОДИН запрос за раз, очередь поглощает остальное" — с ОДНИМ
@@ -205,7 +205,10 @@ test('bootstrapFromLorebook() computes embeddings for the WHOLE batch CONCURRENT
     // с реальным временем): достаточно итераций, чтобы Проход 1/2 (уже
     // отвеченные fetchReplies) и запуск батча эмбедингов гарантированно
     // случились, но эмбединги при этом остаются висеть на `embeddingGate`.
-    for (let i = 0; i < 50 && inFlight < 3; i += 1) await Promise.resolve();
+    // 500, не 50 — `model.generate` стал `async`-обработчиком (см.
+    // `waitForWorkersChangeOnce()` в internal-engine.js), на тик больше на
+    // КАЖДЫЙ вызов; запас, не магическое число.
+    for (let i = 0; i < 500 && inFlight < 3; i += 1) await Promise.resolve();
 
     assert.equal(maxInFlight, 3, 'all 3 entries\' embeddings must be in flight AT THE SAME TIME — a sequential loop (the old behavior) would never exceed 1');
 
@@ -1487,7 +1490,7 @@ function buildRealLorebookAndGraph(entries, { fetchReplies = [] } = {}) {
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
     registerHttpService(engine.buses.network, { fetch: fakeFetchSequence(fetchReplies) });
     const modelsHost = engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true });
-    const modelsCore = createInternalEngineModelsCore(modelsHost);
+    const modelsCore = createInternalEngineModelsCore(modelsHost, { workerWaitMs: 0 });
     modelsCore.configureWorkers([{ id: 'fast', endpoint: 'https://fast.example.com', model: 'm1', format: 'openai' }]);
 
     const lorebookCore = createLorebookCore(engine.registerCaller('core.lorebook', 'cores', { tier: 'official' }));
