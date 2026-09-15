@@ -105,6 +105,61 @@ test('the least-loaded worker is always picked — a worker with 0 running is pr
     dBusy.resolve('a done');
 });
 
+// --- priority: two lanes, priority drains first, neither preempts an already-running item -----
+
+test('a priority item queued AFTER a regular one still dispatches first once a worker frees', async () => {
+    const queue = createDispatchQueue();
+    const workers = [{ id: 'a' }];
+    const order = [];
+    const dBusy = deferred();
+
+    queue.enqueue(workers, () => dBusy.promise); // occupies the only worker
+    await flushMicrotasks();
+
+    const pRegular = queue.enqueue(workers, () => { order.push('regular'); return Promise.resolve('r'); });
+    const pPriority = queue.enqueue(workers, () => { order.push('priority'); return Promise.resolve('p'); }, { priority: true });
+    await flushMicrotasks();
+    assert.equal(order.length, 0, 'sanity — the worker is still busy, nothing queued has run yet');
+
+    dBusy.resolve('done');
+    await Promise.all([pRegular, pPriority]);
+
+    assert.deepEqual(order, ['priority', 'regular'], 'priority must be dispatched before the earlier-queued regular item');
+});
+
+test('a priority item never interrupts an already-running regular item — queueing only affects WAITING items', async () => {
+    const queue = createDispatchQueue();
+    const workers = [{ id: 'a' }];
+    const order = [];
+    const dRunning = deferred();
+
+    const pRunning = queue.enqueue(workers, () => { order.push('running-start'); return dRunning.promise; });
+    await flushMicrotasks(); // 'running' already dispatched, holding the only worker
+
+    const pPriority = queue.enqueue(workers, () => { order.push('priority'); return Promise.resolve('p'); }, { priority: true });
+    await flushMicrotasks();
+    assert.equal(order.length, 1, 'the priority item must wait — it cannot preempt an in-flight run()');
+
+    dRunning.resolve('done');
+    await Promise.all([pRunning, pPriority]);
+    assert.deepEqual(order, ['running-start', 'priority']);
+});
+
+test('queueLength() counts BOTH lanes together', async () => {
+    const queue = createDispatchQueue();
+    const workers = [{ id: 'a' }];
+    const dBusy = deferred();
+
+    queue.enqueue(workers, () => dBusy.promise);
+    await flushMicrotasks();
+    queue.enqueue(workers, () => Promise.resolve('regular'));
+    queue.enqueue(workers, () => Promise.resolve('priority'), { priority: true });
+    await flushMicrotasks();
+
+    assert.equal(queue.queueLength(), 2);
+    dBusy.resolve('done');
+});
+
 async function flushMicrotasks(rounds = 10) {
     for (let i = 0; i < rounds; i++) await Promise.resolve();
 }

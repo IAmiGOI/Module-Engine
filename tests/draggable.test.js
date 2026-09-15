@@ -66,6 +66,21 @@ test('a press on a button inside the handle does NOT start a drag — collapse m
     assert.deepEqual(position(), { left: 10, top: 10 });
 });
 
+test('onClick fires when the drag HANDLE is itself a <button> (DockButton, ROADMAP.md 5.43) — the nested-button guard must not swallow the handle\'s own click', () => {
+    const position = signal({ left: 10, top: 10 });
+    const clicked = [];
+    const handlers = createDragHandlers(position, { onClick: () => clicked.push(1) });
+    const selfButton = {
+        closest: selector => (selector === 'button' ? selfButton : null),
+        setPointerCapture: () => {}, releasePointerCapture: () => {}, parentElement: null,
+    };
+
+    handlers['on:pointerdown'](pointer(0, 0, { target: selfButton, currentTarget: selfButton }));
+    handlers['on:pointerup'](pointer(0, 0, { currentTarget: selfButton }));
+
+    assert.deepEqual(clicked, [1], 'target === currentTarget means the button IS the handle, not a nested one — this must not be blocked');
+});
+
 test('the right mouse button does not drag', () => {
     const position = signal({ left: 10, top: 10 });
     const handlers = createDragHandlers(position);
@@ -88,6 +103,31 @@ test('the pointer is captured for the drag and released after — without it a f
 
     assert.deepEqual(captured, [1]);
     assert.deepEqual(released, [1]);
+});
+
+test('onClick fires on a near-stationary release, and onDrop still fires alongside it', () => {
+    const position = signal({ left: 0, top: 0 });
+    const dropped = [];
+    const clicked = [];
+    const handlers = createDragHandlers(position, { onDrop: value => dropped.push(value), onClick: () => clicked.push(1) });
+
+    handlers['on:pointerdown'](pointer(100, 100));
+    handlers['on:pointerup'](pointer(101, 99));
+
+    assert.equal(clicked.length, 1, 'movement of ~1px is well under the default 4px threshold');
+    assert.equal(dropped.length, 1, 'onDrop is unaffected — still fires on every release');
+});
+
+test('onClick does NOT fire once the pointer has travelled past the threshold — that is a drag, not a tap', () => {
+    const position = signal({ left: 0, top: 0 });
+    const clicked = [];
+    const handlers = createDragHandlers(position, { onClick: () => clicked.push(1) });
+
+    handlers['on:pointerdown'](pointer(100, 100));
+    handlers['on:pointermove'](pointer(140, 100));
+    handlers['on:pointerup'](pointer(140, 100));
+
+    assert.deepEqual(clicked, []);
 });
 
 test('releasing reports the dropped position, so the caller can persist it', () => {

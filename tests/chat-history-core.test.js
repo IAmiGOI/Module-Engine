@@ -45,6 +45,21 @@ test('chatHistory.messages proxies real chat text WITH mesid — a Модуль 
     assert.equal(result.value[1].text, 'It creaks loudly.');
 });
 
+test('chatHistory.messages with "mesids" returns exactly those messages, ignoring "limit" entirely — even ones hidden by a prior Summary fold', async () => {
+    const { module } = buildEngine([
+        { is_user: true, is_system: false, mes: 'msg 0' },
+        { is_user: false, is_system: true, mes: 'msg 1 — hidden by summary fold' }, // is_system:true, like chatHistory.hide leaves behind
+        { is_user: true, is_system: false, mes: 'msg 2' },
+        { is_user: false, is_system: false, mes: 'msg 3' },
+    ]);
+
+    const result = await call(module, 'chatHistory.messages', { mesids: ['3', '1'], limit: 1 });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.map(item => item.mesid), ['1', '3'], 'original chat order, not the order given in mesids');
+    assert.equal(result.value[0].text, 'msg 1 — hidden by summary fold', 'is_system alone must not exclude it in this mode');
+});
+
 test('annotate() then annotations() round-trips a per-message value', async () => {
     const { module } = buildEngine();
 

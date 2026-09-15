@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { signal, computed } from '../cores/ui/reactive.js';
-import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock, ProgressBar, HoldButton } from '../libraries/shared/widgets.js';
+import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock, ProgressBar, HoldButton, DockButton, EdgeDrawer, IconButton } from '../libraries/shared/widgets.js';
 
 /**
  * Виджеты — чистые функции «данные → дерево», поэтому проверяются как
@@ -230,6 +230,16 @@ test('FloatingPanel() applies a stored size when there is one', () => {
     assert.deepEqual(node.props.style(), { width: '300px', height: '200px', resize: 'none' });
 });
 
+test('FloatingPanel() carries an extra className alongside its base class, for a per-instance CSS variant', () => {
+    const node = FloatingPanel('Map', { className: 'stme-floating-panel--map' }, 'body');
+    assert.equal(node.props.class, 'stme-floating-panel stme-floating-panel--map');
+});
+
+test('FloatingPanel() ALWAYS enforces minWidth/minHeight, even before any resize — unlike width/height, which stay unset until the user actually resizes', () => {
+    const node = FloatingPanel('Map', { position: signal({}), size: signal({}), minWidth: 640, minHeight: 480 }, 'body');
+    assert.deepEqual(node.props.style(), { minWidth: '640px', minHeight: '480px', resize: 'none' });
+});
+
 test('FloatingPanel() without onResize is immutable — inline resize:none kills the CSS grip and no size is ever persisted', () => {
     const node = FloatingPanel('Music', { position: signal({}), size: signal({}) }, 'body');
 
@@ -393,4 +403,48 @@ test('HoldButton() must NOT read event.currentTarget from inside its setTimeout 
 
     await new Promise(resolve => setTimeout(resolve, 30));
     assert.equal(confirmed, 1, 'onConfirm must still fire — the element must have been captured at pointerdown time, not re-read later');
+});
+
+test('DockButton() places itself via a position signal, same convention as FloatingPanel, and carries any drag handlers verbatim', () => {
+    const position = signal({ left: 40, top: 60 });
+    const onClick = () => {};
+    const node = DockButton('🗺', { position, drag: { 'on:pointerdown': () => {}, 'on:click': onClick }, title: 'Open Map' });
+
+    assert.equal(node.tag, 'button');
+    assert.equal(node.props.class, 'stme-dock-button');
+    assert.equal(node.props.title, 'Open Map');
+    assert.deepEqual(node.props.style(), { left: '40px', top: '60px' });
+    assert.equal(typeof node.props['on:pointerdown'], 'function');
+});
+
+test('DockButton() writes no left/top at all before the user ever moves it — CSS owns the default corner', () => {
+    const node = DockButton('🗺', {});
+    assert.deepEqual(node.props.style(), {});
+});
+
+test('EdgeDrawer() toggles its open class from the signal, and the tab click reports the OPPOSITE of the current state', () => {
+    const open = signal(false);
+    const toggled = [];
+    const node = EdgeDrawer(open, { onToggle: value => toggled.push(value) }, 'settings form here');
+
+    assert.equal(node.props.class(), 'stme-edge-drawer');
+    const tab = node.children[0];
+    tab.props['on:click']();
+    assert.deepEqual(toggled, [true]);
+
+    open.set(true);
+    assert.equal(node.props.class(), 'stme-edge-drawer stme-edge-drawer-open');
+});
+
+test('IconButton() carries its own class (never menu_button chrome) and marks the active state, for toggle-style tool palettes', () => {
+    let clicked = 0;
+    const inactive = IconButton('📍', () => { clicked += 1; });
+    const active = IconButton('📍', () => {}, { active: true, title: 'Add marker' });
+
+    assert.equal(inactive.tag, 'button');
+    assert.equal(inactive.props.class, 'stme-icon-button');
+    inactive.props['on:click']();
+    assert.equal(clicked, 1);
+    assert.equal(active.props.class, 'stme-icon-button stme-icon-button-active');
+    assert.equal(active.props.title, 'Add marker');
 });

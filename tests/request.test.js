@@ -30,12 +30,12 @@ test('resolves with the first delivered result, and unsubscribes right after', a
     assert.equal(bus.unsubscribed, true);
 });
 
-test('passes params/when straight through to bus.subscribe()', () => {
+test('passes params/when/priority straight through to bus.subscribe()', () => {
     const bus = makeStubBus();
-    request(bus, 'demo.contract', { params: { x: 1 }, when: { event: 'y' } });
+    request(bus, 'demo.contract', { params: { x: 1 }, when: { event: 'y' }, priority: 'pipeline' });
 
     assert.equal(bus.capturedArgs.contract, 'demo.contract');
-    assert.deepEqual(bus.capturedArgs.options, { params: { x: 1 }, when: { event: 'y' } });
+    assert.deepEqual(bus.capturedArgs.options, { params: { x: 1 }, when: { event: 'y' }, priority: 'pipeline' });
 });
 
 test('a second delivery after the first is ignored — request() settles exactly once', async () => {

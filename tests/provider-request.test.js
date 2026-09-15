@@ -50,6 +50,30 @@ test('buildProviderRequest() for openai omits Authorization entirely when apiKey
     assert.equal('Authorization' in built.headers, false);
 });
 
+test('buildProviderRequest() for openai with request.messages sends them EXACTLY as given, ignoring prompt/systemPrompt entirely', () => {
+    const worker = { endpoint: 'https://api.example.com/v1', model: 'gpt-test', format: 'openai' };
+    const messages = [
+        { role: 'system', content: 'be concise' },
+        { role: 'user', content: 'summarize this' },
+        { role: 'assistant', content: 'draft summary' },
+        { role: 'system', content: 'expand: you missed X' },
+    ];
+
+    const built = buildProviderRequest(worker, { ...REQUEST, systemPrompt: 'ignored', prompt: 'ignored too', messages });
+
+    const body = JSON.parse(built.body);
+    assert.deepEqual(body.messages, messages);
+});
+
+test('buildProviderRequest() for openai with an EMPTY messages array falls back to the prompt/systemPrompt sugar, not an empty conversation', () => {
+    const worker = { endpoint: 'https://api.example.com/v1', model: 'gpt-test', format: 'openai' };
+
+    const built = buildProviderRequest(worker, { ...REQUEST, messages: [] });
+
+    const body = JSON.parse(built.body);
+    assert.deepEqual(body.messages, [{ role: 'user', content: 'hello' }]);
+});
+
 test('buildProviderRequest() for anthropic: appends /messages, sets x-api-key + anthropic-version, puts systemPrompt in a top-level "system" field', () => {
     const worker = { endpoint: 'https://api.example.com', apiKey: 'ak-1', model: 'claude-test', format: 'anthropic' };
 
@@ -109,15 +133,47 @@ test('a request with no reasoning fields at all sends NOTHING extra — the bare
 test('openai reasoning ONLY goes to a real OpenRouter endpoint — a generic OpenAI-compatible one gets nothing, since there is no shared standard for it', () => {
     const generic = buildProviderRequest(
         { endpoint: 'https://api.example.com/v1', format: 'openai' },
-        { ...REQUEST, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000 },
+        { ...REQUEST, maxTokens: 4000, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000 },
     );
     const openRouter = buildProviderRequest(
         { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
-        { ...REQUEST, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000 },
+        { ...REQUEST, maxTokens: 4000, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000 },
     );
 
     assert.equal('reasoning' in JSON.parse(generic.body), false);
     assert.deepEqual(JSON.parse(openRouter.body).reasoning, { enabled: true, effort: 'high', max_tokens: 2000 });
+});
+
+// OpenRouter's `max_tokens` is a completion-only budget SHARED between a
+// reasoning model's thinking and its visible reply (prompt is billed
+// separately against the context window — see OpenRouter's Parameters doc).
+// Left uncapped, `reasoningBudget` could consume the whole thing and leave
+// nothing for the actual answer, so a fixed reserve always survives it.
+test('openai reasoning budget is capped so at least 200 tokens survive for the actual completion, no matter how high reasoningBudget asks', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
+        { ...REQUEST, maxTokens: 1000, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 999999 },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).reasoning, { enabled: true, effort: 'high', max_tokens: 800 });
+});
+
+test('openai reasoning with no budget requested still reserves 200 tokens off max_tokens for the completion, rather than leaving the provider free to spend it all on thinking', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
+        { ...REQUEST, maxTokens: 1000, reasoningMode: 'enabled', reasoningEffort: 'high' },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).reasoning, { enabled: true, effort: 'high', max_tokens: 800 });
+});
+
+test('openai reasoning with max_tokens too small to hold the 200-token reserve sends no max_tokens for reasoning at all, rather than starving the completion to 0', () => {
+    const built = buildProviderRequest(
+        { endpoint: 'https://openrouter.ai/api/v1', format: 'openai' },
+        { ...REQUEST, maxTokens: 100, reasoningMode: 'enabled', reasoningEffort: 'high', reasoningBudget: 2000 },
+    );
+
+    assert.deepEqual(JSON.parse(built.body).reasoning, { enabled: true, effort: 'high' });
 });
 
 test('openai reasoning "disabled" is sent as an explicit choice, distinct from silence ("inherit")', () => {

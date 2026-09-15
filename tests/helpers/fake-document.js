@@ -78,6 +78,10 @@ export function makeFakeDocument() {
     return {
         body: new FakeElement('body'),
         createElement: tag => new FakeElement(tag),
+        // Real DOM ignores the namespace URI argument for the fake's purposes
+        // — services/dom.js's own createElement() is what actually cares
+        // which of these two got called, tagging the result with `__isSvg`.
+        createElementNS: (_ns, tag) => new FakeElement(tag),
         createTextNode: text => new FakeTextNode(text),
     };
 }
