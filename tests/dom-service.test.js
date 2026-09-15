@@ -117,10 +117,65 @@ test('removeProp on an "on:" key detaches the real listener', () => {
     assert.equal(el._listeners.has('click'), false);
 });
 
-// --- Contract level: registerDomService() actually wires all 7 as real,
+// --- Geometry/scroll/resize/innerHTML — added for Chat Viewport's own
+// virtualization (visible-range math needs real measured row heights; the
+// invisible accessibility/selection mirror needs a way to inject already-
+// formatted HTML) ---
+
+test('measureRect() snapshots getBoundingClientRect() into plain numbers, defaulting missing fields to 0', () => {
+    const el = { getBoundingClientRect: () => ({ width: 120.5, height: 40, top: 10, left: 0 }) };
+    assert.deepEqual(domOperations.measureRect(el), { width: 120.5, height: 40, top: 10, left: 0 });
+    assert.deepEqual(domOperations.measureRect({}), { width: 0, height: 0, top: 0, left: 0 });
+});
+
+test('readScrollPosition()/writeScrollPosition() read and write scrollTop/scrollLeft directly', () => {
+    const el = { scrollTop: 50, scrollLeft: 0 };
+    assert.deepEqual(domOperations.readScrollPosition(el), { top: 50, left: 0 });
+
+    domOperations.writeScrollPosition(el, { top: 200 });
+    assert.equal(el.scrollTop, 200);
+    assert.equal(el.scrollLeft, 0, 'omitting left must not clobber it with NaN/undefined');
+});
+
+test('setInnerHtml() assigns innerHTML as-is — the one deliberate place chat-viewport HTML enters the DOM outside h()/diff.js', () => {
+    const el = {};
+    domOperations.setInnerHtml(el, '<p>hi</p>');
+    assert.equal(el.innerHTML, '<p>hi</p>');
+});
+
+test('observeResize()/unobserveResize() wire and tear down a real ResizeObserver by the SAME handler reference — same subscribe/unsubscribe discipline as services/st-events.js', () => {
+    let observedEl = null;
+    let disconnected = false;
+    let deliver;
+    class FakeResizeObserver {
+        constructor(cb) { deliver = cb; }
+        observe(el) { observedEl = el; }
+        disconnect() { disconnected = true; }
+    }
+    const el = {};
+    const seen = [];
+    const handler = box => seen.push(box);
+
+    const subscribed = domOperations.observeResize(el, handler, FakeResizeObserver);
+    assert.equal(subscribed, true);
+    assert.equal(observedEl, el);
+
+    deliver([{ contentRect: { width: 300, height: 40 } }]);
+    assert.deepEqual(seen, [{ width: 300, height: 40 }]);
+
+    const unsubscribed = domOperations.unobserveResize(el, handler);
+    assert.equal(unsubscribed, true);
+    assert.equal(disconnected, true);
+});
+
+test('unobserveResize() on an element/handler pair that was never observed is a harmless no-op', () => {
+    assert.equal(domOperations.unobserveResize({}, () => {}), false);
+});
+
+// --- Contract level: registerDomService() actually wires all 16 as real,
 // callable contracts on a bus ---
 
-test('registerDomService() registers all 7 contracts, each performing the real operation on the real (fake) document/tree', async () => {
+test('registerDomService() registers all 16 contracts, each performing the real operation on the real (fake) document/tree', async () => {
     const bus = createContractBus();
     registerDomService(bus, { document: makeFakeDocument() });
 
@@ -133,7 +188,7 @@ test('registerDomService() registers all 7 contracts, each performing the real o
     assert.deepEqual(el.children, [text]);
 });
 
-test('registerDomService()\'s returned unregister function retires all 7 contracts at once', async () => {
+test('registerDomService()\'s returned unregister function retires all contracts at once', async () => {
     const bus = createContractBus();
     const unregister = registerDomService(bus, { document: makeFakeDocument() });
 

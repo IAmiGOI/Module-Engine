@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { signal, computed } from '../cores/ui/reactive.js';
-import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock, ProgressBar, HoldButton, DockButton, EdgeDrawer, IconButton } from '../libraries/shared/widgets.js';
+import { Button, TextInput, Select, Slider, Toggle, Field, Row, Card, Section, Badge, EmptyState, List, TwoColumn, EditableList, FloatingPanel, StatBlock, ProgressBar, HoldButton, DockButton, EdgeDrawer, IconButton, Avatar, Timestamp, MessageHeader, MessageActionsRow, ReasoningBlock } from '../libraries/shared/widgets.js';
 
 /**
  * Виджеты — чистые функции «данные → дерево», поэтому проверяются как
@@ -447,4 +447,105 @@ test('IconButton() carries its own class (never menu_button chrome) and marks th
     assert.equal(clicked, 1);
     assert.equal(active.props.class, 'stme-icon-button stme-icon-button-active');
     assert.equal(active.props.title, 'Add marker');
+});
+
+// --- Chat Viewport chrome (план `chat-viewport`) --------------------------
+
+test('Avatar() renders a real <img> at the given size when a url is provided', () => {
+    const node = Avatar('https://example.com/pic.png', { size: 64, name: 'Alice' });
+    assert.equal(node.tag, 'img');
+    assert.equal(node.props.src, 'https://example.com/pic.png');
+    assert.equal(node.props.style.width, '64px');
+    assert.equal(node.props.style.height, '64px');
+    assert.match(node.props.alt, /Alice/);
+});
+
+test('Avatar() defaults to 56px — deliberately bigger than SillyTavern\'s own native avatar size (owner\'s explicit request)', () => {
+    const node = Avatar('https://example.com/pic.png');
+    assert.equal(node.props.style.width, '56px');
+});
+
+test('Avatar() with no url falls back to an initial-letter placeholder instead of a broken <img>', () => {
+    const node = Avatar(null, { name: 'bob' });
+    assert.equal(node.tag, 'div');
+    assert.match(node.props.class, /stme-avatar-fallback/);
+    assert.equal(node.children[0], 'B', 'the fallback initial is uppercased regardless of input casing');
+});
+
+test('Avatar() with neither url nor name falls back to "?" rather than an empty circle', () => {
+    const node = Avatar(null, {});
+    assert.equal(node.children[0], '?');
+});
+
+test('Timestamp() renders the caller\'s already-formatted text verbatim, with an optional title for the full value', () => {
+    const node = Timestamp('2 min ago', { title: '2024-01-01 12:00:00' });
+    assert.equal(node.tag, 'time');
+    assert.equal(node.children[0], '2 min ago');
+    assert.equal(node.props.title, '2024-01-01 12:00:00');
+});
+
+test('MessageHeader() shows the turn-index badge only when given one, and the generation-time badge only for non-user messages', () => {
+    const withBoth = MessageHeader({ name: 'Narrator', turnIndex: 3, genDurationMs: 2500, isUser: false });
+    const info = withBoth.children[1];
+    const nameRow = info.children[0];
+    assert.equal(nameRow.children[0].children[0], 'Narrator');
+    assert.ok(nameRow.children.some(c => c?.children?.[0] === '#3'));
+    assert.ok(nameRow.children.some(c => c?.children?.[0] === '2.5s'));
+
+    const userHeader = MessageHeader({ name: 'You', turnIndex: 2, genDurationMs: 2500, isUser: true });
+    const userNameRow = userHeader.children[1].children[0];
+    assert.ok(!userNameRow.children.some(c => c?.children?.[0] === '2.5s'), 'a user message never had a generation time — showing one would be nonsensical');
+});
+
+test('MessageHeader() places "actions" in the SAME name-row as the name/badges, not a separate row below — owner: "любые кнопки должны быть в ряд с именем"', () => {
+    const actionsNode = MessageActionsRow({ onDelete: () => {} });
+    const header = MessageHeader({ name: 'Narrator', turnIndex: 1, actions: actionsNode });
+    const nameRow = header.children[1].children[0];
+
+    assert.ok(nameRow.children.includes(actionsNode), 'the actions tree must be a child of the name-row itself');
+});
+
+test('MessageHeader() without "actions" renders just the name in the name-row — h() filters the missing actions out entirely, actions stay optional', () => {
+    const header = MessageHeader({ name: 'Narrator' });
+    const nameRow = header.children[1].children[0];
+    assert.equal(nameRow.children.length, 1);
+    assert.equal(nameRow.children[0].children[0], 'Narrator');
+});
+
+test('MessageHeader() falls back to "You"/"Narrator" when no name is given', () => {
+    const user = MessageHeader({ isUser: true });
+    const npc = MessageHeader({ isUser: false });
+    assert.equal(user.children[1].children[0].children[0].children[0], 'You');
+    assert.equal(npc.children[1].children[0].children[0].children[0], 'Narrator');
+});
+
+test('MessageActionsRow() only shows swipe controls/counter when swipeCount is given and greater than 1', () => {
+    const withoutSwipe = MessageActionsRow({ onEdit: () => {}, onDelete: () => {} });
+    assert.equal(withoutSwipe.children.filter(Boolean).length, 2);
+
+    const withSwipe = MessageActionsRow({ onEdit: () => {}, onSwipeLeft: () => {}, onSwipeRight: () => {}, swipeIndex: 1, swipeCount: 4 });
+    const counter = withSwipe.children.find(c => c?.props?.class === 'stme-message-swipe-counter');
+    assert.equal(counter.children[0], '2/4');
+});
+
+test('MessageActionsRow() with swipeCount:1 (no real alternative swipes) hides the swipe controls entirely', () => {
+    const node = MessageActionsRow({ onSwipeLeft: () => {}, onSwipeRight: () => {}, swipeCount: 1 });
+    assert.equal(node.children.filter(Boolean).length, 0);
+});
+
+test('MessageActionsRow() omits a button entirely when its handler is not given, rather than rendering a disabled/dead one', () => {
+    const node = MessageActionsRow({ onDelete: () => {} });
+    const buttons = node.children.filter(Boolean);
+    assert.equal(buttons.length, 1);
+});
+
+test('ReasoningBlock() renders nothing at all for a message with no reasoning text — not an empty collapsed section', () => {
+    assert.equal(ReasoningBlock(''), null);
+    assert.equal(ReasoningBlock(null), null);
+});
+
+test('ReasoningBlock() wraps real reasoning text in a collapsed-by-default <details>', () => {
+    const node = ReasoningBlock('Because the bandit flinched first.');
+    assert.equal(node.tag, 'details');
+    assert.equal(node.props.open, undefined, 'no `open` prop at all means collapsed, same convention as Details()');
 });
