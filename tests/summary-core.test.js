@@ -122,6 +122,132 @@ function makeChat(count) {
     return Array.from({ length: count }, (_, i) => ({ is_user: i % 2 === 0, is_system: false, name: i % 2 === 0 ? 'Player' : 'Character', mes: `line ${i}`, send_date: `2024-01-01 @${String(i).padStart(2, '0')}h` }));
 }
 
+/** Resolves the next time `eventName` fires on the real Event Bus — the only way to observe a DETACHED (fire-and-forget) verify cycle finishing, since checkAndFold() itself never awaits it. */
+function waitForEvent(engine, eventName) {
+    return new Promise(resolve => {
+        const unsubscribe = engine.events.subscribe(eventName, payload => { unsubscribe(); resolve(payload); });
+    });
+}
+
+/** A scriptable fetch: replies with `replies[i]` on the i-th call (repeats the last one past the end), and records every call's parsed JSON body for assertions on exactly what was sent. */
+function fakeFetchScript(replies) {
+    const calls = [];
+    let i = 0;
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, body: options?.body ? JSON.parse(options.body) : null });
+        const reply = replies[Math.min(i, replies.length - 1)];
+        i += 1;
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    fetchImpl.calls = calls;
+    return fetchImpl;
+}
+
+// --- Verify (BasicSummary verify, level >1 only, ROADMAP.md) ---------------
+
+/** batchSize 2 at both levels, protectedWindow 1 -> threshold 3. 8 raw messages: level-1 folds [0,1],[2,3],[4,5] (3 HTTP calls), leaves [6,7] protected; level-2 then folds the oldest two level-1 summaries into ONE draft (4th call) and, with verify on, hands it to the background cycle instead of promoting it immediately. */
+async function setupPendingLevel2(fetch) {
+    const chat = makeChat(8);
+    const built = buildEngine({ chat, fetch });
+    await built.summaryCore.load();
+    await call(built.caller, 'summary.configure', { levels: [{ batchSize: 2 }, { batchSize: 2 }], protectedWindow: 1, verifyEnabled: true });
+    return built;
+}
+
+test('verify: a clean "ok" verdict promotes the level-2 draft immediately, with no UNVERIFIED marker', async () => {
+    const fetch = fakeFetchScript(['L1 a', 'L1 b', 'L1 c', 'L2 draft', '{"verdict":"ok"}']);
+    const { caller, engine } = await setupPendingLevel2(fetch);
+
+    const completed = waitForEvent(engine, 'summary.verify.completed');
+    await call(caller, 'summary.check');
+    const payload = await completed;
+
+    assert.equal(payload.verdict, 'ok');
+    const list = await call(caller, 'summary.list');
+    const level2 = list.value.find(r => r.level === 2);
+    assert.ok(level2, 'level-2 summary must be active after promotion');
+    assert.equal(level2.text, 'L2 draft');
+    assert.equal(list.value.filter(r => r.level === 1).length, 1, 'only the un-batched 3rd level-1 summary remains active — the other two were folded into level-2');
+});
+
+test('verify: "expand" resends a 4-turn request with the PREVIOUS draft as the assistant turn, then promotes once a later verify says ok', async () => {
+    const fetch = fakeFetchScript([
+        'L1 a', 'L1 b', 'L1 c',
+        'L2 draft v1',
+        '{"verdict":"expand","instruction":"you missed the ending"}',
+        'L2 draft v2 — expanded',
+        '{"verdict":"ok"}',
+    ]);
+    const { caller, engine } = await setupPendingLevel2(fetch);
+
+    const completed = waitForEvent(engine, 'summary.verify.completed');
+    await call(caller, 'summary.check');
+    await completed;
+
+    const list = await call(caller, 'summary.list');
+    assert.equal(list.value.find(r => r.level === 2).text, 'L2 draft v2 — expanded');
+
+    const refoldCall = fetch.calls.find(c => Array.isArray(c.body?.messages) && c.body.messages.length === 4);
+    assert.ok(refoldCall, 'the 4-turn refold request must have been sent');
+    assert.deepEqual(refoldCall.body.messages.map(m => m.role), ['system', 'user', 'assistant', 'system']);
+    assert.equal(refoldCall.body.messages[2].content, 'L2 draft v1', 'the assistant turn must carry the PREVIOUS draft, unmodified');
+    assert.match(refoldCall.body.messages[3].content, /you missed the ending/);
+});
+
+test('verify: "redo" resends a 3-turn request WITHOUT the previous draft, then promotes once a later verify says ok', async () => {
+    const fetch = fakeFetchScript([
+        'L1 a', 'L1 b', 'L1 c',
+        'L2 draft v1 — wrong',
+        '{"verdict":"redo","reason":"mixed up two characters"}',
+        'L2 draft v2 — from scratch',
+        '{"verdict":"ok"}',
+    ]);
+    const { caller, engine } = await setupPendingLevel2(fetch);
+
+    const completed = waitForEvent(engine, 'summary.verify.completed');
+    await call(caller, 'summary.check');
+    await completed;
+
+    const list = await call(caller, 'summary.list');
+    assert.equal(list.value.find(r => r.level === 2).text, 'L2 draft v2 — from scratch');
+
+    const refoldCall = fetch.calls.find(c => Array.isArray(c.body?.messages) && c.body.messages.length === 3);
+    assert.ok(refoldCall, 'the 3-turn redo request must have been sent');
+    assert.deepEqual(refoldCall.body.messages.map(m => m.role), ['system', 'user', 'system']);
+    assert.match(refoldCall.body.messages[2].content, /mixed up two characters/);
+    assert.equal(refoldCall.body.messages.some(m => m.role === 'assistant'), false, 'redo must NOT carry the discarded draft');
+});
+
+test('verify: exhausting the 2-attempt budget still promotes the LAST draft, marked internally as unverified — and the mark reaches the main model but stays out of the sidecar-facing text', async () => {
+    const fetch = fakeFetchScript([
+        'L1 a', 'L1 b', 'L1 c',
+        'L2 draft v1',
+        '{"verdict":"expand","instruction":"missing X"}',
+        'L2 draft v2',
+        '{"verdict":"expand","instruction":"still missing Y"}',
+        'L2 draft v3',
+        '{"verdict":"expand","instruction":"still not enough"}',
+    ]);
+    const { caller, engine, pipelineCore } = await setupPendingLevel2(fetch);
+
+    const completed = waitForEvent(engine, 'summary.verify.completed');
+    await call(caller, 'summary.check');
+    const payload = await completed;
+
+    assert.equal(payload.verdict, 'accepted-unverified');
+    const list = await call(caller, 'summary.list');
+    const level2 = list.value.find(r => r.level === 2);
+    assert.ok(level2.text.startsWith('[[UNVERIFIED]]'), 'exhausted draft must carry the internal marker');
+    assert.match(level2.text, /L2 draft v3/, 'the LAST attempted draft text must be kept, not an earlier one');
+
+    // The main roleplay model MUST see the caveat (own words: "accepted, but
+    // marked... trust the user if they interpret it differently").
+    const outgoing = [{ mes: 'tail' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+    const summaryMessages = outgoing.filter(message => message.mes?.includes('L2 draft v3'));
+    assert.ok(summaryMessages.some(message => message.mes.includes('[[UNVERIFIED]]')), 'the injected prompt message must keep the marker for the main model');
+});
+
 test('checkAndFold() does nothing below threshold — backlog has not reached a full batch yet', async () => {
     const chat = makeChat(4); // protectedWindow(2)+batchSize(3) = 5, so 4 is one short
     const { caller, summaryCore } = buildEngine({ chat });

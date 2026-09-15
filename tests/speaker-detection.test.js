@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
     createEmptySpeakerCast, addCastMember, removeCastMember, updateCastMember, resolveEntityByName,
     findKnownMention, detectSpeakers, parseExplicitTag, findSpeechVerbSubject, findSentenceSubject,
-    findVocativeAddressee, splitIntoSentences,
+    findVocativeAddressee, splitIntoSentences, hasPresenceVeto, findDepartureSubject,
 } from '../libraries/core/speaker-detection.js';
 
 function castWith(...members) {
@@ -65,7 +65,14 @@ test('findKnownMention returns null when NO known cast member is mentioned at al
 test('parseExplicitTag recognizes the "Name: \\"text\\"" format and resolves it against the cast', () => {
     const { cast, ids } = castWith({ name: 'Sasha', gender: 'M' });
     const tagged = parseExplicitTag('Sasha: "Speaking."', cast);
-    assert.deepEqual(tagged, { id: ids.Sasha, rawName: 'Sasha', quote: 'Speaking.' });
+    assert.deepEqual(tagged, { id: ids.Sasha, rawName: 'Sasha', quote: 'Speaking.', quoteStart: 8, quoteEnd: 17 });
+    assert.equal('Sasha: "Speaking."'.slice(tagged.quoteStart, tagged.quoteEnd), 'Speaking.', 'quoteStart/quoteEnd must point at exactly the quote content, no more');
+});
+
+test('parseExplicitTag resolves a TITLED name ("Dr. Okumura") against the cast — a period inside the name must not break the tag format itself', () => {
+    const { cast, ids } = castWith({ name: 'Dr. Okumura', gender: 'M' });
+    const tagged = parseExplicitTag('Dr. Okumura: "We should start."', cast);
+    assert.equal(tagged.id, ids['Dr. Okumura']);
 });
 
 test('parseExplicitTag leaves the id null for a name NOT in the cast — it never auto-creates the character', () => {
@@ -198,6 +205,98 @@ test('detectSpeakers lets a KNOWN name actually found in the text win over defau
 
     const dialogue = segments.find(segment => segment.type === 'dialogue');
     assert.equal(dialogue.speakerId, ids.Maria);
+});
+
+// --- Real bugs from a beta tester's live transcripts (ROADMAP.md 5.42) ---
+
+test('detectSpeakers paints ONLY the quote itself, never unrelated narration fused ahead of it by the "ends-in-a-colon" merge rule in splitIntoSentences() — a real bug: "From your left, barely audible:" (narration, dramatic colon) turned the SPEAKER\'S color, not just "...He has a point."', () => {
+    const { cast, ids } = castWith({ name: 'Reine', gender: 'F' });
+    const text = 'From your left, barely audible:\n\nReine: "...He has a point."';
+    const { segments } = detectSpeakers(text, cast);
+    const dialogue = segments.find(segment => segment.type === 'dialogue');
+
+    assert.equal(dialogue.speakerId, ids.Reine, 'still correctly attributed to Reine');
+    assert.equal(text.slice(dialogue.start, dialogue.end), dialogue.text, 'the paint span must equal EXACTLY the quote text');
+    assert.equal(dialogue.text.includes('barely audible'), false, 'narration must never leak into the painted span');
+});
+
+test('detectSpeakers paints ONLY the quote for the explicit "Name:" tag format too — a short fused prefix (blank lines + "Damion:") must not extend the painted span before the actual quote', () => {
+    const { cast, ids } = castWith({ name: 'Damion', gender: 'M' });
+    const text = 'He bites into the piece.\n\nDamion: "...sorry..."';
+    const { segments } = detectSpeakers(text, cast);
+    const dialogue = segments.find(segment => segment.type === 'dialogue');
+
+    assert.equal(dialogue.rule, 'explicitTag');
+    assert.equal(dialogue.speakerId, ids.Damion);
+    assert.equal(text.slice(dialogue.start, dialogue.end), dialogue.text);
+});
+
+test('detectSpeakers recognizes "Dr. Okumura" as ONE cast member across the sentence-splitting title abbreviation — a real bug: "Dr." was read as ending a sentence, splitting the name and losing recognition of the doctor as the subject', () => {
+    const { cast, ids } = castWith({ name: 'Dr. Okumura', gender: 'M' }, { name: 'Damion', gender: 'M' });
+    const text = 'Dr. Okumura turned the penlight between his fingers. "I want to evaluate the sites."';
+    const { segments } = detectSpeakers(text, cast);
+    const dialogue = segments.find(segment => segment.type === 'dialogue');
+
+    assert.equal(dialogue.speakerId, ids['Dr. Okumura'], 'the title must not break recognition of the name it belongs to');
+});
+
+test('splitIntoSentences does not treat the period after a title abbreviation ("Dr.", "Mr.", "Mrs.") as a sentence boundary', () => {
+    const sentences = splitIntoSentences('Dr. Okumura nodded. He smiled.');
+    assert.equal(sentences.length, 2);
+    assert.equal(sentences[0].text.trim(), 'Dr. Okumura nodded.');
+});
+
+test('splitIntoSentences recognizes the single-character ellipsis "…" as a sentence terminator, same as "..."', () => {
+    const sentences = splitIntoSentences('He looked away… She said nothing.');
+    assert.equal(sentences.length, 2);
+    assert.equal(sentences[0].text.trim(), 'He looked away…');
+});
+
+// --- Presence veto / departure (ROADMAP.md 5.41, ported from scene-director's PresenceEngine idea) ---
+
+test('hasPresenceVeto detects an absence-context phrase ("thinks of")', () => {
+    assert.equal(hasPresenceVeto('Maria thinks of Alex often.'), true);
+});
+
+test('hasPresenceVeto does not fire on an ordinary sentence with no absence phrasing', () => {
+    assert.equal(hasPresenceVeto('Maria crossed the room.'), false);
+});
+
+test('findDepartureSubject finds a KNOWN cast member adjacent to an explicit departure verb', () => {
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' });
+    assert.equal(findDepartureSubject('Alex leaves the room.', cast), ids.Alex);
+});
+
+test('findDepartureSubject returns null when nobody in the cast is mentioned, even next to a departure verb', () => {
+    const { cast } = castWith({ name: 'Alex', gender: 'M' });
+    assert.equal(findDepartureSubject('Someone leaves the room.', cast), null);
+});
+
+test('detectSpeakers does NOT attribute a quote to a cast member who is only mentioned in an ABSENCE context ("thinks of") — falls back to whoever is actually established as present', () => {
+    const { cast, ids } = castWith({ name: 'Maria', gender: 'F' }, { name: 'Alex', gender: 'M' });
+    const text = 'Maria sits by the window. She thinks of Alex often. "I miss him," she says.';
+    const { segments } = detectSpeakers(text, cast);
+
+    const dialogue = segments.find(segment => segment.type === 'dialogue');
+    assert.equal(dialogue.speakerId, ids.Maria, 'the pronoun must resolve to Maria (actually present), not Alex (merely thought of)');
+});
+
+test('detectSpeakers removes a cast member from the subject stack once they EXPLICITLY leave — a later quote must not fall back to them', () => {
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' }, { name: 'Maria', gender: 'F' });
+    const text = 'Alex leaves the room. Maria enters. "Where did he go?"';
+    const { segments } = detectSpeakers(text, cast);
+
+    const dialogue = segments.find(segment => segment.type === 'dialogue');
+    assert.equal(dialogue.speakerId, ids.Maria, 'nearestSubject must land on Maria — Alex was purged from the stack on departure');
+});
+
+test('detectSpeakers: a departed cast member mentioned again LATER in a fresh, non-absence sentence can still be attributed normally — departure only purges the STACK, the cast list itself is untouched', () => {
+    const { cast, ids } = castWith({ name: 'Alex', gender: 'M' });
+    const text = 'Alex leaves the room. Alex said, "Wait for me."';
+    const { segments } = detectSpeakers(text, cast);
+
+    const dialogue = segments.find(segment => segment.type === 'dialogue');
+    assert.equal(dialogue.speakerId, ids.Alex, 'a fresh explicit mention (speechVerb rule) still works after a departure — only the passive stack fallback is affected');
 });
 
 test('detectSpeakers matching against a cast with an alias attributes the quote correctly by the NICKNAME used in the text', () => {

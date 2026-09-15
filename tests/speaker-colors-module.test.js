@@ -34,6 +34,20 @@ function fakeMessageNode(mesid) {
     return { __fakeMessageNode: true, mesid };
 }
 
+/** Finds every h() tree node matching `predicate` — the tree is DATA, no DOM needed (same helper shape as tests/tracker-module.test.js). */
+function findAll(node, predicate, found = []) {
+    if (Array.isArray(node)) { for (const item of node) findAll(item, predicate, found); return found; }
+    if (typeof node === 'function') return findAll(node(), predicate, found);
+    if (!node || typeof node !== 'object') return found;
+    if (predicate(node)) found.push(node);
+    for (const child of node.children ?? []) findAll(child, predicate, found);
+    return found;
+}
+
+function findButton(tree, label) {
+    return findAll(tree, node => node.tag === 'button' && node.children?.includes(label))[0];
+}
+
 function wireFakeChatDom(engine, { messages, accent = '#3f51b5' }) {
     const paintCalls = [];
     const clearCalls = [];
@@ -134,6 +148,30 @@ test('a message with NO recoverable speaker at all (no quote) is cleared, not le
     await moduleInstance.load();
 
     assert.deepEqual(clearCalls, ['5']);
+});
+
+test('clicking "Apply" WITHOUT ever touching the preset dropdown still applies the right preset — found live: a native <select> with no option explicitly `selected` (the signal still \'\') visually highlights its FIRST option by default, and Apply/Delete used to silently no-op against the still-empty signal', async () => {
+    const { engine, speakerCore } = buildEngine();
+    await speakerCore.restore();
+    wireFakeChatDom(engine, { messages: [] });
+    const moduleHost = buildModuleHost(engine);
+    await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F', color: '#123456' } }, resolve));
+    await new Promise(resolve => moduleHost.cores.subscribe('speaker.presets.save', { params: { name: 'Cast A' } }, resolve));
+    const beforeRemoval = await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.list', {}, resolve));
+    await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.remove', { params: { id: beforeRemoval.value[0].id } }, resolve));
+
+    // Fresh module instance + load(), same as a page reload — the user never
+    // clicks the "Apply a saved preset" dropdown at all in this scenario.
+    const moduleInstance = createSpeakerColorsModule(moduleHost);
+    await moduleInstance.load();
+    const applyButton = findButton(moduleInstance.tree(), 'Apply');
+    assert.ok(applyButton, 'the Apply button must exist in the rendered tree');
+
+    applyButton.props['on:click']();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const cast = await new Promise(resolve => moduleHost.cores.subscribe('speaker.cast.list', {}, resolve));
+    assert.ok(cast.value.some(entity => entity.name === 'Lisawoo'), 'the preset must actually be applied, not silently no-op');
 });
 
 test('module.stop() unsubscribes every redraw listener — a repaint no longer fires once the Module is disabled', async () => {

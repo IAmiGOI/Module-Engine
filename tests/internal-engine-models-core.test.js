@@ -345,7 +345,11 @@ test('a worker configured with reasoning enabled actually sends it to a REAL Ope
     const result = await new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hello' } }, resolve));
 
     assert.equal(result.ok, true);
-    assert.deepEqual(JSON.parse(calls[0].body).reasoning, { enabled: true, effort: 'high', max_tokens: 2000 });
+    // Worker leaves `maxTokens` unset, so it falls back to REQUEST_DEFAULTS'
+    // 1000 (see resolveGenerateRequest) — reasoningBudget 2000 gets capped to
+    // maxTokens(1000) minus the 200-token completion reserve (see
+    // buildOpenAiReasoning in provider-request.js).
+    assert.deepEqual(JSON.parse(calls[0].body).reasoning, { enabled: true, effort: 'high', max_tokens: 800 });
 });
 
 // --- Свои пресеты: контракты + событие --------------------------------------
