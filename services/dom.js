@@ -16,6 +16,34 @@
 const DOM_PROPS = new Set(['value', 'checked', 'disabled', 'selected', 'textContent', 'className', 'open', 'hidden']);
 
 /**
+ * SVG tags need `document.createElementNS()`, not the plain
+ * `document.createElement()` used for everything else — a `<circle>`/
+ * `<polygon>`/etc. created via `createElement` is a generic, non-rendering
+ * `HTMLUnknownElement` (attributes like `cx`/`r` are still settable as
+ * plain DOM attributes, so `getAttribute()` lies that everything is fine),
+ * not a real `SVGCircleElement` — it paints NOTHING, at a `getBoundingClientRect()`
+ * of `{width:0, height:0}`. Found live (ROADMAP.md 5.47): the map module's
+ * whole region/node/edge canvas rendered zero visible shapes despite every
+ * node/attribute being present and correct in the tree. `__isSvg` is set on
+ * creation so `setProp()` below can ALSO route `class` through `setAttribute`
+ * for these — `SVGElement.className` is a read-only `SVGAnimatedString`,
+ * so the plain `el.className = value` used for HTML elements silently does
+ * nothing on a real SVG element either.
+ */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_TAGS = new Set([
+    'svg', 'g', 'circle', 'ellipse', 'line', 'path', 'polygon', 'polyline', 'rect', 'image',
+    'text', 'tspan', 'defs', 'use', 'symbol', 'marker', 'clipPath', 'linearGradient', 'radialGradient', 'stop',
+]);
+
+function createElement(doc, tag) {
+    if (!SVG_TAGS.has(tag)) return doc.createElement(tag);
+    const el = doc.createElementNS(SVG_NS, tag);
+    el.__isSvg = true;
+    return el;
+}
+
+/**
  * Что мы САМИ последний раз записали в этот проп — не то, что сейчас
  * ЧИТАЕТСЯ из `el[key]`. Проверено на реальном браузере: у `<option>` без
  * явно выставленного content-атрибута `value` геттер `.value` откатывается на
@@ -37,7 +65,11 @@ function setProp(el, key, value) {
         else delete el.__listeners[type];
         return;
     }
-    if (key === 'class') { el.className = value ?? ''; return; }
+    if (key === 'class') {
+        if (el.__isSvg) el.setAttribute('class', value ?? '');
+        else el.className = value ?? '';
+        return;
+    }
     if (key === 'style' && value && typeof value === 'object') { Object.assign(el.style, value); return; }
     // Присваивание того же значения — не безобидный no-op: у <input> запись
     // в .value ставит каретку в конец, даже если строка не изменилась. А
@@ -192,7 +224,7 @@ function paintTextRuns(container, runs, doc) {
  */
 export function registerDomService(servicesBus, { document: doc = globalThis.document } = {}) {
     const unregisters = [
-        servicesBus.register('dom.createElement', ({ tag }) => doc.createElement(tag), { loadMetric: () => 0 }),
+        servicesBus.register('dom.createElement', ({ tag }) => createElement(doc, tag), { loadMetric: () => 0 }),
         servicesBus.register('dom.createTextNode', ({ text }) => doc.createTextNode(text), { loadMetric: () => 0 }),
         servicesBus.register('dom.setProp', ({ el, key, value }) => setProp(el, key, value), { loadMetric: () => 0 }),
         servicesBus.register('dom.removeProp', ({ el, key }) => removeProp(el, key), { loadMetric: () => 0 }),
@@ -214,4 +246,4 @@ export function registerDomService(servicesBus, { document: doc = globalThis.doc
 }
 
 /** Exported for services/dom.test.js's own unit-level coverage of the raw DOM logic, independent of the contract/Gate plumbing. */
-export const domOperations = { setProp, removeProp, paintTextRuns, clearPaintedRuns };
+export const domOperations = { setProp, removeProp, paintTextRuns, clearPaintedRuns, createElement };
