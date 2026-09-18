@@ -58,11 +58,25 @@ const lastWritten = new WeakMap(); // el -> { [key]: value }
 
 function setProp(el, key, value) {
     if (key.startsWith('on:')) {
-        const type = key.slice(3);
+        // `:capture` suffix — НАЙДЕНО ЖИВЬЁМ (Chat Viewport, ToolCall-
+        // сообщения): нативное DOM-событие `toggle` (`<details>`) в этом
+        // браузере НЕ всплывает (`bubbles: false`) — делегированный
+        // обработчик на РОДИТЕЛЕ (обычный `addEventListener(type, value)`,
+        // фаза bubble по умолчанию) никогда не срабатывал на реальный клик
+        // пользователя, хотя синтетический `new Event('toggle', {bubbles:
+        // true})` в тесте проходил — ложно казалось, что делегирование
+        // работает. Фаза CAPTURE ловит событие на пути ВНИЗ, до/вне
+        // зависимости от всплытия — единственный надёжный способ поймать
+        // `toggle` на общем контейнере, когда под ним может быть НЕСКОЛЬКО
+        // `<details>` (сырой HTML сообщения, не `h()`-дерево — навесить
+        // обработчик на каждый по отдельности нечем).
+        const capture = key.endsWith(':capture');
+        const type = key.slice(3, capture ? -8 : undefined);
+        const listenerKey = capture ? `${type}:capture` : type;
         el.__listeners ??= {};
-        if (el.__listeners[type]) el.removeEventListener(type, el.__listeners[type]);
-        if (value) { el.addEventListener(type, value); el.__listeners[type] = value; }
-        else delete el.__listeners[type];
+        if (el.__listeners[listenerKey]) el.removeEventListener(type, el.__listeners[listenerKey], capture);
+        if (value) { el.addEventListener(type, value, capture); el.__listeners[listenerKey] = value; }
+        else delete el.__listeners[listenerKey];
         return;
     }
     if (key === 'class') {
@@ -217,12 +231,144 @@ function paintTextRuns(container, runs, doc) {
 }
 
 /**
+ * `getBoundingClientRect()` возвращает "живой" DOMRect, у которого чтение
+ * полей ленивое и завязано на реальный layout — наружу отдаётся снятый
+ * снимок из простых чисел, чтобы вызывающий (Ядро Chat Viewport) мог
+ * держать его в сигнале без риска, что значения потом расползутся.
+ */
+function measureRect(el) {
+    const rect = el?.getBoundingClientRect?.() ?? {};
+    return {
+        width: Number(rect.width) || 0,
+        height: Number(rect.height) || 0,
+        top: Number(rect.top) || 0,
+        left: Number(rect.left) || 0,
+    };
+}
+
+/**
+ * `clientWidth`/`clientHeight` — the CONTENT box, excluding the element's
+ * OWN scrollbar (unlike `measureRect`'s `getBoundingClientRect()`, which
+ * gives the outer border-box and does NOT shrink for a scrollbar the
+ * element draws for ITSELF). Needed by Chat Viewport (`cores/ui/engine-
+ * panel.js`): НАЙДЕНО ЖИВЬЁМ — sizing the canvas to the wrapper's OUTER
+ * width (from `measureRect`) while the wrapper ALSO has `overflow-y: auto`
+ * (and therefore, per CSS spec, an implicit `overflow-x: auto` too, since
+ * only one axis was set to non-`visible`) meant the canvas was a few pixels
+ * WIDER than the wrapper's own scrollable content area, forcing a
+ * horizontal scrollbar to appear — "chat is narrower than the canvas, has
+ * to be scrolled sideways".
+ */
+function measureClientSize(el) {
+    return { width: Number(el?.clientWidth) || 0, height: Number(el?.clientHeight) || 0 };
+}
+
+function readScrollPosition(el) {
+    return { top: Number(el?.scrollTop) || 0, left: Number(el?.scrollLeft) || 0 };
+}
+
+function writeScrollPosition(el, { top, left } = {}) {
+    if (!el) return false;
+    if (Number.isFinite(top)) el.scrollTop = top;
+    if (Number.isFinite(left)) el.scrollLeft = left;
+    return true;
+}
+
+/**
+ * `ResizeObserver` — единственная браузерная возможность, которой в этом
+ * файле раньше не было ни одной обёртки: у Chat Viewport высота строки
+ * сообщения меняется постфактум (markdown/картинки/блок рассуждений
+ * докладываются уже ПОСЛЕ первого рендера), и только реальный
+ * `ResizeObserver` узнаёт об этом без опроса на каждый кадр. Инжектируется
+ * (`ResizeObserverCtor`) тем же приёмом, что `document` выше — тестам не
+ * нужен настоящий браузер.
+ *
+ * Подписка/отписка — ДВА отдельных контракта по ТОЙ ЖЕ ссылке на `handler`,
+ * не "subscribe возвращает функцию-отписку": ровно та же дисциплина, что уже
+ * у `stEvents.subscribe`/`unsubscribe` (см. doc-comment `st-events.js`) — Ядро
+ * само держит свою функцию и само решает, когда её снять, Сервис остаётся
+ * без собственного состояния поверх WeakMap "куда дели наблюдатель".
+ */
+const resizeObservers = new WeakMap(); // el -> Map(handler -> ResizeObserver)
+
+function observeResize(el, handler, ResizeObserverCtor) {
+    if (!el || typeof handler !== 'function' || typeof ResizeObserverCtor !== 'function') return false;
+    const observer = new ResizeObserverCtor(entries => {
+        for (const entry of entries) {
+            const box = entry.contentRect ?? {};
+            handler({ width: Number(box.width) || 0, height: Number(box.height) || 0 });
+        }
+    });
+    observer.observe(el);
+    if (!resizeObservers.has(el)) resizeObservers.set(el, new Map());
+    resizeObservers.get(el).set(handler, observer);
+    return true;
+}
+
+function unobserveResize(el, handler) {
+    const observer = resizeObservers.get(el)?.get(handler);
+    if (!observer) return false;
+    observer.disconnect();
+    resizeObservers.get(el).delete(handler);
+    return true;
+}
+
+/**
+ * Единственное место во всём движке, куда попадает уже готовый чужой HTML
+ * "как есть" — тело сообщения Chat Viewport, полученное через
+ * `stChat.formatMessage()` (родной `messageFormatting()` ST), для невидимого
+ * accessibility/selection-слоя (см. план `chat-viewport`). Не общий
+ * `dangerouslySetInnerHTML`-проп у `dom.setProp` намеренно: это ЕДИНСТВЕННЫЙ
+ * контракт, где чужая разметка вставляется без прохода через `h()`/diff.js,
+ * и Гейт должен видеть это как отдельно поименованную операцию, а не как
+ * ещё один случай `setProp`.
+ */
+function setInnerHtml(el, html) {
+    if (!el) return false;
+    el.innerHTML = String(html ?? '');
+    return true;
+}
+
+/**
  * Registers every `dom.*` contract on `servicesBus` (a Service caller's
  * `.own` bus — see engine.js's registerCaller()). `document` is injected so
  * tests never need a real browser; production wiring omits it (defaults to
- * `globalThis.document`).
+ * `globalThis.document`). `ResizeObserverCtor` is injected the same way, for
+ * the same reason.
  */
-export function registerDomService(servicesBus, { document: doc = globalThis.document } = {}) {
+/**
+ * Картинки в теле сообщения (`<img>`) в SVG-растр не попадают: внешние ресурсы SVG-как-картинка не грузит,
+ * а прочитать чужой URL без CORS ни через fetch, ни через canvas нельзя. Поэтому картинки показываются
+ * настоящим DOM поверх канваса, а в растр идёт «пустышка» того же размера. Ждёт загрузки картинок внутри
+ * `el`, снимает их прямоугольники относительно `el`, затем подменяет каждую на невидимую коробку с явным
+ * размером (src убран) и отдаёт готовую разметку для растеризации.
+ */
+async function prepareImages(el, timeoutMs = 8000) {
+    const imgs = [...(el?.querySelectorAll?.('img') ?? [])];
+    if (imgs.length === 0) return { images: [], html: el?.innerHTML ?? '' };
+    await Promise.all(imgs.map(img => (img.complete ? null : new Promise(resolve => {
+        const done = () => resolve();
+        img.addEventListener('load', done, { once: true });
+        img.addEventListener('error', done, { once: true });
+        setTimeout(done, timeoutMs);
+    }))));
+    const base = el.getBoundingClientRect();
+    const images = [];
+    for (const img of imgs) {
+        const rect = img.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            images.push({ src: img.currentSrc || img.src, x: rect.left - base.left, y: rect.top - base.top, width: rect.width, height: rect.height });
+        }
+        const width = Math.round(rect.width);
+        const height = Math.round(rect.height);
+        img.removeAttribute('src');
+        img.removeAttribute('srcset');
+        img.style.cssText = `width:${width}px;height:${height}px;visibility:hidden;`;
+    }
+    return { images, html: el.innerHTML };
+}
+
+export function registerDomService(servicesBus, { document: doc = globalThis.document, ResizeObserverCtor = globalThis.ResizeObserver } = {}) {
     const unregisters = [
         servicesBus.register('dom.createElement', ({ tag }) => createElement(doc, tag), { loadMetric: () => 0 }),
         servicesBus.register('dom.createTextNode', ({ text }) => doc.createTextNode(text), { loadMetric: () => 0 }),
@@ -235,15 +381,77 @@ export function registerDomService(servicesBus, { document: doc = globalThis.doc
         servicesBus.register('dom.clearPaintedRuns', ({ container }) => { clearPaintedRuns(container); return true; }, { loadMetric: () => 0 }),
         /** Read-only text extraction — the one property read a Модуль is never allowed to take directly off a node it was handed (see ARCHITECTURE.md: no exceptions for "just a read"). */
         servicesBus.register('dom.textContent', ({ node }) => String(node?.textContent ?? ''), { loadMetric: () => 0 }),
-        /** Reads a CSS custom property off `documentElement` — the same theme accent ST itself exposes (`--SmartThemeQuoteColor`), used by Модуль «Speaker Colors» to derive its auto palette from the user's actual theme rather than a hardcoded color. */
-        servicesBus.register('dom.readCssVariable', ({ name }) => {
-            const source = doc.documentElement ?? doc.body;
+        /**
+         * Finds ONE descendant by CSS selector, or `null`. Same "read-only
+         * exception" precedent as `dom.textContent` above. Needed by Chat
+         * Viewport (`cores/ui/chat-viewport.js`): a ToolCall message's OWN
+         * `<details>` toggle (embedded in `mes.mes` HTML itself, e.g.
+         * `<details><summary>Tool calls: ...`) has no `ref`-like way to reach
+         * a specific placeholder node the `h()`-tree mounted once — `h()`/
+         * `diff.js` don't support a `ref` callback, so the one stable place
+         * to find that placeholder again (to inject its REAL formatted HTML
+         * via `dom.setInnerHtml`, keeping the `<details>` a real, clickable
+         * DOM element instead of flattening it into the WebGL body texture)
+         * is a plain selector query off the already-mounted chrome root.
+         */
+        servicesBus.register('dom.querySelector', ({ el, selector }) => el?.querySelector?.(selector) ?? null, { loadMetric: () => 0 }),
+        /**
+         * Reads a CSS custom property (or, with `el`, any regular resolved
+         * property) off `documentElement` by default — the same theme accent
+         * ST itself exposes (`--SmartThemeQuoteColor`), used by Модуль
+         * «Speaker Colors» to derive its auto palette from the user's actual
+         * theme rather than a hardcoded color.
+         *
+         * `el` — НАЙДЕНО ЖИВЬЁМ: Chat Viewport's invisible mirror
+         * (`cores/ui/chat-viewport.js`) lives in the real page and inherits
+         * the REAL `font-size`/`line-height`/`font-family` ST actually uses
+         * for message text (`--mainFontSize` etc., cascaded from `body`, not
+         * from `documentElement`/`<html>`) — but the rasterized WebGL texture
+         * used a hardcoded, unrelated font spec, so what got MEASURED (mirror,
+         * real font) didn't match what got DRAWN (texture, wrong font) —
+         * short single-line user messages were the most visibly clipped,
+         * since a small size/line-height mismatch eats a whole line first.
+         * Passing the mirror itself as `el` reads the SAME resolved values
+         * the browser already used to lay out that exact element — no
+         * guessing which ancestor sets the rule.
+         */
+        servicesBus.register('dom.readCssVariable', ({ name, el }) => {
+            const source = el ?? doc.documentElement ?? doc.body;
             const value = (doc.defaultView ?? globalThis).getComputedStyle?.(source)?.getPropertyValue(name);
             return String(value ?? '').trim();
         }, { loadMetric: () => 0 }),
+        servicesBus.register('dom.measureRect', ({ el }) => measureRect(el), { loadMetric: () => 0 }),
+        servicesBus.register('dom.prepareImages', ({ el, timeoutMs }) => prepareImages(el, timeoutMs), { loadMetric: () => 1 }),
+        servicesBus.register('dom.clientSize', ({ el }) => measureClientSize(el), { loadMetric: () => 0 }),
+        servicesBus.register('dom.scrollPosition', ({ el }) => readScrollPosition(el), { loadMetric: () => 0 }),
+        servicesBus.register('dom.setScrollPosition', ({ el, top, left }) => writeScrollPosition(el, { top, left }), { loadMetric: () => 0 }),
+        servicesBus.register('dom.observeResize', ({ el, handler }) => observeResize(el, handler, ResizeObserverCtor), { loadMetric: () => 0 }),
+        servicesBus.register('dom.unobserveResize', ({ el, handler }) => unobserveResize(el, handler), { loadMetric: () => 0 }),
+        servicesBus.register('dom.setInnerHtml', ({ el, html }) => setInnerHtml(el, html), { loadMetric: () => 0 }),
+        /**
+         * Единственная точка входа к `document.body` — понадобилась Chat
+         * Viewport (план `chat-viewport`): его оверлей обязан жить ВНЕ
+         * `#chat`, а не внутри — иначе подавление нативного чата
+         * (`display:none` на `#chat`) утащило бы оверлей за собой, раз
+         * `display:none` наследуется потомками. `stChat.container` даёт
+         * `#chat`, здесь — симметричный якорь для "куда угодно ещё".
+         */
+        servicesBus.register('dom.body', () => doc.body, { loadMetric: () => 0 }),
+        /**
+         * Найдено живьём (план `chat-viewport`): `getBoundingClientRect()`
+         * элемента с `display:none` НАВСЕГДА возвращает нули — измерение
+         * самого `#chat` ПОСЛЕ его подавления (например, на ресайзе окна)
+         * даёт 0×0 и схлопывает оверлей Chat Viewport в точку. Родитель
+         * `#chat` подавлению не подвергается — стабильный якорь для ЛЮБОГО
+         * измерения размера ПОСЛЕ первого включения, не только для первого.
+         */
+        servicesBus.register('dom.parentElement', ({ el }) => el?.parentNode ?? null, { loadMetric: () => 0 }),
     ];
     return () => { for (const unregister of unregisters) unregister(); };
 }
 
 /** Exported for services/dom.test.js's own unit-level coverage of the raw DOM logic, independent of the contract/Gate plumbing. */
-export const domOperations = { setProp, removeProp, paintTextRuns, clearPaintedRuns, createElement };
+export const domOperations = {
+    setProp, removeProp, paintTextRuns, clearPaintedRuns, createElement,
+    measureRect, measureClientSize, readScrollPosition, writeScrollPosition, observeResize, unobserveResize, setInnerHtml,
+};
