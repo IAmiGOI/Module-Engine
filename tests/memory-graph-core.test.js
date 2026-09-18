@@ -808,3 +808,13 @@ test('parseOrphanConnectionsResponse() returns nothing for a non-array response,
     assert.deepEqual(parseOrphanConnectionsResponse({ not: 'an array' }, [{ id: 'a' }], ['a']), []);
     assert.deepEqual(parseOrphanConnectionsResponse(null, [{ id: 'a' }], ['a']), []);
 });
+
+test('fitEntriesToTokenBudget() shortens entry text to fit the budget, leaves entries alone when unlimited or already small', async () => {
+    const { fitEntriesToTokenBudget } = await import('../cores/memory-graph/index.js');
+    const entries = [{ uid: 1, label: 'A', content: 'x'.repeat(4000) }, { uid: 2, label: 'B', content: 'y'.repeat(4000) }];
+    assert.equal(fitEntriesToTokenBudget(entries, 0), entries, '0 means unlimited');
+    assert.equal(fitEntriesToTokenBudget(entries, 100000), entries, 'already within budget');
+    const fitted = fitEntriesToTokenBudget(entries, 500);
+    assert.ok(fitted.every(entry => entry.content.length < 1200), 'each entry is shortened to roughly its share');
+    assert.equal(entries[0].content.length, 4000, 'the originals are not mutated');
+});

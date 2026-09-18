@@ -223,6 +223,54 @@ test('a slot claimed AFTER the engine started still shows up — modules are ena
     assert.ok(footer.children.some(child => child.dataset.slot === 'left'), 'и в нём слот включённого позже Модуля');
 });
 
+// --- hostResolver — подмена цели для Chat Viewport (owner: "RP Time и
+// прочие штуки не отображаются корректно") ---------------------------------
+
+test('setHostResolver() redirects the footer into whatever element the resolver returns, instead of the native message block', async () => {
+    const { core, messageBlock } = buildEngine();
+    const altHost = fakeNode('stme-chat-viewport-footer-slot');
+    core.claim({ slot: 'left', ownerId: 'module.time', node: h('div', {}, 'time') });
+    core.setHostResolver(() => altHost);
+
+    await core.render();
+
+    assert.ok(footerOf(altHost), 'подвал уехал в подменённый хост');
+    assert.equal(footerOf(messageBlock), undefined, 'и не осел заодно ещё и в настоящем .mes_block');
+});
+
+test('a resolver returning null for a message falls back to the native block — messages outside a virtualized window have nowhere else to go', async () => {
+    const { core, messageBlock } = buildEngine();
+    core.claim({ slot: 'left', ownerId: 'module.time', node: h('div', {}, 'time') });
+    core.setHostResolver(() => null);
+
+    await core.render();
+
+    assert.ok(footerOf(messageBlock), 'без хоста от резолвера — старое поведение как ни в чём не бывало');
+});
+
+test('clearHostResolver() restores the native block as the target', async () => {
+    const { core, messageBlock } = buildEngine();
+    const altHost = fakeNode('stme-chat-viewport-footer-slot');
+    core.claim({ slot: 'left', ownerId: 'module.time', node: h('div', {}, 'time') });
+    core.setHostResolver(() => altHost);
+    await core.render();
+    assert.ok(footerOf(altHost));
+
+    core.clearHostResolver();
+    await core.render();
+
+    assert.ok(footerOf(messageBlock), 'подвал вернулся в настоящий .mes_block после снятия резолвера');
+});
+
+test('setHostResolver() is reachable over the bus too, not just as a direct method — Chat Viewport is a Core, and Core-to-Core calls share the same \'cores\' bus (host.own), no Gate in between', async () => {
+    const { engine } = buildEngine();
+    const caller = engine.registerCaller('core.ui.chatViewport', 'cores', { tier: 'official' });
+
+    const result = await request(caller.own, 'ui.messageFooter.setHostResolver', { params: { resolver: () => null } });
+
+    assert.equal(result.ok, true);
+});
+
 test('a slot claimed after the footer is ALREADY placed still gets its cell — the early return must not skip the slots', async () => {
     const { core, messageBlock } = buildEngine();
     core.claim({ slot: 'center', ownerId: 'first', node: h('div', {}, 'A') });
