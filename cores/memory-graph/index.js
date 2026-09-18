@@ -179,6 +179,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // вывозит") — поднято до 50000. Не экономим на этом: усечённый
     // посреди объекта JSON просто не парсится вообще.
     bootstrapMaxTokens: 50000,
+    // Потолок КОНТЕКСТА (в токенах), который уходит в модель при бутстрапе лорбука (0 — без ограничения). Записи ужимаются пропорционально.
+    bootstrapMaxContextTokens: 0,
     // Сэмплер для Проходов 1-3 (решено с пользователем явно, числами) —
     // низкая температура и низкий reasoning-эффорт: это структурированная
     // JSON-раскладка по точным правилам, не творческая генерация, ей не
@@ -262,6 +264,7 @@ export function clampGraphSettings(values = {}) {
             ? values.baseRegionNames.map(name => String(name).trim()).filter(Boolean)
             : DEFAULT_SETTINGS.baseRegionNames,
         entriesPerRegionCenter: clampInt(values.entriesPerRegionCenter, 1, 200, DEFAULT_SETTINGS.entriesPerRegionCenter),
+        bootstrapMaxContextTokens: clampInt(values.bootstrapMaxContextTokens, 0, 2000000, DEFAULT_SETTINGS.bootstrapMaxContextTokens),
         bootstrapMaxTokens: clampInt(values.bootstrapMaxTokens, 100, 200000, DEFAULT_SETTINGS.bootstrapMaxTokens), // потолок ВЫШЕ, чем у clampSamplerSettings() в internal-engine.js (32768) — там граница под обычный чат-сэмплер, бутстрапу реально нужно больше на настоящем лорбуке
         bootstrapTemperature: clampInt(values.bootstrapTemperature * 100, 0, 200, DEFAULT_SETTINGS.bootstrapTemperature * 100) / 100,
         bootstrapReasoningEffort: BOOTSTRAP_REASONING_EFFORTS.includes(values.bootstrapReasoningEffort) ? values.bootstrapReasoningEffort : DEFAULT_SETTINGS.bootstrapReasoningEffort,
@@ -818,6 +821,20 @@ export const BOOTSTRAP_SYSTEM_PROMPT = 'Follow the instructions in the user mess
  * текста промпта, ответ модели разбирается отдельно
  * (`parseRegionSkeletonResponse`), как и остальные SideCar-промпты в файле.
  */
+/**
+ * Ужимает тексты записей так, чтобы список влез в `maxTokens` (грубо 4 символа на токен). 0/не число — без изменений.
+ * Ужимаются только копии для ПРОМПТА — сами записи (и то, что попадёт в граф) остаются целыми.
+ */
+export function fitEntriesToTokenBudget(entries, maxTokens) {
+    const budgetChars = Math.floor(Number(maxTokens) * 4);
+    if (!(budgetChars > 0) || !entries.length) return entries;
+    const overhead = entries.reduce((sum, entry) => sum + String(entry.label).length + 12, 0);
+    const total = overhead + entries.reduce((sum, entry) => sum + entry.content.length, 0);
+    if (total <= budgetChars) return entries;
+    const perEntry = Math.max(80, Math.floor((budgetChars - overhead) / entries.length));
+    return entries.map(entry => (entry.content.length > perEntry ? { ...entry, content: `${entry.content.slice(0, perEntry)}…` } : entry));
+}
+
 export function buildRegionSkeletonPrompt(entries, baseRegionNames) {
     const listing = entries.map(entry => `${entry.uid}. ${entry.label}: ${entry.content}`).join('\n');
     return `Here is the FULL World Info / Lorebook for this story (${entries.length} entries, numbered):\n\n${listing}\n\nWe are organizing this into semantic regions of a memory graph. Use ONLY these regions — do NOT invent, rename, merge, or add any others: ${baseRegionNames.join(', ')}.\n\nFor EACH region that genuinely fits this lore, pick exactly 2 entries (by number) that best represent it — the most foundational, representative entries for that region. Skip a region if nothing in the lore fits it.\n\nReply with ONLY a JSON array, using EXACTLY the region names given above: [{"region": "region name", "subCenterUids": [number, number]}, ...]`;
@@ -2049,7 +2066,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
                 // 2. Проход 1 — базовый скелет (Locations/Main Characters/
                 // Factions или свои варианты) + 2 под-центра на каждый.
-                const skeletonPrompt = buildRegionSkeletonPrompt(rawEntries, settings.baseRegionNames);
+                const promptEntries = fitEntriesToTokenBudget(rawEntries, settings.bootstrapMaxContextTokens);
+                const skeletonPrompt = buildRegionSkeletonPrompt(promptEntries, settings.baseRegionNames);
                 const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                 tick('skeleton', `laying out regions from ${rawEntries.length} entries`);
                 if (!skeletonResult.ok) { failureReason = `Проход 1 (skeleton) call failed: ${skeletonResult.error?.message}`; return false; }
@@ -2071,7 +2089,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // целиком (решено с пользователем — как и Проход 1, не как
                 // мягкий откат Прохода 3 ниже).
                 const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
-                const centersPrompt = buildAdditionalCentersPrompt(rawEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
+                const centersPrompt = buildAdditionalCentersPrompt(promptEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
                 const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                 tick('centers', `targeting ~${targetTotal} region${targetTotal === 1 ? '' : 's'}`);
                 if (!centersResult.ok) { failureReason = `Проход 2 (centers) call failed: ${centersResult.error?.message}`; return false; }

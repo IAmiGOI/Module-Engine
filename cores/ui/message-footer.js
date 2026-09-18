@@ -86,6 +86,21 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
     let stopObserving = null;
     let attaching = false;
     let started = false;
+    // Подмена "куда крепить подвал" — owner: "RP Time и прочие штуки не
+    // отображаются корректно" в Chat Viewport. По умолчанию подвал всегда
+    // уезжал в НАСТОЯЩИЙ `.mes` (см. `ensureFooter()` ниже, `block` из
+    // `attach()`) — а Chat Viewport подавляет `#chat` целиком
+    // (`display:none`), рисуя СВОЙ собственный DOM-хром поверх канваса; у
+    // него просто нет своего понятия о "подвале" вообще, и виджет молча
+    // прятался в невидимом дереве. `hostResolver`, если задан, даёт ЭТОМУ
+    // Ядру спросить у чужого владельца (Chat Viewport), куда деть подвал
+    // КОНКРЕТНОГО сообщения — тот сам решает (обычно: DOM-заглушка внутри
+    // своей строки), не наоборот. `null` от резолвера — "мне сейчас нечем
+    // принять" (сообщение вне видимого окна виртуализации) — тогда как и
+    // раньше, `block`. Один резолвер сразу на все сообщения (не карта per-
+    // mesid): единственный владелец может быть только один — то же
+    // допущение, что уже у `slots`/`ownerId` выше.
+    let hostResolver = null;
 
     const mountKey = (mesid, slot) => `${mesid}::${slot}`;
 
@@ -157,7 +172,9 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
             footer.dataset.stmeFooterMesid = String(mesid);
             footers.set(mesid, footer);
         }
-        if (!block.contains(footer)) block.append(footer);
+        // `hostResolver` — см. doc-comment у его объявления выше.
+        const host = hostResolver?.(mesid) ?? block;
+        if (host && !host.contains(footer)) host.append(footer);
         return footer;
     }
 
@@ -303,7 +320,20 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
         host.own.register('ui.messageFooter.slots', () => SLOTS.map(slot => ({ slot, ownerId: slots.get(slot)?.ownerId ?? null }))),
         host.own.register('ui.messageFooter.attach', () => attach()),
         host.own.register('ui.messageFooter.liveMesid', () => liveMesid()),
+        // См. doc-comment у `hostResolver` выше — единственный владелец
+        // (Chat Viewport, пока он включён) задаёт/снимает подмену цели.
+        host.own.register('ui.messageFooter.setHostResolver', params => setHostResolver(params?.resolver)),
+        host.own.register('ui.messageFooter.clearHostResolver', () => clearHostResolver()),
     ];
+
+    function setHostResolver(resolver) {
+        hostResolver = typeof resolver === 'function' ? resolver : null;
+        return true;
+    }
+    function clearHostResolver() {
+        hostResolver = null;
+        return true;
+    }
 
     return {
         claim,
@@ -313,6 +343,8 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
         attach,
         start,
         liveMesid,
+        setHostResolver,
+        clearHostResolver,
         footerCount: () => footers.size,
         slots: () => SLOTS.map(slot => ({ slot, ownerId: slots.get(slot)?.ownerId ?? null })),
         stop: () => {
@@ -321,6 +353,7 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
             for (const slot of SLOTS) release(slot);
             forgetAll();
             mounts.unmountAll();
+            hostResolver = null;
             for (const unregister of unregisters) unregister();
         },
     };

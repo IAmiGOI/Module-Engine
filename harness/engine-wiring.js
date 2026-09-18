@@ -1,6 +1,8 @@
 import { createEngine } from '../libraries/shared/engine.js';
 import { request } from '../libraries/shared/request.js';
 import { registerDomService } from '../services/dom.js';
+import { registerHtmlRasterizerService } from '../services/html-rasterizer.js';
+import { registerWebglRendererService } from '../services/webgl-renderer.js';
 import { registerHttpService } from '../services/http.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerStChatService } from '../services/st-chat.js';
@@ -45,6 +47,7 @@ import { createUiModulesCore } from '../cores/ui/ui-modules.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
 import { createActivityLightCore } from '../cores/ui/activity-light.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
+import { createChatViewportCore } from '../cores/ui/chat-viewport.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
 import { createPicturePanelCore } from '../cores/ui/picture-panel.js';
@@ -434,6 +437,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // Сами сообщения чата — отдельно от метаданных: без них трекер опрашивал бы
     // модель по переписке, которой она не видела.
     registerStChatService(engine.buses.services, { getContext });
+    // Растеризация HTML в текстуру и композитинг WebGL для Chat Viewport
+    // (план `chat-viewport`) — обе на настоящих браузерных возможностях,
+    // никакого фейка/инъекции здесь не нужно вне тестов.
+    registerHtmlRasterizerService(engine.buses.services);
+    registerWebglRendererService(engine.buses.services);
     // Локальный эмбединг — не сетевой вызов через `http.request` (см.
     // doc-comment services/embedding.js за честной оговоркой: сама закачка
     // весов модели идёт мимо нашего Гейта сети, это делает сторонняя
@@ -634,6 +642,21 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.messageFooter' }),
     });
 
+    // Chat Viewport — гибридный WebGL/DOM рендер истории чата (план
+    // `chat-viewport`): тело сообщения растеризуется в текстуру, действия
+    // (delete/swipe/regenerate/edit) идут через `services/st-chat.js`'ы
+    // обёртки над экспортированными функциями самой ST. Ядро строится, но
+    // `attach()` не зовётся здесь — только по кнопке в харнессе (main.js),
+    // чтобы можно было сравнить с нативным `#chat` рядом, а не подавлять его
+    // безусловно на загрузке страницы.
+    const chatViewportHost = engine.registerCaller('core.ui.chatViewport', 'cores', { tier: 'official' });
+    const chatViewport = createChatViewportCore(chatViewportHost, {
+        prerenderFactor: 2,
+        textureBudgetBytes: 256 * 1024 * 1024, prefetchScreens: 3, prefetchConcurrency: 3,
+        createFinalUi: () => createFinalUiPc(chatViewportHost),
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.chatViewport' }),
+    });
+
     let panelUi = null;
     // Самообновление: единственное Ядро, которому выдано право выходить в сеть
     // помимо моделей — оно сверяет наш код с GitHub напрямую.
@@ -682,6 +705,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         ],
         modules,
         openMemoryGraphPanel: () => memoryGraphPanel.show(),
+        chatViewport,
     });
     enginePanelRef = enginePanel;
 
@@ -761,5 +785,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, messageFooter, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }

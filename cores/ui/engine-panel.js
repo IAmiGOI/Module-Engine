@@ -1,5 +1,5 @@
 import { h } from './tree.js';
-import { signal, computed } from './reactive.js';
+import { signal, computed, effect } from './reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import {
     Button, TextInput, TextArea, NumberInput, Select, Toggle, Slider, Chip, Details,
@@ -18,6 +18,16 @@ const MACRO_KINDS = Object.freeze([
     { value: 'text', label: 'Plain text' },
     { value: 'code', label: 'Code' },
 ]);
+
+// Chat Viewport side margin — owner: "Сделать ВО ВСЮ ширину страницы.
+// Отступ чисто небольшой дефолтно, чтобы было читаемо. Далее — можно сузить
+// до любой ширины, не меньше ДЕФОЛТНОЙ для ST". `MIN_WIDTH_FRACTION` — та
+// самая "ДЕФОЛТНАЯ для ST" ширина: `chat_width: 50` (то есть 50vw/половина
+// страницы) — захардоженный ДЕФОЛТ ST из `power-user.js`, НЕ текущая
+// настройка владельца (она может быть любой — не наше дело её здесь
+// читать/угадывать).
+const DEFAULT_SIDE_MARGIN = 24;
+const MIN_WIDTH_FRACTION = 0.5;
 
 let uid = 0;
 
@@ -109,7 +119,7 @@ function fromMacroRecord(record) {
  * править эндпоинты и ключи в обход Шины было бы ровно тем случаем, ради
  * которого Гейты и существуют.
  */
-export function createEnginePanelCore(host, { mount, mountSettings, listContracts, modules: moduleRegistry, openMemoryGraphPanel } = {}) {
+export function createEnginePanelCore(host, { mount, mountSettings, listContracts, modules: moduleRegistry, openMemoryGraphPanel, chatViewport } = {}) {
     // Что свёрнуто — помнится между сеансами. По умолчанию свёрнуто всё.
     const collapse = createCollapseState(host.own, { namespace: 'core.ui.panel' });
     const workers = signal([]);
@@ -192,6 +202,21 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
      */
     async function callService(contract, params) {
         return request(host.services, contract, { params });
+    }
+
+    /**
+     * `callService()` отдаёт СЫРОЙ конверт `{ok, value, error}` — существующие
+     * места сами решают, как обработать отказ (см. `exportPreset()`/
+     * `importPreset()`: разная реакция на разные контракты). Chat Viewport
+     * зовёт `dom.*`/`stChat.*` десятками подряд ради одной операции
+     * (`enableChatViewport()`), и для НЕГО отказ в середине цепочки всегда
+     * означает одно и то же — прервать и сообщить, поэтому здесь один общий
+     * разворачиватель, а не ручная проверка `.ok` на каждой строке.
+     */
+    async function callServiceOrThrow(contract, params) {
+        const result = await callService(contract, params);
+        if (!result.ok) throw new Error(`${contract}: ${result.error.message}`);
+        return result.value;
     }
 
     /**
@@ -888,6 +913,466 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         });
     }
 
+    // --- Chat Viewport (план `chat-viewport`) — единственная реальная точка
+    // включения. Раньше `chatViewport.attach()` вызывался ТОЛЬКО из
+    // демо-кнопки харнесса — в настоящей панели движка не было НИЧЕГО, что
+    // бы его включало, поэтому в реальном UI подавление `#chat` не могло
+    // сработать в принципе (владелец поймал это конкретно: "чат не
+    // подавляется" → "переключатель забыл внести в UI"). Живёт в экране
+    // НАСТРОЕК (см. `settingsTree()` ниже), не в основной вкладке — тот же
+    // раздел, что даёт доступ к "Engine"/"Preset"/"Updates".
+    const chatViewportEnabled = signal(false);
+    const chatViewportBusy = signal(false);
+    // owner (уточнено ПОСЛЕ первой версии — та по умолчанию совпадала с
+    // шириной #chat, то есть с настоящей ST-настройкой `chat_width`
+    // (--sheldWidth, обычно 50vw), а НЕ со страницей): "Сделать ВО ВСЮ
+    // ширину страницы [по умолчанию]. Отступ чисто небольшой дефолтно,
+    // чтобы было читаемо. Далее — можно сузить до любой ширины, не меньше
+    // ДЕФОЛТНОЙ для ST" — значит: по умолчанию оверлей должен занимать всю
+    // СТРАНИЦУ (не #chat), с небольшим фиксированным отступом для
+    // читаемости, а сужать можно вплоть до ПОЛОВИНЫ страницы (ST-дефолт
+    // `chat_width: 50` из `power-user.js`) — не до текущей настройки
+    // владельца (которая может отличаться), а именно до захардкоженного
+    // ST-дефолта. `DEFAULT_SIDE_MARGIN`/`MIN_WIDTH_FRACTION` — см. ниже, у
+    // `enableChatViewport()`, где это уже переводится в пиксели.
+    // px, симметрично с обеих сторон (одна ручка сужает сразу оба края,
+    // держа контент по центру; независимые отступы слева/справа —
+    // усложнение, не запрошенное явно, не делаем, пока owner не попросит
+    // именно это).
+    const chatViewportSideMargin = signal(DEFAULT_SIDE_MARGIN);
+    let chatViewportOverlay = null; // { wrapper, spacer, canvas, mirror, chrome, stopResize }
+
+    /**
+     * Позиция/размер оверлея — снимок `#chat` РОВНО ОДИН РАЗ, в момент
+     * `enableChatViewport()`, пока `#chat` ещё виден. НЕ пересчитывается на
+     * ресайз окна — сознательный откат от более "живой" первой версии,
+     * которая перемеряла на каждый ресайз и оказалась вдвойне сломанной,
+     * обе находки живьём, не догадки:
+     * 1. `getBoundingClientRect()` элемента с `display:none` (чем и подавлен
+     *    `#chat`) НАВСЕГДА возвращает нули — сам `#chat` перемерить после
+     *    первого включения уже нечем.
+     * 2. Родитель `#chat` — не заменяет его как источник геометрии: он даёт
+     *    свой собственный размер (в харнессе — почти вся страница) и не
+     *    знает, каким было смещение `#chat` ВНУТРИ себя. Взять размер/позицию
+     *    родителя вместо `#chat` раздувало канвас на всю страницу и уводило
+     *    его в угол, не туда, где на самом деле был чат.
+     * Точная синхронизация с ресайзом окна возможна только в реальной
+     * SillyTavern, где известна настоящая структура вокруг `#chat` — здесь
+     * честно зафиксировано как "не решено на этом шаге", а не подделано.
+     *
+     * Что ВСЁ ЖЕ обновляется живьём — высота spacer'а (`totalHeight`), по
+     * СОБЫТИЮ рендера (`ui.chatViewport.render.completed`), не по ресайзу:
+     * chat растёт от новых сообщений, а не от изменения размера окна.
+     */
+    async function enableChatViewport() {
+        if (!chatViewport || chatViewportOverlay) return;
+        chatViewportBusy.set(true);
+        try {
+            const container = await callServiceOrThrow('stChat.container');
+            if (!container) throw new Error('SillyTavern chat container (#chat) was not found.');
+            const body = await callServiceOrThrow('dom.body');
+            const rect = await callServiceOrThrow('dom.measureRect', { el: container });
+            // Ширина СТРАНИЦЫ, не #chat — owner: "Сделать ВО ВСЮ ширину
+            // страницы [по умолчанию]" (см. doc-comment у
+            // `chatViewportSideMargin` выше). `#chat` сам по себе уже уже
+            // страницы (у ST есть своя настройка `chat_width`, обычно 50vw,
+            // `--sheldWidth` в `power-user.js`) — оверлей должен её
+            // игнорировать и мерить именно `body`, а не `container`.
+            // Вертикаль (`top`/`height`) остаётся от `#chat` — про высоту
+            // владелец ничего не просил менять.
+            const pageSize = await callServiceOrThrow('dom.clientSize', { el: body });
+
+            const wrapper = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+            const spacer = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+            const stickyLayer = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+            const marginLayer = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+            const canvas = await callServiceOrThrow('dom.createElement', { tag: 'canvas' });
+            const mirror = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+            const chrome = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+            const leftHandle = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+            const rightHandle = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+
+            await callServiceOrThrow('dom.setProp', { el: wrapper, key: 'class', value: 'stme-chat-viewport-overlay' });
+            await callServiceOrThrow('dom.setProp', { el: spacer, key: 'class', value: 'stme-chat-viewport-spacer' });
+            await callServiceOrThrow('dom.setProp', { el: mirror, key: 'class', value: 'stme-chat-viewport-mirror-host' });
+            await callServiceOrThrow('dom.setProp', { el: chrome, key: 'class', value: 'stme-chat-viewport-chrome-host' });
+            await callServiceOrThrow('dom.setProp', { el: leftHandle, key: 'class', value: 'stme-chat-viewport-resize-handle' });
+            await callServiceOrThrow('dom.setProp', { el: rightHandle, key: 'class', value: 'stme-chat-viewport-resize-handle' });
+            // ОДИН `position:sticky` слой несёт И канвас, И хром — НАЙДЕНО
+            // ЖИВЬЁМ: раньше у каждого был СВОЙ `position:sticky`, и это
+            // работало, пока `mirror` был обычным элементом в потоке (его
+            // большая высота — сотни/тысячи px — "проталкивала" `chrome`
+            // достаточно далеко в потоке, что sticky-порог `chrome` был уже
+            // пройден почти при любом скролле, чисто случайно). Как только
+            // `mirror` стал `position:absolute` (фикс раздувания scrollHeight),
+            // `chrome` лишился этой "проталкивающей" высоты — его собственная
+            // позиция в потоке стала равна ВСЕГО ЛИШЬ высоте канваса (не
+            // тысячам px), и sticky `chrome` переставал липнуть к верху, пока
+            // прокрутка не пройдёт эту небольшую дистанцию — визуально хром и
+            // тело двигались с разным порогом прилипания ("едут на разных
+            // уровнях"). Два независимых sticky-элемента с разной историей
+            // потока — риск разъехаться всегда; один общий sticky-контейнер с
+            // канвасом и хромом ВНУТРИ (`position:absolute` у обоих,
+            // относительно этого контейнера) устраняет саму возможность —
+            // им уже нечему считать раздельно.
+            await callServiceOrThrow('dom.setProp', { el: stickyLayer, key: 'style', value: { position: 'sticky', top: '0px', left: '0px', height: '0px', overflow: 'visible' } });
+            // `marginLayer` — единственный держатель горизонтального сдвига
+            // при заужении (см. doc-comment у `chatViewportSideMargin` и у
+            // "Заужение с боков" ниже): `position:absolute` ВНУТРИ
+            // `stickyLayer`, задаёт СВОЙ `left` как реальный оффсет (а не
+            // порог прилипания, которым он был бы у `position:sticky`).
+            // `canvas`/`chrome` — снова `left:0px`, но теперь уже относительно
+            // `marginLayer`, а не `stickyLayer` напрямую. Важно и для фона
+            // глифов (`ensureGlyphBg()` в `chat-viewport.js`): тот берёт свой
+            // родитель через `canvas.parentElement`, то есть теперь тоже
+            // `marginLayer` — фон автоматически сдвигается СИНХРОННО с
+            // канвасом и хромом, без единой правки в самом `chat-viewport.js`
+            // (который ничего не знает про "margin", это забота панели).
+            await callServiceOrThrow('dom.setProp', { el: marginLayer, key: 'style', value: { position: 'absolute', top: '0px', left: '0px', height: '0px', overflow: 'visible' } });
+            await callServiceOrThrow('dom.setProp', { el: canvas, key: 'style', value: { position: 'absolute', top: '0px', left: '0px', display: 'block' } });
+            await callServiceOrThrow('dom.setProp', { el: chrome, key: 'style', value: { position: 'absolute', top: '0px', left: '0px', height: '0px', overflow: 'visible' } });
+            // Ручки-хваталки для заужения — owner: "нужно ТЯНУТЬ физически.
+            // Не ползунком где-то там" (settings-панель убрана вовсе, см.
+            // `chatViewportCard()`). Сиблинги `marginLayer`, НЕ внутри него —
+            // их `left` считается в тех же координатах, что и сам
+            // `marginLayer`/`canvas` (relative к `stickyLayer`), поэтому
+            // левая ручка встаёт РОВНО на левый край канваса (`left: margin`),
+            // а правая — на правый (`left: margin + width`); если бы их
+            // вложили ВНУТРЬ `marginLayer`, `left` удвоился бы с его
+            // собственным сдвигом. `height: 100vh` — упрощение: ручке не
+            // обязательно точно совпадать с высотой канваса (она и не
+            // скроллится вместе с контентом за счёт sticky-родителя), просто
+            // должна перекрывать видимую область для захвата мышью.
+            await callServiceOrThrow('dom.setProp', { el: leftHandle, key: 'style', value: { position: 'absolute', top: '0px', height: '100vh' } });
+            await callServiceOrThrow('dom.setProp', { el: rightHandle, key: 'style', value: { position: 'absolute', top: '0px', height: '100vh' } });
+
+            // Порядок важен: `position:sticky` держится "прилипшим" к верху
+            // скролл-контейнера, только если это первое, что встречает
+            // прокрутка — найдено живьём: spacer ПЕРЕД канвасом сдвигал сам
+            // канвас на высоту spacer'а вниз (canvas не прилипал сразу, а
+            // просто стоял ниже своей естественной позиции в потоке), и всё
+            // тело сообщения рисовалось за пределами видимой области.
+            await callServiceOrThrow('dom.append', { parent: marginLayer, child: canvas });
+            await callServiceOrThrow('dom.append', { parent: marginLayer, child: chrome });
+            await callServiceOrThrow('dom.append', { parent: stickyLayer, child: marginLayer });
+            await callServiceOrThrow('dom.append', { parent: stickyLayer, child: leftHandle });
+            await callServiceOrThrow('dom.append', { parent: stickyLayer, child: rightHandle });
+            await callServiceOrThrow('dom.append', { parent: wrapper, child: stickyLayer });
+            await callServiceOrThrow('dom.append', { parent: wrapper, child: mirror });
+            await callServiceOrThrow('dom.append', { parent: wrapper, child: spacer });
+            await callServiceOrThrow('dom.append', { parent: body, child: wrapper });
+            // `zIndex: 31` — НАЙДЕНО ЖИВЬЁМ в реальной ST: `#sheld` (сам центр
+            // чата, наш родной сосед по `document.body`) держит `z-index: 30`
+            // в `style.css` — при `zIndex: 5` наш оверлей визуально был ПОД
+            // ним (виден "из-под", canvas просвечивал), но `#sheld` при этом
+            // ПЕРЕХВАТЫВАЛ все события мыши/колеса в этой области — скролл
+            // колесом и клики по нашим кнопкам физически не доходили до
+            // оверлея (`elementFromPoint` над оверлеем возвращал `#sheld`, не
+            // наш `wrapper`). 31 — минимально достаточно, ЧУТЬ выше `#sheld`
+            // и его локальных соседей (тоже 30), но далеко НИЖЕ настоящих
+            // попапов/тостов ST (2000+/9999+), чтобы диалоги персонажа и
+            // прочие модалки по-прежнему рисовались поверх нашего оверлея.
+            // `scrollbarGutter: 'stable'` — НАЙДЕНО ЖИВЬЁМ: без него `wrapper`
+            // резервирует место под СВОЙ вертикальный скроллбар только когда
+            // контент УЖЕ достаточно высокий, чтобы реально прокручиваться —
+            // а `spacer` (единственное, что даёт эту высоту) получает
+            // настоящее значение только ПОСЛЕ `attach()`+первого `render()`.
+            // Значит `wrapper.clientWidth`, измеренный ДО `attach()` (см.
+            // ниже — нужен, чтобы передать ПРАВИЛЬНУЮ ширину В `attach()`),
+            // на этом шаге ещё врёт — скроллбара физически нет, `clientWidth`
+            // равен полной внешней ширине. `scrollbar-gutter: stable`
+            // резервирует место под скроллбар ВСЕГДА, вне зависимости от
+            // того, нужен ли он прямо сейчас — `clientWidth` становится
+            // стабильным и правильным с самого начала, без гонки с
+            // `render()`.
+            await callServiceOrThrow('dom.setProp', {
+                el: wrapper, key: 'style',
+                value: { position: 'fixed', top: `${rect.top}px`, left: '0px', width: `${pageSize.width}px`, height: `${rect.height}px`, overflowY: 'auto', scrollbarGutter: 'stable', zIndex: 31, contain: 'layout style' },
+            });
+
+            // `css` для тела сообщения — НАЙДЕНО ЖИВЬЁМ в реальной ST: `attach()`
+            // никогда не получал его здесь вовсе (только харнесс подставлял
+            // свой захардкоженный демо-цвет — `harness/main.js`'s `cvAttach`),
+            // поэтому `buildForeignObjectSvg` растеризовал текст БЕЗ единого
+            // правила стиля — браузер по умолчанию рисует текст ЧЁРНЫМ, что на
+            // тёмной теме ST визуально неотличимо от фона. `foreignObject`
+            // — отдельный `data:`-документ, он НЕ наследует переменные темы
+            // страницы (см. doc-comment `services/html-rasterizer.js`), поэтому
+            // реальные цвета темы читаются здесь (`dom.readCssVariable`, тот же
+            // контракт, что уже использует Спикер-Цвета) и вшиваются как
+            // конкретные значения, а не как `var(--...)`.
+            // Шрифт/межстрочный интервал — ЗАФИКСИРОВАНЫ числом, не прочитаны
+            // динамически. НАЙДЕНО ЖИВЬЁМ (дважды): (1) попытка читать
+            // `font-size`/`line-height` живьём с `mirror` через
+            // `getComputedStyle` ломалась, потому что читалась она здесь —
+            // ДО того, как в зеркало вообще положили текст первого сообщения
+            // (`mirror` в этот момент пустой). Пустой блочный элемент с
+            // `line-height: normal` отдаёт `getComputedStyle` буквально
+            // строку `"normal"`, не число в px — computed "normal" зависит от
+            // МЕТРИК ШРИФТА, а без реального текста браузеру не из чего их
+            // вывести. (2) Даже прочитанное число не помогло бы: растровая
+            // текстура рисуется в ИЗОЛИРОВАННОМ `data:`-документе
+            // (`foreignObject`), куда веб-шрифты страницы (`@font-face`) не
+            // переезжают сами по себе — заведомо другой шрифт, другие
+            // метрики, другое число для того же самого `line-height: normal`.
+            // Единственный по-настоящему надёжный способ — не измерять и не
+            // угадывать, а ЗАДАТЬ одно и то же число явно с ОБЕИХ сторон:
+            // здесь (растровая текстура) и на `.stme-chat-viewport-mirror`
+            // в `panel.css` (зеркало, которым измеряется высота строки) —
+            // значения ниже ДОЛЖНЫ совпадать с той CSS-декларацией.
+            // `font-family` — ЧИТАЕТСЯ с `mirror`, В ОТЛИЧИЕ от font-size/
+            // line-height выше (не подвержена их багу): computed `font-
+            // family` — простая строка, не зависящая от наличия реального
+            // текста в элементе (в отличие от `line-height: normal`, которому
+            // для вычисления числа нужны настоящие метрики глифов) —
+            // безопасно читать даже с ещё пустого зеркала. НАЙДЕНО ЖИВЬЁМ:
+            // захардкоженный `system-ui, sans-serif` — обычный системный
+            // шрифт ОС, визуально заметно отличается от настоящего шрифта
+            // темы ST (`--mainFontFamily`, часто кастомный webfont) —
+            // сообщения выглядели "не в стиле" остального интерфейса.
+            // `.stme-chat-viewport-mirror` в `panel.css` НЕ переопределяет
+            // `font-family` сама — наследует его от страницы естественно,
+            // тем же каскадом, что и настоящий `.mes_text`, так что
+            // прочитанное здесь значение — ровно то, что уже использовалось
+            // при измерении высоты строки.
+            const [bodyColor, quoteColor, emColor, fontFamily] = await Promise.all([
+                callServiceOrThrow('dom.readCssVariable', { name: '--SmartThemeBodyColor' }),
+                callServiceOrThrow('dom.readCssVariable', { name: '--SmartThemeQuoteColor' }),
+                callServiceOrThrow('dom.readCssVariable', { name: '--SmartThemeEmColor' }),
+                callServiceOrThrow('dom.readCssVariable', { name: 'font-family', el: mirror }),
+            ]);
+            // `margin: 0` на всём внутри — НАЙДЕНО ЖИВЬЁМ: зеркало измеряет
+            // высоту через `getBoundingClientRect()`, который НЕ включает
+            // внешние отступы элемента — margin у `<p>` там (`margin-bottom:
+            // 16px` от настоящего CSS ST) физически не влияет на измеренную
+            // высоту. Но в ИЗОЛИРОВАННОМ SVG-документе (`foreignObject`) у
+            // `<p>` без явного сброса действует БРАУЗЕРНЫЙ дефолтный margin
+            // (обычно `1em` сверху и снизу — здесь это ~15px) — а эта верхняя
+            // граница СЪЕДАЕТ место у зафиксированной высоты бокса (21px у
+            // однострочного сообщения — почти всё), прежде чем текст вообще
+            // начнёт рисоваться: короткие однострочные сообщения обрезались
+            // почти целиком. Реальные отступы ST внутри нашей текстуры не
+            // нужны — тело сообщения и так позиционируется извне (через
+            // измеренную высоту), поэтому `margin: 0` внутри безопасно и
+            // устраняет саму возможность такого расхождения.
+            const css = `.stme-chat-viewport-body { color: ${bodyColor || '#dcdcd2'}; `
+                + `font-size: 15px; line-height: 1.4; font-family: ${fontFamily || 'system-ui, sans-serif'}; } `
+                + `.stme-chat-viewport-body * { margin: 0; padding: 0; } `
+                + `.stme-chat-viewport-body q { color: ${quoteColor || '#e18a24'}; } `
+                + `.stme-chat-viewport-body em, .stme-chat-viewport-body i { color: ${emColor || '#919191'}; } `
+                // Как в родном style.css ST: курсив ВНУТРИ цитаты наследует цвет цитаты, цвет
+                // `<font color>` не перебивается, а автокавычки `<q>` убраны (кавычки уже в тексте).
+                + `.stme-chat-viewport-body q em, .stme-chat-viewport-body q i, `
+                + `.stme-chat-viewport-body font[color] em, .stme-chat-viewport-body font[color] i, .stme-chat-viewport-body font[color] q { color: inherit; } `
+                + `.stme-chat-viewport-body q:before, .stme-chat-viewport-body q:after { content: ''; }`;
+
+            // `wrapper.clientWidth/Height`, НЕ `rect.width/height` — НАЙДЕНО
+            // ЖИВЬЁМ: `rect` — внешний border-box `#chat` (`getBoundingClientRect()`),
+            // тот же размер, что мы тут же ставим `wrapper`'у как CSS
+            // `width`/`height`. Но `wrapper` САМ получает `overflow-y: auto`
+            // выше — а по спецификации CSS, если задан только один из
+            // `overflow-x`/`overflow-y` НЕ-`visible`, второй молча
+            // вычисляется как `auto` тоже. Значит у `wrapper` есть СВОЙ
+            // скроллбар (вертикальный, реально показывается — контент высокий),
+            // который отъедает несколько px от содержимого — а канвас
+            // рисовался на всю ВНЕШНЮЮ ширину `rect.width`, чуть ШИРЕ
+            // содержимого `wrapper`, и получал горизонтальный скролл
+            // ("чат уже канваса, надо мотать вбок"). `clientWidth/Height`
+            // измеряется ПОСЛЕ того, как `overflow-y:auto` уже применён —
+            // это и есть настоящая, уже уменьшенная под свой скроллбар
+            // область содержимого.
+            const clientSize = await callServiceOrThrow('dom.clientSize', { el: wrapper });
+            // Заужение с боков — owner: "Отступ чисто небольшой дефолтно...
+            // Далее можно сузить до любой ширины, не меньше ДЕФОЛТНОЙ для
+            // ST" (см. doc-comment у `chatViewportSideMargin` и у
+            // `marginLayer` выше). Ширина канваса уменьшается на `margin` с
+            // ОБЕИХ сторон, а `marginLayer` сдвигается вправо на `margin`.
+            // `maxMargin` — предел, дальше которого утянуть ручкой нельзя:
+            // результирующая ширина не должна упасть ниже
+            // `MIN_WIDTH_FRACTION` (0.5 — ST-дефолт `chat_width: 50`) от
+            // ширины СТРАНИЦЫ (`clientSize.width`, уже посчитанной выше как
+            // раз от полной страницы, не от `#chat`).
+            const maxMargin = Math.max(0, clientSize.width * (1 - MIN_WIDTH_FRACTION) / 2);
+            const initialMargin = Math.min(chatViewportSideMargin(), maxMargin);
+            const effectiveWidth = Math.max(1, clientSize.width - initialMargin * 2);
+            const ok = await chatViewport.attach({ canvas, mirrorContainer: mirror, chromeContainer: chrome, width: effectiveWidth, height: clientSize.height, css });
+            // Слой держит окно предрендера (канвас выше и ниже экрана): `overflow: clip`
+            // + `overflow-clip-margin` — содержимое за краем видно (для подкатки при
+            // скролле), но НЕ растягивает scrollHeight обёртки. Отрицательный marginBottom гасит собственную
+            // высоту слоя в потоке — иначе под последним сообщением появлялся лишний экран пустоты.
+            await callServiceOrThrow('dom.setProp', { el: stickyLayer, key: 'style', value: { height: `${clientSize.height}px`, marginBottom: `${-clientSize.height}px`, overflow: 'clip', overflowClipMargin: `${chatViewport.canvasPad()}px` } });
+            if (!ok) {
+                await callServiceOrThrow('dom.remove', { node: wrapper });
+                await notify('error', 'Chat Viewport: this browser has no WebGL — staying on the native chat.');
+                chatViewportEnabled.set(false);
+                return;
+            }
+
+            // Нативное `scroll`-событие способно стрелять НАМНОГО чаще одного
+            // раза за кадр (трекпад/точный скролл — сотни раз в секунду) —
+            // НАЙДЕНО ЖИВЬЁМ: каждый вызов уходил прямиком в `render()`, а тот
+            // читает `stChat.messages` С НУЛЯ (`readOrderedMessages()` внутри
+            // `cores/ui/chat-viewport.js`) — `map()`/`filter()` по ВСЕЙ истории
+            // чата (тысячи сообщений на реальном длинном чате), не только по
+            // видимому окну. На каждое такое сырое событие — это и была
+            // просадка плавности скролла, отдельная от более раннего фикса
+            // `display:none`/layout. Схлопываем до максимум одного вызова за
+            // кадр браузера (`requestAnimationFrame`) — тот же приём, что для
+            // любого scroll-driven рендера, а не что-то специфичное для этого
+            // Ядра; `scrollTop` берём АКТУАЛЬНЫЙ на момент кадра, а не тот, что
+            // был на момент последнего сырого события — не теряет позицию,
+            // просто не перерисовывает чаще, чем браузер способен показать.
+            let scrollRafId = null;
+            // Между нативным скроллом и следующим закоммиченным кадром слой
+            // сдвигается на разницу scrollTop синхронно — движение выглядит как
+            // обычный скролл, а не рывки по кадрам.
+            const syncScrollOffset = () => {
+                const delta = wrapper.scrollTop - chatViewport.renderedScrollTop();
+                callService('dom.setProp', { el: marginLayer, key: 'style', value: { transform: delta ? `translateY(${-delta}px)` : '' } });
+            };
+            const onScroll = () => {
+                syncScrollOffset();
+                if (scrollRafId !== null) return;
+                scrollRafId = requestAnimationFrame(() => {
+                    scrollRafId = null;
+                    chatViewport.setViewport({ scrollTop: wrapper.scrollTop });
+                });
+            };
+            await callServiceOrThrow('dom.setProp', { el: wrapper, key: 'on:scroll', value: onScroll });
+
+            // Spacer растёт вместе с чатом (новое сообщение, правка, свайп) —
+            // по СОБЫТИЮ рендера, не по ресайзу окна (см. doc-comment выше).
+            //
+            // Автопрокрутка вниз — owner: "Текст не мотается вниз при
+            // стриминге (ризонинга тоже, появления новых глифов тоже)".
+            // `lastTotalHeight` — высота spacer'а ДО ЭТОГО обновления (значит
+            // и старая `scrollHeight` обёртки, раз spacer — единственное, что
+            // её растягивает); нужна, чтобы решить "был ли пользователь
+            // прижат к низу" ДО того, как контент вырос — `wasAtBottom`
+            // проверяется по СТАРОЙ высоте, `scrollTop` берётся ТЕКУЩИЙ.
+            // Порог (`BOTTOM_THRESHOLD`) — то же "почти у низа" тоже считается
+            // прижатым, иначе суб-пиксельные несовпадения округления никогда
+            // не давали бы `true`. Если пользователь САМ прокрутил вверх
+            // читать историю — не трогаем его позицию, дочитывает спокойно
+            // (тот же принцип, что у любого чата с автопрокруткой).
+            //
+            // `nextTotalHeight > lastTotalHeight` — НАЙДЕНО ЖИВЬЁМ: owner
+            // "если скроллить наверх медленно — панель просто дёргается
+            // вместо того, чтобы уезжать". Причина — `render.completed`
+            // стреляет НЕ ТОЛЬКО когда чат реально вырос, а на КАЖДЫЙ
+            // `render()`, включая тот, что вызывает САМ `onScroll` выше
+            // (`setViewport({scrollTop})` → `render()`). Без этого условия
+            // любой шаг скролла ВВЕРХ короче `BOTTOM_THRESHOLD` (частый
+            // случай при медленном скролле мелкими шагами) сам себя
+            // проверял по СТАРОЙ `lastTotalHeight`, видел «всё ещё близко к
+            // низу» и тут же принудительно возвращал `scrollTop` обратно —
+            // рывок вместо ухода. Автопрокрутка нужна ТОЛЬКО когда контент
+            // реально вырос (новый токен/сообщение), не на любой рендер.
+            const BOTTOM_THRESHOLD = 48;
+            let lastTotalHeight = chatViewport.totalHeight();
+            const stopSpacerSync = host.events.subscribe('ui.chatViewport.render.completed', async payload => {
+                syncScrollOffset();
+                const nextTotalHeight = payload?.totalHeight ?? chatViewport.totalHeight();
+                const grew = nextTotalHeight > lastTotalHeight;
+                const scrollPos = await callService('dom.scrollPosition', { el: wrapper });
+                const clientSize = await callService('dom.clientSize', { el: wrapper });
+                const wasAtBottom = grew && !payload?.userToggle && scrollPos.ok && clientSize.ok
+                    && (scrollPos.value.top + clientSize.value.height >= lastTotalHeight - BOTTOM_THRESHOLD);
+                lastTotalHeight = nextTotalHeight;
+                await callService('dom.setProp', { el: spacer, key: 'style', value: { height: `${nextTotalHeight}px` } });
+                if (wasAtBottom && clientSize.ok) {
+                    await callService('dom.setScrollPosition', { el: wrapper, top: Math.max(0, nextTotalHeight - clientSize.value.height) });
+                }
+            });
+
+            // Живое обновление ширины/сдвига при перетаскивании слайдера —
+            // БЕЗ полного disable/re-enable цикла. `effect()` сам вызывается
+            // немедленно при создании (см. doc-comment `reactive.js`), поэтому
+            // первый прогон здесь просто дублирует уже применённые выше
+            // `effectiveWidth`/`left` — безвредно, идемпотентно.
+            const stopSideMarginSync = effect(() => {
+                const margin = Math.max(0, Math.min(chatViewportSideMargin(), maxMargin));
+                const width = Math.max(1, clientSize.width - margin * 2);
+                chatViewport.setViewport({ viewportWidth: width });
+                callService('dom.setProp', { el: marginLayer, key: 'style', value: { left: `${margin}px` } });
+                callService('dom.setProp', { el: leftHandle, key: 'style', value: { left: `${margin}px` } });
+                callService('dom.setProp', { el: rightHandle, key: 'style', value: { left: `${margin + width}px` } });
+            });
+
+            // Перетаскивание ручек мышью/тачем — owner: "нужно ТЯНУТЬ
+            // физически. Не ползунком где-то там". `pointermove`/`pointerup`
+            // вешаются на `window` НАПРЯМУЮ (не через `dom.setProp`/Сервис —
+            // тот же приём, что уже есть у `onScroll` выше через `rAF`
+            // напрямую): у Сервисов нет контракта "подписаться на window", а
+            // городить его ради одного эфемерного drag-жеста — накладные
+            // расходы без пользы; сам drag живёт и умирает целиком внутри
+            // одного вызова `enableChatViewport()`. Ручка ДВИГАЕТ margin в
+            // СВОЮ сторону: левая тянется вправо (внутрь) — margin растёт;
+            // правая тянется влево (тоже внутрь) — margin тоже растёт, оттого
+            // разный знак `dx` у обеих.
+            let stopDrag = null;
+            const startDrag = (handleSign) => startEvent => {
+                startEvent.preventDefault();
+                const startClientX = startEvent.clientX;
+                const startMargin = Math.max(0, Math.min(chatViewportSideMargin(), maxMargin));
+                const onMove = moveEvent => {
+                    const dx = (moveEvent.clientX - startClientX) * handleSign;
+                    chatViewportSideMargin.set(Math.max(0, Math.min(startMargin + dx, maxMargin)));
+                };
+                const onUp = () => {
+                    window.removeEventListener('pointermove', onMove);
+                    window.removeEventListener('pointerup', onUp);
+                    stopDrag = null;
+                };
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp);
+                stopDrag = onUp;
+            };
+            await callServiceOrThrow('dom.setProp', { el: leftHandle, key: 'on:pointerdown', value: startDrag(1) });
+            await callServiceOrThrow('dom.setProp', { el: rightHandle, key: 'on:pointerdown', value: startDrag(-1) });
+
+            chatViewportOverlay = {
+                wrapper, spacer, canvas, mirror, chrome, stopSpacerSync, stopSideMarginSync,
+                stopDrag: () => stopDrag?.(),
+            };
+            await callServiceOrThrow('dom.setProp', { el: spacer, key: 'style', value: { height: `${chatViewport.totalHeight()}px` } });
+        } catch (error) {
+            chatViewportEnabled.set(false);
+            await notify('error', `Chat Viewport failed to start: ${error.message}`);
+        } finally {
+            chatViewportBusy.set(false);
+        }
+    }
+
+    async function disableChatViewport() {
+        if (!chatViewport || !chatViewportOverlay) return;
+        chatViewportBusy.set(true);
+        try {
+            chatViewportOverlay.stopSpacerSync();
+            chatViewportOverlay.stopSideMarginSync();
+            chatViewportOverlay.stopDrag();
+            await chatViewport.detach();
+            await callService('dom.remove', { node: chatViewportOverlay.wrapper });
+        } finally {
+            chatViewportOverlay = null;
+            chatViewportBusy.set(false);
+        }
+    }
+
+    function chatViewportCard() {
+        return Card('Chat Viewport (experimental)', { ...collapse.bind('card:chatViewport') },
+            h('p', { class: 'stme-summary-help' }, 'Renders the chat history through our own WebGL-backed viewport instead of SillyTavern\'s native chat. Off by default — this is early and only approximates real SillyTavern layout (see ROADMAP).'),
+            Toggle('Enabled', chatViewportEnabled, {
+                onChange: value => (value ? enableChatViewport() : disableChatViewport()),
+                hint: computed(() => (chatViewportBusy() ? 'Starting…' : '')),
+            }),
+            // Ползунок ширины нарочно НЕ здесь — owner: "нужно ТЯНУТЬ
+            // физически. Не ползунком где-то там". Заужение — ручки по краям
+            // самого канваса в чате (см. `leftHandle`/`rightHandle` в
+            // `enableChatViewport()`), а не отдельный контрол в настройках.
+        );
+    }
+
     function memoryGraphCard() {
         return Card('Memory Graph', {
             ...collapse.bind('card:memoryGraph'),
@@ -1143,6 +1628,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             // машине, им место рядом с пресетами и апдейтами, а не в основном
             // экране работы.
             statusCard(),
+            chatViewportCard(),
             presetCard(),
             updatesCard(),
         );

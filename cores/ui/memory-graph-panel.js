@@ -597,6 +597,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // DEFAULT_SETTINGS: 20). Ползунок пишется сразу при отпускании — не
     // нужен отдельный Save: `memoryGraph.configure` клэмпит и сохраняет сам.
     const retrievalTargetNodes = signal(20);
+    const bootstrapMaxContextTokens = signal(0);
     const retrievalBusy = signal(false);
     // Sticky balance (решено с пользователем явно) — три готовые точки, не
     // откручиваемое число (см. RETRIEVAL_STABILITY_LEVELS/_MARGINS в
@@ -611,6 +612,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function loadRetrievalSettings() {
         const result = await call('memoryGraph.settings');
         if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
+        if (result.ok && result.value?.bootstrapMaxContextTokens != null) bootstrapMaxContextTokens.set(result.value.bootstrapMaxContextTokens);
         if (result.ok && result.value?.retrievalStability) retrievalStability.set(result.value.retrievalStability);
         if (result.ok && Array.isArray(result.value?.fallbackWorkerIds)) fallbackWorkerIds.set(result.value.fallbackWorkerIds);
     }
@@ -621,6 +623,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             const result = await call('memoryGraph.configure', { retrievalTargetNodes: retrievalTargetNodes.peek() });
             if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
             statusText.set(result.ok ? `Retrieval limit saved: ${retrievalTargetNodes.peek()} nodes` : `Failed: ${result.error?.message}`);
+        } finally {
+            retrievalBusy.set(false);
+        }
+    }
+
+    async function saveBootstrapMaxContext() {
+        retrievalBusy.set(true);
+        try {
+            const result = await call('memoryGraph.configure', { bootstrapMaxContextTokens: Number(bootstrapMaxContextTokens.peek()) || 0 });
+            if (result.ok && result.value?.bootstrapMaxContextTokens != null) bootstrapMaxContextTokens.set(result.value.bootstrapMaxContextTokens);
+            const saved = bootstrapMaxContextTokens.peek();
+            statusText.set(result.ok ? `Bootstrap context limit saved: ${saved ? `${saved} tokens` : 'unlimited'}` : `Failed: ${result.error?.message}`);
         } finally {
             retrievalBusy.set(false);
         }
@@ -924,6 +938,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             h('p', { class: 'stme-memory-graph-hint' }, 'Beacons + route + noise combined. Higher pulls more context per generation; lower keeps prompts tight.'),
             Row(
                 Button(retrievalBusy() ? 'Saving…' : 'Save limit', saveRetrievalTargetNodes, { disabled: retrievalBusy() }),
+            ),
+            Field('Lorebook bootstrap: max context (tokens, 0 = unlimited)', NumberInput(bootstrapMaxContextTokens, { min: 0, max: 2000000, step: 1000 })),
+            h('p', { class: 'stme-memory-graph-hint' }, 'Caps how much lorebook text is sent to the model when the graph is built from the lorebook. Over the cap, each entry is shortened evenly in the prompt only; the graph keeps full entries.'),
+            Row(
+                Button(retrievalBusy() ? 'Saving…' : 'Save bootstrap limit', saveBootstrapMaxContext, { disabled: retrievalBusy() }),
             ),
             Field('Sticky balance', Select(retrievalStability, RETRIEVAL_STABILITY_OPTIONS, { onChange: saveRetrievalStability })),
             h('p', { class: 'stme-memory-graph-hint' }, 'How eagerly a new, more relevant memory block replaces the WHOLE previous one. The same block reused turn-to-turn keeps your LLM provider\'s prompt cache warm; a more eager setting swaps sooner at the cost of that cache.'),
