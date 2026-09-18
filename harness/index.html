@@ -46,6 +46,31 @@
     <div class="mes" mesid="0" is_user="true" is_system="false"><div class="mes_block"><div class="mes_text">Player: I take a swing at the bandit.</div></div></div>
     <div class="mes" mesid="1" is_user="false" is_system="false"><div class="mes_block"><div class="mes_text">Narrator: The blade bites deep. You stagger back, bleeding.</div></div></div>
 </div>
+<!-- Chat Viewport (план `chat-viewport`) — живая проверка гибридного
+     WebGL/DOM рендера. Канвас и зеркало-контейнер принадлежат харнессу
+     (Ядро сам их не создаёт, только просят передать при attach()), кнопки
+     ниже дёргают контракты Ядра напрямую через console-обвязку в main.js. -->
+<div class="harness-strip">
+    <span>Chat Viewport:</span>
+    <button id="cvAttach" type="button">Attach</button>
+    <button id="cvDetach" type="button">Detach</button>
+    <button id="cvToggleEnabled" type="button">Toggle enabled</button>
+    <button id="cvAddMessage" type="button">Add message</button>
+    <button id="cvEditLast" type="button">Edit last</button>
+    <button id="cvDeleteLast" type="button">Delete last</button>
+    <button id="cvSwipeLast" type="button">Swipe last</button>
+    <button id="cvRegenerate" type="button">Regenerate</button>
+    <span id="cvState"></span>
+</div>
+<div id="stme-chat-viewport-host" style="position:relative; width:600px; height:300px; border:1px solid #8886; margin-bottom:20px; overflow:hidden;">
+    <canvas id="stme-chat-viewport-canvas" width="600" height="300" style="position:absolute; inset:0;"></canvas>
+    <div id="stme-chat-viewport-mirror" style="position:absolute; inset:0; overflow:hidden; visibility:hidden;"></div>
+    <!-- Хром (widgets.js: MessageHeader/MessageActionsRow/ReasoningBlock) —
+         реальный DOM поверх канваса. pointer-events:none на контейнере, auto
+         на самих строках (panel.css) — иначе прозрачные промежутки между
+         сообщениями перехватывали бы клики/скролл, предназначенные канвасу. -->
+    <div id="stme-chat-viewport-chrome" style="position:absolute; inset:0; pointer-events:none;"></div>
+</div>
 <div id="app"></div>
 <script type="module" src="main.js"></script>
 </body>

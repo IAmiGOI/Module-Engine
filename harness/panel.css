@@ -2028,3 +2028,523 @@
 @media (prefers-reduced-motion: reduce) {
     .stme-spotlight-target { animation: none; }
 }
+
+/* Chat Viewport (план `chat-viewport`) — подавление нативного `#chat`, НЕ
+   удаление узла: `getContext().deleteMessage()` требует, чтобы `.mes[mesid]`
+   физически существовал в документе (см. doc-comment cores/ui/chat-viewport.js
+   и services/st-chat.js). Класс переключается самим Ядром
+   (`applySuppression()`), никогда руками. `#chat.class` — специфичностью, не
+   `!important` (UI.md §4): `#chat` сам по себе уже ID-селектор, этого
+   достаточно перебить любое вероятное правило ST на том же элементе без
+   риска, что потом самим будет нечем это перекрыть.
+
+   `display: none`, НЕ `visibility: hidden` — ОБА варианта проверены живьём.
+   `#chat { flex-grow: 1; }` внутри `#sheld` (`display:flex; flex-direction:
+   column`) — именно это растягивание держит панель ввода (`#form_sheld`,
+   следующий flex-сосед) прижатой к низу экрана, поэтому `display:none`
+   САМ ПО СЕБЕ уводил панель ввода наверх (#chat выкидывается из
+   flex-раскладки целиком). Первая попытка исправить это — переключить на
+   `visibility:hidden` (сохраняет geometry, flex-grow продолжает резервировать
+   место) — ЗАВЕЛА панель ввода на место, но ЗАМЕТНО просадила плавность
+   скролла: `visibility:hidden` не убирает поддерево из layout/paint дерева
+   браузера, только из отрисовки — сотни родных `.mes`-узлов настоящего
+   долгого чата продолжали полноценно лежать в layout-дереве и пересчитываться
+   при любом реflow (в т.ч. на каждый наш скролл, раз `#chat` физически рядом
+   в документе), просто невидимо. `display:none` этого не делает — поддерево
+   полностью выключено из layout/paint, дёшево. Вместо смены механизма
+   подавления самого `#chat` — правильно нацеленный AND ДЕШЁВЫЙ фикс: держим
+   `#form_sheld` прижатым к низу через `margin-top: auto` (стандартный приём
+   flex — сосед с `margin-top:auto` забирает всё свободное место НАД собой),
+   но ТОЛЬКО пока подавление активно — через `:has()` (ST сама уже использует
+   `:has()` в своих правилах, см. `#chat:not(...):not(:has(...))` в
+   `style.css`, так что это точно поддерживается средой), а не постоянно —
+   иначе панель ввода залипала бы внизу и в обычном, неподавленном чате.
+
+   `!important` здесь — ИСКЛЮЧЕНИЕ из UI.md §4, не забывчивость: НАЙДЕНО
+   ЖИВЬЁМ, что у владельца установлено стороннее расширение
+   `SillyTavern-ProbablyTooManyTabs`, чей `style.css` форсит
+   `#form_sheld { margin: unset !important; }` БЕЗУСЛОВНО (не через `:has()`,
+   не по состоянию). Специфичность тут бессильна — `!important` бьёт любую
+   специфичность без своего `!important`; единственный способ вообще
+   управлять этим свойством, когда наше подавление активно, — тоже
+   `!important`, но с заведомо более высокой специфичностью (`:has()` +
+   несколько ID), поэтому среди `!important`-правил побеждаем МЫ, а не
+   расширение — и НЕ вмешиваемся в обычный, неподавленный чат вовсе, раз
+   условие `:has()` не выполняется. */
+/* Стартовый экран ST (`.welcomePanel`: недавние чаты и т.п.) живёт в том же #chat.
+   Пока он открыт — показываем родной чат, а оверлей прячем: иначе оверлей перекрывал бы панель
+   и её нельзя было бы ни увидеть, ни кликнуть. Как только открыт настоящий чат, панель уходит
+   из #chat, и правила снова подавляют родной чат. */
+#chat.stme-chat-viewport-suppress-native:not(:has(.welcomePanel)) { display: none; }
+#sheld:not(:has(.welcomePanel)):has(#chat.stme-chat-viewport-suppress-native) #form_sheld { margin-top: auto !important; }
+/* visibility, НЕ display:none — скрытый оверлей теряет размер, и Chat Viewport, включённый на стартовом экране, замерял бы себя как 1x1 px. */
+body:has(#chat .welcomePanel) .stme-chat-viewport-overlay { visibility: hidden !important; pointer-events: none !important; }
+
+/* Оверлей Chat Viewport (`cores/ui/engine-panel.js`'s `enableChatViewport()`)
+   монтируется прямо в `document.body`, ВНЕ `.stme-panel` — та же ситуация,
+   что у окон графа/карты/картинки (см. их же doc-comment выше): переменные
+   `--stme-*` без этого блока пустые, и `color-mix()`/аватар-заглушка/бейджи
+   молча теряют цвет целиком. Найдено живьём в реальной SillyTavern: аватар
+   без изображения был не видно, а `.menu_button`/`.text_pole` (Save/Cancel
+   у edit-оверлея) выглядели необработанными дефолтами ST — тот же класс
+   бага, что раньше ловили на окне графа/карты. */
+.stme-chat-viewport-overlay {
+    --stme-accent: var(--SmartThemeQuoteColor, #8da8ff);
+    --stme-danger: #f5232f;
+    --stme-danger-bright: #ff5a63;
+    --stme-ok: #3f9e72;
+    --stme-ok-bright: #57bb8c;
+    --stme-radius-card: 14px;
+    --stme-radius: 9px;
+    --stme-radius-sm: 7px;
+    accent-color: var(--stme-accent);
+}
+/* `.menu_button`/`.text_pole` — тот же оверрайд, что у `.stme-map-hud-root`,
+   но БЕЗ `animation: stme-pulse` на hover: рядом с чатом анимация запрещена
+   (см. память feedback-no-animated-effects-reflow) — граница действует и
+   здесь, не только на `.stme-message-actions`. */
+.stme-chat-viewport-overlay .menu_button {
+    width: auto;
+    flex-shrink: 0;
+    padding: 7px 18px;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 70%, transparent);
+    border-radius: var(--stme-radius-sm);
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #dfe3ea);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.25;
+}
+.stme-chat-viewport-overlay .menu_button:not(.disabled):not([disabled]):hover,
+.stme-chat-viewport-overlay .menu_button:not(.disabled):not([disabled]).active,
+.stme-chat-viewport-overlay .menu_button:not(.disabled):not([disabled]):active,
+.stme-chat-viewport-overlay .menu_button:not(.disabled):not([disabled]):focus {
+    background-color: transparent;
+}
+.stme-chat-viewport-overlay .menu_button:not(.disabled):not([disabled]):hover {
+    border-color: var(--stme-accent);
+    color: var(--stme-accent);
+}
+.stme-chat-viewport-overlay .menu_button:focus-visible { outline: 2px solid var(--stme-accent); outline-offset: 2px; }
+.stme-chat-viewport-overlay input.text_pole,
+.stme-chat-viewport-overlay select.text_pole,
+.stme-chat-viewport-overlay textarea.text_pole {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #444) 70%, transparent);
+    border-radius: var(--stme-radius-sm);
+    background: color-mix(in srgb, #fff 7%, var(--SmartThemeBlurTintColor, #1c1e26));
+}
+.stme-chat-viewport-overlay input.text_pole:focus,
+.stme-chat-viewport-overlay select.text_pole:focus,
+.stme-chat-viewport-overlay textarea.text_pole:focus {
+    border-color: var(--stme-accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--stme-accent) 28%, transparent);
+    outline: none;
+}
+
+/**
+ * Невидимое DOM-зеркало (измерение высоты строки, `cores/ui/chat-
+ * viewport.js`) — НАЙДЕНО ЖИВЬЁМ: в настоящей SillyTavern оно оставалось
+ * ПОЛНОСТЬЮ ВИДИМЫМ (никакого CSS-правила для него не существовало вовсе —
+ * в харнессе это скрывалось только ручным инлайн-стилем в статичной HTML-
+ * разметке, который не переехал в настоящий движок). Отсюда и "текст ездит
+ * по тексту, аватарки/текст поверх друг друга" — это НАСТОЯЩИЙ, видимый
+ * текст зеркала, наложенный на WebGL-текстуру того же текста.
+ * `visibility` (не `display:none`) — зеркало обязано остаться в раскладке
+ * ИЗМЕРИМЫМ (`dom.measureRect` элемента с `display:none` навсегда вернул бы
+ * нули, см. doc-comment `ensureRowChrome()`). Оно НЕ даёт выделение/Ctrl+F —
+ * `visibility:hidden` убирает элемент из hit-testing точно так же, как
+ * `display:none`; настоящий accessibility/selection-слой (opacity:0 + свой
+ * путь клика) — отдельный, ещё не сделанный шаг, см. план `chat-viewport`.
+ *
+ * **ВТОРОЙ, отдельный баг — НАЙДЕНО ЖИВЬЁМ в реальной ST, не в харнессе**:
+ * `visibility:hidden` не убирает элемент из потока документа (в отличие от
+ * `display:none`) — хост зеркала оставался обычным блочным элементом внутри
+ * скролл-обёртки Chat Viewport и накапливал РЕАЛЬНУЮ высоту суммы всех своих
+ * зеркал (сотни/тысячи px на длинном чате), раздувая `scrollHeight` обёртки
+ * далеко за пределы того, что знает виртуализация (`spacer` — единственный
+ * элемент, которому ПОЛОЖЕНО задавать реальную прокручиваемую высоту).
+ * Итог: `wrapper.scrollTop` от настоящего скролла браузера уходил дальше,
+ * чем `computeVisibleRange()` вообще способен учесть, все `topPx` уходили в
+ * отрицательные значения — WebGL-квады рисовались ВЫШЕ канваса, невидимо.
+ * Отсюда и "текст не отображается"/`0` непрозрачных пикселей при живой
+ * проверке, и "скролл работает странно" — эффективная прокручиваемая высота
+ * страницы не совпадала с тем, что виртуализация считает концом чата.
+ * `position: absolute` полностью убирает хост (и его детей) из потока —
+ * `getBoundingClientRect()` абсолютно спозиционированного элемента остаётся
+ * настоящим (в отличие от `display:none`), так что измерение высоты строки
+ * не ломается, а вклад в `scrollHeight` родителя исчезает.
+ */
+.stme-chat-viewport-mirror-host {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+}
+.stme-chat-viewport-mirror-host,
+.stme-chat-viewport-mirror-host * {
+    visibility: hidden;
+}
+
+/**
+ * `font-size`/`line-height` ЯВНЫМИ значениями, не унаследованными — НАЙДЕНО
+ * ЖИВЬЁМ: без этого зеркало наследует `line-height: normal` со страницы
+ * ST. `getComputedStyle()` на ПУСТОМ зеркале (именно так его и читает
+ * `cores/ui/engine-panel.js` — ДО того, как в него вообще положили текст
+ * первого сообщения) отдаёт буквально строку `"normal"`, не число в px —
+ * `normal` вычисляется из МЕТРИК ШРИФТА, а без реального текста браузеру
+ * не из чего их брать. Даже если бы удалось прочитать число — растровая
+ * текстура рисуется в ИЗОЛИРОВАННОМ `data:`-документе (`foreignObject`),
+ * куда веб-шрифты страницы (`@font-face`) не переезжают сами по себе;
+ * подставленный шрифт заведомо другой, и его СОБСТВЕННЫЙ "normal"
+ * межстрочный интервал — другое число. Единственный надёжный способ
+ * гарантировать, что измеренная (зеркало) и нарисованная (текстура)
+ * высота строки СОВПАДАЮТ, — задать ЧИСЛОМ и там, и там одно и то же
+ * значение, а не полагаться на "какой бы шрифт ни оказался, посчитай
+ * межстрочный интервал сам" по обе стороны независимо. Значение здесь
+ * ДОЛЖНО совпадать с `.stme-chat-viewport-body` в CSS, который собирает
+ * `cores/ui/engine-panel.js` для `htmlRasterizer.rasterize`.
+ */
+.stme-chat-viewport-mirror img { max-width: 100%; height: auto; }
+.stme-chat-viewport-mirror {
+    font-size: 15px;
+    line-height: 1.4;
+    /* БЕЗ `overflow: hidden`: невидимый float-заглушка под аватарку не должен
+       раздувать измеренную высоту зеркала — иначе пустое/короткое тело
+       (напр. у сообщения, где только ризонинг) получало бы высоту заглушки, и
+       следующая строка глифа уезжала бы ниже аватарки. Минимальную высоту
+       глифа держит `GLYPH_MIN_HEIGHT` в chat-viewport.js. */
+}
+
+/* Chat Viewport — хром вокруг WebGL-текстуры тела сообщения (widgets.js:
+   Avatar/MessageHeader/MessageActionsRow/ReasoningBlock/Timestamp). НИКАКОЙ
+   анимации/transition здесь намеренно (feedback-no-animated-effects-reflow —
+   владелец проверил: анимация рядом с DOM чата форсирует reflow без обхода). */
+.stme-chat-viewport-row {
+    /* Контейнер хрома целиком pointer-events:none (см. harness/index.html) —
+       иначе прозрачные промежутки между строками перехватывали бы скролл/
+       клики, предназначенные канвасу под ними. Сама строка — auto, иначе
+       кнопки внутри неё вообще не кликались бы. */
+    pointer-events: none;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    /* Изменения внутри строки (раскрытие ризонинга, подгрузка картинки) не должны инвалидировать раскладку всего документа. */
+    contain: layout style;
+}
+/* Сам корень растянут невидимым float-ом до низа зоны аватарки и перекрывал бы
+   клики по строкам ниже — кликабельны только настоящие дети. */
+.stme-chat-viewport-row > div > * { pointer-events: auto; }
+.stme-chat-viewport-row > div > .stme-chat-viewport-avatar-float { pointer-events: none; }
+/*
+ * Фон глифа (owner: "Глифы должны иметь отдельный бэкграунд, в стиле всего
+ * движка") — статичная плашка ПОД канвасом/хромом одного глифа целиком
+ * (см. `ensureGlyphBg()` в `cores/ui/chat-viewport.js` — `z-index:-1`
+ * относительно канваса/хрома, оба без явного z-index в том же родителе).
+ * Позиция/размер выставляются инлайн-стилем из Ядра на каждый `render()`,
+ * здесь только внешний вид. Без `backdrop-filter`/размытия, в отличие от
+ * `.stme-card` — глифов на экране может быть несколько одновременно поверх
+ * скроллящегося канваса, дорогой blur на каждый был бы заметной просадкой.
+ * БЕЗ анимации/transition — тот же владельческий запрет, что и у всего
+ * остального хрома чата (см. комментарий выше про `feedback-no-animated-
+ * effects-reflow`).
+ */
+.stme-chat-viewport-glyph-bg {
+    box-sizing: border-box;
+    border-radius: var(--stme-radius-card, 10px);
+    /* НАЙДЕНО ЖИВЬЁМ: первая версия (тёмная подложка поверх и так тёмного
+       фона чата, 55% непрозрачности) была технически применена (подтверждено
+       через getComputedStyle), но визуально неотличима от фона — темнее
+       тёмного не даёт контраста без `.stme-card`'s `backdrop-filter`
+       (который здесь намеренно не используем — дорого на несколько глифов
+       разом поверх скроллящегося канваса). Светлее подложки, а не темнее —
+       тот же приём, что `.stme-panel input.text_pole` уже использует по
+       этой же причине. */
+    border: 1.5px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    background: color-mix(in srgb, #fff 9%, var(--SmartThemeBlurTintColor, #1c1e26));
+}
+/* Ручка заужения — owner: "нужно ТЯНУТЬ физически. Не ползунком где-то
+   там" (см. `leftHandle`/`rightHandle` в `enableChatViewport()`). Невидима
+   в покое (шире, чем видимая полоска, чтобы было легче попасть мышью — тот
+   же приём, что у обычных resize-хватал в браузерных панелях), подсвечена
+   на hover/при захвате, чтобы было понятно, что тут можно тянуть. Своя
+   translateX(-50%) центрирует хватал-зону НА краю канваса (а не левым краем
+   самой ручки), чтобы курсор мог промахнуться и туда, и сюда на несколько px
+   и всё равно попасть. */
+.stme-chat-viewport-resize-handle {
+    width: 14px;
+    transform: translateX(-50%);
+    cursor: ew-resize;
+    z-index: 2;
+    touch-action: none;
+}
+.stme-chat-viewport-resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 3px;
+    height: 100%;
+    transform: translateX(-50%);
+    background: transparent;
+    border-radius: 2px;
+    transition: background 0.12s ease;
+}
+.stme-chat-viewport-resize-handle:hover::after,
+.stme-chat-viewport-resize-handle:active::after {
+    background: color-mix(in srgb, var(--stme-accent) 70%, transparent);
+}
+.stme-message-header-compact {
+    /* Продолжение глифа (не первое сообщение цепочки) — своей аватарки/
+       имени нет (см. `buildRowTree()`'s `c.isGlyphStart`), только строка
+       действий той же высоты, что обычно занимает `.stme-message-header`,
+       чтобы кнопки не прыгали по высоте между первым сообщением глифа и
+       продолжением. */
+    min-height: 24px;
+}
+/* owner: "Компановка должна быть такая: Красный... Синий — виджеты, рядом
+   на одной строке" — шапка (или компактная замена) слева, заглушка
+   подвала (RP Time и т.п.) справа, оба ТОП-выровнены (см. также
+   `.stme-message-header`'s `align-items: flex-start` выше). Шапка не
+   растягивается на всю ширину (`flex: none` у неё нет, но и `flex-grow`
+   тоже нет — её собственная ширина остаётся её собственным контентом),
+   поэтому `space-between` просто прижимает подвал к правому краю. */
+.stme-chat-viewport-row-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+/* Owner: "Спейсинг между пустым сообщением где только ризонинг и ToolCall,
+   затем между ToolCall и полноценным сообщением внутри одного глифа
+   все-еще слишком большой". НАЙДЕНО ЖИВЬЁМ: зазор МЕЖДУ строками сам по
+   себе уже ~0px (нет `GLYPH_GAP` внутри одного глифа) — "спейсинг"
+   оказался не межстрочным, а раздутой ВЫСОТОЙ каждой отдельной строки:
+   `.stme-details`/`.stme-toolcall-body` несут свой `border-top`/
+   `padding-top: 8px`, рассчитанные на случай, когда перед ними стоит
+   полноразмерная шапка (аватар+имя). После КОМПАКТНОЙ шапки продолжения
+   глифа (`.stme-message-header-compact`, всего 24-26px, у нейё уже есть
+   собственный нижний край) этот же отступ — лишний, дублирующий: три-
+   четыре свёрнутых Reasoning/ToolCall подряд (частый случай — несколько
+   раундов инструментов в одном ходу) визуально раздувались на ~8px
+   каждый сверх уже принятой компактности. `~` (любой последующий
+   сиблинг), НЕ `+` (непосредственно следующий) — НАЙДЕНО ЖИВЬЁМ: между
+   шапкой и `.stme-details`/`.stme-toolcall-body` встала ещё
+   `.stme-chat-viewport-footer-slot` (owner: "RP Time не вверху"), и `+`
+   перестал попадать вовсе — селектор требует БУКВАЛЬНОЙ смежности в DOM.
+   `.stme-chat-viewport-row-top-compact`, НЕ `.stme-message-header-compact`
+   — НАЙДЕНО ЖИВЬЁМ ЕЩЁ РАЗ: шапка/заглушка подвала переехали в ОБЩУЮ
+   обёртку `.stme-chat-viewport-row-top` (owner: "Красный... Синий —
+   рядом, на одной строке" — см. `buildRowTree()`), и `.stme-message-
+   header-compact` перестал быть СИБЛИНГОМ `.stme-details` вовсе (стал
+   племянником — на уровень глубже); маркер компактности пришлось
+   продублировать НА САМОЙ обёртке (`stme-chat-viewport-row-top-compact`),
+   чтобы `~` снова видел его на ТОМ ЖЕ уровне, что и раскрывашки. */
+.stme-chat-viewport-row-top-compact ~ .stme-details {
+    border-top: none;
+    padding-top: 0;
+}
+.stme-chat-viewport-row-top-compact ~ .stme-toolcall-body {
+    padding-top: 0;
+}
+.stme-message-header {
+    display: flex;
+    /* owner: "Имя персонажа не выровнены по верху фото" — было `center`:
+       с портретной 136px-аватаркой центрирование заметно уводило имя вниз
+       от её видимого верхнего края. */
+    align-items: flex-start;
+    /* Не единый gap на всех троих детей — между аватаркой и полоской-
+       светофором зазор УЖЕ есть (сама полоска несёт `margin-left`, см.
+       `.stme-chat-viewport-gen-stripe` ниже, вплотную к краю аватарки), а
+       между полоской и текстовым блоком нужен полноценный отступ. */
+    gap: 10px;
+}
+/*
+ * Колонка аватарки+полоски-светофора — owner: "Оно должно быть СПРАВА от
+ * аватарки. Блоки ризонинга тоже. И только после заполнения той зоны
+ * спускаться вниз." Настоящий `float: left` (не `flex`-ребёнок шапки, как
+ * было раньше) — см. doc-comment `AVATAR_HEIGHT` в `cores/ui/chat-
+ * viewport.js` за тем, почему float и почему НАМЕРЕННО без clearfix здесь.
+ * `margin-right` РОВНО `TEXT_PADDING` (10px, тот же файл) — квад тела
+ * сообщения уже сдвинут на этот же отступ на экране, отсюда и совпадение:
+ * `AVATAR_SPACER_WIDTH` там специально БЕЗ добавочного `+TEXT_PADDING`,
+ * чтобы не задваивать этот же зазор.
+ */
+.stme-chat-viewport-avatar-col {
+    float: left;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-right: 10px;
+}
+/* Невидимый float в строках-продолжениях: держит зону аватарки первой строки глифа. */
+.stme-chat-viewport-avatar-float { float: left; width: 124px; visibility: hidden; }
+/* CoT-строки (ризонинг/ToolCall) внутри глифа — без пустой строки действий сверху. */
+.stme-chat-viewport-content-col-tight .stme-chat-viewport-row-top-compact { height: 0; min-height: 0; justify-content: flex-end; }
+.stme-avatar {
+    /* owner: "иконка персонажа должна быть не круглой, а прямоугольной, со
+       скруглёнными краями" — раньше 50% (идеальный круг). */
+    border-radius: 14px;
+    object-fit: cover;
+    flex: none;
+}
+.stme-avatar-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--stme-accent) 35%, var(--SmartThemeBlurTintColor, #1c1e26));
+    color: var(--SmartThemeBodyColor, #dfe3ea);
+    font-weight: 600;
+}
+/*
+ * Полоска-светофор генерации — owner: "небольшая полоска генерации как у
+ * светофора, которая фиксирует свой последний цвет после завершения
+ * генерации. Красная - ген прерван, зеленый - успешен, оранжеый - ген
+ * идет." Живёт в `.stme-chat-viewport-avatar-col` рядом с аватаркой (её
+ * `gap: 6px` — узкий зазор, теснее, чем `margin-right` до текста). Высота
+ * — константой 136px, НЕ `align-self: stretch` — тот же `AVATAR_HEIGHT`,
+ * что жёстко задаёт сама аватарка (`cores/ui/chat-viewport.js`). Цвета —
+ * ТА ЖЕ палитра, что у общего Activity Light этого движка (`--stme-light`
+ * в секции "Светофор активности" выше) — владелец: "Посмотри в нашем
+ * светофоре" — единый визуальный язык, не новый набор цветов с нуля.
+ */
+.stme-chat-viewport-gen-stripe {
+    flex: none;
+    width: 6px;
+    height: 136px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 12%, transparent);
+}
+.stme-chat-viewport-gen-stripe-working { background: #e8a13c; box-shadow: 0 0 6px rgba(232, 161, 60, .6); }
+.stme-chat-viewport-gen-stripe-success { background: #4fae7f; box-shadow: 0 0 6px rgba(79, 174, 127, .6); }
+.stme-chat-viewport-gen-stripe-error   { background: #e5453f; box-shadow: 0 0 6px rgba(229, 69, 63, .6); }
+.stme-message-header-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+/* Кнопки живут В ЭТОМ ряду (владелец: "любые кнопки должны быть в ряд с
+   именем"), не отдельной строкой — .stme-message-actions ниже прижимается
+   вправо через margin-left:auto, имя/бейджи остаются слева. */
+.stme-message-header-name-row { display: flex; align-items: center; gap: 6px; }
+.stme-message-header-name { color: var(--SmartThemeBodyColor, #dfe3ea); }
+.stme-timestamp {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 60%, transparent);
+}
+.stme-message-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    /* Раскрываются ТОЛЬКО при наведении на строку целиком (владелец),
+       БЕЗ анимации/transition — мгновенный переключатель, а не плавное
+       появление (см. память feedback-no-animated-effects-reflow: анимация
+       рядом с чатом форсирует reflow в этом окружении без обхода).
+       visibility (не display) держит место в раскладке зарезервированным —
+       наведение не сдвигает имя/бейджи в сторону, когда кнопки появляются. */
+    visibility: hidden;
+}
+/* Зона наведения — весь `.stme-chat-viewport-row` (аватар + имя + бейджи +
+   блок рассуждений, если раскрыт), не узкая строка с именем — сама строка
+   НЕ имеет явной высоты (см. doc-comment `buildRowTree()` в
+   cores/ui/chat-viewport.js — циклическая зависимость измерения была
+   реальным багом), поэтому её реальная зона наведения — естественная
+   высота хрома. Тело сообщения рисуется на канвасе НИЖЕ этой зоны и в неё
+   не входит: у канваса нет DOM-присутствия, навести курсор "на текст" и
+   поймать hover нечем без отдельного невидимого слоя (открытый пункт). */
+.stme-chat-viewport-row:hover .stme-message-actions,
+.stme-chat-viewport-row:focus-within .stme-message-actions {
+    /* :focus-within — клавиатурная навигация (Tab на кнопку) должна открыть
+       её, а не оставить сфокусированную, но невидимую кнопку. */
+    visibility: visible;
+}
+/* Действия сообщения — компактнее общего .stme-icon-button (36px — размер
+   для плавающих палитр вроде карты, здесь их много в одной строке). */
+.stme-message-actions .stme-icon-button { width: 26px; height: 26px; border-width: 1px; }
+.stme-message-actions .stme-icon-svg { width: 14px; height: 14px; }
+.stme-message-swipe-counter {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 70%, transparent);
+    min-width: 28px;
+    text-align: center;
+}
+.stme-reasoning-text {
+    font-size: 12.5px;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 75%, transparent);
+    padding: 6px 0 0 2px;
+    white-space: pre-wrap;
+}
+
+/**
+ * Тело ToolCall-сообщения — НАСТОЯЩИЙ DOM (не WebGL-текстура, см.
+ * `ensureRowChrome()`/`buildRowTree()` в `cores/ui/chat-viewport.js`),
+ * поэтому наследует реальную тему ST каскадом сам — здесь только отступ,
+ * размер и цвет `<summary>`/тела, тот же приём, что `.stme-reasoning-text`
+ * выше, для визуального единства двух "свёрнутых по умолчанию" блоков.
+ */
+.stme-toolcall-body {
+    font-size: 12.5px;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 75%, transparent);
+    padding: 6px 0 0 2px;
+}
+.stme-toolcall-body:empty { display: none; }
+.stme-toolcall-body details > summary {
+    cursor: pointer;
+    color: var(--stme-accent, #8da8ff);
+    font-weight: 600;
+}
+/* Заглушка под подвал сообщения (RP Time и другие Модули со слотами
+   message-footer.js) — owner: "RP Time и прочие штуки не отображаются
+   корректно". Сама пуста, пока `ui.messageFooter`'s резолвер (см.
+   `attach()` в `cores/ui/chat-viewport.js`) не подложит сюда настоящий
+   `.stme-message-footer` узел; `:empty` держит её схлопнутой для
+   сообщений, у которых ни один Модуль слот не занял — тот же приём, что
+   `.stme-toolcall-body:empty` выше. */
+.stme-chat-viewport-footer-slot:empty { display: none; }
+/*
+ * Формат подвала ВНУТРИ Chat Viewport — owner: "Все виджеты должны
+ * отображаться справа. Без своего блока, просто тот-же формат RP Time с
+ * заголовком и временем внизу, но без рамки." "Авто-переключение формата
+ * отображения в зависимости от активного вьюпорта" — переключать
+ * ОТДЕЛЬНЫМ JS-флагом не нужно вовсе: `message-footer.js` ничего не знает
+ * про Chat Viewport (см. его `hostResolver` doc-comment) и рисует ОДНО и
+ * то же дерево что там, что в настоящем `.mes` — форма зависит только от
+ * ТОГО, куда резолвер его пристроил. Значит "формат по вьюпорту" — это
+ * просто CSS-каскад от контейнера: нативный `.mes .stme-message-footer`
+ * остаётся как был (сетка/рамка/паддинг из блока выше), а вложенность в
+ * `.stme-chat-viewport-footer-slot` (появляется ТОЛЬКО когда Chat Viewport
+ * реально забрал этот узел к себе) сама и есть переключатель — исчез Chat
+ * Viewport, узел вернулся в настоящий `.mes`, эти селекторы перестали
+ * подходить, старый вид вернулся сам, без единой строчки JS.
+ */
+.stme-chat-viewport-footer-slot .stme-message-footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 14px;
+    width: auto;
+    margin-top: 4px;
+}
+.stme-chat-viewport-footer-slot .stme-message-footer-slot {
+    /* Одноимённый класс с ВНЕШНЕЙ заглушкой Chat Viewport — это ВНУТРЕННИЕ
+       ячейки left/center/right САМОГО `message-footer.js` (см. его
+       `cell.className = 'stme-message-footer-slot'`), другой уровень
+       вложенности, не спутать. */
+    flex: none;
+    min-width: 0;
+}
+.stme-chat-viewport-footer-slot .stme-stat {
+    /* "Без своего блока... но без рамки" — снимаем ВСЁ, чем `.stme-stat`
+       обычно себя обособляет (рамка/градиент/тень/паддинг/скругление),
+       оставляя только сам layout "иконка+подпись сверху, значение снизу". */
+    border: none;
+    background: none;
+    box-shadow: none;
+    padding: 0;
+    border-radius: 0;
+    text-align: right;
+}
+.stme-chat-viewport-footer-slot .stme-stat-head { justify-content: flex-end; }
+/* [[feedback_no_animated_effects_reflow]] — владелец проверил живьём:
+   анимация рядом с DOM чата форсирует reflow без обхода в этом окружении.
+   Пульсация ожидания у `.stme-stat-pending` — тот самый запрещённый
+   класс эффектов, но ТОЛЬКО здесь, рядом с чатом; в настоящем `.mes`
+   (вне Chat Viewport, где reflow ничем не грозит) она остаётся как была. */
+.stme-chat-viewport-footer-slot .stme-stat-pending { animation: none; }

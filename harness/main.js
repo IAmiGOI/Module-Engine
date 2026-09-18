@@ -29,6 +29,11 @@ const ST_EVENT_TYPES = Object.freeze({
     GENERATION_ENDED: 'generation_ended',
     MESSAGE_SWIPED: 'message_swiped',
     MESSAGE_EDITED: 'message_edited',
+    MESSAGE_UPDATED: 'message_updated',
+    MESSAGE_DELETED: 'message_deleted',
+    CHARACTER_MESSAGE_RENDERED: 'character_message_rendered',
+    USER_MESSAGE_RENDERED: 'user_message_rendered',
+    STREAM_TOKEN_RECEIVED: 'stream_token_received',
     // Настоящие значения из ST (scripts/events.js), не выдуманные — Ядро
     // работы с WI подписывается на них через `eventsCore.bridge()`, а тот
     // мостит только то, что `eventTypes` вообще заявляет о себе.
@@ -90,8 +95,51 @@ const stContext = {
     eventSource: {
         on: (name, handler) => stListeners.set(name, [...(stListeners.get(name) ?? []), handler]),
         off: (name, handler) => stListeners.set(name, (stListeners.get(name) ?? []).filter(item => item !== handler)),
+        // Настоящая ST эмитит УЖЕ РЕЗОЛВЛЕННЫМ именем (не ключом) — та же
+        // форма, что `stme-beta`'s services/st-chat.js ждёт от
+        // `context.eventSource.emit(context.eventTypes.MESSAGE_EDITED, ...)`.
+        async emit(name, ...args) { for (const handler of stListeners.get(name) ?? []) await handler(...args); },
     },
+    // --- Демо-заглушки для Chat Viewport (план `chat-viewport`) — настоящая
+    // ST экспортирует эти же имена через getContext() (st-context.js);
+    // здесь достаточно, чтобы они реально двигали `stContext.chat`, не
+    // воспроизводя markdown/swipe-механику ST один в один.
+    async deleteMessage(index) {
+        stContext.chat.splice(index, 1);
+        await stContext.saveChat();
+    },
+    async swipe_left(_event, { message } = {}) { await demoSwipe(message); },
+    async swipe_right(_event, { message } = {}) { await demoSwipe(message); },
+    async generate(type) {
+        if (type !== 'regenerate' || !stContext.chat.length) return;
+        const last = stContext.chat[stContext.chat.length - 1];
+        last.mes = `(regenerated) ${DEMO_REPLIES[Math.floor(Math.random() * DEMO_REPLIES.length)]}`;
+        await stContext.saveChat();
+    },
+    messageFormatting(mes, name, _isSystem, isUser, _messageId) {
+        // Не настоящий markdown ST — верность формата уже отдельно проверена
+        // живым спайком (`scratchpad/rasterize-spike.html`) на реальном
+        // `foreignObject`; здесь достаточно честного HTML с именем/текстом.
+        const safe = String(mes ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<p><strong>${isUser ? 'You' : (name || 'Narrator')}:</strong> ${safe}</p>`;
+    },
+    updateMessageBlock() {},
+    async saveChatConditional() { await stContext.saveChat(); },
 };
+
+const DEMO_REPLIES = [
+    'The wind shifts, carrying the smell of rain toward the tavern.',
+    'Someone in the corner laughs at a joke you did not hear.',
+    'The bartender eyes the door, waiting for the next patron.',
+];
+
+let demoSwipeCounter = 0;
+async function demoSwipe(message) {
+    if (!message) return;
+    demoSwipeCounter += 1;
+    message.mes = `${DEMO_REPLIES[demoSwipeCounter % DEMO_REPLIES.length]} (swipe #${demoSwipeCounter})`;
+    await stContext.saveChat();
+}
 
 // Затравка демо-книги — один раз, если её ещё вообще не было (не
 // перетираем то, что харнесс уже накопил за прошлые сеансы).
@@ -276,4 +324,74 @@ document.getElementById('harnessEditMsg').addEventListener('click', async () => 
     block.innerHTML = '<div class="mes_text">Narrator: (edited by hand) You stagger back into the doorway.</div>';
     await new Promise(r => setTimeout(r, 250));
     describeFooter();
+});
+
+// --- Chat Viewport (план `chat-viewport`) — живая проверка гибридного
+// WebGL/DOM рендера в настоящем браузере, а не только `node --test`. ---
+
+const cvState = document.getElementById('cvState');
+const cvCanvas = document.getElementById('stme-chat-viewport-canvas');
+const cvMirror = document.getElementById('stme-chat-viewport-mirror');
+const cvChrome = document.getElementById('stme-chat-viewport-chrome');
+let cvEnabled = true;
+
+function describeChatViewport() {
+    cvState.textContent = wired.chatViewport.isAttached()
+        ? `· attached, visible mesids: [${wired.chatViewport.visibleMesids().join(', ')}]`
+        : '· detached';
+}
+
+document.getElementById('cvAttach').addEventListener('click', async () => {
+    const ok = await wired.chatViewport.attach({
+        canvas: cvCanvas,
+        mirrorContainer: cvMirror,
+        chromeContainer: cvChrome,
+        width: cvCanvas.width,
+        height: cvCanvas.height,
+        // Тема ST в харнессе не грузится по-настоящему — берём то же
+        // минимальное подмножество, что panel.css уже определяет как
+        // запасные значения для автономного рига.
+        css: 'body{margin:0} p{margin:0 0 8px;font:14px/1.4 system-ui,sans-serif;color:#e0e0e0}',
+    });
+    cvState.textContent = ok ? '· attached' : '· NO WebGL available on this device/browser';
+    if (ok) describeChatViewport();
+});
+
+document.getElementById('cvDetach').addEventListener('click', async () => {
+    await wired.chatViewport.detach();
+    describeChatViewport();
+});
+
+document.getElementById('cvToggleEnabled').addEventListener('click', async () => {
+    cvEnabled = !cvEnabled;
+    await wired.chatViewport.setEnabled({ enabled: cvEnabled });
+    describeChatViewport();
+});
+
+document.getElementById('cvAddMessage').addEventListener('click', async () => {
+    stContext.chat.push({ is_user: stContext.chat.length % 2 === 0, is_system: false, name: stContext.chat.length % 2 === 0 ? 'Player' : 'Narrator', mes: `Message #${stContext.chat.length}: ${DEMO_REPLIES[stContext.chat.length % DEMO_REPLIES.length]}` });
+    await stContext.saveChat();
+    await wired.chatViewport.render();
+    describeChatViewport();
+});
+
+document.getElementById('cvEditLast').addEventListener('click', async () => {
+    const mesid = String(stContext.chat.length - 1);
+    await wired.chatViewport.editMessage({ mesid, text: `(edited via Chat Viewport) ${stContext.chat.at(-1)?.mes ?? ''}` });
+    describeChatViewport();
+});
+
+document.getElementById('cvDeleteLast').addEventListener('click', async () => {
+    await wired.chatViewport.deleteMessage({ mesid: String(stContext.chat.length - 1) });
+    describeChatViewport();
+});
+
+document.getElementById('cvSwipeLast').addEventListener('click', async () => {
+    await wired.chatViewport.swipe({ mesid: String(stContext.chat.length - 1), direction: 'right' });
+    describeChatViewport();
+});
+
+document.getElementById('cvRegenerate').addEventListener('click', async () => {
+    await wired.chatViewport.regenerate();
+    describeChatViewport();
 });

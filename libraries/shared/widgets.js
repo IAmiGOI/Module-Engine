@@ -642,3 +642,184 @@ export function EdgeDrawer(open, { onToggle, title = 'Settings' } = {}, ...child
         h('div', { class: 'stme-edge-drawer-body' }, children),
     );
 }
+
+// --- Chat Viewport chrome (план `chat-viewport`) --------------------------
+//
+// Хром — DOM-обвязка вокруг WebGL-текстуры тела сообщения (сам текст рисует
+// канвас, не эти виджеты): аватарка, шапка, действия, блок рассуждений.
+// Статичные, БЕЗ анимации (см. память feedback-no-animated-effects-reflow —
+// анимация рядом с чатом форсирует reflow, обхода в этом окружении нет).
+
+/**
+ * Аватарка сообщения — намеренно КРУПНЕЕ дефолтного размера в ST (~32-40px):
+ * прямое решение владельца при проектировании шапки Chat Viewport. `url`
+ * может быть пустым (нет аватара у этого спикера/сообщения) — тогда рисуется
+ * пустая заглушка с первой буквой имени, а не сломанная `<img>`.
+ *
+ * `width`≠`height` — НАСТОЯЩИЙ прямоугольник (портретные пропорции 3×4), не
+ * квадрат со скруглёнными углами: первая версия давала `size` на обе
+ * стороны разом (72×72) — владелец поправил дважды подряд, "квадратная а
+ * не прямоугольная" именно про ЭТО, квадрат с скруглением всё ещё квадрат.
+ * 102×136 — owner: "увеличь аватарку в 1.5 раза в ширину" (68 × 1.5 = 102)
+ * "и так, чтобы она была 3x4 в портретном варианте" (102 / 3 × 4 = 136).
+ * `border-radius: 14px` — см. `.stme-avatar` в panel.css.
+ */
+export function Avatar(url, { width = 102, height = 136, name = '' } = {}) {
+    const style = { width: `${width}px`, height: `${height}px` };
+    if (!url) {
+        const initial = String(name ?? '').trim().charAt(0).toUpperCase() || '?';
+        return h('div', { class: 'stme-avatar stme-avatar-fallback', style, 'aria-hidden': 'true' }, initial);
+    }
+    return h('img', { class: 'stme-avatar', style, src: url, alt: name ? `${name}'s avatar` : '' });
+}
+
+/**
+ * Время сообщения — принимает УЖЕ готовую строку, а не сырую дату: формат
+ * ST (`send_date`) — не ISO (`"2024-01-01 @12h00m00s"`), парсить его здесь
+ * означало бы держать знание о чужом формате в общем виджете. Вызывающий
+ * (Ядро/Модуль) решает, как отформатировать; `title` — полное значение по
+ * наведению, когда `text` — сокращённое ("2 min ago").
+ */
+export function Timestamp(text, { title } = {}) {
+    return h('time', { class: 'stme-timestamp', title }, text);
+}
+
+/** Реальный SVG-глиф, не эмодзи — та же причина, что у иконок инструментов карты (ROADMAP.md 5.5x): эмодзи рендерится непредсказуемо/по-детски между платформами. */
+function editIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M3 21v-3.75L14.81 5.44l3.75 3.75L6.75 21H3zM18.71 4.04a1 1 0 0 1 1.41 0l1.84 1.84a1 1 0 0 1 0 1.41l-1.79 1.79-3.25-3.25 1.79-1.79z' }),
+    );
+}
+function deleteIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M6 7h12l-1 14H7L6 7zm3-4h6l1 2h4v2H2V5h4l1-2z' }),
+    );
+}
+function swipeLeftIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M15 6l-6 6 6 6', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
+    );
+}
+function swipeRightIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M9 6l6 6-6 6', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
+    );
+}
+function regenerateIcon() {
+    return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
+        h('path', { d: 'M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z' }),
+    );
+}
+
+/**
+ * Полоска-светофор генерации — owner: "небольшая полоска генерации как у
+ * светофора, которая фиксирует свой последний цвет после завершения
+ * генерации. Красная - ген прерван, зеленый - успешен, оранжеый - ген
+ * идет." Три состояния, не пять, как у общего Activity Light этого же
+ * движка (`cores/ui/activity-light.js` — idle/working/success/warning/
+ * error/notify): владелец здесь намеренно свёл "остановлено без ошибки" и
+ * "настоящая ошибка" в ОДНО красное — "прерван" тем и тем. `null`/что-то
+ * незнакомое — нейтральная полоска БЕЗ цвета (сообщение никогда не
+ * генерировалось на глазах этой вкладки — историческое, открыто уже
+ * готовым; см. `genStatus` в chat-viewport.js). В ОТЛИЧИЕ от Activity
+ * Light — НЕ гаснет обратно в нейтральный по таймеру, держит цвет
+ * НАВСЕГДА (сам чат — история, а не живая консоль).
+ */
+export function GenStripe(status) {
+    const known = status === 'working' || status === 'success' || status === 'error';
+    return h('div', { class: `stme-chat-viewport-gen-stripe${known ? ` stme-chat-viewport-gen-stripe-${status}` : ''}`, 'aria-hidden': 'true' });
+}
+
+/**
+ * Хедер сообщения — аватарка, полоска-светофор, имя, номер хода, время
+ * генерации (только у НЕ-пользовательских реплик, где оно вообще имеет
+ * смысл), время сообщения. `genDurationMs`/`timestampText` — уже готовые
+ * строки/числа от вызывающего; виджет ничего не вычисляет сам, только
+ * раскладывает.
+ */
+/**
+ * `actions` — уже готовое дерево (обычно `MessageActionsRow(...)`), кладётся
+ * в ТОТ ЖЕ ряд, что имя и бейджи, а не отдельной строкой ниже (владелец: "Любые
+ * кнопки должны быть в ряд с именем") — `margin-left: auto` в CSS прижимает
+ * его к правому краю ряда, не раздувая высоту шапки. Сам ряд несёт класс
+ * `stme-message-header-name-row`, под который и написано скрытие-по-наведению
+ * (см. panel.css) — виджет только даёт разметку, наведение целиком на CSS.
+ *
+ * `align-items: flex-start` (panel.css), не `center` — owner: "Имя
+ * персонажа не выровнены по верху фото": аватар вырос до портрета 102×136
+ * (был квадрат 72×72, до этого 56×56) — центрирование стало заметно
+ * сдвигать имя вниз от видимого верхнего края аватарки.
+ */
+/**
+ * ТОЛЬКО имя/бейджи/время — БЕЗ аватарки и полоски-светофора. Владелец
+ * (после "мимо" на первую версию — "Оно должно быть СПРАВА от аватарки.
+ * Блоки ризонинга тоже. И только после заполнения той зоны спускаться
+ * вниз") настоял на НАСТОЯЩЕМ обтекании: не только имя, а ВСЁ (имя,
+ * дата, `ReasoningBlock`, ToolCall) должно течь рядом с аватаркой, пока
+ * её высота не кончится — а `ReasoningBlock`/ToolCall рисует уже НЕ этот
+ * виджет, а `buildRowTree()` в `cores/ui/chat-viewport.js`, отдельными
+ * сиблингами. Значит аватарке/полоске нужно быть НАСТОЯЩИМ CSS `float`
+ * НАД ВСЕМИ ними разом (обычный `<img style="float:left">` + текст после
+ * — ЛЮБОЙ следующий блочный сиблинг в том же контексте форматирования
+ * САМ обтекает float, даже если он не прямой ребёнок того же узла, что
+ * float, — обычное поведение CSS, не выдумка) — а не только рядом с
+ * ЭТИМ конкретным виджетом. Аватарка/полоска поэтому вынесены наружу,
+ * в `buildRowTree()`, единственный узел, которому видны ВСЕ сиблинги
+ * разом. Собран как раньше — только БЕЗ `Avatar()`/`GenStripe()`
+ * внутри и БЕЗ обёртки `.stme-message-header` (та задавала `display:
+ * flex` на паре "аватар+инфо" — сейчас аватар снаружи, инфо просто
+ * блочный элемент, обтекающий чужой float естественно).
+ */
+export function MessageHeader({ name = '', turnIndex, genDurationMs, timestampText, isUser = false, actions } = {}) {
+    return h('div', { class: 'stme-message-header-info' },
+        h('div', { class: 'stme-message-header-name-row' },
+            h('strong', { class: 'stme-message-header-name' }, name || (isUser ? 'You' : 'Narrator')),
+            turnIndex != null ? Badge(`#${turnIndex}`, { tone: 'muted' }) : null,
+            !isUser && genDurationMs != null ? Badge(`${(genDurationMs / 1000).toFixed(1)}s`, { tone: 'muted' }) : null,
+            actions ?? null,
+        ),
+        timestampText ? Timestamp(timestampText) : null,
+    );
+}
+
+/**
+ * Действия над сообщением — edit/delete/swipe/regenerate. Свайп и
+ * регенерация показываются, только если вызывающий вообще дал счётчик
+ * свайпов (`swipeCount`) — у сообщения пользователя свайпов не бывает, и
+ * рисовать нерабочие стрелки хуже, чем не рисовать ничего.
+ */
+export function MessageActionsRow({ onEdit, onDelete, onSwipeLeft, onSwipeRight, onRegenerate, swipeIndex, swipeCount } = {}) {
+    const canSwipe = Number.isFinite(swipeCount) && swipeCount > 1;
+    return h('div', { class: 'stme-message-actions' },
+        onEdit ? IconButton(editIcon(), onEdit, { title: 'Edit' }) : null,
+        onDelete ? IconButton(deleteIcon(), onDelete, { title: 'Delete' }) : null,
+        canSwipe ? IconButton(swipeLeftIcon(), onSwipeLeft, { title: 'Previous swipe' }) : null,
+        canSwipe ? h('span', { class: 'stme-message-swipe-counter' }, `${(swipeIndex ?? 0) + 1}/${swipeCount}`) : null,
+        canSwipe ? IconButton(swipeRightIcon(), onSwipeRight, { title: 'Next swipe' }) : null,
+        onRegenerate ? IconButton(regenerateIcon(), onRegenerate, { title: 'Regenerate' }) : null,
+    );
+}
+
+/**
+ * Блок рассуждений (CoT) — свёрнут по умолчанию (тот же родной `<details>`,
+ * что и `Details()`, но собран здесь напрямую, а не через неё — `onToggle`
+ * нужен ТОЛЬКО этому виджету, а `Details()` используют много вызывающих с
+ * другой сигнатурой, менять её ради одного случая рискованно). `text`
+ * пуст/отсутствует — виджет не рисует НИЧЕГО, а не пустую секцию.
+ *
+ * `onToggle` — НАЙДЕНО ЖИВЬЁМ: раскрытие/сворачивание `<details>` — чисто
+ * браузерное действие, движок о нём никак не узнаёт сам по себе. Высота
+ * строки (и, следом, позиция ВСЕХ строк ниже неё в виртуализации) меняется,
+ * а `render()` никто не зовёт — открытие рассуждений визуально не двигало
+ * ничего под ним, следующие сообщения оставались на старом месте и
+ * накладывались. `'on:toggle'` — родное DOM-событие `<details>`, дёшево
+ * подписаться, дальше вызывающий (`cores/ui/chat-viewport.js`) решает, что
+ * с этим делать (обычно — `render()` заново).
+ */
+export function ReasoningBlock(text, { onToggle } = {}) {
+    if (!text) return null;
+    return h('details', { class: 'stme-details', 'on:toggle': onToggle },
+        h('summary', {}, 'Reasoning'),
+        h('div', { class: 'stme-reasoning-text' }, text),
+    );
+}
