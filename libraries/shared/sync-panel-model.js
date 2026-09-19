@@ -29,6 +29,12 @@ export function describeCounts(counts = {}, { sent = 'sent', received = 'receive
     return parts.length ? parts.join(', ') : 'everything up to date';
 }
 
+/** Строка про остановленный проход: сколько файлов не пробовали и что делать. */
+function describeStopped(stopped) {
+    if (!stopped) return null;
+    return `Stopped after the first refusal${stopped.remaining ? ` — ${plural(stopped.remaining, 'file')} not tried` : ''}. Fix the problem and sync again; what was already sent is kept.`;
+}
+
 /** Итог последнего прохода → строки для показа и тон (`ok` / `warn` / `error` / `muted`). */
 export function describeLastRun(last, now) {
     if (!last) return { tone: 'muted', lines: ['Not synced yet in this session.'] };
@@ -41,6 +47,7 @@ export function describeLastRun(last, now) {
         if (peer.outcome === 'failed') { lines.push(`${peer.error ?? 'Sync with the device failed.'}`); tone = 'error'; continue; }
         lines.push(`${peer.pair ?? 'Device'}: ${describeCounts(peer.counts)}`);
         for (const message of peer.errors ?? []) lines.push(`⚠ ${message}`);
+        if (peer.stopped) lines.push(describeStopped(peer.stopped));
         if (peer.counts?.failed || peer.ok === false) tone = tone === 'error' ? 'error' : 'warn';
     }
     if (last.github) {
@@ -50,6 +57,7 @@ export function describeLastRun(last, now) {
         else {
             lines.push(`GitHub: ${describeCounts(github.counts, { sent: 'uploaded', received: 'downloaded' })}`);
             for (const message of github.errors ?? []) lines.push(`⚠ ${message}`);
+            if (github.stopped) lines.push(describeStopped(github.stopped));
             if (github.counts?.failed || github.ok === false) tone = tone === 'error' ? 'error' : 'warn';
         }
     }
@@ -61,6 +69,7 @@ export function describeLastRun(last, now) {
         else {
             lines.push(`${name}: ${describeCounts(cloud.counts, { sent: 'uploaded', received: 'downloaded' })}`);
             for (const message of cloud.errors ?? []) lines.push(`⚠ ${message}`);
+            if (cloud.stopped) lines.push(describeStopped(cloud.stopped));
             if (cloud.counts?.failed || cloud.ok === false) tone = tone === 'error' ? 'error' : 'warn';
         }
     }
@@ -75,8 +84,9 @@ export function describeProgress(progress) {
     const total = progress.total || 0;
     const percent = total > 0 ? Math.min(100, Math.round((progress.done / total) * 100)) : 0;
     const where = progress.target === 'github' ? 'GitHub' : String(progress.target ?? '').replace(/^device:/, '') || 'device';
-    const verb = progress.phase === 'scanning' ? 'Checking files' : 'Syncing';
+    const verb = progress.phase === 'scanning' ? 'Checking files' : progress.phase === 'connecting' ? 'Connecting' : 'Syncing';
     const file = progress.path ? ` — ${String(progress.path).split('/').slice(-1)[0]}` : '';
+    if (progress.phase === 'connecting') return { percent: 0, label: `Connecting to ${where}…` };
     return { percent, label: `${verb} with ${where}: ${progress.done ?? 0}/${total}${file}` };
 }
 

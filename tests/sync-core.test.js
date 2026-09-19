@@ -317,3 +317,61 @@ test('configuring GitHub keeps the stored token unless a new one is given, and i
     assert.equal(config.github.token, '');
     await device.core.stop();
 });
+
+// ── Соединение: причина неудачи, ручной запуск, свой ретранслятор ─────────────────────────────────────────────────
+
+test('pressing Sync now on a device with no open channel calls the other device instead of silently doing nothing', async () => {
+    const pair = await createPair({ aFiles: { 'backgrounds/pc.png': 'PC' } });
+    await pair.a.core.start();           // ноутбук уже открыт и слушает; телефон (B) только что открыл ST и НЕ стартовал соединение сам
+    const result = await pair.b.call('sync.run');
+    await waitFor(() => pair.b.text('backgrounds/pc.png') === 'PC', { label: 'the file to arrive after the manual sync' });
+    assert.equal(result.peers[0].outcome, 'requested');
+    assert.deepEqual((await pair.b.call('sync.status')).connections.map(item => item.status), ['open']);
+    await stopAll(pair.a, pair.b);
+});
+
+test('when the direct channel never opens, the card gets a plain reason instead of a silent "offline"', async () => {
+    const pair = await createPair({});
+    await pair.a.core.start();           // B не запущен вовсе: предложение соединения останется без ответа
+    const run = pair.a.call('sync.run');
+    await settle();
+    await pair.clock.advance(31000);
+    await run;
+    const status = await pair.a.call('sync.status');
+    assert.equal(status.connections[0].status, 'offline');
+    assert.match(status.connections[0].problem, /Could not connect/);
+    assert.match(status.connections[0].problem, /TURN/);
+    await stopAll(pair.a, pair.b);
+});
+
+test('a problem is forgotten as soon as the devices connect', async () => {
+    const pair = await createPair({});
+    await pair.a.core.start();
+    const run = pair.a.call('sync.run');
+    await settle();
+    await pair.clock.advance(31000);
+    await run;
+    assert.ok((await pair.a.call('sync.status')).connections[0].problem);
+    await pair.b.core.start();
+    await pair.clock.advance(9000);
+    await waitFor(() => finishedRuns(pair.a) >= 2, { label: 'the reconnect pass' });
+    assert.equal((await pair.a.call('sync.status')).connections[0].problem, null);
+    await stopAll(pair.a, pair.b);
+});
+
+test('a relay (TURN) server is used together with the default STUN ones, and its password never reaches the interface', async () => {
+    const pair = await createPair({ aFiles: { 'backgrounds/a.png': 'A' } });
+    for (const device of [pair.a, pair.b]) await device.call('sync.configure', { relay: { url: 'turn:turn.example.com:3478', username: 'me', credential: 'S3CRET-PW' } });
+    await connect(pair);
+    const servers = pair.network.opens.at(-1).iceServers;
+    assert.ok(servers.some(server => String(server.urls).startsWith('stun:')), 'STUN is still there');
+    assert.deepEqual(servers.at(-1), { urls: ['turn:turn.example.com:3478'], username: 'me', credential: 'S3CRET-PW' });
+    const shown = JSON.stringify(await pair.a.call('sync.status'));
+    assert.doesNotMatch(shown, /S3CRET-PW/);
+    assert.match(shown, /"hasCredential":true/);
+    await pair.a.call('sync.configure', { relay: { url: 'turn:turn.example.com:3478', username: 'me2' } });
+    assert.equal(pair.a.settings.get('core.sync/config').iceServers[0].credential, 'S3CRET-PW', 'an empty password field keeps the saved one');
+    await pair.a.call('sync.configure', { relay: { url: '' } });
+    assert.equal(pair.a.settings.get('core.sync/config').iceServers, null, 'an empty address removes the relay');
+    await stopAll(pair.a, pair.b);
+});

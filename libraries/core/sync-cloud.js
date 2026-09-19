@@ -1,4 +1,5 @@
 import { computeGitBlobSha } from './content-hash.js';
+import { FatalSyncError, isFatalHttpStatus } from './sync-errors.js';
 
 /**
  * Облачный диск как сторона синхронизации (Dropbox и Google Drive) — ДОПОЛНИТЕЛЬНЫЙ способ рядом с прямым обменом между
@@ -18,6 +19,8 @@ import { computeGitBlobSha } from './content-hash.js';
 
 export const INDEX_NAME = 'index.json';
 export const CLOUD_MAX_FILE_BYTES = 95 * 1024 * 1024;
+/** Индекс записывается каждые столько изменённых файлов: оборвавшийся проход (квота, обрыв сети) сохраняет уже залитое ВИДИМЫМ для других устройств. */
+export const CLOUD_CHECKPOINT_EVERY = 25;
 const MAX_INDEX_ATTEMPTS = 4;
 
 export class CloudConflictError extends Error {
@@ -29,11 +32,14 @@ const parse = text => { try { return JSON.parse(text); } catch { return null; } 
 export function describeCloudFailure(provider, status, text = '') {
     const name = provider === 'google' ? 'Google Drive' : 'Dropbox';
     const data = parse(text);
-    const detail = data?.error_summary ?? data?.error?.message ?? (typeof data?.error === 'string' ? data.error : '');
+    // Точка в конце добавляется ниже сама — у Google в тексте она уже есть («…exceeded.» + «.» давало «..»).
+    const detail = String(data?.error_summary ?? data?.error?.message ?? (typeof data?.error === 'string' ? data.error : '')).replace(/[.\s]+$/, '');
+    const reason = data?.error?.errors?.[0]?.reason ?? '';
+    if (reason === 'storageQuotaExceeded' || /quota|insufficient_space/i.test(detail)) return `${name} is full: the storage quota is used up. Free some space in the account and sync again — files already uploaded are kept.`;
     if (status === 401) return `${name} rejected the sign-in (401): connect the account again.`;
     if (status === 403) return `${name} refused access (403)${detail ? `: ${detail}` : ''}.`;
     if (status === 429) return `${name} is rate-limiting requests (429): try again later.`;
-    if (status === 507 || /insufficient_space|storageQuota/.test(detail)) return `${name} is out of space.`;
+    if (status === 507) return `${name} is out of space.`;
     return `${name} answered HTTP ${status}${detail ? `: ${detail}` : ''}`;
 }
 
@@ -54,7 +60,7 @@ const asciiJson = value => JSON.stringify(value).replace(/[-￿]/g, char => `\\
 export function createDropboxStore({ http }) {
     const CONTENT = 'https://content.dropboxapi.com/2/files';
     const API = 'https://api.dropboxapi.com/2/files';
-    const fail = response => new Error(describeCloudFailure('dropbox', response.status, response.text));
+    const fail = response => (isFatalHttpStatus(response.status) || /insufficient_space/.test(response.text ?? '') ? new FatalSyncError(describeCloudFailure('dropbox', response.status, response.text)) : new Error(describeCloudFailure('dropbox', response.status, response.text)));
     const isConflict = response => response.status === 409 && /conflict/.test(response.text ?? '');
     const isMissing = response => response.status === 409 && /not_found/.test(response.text ?? '');
 
@@ -99,7 +105,7 @@ const FOLDER_MIME = 'application/vnd.google-apps.folder';
 export function createDriveStore({ http }) {
     const API = 'https://www.googleapis.com/drive/v3/files';
     const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
-    const fail = response => new Error(describeCloudFailure('google', response.status, response.text));
+    const fail = response => (isFatalHttpStatus(response.status) ? new FatalSyncError(describeCloudFailure('google', response.status, response.text)) : new Error(describeCloudFailure('google', response.status, response.text)));
     let folderId = null;
     let listing = null;   // имя -> { id, version }
 
@@ -201,6 +207,7 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
 
     return {
         batched: true,
+        checkpointEvery: CLOUD_CHECKPOINT_EVERY,
 
         async manifest() {
             index = await loadIndex();

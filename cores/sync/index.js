@@ -13,7 +13,7 @@ import {
     buildDropboxAuthUrl, computeCodeChallenge, createTokenManager, exchangeDropboxCode, generateCodeVerifier, pollGoogleDeviceFlow, startGoogleDeviceFlow,
 } from '../../libraries/core/sync-oauth.js';
 import { CLOUD_PROVIDER_LABELS, resolveCloudApp } from '../../libraries/core/sync-cloud-apps.js';
-import { categoryOfPath, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeSyncConfig } from '../../libraries/core/sync-config.js';
+import { buildIceServers, relayToIceServers, categoryOfPath, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeSyncConfig } from '../../libraries/core/sync-config.js';
 
 /**
  * Ядро синхронизации — держит пользовательские файлы ST одинаковыми на нескольких устройствах: напрямую между устройствами
@@ -197,7 +197,7 @@ export function createSyncCore(host, {
     }
 
     const summarize = result => ({
-        ok: result.ok, aborted: result.aborted, counts: result.counts,
+        ok: result.ok, aborted: result.aborted, stopped: result.stopped ?? null, counts: result.counts,
         errors: result.errors.slice(0, 5).map(error => (error.path === '*' ? error.message : `${error.path}: ${error.message}`)),
     });
 
@@ -366,7 +366,10 @@ export function createSyncCore(host, {
     const helloTimers = new Map();  // pairId -> handle
     const lastHelloAt = new Map();
     const pairFor = id => config.pairs.find(pair => pair.id === id);
-    const iceServers = () => config.iceServers ?? undefined;
+    const iceServers = () => buildIceServers(config.iceServers);
+    const problems = new Map();     // pairId -> почему соединение не поднялось (показывается в карточке)
+    const openWaiters = new Map();  // pairId -> [функции, ждущие открытия канала]
+    const settleWaiters = (pairId, opened) => { for (const finish of openWaiters.get(pairId) ?? []) finish(opened); openWaiters.delete(pairId); };
 
     async function publishSealed(room, message) {
         const sealed = await room.box.seal({ ...message, from: config.deviceId, ts: now() });
@@ -498,9 +501,30 @@ export function createSyncCore(host, {
     function onChannelOpen(session) {
         if (sessions.get(session.pairId) !== session) return;
         session.status = 'open';
+        problems.delete(session.pairId);
+        settleWaiters(session.pairId, true);
         notify();
         if (session.role !== 'leader' || !config.autoSync) return;
         runSession(session).catch(error => log.warn?.('[ST Module Engine (Beta)] Sync: first pass failed —', error?.message ?? error));
+    }
+
+    /** Ручной запуск: устройство без открытого канала сначала зовём к соединению, а не молча пропускаем. true, если канал открылся. */
+    async function connectNow(pair, waitMs = 25000) {
+        if (sessions.get(pair.id)?.status === 'open') return true;
+        problems.delete(pair.id);
+        try {
+            await ensureRoom(pair);
+            await announce(pair);
+            if (iAmLeaderFor(pair)) await beginOffer(pair);
+        } catch (error) {
+            problems.set(pair.id, `Could not reach the signalling service: ${error?.message ?? error}`);
+            return false;
+        }
+        return new Promise(resolve => {
+            const timer = setTimer(() => finish(sessions.get(pair.id)?.status === 'open'), waitMs);
+            const finish = opened => { clearTimer(timer); resolve(opened); };
+            openWaiters.set(pair.id, [...(openWaiters.get(pair.id) ?? []), finish]);
+        });
     }
 
     function closeSession(session, reason) {
@@ -513,7 +537,13 @@ export function createSyncCore(host, {
         session.endpoint?.close(new Error(reason ?? 'closed'));
         if (sessions.get(session.pairId) !== session) return;
         sessions.delete(session.pairId);
+        const neverOpened = session.status !== 'open';
         session.status = 'closed';
+        // Канал так и не открылся — запоминаем причину: без неё карточка молча показывала «offline» и разобраться было нечем.
+        if (neverOpened && !/replaced|stopped|removed/.test(String(reason))) {
+            problems.set(session.pairId, `Could not connect (${reason ?? 'no answer'}). The devices found each other but could not open a direct channel — usually one of them is on mobile data or behind a strict router. A relay (TURN) server fixes that: see "Connection help" below.`);
+        }
+        settleWaiters(session.pairId, false);
         notify();
         const pair = pairFor(session.pairId);
         if (pair && started) scheduleHello(pair, 8000);
@@ -719,6 +749,14 @@ export function createSyncCore(host, {
         await loadConfig();
         return runExclusive(target, async outcome => {
             const wants = resolveWants(target);
+            if (wants.peers && (target === 'all' || target === 'peers')) {
+                for (const pair of config.pairs) {
+                    if (sessions.get(pair.id)?.status === 'open') continue;
+                    setProgress(`device:${pair.name}`, { phase: 'connecting', done: 0, total: 0 });
+                    await connectNow(pair);
+                }
+                setProgress(null, null);
+            }
             if (wants.peers) {
                 for (const session of [...sessions.values()]) {
                     if (session.status !== 'open') continue;
@@ -739,6 +777,8 @@ export function createSyncCore(host, {
         if (typeof patch.autoSync === 'boolean') next.autoSync = patch.autoSync;
         if (patch.intervalMin != null) next.intervalMin = patch.intervalMin;
         if (typeof patch.signalServer === 'string') next.signalServer = patch.signalServer;
+        // Пароль ретранслятора карточке не возвращается, поэтому пустое поле значит «оставить прежний».
+        if (patch.relay && typeof patch.relay === 'object') next.iceServers = relayToIceServers({ ...patch.relay, credential: patch.relay.credential || config.iceServers?.[0]?.credential });
         if (patch.github && typeof patch.github === 'object') {
             const token = patch.github.token ? patch.github.token : (patch.clearToken ? '' : config.github.token);
             const repository = typeof patch.github.repository === 'string' ? patch.github.repository : `${config.github.owner}/${config.github.repo}`;
@@ -757,7 +797,7 @@ export function createSyncCore(host, {
             };
         }
         const signalServerChanged = next.signalServer !== config.signalServer;
-        config = sanitizeSyncConfig({ ...next, deviceId: config.deviceId, pairs: config.pairs, iceServers: config.iceServers }, { generateDeviceId: () => config.deviceId, defaultDeviceName: describeDevice() });
+        config = sanitizeSyncConfig({ ...next, deviceId: config.deviceId, pairs: config.pairs, iceServers: next.iceServers }, { generateDeviceId: () => config.deviceId, defaultDeviceName: describeDevice() });
         await saveConfig();
         if (signalServerChanged) await restartRooms();
         restartSchedule();
@@ -806,7 +846,7 @@ export function createSyncCore(host, {
             cloudLast,
             cloudAuth: cloudAuth ? { provider: cloudAuth.provider, kind: cloudAuth.kind, status: cloudAuth.status, url: cloudAuth.url ?? null, userCode: cloudAuth.userCode ?? null, message: cloudAuth.message } : null,
             pairing: pairing ? { mode: pairing.mode, code: pairing.code, status: pairing.status, message: pairing.message, expiresAt: pairing.expiresAt } : null,
-            connections: config.pairs.map(pair => ({ id: pair.id, name: pair.name, status: sessions.get(pair.id)?.status ?? 'offline', role: sessions.get(pair.id)?.role ?? null, lastSync: pair.lastSync })),
+            connections: config.pairs.map(pair => ({ id: pair.id, name: pair.name, status: sessions.get(pair.id)?.status ?? 'offline', role: sessions.get(pair.id)?.role ?? null, lastSync: pair.lastSync, problem: problems.get(pair.id) ?? null })),
         };
     }
 

@@ -1,3 +1,5 @@
+import { FatalSyncError, isFatalHttpStatus } from './sync-errors.js';
+
 /**
  * Сторона «репозиторий GitHub» для синхронизации: легковесная — на каждый проход уходят ТОЛЬКО изменившиеся файлы и ровно один
  * коммит. Механика (Git Data API, у него нет лимита в один файл на запрос, как у Contents API):
@@ -95,7 +97,7 @@ export function createGithubRemote({ http, settings, deviceName = 'device', toBa
         return response;
     }
     const json = response => { try { return JSON.parse(response.text); } catch { return null; } };
-    const fail = response => new Error(describeGithubFailure(response.status, response.text, response.headers));
+    const fail = response => (isFatalHttpStatus(response.status) ? new FatalSyncError(describeGithubFailure(response.status, response.text, response.headers)) : new Error(describeGithubFailure(response.status, response.text, response.headers)));
 
     /** Пустой репозиторий не принимает blob'ы — создаём служебный файл, и появляется первая ветка. */
     async function initializeEmptyRepository() {
