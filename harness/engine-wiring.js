@@ -5,6 +5,8 @@ import { registerHtmlRasterizerService } from '../services/html-rasterizer.js';
 import { registerWebglRendererService } from '../services/webgl-renderer.js';
 import { registerRasterCacheService } from '../services/raster-cache.js';
 import { registerGlAnimationService } from '../services/gl-animation.js';
+import { registerStBackgroundsService } from '../services/st-backgrounds.js';
+import { createBackgroundsCore } from '../cores/backgrounds/index.js';
 import { createGlAnimationsCore } from '../cores/ui/gl-animations.js';
 import { registerHttpService } from '../services/http.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
@@ -427,6 +429,8 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
  * самого себя.
  */
 export const CORE_REPO = Object.freeze({ owner: 'IAmiGOI', repo: 'Module-Engine' });
+/** Репозиторий с фонами: любой файл-картинка/видео, положенный туда, сам появляется в списке фонов ST (cores/backgrounds). */
+export const BACKGROUNDS_REPO = Object.freeze({ owner: 'IAmiGOI', repo: 'Module-Engine-Backgrounds' });
 
 // `fetch` по умолчанию ПРИВЯЗАН к глобальному объекту: браузерный `fetch`
 // требует, чтобы `this` был окном, и вызов «голой» ссылки отвечает «Illegal
@@ -447,6 +451,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerWebglRendererService(engine.buses.services);
     registerRasterCacheService(engine.buses.services);
     registerGlAnimationService(engine.buses.services);
+    registerStBackgroundsService(engine.buses.services, { getContext });
     // Локальный эмбединг — не сетевой вызов через `http.request` (см.
     // doc-comment services/embedding.js за честной оговоркой: сама закачка
     // весов модели идёт мимо нашего Гейта сети, это делает сторонняя
@@ -624,6 +629,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // (пилюля живёт мимо движка, поэтому ей отдаётся сам сигнал).
     // Ядро WebGL-анимаций: общий цикл кадров и реестр маленьких эффектов (см. cores/ui/gl-animations.js).
     const glAnimations = createGlAnimationsCore(engine.registerCaller('core.ui.glAnimations', 'cores', { tier: 'official' }));
+    // Фоны из отдельного репозитория: единственное ещё Ядро с правом выхода в сеть (как самообновление).
+    const backgrounds = createBackgroundsCore(
+        engine.registerCaller('core.backgrounds', 'cores', { tier: 'official', networkAccess: true }),
+        { ...BACKGROUNDS_REPO, publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.backgrounds' }) },
+    );
     const activityLight = createActivityLightCore(
         engine.registerCaller('core.ui.activityLight', 'cores', { tier: 'official' }),
     );
@@ -792,5 +802,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }

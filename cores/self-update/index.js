@@ -227,7 +227,14 @@ export function createSelfUpdateCore(host, {
      * Alpha `attemptCoreUpdate()` сам создавал и удалял свои узлы, то есть ход
      * обновления и его показ были одним куском кода, и разделить их было негде.
      */
-    async function run({ force = false } = {}) {
+    async function run(options = {}) {
+        const result = await runOnce(options);
+        // Экран загрузки ждёт КОНЦА хода, каким бы он ни был (свежо, недоступно, пауза, сбой, применилось) — иначе он висел бы, если сказать нечего.
+        publishEvent('selfUpdate.finished', { outcome: result?.outcome ?? null });
+        return result;
+    }
+
+    async function runOnce({ force = false } = {}) {
         if (!force && await attemptedRecently()) {
             // Автоматическая проверка при загрузке молчала бы точно так же, как
             // и раньше — но если ПРОШЛАЯ попытка в это самое окно остывания
@@ -241,6 +248,7 @@ export function createSelfUpdateCore(host, {
             return { outcome: 'cooling-down', lastOutcome: last?.outcome ?? null };
         }
 
+        publishEvent('selfUpdate.checking', {});
         const status = await check();
         if (!status.checked) {
             const reason = status.reason ?? null;

@@ -440,6 +440,7 @@ export function createChatViewportCore(host, {
     function buildRowTree(mesid, state) {
         return h('div', {
             class: 'stme-chat-viewport-row',
+            'data-mesid': mesid,
             style: computed(() => ({
                 position: 'absolute', top: '0px', left: '0px',
                 transform: `translateY(${state.position().y}px)`,
@@ -654,7 +655,9 @@ export function createChatViewportCore(host, {
         if (!chromeMounts) return 0;
         let state = rowStates.get(mesid);
         if (!state) {
-            state = { position: signal({ y: 0, width: viewportWidth }), content: signal(content), editing: signal(false), draft: signal(''), editRect: signal(null) };
+            // Новая строка монтируется ЗА экраном (-1e6), а не в y=0: позицию ей ставит только коммит кадра, и если кадр прервался (пришёл новый скролл),
+            // все строки без позиции налезали бы друг на друга в верхней части экрана.
+            state = { position: signal({ y: -1e6, width: viewportWidth }), content: signal(content), editing: signal(false), draft: signal(''), editRect: signal(null) };
             rowStates.set(mesid, state);
             const finalUi = chromeMounts.mount(mesid, buildRowTree(mesid, state));
             await chromeMounts.settled(mesid);
@@ -1542,6 +1545,7 @@ export function createChatViewportCore(host, {
                 dirtyMain = false;
             }
             if (lastCanvas) await drawLastCanvas(lastPlacement);
+            if (globalThis.__stmeBusStats) globalThis.__stmeFrame = { anchor: frameScrollTop, pad: canvasPad(), dpr: devicePixelRatio, quads: quads.map(q => ({ id: q.textureId, y: q.y / devicePixelRatio - canvasPad(), h: q.height / devicePixelRatio })), positions: positions.map(p => ({ id: p.mesid, y: p.y })), visibleOnly, at: performance.now() };
             if (globalThis.__stmeBusStats) globalThis.__stmeRendered = { scrollTop: renderedScrollTop, at: performance.now() };   // диагностика задержки: до какого scrollTop дорисован кадр
             publishEvent('ui.chatViewport.render.completed', { visible: quads.length, total: order.length, totalHeight: lastTotalHeight, userToggle: toggleRender, renderedScrollTop });
             if (!renderQueued) toggleRender = false;

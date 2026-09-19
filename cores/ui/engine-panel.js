@@ -174,6 +174,11 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     const contracts = signal([]);
     const generationStage = signal('idle');
     const repository = signal({ owner: '', repo: '', extensionName: '' });
+    // Фоны из репозитория (cores/backgrounds): состояние карточки «Backgrounds».
+    const backgroundsStatus = signal(null);
+    const backgroundsAuto = signal(true);
+    const backgroundsRemoveDeleted = signal(true);
+    const backgroundsBusy = signal(false);
     const updateText = signal('Not checked yet.');
     const updateTone = signal('muted');
     const updateBusy = signal(false);
@@ -1195,7 +1200,10 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             // `MIN_WIDTH_FRACTION` (0.5 — ST-дефолт `chat_width: 50`) от
             // ширины СТРАНИЦЫ (`clientSize.width`, уже посчитанной выше как
             // раз от полной страницы, не от `#chat`).
-            const maxMargin = Math.max(0, clientSize.width * (1 - MIN_WIDTH_FRACTION) / 2);
+            // Ширина страницы меняется на лету (окно браузера, всплывающая панель Chrome, боковая панель) — она сигнал, а не константа.
+            const pageWidth = signal(clientSize.width);
+            const maxMarginNow = () => Math.max(0, pageWidth.peek() * (1 - MIN_WIDTH_FRACTION) / 2);
+            const maxMargin = maxMarginNow();
             const initialMargin = Math.min(chatViewportSideMargin(), maxMargin);
             const effectiveWidth = Math.max(1, clientSize.width - initialMargin * 2);
             const ok = await chatViewport.attach({ canvas, lastCanvas, mirrorContainer: mirror, chromeContainer: chrome, width: effectiveWidth, height: clientSize.height, css });
@@ -1294,8 +1302,9 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             // первый прогон здесь просто дублирует уже применённые выше
             // `effectiveWidth`/`left` — безвредно, идемпотентно.
             const stopSideMarginSync = effect(() => {
-                const margin = Math.max(0, Math.min(chatViewportSideMargin(), maxMargin));
-                const width = Math.max(1, clientSize.width - margin * 2);
+                const page = pageWidth();
+                const margin = Math.max(0, Math.min(chatViewportSideMargin(), Math.max(0, page * (1 - MIN_WIDTH_FRACTION) / 2)));
+                const width = Math.max(1, page - margin * 2);
                 chatViewport.setViewport({ viewportWidth: width });
                 callService('dom.setProp', { el: marginLayer, key: 'style', value: { left: `${margin}px` } });
                 callService('dom.setProp', { el: leftHandle, key: 'style', value: { left: `${margin}px` } });
@@ -1317,10 +1326,10 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             const startDrag = (handleSign) => startEvent => {
                 startEvent.preventDefault();
                 const startClientX = startEvent.clientX;
-                const startMargin = Math.max(0, Math.min(chatViewportSideMargin(), maxMargin));
+                const startMargin = Math.max(0, Math.min(chatViewportSideMargin(), maxMarginNow()));
                 const onMove = moveEvent => {
                     const dx = (moveEvent.clientX - startClientX) * handleSign;
-                    chatViewportSideMargin.set(Math.max(0, Math.min(startMargin + dx, maxMargin)));
+                    chatViewportSideMargin.set(Math.max(0, Math.min(startMargin + dx, maxMarginNow())));
                 };
                 const onUp = () => {
                     window.removeEventListener('pointermove', onMove);
@@ -1340,34 +1349,65 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             await callService('dom.suppressStyleRules', { key: 'chat-viewport', selectorPattern: String.raw`:has\([^)]*\[style\*=` });
             // ST держит весь документ одним слоем хаком на `<html>` — из-за него любое изменение перерисовывает страницу целиком.
             await callService('dom.overrideRootStyles', { key: 'chat-viewport', styles: { transform: 'none', 'backface-visibility': 'visible', perspective: 'none' } });
-            // Нижняя граница оверлея — верх панели ввода ST (`#form_sheld`), а не фиксированная высота с момента включения: когда
-            // текст в поле ввода растёт на несколько строк, панель поднимается, и оверлей обязан укоротиться и оттеснить чат вверх
-            // (родной `#chat` скрыт и это сделать за нас не может — раньше панель уезжала ПОД чат).
+            // Геометрия оверлея следует за страницей: нижняя граница — верх панели ввода ST (`#form_sheld`), ширина — ширина `body`.
+            // Раньше высота/ширина фиксировались один раз при включении: когда текст в поле ввода растёт на несколько строк, панель
+            // поднимается (родной `#chat` скрыт и оттеснить её не может), а когда Chrome показывает и убирает свою панель или
+            // окно меняет размер, канвас и чат оставались прежнего размера.
             let stopHeightSync = () => {};
             const formSheld = await callService('dom.querySelector', { el: body, selector: '#form_sheld' });
-            if (formSheld.ok && formSheld.value) {
-                let currentHeight = clientSize.height;
-                const syncHeight = async () => {
-                    const formRect = await callService('dom.measureRect', { el: formSheld.value });
-                    if (!formRect.ok) return;
-                    const nextHeight = Math.max(120, Math.round(formRect.value.top - rect.top));
-                    if (nextHeight === currentHeight) return;
-                    const scrollPos = await callService('dom.scrollPosition', { el: wrapper });
-                    const previousHeight = currentHeight;
-                    const wasAtBottom = scrollPos.ok && (scrollPos.value.top + previousHeight >= lastTotalHeight - BOTTOM_THRESHOLD);
-                    currentHeight = nextHeight;
-                    await callService('dom.setProp', { el: wrapper, key: 'style', value: { height: `${nextHeight}px` } });
-                    await callService('dom.setProp', { el: stickyLayer, key: 'style', value: { height: `${nextHeight}px`, marginBottom: `${-nextHeight}px` } });
-                    if (wasAtBottom && scrollPos.ok) {
-                        // Чат прижат к низу — сохраняем это: содержимое едет вверх вместе с поднявшейся панелью.
-                        await callService('dom.setScrollPosition', { el: wrapper, top: Math.max(0, scrollPos.value.top + (previousHeight - nextHeight)) });
-                    }
-                    chatViewport.setViewport({ viewportHeight: nextHeight, scrollTop: wrapper.scrollTop });
-                };
-                await callService('dom.observeResize', { el: formSheld.value, handler: syncHeight });
-                stopHeightSync = () => { callService('dom.unobserveResize', { el: formSheld.value, handler: syncHeight }); };
-                syncHeight();
-            }
+            let currentHeight = clientSize.height;
+            let lastBodyWidth = pageSize.width;
+            let syncing = false;
+            let syncAgain = false;
+            const syncGeometry = async () => {
+                if (syncing) { syncAgain = true; return; }
+                syncing = true;
+                try {
+                    do {
+                        syncAgain = false;
+                        const bodySize = await callService('dom.clientSize', { el: body });
+                        if (bodySize.ok && bodySize.value.width > 0 && bodySize.value.width !== lastBodyWidth) {
+                            lastBodyWidth = bodySize.value.width;
+                            await callService('dom.setProp', { el: wrapper, key: 'style', value: { width: `${bodySize.value.width}px` } });
+                            const wrapperSize = await callService('dom.clientSize', { el: wrapper });
+                            if (wrapperSize.ok && wrapperSize.value.width > 0) pageWidth.set(wrapperSize.value.width);
+                        }
+                        if (formSheld.ok && formSheld.value) {
+                            const formRect = await callService('dom.measureRect', { el: formSheld.value });
+                            const nextHeight = formRect.ok ? Math.max(120, Math.round(formRect.value.top - rect.top)) : currentHeight;
+                            if (nextHeight !== currentHeight) {
+                                const scrollPos = await callService('dom.scrollPosition', { el: wrapper });
+                                const previousHeight = currentHeight;
+                                const wasAtBottom = scrollPos.ok && (scrollPos.value.top + previousHeight >= lastTotalHeight - BOTTOM_THRESHOLD);
+                                currentHeight = nextHeight;
+                                await callService('dom.setProp', { el: wrapper, key: 'style', value: { height: `${nextHeight}px` } });
+                                await callService('dom.setProp', { el: stickyLayer, key: 'style', value: { height: `${nextHeight}px`, marginBottom: `${-nextHeight}px` } });
+                                if (wasAtBottom && scrollPos.ok) {
+                                    // Чат прижат к низу — сохраняем это: содержимое едет вверх вместе с поднявшейся панелью.
+                                    await callService('dom.setScrollPosition', { el: wrapper, top: Math.max(0, scrollPos.value.top + (previousHeight - nextHeight)) });
+                                }
+                                chatViewport.setViewport({ viewportHeight: nextHeight, scrollTop: wrapper.scrollTop });
+                            }
+                        }
+                    } while (syncAgain);
+                } finally {
+                    syncing = false;
+                }
+            };
+            let resizeFrame = null;
+            const onWindowResize = () => {
+                if (resizeFrame !== null) return;
+                resizeFrame = requestAnimationFrame(() => { resizeFrame = null; syncGeometry(); });
+            };
+            window.addEventListener('resize', onWindowResize);
+            await callService('dom.observeResize', { el: body, handler: syncGeometry });
+            if (formSheld.ok && formSheld.value) await callService('dom.observeResize', { el: formSheld.value, handler: syncGeometry });
+            stopHeightSync = () => {
+                window.removeEventListener('resize', onWindowResize);
+                callService('dom.unobserveResize', { el: body, handler: syncGeometry });
+                if (formSheld.ok && formSheld.value) callService('dom.unobserveResize', { el: formSheld.value, handler: syncGeometry });
+            };
+            syncGeometry();
             chatViewportOverlay = {
                 wrapper, spacer, canvas, mirror, chrome, stopSpacerSync, stopSideMarginSync, stopHeightSync,
                 stopDrag: () => stopDrag?.(),
@@ -1428,6 +1468,51 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
                 Button('Save', saveMemoryGraphThresholdK),
             ),
             Row(Button('Open Graph Editor', () => openMemoryGraphPanel?.())),
+        );
+    }
+
+    async function refreshBackgrounds() {
+        const result = await request(host.own, 'backgrounds.status', { params: {} });
+        if (!result.ok) return;
+        backgroundsStatus.set(result.value);
+        backgroundsAuto.set(result.value.enabled);
+        backgroundsRemoveDeleted.set(result.value.removeDeleted);
+    }
+
+    async function syncBackgroundsNow() {
+        if (backgroundsBusy.peek()) return;
+        backgroundsBusy.set(true);
+        try {
+            await request(host.own, 'backgrounds.sync', { params: { force: true } });
+        } finally {
+            backgroundsBusy.set(false);
+            await refreshBackgrounds();
+        }
+    }
+
+    const backgroundsSummary = computed(() => {
+        const status = backgroundsStatus();
+        if (!status) return 'Backgrounds status is not available yet.';
+        const last = status.lastOutcome;
+        if (backgroundsBusy() || status.running) return 'Syncing…';
+        if (!last) return `${status.installedCount} installed. Not synced yet in this session.`;
+        if (last.outcome === 'synced') return `${status.installedCount} installed — last sync: +${last.installed} / -${last.removed}${last.failed ? `, ${last.failed} failed` : ''}${last.skipped ? `, ${last.skipped} skipped` : ''}.`;
+        if (last.outcome === 'unchanged') return `${status.installedCount} installed — the repository has not changed.`;
+        if (last.outcome === 'empty') return 'The backgrounds repository is empty — add an image or video to it and it will appear here.';
+        if (last.outcome === 'disabled') return 'Auto-install is off.';
+        return `${status.installedCount} installed — last sync did not run (${last.error ?? last.outcome}).`;
+    });
+
+    function backgroundsCard() {
+        return Card('Backgrounds', {
+            ...collapse.bind('card:backgrounds'),
+            subtitle: computed(() => (backgroundsStatus() ? `${backgroundsStatus().repository.owner}/${backgroundsStatus().repository.repo}` : 'from a GitHub repository')),
+        },
+            h('p', { class: 'stme-summary-help' }, 'Any image or video added to the backgrounds repository appears in the SillyTavern background list on the next start, named "stme-<folder>-<file>". Files you delete by hand are not brought back unless they change in the repository.'),
+            h('p', { class: 'stme-update-status' }, backgroundsSummary),
+            Toggle('Install automatically at startup', backgroundsAuto, { onChange: value => { request(host.own, 'backgrounds.setSettings', { params: { enabled: value } }); } }),
+            Toggle('Remove backgrounds deleted from the repository', backgroundsRemoveDeleted, { onChange: value => { request(host.own, 'backgrounds.setSettings', { params: { removeDeleted: value } }); } }),
+            Row(computed(() => Button(backgroundsBusy() ? 'Syncing…' : 'Sync now', syncBackgroundsNow))),
         );
     }
 
@@ -1671,6 +1756,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             chatViewportCard(),
             presetCard(),
             updatesCard(),
+            backgroundsCard(),
         );
     }
 
@@ -1769,6 +1855,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         await loadSummaries();
         await loadMemoryGraphCount();
         await loadMemoryGraphSettings();
+        await refreshBackgrounds();
         // Список контрактов приходит от сборщика движка: своя шина доступна
         // через host.own, а шины сервисов и сети — нет (у Ядра туда только
         // Гейт-аксессор, и это правильно). Так что «что вообще подключено»

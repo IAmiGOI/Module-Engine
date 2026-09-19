@@ -1,3 +1,5 @@
+import './harness/boot-start.js';
+import { wireBootScreen } from './harness/boot-screen.js';
 import { wireEngine } from './harness/engine-wiring.js';
 import { createFullScreenPanel } from './harness/full-screen-panel.js';
 import { isMobileSurface } from './cores/ui/final-ui-android.js';
@@ -383,11 +385,15 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, selfUpdate, memoryGraphPanel, picturePanel, activityLight, glAnimations, modules, enginePanel, firstLoad, firstLoadResult, uiEngine } = await wireEngine({
+    const { engine, panelUi, selfUpdate, backgrounds, memoryGraphPanel, picturePanel, activityLight, glAnimations, modules, enginePanel, firstLoad, firstLoadResult, uiEngine } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
     });
+
+    // Экран загрузки показывает стадии самообновления (проверка, скачивание, перезапуск) и закрывается, когда ход закончен.
+    // Подписка ДО `selfUpdate.run()` ниже: иначе событие `selfUpdate.checking` уйдёт раньше подписчика.
+    wireBootScreen(globalThis.__stmeBoot, engine.events);
 
     // Первый запуск движка — `firstLoad` уже посчитал запуски и (при счётчике
     // 0 → 1) объявил событие `firstLoad.firstLaunch` ещё внутри wireEngine().
@@ -408,7 +414,11 @@ async function init() {
     // против шума в интерфейсе, а не против диагностики: без строчки в консоли
     // отличить работающее самообновление от сломанного было нечем.
     selfUpdate.run()
-        .then(result => console.info('[ST Module Engine (Beta)] Self-update:', result?.outcome ?? 'no result', result?.reason ?? result?.error ?? ''))
+        .then(result => {
+            console.info('[ST Module Engine (Beta)] Self-update:', result?.outcome ?? 'no result', result?.reason ?? result?.error ?? '');
+            // Фоны из репозитория — уже ПОСЛЕ проверки обновления и не блокируя интерфейс; если движок обновился, страница сейчас перезагрузится.
+            if (result?.outcome !== 'updated') backgrounds.sync().catch(error => console.warn('[ST Module Engine (Beta)] Backgrounds sync skipped:', error));
+        })
         .catch(error => console.warn('[ST Module Engine (Beta)] Self-update skipped:', error));
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
@@ -473,5 +483,5 @@ async function init() {
 
 jQuery(async () => {
     try { await init(); }
-    catch (error) { console.error('[ST Module Engine (Beta)] Failed to start:', error); }
+    catch (error) { console.error('[ST Module Engine (Beta)] Failed to start:', error); globalThis.__stmeBoot?.finish(); }
 });
