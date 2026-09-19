@@ -55,11 +55,28 @@ export function registerRasterCacheService(servicesBus, {
     decode = blob => globalThis.createImageBitmap(blob),
     maxBytes = DEFAULT_MAX_BYTES,
     now = () => Date.now(),
+    // Воркер выносит чтение/декодирование/кодирование/запись с главного потока. `null` — без воркера (тесты, старые браузеры):
+    // тогда всё идёт прежним путём в этом же потоке. По умолчанию создаётся только в браузере со штатным indexedDB.
+    worker = (indexedDB === globalThis.indexedDB && typeof globalThis.Worker === 'function')
+        ? (() => { try { return new globalThis.Worker(new URL('./raster-cache-worker.js', import.meta.url), { type: 'module' }); } catch { return null; } })()
+        : null,
 } = {}) {
     let dbPromise = null;
+    let workerSeq = 0;
+    const workerCalls = new Map();
+    if (worker) {
+        worker.onmessage = ({ data }) => { const call = workerCalls.get(data.id); workerCalls.delete(data.id); if (call) (data.error ? call.reject(new Error(data.error)) : call.resolve(data.result)); };
+        worker.onerror = () => { for (const call of workerCalls.values()) call.reject(new Error('raster cache worker failed')); workerCalls.clear(); };
+    }
+    const callWorker = (message, transfer = []) => new Promise((resolve, reject) => {
+        workerSeq += 1;
+        workerCalls.set(workerSeq, { resolve, reject });
+        worker.postMessage({ id: workerSeq, ...message }, transfer);
+    });
     const db = () => { if (!indexedDB) return Promise.resolve(null); dbPromise ??= openDb(indexedDB).catch(() => null); return dbPromise; };
 
     async function get({ key } = {}) {
+        if (worker) { try { return await callWorker({ op: 'get', key }); } catch { /* воркер сломался — читаем здесь */ } }
         const database = await db();
         if (!database) return null;
         const record = await wrap(database.transaction(STORE).objectStore(STORE).get(key)).catch(() => null);
@@ -69,7 +86,48 @@ export function registerRasterCacheService(servicesBus, {
         return { image, height: record.height, width: record.width, physHeight: record.physHeight, images: record.images };
     }
 
-    async function put({ key, image, height, width, physHeight, images }) {
+    // Кодирование картинки в WebP — синхронная тяжёлая работа главного потока (замер: ~8% профиля прокрутки). Запись поэтому не
+    // делается сразу: строки встают в очередь, и по одной, в простое (`requestIdleCallback`, иначе таймер), кодируются и пишутся.
+    const pending = [];
+    let draining = false;
+    function drain() {
+        if (draining) return;
+        draining = true;
+        const step = () => {
+            const job = pending.shift();
+            if (!job) { draining = false; return; }
+            putNow(job).catch(() => {}).finally(() => schedule(step));
+        };
+        schedule(step);
+    }
+    const schedule = fn => (typeof globalThis.requestIdleCallback === 'function' ? globalThis.requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 60));
+    /** Есть ли на диске запись с таким ключом — без декодирования картинки (нужно фоновому прогреву чата). */
+    async function has({ key } = {}) {
+        if (pending.some(p => p.key === key)) return true;
+        if (worker) { try { return await callWorker({ op: 'has', key }); } catch { /* воркер сломался — считаем здесь */ } }
+        const database = await db();
+        if (!database) return false;
+        const count = await wrap(database.transaction(STORE).objectStore(STORE).count(key)).catch(() => 0);
+        return count > 0;
+    }
+
+    async function put(job) {
+        // Повторная запись того же ключа заменяет ожидающую; очередь ограничена — самые старые отбрасываются.
+        const at = pending.findIndex(p => p.key === job.key);
+        if (at >= 0) pending.splice(at, 1);
+        pending.push(job);
+        while (pending.length > 200) pending.shift();
+        drain();
+        return true;
+    }
+
+    async function putNow({ key, image, height, width, physHeight, images }) {
+        if (worker) {
+            try {
+                const bitmap = await globalThis.createImageBitmap(image, { resizeWidth: width, resizeHeight: physHeight });
+                return await callWorker({ op: 'put', key, chatKey: getChatKey(), at: now(), bitmap, height, width, physHeight, images }, [bitmap]);
+            } catch { /* не вышло через воркер — пишем здесь */ }
+        }
         const database = await db();
         if (!database) return false;
         const blob = await encode(image, width, physHeight).catch(() => null);
@@ -114,6 +172,7 @@ export function registerRasterCacheService(servicesBus, {
 
     const unregisters = [
         servicesBus.register('rasterCache.get', params => get(params), { loadMetric: () => 1 }),
+        servicesBus.register('rasterCache.has', params => has(params), { loadMetric: () => 1 }),
         servicesBus.register('rasterCache.put', params => put(params), { loadMetric: () => 1 }),
         servicesBus.register('rasterCache.prune', () => prune(), { loadMetric: () => 1 }),
         servicesBus.register('rasterCache.clear', () => clear(), { loadMetric: () => 0 }),

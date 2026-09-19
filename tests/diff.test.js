@@ -163,7 +163,7 @@ test('a survived element re-fed with unchanged props but a NEW static text child
     rows.set([h('span', { key: 'badge', class: 'b' }, '1 event seen')]);
 
     assert.deepEqual(patches, [
-        { type: 'replace', path: [{ key: 'badge' }, { key: '0' }], node: { text: '1 event seen' } },
+        { type: 'setText', path: [{ key: 'badge' }, { key: '0' }], text: '1 event seen' },
     ]);
 });
 

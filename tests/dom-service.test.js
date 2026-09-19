@@ -262,3 +262,41 @@ test('registerDomService()\'s returned unregister function retires all contracts
 
     assert.equal(result.ok, false);
 });
+
+test('suppressStyleRules()/restoreStyleRules() remove matching :has([style*=]) rules and put them back at their old positions', async () => {
+    const { registerDomService } = await import('../services/dom.js');
+    const rules = [
+        { selectorText: '.a', cssText: '.a { color: red; }' },
+        { selectorText: '#x:has([data-a][style*="display: none"])', cssText: '#x:has([data-a][style*="display: none"]) { opacity: 0.5; }' },
+        { selectorText: '.b', cssText: '.b { color: blue; }' },
+    ];
+    const sheet = { href: 'toggle-dependent.css', get cssRules() { return rules; }, deleteRule(i) { rules.splice(i, 1); }, insertRule(text, i) { rules.splice(i, 0, { selectorText: text.split(' {')[0], cssText: text }); } };
+    const bus = { handlers: new Map(), register(name, fn) { this.handlers.set(name, fn); return () => {}; } };
+    registerDomService(bus, { document: { styleSheets: [sheet] } });
+
+    const removed = bus.handlers.get('dom.suppressStyleRules')({ key: 't', selectorPattern: String.raw`:has\([^)]*\[style\*=` });
+    assert.equal(removed, 1);
+    assert.deepEqual(rules.map(r => r.selectorText), ['.a', '.b']);
+    bus.handlers.get('dom.restoreStyleRules')({ key: 't' });
+    assert.deepEqual(rules.map(r => r.selectorText), ['.a', '#x:has([data-a][style*="display: none"])', '.b']);
+});
+
+test('overrideRootStyles()/restoreRootStyles() set important overrides on <html> and put the previous values back', async () => {
+    const { registerDomService } = await import('../services/dom.js');
+    const props = new Map([['transform', ['translateZ(0)', '']]]);
+    const style = {
+        getPropertyValue: n => props.get(n)?.[0] ?? '',
+        getPropertyPriority: n => props.get(n)?.[1] ?? '',
+        setProperty: (n, v, p = '') => props.set(n, [v, p]),
+        removeProperty: n => props.delete(n),
+    };
+    const bus = { handlers: new Map(), register(name, fn) { this.handlers.set(name, fn); return () => {}; } };
+    registerDomService(bus, { document: { styleSheets: [], documentElement: { style } } });
+
+    assert.equal(bus.handlers.get('dom.overrideRootStyles')({ key: 'k', styles: { transform: 'none', perspective: 'none' } }), true);
+    assert.deepEqual(props.get('transform'), ['none', 'important']);
+    assert.deepEqual(props.get('perspective'), ['none', 'important']);
+    bus.handlers.get('dom.restoreRootStyles')({ key: 'k' });
+    assert.deepEqual(props.get('transform'), ['translateZ(0)', '']);
+    assert.equal(props.has('perspective'), false);
+});

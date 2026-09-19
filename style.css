@@ -65,3 +65,95 @@
     box-sizing: border-box;
 }
 .stmeBeta-fullscreen-body > * { max-width: 1100px; margin: 0 auto; }
+
+/* ===== Экран загрузки ST: «ST × ME» (чистый CSS — применяется сразу, как скачается этот файл, раньше JS расширения) =====
+   ST рисует сплеш `#loader.splash-screen` в firstLoadInit(): [img.splash-logo, #load-spinner (шестерёнка), h2.splash-message].
+   Раскладка — сеткой: ST-логотип, «×» (::before), логотип ModuleEngine (::after), под ними индикатор (бывшая шестерёнка) и
+   слово LOADING. Анимируется только transform/opacity; при prefers-reduced-motion — статично. */
+@keyframes stme-splash-glow { 0%, 100% { opacity: .8; transform: scale(1); } 50% { opacity: 1; transform: scale(1.03); } }
+@keyframes stme-splash-bar { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+@keyframes stme-splash-drift { from { transform: translate3d(-6%, -4%, 0) scale(1.1); } to { transform: translate3d(6%, 5%, 0) scale(1.1); } }
+@keyframes stme-splash-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+#preloader::before, #preloader::after {
+    content: '';
+    position: absolute;
+    inset: -20%;
+    pointer-events: none;
+    animation: stme-splash-drift 9s ease-in-out infinite alternate;
+    will-change: transform;
+}
+#preloader::before { background: radial-gradient(38% 42% at 28% 32%, rgba(255, 90, 77, .22), transparent 70%); }
+#preloader::after { background: radial-gradient(40% 44% at 72% 68%, rgba(91, 184, 255, .22), transparent 70%); animation-duration: 12s; animation-direction: alternate-reverse; }
+
+#loader.splash-screen {
+    display: grid;
+    grid-template-columns: auto auto auto;
+    grid-template-areas: "st times me" "bar bar bar" "msg msg msg";
+    justify-content: center;
+    align-content: center;
+    align-items: center;
+    column-gap: clamp(14px, 3vw, 28px);
+    row-gap: 2.2rem;
+}
+#loader.splash-screen .splash-logo { grid-area: st; width: min(150px, 34vw); }
+#loader.splash-screen::before {
+    content: '\d7';
+    grid-area: times;
+    font-size: clamp(28px, 5vw, 44px);
+    font-weight: 300;
+    line-height: 1;
+    opacity: .75;
+    color: var(--SmartThemeBodyColor, #dcdcd2);
+}
+#loader.splash-screen::after {
+    content: '';
+    grid-area: me;
+    width: min(150px, 34vw);
+    aspect-ratio: 512 / 461;
+    background: url('assets/me-logo.webp') center / contain no-repeat;
+    border-radius: 22%;
+    box-shadow: 0 0 28px rgba(91, 140, 255, .45);
+    animation: stme-splash-glow 2.6s ease-in-out infinite;
+}
+/* Шестерёнка ST -> тонкий индикатор с бегущим бликом. */
+#loader.splash-screen #load-spinner {
+    grid-area: bar;
+    justify-self: center;
+    position: relative;
+    display: block;
+    width: min(240px, 50vw);
+    height: 3px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, .12);
+    font-size: 0;
+    animation: none !important;
+}
+#loader.splash-screen #load-spinner::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 38%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, transparent, #c86bff, #5bb8ff, transparent);
+    animation: stme-splash-bar 1.5s cubic-bezier(.5, 0, .5, 1) infinite;
+    will-change: transform;
+}
+/* Слово вместо «Инициализация…»: родной текст скрыт (font-size: 0), новый рисуется псевдоэлементом. */
+#loader.splash-screen .splash-message {
+    grid-area: msg;
+    justify-self: center;
+    font-size: 0;
+    animation: stme-splash-rise .6s ease-out .4s both;
+}
+#loader.splash-screen .splash-message::after {
+    content: 'LOADING';
+    font-size: .95rem;
+    font-weight: 500;
+    letter-spacing: .32em;
+}
+@media (prefers-reduced-motion: reduce) {
+    #preloader::before, #preloader::after, #loader.splash-screen::after,
+    #loader.splash-screen #load-spinner::before, #loader.splash-screen .splash-message { animation: none; }
+}

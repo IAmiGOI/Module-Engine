@@ -368,9 +368,78 @@ async function prepareImages(el, timeoutMs = 8000) {
     return { images, html: el.innerHTML };
 }
 
+/**
+ * Временно убирает из таблиц стилей правила, чей селектор подходит под `selectorPattern` (RegExp-строка), и умеет
+ * вернуть их на место. Нужно Chat Viewport: правила ST вида `:has(... [style*="..."])` (toggle-dependent.css) заставляют
+ * браузер пересчитывать стили у сотен элементов при ЛЮБОМ изменении атрибута style где угодно на странице —
+ * замерено трассировкой: одно изменение внутри глифа давало ~390 пересчитанных элементов вместо 1.
+ */
+const suppressedStyleRules = new Map();
+function suppressStyleRules(doc, { key, selectorPattern, hrefIncludes = '' }) {
+    if (suppressedStyleRules.has(key)) return suppressedStyleRules.get(key).length;
+    const pattern = new RegExp(selectorPattern);
+    const removed = [];
+    for (const sheet of [...doc.styleSheets]) {
+        if (hrefIncludes && !String(sheet.href ?? '').includes(hrefIncludes)) continue;
+        let rules;
+        try { rules = sheet.cssRules; } catch { continue; }
+        for (let i = rules.length - 1; i >= 0; i -= 1) {
+            const rule = rules[i];
+            if (rule.selectorText && pattern.test(rule.selectorText)) {
+                removed.push({ sheet, index: i, cssText: rule.cssText });
+                sheet.deleteRule(i);
+            }
+        }
+    }
+    suppressedStyleRules.set(key, removed);
+    return removed.length;
+}
+function restoreStyleRules(key) {
+    const removed = suppressedStyleRules.get(key);
+    if (!removed) return 0;
+    suppressedStyleRules.delete(key);
+    for (const { sheet, index, cssText } of [...removed].reverse()) {
+        try { sheet.insertRule(cssText, Math.min(index, sheet.cssRules.length)); } catch { /* сторонний лист мог измениться — не критично */ }
+    }
+    return removed.length;
+}
+
+/**
+ * Временно переопределяет inline-стили корневого элемента (`<html>`) и умеет вернуть прежние значения. Нужно Chat Viewport:
+ * ST вешает на `html` хак `transform: translateZ(0)` + `backface-visibility: hidden` + `perspective` (style.css, "fix for chrome
+ * flickering on blurred divs"), из-за чего весь документ — один слой, и любое изменение на странице перерисовывает его целиком.
+ */
+const rootStyleBackups = new Map();
+function overrideRootStyles(doc, { key, styles }) {
+    if (rootStyleBackups.has(key)) return false;
+    const style = doc.documentElement.style;
+    const backup = [];
+    for (const [name, value] of Object.entries(styles)) {
+        backup.push([name, style.getPropertyValue(name), style.getPropertyPriority(name)]);
+        style.setProperty(name, value, 'important');
+    }
+    rootStyleBackups.set(key, backup);
+    return true;
+}
+function restoreRootStyles(doc, key) {
+    const backup = rootStyleBackups.get(key);
+    if (!backup) return false;
+    rootStyleBackups.delete(key);
+    const style = doc.documentElement.style;
+    for (const [name, value, priority] of backup) {
+        if (value) style.setProperty(name, value, priority); else style.removeProperty(name);
+    }
+    return true;
+}
+
 export function registerDomService(servicesBus, { document: doc = globalThis.document, ResizeObserverCtor = globalThis.ResizeObserver } = {}) {
     const unregisters = [
         servicesBus.register('dom.createElement', ({ tag }) => createElement(doc, tag), { loadMetric: () => 0 }),
+        /** Меняет значение существующего текстового узла (characterData) — без пересоздания узла и без пересчёта стилей вокруг. */
+        servicesBus.register('dom.focusSelector', ({ el, selector }) => { const target = el?.querySelector?.(selector); target?.focus?.(); return Boolean(target); }, { loadMetric: () => 0 }),
+        /** Пакетное измерение: все чтения подряд — браузер пересчитывает раскладку ОДИН раз на пачку, а не на каждый элемент. */
+        servicesBus.register('dom.measureRects', ({ els }) => els.map(el => measureRect(el)), { loadMetric: () => 0 }),
+        servicesBus.register('dom.setText', ({ node, text }) => { if (node.nodeValue !== String(text)) node.nodeValue = String(text); return true; }, { loadMetric: () => 0 }),
         servicesBus.register('dom.createTextNode', ({ text }) => doc.createTextNode(text), { loadMetric: () => 0 }),
         servicesBus.register('dom.setProp', ({ el, key, value }) => setProp(el, key, value), { loadMetric: () => 0 }),
         servicesBus.register('dom.removeProp', ({ el, key }) => removeProp(el, key), { loadMetric: () => 0 }),
@@ -380,6 +449,7 @@ export function registerDomService(servicesBus, { document: doc = globalThis.doc
         servicesBus.register('dom.paintTextRuns', ({ container, runs }) => paintTextRuns(container, runs, doc), { loadMetric: () => 0 }),
         servicesBus.register('dom.clearPaintedRuns', ({ container }) => { clearPaintedRuns(container); return true; }, { loadMetric: () => 0 }),
         /** Read-only text extraction — the one property read a Модуль is never allowed to take directly off a node it was handed (see ARCHITECTURE.md: no exceptions for "just a read"). */
+        servicesBus.register('dom.getInnerHtml', ({ node }) => String(node?.innerHTML ?? ''), { loadMetric: () => 0 }),
         servicesBus.register('dom.textContent', ({ node }) => String(node?.textContent ?? ''), { loadMetric: () => 0 }),
         /**
          * Finds ONE descendant by CSS selector, or `null`. Same "read-only
@@ -421,6 +491,10 @@ export function registerDomService(servicesBus, { document: doc = globalThis.doc
             return String(value ?? '').trim();
         }, { loadMetric: () => 0 }),
         servicesBus.register('dom.measureRect', ({ el }) => measureRect(el), { loadMetric: () => 0 }),
+        servicesBus.register('dom.overrideRootStyles', params => overrideRootStyles(doc, params), { loadMetric: () => 0 }),
+        servicesBus.register('dom.restoreRootStyles', ({ key }) => restoreRootStyles(doc, key), { loadMetric: () => 0 }),
+        servicesBus.register('dom.suppressStyleRules', params => suppressStyleRules(doc, params), { loadMetric: () => 0 }),
+        servicesBus.register('dom.restoreStyleRules', ({ key }) => restoreStyleRules(key), { loadMetric: () => 0 }),
         servicesBus.register('dom.prepareImages', ({ el, timeoutMs }) => prepareImages(el, timeoutMs), { loadMetric: () => 1 }),
         servicesBus.register('dom.clientSize', ({ el }) => measureClientSize(el), { loadMetric: () => 0 }),
         servicesBus.register('dom.scrollPosition', ({ el }) => readScrollPosition(el), { loadMetric: () => 0 }),

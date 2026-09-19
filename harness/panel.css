@@ -1373,6 +1373,59 @@
     0%, 100% { opacity: 1; }
     50%      { opacity: .55; }
 }
+/* ===== Переливка светофора — ТОЛЬКО ПОКА АКТИВЕН Chat Viewport, и только через `transform` =====
+   Замеры владельца: `background-position` (перерисовка слоя) ~60–80% GPU, WebGL-канвас на 30 fps ~20–30%, а анимация
+   `opacity` — 0%: композитору достаточно сдвинуть готовую текстуру. Поэтому переливка — высокий (200%) элемент с
+   периодичным градиентом (A B A B A), который `transform: translateY` едет на ровно один период, обрезанный
+   `overflow: hidden`. Ни перерисовки, ни шейдера. `steps(29)` на 2.4 с ≈ 12 обновлений в секунду (лимит FPS, снижен с 30 по замеру владельца).
+   Цвет — та же `--stme-light`, что у статичной полоски, так что перекраска по состоянию — без JS. */
+.stme-light-flow-strip {
+    --stme-light: #5b8dff;
+    display: none;
+    position: absolute;
+    left: 72px;   /* уточняется JS (activity-light-dom.js) по реальному положению дока */
+    top: 38px;
+    width: 4px;
+    height: 185px;
+    border-radius: 999px;
+    overflow: hidden;
+    pointer-events: none;
+    box-shadow: 0 0 10px var(--stme-light), 0 0 22px color-mix(in srgb, var(--stme-light) 55%, transparent);
+    transition: box-shadow .35s ease, opacity .35s ease;
+}
+.stme-light-working .stme-light-flow-strip { --stme-light: #e8a13c; }
+.stme-light-success .stme-light-flow-strip { --stme-light: #4fae7f; }
+.stme-light-warning .stme-light-flow-strip { --stme-light: #d9c545; }
+.stme-light-error   .stme-light-flow-strip { --stme-light: #e5453f; }
+.stme-light-notify  .stme-light-flow-strip { --stme-light: #ffffff; }
+.stme-light-flow {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 200%;
+    background: linear-gradient(180deg,
+        var(--stme-light),
+        color-mix(in srgb, var(--stme-light) 55%, #ffffff),
+        var(--stme-light),
+        color-mix(in srgb, var(--stme-light) 55%, #ffffff),
+        var(--stme-light));
+    animation: stme-dock-flow 2.4s steps(29) infinite;
+    will-change: transform;
+}
+@keyframes stme-dock-flow {
+    from { transform: translateY(0); }
+    to   { transform: translateY(-50%); }
+}
+body:has(.stme-chat-viewport-overlay) .stme-light-flow-strip { display: block; }
+body:has(.stme-chat-viewport-overlay) .stme-launcher-dock::before { display: none; }
+.stme-light-notify .stme-light-flow-strip { animation: stme-dock-blink .9s steps(1) 3; }
+.stme-launcher-dock-zone:hover .stme-light-flow-strip,
+.stme-launcher-dock-zone:focus-within .stme-light-flow-strip,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-light-flow-strip { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+    .stme-light-flow { animation: none; }
+}
 @keyframes stme-dock-blink {
     0%, 100% { opacity: 1; }
     50%      { opacity: .12; }
@@ -2231,6 +2284,8 @@ body:has(#chat .welcomePanel) .stme-chat-viewport-overlay { visibility: hidden !
     padding: 6px 10px;
     /* Изменения внутри строки (раскрытие ризонинга, подгрузка картинки) не должны инвалидировать раскладку всего документа. */
     contain: layout style;
+    /* Своя композитная плоскость: перерисовка одной строки не трогает остальные и фон. */
+    will-change: transform;
 }
 /* Сам корень растянут невидимым float-ом до низа зоны аватарки и перекрывал бы
    клики по строкам ниже — кликабельны только настоящие дети. */
@@ -2250,6 +2305,7 @@ body:has(#chat .welcomePanel) .stme-chat-viewport-overlay { visibility: hidden !
  * effects-reflow`).
  */
 .stme-chat-viewport-glyph-bg {
+    will-change: transform;
     box-sizing: border-box;
     border-radius: var(--stme-radius-card, 10px);
     /* НАЙДЕНО ЖИВЬЁМ: первая версия (тёмная подложка поверх и так тёмного
@@ -2548,3 +2604,25 @@ body:has(#chat .welcomePanel) .stme-chat-viewport-overlay { visibility: hidden !
    класс эффектов, но ТОЛЬКО здесь, рядом с чатом; в настоящем `.mes`
    (вне Chat Viewport, где reflow ничем не грозит) она остаётся как была. */
 .stme-chat-viewport-footer-slot .stme-stat-pending { animation: none; }
+
+/* Правка сообщения прямо на месте его тела (cores/ui/chat-viewport.js): textarea ровно по границам тела, кнопки — в углу. */
+.stme-chat-viewport-edit-inline { display: flex; flex-direction: column; z-index: 3; }
+.stme-chat-viewport-edit-area { flex: 1; min-height: 0; width: 100%; resize: none; box-sizing: border-box; font: inherit; line-height: inherit; }
+.stme-chat-viewport-edit-buttons { position: absolute; right: 6px; bottom: 6px; display: flex; gap: 6px; opacity: .85; }
+
+/* Заглушка строки, пока она грузится при быстрой прокрутке: карточка и серые «строчки текста» вместо пустого экрана. */
+.stme-chat-viewport-skeleton {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    box-sizing: border-box;
+    padding: 14px 24px 14px 152px;
+    pointer-events: none;
+    border-radius: 12px;
+    background:
+        repeating-linear-gradient(to bottom, rgba(255,255,255,.22) 0 11px, transparent 11px 21px) content-box,
+        rgba(28, 30, 38, .55);
+    background-clip: content-box, border-box;
+    background-repeat: no-repeat;
+}

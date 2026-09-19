@@ -78,6 +78,12 @@ export function createFinalUiAndroid(host) {
             return;
         }
 
+        if (patch.type === 'setText') {
+            const textNode = nodes.get(key);
+            if (textNode) await callDom('dom.setText', { node: textNode, text: patch.text });
+            return;
+        }
+
         if (patch.type === 'replace') {
             const old = nodes.get(key);
             forgetSubtree(key);
