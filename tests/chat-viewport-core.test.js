@@ -14,6 +14,7 @@ import { createChatViewportCore } from '../cores/ui/chat-viewport.js';
  */
 
 function buildEngine({ messages = [], heightByHtml = new Map(), glAvailable = true, chromeHeight = 0 } = {}) {
+    let chromeHeightNow = chromeHeight;   // тест может изменить: имитация переноса имени на вторую строку
     const engine = createEngine();
     const calls = {
         deleteMessage: [], swipe: [], regenerate: [], setText: [],
@@ -65,7 +66,7 @@ function buildEngine({ messages = [], heightByHtml = new Map(), glAvailable = tr
     }
     engine.buses.services.register('dom.measureRect', ({ el }) => ({
         width: 300,
-        height: el.__chromeRoot ? chromeHeight : (lookupHeight(el.html) ?? 96),
+        height: el.__chromeRoot ? chromeHeightNow : (lookupHeight(el.html) ?? 96),
         top: 0, left: 0,
     }));
 
@@ -132,7 +133,11 @@ function buildEngine({ messages = [], heightByHtml = new Map(), glAvailable = tr
         return true;
     });
 
-    return { engine, calls, fireStEvent, messageFooterCalls, messages };
+    // Наблюдатели за размером хрома: тест сам «срабатывает» ими, как это сделал бы ResizeObserver браузера.
+    const observers = [];
+    engine.buses.services.register('dom.observeResize', ({ el, handler }) => { observers.push({ el, handler, active: true }); return true; });
+    engine.buses.services.register('dom.unobserveResize', ({ el, handler }) => { for (const item of observers) if (item.el === el && item.handler === handler) item.active = false; return true; });
+    return { engine, calls, fireStEvent, messageFooterCalls, messages, observers, setChromeHeight: value => { chromeHeightNow = value; } };
 }
 
 function buildCore(engineBundle, coreOptions) {
@@ -579,4 +584,48 @@ test('with a separate last-message canvas, ONLY the last message body is uploade
     assert.ok(!mainQuads.some(q => q.textureId === '1'), 'the main canvas never draws the last message');
     const lastQuads = bundle.calls.drawOn.filter(d => d.canvas === LAST_CANVAS).at(-1).quads;
     assert.deepEqual(lastQuads.map(q => q.textureId), ['1']);
+});
+
+test('when the header (chrome) becomes TALLER after the first measurement — the name wraps onto a second line on a narrow phone screen — the body moves down instead of overlapping it (phone screenshots)', async () => {
+    const heightByHtml = new Map([['<p>a</p>', 100]]);
+    const bundle = buildEngine({ messages: [msg('0', 'a')], heightByHtml, chromeHeight: 40 });
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0, createFinalUi: fakeCreateFinalUi() });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, chromeContainer: CHROME_CONTAINER, width: 300, height: 200 });
+    assert.equal(bundle.calls.drawFrame.at(-1)[0].y, 52, 'first layout: one-line header');
+    assert.ok(bundle.observers.some(item => item.active), 'the core watches the real height of the header');
+
+    bundle.setChromeHeight(80);   // the name wrapped: the header is now two lines high
+    for (const item of bundle.observers.filter(entry => entry.active)) await item.handler({ width: 300, height: 80 });
+    await new Promise(resolve => setTimeout(resolve, 120));
+
+    assert.equal(bundle.calls.drawFrame.at(-1)[0].y, 92, 'the body starts below the taller header: 80 measured + 12 padding');
+});
+
+test('a header whose height did not really change does not cause another layout pass, however often the observer fires', async () => {
+    const heightByHtml = new Map([['<p>a</p>', 100]]);
+    const bundle = buildEngine({ messages: [msg('0', 'a')], heightByHtml, chromeHeight: 40 });
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0, createFinalUi: fakeCreateFinalUi() });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, chromeContainer: CHROME_CONTAINER, width: 300, height: 200 });
+    const framesBefore = bundle.calls.drawFrame.length;
+    for (let round = 0; round < 3; round += 1) for (const item of bundle.observers.filter(entry => entry.active)) await item.handler({ width: 300, height: 40 });
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal(bundle.calls.drawFrame.length, framesBefore, 'no extra frames');
+});
+
+test('several header changes in a burst are laid out ONCE, and watching stops when the row is forgotten (chat changed)', async () => {
+    const heightByHtml = new Map([['<p>a</p>', 100], ['<p>b</p>', 100]]);
+    const bundle = buildEngine({ messages: [msg('0', 'a'), msg('1', 'b')], heightByHtml, chromeHeight: 40 });
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0, createFinalUi: fakeCreateFinalUi() });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, chromeContainer: CHROME_CONTAINER, width: 300, height: 400 });
+    const framesBefore = bundle.calls.drawFrame.length;
+    bundle.setChromeHeight(64);
+    await Promise.all(bundle.observers.filter(entry => entry.active).map(item => item.handler({ width: 300, height: 64 })));
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(bundle.calls.drawFrame.length - framesBefore, 1, 'both rows changed, one pass');
+    assert.equal(bundle.calls.drawFrame.at(-1)[0].y, 76);
+
+    bundle.messages.splice(0);   // the new chat is empty: every old row is forgotten
+    bundle.engine.events.emit('st.chatChanged', {});
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(bundle.observers.some(item => item.active), false, 'no observer outlives its row');
 });

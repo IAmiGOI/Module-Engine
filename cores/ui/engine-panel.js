@@ -6,6 +6,8 @@ import {
     Field, Row, Card, Section, Badge, EmptyState, TwoColumn, EditableList, ProgressBar,
 } from '../../libraries/shared/widgets.js';
 import { createCollapseState } from '../../libraries/shared/collapse-state.js';
+import { resolveChatViewportEnabled } from '../../libraries/shared/chat-viewport-math.js';
+import { isMobileSurface } from './final-ui-android.js';
 import { createSyncCard } from './sync-card.js';
 import { TRIGGER_MODES, computeTriggers, resolveTriggerMode } from '../../libraries/core/trigger-modes.js';
 
@@ -120,7 +122,7 @@ function fromMacroRecord(record) {
  * править эндпоинты и ключи в обход Шины было бы ровно тем случаем, ради
  * которого Гейты и существуют.
  */
-export function createEnginePanelCore(host, { mount, mountSettings, listContracts, modules: moduleRegistry, openMemoryGraphPanel, chatViewport } = {}) {
+export function createEnginePanelCore(host, { mount, mountSettings, listContracts, modules: moduleRegistry, openMemoryGraphPanel, chatViewport, isMobile = isMobileSurface } = {}) {
     // Что свёрнуто — помнится между сеансами. По умолчанию свёрнуто всё.
     const collapse = createCollapseState(host.own, { namespace: 'core.ui.panel' });
     const workers = signal([]);
@@ -1462,7 +1464,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
 
     function chatViewportCard() {
         return Card('Chat Viewport (experimental)', { ...collapse.bind('card:chatViewport') },
-            h('p', { class: 'stme-summary-help' }, 'Renders the chat history through our own WebGL-backed viewport instead of SillyTavern\'s native chat. Off by default — this is early and only approximates real SillyTavern layout (see ROADMAP).'),
+            h('p', { class: 'stme-summary-help' }, 'Renders the chat history through our own WebGL-backed viewport instead of SillyTavern\'s native chat. On by default on phones (SillyTavern\'s native chat layout breaks there), off by default on a computer — this is early and only approximates real SillyTavern layout (see ROADMAP).'),
             Toggle('Enabled', chatViewportEnabled, {
                 onChange: async value => { await (value ? enableChatViewport() : disableChatViewport()); await saveChatViewportState(); },
                 hint: computed(() => (chatViewportBusy() ? 'Starting…' : '')),
@@ -1861,7 +1863,9 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         const result = await request(host.own, 'storage.settings.get', { params: { namespace: 'core.ui.panel', key: 'chatViewport', fallback: {} } });
         const saved = (result.ok ? result.value : null) ?? {};
         if (Number.isFinite(saved.sideMargin)) chatViewportSideMargin.set(saved.sideMargin);
-        if (saved.enabled) {
+        // Явный выбор пользователя важнее всего; если его не было — на телефоне включаем (см. `resolveChatViewportEnabled`).
+        // Неудавшийся запуск выбор НЕ записывает, поэтому на следующей загрузке телефон попробует снова.
+        if (resolveChatViewportEnabled(saved, { mobile: isMobile() })) {
             chatViewportEnabled.set(true);
             // ST к этому моменту может ещё не дорисовать чат — включаем с небольшой задержкой.
             setTimeout(() => { enableChatViewport(); }, 1500);

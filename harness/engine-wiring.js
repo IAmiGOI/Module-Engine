@@ -12,6 +12,7 @@ import { registerSyncStateService } from '../services/sync-state.js';
 import { registerSyncSignalService } from '../services/sync-signal.js';
 import { registerSyncPeerService } from '../services/sync-peer.js';
 import { createSyncCore } from '../cores/sync/index.js';
+import { createStartupCore } from '../cores/startup/index.js';
 import { createBackgroundsCore } from '../cores/backgrounds/index.js';
 import { createGlAnimationsCore } from '../cores/ui/gl-animations.js';
 import { registerHttpService } from '../services/http.js';
@@ -652,6 +653,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         engine.registerCaller('core.sync', 'cores', { tier: 'official', networkAccess: true }),
         { publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.sync' }) },
     );
+    // Порядок запуска (самообновление → фоны → синхронизация → экран загрузки) — контрактами, не ссылками; вызывается из index.js.
+    const startup = createStartupCore(
+        engine.registerCaller('core.startup', 'cores', { tier: 'official' }),
+        { screen: globalThis.__stmeBoot },
+    );
     const activityLight = createActivityLightCore(
         engine.registerCaller('core.ui.activityLight', 'cores', { tier: 'official' }),
     );
@@ -824,5 +830,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }
