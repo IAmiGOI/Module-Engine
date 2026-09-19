@@ -15,6 +15,10 @@ import {
     buildRegionEdgesPrompt, parseRegionEdgesResponse,
     buildOrphanConnectionsPrompt, parseOrphanConnectionsResponse,
     scoreBeaconSet, shouldReplaceStickySet, RETRIEVAL_STABILITY_MARGINS,
+    nearestEmbeddingDistance,
+    buildSkeletonPartPrompt, buildCentersPartPrompt, parseCandidatesResponse, mergeCandidateGroups,
+    trimCandidatesToBudget, buildSkeletonReducePrompt, buildCentersReducePrompt,
+    assignBootstrapUids, entryTitle,
 } from '../cores/memory-graph/index.js';
 
 // --- Физика регионов --------------------------------------------------
@@ -85,6 +89,15 @@ test('computeRegionLogits() lets keyword evidence flip a close vector call with 
 test('isStrongChange() treats the first two distances (no baseline yet) as ALWAYS strong — the graph must be able to bootstrap its first nodes', () => {
     assert.equal(isStrongChange(0.01, null, 1.5), true);
     assert.equal(isStrongChange(0.01, updateDistanceStats(null, 0.5), 1.5), true);
+});
+
+test('nearestEmbeddingDistance() is 1 minus the best REAL cosine — 0 for an identical vector, 1 for orthogonal, 1 with no candidates, never outside [0,1]', () => {
+    assert.equal(nearestEmbeddingDistance([1, 0], [[0, 1], [1, 0]]), 0, 'the best candidate wins, not the first');
+    assert.equal(nearestEmbeddingDistance([1, 0], [[0, 1]]), 1, 'orthogonal is distance 1');
+    assert.equal(nearestEmbeddingDistance([1, 0], [[-1, 0]]), 1, 'an opposite vector must not push the distance past 1');
+    assert.equal(nearestEmbeddingDistance([1, 0], []), 1, 'nothing to compare with means fully unknown');
+    assert.equal(nearestEmbeddingDistance([1, 0], [null, undefined, [1, 0]]), 0, 'missing embeddings are skipped, not treated as a match');
+    assert.ok(Math.abs(nearestEmbeddingDistance([1, 0], [[1, 1]]) - (1 - Math.SQRT1_2)) < 1e-9, 'a 45-degree candidate has cosine sqrt(1/2)');
 });
 
 test('updateDistanceStats()/stddevOf() compute a real running mean and stddev (Welford), matching a plain manual calculation', () => {
@@ -817,4 +830,88 @@ test('fitEntriesToTokenBudget() shortens entry text to fit the budget, leaves en
     const fitted = fitEntriesToTokenBudget(entries, 500);
     assert.ok(fitted.every(entry => entry.content.length < 1200), 'each entry is shortened to roughly its share');
     assert.equal(entries[0].content.length, 4000, 'the originals are not mutated');
+});
+
+// --- Чанкованные Проходы 1-2 ------------------------------------------------
+
+const chunkEntries = [
+    { uid: 1, label: 'Alpha Land', content: 'FULLTEXT-ONE alpha land description' },
+    { uid: 2, label: 'Beta Guild', content: 'FULLTEXT-TWO beta guild description' },
+    { uid: 3, label: 'Gamma Hero', content: 'FULLTEXT-THREE gamma hero description' },
+];
+const chunkEntryByUid = new Map(chunkEntries.map(entry => [entry.uid, entry]));
+
+test('buildSkeletonPartPrompt()/buildCentersPartPrompt() give the FULL text of this part only, but the label INDEX of every entry', () => {
+    for (const prompt of [
+        buildSkeletonPartPrompt({ partEntries: [chunkEntries[0]], allEntries: chunkEntries, partNumber: 1, partCount: 3, baseRegionNames: ['Locations', 'Factions'] }),
+        buildCentersPartPrompt({ partEntries: [chunkEntries[0]], allEntries: chunkEntries, partNumber: 1, partCount: 3, existingRegionNames: ['Locations'], targetTotalRegions: 5, entriesPerRegionCenter: 20 }),
+    ]) {
+        assert.ok(prompt.includes('FULLTEXT-ONE'), 'this part\'s entry arrives whole');
+        assert.ok(!prompt.includes('FULLTEXT-TWO') && !prompt.includes('FULLTEXT-THREE'), 'other parts\' text is NOT duplicated in this call');
+        for (const entry of chunkEntries) assert.ok(prompt.includes(`${entry.uid}. ${entry.label}`), `index still names ${entry.label}`);
+        assert.ok(prompt.includes('part 1 of 3'));
+    }
+    assert.ok(buildSkeletonPartPrompt({ partEntries: chunkEntries, allEntries: chunkEntries, partNumber: 1, partCount: 1, baseRegionNames: ['Locations', 'Factions'] }).includes('Use ONLY these regions'), 'base regions stay a closed list — the part prompt must not invite inventing regions');
+});
+
+test('parseCandidatesResponse() is tolerant: filters unknown uids / duplicate uids / disallowed regions, keeps rank order, caps per region, normalizes region-name spelling', () => {
+    const valid = new Set([1, 2, 3]);
+    const parsed = [
+        { region: ' locations ', candidates: [{ uid: 2, note: 'n2' }, { uid: 99, note: 'ghost' }, { uid: 2, note: 'dup' }, { uid: 1 }, { uid: 3 }] },
+        { region: 'Invented', candidates: [{ uid: 1 }] },
+        { region: 'Factions', candidates: [{ uid: 404 }] },
+        'garbage', null,
+    ];
+    const result = parseCandidatesResponse(parsed, valid, { allowedRegionNames: ['Locations', 'Factions'], maxPerRegion: 2 });
+    assert.deepEqual(result, [{ region: 'Locations', candidates: [{ uid: 2, note: 'n2' }, { uid: 1, note: '' }] }], 'canonical name, ghost + dup dropped, capped at 2, invented and empty regions dropped');
+    const open = parseCandidatesResponse(parsed, valid, { maxPerRegion: 3 });
+    assert.ok(open.some(group => group.region === 'Invented'), 'with no allow-list (Проход 2) new regions are kept');
+    assert.deepEqual(parseCandidatesResponse('nope', valid), []);
+});
+
+test('mergeCandidateGroups() interleaves by RANK across parts (every part\'s #1 before any #2), dedups uids, keeps known region names first and merges spelling variants of a new region', () => {
+    const partA = [{ region: 'Locations', candidates: [{ uid: 1, note: 'a1' }, { uid: 2, note: 'a2' }] }];
+    const partB = [{ region: 'locations', candidates: [{ uid: 3, note: 'b1' }, { uid: 1, note: 'dup of a1' }] }, { region: 'Military', candidates: [{ uid: 2, note: 'm' }] }];
+    const partC = [{ region: 'Military ', candidates: [{ uid: 3, note: 'm2' }] }];
+    const merged = mergeCandidateGroups([partA, partB, partC], chunkEntryByUid, ['Locations']);
+    assert.equal(merged[0].region, 'Locations');
+    assert.deepEqual(merged[0].candidates.map(c => c.uid), [1, 3, 2], 'rank 0 of part A, rank 0 of part B, then rank 1s — duplicate uid 1 appears once');
+    assert.equal(merged[0].candidates[0].label, 'Alpha Land', 'labels come from the entries, not from the model');
+    assert.equal(merged.length, 2);
+    assert.deepEqual(merged[1].candidates.map(c => c.uid), [2, 3], '"Military" and "Military " are the same new region');
+});
+
+test('trimCandidatesToBudget() drops only the LOWEST-ranked candidates (from the widest region, keeping at least one per region) and reports how many', () => {
+    const many = (region, n) => ({ region, candidates: Array.from({ length: n }, (_, i) => ({ uid: i + 1, label: `Label ${i}`, note: 'x'.repeat(40) })) });
+    const groups = [many('A', 6), many('B', 2)];
+    const untouched = trimCandidatesToBudget(groups, 100000);
+    assert.equal(untouched.trimmed, 0);
+    const tight = trimCandidatesToBudget(groups, 60);
+    assert.ok(tight.trimmed > 0);
+    assert.ok(tight.groups.every(group => group.candidates.length >= 1), 'never empties a region');
+    assert.deepEqual(tight.groups[0].candidates.map(c => c.uid), [1, 2, 3, 4, 5, 6].slice(0, tight.groups[0].candidates.length), 'the survivors are the TOP-ranked prefix');
+    assert.equal(groups[0].candidates.length, 6, 'input is not mutated');
+    assert.equal(trimCandidatesToBudget(groups, 0).trimmed, 0, 'budget 0 = no trimming');
+});
+
+test('reduce prompts list every candidate with its note; the Проход 2 reduce asks to merge same-meaning new regions', () => {
+    const groups = [{ region: 'Locations', candidates: [{ uid: 1, label: 'Alpha Land', note: 'a big place' }] }];
+    const skeleton = buildSkeletonReducePrompt(groups, ['Locations', 'Factions']);
+    assert.ok(skeleton.includes('1. Alpha Land — a big place') && skeleton.includes('subCenterUids'));
+    const centers = buildCentersReducePrompt(groups, ['Locations'], 7, 20);
+    assert.ok(centers.includes('1. Alpha Land — a big place') && centers.includes('centerUid') && /SAME region/.test(centers) && centers.includes('about 7 regions'));
+});
+
+// --- Несколько активных Lorebook ----------------------------------------------
+
+test('assignBootstrapUids() keeps original uids when they are unique (single book = unchanged behavior) and renumbers 0..N-1 when books collide', () => {
+    assert.deepEqual(assignBootstrapUids([10, 20, 30]), [10, 20, 30], 'unique — untouched, including gaps');
+    assert.deepEqual(assignBootstrapUids([0, 1, 0, 1]), [0, 1, 2, 3], 'two books both with uids 0 and 1 — sequential handles');
+    assert.deepEqual(assignBootstrapUids([5, 7, 5]), [0, 1, 2], 'ANY collision renumbers everything, so handles stay stable and unique');
+    assert.deepEqual(assignBootstrapUids([]), []);
+});
+
+test('entryTitle() appends the book only when the entry carries one (several active lorebooks)', () => {
+    assert.equal(entryTitle({ label: 'Alpha' }), 'Alpha');
+    assert.equal(entryTitle({ label: 'Alpha', book: 'World A' }), 'Alpha [World A]');
 });

@@ -104,10 +104,13 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
 
     // Фейковый Lorebook — управляется параметром теста.
     const lorebookHost = engine.registerCaller('core.lorebook', 'cores', { tier: 'official' });
-    const books = lorebookEntries ? ['Demo Lore'] : [];
+    // `book` у записи — опционален (по умолчанию 'Demo Lore'): так фикстура умеет НЕСКОЛЬКО активных книг с пересекающимися uid.
+    const bookOf = e => e.book ?? 'Demo Lore';
+    const books = lorebookEntries ? [...new Set(lorebookEntries.map(bookOf))] : [];
+    if (lorebookEntries && !books.length) books.push('Demo Lore'); // пустая, но активная книга
     lorebookHost.own.register('lorebook.books', () => books);
-    lorebookHost.own.register('lorebook.find', () => (lorebookEntries ?? []).map(e => ({ uid: e.uid, book: 'Demo Lore', name: e.comment })));
-    lorebookHost.own.register('lorebook.get', params => (lorebookEntries ?? []).find(e => e.uid === params?.uid));
+    lorebookHost.own.register('lorebook.find', () => (lorebookEntries ?? []).map(e => ({ uid: e.uid, book: bookOf(e), name: e.comment })));
+    lorebookHost.own.register('lorebook.get', params => (lorebookEntries ?? []).find(e => e.uid === params?.uid && (params?.book === undefined || bookOf(e) === params.book)));
     // Зеркало checkAndPlace() -> WI (см. cores/memory-graph/index.js's
     // checkAndPlace()): та же ошибка, что у настоящего lorebook.createEntry()
     // на отсутствие активной книги ("no lorebook active"), брошенная —
@@ -142,7 +145,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
-            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook',
+            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
         ],
     });
 
@@ -649,6 +652,57 @@ test('bootstrapFromLorebook() places a region\'s designated center as a protecte
     assert.equal(nodes.value.length, 1);
     assert.equal(nodes.value[0].protectedNode, true, 'the very first node of a region is its center, and centers are protected (MEMORY_GRAPH.md)');
     assert.ok(nodes.value[0].regionId, 'must actually be attached to a region, not left staged');
+});
+
+test('checkAndPlace(): after a familiar baseline, a context far from EVERY existing node fires the SideCar (gate measures real cosine, not softmax shares)', async () => {
+    // Регрессия: расстояние раньше считалось как 1 − max(доля softmax по 15
+    // регионам) — почти константа, поэтому гейт срабатывал единицами процентов
+    // случайных ходов, и новых нод почти не появлялось.
+    const { graphCore } = buildEngine({ fetchReply: '{"label":"Alpha","content":"alpha bravo charlie delta","importance":5}' });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const familiar = 'Alpha: alpha bravo charlie delta';
+    // Первые вызовы — всегда "сильные" (нет базовой линии, count<2); пустой
+    // граф в базовую линию не попадает, поэтому прогрев — 4 вызова, не 2.
+    for (let i = 0; i < 4; i += 1) await graphCore.checkAndPlace(familiar);
+    assert.equal((await graphCore.checkAndPlace(familiar)).status, 'no-change', 'a context identical to an existing node is not news');
+    assert.equal((await graphCore.checkAndPlace(familiar)).status, 'no-change');
+
+    const novel = await graphCore.checkAndPlace('golf lima oscar quebec sierra yankee');
+    assert.notEqual(novel.status, 'no-change', 'a context orthogonal to every known node must reach the SideCar');
+});
+
+test('checkAndPlace(): a context that is NEW relative to every node still fires even when it sits near a region CENTER (a new fact inside a familiar topic)', async () => {
+    // Второй сигнал гейта — расстояние до ближайшей НОДЫ, а не центра региона.
+    // Слова подобраны под fakeEmbed (4 измерения): alpha/bravo/... -> dim 1,
+    // golf/lima/... -> dim 2, papa/romeo/... -> dim 3. Единственный ЦЕНТР
+    // региона — "Alpha" (dim 1); "Golf" (dim 2) — стейджится, центром не
+    // становится, но он ЕСТЬ среди нод. Прогрев идёт контекстом "Golf":
+    // расстояние до центра стабильно 1 (тема гейтом уже "привычна"),
+    // расстояние до ближайшей ноды 0. Новый контекст (dim 3) — до центра
+    // по-прежнему 1 (тематический гейт молчит), но до ЛЮБОЙ ноды тоже 1 —
+    // выше базовой линии 0: только второй сигнал может это заметить.
+    const { graphCore } = buildEngine({
+        fetchReplies: [
+            '{"label":"Alpha","content":"alpha bravo charlie delta","importance":5}',
+            '{"label":"Golf","content":"golf lima oscar quebec","importance":5}', // последний ответ повторяется — прогрев не заводит посторонних нод
+        ],
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('alpha bravo charlie delta');
+    await graphCore.checkAndPlace('golf lima oscar quebec');
+    const golf = graphCore.nodes().find(n => n.label === 'Golf');
+    assert.equal(golf.regionId, null, 'fixture precondition: Golf is staged, so Alpha stays the ONLY region center');
+
+    const statuses = [];
+    for (let i = 0; i < 6; i += 1) statuses.push((await graphCore.checkAndPlace('Golf: golf lima oscar quebec')).status);
+    assert.equal(statuses.at(-1), 'no-change', 'fixture precondition: the baseline settled — a context identical to a known node is not news');
+
+    const newFact = await graphCore.checkAndPlace('papa romeo tango victor');
+    assert.notEqual(newFact.status, 'no-change', 'far from EVERY node fires even though the topic-center distance is unchanged from baseline');
 });
 
 test('checkAndPlace(): a genuinely UNRELATED second node can seed its OWN dartboard region instead of being forced into the first — a region with no center yet must be a NEUTRAL candidate, not a permanently-losing one', async () => {
@@ -1979,4 +2033,215 @@ test('memoryGraph.bootstrapFromLorebook contract can be triggered manually, inde
     const result = await call(caller, 'memoryGraph.bootstrapFromLorebook');
     assert.equal(result.value, true);
     assert.equal((await call(caller, 'memoryGraph.nodes')).value.length, 1);
+});
+
+// --- Чанкованные Проходы 1-2 (map-reduce над вызовами) ----------------------
+
+/** Фейковая модель для чанкованного бутстрапа: распознаёт тип вызова по тексту промпта и отвечает по его содержимому. */
+function chunkedBootstrapFetch({ failFirstSkeletonPart = false, failAllSkeletonParts = false } = {}) {
+    const calls = [];
+    let skeletonPartAttempts = 0;
+    const uidsAfter = (prompt, marker) => [...prompt.slice(prompt.indexOf(marker)).matchAll(/^(\d+)\. /gm)].map(match => Number(match[1]));
+    const candidateUids = prompt => [...prompt.matchAll(/^ {2}(\d+)\. /gm)].map(match => Number(match[1]));
+    const fetch = async (url, init) => {
+        const body = JSON.parse(init.body);
+        const prompt = body.messages.at(-1).content;
+        let kind; let reply;
+        if (prompt.includes('This is part') && prompt.includes('Use ONLY these regions')) {
+            kind = 'skeleton-part';
+            skeletonPartAttempts += 1;
+            if (failAllSkeletonParts) {
+                calls.push({ kind, prompt, failed: true });
+                return { status: 500, ok: false, headers: { entries: () => [] }, text: async () => 'boom' };
+            }
+            if (failFirstSkeletonPart && skeletonPartAttempts === 1) {
+                // 200 OK, но не JSON — именно этот путь повторяет generateJson() (HTTP-сбои повторяет слой моделей сам).
+                calls.push({ kind, prompt, failed: true });
+                return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: 'Sorry, I cannot do that.' } }] }) };
+            }
+            const uids = uidsAfter(prompt, 'FULL TEXT of the entries in THIS part');
+            reply = JSON.stringify([{ region: 'Locations', candidates: [{ uid: uids[0], note: 'first of part' }] }]);
+        } else if (prompt.includes('This is part') && prompt.includes('These regions already exist')) {
+            kind = 'centers-part';
+            const uids = uidsAfter(prompt, 'FULL TEXT of the entries in THIS part');
+            reply = JSON.stringify([{ region: 'Locations', candidates: [{ uid: uids[0], note: 'center-ish' }] }]);
+        } else if (prompt.includes('analyzed in parts') && prompt.includes('subCenterUids')) {
+            kind = 'skeleton-reduce';
+            reply = JSON.stringify([{ region: 'Locations', subCenterUids: candidateUids(prompt).slice(0, 2) }]);
+        } else if (prompt.includes('analyzed in parts') && prompt.includes('centerUid')) {
+            kind = 'centers-reduce';
+            reply = JSON.stringify([{ region: 'Locations', centerUid: candidateUids(prompt)[0] }]);
+        } else {
+            kind = 'other';
+            reply = '[]';
+        }
+        calls.push({ kind, prompt });
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    return { fetch, calls };
+}
+
+const bigLore = Array.from({ length: 6 }, (_, uid) => ({ uid, comment: `Entry ${uid}`, content: `MARKER-${uid} ${'lorem ipsum '.repeat(250)}` })); // ≈ 3000 симв. ≈ 850 токенов на запись
+
+test('chunked bootstrap: a lore bigger than bootstrapChunkTokens is split into parts, EVERY entry reaches exactly one part IN FULL, and the graph still gets every entry', async () => {
+    const { fetch, calls } = chunkedBootstrapFetch();
+    const { graphCore, caller } = buildEngine({ lorebookEntries: bigLore, fetchOverride: fetch });
+    await call(caller, 'memoryGraph.configure', { bootstrapChunkTokens: 2000 });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    const skeletonParts = calls.filter(c => c.kind === 'skeleton-part');
+    const centerParts = calls.filter(c => c.kind === 'centers-part');
+    assert.ok(skeletonParts.length >= 3, `expected the lore to be split into several parts, got ${skeletonParts.length}`);
+    assert.equal(centerParts.length, skeletonParts.length, 'Проход 2 uses the same parts as Проход 1');
+    assert.equal(calls.filter(c => c.kind === 'skeleton-reduce').length, 1);
+    assert.equal(calls.filter(c => c.kind === 'centers-reduce').length, 1);
+
+    for (const parts of [skeletonParts, centerParts]) {
+        for (const entry of bigLore) {
+            const holders = parts.filter(part => part.prompt.includes(entry.content.trim())); // бутстрап trim()-ит текст записи
+            assert.equal(holders.length, 1, `entry ${entry.uid} must appear IN FULL in exactly one part — never truncated, never dropped, never duplicated`);
+        }
+        for (const part of parts) for (const entry of bigLore) assert.ok(part.prompt.includes(`${entry.uid}. ${entry.comment}`), 'every part carries the label index of ALL entries');
+    }
+
+    assert.equal(graphCore.nodes().length, bigLore.length, 'every lorebook entry ends up as a node');
+});
+
+test('chunked bootstrap: a single failed part call is retried once and the bootstrap still succeeds', async () => {
+    const { fetch, calls } = chunkedBootstrapFetch({ failFirstSkeletonPart: true });
+    const { graphCore, caller } = buildEngine({ lorebookEntries: bigLore, fetchOverride: fetch });
+    await call(caller, 'memoryGraph.configure', { bootstrapChunkTokens: 2000 });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+    assert.ok(calls.some(c => c.failed), 'sanity: one part call really failed');
+    assert.equal(graphCore.nodes().length, bigLore.length, 'the retry rescued the bootstrap');
+});
+
+test('chunked bootstrap: a part that keeps failing aborts the bootstrap with an empty graph (no silent loss of a chunk\'s entries)', async () => {
+    const { fetch } = chunkedBootstrapFetch({ failAllSkeletonParts: true });
+    const { graphCore, caller } = buildEngine({ lorebookEntries: bigLore, fetchOverride: fetch });
+    await call(caller, 'memoryGraph.configure', { bootstrapChunkTokens: 2000 });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+    assert.equal(graphCore.nodes().length, 0);
+});
+
+test('chunked bootstrap: a lore that fits ONE chunk is untouched — the original two whole-lore calls, no part/reduce calls', async () => {
+    const { fetch, calls } = chunkedBootstrapFetch();
+    const { graphCore } = buildEngine({ lorebookEntries: bigLore, fetchOverride: async (url, init) => { const r = await fetch(url, init); return r; } });
+    // Дефолт 6000 токенов; 6 записей по ~850 токенов = ~5100 — влезает в один чанк.
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+    assert.equal(calls.filter(c => c.kind === 'skeleton-part' || c.kind === 'centers-part' || c.kind === 'skeleton-reduce' || c.kind === 'centers-reduce').length, 0, 'no chunked-path prompts');
+});
+
+// --- Несколько активных Lorebook --------------------------------------------
+
+/** Фейковая модель, записывающая каждый промпт; на Проходы 1-2 отвечает первым номером записи из списка, на остальное — []. */
+function recordingBootstrapFetch() {
+    const prompts = [];
+    const firstUid = prompt => Number(prompt.match(/^(\d+)\. /m)?.[1]);
+    const fetch = async (url, init) => {
+        const prompt = JSON.parse(init.body).messages.at(-1).content;
+        prompts.push(prompt);
+        let reply = '[]';
+        if (prompt.includes('subCenterUids')) reply = JSON.stringify([{ region: 'Locations', subCenterUids: [firstUid(prompt)] }]);
+        else if (prompt.includes('centerUid')) reply = JSON.stringify([{ region: 'Locations', centerUid: firstUid(prompt) }]);
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    return { fetch, prompts };
+}
+
+const twoBookLore = [
+    { uid: 0, book: 'World A', comment: 'Capital', content: 'A-CAPITAL the capital of world A.' },
+    { uid: 1, book: 'World A', comment: 'King', content: 'A-KING the king of world A.' },
+    { uid: 0, book: 'World B', comment: 'Capital', content: 'B-CAPITAL the capital of world B.' },
+    { uid: 1, book: 'World B', comment: 'Queen', content: 'B-QUEEN the queen of world B.' },
+];
+
+test('several active lorebooks with COLLIDING uids: every entry reaches the model exactly once, under a unique number tagged with its book, and every entry becomes a node', async () => {
+    const { fetch, prompts } = recordingBootstrapFetch();
+    const { graphCore } = buildEngine({ lorebookEntries: twoBookLore, fetchOverride: fetch });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    const wholeLoreCall = prompts.find(prompt => prompt.includes('subCenterUids'));
+    for (const marker of ['A-CAPITAL', 'A-KING', 'B-CAPITAL', 'B-QUEEN']) {
+        assert.equal(wholeLoreCall.split(marker).length - 1, 1, `${marker} must appear exactly once — not overwritten by the same-uid entry of the other book`);
+    }
+    const numbers = [...wholeLoreCall.matchAll(/^(\d+)\. /gm)].map(match => Number(match[1]));
+    assert.deepEqual(numbers, [0, 1, 2, 3], 'four entries, four DISTINCT numbers');
+    assert.ok(wholeLoreCall.includes('Capital [World A]') && wholeLoreCall.includes('Capital [World B]'), 'same-named entries stay distinguishable by book');
+    assert.equal(graphCore.nodes().length, 4, 'nothing lost to the uid collision');
+});
+
+test('several active lorebooks also work through the CHUNKED path — collisions do not merge entries across parts either', async () => {
+    const twoBookBig = [0, 1, 2].flatMap(uid => ['World A', 'World B'].map(book => ({ uid, book, comment: `Entry ${book} ${uid}`, content: `MARKER-${book.replace(' ', '-')}-${uid} ${'lorem ipsum '.repeat(250)}` })));
+    const { fetch, calls } = chunkedBootstrapFetch();
+    const { graphCore, caller } = buildEngine({ lorebookEntries: twoBookBig, fetchOverride: fetch });
+    await call(caller, 'memoryGraph.configure', { bootstrapChunkTokens: 2000 });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    const skeletonParts = calls.filter(c => c.kind === 'skeleton-part');
+    assert.ok(skeletonParts.length >= 3, 'sanity: really chunked');
+    for (const entry of twoBookBig) {
+        const holders = skeletonParts.filter(part => part.prompt.includes(entry.content.trim()));
+        assert.equal(holders.length, 1, `${entry.comment} must be in exactly one part`);
+    }
+    assert.equal(graphCore.nodes().length, twoBookBig.length);
+});
+
+test('a single lorebook keeps its ORIGINAL uids (no renumbering, no book tag) — behavior unchanged', async () => {
+    const { fetch, prompts } = recordingBootstrapFetch();
+    const { graphCore } = buildEngine({ lorebookEntries: [{ uid: 10, comment: 'Ten', content: 'ten ten' }, { uid: 20, comment: 'Twenty', content: 'twenty twenty' }], fetchOverride: fetch });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+    const wholeLoreCall = prompts.find(prompt => prompt.includes('subCenterUids'));
+    assert.ok(wholeLoreCall.includes('10. Ten: ten ten') && wholeLoreCall.includes('20. Twenty: twenty twenty'), 'original uids and plain labels');
+    assert.ok(!wholeLoreCall.includes('[Demo Lore]'), 'no book tag with a single book');
+});
+
+// ── Кнопки построения графа: «с карточкой», остановка и автосохранение ─────────────────────────────
+
+const LORE = [
+    { uid: 0, comment: 'Center', content: 'the region center.' },
+    { uid: 1, comment: 'Second', content: 'an ordinary entry, number two.' },
+];
+const LORE_REPLIES = ['[{"region":"Region","subCenterUids":[1]}]', '[{"region":"Region","centerUid":0}]', '[]'];
+
+test('memoryGraph.bootstrapFromLorebook with includeCard also adds the character card node; without it, only the Lorebook is built', async () => {
+    const withCard = buildEngine({ lorebookEntries: LORE, fetchReplies: [...LORE_REPLIES], character: { name: 'Aria', description: 'A wandering healer.', personality: 'Calm.' } });
+    const builtWith = await call(withCard.caller, 'memoryGraph.bootstrapFromLorebook', { includeCard: true });
+    assert.equal(builtWith.value, true);
+    assert.ok((await call(withCard.caller, 'memoryGraph.nodes')).value.some(node => node.label === 'Aria'), 'the card node is part of the graph');
+
+    const without = buildEngine({ lorebookEntries: LORE, fetchReplies: [...LORE_REPLIES], character: { name: 'Aria', description: 'A wandering healer.', personality: 'Calm.' } });
+    await call(without.caller, 'memoryGraph.bootstrapFromLorebook', { includeCard: false });
+    assert.equal((await call(without.caller, 'memoryGraph.nodes')).value.some(node => node.label === 'Aria'), false);
+});
+
+test('memoryGraph.bootstrapAbort stops a running build: it ends without success, keeps what was built so far, and reports it was stopped by the user', async () => {
+    let releaseEmbeddings;
+    const embeddingGate = new Promise(resolve => { releaseEmbeddings = resolve; });
+    let inFlight = 0;
+    const { caller, graphCore } = buildEngine({
+        lorebookEntries: LORE, embeddingGate, onEmbeddingCall: () => { inFlight += 1; }, fetchReplies: [...LORE_REPLIES],
+    });
+    const finished = [];
+    caller.events.subscribe('memoryGraph.bootstrapFinished', payload => finished.push(payload));
+
+    const idle = await call(caller, 'memoryGraph.bootstrapAbort');
+    assert.equal(idle.value.running, false, 'nothing to stop when idle');
+
+    const build = graphCore.bootstrapFromLorebook();
+    for (let i = 0; i < 500 && inFlight < 2; i += 1) await Promise.resolve();
+    const aborted = await call(caller, 'memoryGraph.bootstrapAbort');
+    assert.equal(aborted.value.running, true);
+    releaseEmbeddings();
+
+    assert.equal(await build, false);
+    assert.equal(finished.at(-1).success, false);
+    assert.match(finished.at(-1).reason, /stopped by user/);
 });

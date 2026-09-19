@@ -392,6 +392,18 @@ export function createChatViewportCore(host, {
         return result.ok ? result.value : null;
     }
 
+    /** Сумма времени генерации по всем сообщениям глифа; `null`, если ни у одного нет измеренного времени. */
+    function sumGlyphDuration(members, byMesid, fallbackMessage) {
+        if (!members?.length) return fallbackMessage.genDurationMs ?? null;
+        let total = 0;
+        let any = false;
+        for (const id of members) {
+            const duration = byMesid.get(id)?.genDurationMs;
+            if (Number.isFinite(duration)) { total += duration; any = true; }
+        }
+        return any ? total : null;
+    }
+
     /** HTML тела сообщения, уже раскрашенный по говорящим (Ядро говорящего, `speaker.paintHtml`), если оно есть и есть что красить. */
     async function paintedBodyHtml(message) {
         const formatted = await serviceOrThrow('stChat.formatMessage', { mesid: message.mesid });
@@ -1216,15 +1228,18 @@ export function createChatViewportCore(host, {
                 const freshOrder = freshMessages.map(m => m.mesid);
                 const freshGlyphHeaders = new Map();
                 const freshById = new Map(freshMessages.map(m => [m.mesid, m]));
+                const freshGlyphMembers = new Map(); // mesid заголовка глифа -> mesid'ы всех его сообщений (для суммарного времени генерации)
                 const freshGlyphFinals = new Map(); // mesid заголовка глифа -> mesid ПОСЛЕДНЕГО (финального) сообщения глифа
                 for (const glyph of computeGlyphs(freshMessages)) {
                     for (const id of glyph.mesids) freshGlyphHeaders.set(id, glyph.headerMesid);
+                    freshGlyphMembers.set(glyph.headerMesid, glyph.mesids);
                     // Финальное — последнее сообщение глифа, но не вызов инструментов (у него нет собственного текста, правка бессмысленна).
                     const lastEditable = [...glyph.mesids].reverse().find(id => !freshById.get(id)?.isToolCall);
                     freshGlyphFinals.set(glyph.headerMesid, lastEditable ?? glyph.mesids[glyph.mesids.length - 1]);
                 }
                 snapshot = {
                     glyphFinalByHeader: freshGlyphFinals,
+                    glyphMembersByHeader: freshGlyphMembers,
                     order: freshOrder,
                     byMesid: new Map(freshMessages.map(m => [m.mesid, m])),
                     glyphHeaderByMesid: freshGlyphHeaders,
@@ -1233,7 +1248,7 @@ export function createChatViewportCore(host, {
                 glyphHeadOf.clear();
                 for (const [id, head] of freshGlyphHeaders) glyphHeadOf.set(id, head);
             }
-            const { order, byMesid, glyphHeaderByMesid, glyphFinalByHeader, indexByMesid } = snapshot;
+            const { order, byMesid, glyphHeaderByMesid, glyphFinalByHeader, glyphMembersByHeader, indexByMesid } = snapshot;
             {
                 const tail = byMesid.get(order[order.length - 1]);
                 lastBodyMesid = (lastCanvas && tail && !tail.isToolCall) ? tail.mesid : null;
@@ -1411,7 +1426,10 @@ export function createChatViewportCore(host, {
                 const chromeHeight = await ensureRowChrome(mesid, {
                     padTop, padBottom, tight, avatarFloatHeight,
                     name: message.name, avatarUrl: message.avatarUrl, isUser: message.isUser,
-                    turnIndex: Number(mesid), genDurationMs: message.genDurationMs, sendDate: message.sendDate,
+                    turnIndex: Number(mesid),
+                    // Таймер в шапке глифа — суммарное время генерации ВСЕХ склеенных сообщений глифа, а не только первого.
+                    genDurationMs: isGlyphStart ? sumGlyphDuration(glyphMembersByHeader?.get(glyphHeaderMesid), byMesid, message) : message.genDurationMs,
+                    sendDate: message.sendDate,
                     reasoningText: message.reasoningText, swipeIndex: message.swipeIndex,
                     swipeCount: message.swipeCount, text: message.text, isLast, isGlyphStart,
                     // Кнопки глифа живут в его шапке и работают с ФИНАЛЬНЫМ сообщением глифа (последним), а не с первым, у которого шапка.
