@@ -23,6 +23,7 @@ export const SYNC_CATEGORIES = Object.freeze([
     { id: 'characters', label: 'Characters' },
     { id: 'chats', label: 'Chats (including group chats)' },
     { id: 'worlds', label: 'Lorebooks' },
+    { id: 'presets', label: 'Presets & prompts (samplers, Prompt Manager, instruct, themes, Quick Replies)' },
     { id: 'backgrounds', label: 'Backgrounds' },
     { id: 'personas', label: 'Persona avatars' },
 ]);
@@ -56,6 +57,7 @@ export function registerStUserDataService(bus, {
     FormDataCtor = globalThis.FormData,
     BlobCtor = globalThis.Blob,
     concurrency = DEFAULT_CONCURRENCY,
+    now = () => Date.now(),
     refreshCharacters = () => getContext()?.getCharacters?.(),
 } = {}) {
     const headers = (options = {}) => getContext()?.getRequestHeaders?.(options) ?? {};
@@ -257,13 +259,91 @@ export function registerStUserDataService(bus, {
         async remove(name) { await postJson('/api/worldinfo/delete', { name: stripExt(name, '.json') }); },
     };
 
+    // ── Пресеты, темы, Quick Replies ──────────────────────────────────────────────────────────────────────────────
+    // Промпты Prompt Manager — часть пресетов Chat Completion (`prompts`/`prompt_order` внутри `OpenAI Settings/*.json`). Список и
+    // содержимое ВСЕХ пресетов отдаёт один вызов `settings/get` (он читает каждый файл), поэтому ответ запоминается: без этого
+    // каждое чтение файла стоило бы N чтений. Имя файла у instruct/context/… и тем берётся из поля `name` внутри — как делает сам ST.
+    // MovingUI сюда не входит: это положения окон под конкретный экран (у ноутбука и телефона они разные), и удалить его через API нельзя.
+    const PRESET_KINDS = [
+        ['openai', 'openai_setting_names', 'openai_settings', 'files'],
+        ['textgenerationwebui', 'textgenerationwebui_preset_names', 'textgenerationwebui_presets', 'files'],
+        ['kobold', 'koboldai_setting_names', 'koboldai_settings', 'files'],
+        ['novel', 'novelai_setting_names', 'novelai_settings', 'files'],
+        ['instruct', 'instruct', null, 'objects'],
+        ['context', 'context', null, 'objects'],
+        ['sysprompt', 'sysprompt', null, 'objects'],
+        ['reasoning', 'reasoning', null, 'objects'],
+    ];
+    // Каталог живёт в пределах ОДНОГО сканирования (его сбрасывает `list()` ниже): три раздела подряд не читают все файлы трижды, а правка
+    // пресета между двумя проходами не теряется. Чтения отдельных файлов после сканирования берут тот же снимок, но не старше этого срока.
+    const CATALOG_READ_MS = 15000;
+    let catalog = null;
+    let catalogAt = 0;
+
+    const stampOfText = text => { let hash = 5381; for (let index = 0; index < text.length; index += 1) hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0; return `${text.length}:${hash.toString(16)}`; };
+    const canonical = value => JSON.stringify(typeof value === 'string' ? JSON.parse(value) : value);
+
+    async function loadCatalog(maxAgeMs) {
+        if (catalog && now() - catalogAt < maxAgeMs) return catalog;
+        const data = await postForJson('/api/settings/get', {});
+        const entries = new Map();
+        const safe = (path, value) => { try { entries.set(path, canonical(value)); } catch { /* битый файл пресета пропускается, как это делает ST */ } };
+        for (const [kind, namesKey, contentsKey, shape] of PRESET_KINDS) {
+            if (shape === 'files') (data?.[namesKey] ?? []).forEach((name, index) => safe(`presets/${kind}/${name}.json`, data[contentsKey]?.[index]));
+            else for (const preset of data?.[namesKey] ?? []) if (preset?.name) safe(`presets/${kind}/${preset.name}.json`, preset);
+        }
+        for (const theme of data?.themes ?? []) if (theme?.name) safe(`themes/${theme.name}.json`, theme);
+        for (const preset of data?.quickReplyPresets ?? []) if (preset?.name) safe(`quickReplies/${preset.name}.json`, preset);
+        catalog = entries;
+        catalogAt = now();
+        return entries;
+    }
+    const forgetCatalog = () => { catalog = null; };
+
+    function catalogProvider(id) {
+        const strip = name => stripExt(name, '.json');
+        return {
+            id, category: 'presets',
+            async list() {
+                const entries = await loadCatalog(CATALOG_READ_MS);
+                return [...entries].filter(([path]) => path.startsWith(`${id}/`)).map(([path, text]) => ({ path, stamp: stampOfText(text), size: text.length, modified: 0 }));
+            },
+            async read(name) {
+                const text = (await loadCatalog(CATALOG_READ_MS)).get(`${id}/${name}`);
+                if (text == null) throw new Error(`preset "${id}/${name}" was not found`);
+                return new BlobCtor([text], { type: 'application/json' });
+            },
+            async write(name, blob) {
+                const text = canonical(await blob.text());
+                const preset = JSON.parse(text);
+                if (id === 'presets') {
+                    const slash = name.indexOf('/');
+                    await postJson('/api/presets/save', { name: strip(name.slice(slash + 1)), apiId: name.slice(0, slash), preset });
+                } else if (id === 'themes') await postJson('/api/themes/save', preset);
+                else await postJson('/api/quick-replies/save', preset);
+                forgetCatalog();
+                return { stamp: stampOfText(text), size: text.length, modified: 0 };
+            },
+            async remove(name) {
+                if (id === 'presets') {
+                    const slash = name.indexOf('/');
+                    await postJson('/api/presets/delete', { name: strip(name.slice(slash + 1)), apiId: name.slice(0, slash) });
+                } else await postJson(id === 'themes' ? '/api/themes/delete' : '/api/quick-replies/delete', { name: strip(name) });
+                forgetCatalog();
+            },
+        };
+    }
+    const presets = catalogProvider('presets');
+    const themes = catalogProvider('themes');
+    const quickReplies = catalogProvider('quickReplies');
+
     function splitChatName(name) {
         const slash = name.indexOf('/');
         if (slash < 1) throw new Error(`invalid chat path "${name}"`);
         return [name.slice(0, slash), name.slice(slash + 1)];
     }
 
-    const providers = [characters, chats, groups, groupChats, worlds, backgrounds, personas];
+    const providers = [characters, chats, groups, groupChats, worlds, presets, themes, quickReplies, backgrounds, personas];
     const byId = new Map(providers.map(provider => [provider.id, provider]));
 
     function resolve(path) {
@@ -276,6 +356,7 @@ export function registerStUserDataService(bus, {
     const wanted = categories => (Array.isArray(categories) && categories.length ? providers.filter(provider => categories.includes(provider.category)) : providers);
 
     async function list({ categories } = {}) {
+        forgetCatalog();   // каждое сканирование начинается с ЖИВЫХ данных ST
         const results = [];
         for (const provider of wanted(categories)) results.push(...await provider.list());
         return results;

@@ -53,3 +53,53 @@ test('without a document (Node) there is no screen, and wiring a missing screen 
     assert.equal(createBootScreen(undefined), null);
     assert.equal(typeof wireBootScreen(null, fakeEvents()), 'function');
 });
+
+test('with a sync waiting, the screen does NOT close after the update check — it moves to "syncing" and follows the sync until it finishes', () => {
+    const screen = fakeScreen();
+    const events = fakeEvents();
+    wireBootScreen(screen, events, { holdForSync: true });
+    events.emit('selfUpdate.checking');
+    events.emit('selfUpdate.upToDate');
+    events.emit('selfUpdate.finished', { outcome: 'up-to-date' });
+    assert.equal(screen.log.some(row => row[0] === 'finish'), false, 'still open');
+    assert.equal(screen.log.at(-1)[1], 'syncing');
+    events.emit('sync.progress', { progress: { target: 'device:Phone', phase: 'syncing', done: 3, total: 12, path: 'chats/a/b.jsonl' } });
+    events.emit('sync.finished', { peers: [] });
+    assert.deepEqual(screen.log.slice(-2).map(row => row.slice(0, 2)), [['stage', 'syncDone'], ['finish', 500]]);
+});
+
+test('without a sync waiting the screen behaves exactly as before, and sync events are ignored', () => {
+    const screen = fakeScreen();
+    const events = fakeEvents();
+    wireBootScreen(screen, events);
+    events.emit('selfUpdate.upToDate');
+    events.emit('sync.progress', { progress: { target: 'github', phase: 'syncing', done: 1, total: 2 } });
+    events.emit('sync.finished', {});
+    assert.deepEqual(screen.log.map(row => row.slice(0, 2)), [['stage', 'upToDate'], ['finish', 450]]);
+});
+
+test('a failed update check still leads to the sync, and the sync stage carries its own text, progress and an idle timeout', () => {
+    const rows = [];
+    const screen = { setStage: (name, options) => rows.push([name, options]), finish: () => rows.push(['finish']) };
+    const events = fakeEvents();
+    wireBootScreen(screen, events, { holdForSync: true });
+    events.emit('selfUpdate.failed');
+    assert.equal(rows.at(-1)[0], 'syncing');
+    assert.ok(rows.at(-1)[1].timeoutMs > 0, 'an idle timeout releases the interface if the sync stalls');
+    events.emit('sync.progress', { progress: { target: 'github', phase: 'syncing', done: 5, total: 10, path: 'a/b.png' } });
+    const [, options] = rows.at(-1);
+    assert.match(options.text, /Syncing with GitHub: 5\/10/);
+    assert.ok(options.progress > 0.7 && options.progress < 1);
+});
+
+test('progress events that arrive before the sync stage began (or with no progress) do not move the screen', () => {
+    const screen = fakeScreen();
+    const events = fakeEvents();
+    wireBootScreen(screen, events, { holdForSync: true });
+    events.emit('sync.progress', { progress: { target: 'github', phase: 'syncing', done: 1, total: 2 } });
+    assert.deepEqual(screen.log, []);
+});
+
+test('the boot stages know the two sync steps', () => {
+    assert.ok(BOOT_STAGES.syncing.text.length > 0 && BOOT_STAGES.syncDone.progress === 1);
+});

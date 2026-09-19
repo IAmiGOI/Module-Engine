@@ -14,7 +14,14 @@ function createFakeSt() {
         worlds: new Map([['Lore', { entries: { 0: { content: 'x' } } }]]),
         backgrounds: new Map([['room.png', 'ROOM'], ['stme-forest.png', 'OWN']]),
         personas: new Map([['me.png', 'ME']]),
+        // Пресеты: «файловые» (openai/kobold/…) хранятся строкой JSON, «объектные» (instruct/context/…, темы, Quick Replies) — объектом с полем name.
+        presetFiles: { openai: new Map([['Default', { temperature: 1, prompts: [{ identifier: 'main', name: 'Main Prompt', content: 'Write {{char}}\'s next reply.' }], prompt_order: [{ character_id: 100000, order: [{ identifier: 'main', enabled: true }] }] }]]), textgenerationwebui: new Map(), kobold: new Map(), novel: new Map() },
+        presetObjects: { instruct: new Map([['ChatML', { name: 'ChatML', input_sequence: '<|im_start|>user' }]]), context: new Map(), sysprompt: new Map(), reasoning: new Map() },
+        themes: new Map([['Midnight', { name: 'Midnight', main_text_color: 'rgba(220,220,210,1)' }]]),
+        quickReplies: new Map([['Quick', { name: 'Quick', qrList: [] }]]),
+        movingUI: new Map([['Layout', { name: 'Layout' }]]),
     };
+    const settingsGetCalls = [];
     const calls = [];
     let context = { characters: [{ avatar: 'Alice.png' }], characterId: 0, chatId: 'other chat', groupId: null };
     const json = data => ({ ok: true, status: 200, json: async () => data, blob: async () => new Blob([JSON.stringify(data)]), headers: new Headers() });
@@ -65,10 +72,33 @@ function createFakeSt() {
             case '/api/avatars/delete': state.personas.delete(data.avatar); return json({});
             case '/api/characters/import': assert.equal(data.file_type, 'png'); state.characters.set(`${data.preserved_name}.png`, await data.avatar.text()); return json({ file_name: data.preserved_name });
             case '/api/characters/delete': state.characters.delete(data.avatar_url); return json({});
+            case '/api/settings/get': {
+                settingsGetCalls.push(1);
+                const files = kind => [...state.presetFiles[kind].keys()];
+                const contents = kind => [...state.presetFiles[kind].values()].map(preset => JSON.stringify(preset, null, 4));
+                return json({
+                    settings: '{}',
+                    openai_setting_names: files('openai'), openai_settings: contents('openai'),
+                    textgenerationwebui_preset_names: files('textgenerationwebui'), textgenerationwebui_presets: contents('textgenerationwebui'),
+                    koboldai_setting_names: files('kobold'), koboldai_settings: contents('kobold'),
+                    novelai_setting_names: files('novel'), novelai_settings: contents('novel'),
+                    instruct: [...state.presetObjects.instruct.values()], context: [...state.presetObjects.context.values()],
+                    sysprompt: [...state.presetObjects.sysprompt.values()], reasoning: [...state.presetObjects.reasoning.values()],
+                    themes: [...state.themes.values()], quickReplyPresets: [...state.quickReplies.values()], movingUIPresets: [...state.movingUI.values()],
+                });
+            }
+            case '/api/presets/save':
+                if (state.presetFiles[data.apiId]) state.presetFiles[data.apiId].set(data.name, data.preset); else state.presetObjects[data.apiId].set(data.name, data.preset);
+                return json({ name: data.name });
+            case '/api/presets/delete': (state.presetFiles[data.apiId] ?? state.presetObjects[data.apiId]).delete(data.name); return json({});
+            case '/api/themes/save': state.themes.set(data.name, data); return json({});
+            case '/api/themes/delete': state.themes.delete(data.name); return json({});
+            case '/api/quick-replies/save': state.quickReplies.set(data.name, data); return json({});
+            case '/api/quick-replies/delete': state.quickReplies.delete(data.name); return json({});
             default: return { ok: false, status: 404 };
         }
     }
-    return { state, calls, fetch: fetchFake, setContext: value => { context = value; }, getContext: () => ({ ...context, getRequestHeaders: () => ({ 'X-CSRF-Token': 't' }), getCharacters: async () => { calls.push('getCharacters'); } }) };
+    return { state, calls, settingsGetCalls, fetch: fetchFake, setContext: value => { context = value; }, getContext: () => ({ ...context, getRequestHeaders: () => ({ 'X-CSRF-Token': 't' }), getCharacters: async () => { calls.push('getCharacters'); } }) };
 }
 
 function setup() {
@@ -87,7 +117,8 @@ test('listing covers every category with stable paths and cheap stamps, and skip
     const paths = listing.map(item => item.path).sort();
     assert.deepEqual(paths, [
         'backgrounds/room.png', 'characters/Alice.png', 'characters/Bob.png', 'chats/Alice/Chat one.jsonl',
-        'groupChats/1700.jsonl', 'groups/1700.json', 'personas/me.png', 'worlds/Lore.json',
+        'groupChats/1700.jsonl', 'groups/1700.json', 'personas/me.png', 'presets/instruct/ChatML.json', 'presets/openai/Default.json',
+        'quickReplies/Quick.json', 'themes/Midnight.json', 'worlds/Lore.json',
     ]);
     const character = listing.find(item => item.path === 'characters/Alice.png');
     assert.match(character.stamp, /W\/"9-1"\|9\|Sat, 19 Sep 2026/);
@@ -181,4 +212,56 @@ test('an unknown section is refused, and refreshing asks ST to reload its charac
     await assert.rejects(call('stUserData.read', { path: 'mystery/file' }), /no provider/);
     await call('stUserData.refresh', { categories: ['characters'] });
     assert.ok(st.calls.includes('getCharacters'));
+});
+
+test('Prompt Manager prompts travel inside the Chat Completion preset, unchanged, and other kinds of presets are listed too', async () => {
+    const { call, st } = setup();
+    const blob = await call('stUserData.read', { path: 'presets/openai/Default.json' });
+    const preset = JSON.parse(await blob.text());
+    assert.equal(preset.prompts[0].name, 'Main Prompt');
+    assert.equal(preset.prompts[0].content, "Write {{char}}'s next reply.");
+    assert.deepEqual(preset.prompt_order[0].order[0], { identifier: 'main', enabled: true });
+    assert.equal(JSON.parse(await (await call('stUserData.read', { path: 'presets/instruct/ChatML.json' })).text()).input_sequence, '<|im_start|>user');
+    assert.equal(JSON.parse(await (await call('stUserData.read', { path: 'themes/Midnight.json' })).text()).name, 'Midnight');
+    void st;
+});
+
+test('presets are written through ST\'s own save endpoints into the right kind, themes and Quick Replies too, and the stamp matches what a later listing shows', async () => {
+    const { call, st } = setup();
+    const promptPreset = { temperature: 0.7, prompts: [{ identifier: 'jailbreak', name: 'Post-history', content: 'Stay in character.' }] };
+    const stat = await call('stUserData.write', { path: 'presets/openai/My Prompts.json', blob: new Blob([JSON.stringify(promptPreset)]) });
+    assert.deepEqual(st.state.presetFiles.openai.get('My Prompts'), promptPreset);
+    await call('stUserData.write', { path: 'presets/sysprompt/Narrator.json', blob: new Blob([JSON.stringify({ name: 'Narrator', content: 'You narrate.' })]) });
+    assert.equal(st.state.presetObjects.sysprompt.get('Narrator').content, 'You narrate.');
+    await call('stUserData.write', { path: 'themes/Sunrise.json', blob: new Blob([JSON.stringify({ name: 'Sunrise', blur_strength: 3 })]) });
+    await call('stUserData.write', { path: 'quickReplies/Macros.json', blob: new Blob([JSON.stringify({ name: 'Macros', qrList: [{ label: 'a' }] })]) });
+    assert.equal(st.state.themes.get('Sunrise').blur_strength, 3);
+    assert.equal(st.state.quickReplies.get('Macros').qrList[0].label, 'a');
+    const listed = (await call('stUserData.list', { categories: ['presets'] })).find(item => item.path === 'presets/openai/My Prompts.json');
+    assert.equal(listed.stamp, stat.stamp, 'the file is recognised as "as written" — no pointless re-read or bounce');
+});
+
+test('an edited preset changes its stamp, and removing goes through the right delete endpoint', async () => {
+    const { call, st } = setup();
+    const before = (await call('stUserData.list', { categories: ['presets'] })).find(item => item.path === 'presets/openai/Default.json').stamp;
+    st.state.presetFiles.openai.set('Default', { temperature: 2, prompts: [] });
+    const after = (await call('stUserData.list', { categories: ['presets'] })).find(item => item.path === 'presets/openai/Default.json').stamp;
+    assert.notEqual(before, after);
+    await call('stUserData.remove', { path: 'presets/openai/Default.json' });
+    await call('stUserData.remove', { path: 'themes/Midnight.json' });
+    await call('stUserData.remove', { path: 'quickReplies/Quick.json' });
+    await call('stUserData.remove', { path: 'presets/instruct/ChatML.json' });
+    assert.equal(st.state.presetFiles.openai.has('Default'), false);
+    assert.equal(st.state.themes.has('Midnight'), false);
+    assert.equal(st.state.quickReplies.has('Quick'), false);
+    assert.equal(st.state.presetObjects.instruct.has('ChatML'), false);
+});
+
+test('one scan reads the preset catalog ONCE for all three sections, and MovingUI layouts never take part', async () => {
+    const { call, st } = setup();
+    const listing = await call('stUserData.list', { categories: ['presets'] });
+    assert.equal(st.settingsGetCalls.length, 1, 'presets, themes and Quick Replies share one settings/get');
+    assert.equal(listing.some(item => /Layout|movingUI/i.test(item.path)), false, 'window layouts differ per screen and cannot even be deleted through ST');
+    await call('stUserData.read', { path: 'presets/openai/Default.json' });
+    assert.equal(st.settingsGetCalls.length, 1, 'reads right after a scan reuse it');
 });

@@ -56,6 +56,7 @@ import { createFinalUiPc } from '../cores/ui/final-ui-pc.js';
 import { createFinalUiAndroid, isMobileSurface } from '../cores/ui/final-ui-android.js';
 import { createUiModulesCore } from '../cores/ui/ui-modules.js';
 import { createNotificationsCore } from '../cores/ui/notifications.js';
+import { createSyncToastsCore } from '../cores/ui/sync-toasts.js';
 import { createActivityLightCore } from '../cores/ui/activity-light.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
 import { createChatViewportCore } from '../cores/ui/chat-viewport.js';
@@ -786,6 +787,10 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
 
     await messageFooter.start();
 
+    // Тосты синхронизации: ход и итог — нашими плавающими плашками (Ядро уведомлений), не родными уведомлениями ST.
+    createSyncToastsCore(engine.registerCaller('core.ui.syncToasts', 'cores', { tier: 'official' }), {
+        isBootActive: () => Boolean(globalThis.__stmeBoot) && !globalThis.__stmeBoot.isClosed(),
+    });
     const notificationsUi = notifications.open();
     await notificationsUi.settled();
     document.body.append(notificationsUi.getRoot());

@@ -223,6 +223,29 @@ html.stme-boot-active #loader.splash-screen, html.stme-boot-active #preloader { 
     text-transform: uppercase;
     opacity: .9;
 }
+/* Стадия синхронизации: подпись длинная («Syncing with Phone: 3/12 — файл»), поэтому без разрядки и капса, с переносом. */
+.stme-boot[data-stage="syncing"] .stme-boot-stage {
+    max-width: min(340px, 86vw);
+    text-align: center;
+    letter-spacing: .06em;
+    text-transform: none;
+    font-size: .85rem;
+    overflow-wrap: anywhere;
+}
+.stme-boot-skip {
+    position: relative;
+    z-index: 1;
+    padding: 7px 16px;
+    border: 1px solid rgba(255, 255, 255, .25);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .06);
+    color: inherit;
+    font: inherit;
+    font-size: .8rem;
+    cursor: pointer;
+}
+.stme-boot-skip:hover { background: rgba(255, 255, 255, .14); }
+.stme-boot-skip[hidden] { display: none; }
 .stme-boot[data-stage="checking"] .stme-boot-fill, .stme-boot[data-stage="downloading"] .stme-boot-fill { animation: stme-boot-pulse 1.4s ease-in-out infinite; }
 @keyframes stme-boot-pulse { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
