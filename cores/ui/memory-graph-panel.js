@@ -564,10 +564,16 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      * отказ на уровне самого КОНТРАКТА (Гейт/сеть); что случилось ВНУТРИ
      * успешно завершившегося прогона — целиком за событием ниже.
      */
-    function runBootstrap() {
-        call('memoryGraph.bootstrapFromLorebook').then(result => {
-            if (!result.ok) statusText.set(`Bootstrap failed: ${result.error?.message}`);
+    function runBootstrap({ includeCard = false } = {}) {
+        call('memoryGraph.bootstrapFromLorebook', { includeCard }).then(result => {
+            if (!result.ok) statusText.set(`Generation failed: ${result.error?.message}`);
         });
+    }
+
+    /** Остановить построение — уже построенное остаётся (Ядро сохраняет его по ходу дела). */
+    async function abortBootstrap() {
+        statusText.set('Stopping…');
+        await call('memoryGraph.bootstrapAbort');
     }
 
     /**
@@ -596,8 +602,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // ВМЕСТЕ не должны превысить это число (`retrievalTargetNodes`,
     // DEFAULT_SETTINGS: 20). Ползунок пишется сразу при отпускании — не
     // нужен отдельный Save: `memoryGraph.configure` клэмпит и сохраняет сам.
-    const retrievalTargetNodes = signal(20);
-    const bootstrapMaxContextTokens = signal(0);
+    const retrievalTargetNodes = signal(24);
+    const bootstrapChunkTokens = signal(10000);
     const retrievalBusy = signal(false);
     // Sticky balance (решено с пользователем явно) — три готовые точки, не
     // откручиваемое число (см. RETRIEVAL_STABILITY_LEVELS/_MARGINS в
@@ -612,44 +618,31 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function loadRetrievalSettings() {
         const result = await call('memoryGraph.settings');
         if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
-        if (result.ok && result.value?.bootstrapMaxContextTokens != null) bootstrapMaxContextTokens.set(result.value.bootstrapMaxContextTokens);
-        if (result.ok && result.value?.retrievalStability) retrievalStability.set(result.value.retrievalStability);
+        if (result.ok && result.value?.bootstrapChunkTokens != null) bootstrapChunkTokens.set(result.value.bootstrapChunkTokens);
+        if (result.ok && result.value?.retrievalStability) {
+            retrievalStability.set(result.value.retrievalStability);
+            stabilityIndex.set(Math.max(0, RETRIEVAL_STABILITY_OPTIONS.findIndex(option => option.value === result.value.retrievalStability)));
+        }
         if (result.ok && Array.isArray(result.value?.fallbackWorkerIds)) fallbackWorkerIds.set(result.value.fallbackWorkerIds);
     }
 
-    async function saveRetrievalTargetNodes() {
-        retrievalBusy.set(true);
-        try {
-            const result = await call('memoryGraph.configure', { retrievalTargetNodes: retrievalTargetNodes.peek() });
-            if (result.ok && result.value?.retrievalTargetNodes != null) retrievalTargetNodes.set(result.value.retrievalTargetNodes);
-            statusText.set(result.ok ? `Retrieval limit saved: ${retrievalTargetNodes.peek()} nodes` : `Failed: ${result.error?.message}`);
-        } finally {
-            retrievalBusy.set(false);
-        }
+    // Настройки пишутся САМИ через 0,4 с после последнего движения ползунка (отдельных «Save» нет): Ядро клэмпит значения и сохраняет.
+    async function saveSetting(patch) {
+        const result = await call('memoryGraph.configure', patch);
+        if (!result.ok) statusText.set(`Could not save: ${result.error?.message}`);
     }
 
-    async function saveBootstrapMaxContext() {
-        retrievalBusy.set(true);
-        try {
-            const result = await call('memoryGraph.configure', { bootstrapMaxContextTokens: Number(bootstrapMaxContextTokens.peek()) || 0 });
-            if (result.ok && result.value?.bootstrapMaxContextTokens != null) bootstrapMaxContextTokens.set(result.value.bootstrapMaxContextTokens);
-            const saved = bootstrapMaxContextTokens.peek();
-            statusText.set(result.ok ? `Bootstrap context limit saved: ${saved ? `${saved} tokens` : 'unlimited'}` : `Failed: ${result.error?.message}`);
-        } finally {
-            retrievalBusy.set(false);
-        }
-    }
-
-    /** Пишется сразу по выбору (Select()'s onChange) — как и остальные пресет-подобные настройки движка, отдельного Save не нужно. */
-    async function saveRetrievalStability(value) {
-        retrievalBusy.set(true);
-        try {
-            const result = await call('memoryGraph.configure', { retrievalStability: value });
-            if (result.ok && result.value?.retrievalStability) retrievalStability.set(result.value.retrievalStability);
-            statusText.set(result.ok ? `Sticky balance saved: ${retrievalStability.peek()}` : `Failed: ${result.error?.message}`);
-        } finally {
-            retrievalBusy.set(false);
-        }
+    const stabilityIndex = signal(1);
+    const autosaveDisposers = [];
+    function bindAutosave(source, toPatch) {
+        let first = true;
+        let timer = null;
+        autosaveDisposers.push(effect(() => {
+            const value = source();
+            if (first) { first = false; return; }   // первый прогон эффекта — это просто чтение, не изменение
+            clearTimeout(timer);
+            timer = setTimeout(() => saveSetting(toPatch(value)), 400);
+        }));
     }
 
     /**
@@ -806,6 +799,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // конструктора) + КАЖДОЕ последующее изменение — драг/скролл
         // канваса живьём шлёт эти события, syncCytoscape()'s `.layout(...).run()`
         // тоже (fit пересчитывает масштаб под новый набор нод).
+        // Начальный вид — ВЕСЬ дартборд по центру канваса: модельные координаты центрированы на (0, 0), а у Cytoscape по умолчанию pan = (0, 0)
+        // и zoom = 1, то есть (0, 0) лежал в ЛЕВОМ ВЕРХНЕМ углу холста и была видна только правая нижняя четверть графа.
+        const width = container.clientWidth || 480;
+        const height = container.clientHeight || 480;
+        cy.viewport({ zoom: Math.min(width, height) / (2 * MAX_RADIUS), pan: { x: width / 2, y: height / 2 } });
         cy.on('pan zoom', updateBackgroundTransform);
         updateBackgroundTransform();
         cy.on('tap', 'node', event => {
@@ -873,109 +871,49 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         cy.layout({ name: 'preset', fit: false }).run();
     }
 
-    // --- Главный персонаж: в LB или только в карточке? (решено с
-    // пользователем явно: не автоматическая эвристика — явный выбор
-    // пользователя в UI панели, доступный всегда, не только при первом
-    // открытии). "Уже в LB" ничего не создаёт — обычный бутстрап и так
-    // импортирует Lorebook целиком, выбор здесь только подтверждает, что
-    // отдельная нода персонажа не нужна. "Только в карточке" — реальное
-    // действие, `memoryGraph.nodes.createFromCharacterCard`. Повторный
-    // клик не блокируется отдельно: почти идентичный повторный импорт
-    // естественно поймает существующий merge-dedup механизм
-    // (`detectMergeCandidate`), как и любой другой почти-дубликат —
-    // отдельная защита от двойного клика не нужна.
-    function characterOriginRow() {
+    // --- Компактные зоны боковой панели ------------------------------------------------------------------
+
+    /** Ползунок с подписью значения (для 3 положений баланса выводится название, а не число). Занимает свою долю строки. */
+    function LabeledSlider(label, valueSignal, { min, max, step = 1, format = value => String(value) } = {}) {
+        return h('label', { class: 'stme-slider stme-mg-slider' },
+            h('span', { class: 'stme-slider-head' }, h('span', {}, label), h('output', {}, computed(() => format(valueSignal())))),
+            h('input', { type: 'range', min, max, step, value: valueSignal, 'on:input': event => valueSignal.set(Number(event.target.value)) }),
+        );
+    }
+
+    /** Строка построения: две кнопки и размер чанка рядом (как строка управления в модуле Music — без заголовков и рамок). */
+    function generationRow() {
         return Row(
-            h('p', { class: 'stme-memory-graph-hint' }, 'Where does your main character live? Neither option touches the graph by itself — the first just confirms nothing extra is needed, the second imports a node from the character card.'),
-            Row(
-                Button('Character already in Lorebook', () => statusText.set('Noted — no separate node created.')),
-                Button('Only in character card — import', () => runDebugAction('memoryGraph.nodes.createFromCharacterCard')),
-            ),
+            Button(computed(() => (bootstrapRunning() ? 'Building…' : 'Generate + character card')), () => runBootstrap({ includeCard: true }), { disabled: bootstrapRunning }),
+            Button('Generate (Lorebook only)', () => runBootstrap({ includeCard: false }), { disabled: bootstrapRunning }),
+            LabeledSlider('Chunk size', bootstrapChunkTokens, { min: 6000, max: 50000, step: 1000, format: value => `${Math.round(value / 1000)}k tokens` }),
         );
     }
 
-    /**
-     * Бутстрап — вынесен из Debug (решено с пользователем): это штатная
-     * операция первого построения графа, а не дебаг. Автозапуск временно
-     * отключён (см. `bootstrapIfEmpty()` в Ядре), поэтому кнопка —
-     * единственный путь. Прогресс теперь виден ПРЯМО ЗДЕСЬ (реальная жалоба:
-     * раньше он показывался только в отдельной панели движка, а это самое
-     * окно — где пользователь реально жмёт кнопку — молчало и выглядело
-     * зависшим).
-     */
-    function bootstrapRow() {
-        return Section('Build from Lorebook', { open: true, className: 'stme-memory-graph-section' },
-            h('p', { class: 'stme-memory-graph-hint' }, 'Creates the first graph from your Lorebook entries — reading, two model passes, and an embedding per entry. Large books take a while, but the rest of this window (editing, debug actions) stays usable while it runs.'),
-            Row(
-                Button(computed(() => (bootstrapRunning() ? 'Building…' : 'Bootstrap from Lorebook')), runBootstrap, { disabled: bootstrapRunning }),
-                HoldButton('Hold to delete graph', deleteGraph, { holdMs: 1200, variant: 'danger', disabled: busy() }),
-            ),
-            h('p', { class: 'stme-memory-graph-hint' }, 'Deletes every node, region, and pending queue — everything, not just what\'s on screen. Cannot be undone.'),
-            computed(() => {
-                const progress = bootstrapProgress();
-                if (!progress) return null;
-                const percent = Math.min(100, Math.round((progress.done / progress.total) * 100));
-                // `detail` (реальная жалоба: "прогресс бар довольно мало
-                // информативный") — Ядро теперь шлёт реальный счёт ("computing
-                // embeddings (7/40)"), особенно важно раз шаги внутри фазы идут
-                // ПАРАЛЛЕЛЬНО: без счёта пользователь видел бы одно и то же
-                // слово "placing" неопределённое время, не отличая живой
-                // прогон от зависшего.
-                const label = progress.detail ? `${bootstrapPhaseLabel(progress.phase)} — ${progress.detail}` : bootstrapPhaseLabel(progress.phase);
-                return ProgressBar(percent, `${label}… ${percent}%`);
-            }),
+    /** Одна строка: подсказка (в покое) или прогресс с кнопкой остановки (при построении). Всё, что построено, Ядро сохраняет по ходу дела. */
+    function progressRow() {
+        return computed(() => {
+            const progress = bootstrapProgress();
+            if (!progress) return h('small', { class: 'stme-module-hint' }, 'Saved automatically while the graph is built.');
+            const percent = Math.min(100, Math.round((progress.done / progress.total) * 100));
+            const label = progress.detail ? `${bootstrapPhaseLabel(progress.phase)} — ${progress.detail}` : bootstrapPhaseLabel(progress.phase);
+            return h('div', { class: 'stme-mg-progress-row' }, ProgressBar(percent, `${label}… ${percent}%`), Button('Stop', abortBootstrap, { variant: 'danger' }));
+        });
+    }
+
+    /** Строка извлечения: сколько нод собирается в промпт и насколько цепко держится набор (три положения) — два ползунка рядом. */
+    function retrievalRow() {
+        return Row(
+            LabeledSlider('Nodes per retrieval', retrievalTargetNodes, { min: 10, max: 50, step: 1 }),
+            LabeledSlider('Balance', stabilityIndex, { min: 0, max: RETRIEVAL_STABILITY_OPTIONS.length - 1, step: 1, format: value => RETRIEVAL_STABILITY_OPTIONS[value]?.label ?? '' }),
         );
     }
 
-    /**
-     * Лимит извлечения: сколько узлов максимум (маяки + маршрут + шум
-     * вместе) собирается в промпт при каждом обращении к памяти. Пишется
-     * сразу — отдельный Save не нужен, Ядро клэмпит значение само.
-     */
-    function retrievalSection() {
-        return Section('Retrieval limit', { open: true, className: 'stme-memory-graph-section' },
-            Slider('Max nodes per retrieval', retrievalTargetNodes, { min: 1, max: 200, step: 1 }),
-            h('p', { class: 'stme-memory-graph-hint' }, 'Beacons + route + noise combined. Higher pulls more context per generation; lower keeps prompts tight.'),
-            Row(
-                Button(retrievalBusy() ? 'Saving…' : 'Save limit', saveRetrievalTargetNodes, { disabled: retrievalBusy() }),
-            ),
-            Field('Lorebook bootstrap: max context (tokens, 0 = unlimited)', NumberInput(bootstrapMaxContextTokens, { min: 0, max: 2000000, step: 1000 })),
-            h('p', { class: 'stme-memory-graph-hint' }, 'Caps how much lorebook text is sent to the model when the graph is built from the lorebook. Over the cap, each entry is shortened evenly in the prompt only; the graph keeps full entries.'),
-            Row(
-                Button(retrievalBusy() ? 'Saving…' : 'Save bootstrap limit', saveBootstrapMaxContext, { disabled: retrievalBusy() }),
-            ),
-            Field('Sticky balance', Select(retrievalStability, RETRIEVAL_STABILITY_OPTIONS, { onChange: saveRetrievalStability })),
-            h('p', { class: 'stme-memory-graph-hint' }, 'How eagerly a new, more relevant memory block replaces the WHOLE previous one. The same block reused turn-to-turn keeps your LLM provider\'s prompt cache warm; a more eager setting swaps sooner at the cost of that cache.'),
-        );
-    }
-
-    function fallbackWorkerRow(id) {
-        return h('label', { class: 'stme-switch' },
-            h('input', {
-                type: 'checkbox',
-                checked: computed(() => fallbackWorkerIds().includes(id)),
-                disabled: fallbackBusy(),
-                'on:change': event => toggleFallbackWorker(id, event.target.checked),
-            }),
-            h('span', { class: 'stme-switch-track' }),
-            h('span', { class: 'stme-switch-label' }, id),
-        );
-    }
-
-    /**
-     * Прямой запрос пользователя: "сделай несколько уровней fallback, перед
-     * настоящей отменой" — движок уже пробует их по очереди (один тир на
-     * каждый отмеченный id, `cores/models/internal-engine.js`'s
-     * `enqueueWithFallback()`), просто настроить список раньше было нечем.
-     * Отмечены — пробуются В ЭТОМ ПОРЯДКЕ, только если предыдущий тир (и
-     * собственный самоповтор графа при зависании) реально отказал целиком.
-     */
-    function fallbackWorkersSection() {
-        return Section('Fallback workers', { open: false, className: 'stme-memory-graph-section' },
-            h('p', { class: 'stme-memory-graph-hint' }, 'If a SideCar call stalls or fails, the graph retries once on the same connection, then tries each checked connection below in order, before finally giving up. Leave all unchecked to keep today\'s behavior (one connection, no fallback).'),
-            computed(() => (availableWorkerIds().length
-                ? availableWorkerIds().map(id => fallbackWorkerRow(id))
-                : EmptyState('No model connections configured yet — add one in the main engine panel first.'))),
+    /** Низ панели — две кнопки: обновить картинку графа и удалить граф целиком (удержанием). */
+    function footerRow() {
+        return Row(
+            Button('Refresh', refresh),
+            HoldButton('Hold to delete graph', deleteGraph, { holdMs: 1200, variant: 'danger', disabled: busy() }),
         );
     }
 
@@ -1009,16 +947,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
 
     function nodeForm() {
         return computed(() => {
-            if (!isCreating() && !selectedNode()) return EmptyState('Click a node to edit it, or "+ Node" then click the canvas to place a new one.');
-            return Section(isCreating() ? 'New node' : 'Edit node', { open: true },
-                isCreating() ? h('p', { class: 'stme-memory-graph-hint' }, `Will be placed in region ${creatingAt()?.sector ?? 0}:${creatingAt()?.ring ?? 0} — click the canvas to change.`) : null,
-                Field('Label', TextInput(formLabel)),
-                Field('Content', TextArea(formContent, { rows: 4 })),
-                Field('Importance', NumberInput(formImportance, { min: 0, max: 10, step: 1 })),
-                isCreating() ? null : Row(Toggle('Protected', formProtected)),
+            if (!selectedNode()) return h('small', { class: 'stme-module-hint' }, 'Click a node on the graph to edit it.');
+            return h('div', { class: 'stme-mg-node' },
+                Row(Field('Label', TextInput(formLabel)), Field('Importance', NumberInput(formImportance, { min: 0, max: 10, step: 1 }))),
+                Field('Content', TextArea(formContent, { rows: 3 })),
                 Row(
-                    Button(isCreating() ? 'Create' : 'Save', submitForm, { disabled: busy() }),
-                    isCreating() ? null : Button('Delete', deleteSelected, { variant: 'danger', disabled: busy() }),
+                    Toggle('Protected', formProtected),
+                    Button('Save', submitForm, { disabled: busy() }),
+                    Button('Delete', deleteSelected, { variant: 'danger', disabled: busy() }),
                     Button('Cancel', closeForm),
                 ),
             );
@@ -1060,21 +996,15 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                         h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
                     ),
                     h('p', { class: 'stme-memory-graph-hint', style: { width: '480px', boxSizing: 'border-box' } },
-                        'Click a node to edit it. Drag a node onto a different dartboard cell to move it into that region. Drag from a node\'s edge handle to another node to connect them. Click "+ Node", then click empty canvas, to place a new one.'),
+                        'Click a node to edit it. Drag a node onto a different dartboard cell to move it into that region. Drag from a node\'s edge handle to another node to connect them.'),
                 ),
-                h('div', { class: 'stme-memory-graph-sidebar' },
-                    Row(
-                        Button('+ Node — click canvas to place it', () => openCreateForm({ sector: 0, ring: 0 })),
-                        Button('Refresh', refresh),
-                    ),
+                h('div', { class: 'stme-memory-graph-sidebar stme-module-body stme-mg-flat' },
+                    generationRow(),
+                    progressRow(),
+                    retrievalRow(),
                     computed(() => (statusText() ? h('div', { class: 'stme-memory-graph-status' }, statusText()) : null)),
-                    Section('Node', { open: true, className: 'stme-memory-graph-section' },
-                        characterOriginRow(),
-                        nodeForm(),
-                    ),
-                    bootstrapRow(),
-                    retrievalSection(),
-                    fallbackWorkersSection(),
+                    nodeForm(),
+                    footerRow(),
                     debugBlock(),
                 ),
             ),
@@ -1096,7 +1026,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function open() {
         await loadWindowState();
         await loadRetrievalSettings();
-        await loadWorkerIds();
+        bindAutosave(retrievalTargetNodes, value => ({ retrievalTargetNodes: Number(value) }));
+        bindAutosave(bootstrapChunkTokens, value => ({ bootstrapChunkTokens: Number(value) }));
+        bindAutosave(stabilityIndex, value => ({ retrievalStability: RETRIEVAL_STABILITY_OPTIONS[value]?.value ?? 'balanced' }));
         const finalUi = mount(tree());
         await finalUi.settled?.();
         await refresh();
@@ -1105,7 +1037,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 'memoryGraph.nodeCreated', 'memoryGraph.nodeUpdated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeMoved',
                 'memoryGraph.nodeEvicted', 'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
                 'memoryGraph.edgeCreated', 'memoryGraph.edgeDeleted', 'memoryGraph.reset',
-            ].map(event => host.events.subscribe(event, () => refresh())),
+                // Сменили чат: Ядро загрузило граф нового чата — перерисовываем (и сбрасываем выбранную ноду прежнего графа).
+                'memoryGraph.loaded',
+            ].map(event => host.events.subscribe(event, () => { if (event === 'memoryGraph.loaded') closeForm(); refresh(); })),
             // Бутстрап-прогресс — та же тройка событий, тем же смыслом, что
             // уже подписан cores/ui/engine-panel.js: `started` подтверждает,
             // что работа реально НАЧАЛАСЬ (может идти десятки секунд/минуты
@@ -1181,7 +1115,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function activate() {
         effect(() => {
             if (!panelVisible() || cy) return;
-            waitForContainer().then(container => { if (container) ensureCytoscape(); });
+            // Открыли окно — граф обновляется сам (раньше показывал то, что успело накопиться до открытия, до нажатия Refresh).
+            waitForContainer().then(async container => { if (container) { await ensureCytoscape(); refresh(); } });
         });
         // `isCreating()`/`previewPosition()`/`formLabel()` — тоже читаются
         // здесь ЯВНО (не только внутри `syncCytoscape()`, где чтение тоже
@@ -1194,6 +1129,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function show() {
         panelVisible.set(true);
         saveWindowState();
+        refresh();
     }
 
     /** Спрятать окно — та же запись состояния, что и у крестика FloatingPanel (onClose выше): кнопка дока и крестик ведут себя одинаково. */
@@ -1211,6 +1147,6 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         hide,
         refresh,
         isVisible: () => panelVisible.peek(),
-        stop: () => { for (const unsubscribe of refreshUnsubscribers.splice(0)) unsubscribe(); },
+        stop: () => { for (const unsubscribe of refreshUnsubscribers.splice(0)) unsubscribe(); for (const dispose of autosaveDisposers.splice(0)) dispose?.(); },
     };
 }

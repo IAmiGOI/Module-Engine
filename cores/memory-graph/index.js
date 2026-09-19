@@ -1,6 +1,7 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
+import { estimateTokens, packEntriesIntoChunks } from '../../libraries/core/entry-chunker.js';
 
 const PERSISTENCE_NAMESPACE = 'core.memoryGraph';
 const SETTINGS_KEY = 'settings';
@@ -11,6 +12,7 @@ const MERGE_QUEUE_KEY = 'mergeQueue';
 const RECONSOLIDATION_QUEUE_KEY = 'reconsolidationQueue';
 const STATS_KEY = 'distanceStats';
 const STICKY_KEY = 'stickyRetrieval';
+const NOVELTY_STATS_KEY = 'noveltyStats';
 const PREPARE_PIPELINE = 'generation.prepare';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const CHECK_CONTRACT = 'memoryGraph.check';
@@ -144,7 +146,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // явно: "убрать совсем — только количество нод" (символьный лимит
     // подряд мог давать очень разный по фактическому охвату промпт в
     // зависимости от длины content'а попавшихся узлов).
-    retrievalTargetNodes: 20,
+    retrievalTargetNodes: 24,
     noiseFanoutPerNode: 2,
     // Sticky balance (решено с пользователем явно, прямой запрос: "каждая
     // нода закрепляется с прошлого прогона... новые ноды выдаются только
@@ -181,6 +183,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     bootstrapMaxTokens: 50000,
     // Потолок КОНТЕКСТА (в токенах), который уходит в модель при бутстрапе лорбука (0 — без ограничения). Записи ужимаются пропорционально.
     bootstrapMaxContextTokens: 0,
+    // Размер ТЕКСТА записей в одном чанке (токены) для Проходов 1-2 бутстрапа
+    // (0 — не чанковать). Лорбук больше этого бюджета режется НА ВЫЗОВЫ, не
+    // на текст: каждая запись уходит модели целиком (решено с пользователем:
+    // "около 6к за чанк", "без малейших потерь"). Индекс всех меток и промпт
+    // едут сверху бюджета. Лорбук, влезающий в один чанк, идёт как раньше.
+    bootstrapChunkTokens: 10000,
     // Сэмплер для Проходов 1-3 (решено с пользователем явно, числами) —
     // низкая температура и низкий reasoning-эффорт: это структурированная
     // JSON-раскладка по точным правилам, не творческая генерация, ей не
@@ -265,6 +273,7 @@ export function clampGraphSettings(values = {}) {
             : DEFAULT_SETTINGS.baseRegionNames,
         entriesPerRegionCenter: clampInt(values.entriesPerRegionCenter, 1, 200, DEFAULT_SETTINGS.entriesPerRegionCenter),
         bootstrapMaxContextTokens: clampInt(values.bootstrapMaxContextTokens, 0, 2000000, DEFAULT_SETTINGS.bootstrapMaxContextTokens),
+        bootstrapChunkTokens: clampInt(values.bootstrapChunkTokens, 0, 2000000, DEFAULT_SETTINGS.bootstrapChunkTokens),
         bootstrapMaxTokens: clampInt(values.bootstrapMaxTokens, 100, 200000, DEFAULT_SETTINGS.bootstrapMaxTokens), // потолок ВЫШЕ, чем у clampSamplerSettings() в internal-engine.js (32768) — там граница под обычный чат-сэмплер, бутстрапу реально нужно больше на настоящем лорбуке
         bootstrapTemperature: clampInt(values.bootstrapTemperature * 100, 0, 200, DEFAULT_SETTINGS.bootstrapTemperature * 100) / 100,
         bootstrapReasoningEffort: BOOTSTRAP_REASONING_EFFORTS.includes(values.bootstrapReasoningEffort) ? values.bootstrapReasoningEffort : DEFAULT_SETTINGS.bootstrapReasoningEffort,
@@ -344,6 +353,23 @@ export function stddevOf(stats) {
 export function isStrongChange(distance, stats, k = DEFAULT_SETTINGS.thresholdK) {
     if (!stats || stats.count < 2) return true;
     return distance > stats.mean + k * stddevOf(stats);
+}
+
+/**
+ * Расстояние = 1 − максимальный НАСТОЯЩИЙ косинус между эмбедингом и любым из
+ * `candidateEmbeddings` (0 — совпадение, 1 — ортогонально; отрицательные
+ * косинусы зажаты, чтобы расстояние не выходило за [0,1]). Нет кандидатов —
+ * 1 ("полностью неизвестно"). Раньше `checkAndPlace()` считал расстояние по
+ * долям softmax по 15 регионам (`vectorProbs`, сумма = 1) — те почти
+ * константны и сигнала "что-то изменилось" не несут.
+ */
+export function nearestEmbeddingDistance(embedding, candidateEmbeddings) {
+    let best = -1;
+    for (const candidate of candidateEmbeddings) {
+        if (!candidate) continue;
+        best = Math.max(best, cosineSimilarity(embedding, candidate));
+    }
+    return best < 0 ? 1 : 1 - Math.min(1, best);
 }
 
 // --- Decay: важность+связность, промодулированные прошедшим временем -------
@@ -822,6 +848,21 @@ export const BOOTSTRAP_SYSTEM_PROMPT = 'Follow the instructions in the user mess
  * (`parseRegionSkeletonResponse`), как и остальные SideCar-промпты в файле.
  */
 /**
+ * Номера записей в промптах бутстрапа. uid уникален только ВНУТРИ книги — при нескольких активных
+ * Lorebook два разных WI могут иметь запись с одним и тем же uid, и номера в промптах/разборе ответов
+ * склеились бы. Все uid уникальны → остаются как есть (один Lorebook ведёт себя как раньше);
+ * иначе — сквозная нумерация 0..N-1 в порядке чтения.
+ */
+export function assignBootstrapUids(sourceUids) {
+    return new Set(sourceUids).size === sourceUids.length ? sourceUids.slice() : sourceUids.map((_, index) => index);
+}
+
+/** Как запись называется в промптах: метка + [книга], когда активных книг несколько (два WI могут содержать одноимённые записи). */
+export function entryTitle(entry) {
+    return `${entry.label}${entry.book ? ` [${entry.book}]` : ''}`;
+}
+
+/**
  * Ужимает тексты записей так, чтобы список влез в `maxTokens` (грубо 4 символа на токен). 0/не число — без изменений.
  * Ужимаются только копии для ПРОМПТА — сами записи (и то, что попадёт в граф) остаются целыми.
  */
@@ -836,7 +877,7 @@ export function fitEntriesToTokenBudget(entries, maxTokens) {
 }
 
 export function buildRegionSkeletonPrompt(entries, baseRegionNames) {
-    const listing = entries.map(entry => `${entry.uid}. ${entry.label}: ${entry.content}`).join('\n');
+    const listing = entries.map(entry => `${entry.uid}. ${entryTitle(entry)}: ${entry.content}`).join('\n');
     return `Here is the FULL World Info / Lorebook for this story (${entries.length} entries, numbered):\n\n${listing}\n\nWe are organizing this into semantic regions of a memory graph. Use ONLY these regions — do NOT invent, rename, merge, or add any others: ${baseRegionNames.join(', ')}.\n\nFor EACH region that genuinely fits this lore, pick exactly 2 entries (by number) that best represent it — the most foundational, representative entries for that region. Skip a region if nothing in the lore fits it.\n\nReply with ONLY a JSON array, using EXACTLY the region names given above: [{"region": "region name", "subCenterUids": [number, number]}, ...]`;
 }
 
@@ -866,7 +907,7 @@ export function parseRegionSkeletonResponse(parsed, entries) {
  * плотности (`entriesPerRegionCenter` — один центр примерно на N записей).
  */
 export function buildAdditionalCentersPrompt(entries, existingRegionNames, targetTotalRegions, entriesPerRegionCenter) {
-    const listing = entries.map(entry => `${entry.uid}. ${entry.label}: ${entry.content}`).join('\n');
+    const listing = entries.map(entry => `${entry.uid}. ${entryTitle(entry)}: ${entry.content}`).join('\n');
     return `The same World Info (${entries.length} entries, numbered) is being organized into these regions, each already has 2 representative entries: ${existingRegionNames.join(', ')}.\n\nWe need:\n1. A CENTER entry for EACH of these ${existingRegionNames.length} regions — the single most defining entry for that region (can be one of its own 2 representatives, or a different entry that fits better).\n2. Enough NEW regions (with their own center entry) so the total region count reaches about ${targetTotalRegions} (roughly one region per ${entriesPerRegionCenter} entries is the target density — deviate if the lore genuinely doesn't split that way).\n\nAll entries:\n${listing}\n\nReply with ONLY a JSON array covering ALL regions (the ${existingRegionNames.length} existing ones AND any new ones): [{"region": "region name", "centerUid": number}, ...]`;
 }
 
@@ -887,6 +928,142 @@ export function parseAdditionalCentersResponse(parsed, entries) {
         result.push({ name, centerUid: uid });
     }
     return result;
+}
+
+// --- Чанкованные Проходы 1-2 (map-reduce над вызовами, не над текстом) ------
+// Лорбук больше `bootstrapChunkTokens` не режется и не сжимается: он делится
+// на ЧАНКИ ЗАПИСЕЙ ЦЕЛИКОМ (libraries/core/entry-chunker.js), каждый чанк —
+// отдельный вызов ("map"), где модель видит полный текст своих записей плюс
+// индекс меток ВСЕХ записей (знает, что существует за пределами чанка).
+// Затем один маленький вызов ("reduce") выбирает итог среди кандидатов. Почему
+// Проход 1 не теряет: глобальные лучшие 2 региона всегда входят в лучшие 2 СВОЕГО
+// чанка (иначе в чанке их обошли бы двое — и глобально тоже), поэтому
+// кандидатов на чанк достаточно; берём с запасом на непоследовательность
+// модели между вызовами.
+
+export const CHUNK_CANDIDATES_SKELETON = 3;
+export const CHUNK_CANDIDATES_CENTERS = 2;
+
+function labelIndexListing(allEntries) {
+    return allEntries.map(entry => `${entry.uid}. ${entryTitle(entry)}`).join('\n');
+}
+
+function fullTextListing(entries) {
+    return entries.map(entry => `${entry.uid}. ${entryTitle(entry)}: ${entry.content}`).join('\n');
+}
+
+const CANDIDATE_REPLY_SHAPE = '[{"region": "region name", "candidates": [{"uid": number, "note": "max 15 words: what this entry is"}, ...]}, ...]';
+
+/** Проход 1, map — кандидаты в под-центры по базовым регионам из записей ЭТОГО чанка. */
+export function buildSkeletonPartPrompt({ partEntries, allEntries, partNumber, partCount, baseRegionNames, candidatesPerRegion = CHUNK_CANDIDATES_SKELETON }) {
+    return `A story's World Info / Lorebook (${allEntries.length} entries) is too large to read at once, so it is analyzed in ${partCount} parts. This is part ${partNumber} of ${partCount}.\n\nINDEX of ALL entries (labels only, for awareness of what exists in other parts):\n${labelIndexListing(allEntries)}\n\nFULL TEXT of the entries in THIS part (${partEntries.length} entries):\n\n${fullTextListing(partEntries)}\n\nWe are organizing the lore into semantic regions of a memory graph. Use ONLY these regions — do NOT invent, rename, merge, or add any others: ${baseRegionNames.join(', ')}.\n\nFor EACH region, choose from THIS part's entries ONLY (uids listed in the full-text section above) up to ${candidatesPerRegion} candidates that best represent it — the most foundational, representative entries — ranked best first, each with a short note. Skip a region if nothing in this part fits.\n\nReply with ONLY a JSON array, using EXACTLY the region names above: ${CANDIDATE_REPLY_SHAPE}`;
+}
+
+/** Проход 2, map — кандидаты в центры существующих регионов и предложения НОВЫХ регионов из записей ЭТОГО чанка. */
+export function buildCentersPartPrompt({ partEntries, allEntries, partNumber, partCount, existingRegionNames, targetTotalRegions, entriesPerRegionCenter, candidatesPerRegion = CHUNK_CANDIDATES_CENTERS }) {
+    return `A story's World Info / Lorebook (${allEntries.length} entries) is too large to read at once, so it is analyzed in ${partCount} parts. This is part ${partNumber} of ${partCount}.\n\nINDEX of ALL entries (labels only, for awareness of what exists in other parts):\n${labelIndexListing(allEntries)}\n\nFULL TEXT of the entries in THIS part (${partEntries.length} entries):\n\n${fullTextListing(partEntries)}\n\nThe whole lore is being organized into semantic regions. These regions already exist: ${existingRegionNames.join(', ')}.\n\nFrom THIS part's entries ONLY (uids listed in the full-text section above):\n1. For EACH existing region this part has material for, propose up to ${candidatesPerRegion} candidates for its CENTER — the single most defining entry for that region — ranked best first, each with a short note.\n2. If this part's entries genuinely form a coherent group that fits none of the existing regions, propose a NEW region for it (with its own center candidates). The target for the WHOLE lore is about ${targetTotalRegions} regions in total (roughly one per ${entriesPerRegionCenter} entries) — do not over-propose.\n\nSkip anything this part has no material for.\n\nReply with ONLY a JSON array: ${CANDIDATE_REPLY_SHAPE}`;
+}
+
+/**
+ * Разбор ответа map-вызова — терпимо к частично неверным полям. `allowedRegionNames` (Проход 1) —
+ * только эти имена, иначе регион отбрасывается; `null` (Проход 2) — любые (новые регионы разрешены).
+ * Возвращает [{region, candidates: [{uid, note}]}] с рангом по порядку в ответе; дубли uid внутри региона убираются.
+ */
+export function parseCandidatesResponse(parsed, validUids, { allowedRegionNames = null, maxPerRegion = 3 } = {}) {
+    if (!Array.isArray(parsed)) return [];
+    const allowed = allowedRegionNames ? new Map(allowedRegionNames.map(name => [normalizeRegionName(name), name])) : null;
+    const groups = [];
+    for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+        const rawName = String(item.region ?? '').trim();
+        if (!rawName) continue;
+        const name = allowed ? allowed.get(normalizeRegionName(rawName)) : rawName;
+        if (!name) continue;
+        const seen = new Set();
+        const candidates = [];
+        for (const candidate of Array.isArray(item.candidates) ? item.candidates : []) {
+            const uid = Number(candidate?.uid);
+            if (!validUids.has(uid) || seen.has(uid)) continue;
+            seen.add(uid);
+            candidates.push({ uid, note: String(candidate?.note ?? '').trim() });
+            if (candidates.length >= maxPerRegion) break;
+        }
+        if (candidates.length) groups.push({ region: name, candidates });
+    }
+    return groups;
+}
+
+function normalizeRegionName(name) {
+    return String(name).trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * Сливает результаты всех чанков по региону: кандидаты упорядочены по РАНГУ (все первые места чанков раньше
+ * всех вторых и т.д.), затем по номеру чанка; дубли uid убираются. `regionOrder` — канонические имена
+ * (регионы, уже известные раньше, идут первыми и в своём написании); остальные — в порядке появления.
+ */
+export function mergeCandidateGroups(partResults, entryByUid, regionOrder = []) {
+    const canonicalNames = new Map(regionOrder.map(name => [normalizeRegionName(name), name]));
+    const byKey = new Map(regionOrder.map(name => [normalizeRegionName(name), { region: name, ranked: [] }]));
+    partResults.forEach((groups, partIndex) => {
+        for (const group of groups) {
+            const key = normalizeRegionName(group.region);
+            if (!byKey.has(key)) { byKey.set(key, { region: canonicalNames.get(key) ?? group.region, ranked: [] }); }
+            const bucket = byKey.get(key);
+            group.candidates.forEach((candidate, rank) => bucket.ranked.push({ ...candidate, rank, partIndex }));
+        }
+    });
+    const merged = [];
+    for (const { region, ranked } of byKey.values()) {
+        ranked.sort((a, b) => a.rank - b.rank || a.partIndex - b.partIndex);
+        const seen = new Set();
+        const candidates = [];
+        for (const candidate of ranked) {
+            const entry = entryByUid.get(candidate.uid);
+            if (!entry || seen.has(candidate.uid)) continue;
+            seen.add(candidate.uid);
+            candidates.push({ uid: candidate.uid, label: entryTitle(entry), note: candidate.note });
+        }
+        if (candidates.length) merged.push({ region, candidates });
+    }
+    return merged;
+}
+
+function candidateLine(candidate) {
+    return `  ${candidate.uid}. ${candidate.label}${candidate.note ? ` — ${candidate.note}` : ''}`;
+}
+
+/**
+ * Если список кандидатов не влезает в бюджет — сначала убираем худшие по рангу (по одному, у региона с
+ * наибольшим списком, минимум 1 на регион). Это управляемая деградация: отбрасываются только кандидаты
+ * с низшим рангом, а не текст записей. `trimmed` — сколько убрано (для лога).
+ */
+export function trimCandidatesToBudget(groups, budgetTokens) {
+    const working = groups.map(group => ({ region: group.region, candidates: [...group.candidates] }));
+    const cost = () => working.reduce((sum, group) => sum + estimateTokens(group.region) + group.candidates.reduce((s, c) => s + estimateTokens(candidateLine(c)), 0), 0);
+    let trimmed = 0;
+    if (!(Number(budgetTokens) > 0)) return { groups: working, trimmed };
+    while (cost() > budgetTokens) {
+        const widest = working.reduce((best, group) => (group.candidates.length > best.candidates.length ? group : best), working[0]);
+        if (!widest || widest.candidates.length <= 1) break;
+        widest.candidates.pop();
+        trimmed += 1;
+    }
+    return { groups: working, trimmed };
+}
+
+function candidateListing(groups) {
+    return groups.map(group => `Region "${group.region}":\n${group.candidates.map(candidateLine).join('\n')}`).join('\n\n');
+}
+
+/** Проход 1, reduce — итоговые 2 под-центра на регион среди кандидатов всех чанков. Ответ разбирает parseRegionSkeletonResponse(). */
+export function buildSkeletonReducePrompt(groups, baseRegionNames) {
+    return `A story's World Info was analyzed in parts. For each region, the best candidate entries from every part are listed below, best first (the note describes what each entry is).\n\n${candidateListing(groups)}\n\nFor EACH region choose exactly 2 entries (by number) that best represent it — the most foundational, representative ones. Use ONLY these regions, exactly as named: ${baseRegionNames.join(', ')}. Skip a region if none of its candidates truly fits. Choose only from the listed numbers.\n\nReply with ONLY a JSON array: [{"region": "region name", "subCenterUids": [number, number]}, ...]`;
+}
+
+/** Проход 2, reduce — центр для каждого региона + слияние одинаковых по смыслу НОВЫХ регионов. Ответ разбирает parseAdditionalCentersResponse(). */
+export function buildCentersReducePrompt(groups, existingRegionNames, targetTotalRegions, entriesPerRegionCenter) {
+    return `A story's World Info was analyzed in parts. These regions already exist: ${existingRegionNames.join(', ')}. Below, for every region (existing ones and NEW ones proposed by individual parts), the candidate CENTER entries from every part are listed, best first (the note describes what each entry is).\n\n${candidateListing(groups)}\n\nWe need:\n1. A CENTER entry (by number, chosen from the listed candidates) for EACH existing region — the single most defining entry for it.\n2. The NEW regions worth keeping, each with its center. Parts worked independently, so several proposed regions may be the SAME region under different names — merge those into one, using the clearest name. The target for the whole lore is about ${targetTotalRegions} regions in total (roughly one per ${entriesPerRegionCenter} entries) — deviate if the lore genuinely does not split that way. Do not assign one entry as the center of two regions.\n\nReply with ONLY a JSON array covering ALL regions (the ${existingRegionNames.length} existing ones AND any new ones): [{"region": "region name", "centerUid": number}, ...]`;
 }
 
 /**
@@ -1007,6 +1184,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let mergeQueue = {};
     let reconsolidationQueue = {};
     let distanceStats = null;
+    let noveltyStats = null; // Уэлфорд по расстоянию до ближайшей НОДЫ (не центра региона) — см. checkAndPlace()
     let stickyRetrieval = null; // {beaconIds, text} | null — sticky balance, см. injectIntoPrompt()
     let turnCounter = 0;
 
@@ -1042,7 +1220,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     async function loadState() {
-        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult] = await Promise.all([
+        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult, noveltyResult] = await Promise.all([
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: REGIONS_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STAGING_KEY, fallback: {} }),
@@ -1050,6 +1228,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: RECONSOLIDATION_QUEUE_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STATS_KEY, fallback: null }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, fallback: null }),
+            call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NOVELTY_STATS_KEY, fallback: null }),
         ]);
         nodes = nodesResult.ok ? nodesResult.value ?? {} : {};
         regions = regionsResult.ok ? regionsResult.value ?? {} : {};
@@ -1058,6 +1237,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         reconsolidationQueue = reconsolidationQueueResult.ok ? reconsolidationQueueResult.value ?? {} : {};
         distanceStats = statsResult.ok ? statsResult.value : null;
         stickyRetrieval = stickyResult.ok ? stickyResult.value : null;
+        noveltyStats = noveltyResult.ok ? noveltyResult.value : null;
     }
 
     async function persistNodes() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, value: nodes }); }
@@ -1065,7 +1245,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     async function persistStaging() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STAGING_KEY, value: staging }); }
     async function persistMergeQueue() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: MERGE_QUEUE_KEY, value: mergeQueue }); }
     async function persistReconsolidationQueue() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: RECONSOLIDATION_QUEUE_KEY, value: reconsolidationQueue }); }
-    async function persistStats() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STATS_KEY, value: distanceStats }); }
+    async function persistStats() {
+        await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STATS_KEY, value: distanceStats });
+        await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: NOVELTY_STATS_KEY, value: noveltyStats });
+    }
     async function persistStickyRetrieval() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, value: stickyRetrieval }); }
 
     /**
@@ -1720,6 +1903,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             mergeQueue = {};
             reconsolidationQueue = {};
             distanceStats = null;
+            noveltyStats = null;
             stickyRetrieval = null;
             await Promise.all([
                 persistNodes(), persistRegions(), persistStaging(),
@@ -1892,10 +2076,24 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const contextEmbedding = embeddingResult.value; // ТОЛЬКО сигнал размещения — см. комментарий у passage-эмбединга ниже, почему это не то же самое, что node.embedding.
 
             const { coords, probs: vectorProbs } = vectorProbsForAllRegions(contextEmbedding);
-            const nearestSimilarity = Math.max(...coords.map((_, i) => vectorProbs[i]), 0);
-            const distance = 1 - nearestSimilarity;
-            const wasStrong = isStrongChange(distance, distanceStats, settings.thresholdK);
-            distanceStats = updateDistanceStats(distanceStats, distance);
+            // Два независимых сигнала, оба адаптивные (Уэлфорд), достаточно ЛЮБОГО:
+            // 1) смена ТЕМЫ — расстояние до ближайшего центра региона;
+            // 2) НОВЫЙ ФАКТ внутри знакомой темы — расстояние до ближайшей НОДЫ
+            //    (центры регионов этого не видят: факт про уже известную
+            //    тему близок к её центру и раньше пропускался как no-change).
+            // Оба считаются по настоящему косинусу, не по долям softmax.
+            const centerEmbeddings = Object.values(regions).map(region => nodes[region.centerNodeId]?.embedding).filter(Boolean);
+            const nodeEmbeddings = Object.values(nodes).map(node => node.embedding).filter(Boolean);
+            const topicDistance = nearestEmbeddingDistance(contextEmbedding, centerEmbeddings);
+            const noveltyDistance = nearestEmbeddingDistance(contextEmbedding, nodeEmbeddings);
+            const topicChanged = isStrongChange(topicDistance, distanceStats, settings.thresholdK);
+            const factIsNew = isStrongChange(noveltyDistance, noveltyStats, settings.thresholdK);
+            const wasStrong = topicChanged || factIsNew;
+            // "Не с чем сравнивать" (пустой граф) — фиктивное расстояние 1, в
+            // базовую линию его класть нельзя: единственный такой выброс
+            // раздувает среднее/σ и гейт надолго перестаёт срабатывать.
+            if (centerEmbeddings.length) distanceStats = updateDistanceStats(distanceStats, topicDistance);
+            if (nodeEmbeddings.length) noveltyStats = updateDistanceStats(noveltyStats, noveltyDistance);
             await persistStats();
             if (!wasStrong) return { status: 'no-change' };
 
@@ -1977,6 +2175,17 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * (органический рост во время игры остаётся на нём, решено явно: цена
      * LLM здесь приемлема как разовая, не на каждый ход).
      */
+    // Остановка построения по кнопке: флаг проверяется на каждом шаге прогресса и перед каждым вызовом модели (сам уже идущий вызов
+    // прервать нельзя — остановка сработает, как только он вернётся). Уже построенное сохраняется (см. автосохранение ниже).
+    const BOOTSTRAP_ABORTED = Symbol('memoryGraph.bootstrapAborted');
+    let bootstrapAbort = false;
+    let bootstrapActive = false;
+    const AUTOSAVE_INTERVAL_MS = 4000;
+
+    function persistEverything() {
+        return Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
+    }
+
     async function bootstrapFromLorebook() {
         // Обёрнуто в enqueueWrite (не было раньше) — решено с пользователем:
         // теперь бутстрап зовётся ИЗ ФОНА, не awaited вызывающим (см.
@@ -2006,8 +2215,18 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // безусловно", что уже описан в MEMORY_GRAPH.md).
             const totalSummaries = summariesResult.value.length;
             const estimatedRegions = Math.max(1, Math.round(totalSummaries / settings.entriesPerRegionCenter));
-            const totalSteps = totalSummaries * 2 + 2 + estimatedRegions + 1 + 1; // читаем + размещаем по разу на запись, 2 общих LLM-прохода, Проход 3 по региону, условный Проход 4 связности (не больше одного вызова), финализация
+            let totalSteps = totalSummaries * 2 + 2 + estimatedRegions + 1 + 1; // читаем + размещаем по разу на запись, 2 общих LLM-прохода, Проход 3 по региону, условный Проход 4 связности (не больше одного вызова), финализация
             let doneSteps = 0;
+            // Автосохранение по ходу построения (владелец: «сохранение в реальном времени без участия пользователя, на случай ошибок»):
+            // раньше граф писался на диск только в самом конце, и сбой на середине терял всё уже построенное.
+            let lastAutosaveAt = Date.now();
+            let autosaving = false;
+            const autosave = () => {
+                if (autosaving || Date.now() - lastAutosaveAt < AUTOSAVE_INTERVAL_MS) return;
+                autosaving = true;
+                lastAutosaveAt = Date.now();
+                persistEverything().catch(() => {}).finally(() => { autosaving = false; });
+            };
             let succeeded = false;
             // Реальная жалоба пользователя: "после первого этапа bootstrap
             // не идут следующие... только один запрос к SideCar" — до этого
@@ -2028,9 +2247,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // "placing" неопределённое время, никак не отличая живой прогон
             // от зависшего.
             function tick(phase, detail = null) {
+                if (bootstrapAbort) throw BOOTSTRAP_ABORTED;
+                autosave();
                 doneSteps = Math.min(doneSteps + 1, totalSteps);
                 publishEvent('memoryGraph.bootstrapProgress', { done: doneSteps, total: totalSteps, phase, detail });
             }
+            bootstrapAbort = false;
+            bootstrapActive = true;
             publishEvent('memoryGraph.bootstrapStarted', { totalEntries: totalSummaries, totalSteps });
 
             try {
@@ -2050,55 +2273,152 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     tick('reading', `reading Lorebook (${readDone}/${totalSummaries})`);
                     return { summary, fullResult };
                 }));
-                const rawEntries = [];
-                const entryByUid = new Map();
+                // Активных Lorebook может быть несколько (lorebook.find отдаёт записи ВСЕХ источников: глобальные
+                // книги, персонажа, чата, персоны) — uid уникален только внутри книги, поэтому номер записи в
+                // промптах (`uid` ниже) назначается сквозным при коллизиях (assignBootstrapUids()).
+                const readable = [];
                 for (const { summary, fullResult } of readResults) {
                     if (!fullResult.ok) continue;
                     const entry = fullResult.value;
-                    const label = String(entry.comment ?? '').trim() || `WI #${entry.uid}`;
                     const content = String(entry.content ?? '').trim();
                     if (!content) continue; // пустая запись — нечего эмбедить и нечего класть в граф
-                    const record = { uid: summary.uid, label, content, raw: entry };
-                    rawEntries.push(record);
-                    entryByUid.set(summary.uid, record);
+                    readable.push({ summary, entry, content });
                 }
+                const promptUids = assignBootstrapUids(readable.map(item => item.summary.uid));
+                const multipleBooks = new Set(readable.map(item => item.summary.book)).size > 1;
+                const rawEntries = [];
+                const entryByUid = new Map();
+                readable.forEach(({ summary, entry, content }, index) => {
+                    const label = String(entry.comment ?? '').trim() || `WI #${entry.uid}`;
+                    const record = { uid: promptUids[index], label, content, raw: entry, ...(multipleBooks ? { book: summary.book } : {}) };
+                    rawEntries.push(record);
+                    entryByUid.set(record.uid, record);
+                });
                 if (!rawEntries.length) { failureReason = 'no-content: every Lorebook entry was empty or unreadable'; return false; }
 
-                // 2. Проход 1 — базовый скелет (Locations/Main Characters/
-                // Factions или свои варианты) + 2 под-центра на каждый.
-                const promptEntries = fitEntriesToTokenBudget(rawEntries, settings.bootstrapMaxContextTokens);
-                const skeletonPrompt = buildRegionSkeletonPrompt(promptEntries, settings.baseRegionNames);
-                const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
-                tick('skeleton', `laying out regions from ${rawEntries.length} entries`);
-                if (!skeletonResult.ok) { failureReason = `Проход 1 (skeleton) call failed: ${skeletonResult.error?.message}`; return false; }
-                const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
-                if (!skeletonRegions.length) {
-                    // Звонок УДАЛСЯ (skeletonResult.ok), но разбор дал пустой
-                    // список — модель ответила не тем JSON'ом, который ждёт
-                    // parseRegionSkeletonResponse() (не массив, нет валидных
-                    // subCenterUids, и т.п.). Сырой ответ — в консоль целиком:
-                    // единственный способ понять, ЧТО именно модель прислала.
-                    failureReason = 'Проход 1 (skeleton) response parsed to zero usable regions';
-                    console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw model reply:`, skeletonResult.value);
-                    return false;
+                // Помощник для всех вызовов модели в Проходах 1-2 (одинаковый сэмплер/воркеры).
+                const generateBootstrap = prompt => call('model.generate', { prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+
+                // Вызов чанка/сверки: одна повторная попытка на сбой вызова ИЛИ неразобранный JSON (маленькие вызовы
+                // дешёвые, а потеря одного чанка = потеря его записей для структуры).
+                async function generateJson(prompt) {
+                    let lastError = null;
+                    for (let attempt = 0; attempt < 2; attempt += 1) {
+                        if (bootstrapAbort) throw BOOTSTRAP_ABORTED;
+                        const result = await generateBootstrap(prompt);
+                        if (!result.ok) { lastError = result.error?.message ?? 'call failed'; continue; }
+                        const parsed = parseModelJson(result.value);
+                        if (parsed !== undefined) return { ok: true, parsed };
+                        lastError = 'reply was not valid JSON';
+                    }
+                    return { ok: false, error: lastError };
                 }
 
-                // 3. Проход 2 — центр для КАЖДОГО региона из Прохода 1, плюс
-                // новые регионы сверх них, до целевой плотности
-                // (entriesPerRegionCenter). Отказ здесь ТОЖЕ прерывает бутстрап
-                // целиком (решено с пользователем — как и Проход 1, не как
-                // мягкий откат Прохода 3 ниже).
-                const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
-                const centersPrompt = buildAdditionalCentersPrompt(promptEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
-                const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
-                tick('centers', `targeting ~${targetTotal} region${targetTotal === 1 ? '' : 's'}`);
-                if (!centersResult.ok) { failureReason = `Проход 2 (centers) call failed: ${centersResult.error?.message}`; return false; }
-                const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
-                if (!centerAssignments.length) {
-                    failureReason = 'Проход 2 (centers) response parsed to zero usable center assignments';
-                    console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw model reply:`, centersResult.value);
-                    return false;
+                // 2-3. Проходы 1-2. Лорбук влезает в один чанк — как раньше, двумя вызовами по всему тексту.
+                // Больше — чанкованный map-reduce (см. buildSkeletonPartPrompt() выше): ни одна запись не режется.
+                const chunks = packEntriesIntoChunks(rawEntries, settings.bootstrapChunkTokens);
+                if (chunks.length > 1) totalSteps += chunks.length * 2; // прикидка: по вызову на чанк в каждом из двух проходов
+
+                async function runSinglePasses() {
+                    // 2. Проход 1 — базовый скелет (Locations/Main Characters/
+                    // Factions или свои варианты) + 2 под-центра на каждый.
+                    const promptEntries = fitEntriesToTokenBudget(rawEntries, settings.bootstrapMaxContextTokens);
+                    const skeletonPrompt = buildRegionSkeletonPrompt(promptEntries, settings.baseRegionNames);
+                    const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+                    tick('skeleton', `laying out regions from ${rawEntries.length} entries`);
+                    if (!skeletonResult.ok) { failureReason = `Проход 1 (skeleton) call failed: ${skeletonResult.error?.message}`; return null; }
+                    const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
+                    if (!skeletonRegions.length) {
+                        // Звонок УДАЛСЯ (skeletonResult.ok), но разбор дал пустой
+                        // список — модель ответила не тем JSON'ом, который ждёт
+                        // parseRegionSkeletonResponse() (не массив, нет валидных
+                        // subCenterUids, и т.п.). Сырой ответ — в консоль целиком:
+                        // единственный способ понять, ЧТО именно модель прислала.
+                        failureReason = 'Проход 1 (skeleton) response parsed to zero usable regions';
+                        console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw model reply:`, skeletonResult.value);
+                        return null;
+                    }
+
+                    // 3. Проход 2 — центр для КАЖДОГО региона из Прохода 1, плюс
+                    // новые регионы сверх них, до целевой плотности
+                    // (entriesPerRegionCenter). Отказ здесь ТОЖЕ прерывает бутстрап
+                    // целиком (решено с пользователем — как и Проход 1, не как
+                    // мягкий откат Прохода 3 ниже).
+                    const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
+                    const centersPrompt = buildAdditionalCentersPrompt(promptEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
+                    const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+                    tick('centers', `targeting ~${targetTotal} region${targetTotal === 1 ? '' : 's'}`);
+                    if (!centersResult.ok) { failureReason = `Проход 2 (centers) call failed: ${centersResult.error?.message}`; return null; }
+                    const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
+                    if (!centerAssignments.length) {
+                        failureReason = 'Проход 2 (centers) response parsed to zero usable center assignments';
+                        console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw model reply:`, centersResult.value);
+                        return null;
+                    }
+                    return { skeletonRegions, centerAssignments };
                 }
+
+                async function runChunkedPasses() {
+                    const validUids = new Set(rawEntries.map(entry => entry.uid));
+                    const density = settings.entriesPerRegionCenter;
+
+                    // Проход 1 — map (параллельно, очередь воркеров сама сериализует при одном воркере).
+                    let doneSkeletonParts = 0;
+                    const skeletonParts = await Promise.all(chunks.map(async (partEntries, index) => {
+                        const outcome = await generateJson(buildSkeletonPartPrompt({ partEntries, allEntries: rawEntries, partNumber: index + 1, partCount: chunks.length, baseRegionNames: settings.baseRegionNames }));
+                        doneSkeletonParts += 1;
+                        tick('skeleton', `scanning lore, part ${doneSkeletonParts}/${chunks.length}`);
+                        return outcome;
+                    }));
+                    const failedSkeleton = skeletonParts.find(part => !part.ok);
+                    if (failedSkeleton) { failureReason = `Проход 1 (skeleton) part call failed: ${failedSkeleton.error}`; return null; }
+                    const skeletonGroups = mergeCandidateGroups(
+                        skeletonParts.map(part => parseCandidatesResponse(part.parsed, validUids, { allowedRegionNames: settings.baseRegionNames, maxPerRegion: CHUNK_CANDIDATES_SKELETON })),
+                        entryByUid, settings.baseRegionNames,
+                    );
+                    if (!skeletonGroups.length) { failureReason = 'Проход 1 (skeleton) parts produced zero usable candidates'; return null; }
+
+                    // Проход 1 — reduce.
+                    const skeletonReduce = trimCandidatesToBudget(skeletonGroups, settings.bootstrapChunkTokens);
+                    if (skeletonReduce.trimmed) console.warn(`[memoryGraph] bootstrap: skeleton reduce trimmed ${skeletonReduce.trimmed} lowest-ranked candidate(s) to fit ${settings.bootstrapChunkTokens} tokens.`);
+                    const skeletonOutcome = await generateJson(buildSkeletonReducePrompt(skeletonReduce.groups, settings.baseRegionNames));
+                    tick('skeleton', 'choosing region representatives');
+                    if (!skeletonOutcome.ok) { failureReason = `Проход 1 (skeleton) reduce failed: ${skeletonOutcome.error}`; return null; }
+                    const skeletonRegions = parseRegionSkeletonResponse(skeletonOutcome.parsed, rawEntries);
+                    if (!skeletonRegions.length) { failureReason = 'Проход 1 (skeleton) reduce parsed to zero usable regions'; console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw reply:`, skeletonOutcome.parsed); return null; }
+
+                    // Проход 2 — map.
+                    const existingRegionNames = skeletonRegions.map(region => region.name);
+                    const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / density));
+                    let doneCenterParts = 0;
+                    const centerParts = await Promise.all(chunks.map(async (partEntries, index) => {
+                        const outcome = await generateJson(buildCentersPartPrompt({ partEntries, allEntries: rawEntries, partNumber: index + 1, partCount: chunks.length, existingRegionNames, targetTotalRegions: targetTotal, entriesPerRegionCenter: density }));
+                        doneCenterParts += 1;
+                        tick('centers', `scanning lore for centers, part ${doneCenterParts}/${chunks.length}`);
+                        return outcome;
+                    }));
+                    const failedCenter = centerParts.find(part => !part.ok);
+                    if (failedCenter) { failureReason = `Проход 2 (centers) part call failed: ${failedCenter.error}`; return null; }
+                    const centerGroups = mergeCandidateGroups(
+                        centerParts.map(part => parseCandidatesResponse(part.parsed, validUids, { maxPerRegion: CHUNK_CANDIDATES_CENTERS })),
+                        entryByUid, existingRegionNames,
+                    );
+                    if (!centerGroups.length) { failureReason = 'Проход 2 (centers) parts produced zero usable candidates'; return null; }
+
+                    // Проход 2 — reduce (заодно склеивает одинаковые по смыслу новые регионы из разных чанков).
+                    const centersReduce = trimCandidatesToBudget(centerGroups, settings.bootstrapChunkTokens);
+                    if (centersReduce.trimmed) console.warn(`[memoryGraph] bootstrap: centers reduce trimmed ${centersReduce.trimmed} lowest-ranked candidate(s) to fit ${settings.bootstrapChunkTokens} tokens.`);
+                    const centersOutcome = await generateJson(buildCentersReducePrompt(centersReduce.groups, existingRegionNames, targetTotal, density));
+                    tick('centers', `targeting ~${targetTotal} region${targetTotal === 1 ? '' : 's'}`);
+                    if (!centersOutcome.ok) { failureReason = `Проход 2 (centers) reduce failed: ${centersOutcome.error}`; return null; }
+                    const centerAssignments = parseAdditionalCentersResponse(centersOutcome.parsed, rawEntries);
+                    if (!centerAssignments.length) { failureReason = 'Проход 2 (centers) reduce parsed to zero usable center assignments'; console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw reply:`, centersOutcome.parsed); return null; }
+                    return { skeletonRegions, centerAssignments };
+                }
+
+                const passes = chunks.length > 1 ? await runChunkedPasses() : await runSinglePasses();
+                if (!passes) return false;
+                const { skeletonRegions, centerAssignments } = passes;
 
                 // Сшиваем Проход 1 (под-центры) и Проход 2 (центры) по имени
                 // региона; регион без реального, валидного центра — не заводим
@@ -2326,7 +2646,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 publishEvent('memoryGraph.bootstrapped', { source: 'lorebook', nodeCount: Object.keys(nodes).length });
                 succeeded = true;
                 return true;
+            } catch (error) {
+                if (error === BOOTSTRAP_ABORTED) { failureReason = 'stopped by user — what was built so far is kept'; return false; }
+                throw error;
             } finally {
+                bootstrapActive = false;
+                // Не дошли до конца (ошибка или остановка) — всё равно записываем, что успели построить.
+                if (!succeeded) { try { await persistEverything(); await call('storage.chatMemory.flush'); } catch { /* сохранение — best effort */ } }
                 if (!succeeded && failureReason) console.warn(`[memoryGraph] bootstrap stopped: ${failureReason}`);
                 publishEvent('memoryGraph.bootstrapFinished', { success: succeeded, nodeCount: Object.keys(nodes).length, reason: failureReason });
             }
@@ -2612,6 +2938,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
     async function reloadForActiveChat() {
         await loadStateEnqueued();
+        // Граф другого чата загружен — панель графа перечитывает его сама (событие для неё; на `st.chatChanged` она бы опередила загрузку).
+        publishEvent('memoryGraph.loaded', { nodeCount: Object.keys(nodes).length });
         await bootstrapIfEmpty().catch(error => {
             console.warn('[memoryGraph] background bootstrap failed:', error);
         });
@@ -2758,7 +3086,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),
         host.own.register('memoryGraph.sweepReconsolidationQueue', () => sweepReconsolidationQueue()),
         host.own.register('memoryGraph.sweepBackbone', () => sweepBackbone()),
-        host.own.register('memoryGraph.bootstrapFromLorebook', () => bootstrapFromLorebook()),
+        // `includeCard` — после построения из Lorebook добавить ещё и ноду из карточки персонажа (для персонажей, которых нет в Lorebook).
+        host.own.register('memoryGraph.bootstrapFromLorebook', async params => {
+            const built = await bootstrapFromLorebook();
+            if (built && params?.includeCard) await createNodeFromCharacterCard();
+            return built;
+        }),
+        host.own.register('memoryGraph.bootstrapAbort', () => { const running = bootstrapActive; if (running) bootstrapAbort = true; return { ok: true, running }; }),
     ];
 
     return {
