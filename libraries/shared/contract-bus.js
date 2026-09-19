@@ -71,7 +71,10 @@ export function createContractBus(eventBus = createEventBus()) {
             // пайплайна), нельзя брать владельца из params: их пишет сам
             // вызывающий, и подделать чужое имя было бы тривиально. Директор —
             // единственный, кто знает настоящего отправителя.
+            const stats = globalThis.__stmeBusStats;   // диагностика: включается из консоли `globalThis.__stmeBusStats = {}` — время ожидания по контрактам
+            const started = stats ? performance.now() : 0;
             const value = await supplier.handler(params, { callerId, priority });
+            if (stats) { const row = (stats[contract] ??= { n: 0, ms: 0, max: 0 }); const took = performance.now() - started; row.n += 1; row.ms += took; row.max = Math.max(row.max, took); }
             return { ok: true, value };
         } catch (error) {
             return { ok: false, error: { message: error?.message ?? String(error) } };

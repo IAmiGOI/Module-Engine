@@ -3,6 +3,9 @@ import { request } from '../libraries/shared/request.js';
 import { registerDomService } from '../services/dom.js';
 import { registerHtmlRasterizerService } from '../services/html-rasterizer.js';
 import { registerWebglRendererService } from '../services/webgl-renderer.js';
+import { registerRasterCacheService } from '../services/raster-cache.js';
+import { registerGlAnimationService } from '../services/gl-animation.js';
+import { createGlAnimationsCore } from '../cores/ui/gl-animations.js';
 import { registerHttpService } from '../services/http.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerStChatService } from '../services/st-chat.js';
@@ -442,6 +445,8 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // никакого фейка/инъекции здесь не нужно вне тестов.
     registerHtmlRasterizerService(engine.buses.services);
     registerWebglRendererService(engine.buses.services);
+    registerRasterCacheService(engine.buses.services);
+    registerGlAnimationService(engine.buses.services);
     // Локальный эмбединг — не сетевой вызов через `http.request` (см.
     // doc-comment services/embedding.js за честной оговоркой: сама закачка
     // весов модели идёт мимо нашего Гейта сети, это делает сторонняя
@@ -617,6 +622,8 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // (генерация, трекинг, саммари, самообновление) и уведомлений, сводит их
     // в одно состояние — а полоску пилюли-дока красит по нему index.js
     // (пилюля живёт мимо движка, поэтому ей отдаётся сам сигнал).
+    // Ядро WebGL-анимаций: общий цикл кадров и реестр маленьких эффектов (см. cores/ui/gl-animations.js).
+    const glAnimations = createGlAnimationsCore(engine.registerCaller('core.ui.glAnimations', 'cores', { tier: 'official' }));
     const activityLight = createActivityLightCore(
         engine.registerCaller('core.ui.activityLight', 'cores', { tier: 'official' }),
     );
@@ -651,8 +658,8 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // безусловно на загрузке страницы.
     const chatViewportHost = engine.registerCaller('core.ui.chatViewport', 'cores', { tier: 'official' });
     const chatViewport = createChatViewportCore(chatViewportHost, {
-        prerenderFactor: 2,
-        textureBudgetBytes: 256 * 1024 * 1024, prefetchScreens: 3, prefetchConcurrency: 3,
+        prerenderFactor: 4,
+        textureBudgetBytes: 256 * 1024 * 1024, prefetchScreens: 3, prefetchConcurrency: 10, persistentCache: true,
         createFinalUi: () => createFinalUiPc(chatViewportHost),
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.chatViewport' }),
     });
@@ -785,5 +792,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }

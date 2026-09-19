@@ -162,10 +162,42 @@ export function createSpeakerCore(host, { publish } = {}) {
         return listCast();
     }
 
+    /**
+     * Красит РЕПЛИКИ в готовом HTML сообщения и возвращает новый HTML — для Chat Viewport, который рисует текст из HTML сам
+     * (родного `.mes_text` у старых сообщений в DOM может не быть вовсе, там красить нечего). Работает на отсоединённом узле:
+     * та же цепочка «текст узла → определение говорящего → `dom.paintTextRuns`», что у Модуля для родной ленты, но с цветами,
+     * которые УЖЕ заданы у персонажей состава (автоцвет новым персонажам назначает Модуль при покраске родной ленты).
+     * Без состава/цветов/реплик возвращает исходный HTML без изменений.
+     */
+    async function paintHtml({ html, mesid, defaultSpeakerName } = {}) {
+        const source = String(html ?? '');
+        const colorById = new Map(listCast().filter(entity => entity.color).map(entity => [entity.id, entity.color]));
+        if (!source || colorById.size === 0) return source;
+        const services = (contract, params) => request(host.services, contract, { params });
+        const created = await services('dom.createElement', { tag: 'div' });
+        if (!created.ok || !created.value) return source;
+        const node = created.value;
+        await services('dom.setInnerHtml', { el: node, html: source });
+        const text = (await services('dom.textContent', { node })).value ?? '';
+        if (!String(text).trim()) return source;
+        const resolved = await resolve({ text, mesid, defaultSpeakerName });
+        const runs = [];
+        for (const segment of resolved.segments) {
+            if (segment.type !== 'dialogue' || !segment.speaker || segment.confidence <= 0) continue;
+            const color = colorById.get(segment.speaker.id);
+            if (color) runs.push({ start: segment.start, end: segment.end, color });
+        }
+        if (!runs.length) return source;
+        await services('dom.paintTextRuns', { container: node, runs });
+        const painted = await services('dom.getInnerHtml', { node });
+        return painted.ok && typeof painted.value === 'string' ? painted.value : source;
+    }
+
     const chatChangedUnsubscribe = host.events.subscribe('st.chatChanged', () => { void loadCastForCurrentChat(); });
 
     const unregisters = [
         host.own.register('speaker.resolve', params => resolve(params)),
+        host.own.register('speaker.paintHtml', params => paintHtml(params)),
         host.own.register('speaker.cast.list', () => listCast()),
         host.own.register('speaker.cast.add', params => addCharacter(params)),
         host.own.register('speaker.cast.remove', params => removeCharacter(params)),

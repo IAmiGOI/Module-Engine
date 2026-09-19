@@ -139,3 +139,29 @@ test('speaker.castChanged is published on add/update/remove, so the panel knows 
 
     assert.equal(events.length, 3);
 });
+
+test('speaker.paintHtml paints dialogue of a colored cast member on a detached node and returns the painted HTML — the viewport draws text from HTML, so it needs this instead of the native .mes_text', async () => {
+    const { engine, speakerCore } = buildEngine();
+    await speakerCore.restore();
+    const dom = { painted: null };
+    engine.buses.services.register('dom.createElement', () => ({ html: '' }));
+    engine.buses.services.register('dom.setInnerHtml', ({ el, html }) => { el.html = html; return true; });
+    engine.buses.services.register('dom.textContent', ({ node }) => node.html.replace(/<[^>]+>/g, ''));
+    engine.buses.services.register('dom.paintTextRuns', ({ container, runs }) => { dom.painted = runs; container.html = `<painted>${container.html}</painted>`; return true; });
+    engine.buses.services.register('dom.getInnerHtml', ({ node }) => node.html);
+    const module = moduleCaller(engine, ['speaker.cast.add', 'speaker.paintHtml']);
+
+    // Без цветов у персонажей — HTML возвращается как есть.
+    await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Lisawoo', gender: 'F' } }, resolve));
+    const html = '<p>Lisawoo nodded. "Fine," she said.</p>';
+    const plain = await new Promise(resolve => module.cores.subscribe('speaker.paintHtml', { params: { html, mesid: '1' } }, resolve));
+    assert.equal(plain.value, html);
+    assert.equal(dom.painted, null);
+
+    // С цветом — реплика красится этим цветом.
+    await new Promise(resolve => module.cores.subscribe('speaker.cast.add', { params: { name: 'Mira', gender: 'F', color: '#ff8800' } }, resolve));
+    const painted = await new Promise(resolve => module.cores.subscribe('speaker.paintHtml', { params: { html: '<p>Mira frowned. "No," she said.</p>', mesid: '2' } }, resolve));
+    assert.equal(painted.ok, true);
+    assert.ok(dom.painted?.some(run => run.color === '#ff8800'), 'the dialogue run carries the cast member color');
+    assert.match(painted.value, /^<painted>/);
+});

@@ -122,7 +122,11 @@ function mountChild(rawSignal, path, onPatch, patchType) {
             const shapeChanged = !isFreshMount && previousShape !== 'text';
             if (isFreshMount || shapeChanged || previousProps?.__text !== text) {
                 if (shapeChanged) { disposeChildren(); disposeChildren = () => {}; childrenSignal = null; }
-                onPatch({ type: isFreshMount ? patchType : 'replace', path, node: { text } });
+                // Текст → текст: меняем значение того же узла (`setText`), а не пересоздаём его — замена узла
+                // (childList-мутация) заставляла браузер пересчитывать стили сотен элементов вокруг (замерено трассировкой).
+                if (isFreshMount) onPatch({ type: patchType, path, node: { text } });
+                else if (!shapeChanged) onPatch({ type: 'setText', path, text });
+                else onPatch({ type: 'replace', path, node: { text } });
             }
             previousShape = 'text';
             previousProps = { __text: text };

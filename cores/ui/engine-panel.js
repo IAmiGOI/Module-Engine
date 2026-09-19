@@ -987,6 +987,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             const stickyLayer = await callServiceOrThrow('dom.createElement', { tag: 'div' });
             const marginLayer = await callServiceOrThrow('dom.createElement', { tag: 'div' });
             const canvas = await callServiceOrThrow('dom.createElement', { tag: 'canvas' });
+            const lastCanvas = await callServiceOrThrow('dom.createElement', { tag: 'canvas' });
             const mirror = await callServiceOrThrow('dom.createElement', { tag: 'div' });
             const chrome = await callServiceOrThrow('dom.createElement', { tag: 'div' });
             const leftHandle = await callServiceOrThrow('dom.createElement', { tag: 'div' });
@@ -1028,7 +1029,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             // `marginLayer` — фон автоматически сдвигается СИНХРОННО с
             // канвасом и хромом, без единой правки в самом `chat-viewport.js`
             // (который ничего не знает про "margin", это забота панели).
-            await callServiceOrThrow('dom.setProp', { el: marginLayer, key: 'style', value: { position: 'absolute', top: '0px', left: '0px', height: '0px', overflow: 'visible' } });
+            await callServiceOrThrow('dom.setProp', { el: marginLayer, key: 'style', value: { position: 'absolute', top: '0px', left: '0px', height: '0px', overflow: 'visible', willChange: 'transform' } });
             await callServiceOrThrow('dom.setProp', { el: canvas, key: 'style', value: { position: 'absolute', top: '0px', left: '0px', display: 'block' } });
             await callServiceOrThrow('dom.setProp', { el: chrome, key: 'style', value: { position: 'absolute', top: '0px', left: '0px', height: '0px', overflow: 'visible' } });
             // Ручки-хваталки для заужения — owner: "нужно ТЯНУТЬ физически.
@@ -1052,7 +1053,9 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             // канвас на высоту spacer'а вниз (canvas не прилипал сразу, а
             // просто стоял ниже своей естественной позиции в потоке), и всё
             // тело сообщения рисовалось за пределами видимой области.
+            await callServiceOrThrow('dom.setProp', { el: lastCanvas, key: 'style', value: { position: 'absolute', top: '0px', left: '0px', display: 'none', pointerEvents: 'none', willChange: 'transform' } });
             await callServiceOrThrow('dom.append', { parent: marginLayer, child: canvas });
+            await callServiceOrThrow('dom.append', { parent: marginLayer, child: lastCanvas });
             await callServiceOrThrow('dom.append', { parent: marginLayer, child: chrome });
             await callServiceOrThrow('dom.append', { parent: stickyLayer, child: marginLayer });
             await callServiceOrThrow('dom.append', { parent: stickyLayer, child: leftHandle });
@@ -1195,7 +1198,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             const maxMargin = Math.max(0, clientSize.width * (1 - MIN_WIDTH_FRACTION) / 2);
             const initialMargin = Math.min(chatViewportSideMargin(), maxMargin);
             const effectiveWidth = Math.max(1, clientSize.width - initialMargin * 2);
-            const ok = await chatViewport.attach({ canvas, mirrorContainer: mirror, chromeContainer: chrome, width: effectiveWidth, height: clientSize.height, css });
+            const ok = await chatViewport.attach({ canvas, lastCanvas, mirrorContainer: mirror, chromeContainer: chrome, width: effectiveWidth, height: clientSize.height, css });
             // Слой держит окно предрендера (канвас выше и ниже экрана): `overflow: clip`
             // + `overflow-clip-margin` — содержимое за краем видно (для подкатки при
             // скролле), но НЕ растягивает scrollHeight обёртки. Отрицательный marginBottom гасит собственную
@@ -1323,6 +1326,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
                     window.removeEventListener('pointermove', onMove);
                     window.removeEventListener('pointerup', onUp);
                     stopDrag = null;
+                    saveChatViewportState();
                 };
                 window.addEventListener('pointermove', onMove);
                 window.addEventListener('pointerup', onUp);
@@ -1331,8 +1335,41 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             await callServiceOrThrow('dom.setProp', { el: leftHandle, key: 'on:pointerdown', value: startDrag(1) });
             await callServiceOrThrow('dom.setProp', { el: rightHandle, key: 'on:pointerdown', value: startDrag(-1) });
 
+            // Правила ST `:has(... [style*="..."])` пересчитывают стили сотен элементов на любое изменение style —
+            // пока Chat Viewport включён, они убраны (возвращаются при выключении).
+            await callService('dom.suppressStyleRules', { key: 'chat-viewport', selectorPattern: String.raw`:has\([^)]*\[style\*=` });
+            // ST держит весь документ одним слоем хаком на `<html>` — из-за него любое изменение перерисовывает страницу целиком.
+            await callService('dom.overrideRootStyles', { key: 'chat-viewport', styles: { transform: 'none', 'backface-visibility': 'visible', perspective: 'none' } });
+            // Нижняя граница оверлея — верх панели ввода ST (`#form_sheld`), а не фиксированная высота с момента включения: когда
+            // текст в поле ввода растёт на несколько строк, панель поднимается, и оверлей обязан укоротиться и оттеснить чат вверх
+            // (родной `#chat` скрыт и это сделать за нас не может — раньше панель уезжала ПОД чат).
+            let stopHeightSync = () => {};
+            const formSheld = await callService('dom.querySelector', { el: body, selector: '#form_sheld' });
+            if (formSheld.ok && formSheld.value) {
+                let currentHeight = clientSize.height;
+                const syncHeight = async () => {
+                    const formRect = await callService('dom.measureRect', { el: formSheld.value });
+                    if (!formRect.ok) return;
+                    const nextHeight = Math.max(120, Math.round(formRect.value.top - rect.top));
+                    if (nextHeight === currentHeight) return;
+                    const scrollPos = await callService('dom.scrollPosition', { el: wrapper });
+                    const previousHeight = currentHeight;
+                    const wasAtBottom = scrollPos.ok && (scrollPos.value.top + previousHeight >= lastTotalHeight - BOTTOM_THRESHOLD);
+                    currentHeight = nextHeight;
+                    await callService('dom.setProp', { el: wrapper, key: 'style', value: { height: `${nextHeight}px` } });
+                    await callService('dom.setProp', { el: stickyLayer, key: 'style', value: { height: `${nextHeight}px`, marginBottom: `${-nextHeight}px` } });
+                    if (wasAtBottom && scrollPos.ok) {
+                        // Чат прижат к низу — сохраняем это: содержимое едет вверх вместе с поднявшейся панелью.
+                        await callService('dom.setScrollPosition', { el: wrapper, top: Math.max(0, scrollPos.value.top + (previousHeight - nextHeight)) });
+                    }
+                    chatViewport.setViewport({ viewportHeight: nextHeight, scrollTop: wrapper.scrollTop });
+                };
+                await callService('dom.observeResize', { el: formSheld.value, handler: syncHeight });
+                stopHeightSync = () => { callService('dom.unobserveResize', { el: formSheld.value, handler: syncHeight }); };
+                syncHeight();
+            }
             chatViewportOverlay = {
-                wrapper, spacer, canvas, mirror, chrome, stopSpacerSync, stopSideMarginSync,
+                wrapper, spacer, canvas, mirror, chrome, stopSpacerSync, stopSideMarginSync, stopHeightSync,
                 stopDrag: () => stopDrag?.(),
             };
             await callServiceOrThrow('dom.setProp', { el: spacer, key: 'style', value: { height: `${chatViewport.totalHeight()}px` } });
@@ -1350,9 +1387,12 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         try {
             chatViewportOverlay.stopSpacerSync();
             chatViewportOverlay.stopSideMarginSync();
+            chatViewportOverlay.stopHeightSync?.();
             chatViewportOverlay.stopDrag();
             await chatViewport.detach();
             await callService('dom.remove', { node: chatViewportOverlay.wrapper });
+            await callService('dom.restoreStyleRules', { key: 'chat-viewport' });
+            await callService('dom.restoreRootStyles', { key: 'chat-viewport' });
         } finally {
             chatViewportOverlay = null;
             chatViewportBusy.set(false);
@@ -1363,7 +1403,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         return Card('Chat Viewport (experimental)', { ...collapse.bind('card:chatViewport') },
             h('p', { class: 'stme-summary-help' }, 'Renders the chat history through our own WebGL-backed viewport instead of SillyTavern\'s native chat. Off by default — this is early and only approximates real SillyTavern layout (see ROADMAP).'),
             Toggle('Enabled', chatViewportEnabled, {
-                onChange: value => (value ? enableChatViewport() : disableChatViewport()),
+                onChange: async value => { await (value ? enableChatViewport() : disableChatViewport()); await saveChatViewportState(); },
                 hint: computed(() => (chatViewportBusy() ? 'Starting…' : '')),
             }),
             // Ползунок ширины нарочно НЕ здесь — owner: "нужно ТЯНУТЬ
@@ -1698,10 +1738,29 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         ];
     }
 
+    /** Включён ли Chat Viewport и ширина заужения — переживают перезагрузку страницы. */
+    function saveChatViewportState() {
+        return request(host.own, 'storage.settings.set', {
+            params: { namespace: 'core.ui.panel', key: 'chatViewport', value: { enabled: chatViewportEnabled.peek(), sideMargin: chatViewportSideMargin.peek() } },
+        });
+    }
+
+    async function restoreChatViewportState() {
+        const result = await request(host.own, 'storage.settings.get', { params: { namespace: 'core.ui.panel', key: 'chatViewport', fallback: {} } });
+        const saved = (result.ok ? result.value : null) ?? {};
+        if (Number.isFinite(saved.sideMargin)) chatViewportSideMargin.set(saved.sideMargin);
+        if (saved.enabled) {
+            chatViewportEnabled.set(true);
+            // ST к этому моменту может ещё не дорисовать чат — включаем с небольшой задержкой.
+            setTimeout(() => { enableChatViewport(); }, 1500);
+        }
+    }
+
     async function open() {
         // Сначала память о свёрнутом — иначе первый кадр раскрылся бы по
         // умолчанию, а потом схлопнулся, и это было бы видно.
         await collapse.restore();
+        await restoreChatViewportState();
         await loadWorkers();
         await loadMacros();
         await loadTrackerFields();

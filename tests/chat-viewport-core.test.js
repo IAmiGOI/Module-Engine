@@ -105,9 +105,9 @@ function buildEngine({ messages = [], heightByHtml = new Map(), glAvailable = tr
     engine.buses.services.register('webglChat.attach', () => glAvailable);
     engine.buses.services.register('webglChat.resize', ({ width, height }) => { calls.resize?.push({ width, height }); return true; });
     engine.buses.services.register('webglChat.detach', () => true);
-    engine.buses.services.register('webglChat.uploadTexture', ({ textureId }) => { calls.uploadTexture.push(textureId); return true; });
+    engine.buses.services.register('webglChat.uploadTexture', ({ canvas, textureId }) => { calls.uploadTexture.push(textureId); (calls.uploadOn ??= []).push({ textureId, canvas }); return true; });
     engine.buses.services.register('webglChat.releaseTexture', ({ textureId }) => { calls.releaseTexture.push(textureId); return true; });
-    engine.buses.services.register('webglChat.drawFrame', ({ quads }) => { calls.drawFrame.push(quads); return true; });
+    engine.buses.services.register('webglChat.drawFrame', ({ canvas, quads }) => { calls.drawFrame.push(quads); (calls.drawOn ??= []).push({ canvas, quads }); return true; });
 
     // `ui.messageFooter.*` — на шине 'cores', НЕ 'services' (см. doc-comment
     // `coreOrNull()` в `cores/ui/chat-viewport.js` — этот же разнобой шин
@@ -132,7 +132,7 @@ function buildEngine({ messages = [], heightByHtml = new Map(), glAvailable = tr
         return true;
     });
 
-    return { engine, calls, fireStEvent, messageFooterCalls };
+    return { engine, calls, fireStEvent, messageFooterCalls, messages };
 }
 
 function buildCore(engineBundle, coreOptions) {
@@ -330,6 +330,8 @@ test('detach() unsubscribes every ST event — a redraw event firing afterward m
     assert.equal(bundle.calls.drawFrame.length, drawFrameCountAfterDetach, 'a detached core must not still be listening for ST redraw events');
 });
 
+function messages0Text(bundle, text) { bundle.messages[0].text = text; }
+
 test('attach() subscribes to STREAM_TOKEN_RECEIVED DIRECTLY via stEvents (bypassing host.events) — found live: the shared event bus never bridges this event at all (DEFAULT_EXCLUDED_ST in cores/events/index.js), so streaming text/reasoning/ToolCalls never redrew Chat Viewport until this direct subscription existed', async () => {
     const heightByHtml = new Map([['<p>a</p>', 100]]);
     const bundle = buildEngine({ messages: [msg('0', 'a')], heightByHtml });
@@ -339,8 +341,9 @@ test('attach() subscribes to STREAM_TOKEN_RECEIVED DIRECTLY via stEvents (bypass
     assert.ok(bundle.calls.stEventsSubscribe.some(c => c.event === 'STREAM_TOKEN_RECEIVED'), 'attach() must subscribe directly to the raw ST stream event');
 
     const drawFrameCountBefore = bundle.calls.drawFrame.length;
+    messages0Text(bundle, 'a2'); // стрим что-то дописал — иначе кадр без изменений не перерисовывается (и это правильно)
     bundle.fireStEvent('STREAM_TOKEN_RECEIVED');
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 20));
 
     assert.ok(bundle.calls.drawFrame.length > drawFrameCountBefore, 'firing the raw ST stream event must trigger a re-render');
 });
@@ -559,4 +562,20 @@ test('detach() removes every remaining chrome row, not just the texture/mirror s
     await core.detach();
 
     for (const root of chromeRoots) assert.ok(bundle.calls.domRemove.includes(root));
+});
+
+test('with a separate last-message canvas, ONLY the last message body is uploaded to and drawn on it — streaming redraws that small canvas, never the main one', async () => {
+    const heightByHtml = new Map([['<p>a</p>', 100], ['<p>b</p>', 100]]);
+    const bundle = buildEngine({ messages: [msg('0', 'a'), msg('1', 'b')], heightByHtml });
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0 });
+    const LAST_CANVAS = { __id: 'last-canvas', props: {} };
+    await core.attach({ canvas: CANVAS, lastCanvas: LAST_CANVAS, mirrorContainer: MIRROR_CONTAINER, width: 300, height: 400 });
+
+    const uploadFor = id => bundle.calls.uploadOn.find(u => u.textureId === id)?.canvas;
+    assert.equal(uploadFor('0'), CANVAS, 'an earlier message lives on the main canvas');
+    assert.equal(uploadFor('1'), LAST_CANVAS, 'the last message lives on its own canvas');
+    const mainQuads = bundle.calls.drawOn.filter(d => d.canvas === CANVAS).at(-1).quads;
+    assert.ok(!mainQuads.some(q => q.textureId === '1'), 'the main canvas never draws the last message');
+    const lastQuads = bundle.calls.drawOn.filter(d => d.canvas === LAST_CANVAS).at(-1).quads;
+    assert.deepEqual(lastQuads.map(q => q.textureId), ['1']);
 });

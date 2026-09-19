@@ -80,7 +80,7 @@ function getContext() {
  * `:hover` — a visible vibration (caught live). The zone never moves; only
  * the pill inside it does.
  */
-function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, toggleMain, requestModuleHud, activityState, memoryGraphPanel, picturePanel } = {}) {
+function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, toggleMain, requestModuleHud, activityState, glAnimations, memoryGraphPanel, picturePanel } = {}) {
     if (document.getElementById('stmeBetaLauncherDock')) return;
     const zone = document.createElement('div');
     zone.id = 'stmeBetaLauncherDock';
@@ -383,7 +383,7 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, selfUpdate, memoryGraphPanel, picturePanel, activityLight, modules, enginePanel, firstLoad, firstLoadResult, uiEngine } = await wireEngine({
+    const { engine, panelUi, selfUpdate, memoryGraphPanel, picturePanel, activityLight, glAnimations, modules, enginePanel, firstLoad, firstLoadResult, uiEngine } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
@@ -459,6 +459,7 @@ async function init() {
         openSettingsPanel: toggleSettings,
         requestModuleHud: id => modules.requestHud(id),
         activityState: activityLight.state,
+        glAnimations,
         memoryGraphPanel,
         picturePanel,
         // Пилюля знает только `panel` для своего toggle — обёртка ниже

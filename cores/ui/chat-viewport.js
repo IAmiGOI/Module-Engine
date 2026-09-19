@@ -106,10 +106,31 @@ const GLYPH_GAP = 10;
  * левого края текста и левого края аватарки/имени над ним.
  */
 const TEXT_PADDING = 10;
+const SKELETON_POOL_MAX = 14;
+const MEASURE_BATCH_MS = 3; // окно сбора измерений в одну пачку
+const EDIT_MIN_HEIGHT = 96; // минимальная высота тела в режиме правки, px
 /** Сколько мс после последнего скролла считаем, что пользователь ещё листает (рисуем только видимое). */
 const QUICK_SCROLL_MS = 150;
+/** На сколько мс вперёд по ходу прокрутки предзагружаем (скорость × это время). */
+const PREFETCH_HORIZON_MS = 1500;
+/** Высота канваса последнего сообщения растёт ступенями (ресайз очищает канвас — на каждый токен нельзя). */
+const LAST_CANVAS_STEP = 512;
+const MAX_CANVAS_CSS = 8000;
+
+/** Быстрый нестойкий хеш строки (cyrb53) — ключ постоянного кэша растров. */
+function hashString(str) {
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < str.length; i += 1) {
+        const ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
 /** Сколько тел строк окна растеризуем одновременно. */
-const PRELAUNCH_CONCURRENCY = 4;
+const PRELAUNCH_CONCURRENCY = 10;
 /**
  * owner: "Оно должно быть СПРАВА от аватарки. Блоки ризонинга тоже. И
  * только после заполнения той зоны спускаться вниз." Настоящая аватарка —
@@ -160,7 +181,7 @@ export function createChatViewportCore(host, {
     publish, rowHeight = DEFAULT_ROW_HEIGHT, overscan = DEFAULT_OVERSCAN, prerenderFactor = 1,
     // Бюджет памяти под растеризованные тела вне экрана (null — вытеснять сразу за окном, как раньше) и
     // дальность фоновой предрастеризации в высотах экрана (0 — выключена).
-    textureBudgetBytes = null, prefetchScreens = 0, prefetchConcurrency = 3,
+    textureBudgetBytes = null, prefetchScreens = 0, prefetchConcurrency = 3, persistentCache = false,
     getDevicePixelRatio = () => globalThis.devicePixelRatio || 1,
     createFinalUi,
 } = {}) {
@@ -172,6 +193,30 @@ export function createChatViewportCore(host, {
     let canvas = null;
     let mirrorContainer = null;
     let chromeContainer = null;
+    // Заглушки строк, которые ещё грузятся при быстрой прокрутке: пул <div> со «строчками текста» вместо пустого экрана.
+    const skeletonPool = [];
+    async function applySkeletons(specs) {
+        if (!chromeContainer) return;
+        while (skeletonPool.length < specs.length && skeletonPool.length < SKELETON_POOL_MAX) {
+            const node = await serviceOrNull('dom.createElement', { tag: 'div' });
+            if (!node) break;
+            await serviceOrNull('dom.setProp', { el: node, key: 'class', value: 'stme-chat-viewport-skeleton' });
+            await serviceOrNull('dom.append', { parent: chromeContainer, child: node });
+            skeletonPool.push(node);
+        }
+        for (let i = 0; i < skeletonPool.length; i += 1) {
+            const spec = specs[i];
+            await serviceOrNull('dom.setProp', {
+                el: skeletonPool[i], key: 'style',
+                value: spec
+                    ? { display: 'block', transform: `translateY(${Math.round(spec.top)}px)`, height: `${Math.round(spec.height)}px`, width: `${viewportWidth}px` }
+                    : { display: 'none' },
+            });
+        }
+    }
+    async function clearSkeletons() {
+        for (const node of skeletonPool.splice(0)) await serviceOrNull('dom.remove', { node });
+    }
     let css = '';
     // ВСЁ, что касается layout/скролла/измерений (viewportWidth/Height,
     // scrollTop, heights) — ЛОГИЧЕСКИЕ CSS-пиксели, ровно то, что и так
@@ -247,12 +292,67 @@ export function createChatViewportCore(host, {
     // для своих отметок (`ui.messageFooter.liveMesid`, message-footer.js):
     // "последнее отрисованное сообщение ПРЯМО СЕЙЧАС", в момент события.
     const genStatus = new Map();
+    const glyphBgApplied = new Map();   // headerMesid -> последний применённый стиль фона (top|width|height)
+    const rowPositionApplied = new Map(); // mesid -> последняя применённая позиция строки хрома (y|width)
     const glyphBgRoots = new Map();     // headerMesid -> DOM-узел фона глифа (owner: "Глифы должны иметь отдельный бэкграунд")
     const bodyUse = new Map();          // mesid -> порядок последнего использования тела (LRU: первый ключ — самый давний)
     const syncInflight = new Map();     // mesid -> { key, promise } — не растеризовать одно и то же дважды параллельно
     const lastChromeHeight = new Map(); // mesid -> последняя измеренная высота хрома (для оценки заглушки при предрастеризации)
     let lastFrame = null;               // данные последнего кадра для фонового префетча
     let prefetchGen = 0;
+    let prefetchRunning = false;
+    let lastQuadsKey = null;
+    let dirtyMain = true;               // на основном канвасе появилась новая текстура — кадр надо нарисовать даже при тех же квадах
+    // Уровень 3: отдельный маленький канвас под тело ПОСЛЕДНЕГО сообщения — стрим перерисовывает только его.
+    let lastCanvas = null;
+    let lastCanvasSize = { w: 0, h: 0 };
+    let lastQuadKeyL3 = null;
+    let lastTransformL3 = null;
+    let dirtyLast = true;
+    let lastBodyMesid = null;
+    const textureHome = new Map();      // mesid -> канвас, на чей GL-контекст загружена текстура строки
+    let scrollVelocity = 0;             // px/мс, со знаком (EMA) — направление и скорость прокрутки для упреждающей предзагрузки
+    let lastVelAt = 0;
+    // mesid -> { sig, height }: измеренная высота хрома строки. Меряется ТОЛЬКО когда изменилось содержимое/ширина/раскрытие —
+    // раньше каждая видимая строка мерилась на КАЖДОМ кадре, и принудительная раскладка (getBoundingClientRect) съедала ~46% главного потока при прокрутке.
+    // Подвалы (`ui.messageFooter.attach`) раскладываются по слотам ВСЕХ строк за вызов — раньше звали на каждую новую строку
+    // (замер: 86 вызовов, ~1,8 с за прокрутку). Теперь одна отложенная пачка на кадр.
+    let footerAttachTimer = null;
+    let footerAttachDirty = false;
+    function scheduleFooterAttach() {
+        // Первый вызов — сразу (новая строка получает подвал без ожидания), остальные в течение 60 мс схлопываются в один хвостовой.
+        if (footerAttachTimer !== null) { footerAttachDirty = true; return; }
+        coreOrNull('ui.messageFooter.attach', {});
+        footerAttachTimer = setTimeout(() => {
+            footerAttachTimer = null;
+            if (footerAttachDirty) { footerAttachDirty = false; scheduleFooterAttach(); }
+        }, 60);
+    }
+    const chromeHeightCache = new Map();
+    // Измерения зеркал копятся и выполняются пачкой (`dom.measureRects`): при параллельной подготовке нескольких строк
+    // (прелаунч окна, камера предзагрузки) браузер делает ОДНУ принудительную раскладку на пачку вместо одной на строку.
+    let measureQueue = [];
+    let measureTimer = null;
+    function measureBatched(el) {
+        return new Promise((resolve, reject) => {
+            measureQueue.push({ el, resolve, reject });
+            if (!measureTimer) measureTimer = setTimeout(flushMeasure, MEASURE_BATCH_MS);
+        });
+    }
+    async function flushMeasure() {
+        const queue = measureQueue;
+        measureQueue = [];
+        measureTimer = null;
+        try {
+            let rects = await serviceOrNull('dom.measureRects', { els: queue.map(item => item.el) });
+            if (!rects) rects = await Promise.all(queue.map(item => serviceOrThrow('dom.measureRect', { el: item.el })));
+            queue.forEach((item, i) => item.resolve(rects[i]));
+        } catch (error) {
+            queue.forEach(item => item.reject(error));
+        }
+    }
+    const bodyHeights = new Map();      // mesid -> последняя измеренная высота тела (нужна, когда тело пришло из постоянного кэша без зеркала)
+    let cssHashCache = { css: null, hash: '' };
     let lastNeeded = new Set();         // mesid'ы, для которых были загружены текстура+зеркало на ПРЕДЫДУЩЕМ render()
     let lastNeededGlyphs = new Set();   // headerMesid'ы глифов, чей фон был на экране на ПРЕДЫДУЩЕМ render()
     let lastTotalHeight = 0;            // сумма высот ВСЕХ сообщений — для родного скроллбара обёртки в UI движка
@@ -290,6 +390,13 @@ export function createChatViewportCore(host, {
     async function coreOrNull(contract, params) {
         const result = await request(host.own, contract, { params });
         return result.ok ? result.value : null;
+    }
+
+    /** HTML тела сообщения, уже раскрашенный по говорящим (Ядро говорящего, `speaker.paintHtml`), если оно есть и есть что красить. */
+    async function paintedBodyHtml(message) {
+        const formatted = await serviceOrThrow('stChat.formatMessage', { mesid: message.mesid });
+        const painted = await coreOrNull('speaker.paintHtml', { html: formatted, mesid: message.mesid, defaultSpeakerName: message.name });
+        return typeof painted === 'string' ? painted : formatted;
     }
 
     /** Ширина, доступная САМОМУ телу сообщения — `viewportWidth` за вычетом `TEXT_PADDING` с обеих сторон. Вычисляется по требованию (не кешируется), чтобы `setViewport()`'s изменение `viewportWidth` подхватывалось следующим же `render()` без отдельной синхронизации. */
@@ -351,19 +458,34 @@ export function createChatViewportCore(host, {
                 // измерить.
             })),
         }, computed(() => {
-            if (state.editing()) {
-                return h('div', { class: 'stme-chat-viewport-edit' },
-                    TextArea(state.draft),
-                    Row(
-                        Button('Save', async () => {
-                            await editMessage({ mesid, text: state.draft() });
-                            state.editing.set(false);
-                        }),
-                        Button('Cancel', () => state.editing.set(false)),
-                    ),
-                );
-            }
             const c = state.content();
+            // Правка ПРЯМО В СООБЩЕНИИ: пока `editing`, картинка тела (WebGL-квад) не рисуется (см. `render()`), а на её место
+            // встаёт настоящий <textarea> ровно по границам тела; хром (аватар, имя, кнопки) остаётся на месте.
+            const rect = state.editing() ? state.editRect() : null;
+            const finishEdit = async save => {
+                if (save) await editMessage({ mesid, text: state.draft() });
+                state.editing.set(false);
+                state.editRect.set(null);
+                await render({ fresh: false });
+            };
+            const editOverlay = rect ? h('div', {
+                class: 'stme-chat-viewport-edit-inline',
+                style: { position: 'absolute', left: `${TEXT_PADDING}px`, top: `${rect.top}px`, width: `${contentWidth()}px`, height: `${rect.height}px` },
+            },
+                h('textarea', {
+                    class: 'text_pole stme-chat-viewport-edit-area',
+                    value: state.draft,
+                    'on:input': event => state.draft.set(event.target.value),
+                    'on:keydown': event => {
+                        if (event.key === 'Escape') { event.preventDefault(); finishEdit(false); }
+                        else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); finishEdit(true); }
+                    },
+                }),
+                h('div', { class: 'stme-chat-viewport-edit-buttons' },
+                    Button('Save', () => finishEdit(true)),
+                    Button('Cancel', () => finishEdit(false)),
+                ),
+            ) : null;
             // Кнопки — В ТОМ ЖЕ ряду, что имя (не отдельной строкой
             // ниже) и показываются только при наведении на строку
             // целиком — оба решения владельца, реализованы CSS'ом
@@ -377,7 +499,7 @@ export function createChatViewportCore(host, {
             // (свайп), либо неожиданно удалит и перегенерирует
             // СОВСЕМ ДРУГОЕ сообщение (реролл).
             const actions = MessageActionsRow({
-                onEdit: () => { state.draft.set(c.text); state.editing.set(true); },
+                onEdit: async () => { state.draft.set(c.text); state.editing.set(true); await render({ fresh: false }); setTimeout(() => serviceOrNull('dom.focusSelector', { el: chromeRoots.get(mesid), selector: '.stme-chat-viewport-edit-area' }), 250); },
                 onDelete: () => deleteMessage({ mesid }),
                 onSwipeLeft: (c.isLast && c.swipeCount > 1) ? () => swipe({ mesid, direction: 'left' }) : null,
                 onSwipeRight: (c.isLast && c.swipeCount > 1) ? () => swipe({ mesid, direction: 'right' }) : null,
@@ -496,7 +618,7 @@ export function createChatViewportCore(host, {
                 // идемпотентен и безопасен звать когда угодно (см.
                 // doc-comment самой функции) — просто пересчитывает все
                 // позиции заново, тем же путём, что скролл/правка/свайп.
-                ReasoningBlock(c.reasoningText, { onToggle: () => { toggleRender = true; render({ fresh: false }); } }),
+                ReasoningBlock(c.reasoningText, { onToggle: () => { toggleRender = true; chromeHeightCache.clear(); render({ fresh: false }); } }),
                 // `.stme-toolcall-body` — owner: "ToolCall не открывается".
                 // Пустая ЗАГЛУШКА здесь, `h()`/`diff.js` не умеют вставлять
                 // сырой HTML декларативно — реальный HTML вставляется
@@ -512,6 +634,7 @@ export function createChatViewportCore(host, {
                 // в реальном DOM работает бесплатно, тем же браузерным
                 // механизмом, что и наш собственный `ReasoningBlock`.
                 c.isToolCall ? h('div', { class: 'stme-toolcall-body' }) : null,
+                editOverlay,
                 ),
             );
         }));
@@ -531,7 +654,7 @@ export function createChatViewportCore(host, {
         if (!chromeMounts) return 0;
         let state = rowStates.get(mesid);
         if (!state) {
-            state = { position: signal({ y: 0, width: viewportWidth }), content: signal(content), editing: signal(false), draft: signal('') };
+            state = { position: signal({ y: 0, width: viewportWidth }), content: signal(content), editing: signal(false), draft: signal(''), editRect: signal(null) };
             rowStates.set(mesid, state);
             const finalUi = chromeMounts.mount(mesid, buildRowTree(mesid, state));
             await chromeMounts.settled(mesid);
@@ -560,7 +683,7 @@ export function createChatViewportCore(host, {
             const footerSlot = await serviceOrNull('dom.querySelector', { el: root, selector: '.stme-chat-viewport-footer-slot' });
             if (footerSlot) {
                 footerSlots.set(mesid, footerSlot);
-                coreOrNull('ui.messageFooter.attach', {});
+                scheduleFooterAttach();
             }
         }
         // Не кешируется: diff пересоздаёт обёртку при смене формы строки (float
@@ -612,7 +735,7 @@ export function createChatViewportCore(host, {
                 // создавал впечатление, что делегирование работает. Фаза
                 // capture ловит событие на пути вниз независимо от
                 // всплытия — см. doc-comment `services/dom.js`'s `setProp()`.
-                await serviceOrNull('dom.setProp', { el: placeholder, key: 'on:toggle:capture', value: () => { toggleRender = true; render({ fresh: false }); } });
+                await serviceOrNull('dom.setProp', { el: placeholder, key: 'on:toggle:capture', value: () => { toggleRender = true; chromeHeightCache.clear(); render({ fresh: false }); } });
             }
         }
         // `contentCols.get(mesid) ?? root` — НАЙДЕНО ЖИВЬЁМ: измерять надо
@@ -626,10 +749,16 @@ export function createChatViewportCore(host, {
         // ничего специально, но `root`'s auto-height тогда и так корректна
         // — обёртка есть у ВСЕХ строк, см. `buildRowTree()`, так что этот
         // фолбэк практически не нужен, только на случай сбоя querySelector.
+        const { text: _omitted, ...chromeContent } = content;
+        const sig = `${viewportWidth}|${hashString(JSON.stringify(chromeContent))}`;
+        const cached = chromeHeightCache.get(mesid);
+        if (cached && cached.sig === sig) return cached.height;
         const measureTarget = contentCols.get(mesid) ?? root;
         const rect = await serviceOrNull('dom.measureRect', { el: measureTarget });
         // Padding строки (`root`) в измеряемую обёртку не входит — добавляем.
-        return (content.padTop ?? ROW_PAD) + (content.padBottom ?? ROW_PAD) + Math.max(0, Math.round(rect?.height ?? 0));
+        const measured = (content.padTop ?? ROW_PAD) + (content.padBottom ?? ROW_PAD) + Math.max(0, Math.round(rect?.height ?? 0));
+        chromeHeightCache.set(mesid, { sig, height: measured });
+        return measured;
     }
 
     /** `chromeMounts.unmount()` только останавливает диффинг — сам корневой узел из документа не убирает (см. ui-mount-registry.js), поэтому `dom.remove` вызывается здесь явно, тем же приёмом, что `message-footer.js`'s `forget()`. */
@@ -637,6 +766,8 @@ export function createChatViewportCore(host, {
         if (!chromeMounts) return;
         chromeMounts.unmount(mesid);
         rowStates.delete(mesid);
+        chromeHeightCache.delete(mesid);
+        rowPositionApplied.delete(mesid);
         toolCallHtmlWritten.delete(mesid);
         footerSlots.delete(mesid);
         contentCols.delete(mesid);
@@ -684,6 +815,7 @@ export function createChatViewportCore(host, {
         if (bg) {
             await serviceOrNull('dom.remove', { node: bg });
             glyphBgRoots.delete(headerMesid);
+            glyphBgApplied.delete(headerMesid);
         }
     }
 
@@ -693,11 +825,13 @@ export function createChatViewportCore(host, {
             await serviceOrNull('dom.remove', { node: mirror });
             mirrors.delete(mesid);
         }
-        await serviceOrNull('webglChat.releaseTexture', { canvas, textureId: mesid });
+        await serviceOrNull('webglChat.releaseTexture', { canvas: textureHome.get(mesid) ?? canvas, textureId: mesid });
+        textureHome.delete(mesid);
         rasterizedText.delete(mesid);
         physicalTextureSize.delete(mesid);
         bodyUse.delete(mesid);
         bodyImages.delete(mesid);
+        bodyHeights.delete(mesid);
     }
 
     async function forgetMesid(mesid) {
@@ -769,8 +903,7 @@ export function createChatViewportCore(host, {
 
     async function syncMesidRun(message, avatarRemainder = 0) {
         const { mesid, text } = message;
-        const html = avatarSpacerHtml(avatarRemainder) + await serviceOrThrow('stChat.formatMessage', { mesid });
-        const mirror = await ensureMirror(mesid);
+        const html = avatarSpacerHtml(avatarRemainder) + await paintedBodyHtml(message);
 
         // Сравнение с тем, что записали МЫ прошлый раз — тот же приём, что
         // `dom.js`'s `lastWritten`: без него растеризация/загрузка текстуры
@@ -778,7 +911,37 @@ export function createChatViewportCore(host, {
         // изменился (стриминг зовёт render() на каждый токен ДРУГОГО
         // сообщения тоже — это не повод перерисовывать текущее).
         const cacheKey = `${avatarRemainder}::${text}`;
+        const home = (lastCanvas && mesid === lastBodyMesid) ? lastCanvas : canvas;
+        const oldHome = textureHome.get(mesid);
+        const homeMoved = oldHome !== undefined && oldHome !== home;
+        if (homeMoved) {
+            // Сообщение стало (или перестало быть) последним — текстуру надо перенести на другой канвас.
+            await serviceOrNull('webglChat.releaseTexture', { canvas: oldHome, textureId: mesid });
+            textureHome.delete(mesid);
+            rasterizedText.delete(mesid);
+        }
         const changed = rasterizedText.get(mesid) !== cacheKey;
+        if (!changed && !mirrors.has(mesid) && bodyHeights.has(mesid)) return bodyHeights.get(mesid);
+
+        // Постоянный кэш (IndexedDB): готовая строка + измеренная высота + позиции картинок — без зеркала и растеризации.
+        let diskKey = null;
+        if (changed && persistentCache) {
+            if (cssHashCache.css !== css) cssHashCache = { css, hash: hashString(css) };
+            diskKey = `${hashString(html)}.${html.length}.${cssHashCache.hash}.${contentWidth()}.${devicePixelRatio}`;
+            const hit = await serviceOrNull('rasterCache.get', { key: diskKey });
+            if (hit?.image) {
+                await serviceOrThrow('webglChat.uploadTexture', { canvas: home, textureId: mesid, image: hit.image });
+                textureHome.set(mesid, home);
+                if (home === lastCanvas) dirtyLast = true; else dirtyMain = true;
+                rasterizedText.set(mesid, cacheKey);
+                physicalTextureSize.set(mesid, { width: hit.width, height: hit.physHeight });
+                if (hit.images?.length) bodyImages.set(mesid, hit.images); else bodyImages.delete(mesid);
+                bodyHeights.set(mesid, hit.height);
+                return hit.height;
+            }
+        }
+
+        const mirror = await ensureMirror(mesid);
         let rasterHtml = html;
         if (changed) {
             await serviceOrThrow('dom.setInnerHtml', { el: mirror, html });
@@ -799,7 +962,7 @@ export function createChatViewportCore(host, {
         // СТРОКУ вместо честного "почти ничего". `rowHeight`-фолбэк должен
         // срабатывать ТОЛЬКО когда измерение вообще не удалось (не число),
         // а не когда оно честно вернуло ноль.
-        const rect = await serviceOrThrow('dom.measureRect', { el: mirror });
+        const rect = await measureBatched(mirror);
         const height = Math.max(1, Number.isFinite(rect.height) ? Math.round(rect.height) : rowHeight);
 
         if (changed) {
@@ -810,11 +973,19 @@ export function createChatViewportCore(host, {
             // растягивалась GPU при отрисовке квада большего физического
             // размера — то самое "текст слишком пиксельный".
             const rasterized = await serviceOrThrow('htmlRasterizer.rasterize', { html: rasterHtml, width: contentWidth(), height, css, scale: devicePixelRatio });
-            await serviceOrThrow('webglChat.uploadTexture', { canvas, textureId: mesid, image: rasterized.image });
+            await serviceOrThrow('webglChat.uploadTexture', { canvas: home, textureId: mesid, image: rasterized.image });
+            textureHome.set(mesid, home);
+            if (home === lastCanvas) dirtyLast = true; else dirtyMain = true;
             rasterizedText.set(mesid, cacheKey);
             physicalTextureSize.set(mesid, { width: rasterized.width, height: rasterized.height });
+            if (diskKey) {
+                serviceOrNull('rasterCache.put', {
+                    key: diskKey, image: rasterized.image, height, width: rasterized.width, physHeight: rasterized.height, images: bodyImages.get(mesid) ?? [],
+                }).catch(() => {});
+            }
         }
 
+        bodyHeights.set(mesid, height);
         return height;
     }
 
@@ -874,41 +1045,129 @@ export function createChatViewportCore(host, {
         return Math.max(0, AVATAR_WRAP - (offset + chrome));
     }
 
-    function schedulePrefetch() {
-        if (!(prefetchScreens > 0) || !lastFrame) return;
-        prefetchGen += 1;
-        const gen = prefetchGen;
-        const run = () => { pumpPrefetch(gen).catch(() => {}); };
-        if (typeof globalThis.requestIdleCallback === 'function') globalThis.requestIdleCallback(run, { timeout: 300 });
-        else setTimeout(run, 30);
+    /** Уровень 3: канвас под тело последнего сообщения — своя позиция (transform), свой размер ступенями, своя перерисовка. */
+    async function drawLastCanvas(placement) {
+        if (!placement) {
+            if (lastTransformL3 !== 'hidden') {
+                await serviceOrNull('dom.setProp', { el: lastCanvas, key: 'style', value: { display: 'none' } });
+                lastTransformL3 = 'hidden';
+            }
+            return;
+        }
+        const { physicalSize, cssX, cssY } = placement;
+        const wantW = Math.min(MAX_CANVAS_CSS, Math.ceil(physicalSize.width / devicePixelRatio));
+        const needH = Math.ceil(physicalSize.height / devicePixelRatio);
+        const stepped = Math.min(MAX_CANVAS_CSS, Math.ceil(needH / LAST_CANVAS_STEP) * LAST_CANVAS_STEP);
+        if (wantW !== lastCanvasSize.w || needH > lastCanvasSize.h || stepped < lastCanvasSize.h - 2 * LAST_CANVAS_STEP) {
+            lastCanvasSize = { w: wantW, h: stepped };
+            await serviceOrThrow('webglChat.resize', { canvas: lastCanvas, width: Math.round(wantW * devicePixelRatio), height: Math.round(stepped * devicePixelRatio) });
+            await serviceOrThrow('dom.setProp', { el: lastCanvas, key: 'style', value: { width: `${wantW}px`, height: `${stepped}px` } });
+            dirtyLast = true;
+        }
+        const transform = `translate(${cssX}px, ${Math.round(cssY * 100) / 100}px)`;
+        if (transform !== lastTransformL3) {
+            await serviceOrNull('dom.setProp', { el: lastCanvas, key: 'style', value: { display: 'block', transform } });
+            lastTransformL3 = transform;
+        }
+        const quad = { textureId: placement.mesid, x: 0, y: 0, width: physicalSize.width, height: physicalSize.height };
+        const key = JSON.stringify(quad);
+        if (dirtyLast || key !== lastQuadKeyL3) {
+            await serviceOrNull('webglChat.drawFrame', { canvas: lastCanvas, quads: [quad] });
+            lastQuadKeyL3 = key;
+            dirtyLast = false;
+        }
     }
 
-    /** Фоновая растеризация тел вокруг окна, ближайшие первыми, по `prefetchConcurrency` параллельно. */
-    async function pumpPrefetch(gen) {
-        const frame = lastFrame;
-        if (!frame || !attached || !enabled) return;
-        const { order, byMesid, needed, frameScrollTop } = frame;
-        const span = viewportHeight * prefetchScreens;
-        const range = computeVisibleRange({
-            order, heights, scrollTop: Math.max(0, frameScrollTop - span), viewportHeight: viewportHeight + span * 2,
-            estimatedHeight: rowHeight, overscan: 0,
-        });
-        const indices = [];
-        for (let i = range.startIndex; i < range.endIndex; i++) if (!needed.has(order[i])) indices.push(i);
-        const anchor = order.findIndex(m => needed.has(m));
-        indices.sort((a, b) => Math.abs(a - anchor) - Math.abs(b - anchor));
-        for (let at = 0; at < indices.length; at += prefetchConcurrency) {
-            if (gen !== prefetchGen || rendering) return;
+    function schedulePrefetch() {
+        if (!(prefetchScreens > 0) || !lastFrame || prefetchRunning) return;
+        prefetchRunning = true;
+        setTimeout(() => { pumpPrefetch().catch(() => {}).finally(() => { prefetchRunning = false; }); }, 20);
+    }
+
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    /**
+     * Фоновый прогрев кэша ВСЕГО чата: в простое, по одной строке, от текущего места наружу (вперёд и назад по очереди).
+     * Строки, которых нет на диске, растеризуются и пишутся в постоянный кэш (`rasterCache`, переживает перезагрузку), а
+     * текстура тут же освобождается — GPU держит только окно у экрана. Останавливается при прокрутке/рендере и при смене чата.
+     */
+    let warmRunning = false;
+    async function warmChat() {
+        if (!persistentCache || warmRunning) return;
+        warmRunning = true;
+        const gen = prefetchGen;
+        try {
+            const frame = lastFrame;
+            if (!frame) return;
+            const { order, byMesid, needed } = frame;
+            const center = Math.max(0, order.findIndex(m => needed.has(m)));
+            for (let d = 1; d < order.length; d += 1) {
+                for (const i of [center + d, center - d]) {
+                    if (i < 0 || i >= order.length) continue;
+                    while (rendering || (performance.now() - lastScrollAt) < 600) {
+                        await sleep(250);
+                        if (gen !== prefetchGen || !attached || !enabled) return;
+                    }
+                    if (gen !== prefetchGen || !attached || !enabled) return;
+                    const message = byMesid.get(order[i]);
+                    if (!message || message.isToolCall || lastNeeded?.has(message.mesid)) continue;
+                    const remainder = guessRemainder(frame, i);
+                    const html = avatarSpacerHtml(remainder) + await paintedBodyHtml(message);
+                    if (cssHashCache.css !== css) cssHashCache = { css, hash: hashString(css) };
+                    const diskKey = `${hashString(html)}.${html.length}.${cssHashCache.hash}.${contentWidth()}.${devicePixelRatio}`;
+                    if (await serviceOrNull('rasterCache.has', { key: diskKey })) continue;
+                    await syncMesid(message, remainder);
+                    if (!lastNeeded?.has(message.mesid)) await forgetBody(message.mesid);
+                    await sleep(120);
+                }
+            }
+        } catch { /* прогрев — best effort */ } finally { warmRunning = false; }
+    }
+
+    /**
+     * Фоновая растеризация тел вокруг окна. Окно смещено ВПЕРЁД по ходу прокрутки: чем быстрее листаем, тем дальше
+     * вперёд (скорость × PREFETCH_HORIZON_MS), назад — только полэкрана. Ближайшие по ходу движения строки первыми,
+     * `prefetchConcurrency` параллельно. Цикл один и не сбрасывается новым кадром — каждый проход берёт свежий
+     * `lastFrame`, поэтому предзагрузка идёт и во время прокрутки, а не только после остановки.
+     */
+    async function pumpPrefetch() {
+        for (let pass = 0; pass < 600; pass += 1) {
+            const frame = lastFrame;
+            if (!frame || !attached || !enabled) return;
+            if (rendering) { await sleep(16); continue; }
             if (textureBudgetBytes != null && textureBytes() > textureBudgetBytes * 0.9) return;
-            const batch = indices.slice(at, at + prefetchConcurrency).filter(i => {
-                const m = byMesid.get(order[i]);
-                return m && !m.isToolCall && rasterizedText.get(m.mesid) !== `${guessRemainder(frame, i)}::${m.text}`;
+            const { order, byMesid, needed, frameScrollTop } = frame;
+            const velocity = (performance.now() - lastVelAt) < 300 ? scrollVelocity : 0;
+            const moving = Math.abs(velocity) > 0.05;
+            const base = viewportHeight * prefetchScreens;
+            const ahead = moving ? Math.min(viewportHeight * 30, base + Math.abs(velocity) * PREFETCH_HORIZON_MS) : base;
+            const behind = moving ? viewportHeight * 0.5 : base;
+            const down = velocity >= 0;
+            const above = down ? behind : ahead;
+            const below = down ? ahead : behind;
+            const range = computeVisibleRange({
+                order, heights, scrollTop: Math.max(0, frameScrollTop - above), viewportHeight: viewportHeight + above + below,
+                estimatedHeight: rowHeight, overscan: 0,
             });
-            await Promise.all(batch.map(async i => {
+            const anchorFirst = order.findIndex(m => needed.has(m));
+            const anchorLast = anchorFirst < 0 ? -1 : anchorFirst + needed.size - 1;
+            const candidates = [];
+            for (let i = range.startIndex; i < range.endIndex; i += 1) {
+                const m = byMesid.get(order[i]);
+                if (!m || m.isToolCall || needed.has(m.mesid)) continue;
+                if (rasterizedText.get(m.mesid) === `${guessRemainder(frame, i)}::${m.text}`) continue;
+                const forward = down ? i > anchorLast : i < anchorFirst;
+                const distance = down ? Math.abs(i - anchorLast) : Math.abs(i - anchorFirst);
+                candidates.push({ i, rank: (moving && !forward ? 100000 : 0) + distance });
+            }
+            if (!candidates.length) { warmChat(); return; }
+            candidates.sort((x, y) => x.rank - y.rank);
+            await Promise.all(candidates.slice(0, prefetchConcurrency).map(async ({ i }) => {
                 const m = byMesid.get(order[i]);
                 await syncMesid(m, guessRemainder(frame, i));
                 bodyUse.delete(m.mesid); bodyUse.set(m.mesid, true);
-            }).map(p => p.catch(() => {})));
+            }).map(task => task.catch(() => {})));
+            await sleep(0);
         }
     }
 
@@ -943,6 +1202,10 @@ export function createChatViewportCore(host, {
                 for (const [id, head] of freshGlyphHeaders) glyphHeadOf.set(id, head);
             }
             const { order, byMesid, glyphHeaderByMesid, indexByMesid } = snapshot;
+            {
+                const tail = byMesid.get(order[order.length - 1]);
+                lastBodyMesid = (lastCanvas && tail && !tail.isToolCall) ? tail.mesid : null;
+            }
 
             // Глифы (owner: "Глиф - одна цепочка сообщений от одного
             // пользователя подряд") — считаются по ВСЕМУ чату (`messages`,
@@ -987,10 +1250,12 @@ export function createChatViewportCore(host, {
             // `drawFrame()` подряд, синхронно, одним куском — без `await`
             // между ними браузер не может вклиниться со своим кадром.
             let heightsChanged = false;
+            let lastPlacement = null;
             let y = range.offsetTop;
             const quads = [];
             const positions = [];
             const glyphSpans = [];     // [{headerMesid, top, height}] — фон каждого глифа, В ПОРЯДКЕ появления
+            const skeletonSpecs = [];  // строки, что ещё грузятся: [{ top, height }]
             const neededGlyphs = new Set();
             let glyphOffset = 0;
             {
@@ -1027,6 +1292,17 @@ export function createChatViewportCore(host, {
                 if (!visibleOnly && scrollTop !== frameScrollTop) return false; // пришёл новый скролл — этот кадр устарел, следующий уже в очереди
                 const mesid = order[idx];
                 const message = byMesid.get(mesid);
+                // Быстрая прокрутка: строка, которой ещё нет ни в кэше, ни в текстурах, не показывается вовсе (место держит оценка высоты) —
+                // она появляется ЦЕЛИКОМ (шапка + текст + фон) на полном проходе после остановки или когда её подготовит камера предзагрузки.
+                // Раньше кадр ждал подготовки каждой такой строки по очереди, и части появлялись вразнобой.
+                if (visibleOnly && !message.isToolCall && !rasterizedText.has(mesid) && !bodyHeights.has(mesid)) {
+                    const estimate = (heights.get(mesid) ?? rowHeight) + ((glyphHeaderByMesid.get(mesid) === mesid && mesid !== order[0]) ? GLYPH_GAP : 0);
+                    const startsGlyph = glyphHeaderByMesid.get(mesid) === mesid && mesid !== order[0];
+                    skeletonSpecs.push({ top: (y + (startsGlyph ? GLYPH_GAP : 0)) - frameScrollTop, height: estimate - (startsGlyph ? GLYPH_GAP : 0) });
+                    y += estimate;
+                    glyphOffset += estimate;
+                    continue;
+                }
 
                 // `isLast` — НАЙДЕНО ЖИВЬЁМ в реальном исходнике ST: свайп и
                 // регенерация жёстко работают ТОЛЬКО с последним сообщением
@@ -1111,7 +1387,9 @@ export function createChatViewportCore(host, {
                 lastChromeHeight.set(mesid, chromeHeight);
                 bodyUse.delete(mesid); bodyUse.set(mesid, true);
                 const avatarRemainder = (chromeMounts && !message.isToolCall) ? Math.max(0, AVATAR_WRAP - (glyphOffset + chromeHeight)) : 0;
-                const bodyHeight = message.isToolCall ? 0 : await syncMesid(message, avatarRemainder);
+                const measuredBodyHeight = message.isToolCall ? 0 : await syncMesid(message, avatarRemainder);
+                // Пока сообщение правится, под поле ввода закладывается минимум ~4 строки — короткое тело иначе давало бы крошечный textarea.
+                const bodyHeight = rowStates.get(mesid)?.editing() ? Math.max(measuredBodyHeight, EDIT_MIN_HEIGHT) : measuredBodyHeight;
                 if (chromeMounts && !message.isToolCall) await syncBodyImages(mesid, chromeHeight);
                 // Зазор входит в `totalHeight` ЭТОГО сообщения (не отдельная
                 // запись) — виртуализация (`computeVisibleRange`) суммирует
@@ -1124,6 +1402,14 @@ export function createChatViewportCore(host, {
                 // текста, вместе меньше 136px) — без этой поправки
                 // СЛЕДУЮЩАЯ строка начиналась бы, пока аватарка этой ещё
                 // видна на экране, наезжая на её нижнюю часть.
+                {
+                    const editState = rowStates.get(mesid);
+                    if (editState?.editing()) {
+                        const prev = editState.editRect.peek();
+                        const height = bodyHeight;
+                        if (!prev || prev.top !== chromeHeight || prev.height !== height) editState.editRect.set({ top: chromeHeight, height });
+                    }
+                }
                 const ownHeight = chromeHeight + bodyHeight;
                 const totalHeight = ((chromeMounts && isGlyphEnd) ? Math.max(GLYPH_MIN_HEIGHT - glyphOffset, ownHeight) : ownHeight) + gap;
                 glyphOffset += totalHeight - gap;
@@ -1177,19 +1463,24 @@ export function createChatViewportCore(host, {
                 // ToolCall — нет текстуры вообще (тело целиком в хроме, см.
                 // выше), значит и квада для неё нет: нечего рисовать на
                 // канвасе для этого `mesid`.
-                if (!message.isToolCall) {
+                if (!message.isToolCall && !rowStates.get(mesid)?.editing()) {
                     const physicalSize = physicalTextureSize.get(mesid)
                         ?? { width: contentWidth() * devicePixelRatio, height: bodyHeight * devicePixelRatio };
-                    quads.push({
-                        textureId: mesid, x: TEXT_PADDING * devicePixelRatio,
-                        y: (topPx + chromeHeight + canvasPad()) * devicePixelRatio,
-                        width: physicalSize.width,
-                        height: physicalSize.height,
-                    });
+                    if (lastCanvas && mesid === lastBodyMesid) {
+                        lastPlacement = { mesid, cssX: TEXT_PADDING, cssY: topPx + chromeHeight, physicalSize };
+                    } else {
+                        quads.push({
+                            textureId: mesid, x: TEXT_PADDING * devicePixelRatio,
+                            y: (topPx + chromeHeight + canvasPad()) * devicePixelRatio,
+                            width: physicalSize.width,
+                            height: physicalSize.height,
+                        });
+                    }
                 }
                 y += totalHeight;
             }
 
+            await applySkeletons(skeletonSpecs);
             // Строки, что держим смонтированными, но в этом быстром кадре не считали, прячем за экран — иначе они висели бы на старых позициях.
             if (visibleOnly) for (const mesid of retained) if (!needed.has(mesid) && rowStates.has(mesid)) positions.push({ mesid, y: -1e6, width: viewportWidth });
             lastNeeded = retained;
@@ -1207,7 +1498,14 @@ export function createChatViewportCore(host, {
             lastNeededGlyphs = neededGlyphs;
             for (const span of glyphSpans) {
                 const bg = await ensureGlyphBg(span.headerMesid);
-                if (bg) await serviceOrNull('dom.setProp', { el: bg, key: 'style', value: { top: `${span.top}px`, width: `${viewportWidth}px`, height: `${span.height}px` } });
+                if (bg) {
+                    // Тот же стиль — не трогаем DOM: даже запись одинаковых значений заставляла браузер перерисовывать фон глифа (таймер, стрим, светофор).
+                    const bgKey = `${span.top}|${viewportWidth}|${span.height}`;
+                    if (glyphBgApplied.get(span.headerMesid) !== bgKey) {
+                        await serviceOrNull('dom.setProp', { el: bg, key: 'style', value: { transform: `translateY(${span.top}px)`, width: `${viewportWidth}px`, height: `${span.height}px` } });
+                        glyphBgApplied.set(span.headerMesid, bgKey);
+                    }
+                }
             }
 
             // `range.totalHeight` — сумма высот ВСЕХ сообщений (не только
@@ -1229,13 +1527,28 @@ export function createChatViewportCore(host, {
             // Второй проход — синхронный, без единого `await` внутри: хром и
             // канвас коммитятся в одном и том же тике браузера.
             renderedScrollTop = frameScrollTop;
-            for (const p of positions) rowStates.get(p.mesid)?.position.set({ y: p.y, width: p.width });
-            await serviceOrNull('webglChat.drawFrame', { canvas, quads });
+            for (const p of positions) {
+                const key = `${p.y}|${p.width}`;
+                if (rowPositionApplied.get(p.mesid) === key) continue; // позиция не изменилась — DOM строки не трогаем
+                rowPositionApplied.set(p.mesid, key);
+                rowStates.get(p.mesid)?.position.set({ y: p.y, width: p.width });
+            }
+            // Кадр без изменений (те же квады, ни одной новой текстуры) не перерисовываем — иначе любая правка внутри
+            // сообщения заставляла перерисовывать весь канвас.
+            const quadsKey = JSON.stringify(quads);
+            if (dirtyMain || quadsKey !== lastQuadsKey) {
+                await serviceOrNull('webglChat.drawFrame', { canvas, quads });
+                lastQuadsKey = quadsKey;
+                dirtyMain = false;
+            }
+            if (lastCanvas) await drawLastCanvas(lastPlacement);
+            if (globalThis.__stmeBusStats) globalThis.__stmeRendered = { scrollTop: renderedScrollTop, at: performance.now() };   // диагностика задержки: до какого scrollTop дорисован кадр
             publishEvent('ui.chatViewport.render.completed', { visible: quads.length, total: order.length, totalHeight: lastTotalHeight, userToggle: toggleRender, renderedScrollTop });
             if (!renderQueued) toggleRender = false;
             schedulePrefetch();
             return true;
         } catch (error) {
+            console.error('[chatViewport] render failed:', error);
             publishEvent('ui.chatViewport.render.failed', { message: error.message });
             throw error;
         } finally {
@@ -1246,7 +1559,7 @@ export function createChatViewportCore(host, {
 
     async function forgetAll() {
         // Не только `mirrors`: у ToolCall-строк тела/зеркала нет вовсе, их хром иначе переживал бы смену чата и висел на экране в новом.
-        for (const mesid of new Set([...mirrors.keys(), ...chromeRoots.keys(), ...rowStates.keys()])) await forgetMesid(mesid);
+        for (const mesid of new Set([...mirrors.keys(), ...chromeRoots.keys(), ...rowStates.keys(), ...textureHome.keys()])) await forgetMesid(mesid);
         for (const headerMesid of [...glyphBgRoots.keys()]) await forgetGlyphBg(headerMesid);
         heights.clear();
         snapshot = null;
@@ -1283,11 +1596,13 @@ export function createChatViewportCore(host, {
 
     /** Backing store канваса — ФИЗИЧЕСКИЕ пиксели; CSS-размер самого элемента остаётся логическим явным стилем, иначе канвас визуально раздулся бы до backing-store размера. */
     async function applyCanvasSize() {
+        lastQuadsKey = null; // ресайз очищает канвас — следующий кадр обязан нарисоваться
+        dirtyMain = true;
         await serviceOrThrow('webglChat.resize', { canvas, width: Math.round(viewportWidth * devicePixelRatio), height: Math.round(canvasHeight() * devicePixelRatio) });
         await serviceOrThrow('dom.setProp', { el: canvas, key: 'style', value: { width: `${viewportWidth}px`, height: `${canvasHeight()}px`, top: `${-canvasPad()}px` } });
     }
 
-    async function attach({ canvas: nextCanvas, mirrorContainer: nextMirrorContainer, chromeContainer: nextChromeContainer, width, height, css: nextCss = '' } = {}) {
+    async function attach({ canvas: nextCanvas, lastCanvas: nextLastCanvas, mirrorContainer: nextMirrorContainer, chromeContainer: nextChromeContainer, width, height, css: nextCss = '' } = {}) {
         if (!nextCanvas || !nextMirrorContainer) throw new Error('chatViewport.attach: "canvas" and "mirrorContainer" are required.');
         canvas = nextCanvas;
         mirrorContainer = nextMirrorContainer;
@@ -1313,7 +1628,17 @@ export function createChatViewportCore(host, {
         // канвас визуально раздулся бы до backing-store размера).
 
         attached = true;
+        lastQuadsKey = null;
+        dirtyMain = true;
+        lastCanvas = null;
+        if (nextLastCanvas) {
+            const ready = await serviceOrNull('webglChat.attach', { canvas: nextLastCanvas, width: 1, height: 1 });
+            if (ready) { lastCanvas = nextLastCanvas; lastCanvasSize = { w: 0, h: 0 }; lastQuadKeyL3 = null; lastTransformL3 = null; dirtyLast = true; }
+        }
+        if (persistentCache) setTimeout(() => { serviceOrNull('rasterCache.prune', {}).catch(() => {}); }, 5000);
         for (const event of REDRAW_EVENTS) subscriptions.push(host.events.subscribe(event, () => { render(); }));
+        // Состав/цвета говорящих изменились — все растры устарели (ключ кэша строки — текст, не покраска).
+        subscriptions.push(host.events.subscribe('speaker.castChanged', () => { rasterizedText.clear(); render({ fresh: true }); }));
         subscriptions.push(host.events.subscribe('st.chatChanged', () => { forgetAll().then(render); }));
 
         // Подвал сообщения (RP Time и т.п.) — см. doc-comment у
@@ -1384,14 +1709,27 @@ export function createChatViewportCore(host, {
         await forgetAll();
         await applySuppression(false);
         if (canvas) await serviceOrNull('webglChat.detach', { canvas });
+        if (lastCanvas) { await serviceOrNull('webglChat.detach', { canvas: lastCanvas }); lastCanvas = null; }
+        textureHome.clear();
         attached = false;
         canvas = null;
         mirrorContainer = null;
+        await clearSkeletons();
         chromeContainer = null;
     }
 
     async function setViewport({ scrollTop: nextScrollTop, viewportHeight: nextViewportHeight, viewportWidth: nextViewportWidth } = {}) {
-        if (Number.isFinite(nextScrollTop)) { if (Math.max(0, nextScrollTop) !== scrollTop) lastScrollAt = performance.now(); scrollTop = Math.max(0, nextScrollTop); }
+        if (Number.isFinite(nextScrollTop)) {
+            const target = Math.max(0, nextScrollTop);
+            if (target !== scrollTop) {
+                const nowT = performance.now();
+                const dt = nowT - lastVelAt;
+                scrollVelocity = (dt > 0 && dt < 500) ? scrollVelocity * 0.5 + ((target - scrollTop) / dt) * 0.5 : 0;
+                lastVelAt = nowT;
+                lastScrollAt = nowT;
+            }
+            scrollTop = target;
+        }
         const sizeChanged =
             (Number.isFinite(nextViewportHeight) && nextViewportHeight !== viewportHeight) ||
             (Number.isFinite(nextViewportWidth) && nextViewportWidth !== viewportWidth);
