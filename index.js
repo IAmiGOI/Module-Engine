@@ -38,6 +38,7 @@ const DRAWER_HTML = `
         <div class="inline-drawer-content">
             <p><small>Opens a full-width engine panel with a button for every built Core.</small></p>
             <button type="button" class="menu_button" id="stmeBetaOpenPanel">Open engine panel</button>
+            <button type="button" class="menu_button" id="stmeBetaOpenSettings">Open engine settings</button>
         </div>
     </div>
 </div>`;
@@ -466,6 +467,8 @@ async function init() {
     // Flask в пилюле: закрыть настройки (если открыты) и тумблировать панель.
     const toggleMain = () => { settingsPanel.close(); panel.toggle(); };
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => openMain());
+    // Запасной путь к настройкам НЕ через док: на телефоне пилюлю может закрыть интерфейс браузера или ST, а меню расширений доступно всегда.
+    document.getElementById('stmeBetaOpenSettings')?.addEventListener('click', () => openSettings());
     addLauncherDock(panel, {
         openMemoryGraphPanel: () => memoryGraphPanel.show(),
         openSettingsPanel: toggleSettings,
