@@ -19,6 +19,7 @@ const CATEGORY_LABELS = Object.freeze([
     ['characters', 'Characters'],
     ['chats', 'Chats (including group chats)'],
     ['worlds', 'Lorebooks'],
+    ['presets', 'Presets & prompts (Prompt Manager, samplers, instruct, themes, Quick Replies)'],
     ['backgrounds', 'Backgrounds'],
     ['personas', 'Persona avatars'],
 ]);
@@ -35,6 +36,7 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
     // Значения полей (двусторонняя привязка); подтягиваются из `sync.status`.
     const deviceName = signal('');
     const autoSync = signal(true);
+    const syncOnLoad = signal(true);
     const intervalMin = signal(10);
     const categories = Object.fromEntries(CATEGORY_LABELS.map(([id]) => [id, signal(true)]));
     const github = { enabled: signal(false), repository: signal(''), branch: signal('main'), token: signal(''), rootDir: signal(''), maxFileMb: signal(25), auto: signal(false) };
@@ -49,6 +51,7 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
         const config = next.config;
         deviceName.set(config.deviceName);
         autoSync.set(config.autoSync);
+        syncOnLoad.set(config.syncOnLoad);
         intervalMin.set(config.intervalMin);
         for (const [id] of CATEGORY_LABELS) categories[id].set(config.categories.includes(id));
         github.enabled.set(config.github.enabled);
@@ -96,6 +99,7 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
     const disposers = [
         bindAutosave(deviceName, value => ({ deviceName: value })),
         bindAutosave(autoSync, value => ({ autoSync: value })),
+        bindAutosave(syncOnLoad, value => ({ syncOnLoad: value })),
         bindAutosave(intervalMin, value => ({ intervalMin: value })),
         ...CATEGORY_LABELS.map(([id]) => bindAutosave(categories[id], () => ({ categories: CATEGORY_LABELS.map(([key]) => key).filter(key => categories[key].peek()) }))),
         bindAutosave(github.enabled, value => ({ github: { enabled: value } })),
@@ -219,6 +223,7 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
         return Section('What to sync', collapse.bind('section:sync-content', { open: true }),
             ...CATEGORY_LABELS.map(([id, label]) => Toggle(label, categories[id])),
             Toggle('Sync automatically while paired devices are online', autoSync),
+            Toggle('Sync when the page loads', syncOnLoad, { hint: 'Right after the update check, like the engine update itself. The loading screen waits a few seconds; you can continue at once and it goes on in the background.' }),
             Field('Every (minutes)', NumberInput(intervalMin, { min: 1, max: 240, step: 1 }), { hint: 'Devices also sync once whenever they connect.' }),
         );
     }
@@ -292,6 +297,9 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
 
     function resultBlock() {
         return h('div', { class: 'stme-sync-result' },
+            computed(() => (status()?.reloadHint
+                ? h('div', { class: 'stme-sync-progress' }, h('span', { class: 'stme-update-status' }, 'Presets or themes were updated — reload the page to see them.'), Button('Reload page', () => globalThis.location?.reload()))
+                : null)),
             computed(() => {
                 const progress = progressView();
                 return progress ? h('div', { class: 'stme-sync-progress' }, ProgressBar(progress.percent, progress.label), Button('Stop', abort, { variant: 'danger' })) : null;

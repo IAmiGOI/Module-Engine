@@ -46,6 +46,8 @@ const CONFIG_KEY = 'config';
 const NETWORK_TIMEOUT_MS = 20000;
 const PRESENCE_INTERVAL_MS = 60000;
 const CONNECT_TIMEOUT_MS = 30000;
+/** При загрузке страницы второе устройство ждём недолго: его может просто не быть в сети, а экран загрузки не должен из-за этого висеть. */
+const LOAD_CONNECT_WAIT_MS = 8000;
 const SIGNAL_MAX_AGE_MS = 15 * 60000;
 const PAIRING_TTL_MS = 10 * 60000;
 const SIGNAL_SINCE = '15m';
@@ -84,6 +86,7 @@ export function createSyncCore(host, {
     let lastRun = null;
     let githubLast = null;
     let cloudLast = null;
+    let reloadHint = false;   // пресеты/темы записаны в файлы, но ST держит свои списки в памяти до перезагрузки страницы
     let cloudAuth = null;    // вход в облачный диск: { provider, kind: 'code' | 'device', status, url, userCode, message, … }
     let intervalHandle = null;
     let started = false;
@@ -169,6 +172,10 @@ export function createSyncCore(host, {
         touchedPaths.clear();
         if (sections.has('characters')) await service('stUserData.refresh', { categories: ['characters'] }).catch(() => {});
         if (sections.has('backgrounds')) await service('stBackgrounds.refresh', {}).catch(() => {});
+        if (['presets', 'themes', 'quickReplies'].some(section => sections.has(section)) && !reloadHint) {
+            reloadHint = true;
+            publishEvent('sync.reloadHint', {});
+        }
     }
 
     // ── Один проход против одной стороны ────────────────────────────────────────────────────────────────────────────
@@ -723,7 +730,7 @@ export function createSyncCore(host, {
         } finally {
             running = null;
             setProgress(null, null);
-            lastRun = { at: now(), ...outcome };
+            lastRun = { at: now(), target, ...outcome };
             publishEvent('sync.finished', { ...lastRun });
             notify();
         }
@@ -740,7 +747,7 @@ export function createSyncCore(host, {
     function resolveWants(target) {
         if (target === 'all') return { peers: true, github: config.github.enabled, cloud: config.cloud.enabled };
         const background = { github: config.github.enabled && config.github.auto, cloud: config.cloud.enabled && config.cloud.auto };
-        if (target === 'scheduled') return { peers: config.autoSync, ...background };
+        if (target === 'scheduled' || target === 'load') return { peers: config.autoSync, ...background };
         if (target === 'background') return { peers: false, ...background };
         return { peers: target === 'peers', github: target === 'github', cloud: target === 'cloud' };
     }
@@ -749,11 +756,11 @@ export function createSyncCore(host, {
         await loadConfig();
         return runExclusive(target, async outcome => {
             const wants = resolveWants(target);
-            if (wants.peers && (target === 'all' || target === 'peers')) {
+            if (wants.peers && (target === 'all' || target === 'peers' || target === 'load')) {
                 for (const pair of config.pairs) {
                     if (sessions.get(pair.id)?.status === 'open') continue;
                     setProgress(`device:${pair.name}`, { phase: 'connecting', done: 0, total: 0 });
-                    await connectNow(pair);
+                    await connectNow(pair, target === 'load' ? LOAD_CONNECT_WAIT_MS : undefined);
                 }
                 setProgress(null, null);
             }
@@ -775,6 +782,7 @@ export function createSyncCore(host, {
         if (typeof patch.deviceName === 'string') next.deviceName = patch.deviceName;
         if (Array.isArray(patch.categories)) next.categories = patch.categories;
         if (typeof patch.autoSync === 'boolean') next.autoSync = patch.autoSync;
+        if (typeof patch.syncOnLoad === 'boolean') next.syncOnLoad = patch.syncOnLoad;
         if (patch.intervalMin != null) next.intervalMin = patch.intervalMin;
         if (typeof patch.signalServer === 'string') next.signalServer = patch.signalServer;
         // Пароль ретранслятора карточке не возвращается, поэтому пустое поле значит «оставить прежний».
@@ -844,6 +852,7 @@ export function createSyncCore(host, {
             last: lastRun,
             githubLast,
             cloudLast,
+            reloadHint,
             cloudAuth: cloudAuth ? { provider: cloudAuth.provider, kind: cloudAuth.kind, status: cloudAuth.status, url: cloudAuth.url ?? null, userCode: cloudAuth.userCode ?? null, message: cloudAuth.message } : null,
             pairing: pairing ? { mode: pairing.mode, code: pairing.code, status: pairing.status, message: pairing.message, expiresAt: pairing.expiresAt } : null,
             connections: config.pairs.map(pair => ({ id: pair.id, name: pair.name, status: sessions.get(pair.id)?.status ?? 'offline', role: sessions.get(pair.id)?.role ?? null, lastSync: pair.lastSync, problem: problems.get(pair.id) ?? null })),
@@ -858,9 +867,22 @@ export function createSyncCore(host, {
             try { await ensureRoom(pair); await announce(pair); scheduleHello(pair, presenceIntervalMs); } catch (error) { log.info?.('[ST Module Engine (Beta)] Sync: could not open a room —', error?.message ?? error); }
         }
         restartSchedule();
-        const background = resolveWants('background');
-        if (background.github || background.cloud) run({ target: 'background' }).catch(() => {});
         return true;
+    }
+
+    /** Есть ли что синхронизировать при загрузке страницы (включено и есть с кем/куда). Решает, держать ли экран загрузки ради синхронизации. */
+    async function planLoadSync() {
+        await loadConfig();
+        if (!config.syncOnLoad) return false;
+        const wants = resolveWants('load');
+        return Boolean((wants.peers && config.pairs.length) || wants.github || wants.cloud);
+    }
+
+    /** Проход при загрузке страницы: то же, что по расписанию, но с коротким ожиданием второго устройства. */
+    async function runOnLoad() {
+        await loadConfig();
+        if (!(await planLoadSync())) return { outcome: 'skipped' };
+        return run({ target: 'load' });
     }
 
     async function stop() {
@@ -892,7 +914,7 @@ export function createSyncCore(host, {
     ];
 
     return {
-        start, stop, status, run, configure, startPairing, joinPairing, removePair, testGithub, testCloud, beginCloudSignIn, finishCloudSignIn, disconnectCloud,
+        start, stop, status, run, configure, planLoadSync, runOnLoad, startPairing, joinPairing, removePair, testGithub, testCloud, beginCloudSignIn, finishCloudSignIn, disconnectCloud,
         unregister: () => { for (const unregister of unregisters) unregister(); },
     };
 }

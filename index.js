@@ -394,7 +394,9 @@ async function init() {
 
     // Экран загрузки показывает стадии самообновления (проверка, скачивание, перезапуск) и закрывается, когда ход закончен.
     // Подписка ДО `selfUpdate.run()` ниже: иначе событие `selfUpdate.checking` уйдёт раньше подписчика.
-    wireBootScreen(globalThis.__stmeBoot, engine.events);
+    // Держать ли экран загрузки ради синхронизации (включена и есть с кем/куда) — решается ДО хода самообновления, по одним настройкам.
+    const holdForSync = await syncCore.planLoadSync().catch(() => false);
+    wireBootScreen(globalThis.__stmeBoot, engine.events, { holdForSync });
 
     // Первый запуск движка — `firstLoad` уже посчитал запуски и (при счётчике
     // 0 → 1) объявил событие `firstLoad.firstLaunch` ещё внутри wireEngine().
@@ -420,7 +422,13 @@ async function init() {
             // Фоны из репозитория — уже ПОСЛЕ проверки обновления и не блокируя интерфейс; если движок обновился, страница сейчас перезагрузится.
             if (result?.outcome !== 'updated') backgrounds.sync().catch(error => console.warn('[ST Module Engine (Beta)] Backgrounds sync skipped:', error));
             // Синхронизация устройств — тоже после проверки обновления и не блокируя интерфейс.
-            if (result?.outcome !== 'updated') syncCore.start().catch(error => console.warn('[ST Module Engine (Beta)] Sync skipped:', error));
+            // Как и обновление: если включена, проход идёт при загрузке страницы (экран загрузки держится, пока он идёт, но ограниченно).
+            if (result?.outcome !== 'updated') {
+                syncCore.start()
+                    .then(() => (holdForSync ? syncCore.runOnLoad() : null))
+                    .catch(error => console.warn('[ST Module Engine (Beta)] Sync skipped:', error))
+                    .finally(() => { if (holdForSync) globalThis.__stmeBoot?.finish({ afterMs: 300 }); });
+            }
         })
         .catch(error => console.warn('[ST Module Engine (Beta)] Self-update skipped:', error));
 

@@ -7,7 +7,10 @@ import { DEFAULT_GITHUB_MAX_FILE_BYTES, sanitizeGithubSettings } from './sync-gi
  * (`groupChats/…`). Несколько разделов могут принадлежать одной категории (все виды чатов — одна галочка).
  */
 
-export const SYNC_CATEGORY_IDS = Object.freeze(['characters', 'chats', 'worlds', 'backgrounds', 'personas']);
+export const SYNC_CATEGORY_IDS = Object.freeze(['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas']);
+
+/** Версия набора категорий: у настроек, сохранённых до появления «presets», новая категория включается один раз сама. */
+const CATEGORY_VERSION = 2;
 
 const SECTION_TO_CATEGORY = Object.freeze({
     characters: 'characters',
@@ -15,6 +18,9 @@ const SECTION_TO_CATEGORY = Object.freeze({
     groups: 'chats',
     groupChats: 'chats',
     worlds: 'worlds',
+    presets: 'presets',
+    themes: 'presets',
+    quickReplies: 'presets',
     backgrounds: 'backgrounds',
     personas: 'personas',
 });
@@ -34,6 +40,12 @@ export function createCategoryFilter(enabled) {
 export function intersectCategories(a = [], b = []) {
     const other = new Set(b);
     return a.filter(id => other.has(id));
+}
+
+/** Настройки старше версии 2 не знали про «presets»: включаем её один раз (список у них сохранён явный, и без этого новая категория была бы выключена). */
+function migrateCategories(categories, input) {
+    if (Array.isArray(input.categories) && (Number(input.categoryVersion) || 1) < CATEGORY_VERSION && !categories.includes('presets')) return SYNC_CATEGORY_IDS.filter(id => id === 'presets' || categories.includes(id));
+    return categories;
 }
 
 export function sanitizeCategories(raw) {
@@ -100,8 +112,10 @@ export function sanitizeSyncConfig(raw = {}, { generateDeviceId, defaultDeviceNa
     return {
         deviceId,
         deviceName: String(input.deviceName ?? '').trim().slice(0, 60) || defaultDeviceName,
-        categories: sanitizeCategories(input.categories),
+        categories: migrateCategories(sanitizeCategories(input.categories), input),
+        categoryVersion: CATEGORY_VERSION,
         autoSync: input.autoSync !== false,
+        syncOnLoad: input.syncOnLoad !== false,
         intervalMin: clampInterval(input.intervalMin),
         signalServer: /^https:\/\/[^\s/]+(\/[^\s]*)?$/.test(String(input.signalServer ?? '')) ? String(input.signalServer).replace(/\/+$/, '') : 'https://ntfy.sh',
         iceServers: sanitizeIceServers(input.iceServers),
@@ -118,6 +132,7 @@ export function describeConfigForUi(config) {
         deviceName: config.deviceName,
         categories: config.categories,
         autoSync: config.autoSync,
+        syncOnLoad: config.syncOnLoad,
         intervalMin: config.intervalMin,
         signalServer: config.signalServer,
         customIceServers: Boolean(config.iceServers),

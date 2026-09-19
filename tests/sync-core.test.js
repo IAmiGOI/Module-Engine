@@ -56,9 +56,10 @@ test('pairing by code: one device shows a code, the other enters it, and both en
     assert.equal(pairB.id, A_ID);
     assert.equal(pairA.name, 'Phone');
     assert.equal(pairA.secret, pairB.secret);
-    await settle();
-    assert.equal((await a.call('sync.status')).pairing.status, 'done');
-    assert.equal((await b.call('sync.status')).pairing.status, 'done');
+    const pairingStatus = async device => (await device.call('sync.status')).pairing?.status;
+    for (let attempt = 0; attempt < 200 && ((await pairingStatus(a)) !== 'done' || (await pairingStatus(b)) !== 'done'); attempt += 1) await settle(3);
+    assert.equal(await pairingStatus(a), 'done');
+    assert.equal(await pairingStatus(b), 'done');
     assert.doesNotMatch(JSON.stringify(network.posted), new RegExp(pairA.secret), 'the secret never travels in the clear');
     await stopAll(a, b);
 });
@@ -373,5 +374,74 @@ test('a relay (TURN) server is used together with the default STUN ones, and its
     assert.equal(pair.a.settings.get('core.sync/config').iceServers[0].credential, 'S3CRET-PW', 'an empty password field keeps the saved one');
     await pair.a.call('sync.configure', { relay: { url: '' } });
     assert.equal(pair.a.settings.get('core.sync/config').iceServers, null, 'an empty address removes the relay');
+    await stopAll(pair.a, pair.b);
+});
+
+// ── Синхронизация при загрузке страницы ─────────────────────────────────────────────────────────────────────────
+
+test('planLoadSync says whether there is anything to sync at page load, and respects the switch', async () => {
+    const lonely = createFakeDevice({ id: A_ID, name: 'PC', network: createFakeNetwork(), clock: createFakeClock() });
+    assert.equal(await lonely.core.planLoadSync(), false, 'no pairs, nothing enabled');
+    await lonely.call('sync.configure', { github: { enabled: true, repository: 'o/r', token: 't' } });
+    assert.equal(await lonely.core.planLoadSync(), false, 'GitHub enabled but not set to run in the background');
+    await lonely.call('sync.configure', { github: { auto: true } });
+    assert.equal(await lonely.core.planLoadSync(), true);
+    await lonely.call('sync.configure', { syncOnLoad: false });
+    assert.equal(await lonely.core.planLoadSync(), false, 'the page-load switch is off');
+    assert.deepEqual(await lonely.core.runOnLoad(), { outcome: 'skipped' });
+    await stopAll(lonely);
+
+    const pair = await createPair({});
+    assert.equal(await pair.a.core.planLoadSync(), true, 'a paired device with automatic sync on');
+    await pair.a.call('sync.configure', { autoSync: false });
+    assert.equal(await pair.a.core.planLoadSync(), false);
+    await stopAll(pair.a, pair.b);
+});
+
+test('the page-load pass connects to the other device (waiting only briefly), syncs, and reports itself as a "load" pass', async () => {
+    const pair = await createPair({ aFiles: { 'backgrounds/a.png': 'A' } });
+    await pair.a.core.start();
+    await pair.b.core.start();
+    await pair.b.core.runOnLoad();
+    await waitFor(() => pair.b.text('backgrounds/a.png') === 'A', { label: 'the file after the page-load pass' });
+    const finished = pair.b.events.filter(([event]) => event === 'sync.finished').at(-1)[1];
+    assert.equal(finished.target, 'load');
+    await stopAll(pair.a, pair.b);
+});
+
+test('when the other device is not online the page-load pass gives up after a short wait instead of holding the page', async () => {
+    const pair = await createPair({});
+    await pair.a.core.start();
+    const run = pair.a.core.runOnLoad();
+    await settle();
+    await pair.clock.advance(9000);
+    const result = await run;
+    assert.equal(result.target, 'load');
+    assert.equal(result.peers.length, 0);
+    await stopAll(pair.a, pair.b);
+});
+
+test('starting the core no longer runs a background pass by itself — the page-load pass is the one place that does', async () => {
+    const network = createFakeNetwork();
+    const clock = createFakeClock();
+    const fake = createFakeGithub();
+    const device = createFakeDevice({ id: A_ID, name: 'PC', network, clock, files: { 'a.png': 'A' }, overrides: { github: { enabled: true, repository: 'o/r', token: 'secret-token', auto: true } } });
+    device.setHttp(fake.http);
+    await device.core.start();
+    await settle();
+    assert.equal(fake.calls.length, 0, 'nothing was sent just because the core started');
+    await device.core.runOnLoad();
+    assert.ok(fake.calls.length > 0);
+    await stopAll(device);
+});
+
+test('receiving presets makes the device tell the interface a reload is needed — on the receiving side, whichever role it has', async () => {
+    const pair = await createPair({ aFiles: { 'presets/openai/My Prompts.json': '{"prompts":[]}', 'backgrounds/a.png': 'A' } });
+    await connect(pair);
+    assert.equal(pair.b.text('presets/openai/My Prompts.json'), '{"prompts":[]}');
+    await waitFor(() => pair.b.events.some(([event]) => event === 'sync.reloadHint'), { label: 'the reload hint on the receiver' });
+    assert.equal((await pair.b.call('sync.status')).reloadHint, true);
+    assert.equal(pair.a.events.some(([event]) => event === 'sync.reloadHint'), false, 'the sender changed nothing locally');
+    assert.equal((await pair.a.call('sync.status')).reloadHint, false);
     await stopAll(pair.a, pair.b);
 });

@@ -40,14 +40,33 @@ export function createNotificationsCore(host, { mount, timeoutMs = DEFAULT_TIMEO
         return true;
     }
 
+    /** Убрать плашку по её `key` (см. notify): тот, кто её показал, не обязан знать внутренний id. */
+    function dismissKey(key) {
+        const item = items.peek().find(entry => entry.key === key);
+        return item ? dismiss(item.id) : false;
+    }
+
     /**
      * `tone`: 'ok' | 'error' | 'muted'. Повтор того же текста подряд не
      * плодит вторую плашку, а продлевает первую — иначе «Save» пять раз
      * подряд забивает угол пятью одинаковыми строками.
      */
-    function notify({ tone = 'muted', text, timeoutMs: ownTimeout } = {}) {
+    function notify({ tone = 'muted', text, timeoutMs: ownTimeout, key, sticky = false } = {}) {
         const message = String(text ?? '').trim();
         if (!message) throw new Error('ui.notify: "text" is required.');
+
+        // `key` — плашка с ХОДОМ дела («Syncing with Phone: 3/12»): повторный вызов с тем же ключом меняет текст на месте, а не плодит новые.
+        // `sticky` — не снимается по времени: живёт, пока тот, кто её показал, сам не уберёт (`ui.notify.dismiss` по `key`).
+        if (key) {
+            const keyed = items.peek().find(item => item.key === key);
+            if (keyed) {
+                cancel(timers.get(keyed.id));
+                timers.delete(keyed.id);
+                items.set(items.peek().map(item => (item.id === keyed.id ? { ...item, tone, text: message } : item)));
+                if (!sticky) timers.set(keyed.id, schedule(() => dismiss(keyed.id), ownTimeout ?? timeoutMs));
+                return keyed.id;
+            }
+        }
 
         const existing = items.peek().find(item => item.text === message && item.tone === tone);
         if (existing) {
@@ -58,12 +77,12 @@ export function createNotificationsCore(host, { mount, timeoutMs = DEFAULT_TIMEO
 
         counter += 1;
         const id = `note_${counter}`;
-        const next = [...items.peek(), { id, tone, text: message }];
+        const next = [...items.peek(), { id, tone, text: message, ...(key ? { key } : {}) }];
         // Вытесняем самые старые, а не самые новые: свежее сообщение почти
         // всегда и есть то, ради чего пользователь сюда смотрит.
         for (const dropped of next.slice(0, Math.max(0, next.length - MAX_VISIBLE))) dismiss(dropped.id);
         items.set(next.slice(-MAX_VISIBLE));
-        timers.set(id, schedule(() => dismiss(id), ownTimeout ?? timeoutMs));
+        if (!sticky) timers.set(id, schedule(() => dismiss(id), ownTimeout ?? timeoutMs));
         announce('notifications.shown', { tone, id });
         return id;
     }
@@ -77,12 +96,13 @@ export function createNotificationsCore(host, { mount, timeoutMs = DEFAULT_TIMEO
 
     const unregisters = [
         host.own.register('ui.notify', params => notify(params)),
-        host.own.register('ui.notify.dismiss', params => dismiss(params?.id)),
+        host.own.register('ui.notify.dismiss', params => (params?.key ? dismissKey(params.key) : dismiss(params?.id))),
     ];
 
     return {
         notify,
         dismiss,
+        dismissKey,
         items: () => items.peek().map(item => ({ ...item })),
         tree,
         open: () => mount(tree()),
