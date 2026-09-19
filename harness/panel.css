@@ -2317,7 +2317,10 @@ body:has(#chat .welcomePanel) .stme-chat-viewport-overlay { visibility: hidden !
        тот же приём, что `.stme-panel input.text_pole` уже использует по
        этой же причине. */
     border: 1.5px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
-    background: color-mix(in srgb, #fff 9%, var(--SmartThemeBlurTintColor, #1c1e26));
+    /* Чуть плотнее (владелец: «немного месиво, чуть убавь прозрачность глифов»): поверх прежней подложки лёгкая тёмная плёнка. */
+    background:
+        linear-gradient(rgba(18, 20, 28, .16), rgba(18, 20, 28, .16)),
+        color-mix(in srgb, #fff 9%, var(--SmartThemeBlurTintColor, #1c1e26));
 }
 /* Ручка заужения — owner: "нужно ТЯНУТЬ физически. Не ползунком где-то
    там" (см. `leftHandle`/`rightHandle` в `enableChatViewport()`). Невидима
@@ -2469,7 +2472,7 @@ body:has(#chat .welcomePanel) .stme-chat-viewport-overlay { visibility: hidden !
     width: 6px;
     height: 136px;
     border-radius: 3px;
-    background: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 12%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 30%, transparent);
 }
 .stme-chat-viewport-gen-stripe-working { background: #e8a13c; box-shadow: 0 0 6px rgba(232, 161, 60, .6); }
 .stme-chat-viewport-gen-stripe-success { background: #4fae7f; box-shadow: 0 0 6px rgba(79, 174, 127, .6); }
@@ -2626,3 +2629,55 @@ body:has(#chat .welcomePanel) .stme-chat-viewport-overlay { visibility: hidden !
     background-clip: content-box, border-box;
     background-repeat: no-repeat;
 }
+
+/* ===== Линия шапки глифа: продолжение полоски-светофора вправо (вместо чёрной линии над Reasoning) =====
+   Владелец: убрать чёрную линию из глифа; светофор должен плавно переходить в такую же линию, только без подсветки, идущую
+   вправо от него и чуть ниже — виджет времени (RP Time) лежит справа в шапке и раньше сидел прямо на линии. Линия — нижний край
+   шапки (`::after`, ниже виджета времени за счёт padding-bottom), на левом краю у неё скругления-«галтели» (`::before`), которые
+   соединяют её с вертикальной полоской. Цвет — цвет полоски по статусу генерации, БЕЗ свечения (box-shadow нет). */
+.stme-chat-viewport-row .stme-details { border-top: none; }
+.stme-chat-viewport-row-top-line {
+    --stme-line: color-mix(in srgb, var(--SmartThemeBodyColor, #dfe3ea) 30%, transparent);
+    --stme-line-thickness: 4px;
+    --stme-line-fillet: 6px;
+    position: relative;
+    padding-bottom: calc(var(--stme-line-thickness) + 10px);
+}
+.stme-chat-viewport-row-top-line-working { --stme-line: #e8a13c; }
+.stme-chat-viewport-row-top-line-success { --stme-line: #4fae7f; }
+.stme-chat-viewport-row-top-line-error   { --stme-line: #e5453f; }
+.stme-chat-viewport-row-top-line::after {
+    content: '';
+    position: absolute;
+    left: -10px;   /* до самой полоски: между ней и текстовой колонкой зазор TEXT_PADDING = 10px */
+    right: 0;
+    bottom: 0;
+    height: var(--stme-line-thickness);
+    border-radius: 0 999px 999px 0;
+    background: var(--stme-line);
+    transition: background .35s ease;
+}
+.stme-chat-viewport-row-top-line::before {
+    content: '';
+    position: absolute;
+    left: -10px;
+    bottom: calc(-1 * var(--stme-line-fillet));
+    width: var(--stme-line-fillet);
+    height: calc(var(--stme-line-thickness) + 2 * var(--stme-line-fillet));
+    background:
+        radial-gradient(circle at 100% 0, transparent calc(var(--stme-line-fillet) - .5px), var(--stme-line) var(--stme-line-fillet)) top / 100% var(--stme-line-fillet) no-repeat,
+        radial-gradient(circle at 100% 100%, transparent calc(var(--stme-line-fillet) - .5px), var(--stme-line) var(--stme-line-fillet)) bottom / 100% var(--stme-line-fillet) no-repeat;
+}
+
+/* ===== Слабое затемнение за содержимым глифа (владелец: «любые элементы кроме самого глифа имели очень слабое затемнение за ними;
+   где нет текста и других элементов — просто обычный глиф») =====
+   Текст тела сообщения (WebGL-текстура) получает такое же гало при растеризации (`text-shadow` в CSS текстуры, cores/ui/engine-panel.js);
+   здесь — то же для настоящего DOM хрома: текст шапки, бейджи, аватар, кнопки, Reasoning. Только тень вокруг самих элементов —
+   пустые места глифа остаются как были. */
+.stme-chat-viewport-row { text-shadow: 0 0 5px rgba(0, 0, 0, .30), 0 0 2px rgba(0, 0, 0, .18); }
+.stme-chat-viewport-row .stme-badge,
+.stme-chat-viewport-row .stme-avatar,
+.stme-chat-viewport-row .stme-icon-button,
+.stme-chat-viewport-row .stme-details > summary { box-shadow: 0 0 9px rgba(0, 0, 0, .22); }
+.stme-chat-viewport-row .stme-badge,
+.stme-chat-viewport-row .stme-icon-button { border-radius: 999px; }

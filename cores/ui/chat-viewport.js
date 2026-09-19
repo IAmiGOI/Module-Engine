@@ -499,14 +499,17 @@ export function createChatViewportCore(host, {
             // действие, которое либо молча ничего не сделает
             // (свайп), либо неожиданно удалит и перегенерирует
             // СОВСЕМ ДРУГОЕ сообщение (реролл).
-            const actions = MessageActionsRow({
-                onEdit: async () => { state.draft.set(c.text); state.editing.set(true); await render({ fresh: false }); setTimeout(() => serviceOrNull('dom.focusSelector', { el: chromeRoots.get(mesid), selector: '.stme-chat-viewport-edit-area' }), 250); },
-                onDelete: () => deleteMessage({ mesid }),
-                onSwipeLeft: (c.isLast && c.swipeCount > 1) ? () => swipe({ mesid, direction: 'left' }) : null,
-                onSwipeRight: (c.isLast && c.swipeCount > 1) ? () => swipe({ mesid, direction: 'right' }) : null,
-                onRegenerate: (c.isLast && !c.isUser) ? () => regenerate() : null,
-                swipeIndex: c.swipeIndex, swipeCount: c.swipeCount,
-            });
+            // Кнопки — ТОЛЬКО в шапке глифа и всегда про ФИНАЛЬНОЕ сообщение глифа (`c.finalMesid`): у склеенных сообщений (ризонинг,
+            // раунды инструментов, ответ) отдельной правки у каждого нет — правится итоговое. У промежуточных строк кнопок нет вовсе.
+            const targetMesid = c.finalMesid ?? mesid;
+            const actions = c.isGlyphStart ? MessageActionsRow({
+                onEdit: () => beginEdit(targetMesid),
+                onDelete: () => deleteMessage({ mesid: targetMesid }),
+                onSwipeLeft: (c.finalIsLast && c.finalSwipeCount > 1) ? () => swipe({ mesid: targetMesid, direction: 'left' }) : null,
+                onSwipeRight: (c.finalIsLast && c.finalSwipeCount > 1) ? () => swipe({ mesid: targetMesid, direction: 'right' }) : null,
+                onRegenerate: (c.finalIsLast && !c.finalIsUser) ? () => regenerate() : null,
+                swipeIndex: c.finalSwipeIndex, swipeCount: c.finalSwipeCount,
+            }) : null;
             // `c.isGlyphStart` — owner: "Картинка и название и номер
             // привязывается только к началу глифа" — аватар/имя/бейджи
             // рисуются ТОЛЬКО у первого сообщения цепочки (`computeGlyphs()`,
@@ -581,16 +584,15 @@ export function createChatViewportCore(host, {
                 // элемент, идущий ПОСЛЕ float-аватарки (см. выше) — значит
                 // он САМ обтекает её как любой другой блок, отдельно
                 // ничего задавать не нужно.
-                h('div', { class: `stme-chat-viewport-row-top${c.isGlyphStart ? '' : ' stme-chat-viewport-row-top-compact'}` },
+                // У шапки начала глифа — линия под ней в цвете светофора генерации (см. panel.css «Линия шапки»); класс несёт статус.
+                h('div', { class: `stme-chat-viewport-row-top${c.isGlyphStart ? ` stme-chat-viewport-row-top-line${c.genStatus ? ` stme-chat-viewport-row-top-line-${c.genStatus}` : ''}` : ' stme-chat-viewport-row-top-compact'}` },
                     c.isGlyphStart
                         ? MessageHeader({
                             name: c.name, turnIndex: c.turnIndex,
                             genDurationMs: c.genDurationMs, timestampText: c.sendDate, isUser: c.isUser,
                             actions,
                         })
-                        : h('div', { class: 'stme-message-header stme-message-header-compact' },
-                            h('div', { class: 'stme-message-header-name-row' }, actions),
-                        ),
+                        : null,
                     // `.stme-chat-viewport-footer-slot` — owner: "RP Time и
                     // прочие штуки не отображаются корректно", позже "RP
                     // Time не вверху". Заглушка того же рода, что
@@ -651,6 +653,24 @@ export function createChatViewportCore(host, {
      * (измерить, а не угадать фиксированной константой) — иначе хром и текст
      * WebGL накладываются друг на друга (найдено живьём в харнессе).
      */
+    // Правка, начатая кнопкой в шапке глифа, когда строка финального сообщения ещё не смонтирована: применится, как только она появится.
+    let pendingEditMesid = null;
+
+    /** Начать правку сообщения: если его строки нет на экране — прокрутить к нему (событие для панели) и открыть правку, когда она смонтируется. */
+    async function beginEdit(mesid) {
+        const state = rowStates.get(mesid);
+        if (state) { state.draft.set(state.content().text); state.editing.set(true); } else pendingEditMesid = mesid;
+        const frame = lastFrame;
+        const index = frame?.order?.indexOf(mesid) ?? -1;
+        if (index >= 0) {
+            const y = frame.order.slice(0, index).reduce((sum, id) => sum + (heights.get(id) ?? rowHeight), 0);
+            const onScreen = state && y >= frame.frameScrollTop && y < frame.frameScrollTop + viewportHeight * 0.6;
+            if (!onScreen) publishEvent('ui.chatViewport.scrollRequest', { scrollTop: Math.max(0, y - 80) });
+        }
+        await render({ fresh: false });
+        setTimeout(() => serviceOrNull('dom.focusSelector', { el: chromeRoots.get(mesid), selector: '.stme-chat-viewport-edit-area' }), 300);
+    }
+
     async function ensureRowChrome(mesid, content) {
         if (!chromeMounts) return 0;
         let state = rowStates.get(mesid);
@@ -659,6 +679,7 @@ export function createChatViewportCore(host, {
             // все строки без позиции налезали бы друг на друга в верхней части экрана.
             state = { position: signal({ y: -1e6, width: viewportWidth }), content: signal(content), editing: signal(false), draft: signal(''), editRect: signal(null) };
             rowStates.set(mesid, state);
+            if (pendingEditMesid === mesid) { state.draft.set(content.text); state.editing.set(true); pendingEditMesid = null; }
             const finalUi = chromeMounts.mount(mesid, buildRowTree(mesid, state));
             await chromeMounts.settled(mesid);
             const root = finalUi.getRoot();
@@ -752,7 +773,7 @@ export function createChatViewportCore(host, {
         // ничего специально, но `root`'s auto-height тогда и так корректна
         // — обёртка есть у ВСЕХ строк, см. `buildRowTree()`, так что этот
         // фолбэк практически не нужен, только на случай сбоя querySelector.
-        const { text: _omitted, ...chromeContent } = content;
+        const { text: _omitted, finalText: _omittedFinal, ...chromeContent } = content;
         const sig = `${viewportWidth}|${hashString(JSON.stringify(chromeContent))}`;
         const cached = chromeHeightCache.get(mesid);
         if (cached && cached.sig === sig) return cached.height;
@@ -1194,8 +1215,16 @@ export function createChatViewportCore(host, {
                 const freshMessages = await readOrderedMessages();
                 const freshOrder = freshMessages.map(m => m.mesid);
                 const freshGlyphHeaders = new Map();
-                for (const glyph of computeGlyphs(freshMessages)) for (const id of glyph.mesids) freshGlyphHeaders.set(id, glyph.headerMesid);
+                const freshById = new Map(freshMessages.map(m => [m.mesid, m]));
+                const freshGlyphFinals = new Map(); // mesid заголовка глифа -> mesid ПОСЛЕДНЕГО (финального) сообщения глифа
+                for (const glyph of computeGlyphs(freshMessages)) {
+                    for (const id of glyph.mesids) freshGlyphHeaders.set(id, glyph.headerMesid);
+                    // Финальное — последнее сообщение глифа, но не вызов инструментов (у него нет собственного текста, правка бессмысленна).
+                    const lastEditable = [...glyph.mesids].reverse().find(id => !freshById.get(id)?.isToolCall);
+                    freshGlyphFinals.set(glyph.headerMesid, lastEditable ?? glyph.mesids[glyph.mesids.length - 1]);
+                }
                 snapshot = {
+                    glyphFinalByHeader: freshGlyphFinals,
                     order: freshOrder,
                     byMesid: new Map(freshMessages.map(m => [m.mesid, m])),
                     glyphHeaderByMesid: freshGlyphHeaders,
@@ -1204,7 +1233,7 @@ export function createChatViewportCore(host, {
                 glyphHeadOf.clear();
                 for (const [id, head] of freshGlyphHeaders) glyphHeadOf.set(id, head);
             }
-            const { order, byMesid, glyphHeaderByMesid, indexByMesid } = snapshot;
+            const { order, byMesid, glyphHeaderByMesid, glyphFinalByHeader, indexByMesid } = snapshot;
             {
                 const tail = byMesid.get(order[order.length - 1]);
                 lastBodyMesid = (lastCanvas && tail && !tail.isToolCall) ? tail.mesid : null;
@@ -1255,6 +1284,12 @@ export function createChatViewportCore(host, {
             let heightsChanged = false;
             let lastPlacement = null;
             let y = range.offsetTop;
+            // Якорь прокрутки: строка, в которой стоит `frameScrollTop`. Высоты строк ВЫШЕ неё в окне только что могли уточниться (оценка →
+            // измеренная), тогда сама строка уезжает на разницу, а нативный `scrollTop` остаётся прежним — чат «подпрыгивал» после остановки.
+            // Считаем сдвиг якоря между старой и новой раскладкой и в конце проката компенсируем им прокрутку.
+            let oldCum = range.offsetTop;
+            let anchorFound = false;
+            let anchorDelta = 0;
             const quads = [];
             const positions = [];
             const glyphSpans = [];     // [{headerMesid, top, height}] — фон каждого глифа, В ПОРЯДКЕ появления
@@ -1295,6 +1330,8 @@ export function createChatViewportCore(host, {
                 if (!visibleOnly && scrollTop !== frameScrollTop) return false; // пришёл новый скролл — этот кадр устарел, следующий уже в очереди
                 const mesid = order[idx];
                 const message = byMesid.get(mesid);
+                const oldRowHeight = heights.get(mesid) ?? rowHeight;
+                if (!anchorFound && oldCum + oldRowHeight > frameScrollTop) { anchorFound = true; anchorDelta = y - oldCum; }
                 // Быстрая прокрутка: строка, которой ещё нет ни в кэше, ни в текстурах, не показывается вовсе (место держит оценка высоты) —
                 // она появляется ЦЕЛИКОМ (шапка + текст + фон) на полном проходе после остановки или когда её подготовит камера предзагрузки.
                 // Раньше кадр ждал подготовки каждой такой строки по очереди, и части появлялись вразнобой.
@@ -1303,6 +1340,7 @@ export function createChatViewportCore(host, {
                     const startsGlyph = glyphHeaderByMesid.get(mesid) === mesid && mesid !== order[0];
                     skeletonSpecs.push({ top: (y + (startsGlyph ? GLYPH_GAP : 0)) - frameScrollTop, height: estimate - (startsGlyph ? GLYPH_GAP : 0) });
                     y += estimate;
+                    oldCum += estimate;
                     glyphOffset += estimate;
                     continue;
                 }
@@ -1376,6 +1414,15 @@ export function createChatViewportCore(host, {
                     turnIndex: Number(mesid), genDurationMs: message.genDurationMs, sendDate: message.sendDate,
                     reasoningText: message.reasoningText, swipeIndex: message.swipeIndex,
                     swipeCount: message.swipeCount, text: message.text, isLast, isGlyphStart,
+                    // Кнопки глифа живут в его шапке и работают с ФИНАЛЬНЫМ сообщением глифа (последним), а не с первым, у которого шапка.
+                    ...(isGlyphStart ? (() => {
+                        const finalMesid = glyphFinalByHeader?.get(glyphHeaderMesid) ?? mesid;
+                        const finalMessage = byMesid.get(finalMesid) ?? message;
+                        return {
+                            finalMesid, finalText: finalMessage.text, finalSwipeIndex: finalMessage.swipeIndex, finalSwipeCount: finalMessage.swipeCount,
+                            finalIsUser: finalMessage.isUser, finalIsLast: finalMesid === order[order.length - 1],
+                        };
+                    })() : {}),
                     isToolCall: message.isToolCall, toolCallHtml, genStatus: genStatus.get(mesid) ?? null,
                 });
                 // Сколько высоты аватарки хром САМ не занял — ровно на
@@ -1481,6 +1528,7 @@ export function createChatViewportCore(host, {
                     }
                 }
                 y += totalHeight;
+                oldCum += oldRowHeight;
             }
 
             await applySkeletons(skeletonSpecs);
@@ -1530,6 +1578,7 @@ export function createChatViewportCore(host, {
             // Второй проход — синхронный, без единого `await` внутри: хром и
             // канвас коммитятся в одном и том же тике браузера.
             renderedScrollTop = frameScrollTop;
+            if (Math.abs(anchorDelta) >= 1 && !globalThis.__stmeNoAnchorFix) publishEvent('ui.chatViewport.scrollRequest', { by: anchorDelta });   // флаг — только для сравнения «до/после» в диагностике
             for (const p of positions) {
                 const key = `${p.y}|${p.width}`;
                 if (rowPositionApplied.get(p.mesid) === key) continue; // позиция не изменилась — DOM строки не трогаем
@@ -1664,21 +1713,38 @@ export function createChatViewportCore(host, {
         // вовсе (`cores/generation/index.js` несёт только `runId`), а
         // "последнее отрисованное сообщение ПРЯМО СЕЙЧАС" в момент события
         // — лучшее доступное приближение "какое сообщение генерируется".
-        const markGenStatus = async status => {
+        // Полоска — про ОДНУ генерацию ответа: цель (`genTarget`) — то сообщение, которое сейчас генерируется. Раньше каждое событие
+        // метило «последнее сообщение на этот момент»: оранжевое оставалось на предыдущем сообщении, когда появлялось новое, а вытеснение
+        // прогона (свайп/реролл) красило сообщение красным посреди живой генерации.
+        let genTarget = null;
+        const setGenStatus = (mesid, status) => {
+            if (status == null) genStatus.delete(String(mesid)); else genStatus.set(String(mesid), status);
+        };
+        const followGeneration = async () => {
             const mesid = await coreOrNull('ui.messageFooter.liveMesid', {});
             if (mesid == null) return;
-            genStatus.set(String(mesid), status);
+            const target = String(mesid);
+            if (genTarget !== null && genTarget !== target && genStatus.get(genTarget) === 'working') setGenStatus(genTarget, null);
+            genTarget = target;
+            setGenStatus(target, 'working');
             render();
         };
-        subscriptions.push(host.events.subscribe('generation.beforeSend', () => { markGenStatus('working'); }));
-        subscriptions.push(host.events.subscribe('generation.sending', () => { markGenStatus('working'); }));
-        subscriptions.push(host.events.subscribe('generation.toolCall', () => { markGenStatus('working'); }));
-        subscriptions.push(host.events.subscribe('generation.completed', payload => {
-            markGenStatus(payload?.outcome === 'stopped' ? 'error' : 'success');
-        }));
-        subscriptions.push(host.events.subscribe('generation.superseded', () => { markGenStatus('error'); }));
-        subscriptions.push(host.events.subscribe('generation.aborted', () => { markGenStatus('error'); }));
-        subscriptions.push(host.events.subscribe('generation.prepareFailed', () => { markGenStatus('error'); }));
+        const finishGeneration = async status => {
+            const mesid = await coreOrNull('ui.messageFooter.liveMesid', {});
+            const target = mesid != null ? String(mesid) : genTarget;
+            if (genTarget !== null && genTarget !== target && genStatus.get(genTarget) === 'working') setGenStatus(genTarget, null);
+            genTarget = null;
+            if (target == null) return;
+            setGenStatus(target, status);
+            render();
+        };
+        subscriptions.push(host.events.subscribe('generation.beforeSend', () => { followGeneration(); }));
+        subscriptions.push(host.events.subscribe('generation.sending', () => { followGeneration(); }));
+        subscriptions.push(host.events.subscribe('generation.toolCall', () => { followGeneration(); }));
+        subscriptions.push(host.events.subscribe('generation.completed', payload => { finishGeneration(payload?.outcome === 'stopped' ? 'error' : 'success'); }));
+        // `superseded` — прогон вытеснен НОВЫМ, который стартует сразу за ним: это не конец генерации и не ошибка.
+        subscriptions.push(host.events.subscribe('generation.aborted', () => { finishGeneration('error'); }));
+        subscriptions.push(host.events.subscribe('generation.prepareFailed', () => { finishGeneration('error'); }));
 
         // Прямая подписка на сырое ST-событие, В ОБХОД `host.events` — см.
         // doc-comment `STREAM_TOKEN_ST_EVENT` выше за причиной. `onStreamToken`

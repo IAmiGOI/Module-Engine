@@ -989,6 +989,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
 
             const wrapper = await callServiceOrThrow('dom.createElement', { tag: 'div' });
             const spacer = await callServiceOrThrow('dom.createElement', { tag: 'div' });
+            const contentBox = await callServiceOrThrow('dom.createElement', { tag: 'div' });
             const stickyLayer = await callServiceOrThrow('dom.createElement', { tag: 'div' });
             const marginLayer = await callServiceOrThrow('dom.createElement', { tag: 'div' });
             const canvas = await callServiceOrThrow('dom.createElement', { tag: 'canvas' });
@@ -1065,9 +1066,15 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             await callServiceOrThrow('dom.append', { parent: stickyLayer, child: marginLayer });
             await callServiceOrThrow('dom.append', { parent: stickyLayer, child: leftHandle });
             await callServiceOrThrow('dom.append', { parent: stickyLayer, child: rightHandle });
-            await callServiceOrThrow('dom.append', { parent: wrapper, child: stickyLayer });
+            // `contentBox` — граница прокручиваемой области: высота ровно по `spacer` (то есть по высоте чата), `overflow: clip` (НЕ hidden —
+            // hidden сделал бы коробку своим скролл-контейнером и сломал бы `position: sticky` слоя). Без неё окно предрендера канваса
+            // (запас выше/ниже экрана) выступало бы за конец содержимого и добавляло в `scrollHeight` лишнюю прокрутку — на маленьком чате
+            // можно было уехать за пределы единственного сообщения. Запас нужен только внутри чата, за его концом рисовать нечего.
+            await callServiceOrThrow('dom.setProp', { el: contentBox, key: 'style', value: { position: 'relative', overflow: 'clip' } });
+            await callServiceOrThrow('dom.append', { parent: contentBox, child: stickyLayer });
+            await callServiceOrThrow('dom.append', { parent: contentBox, child: spacer });
+            await callServiceOrThrow('dom.append', { parent: wrapper, child: contentBox });
             await callServiceOrThrow('dom.append', { parent: wrapper, child: mirror });
-            await callServiceOrThrow('dom.append', { parent: wrapper, child: spacer });
             await callServiceOrThrow('dom.append', { parent: body, child: wrapper });
             // `zIndex: 31` — НАЙДЕНО ЖИВЬЁМ в реальной ST: `#sheld` (сам центр
             // чата, наш родной сосед по `document.body`) держит `z-index: 30`
@@ -1164,7 +1171,10 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             // измеренную высоту), поэтому `margin: 0` внутри безопасно и
             // устраняет саму возможность такого расхождения.
             const css = `.stme-chat-viewport-body { color: ${bodyColor || '#dcdcd2'}; `
-                + `font-size: 15px; line-height: 1.4; font-family: ${fontFamily || 'system-ui, sans-serif'}; } `
+                + `font-size: 15px; line-height: 1.4; font-family: ${fontFamily || 'system-ui, sans-serif'}; `
+                // Очень слабое затемнение ЗА самим текстом (владелец: «любые элементы кроме самого глифа — очень слабое затемнение за ними»):
+                // запекается в текстуру один раз, GPU ничего не стоит. Радиусы малы — край текстуры не обрезает гало заметно.
+                + `text-shadow: 0 0 5px rgba(0, 0, 0, .30), 0 0 2px rgba(0, 0, 0, .18); } `
                 + `.stme-chat-viewport-body * { margin: 0; padding: 0; } `
                 + `.stme-chat-viewport-body q { color: ${quoteColor || '#e18a24'}; } `
                 + `.stme-chat-viewport-body em, .stme-chat-viewport-body i { color: ${emColor || '#919191'}; } `
@@ -1281,6 +1291,15 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             // реально вырос (новый токен/сообщение), не на любой рендер.
             const BOTTOM_THRESHOLD = 48;
             let lastTotalHeight = chatViewport.totalHeight();
+            // Ядро просит прокрутить (например, к финальному сообщению глифа при правке кнопкой из шапки) — прокруткой владеет обёртка.
+            const stopScrollRequest = host.events.subscribe('ui.chatViewport.scrollRequest', async payload => {
+                if (Number.isFinite(payload?.scrollTop)) { callService('dom.setScrollPosition', { el: wrapper, top: payload.scrollTop }); return; }
+                // `by` — сдвиг на разницу: высоты выше окна уточнились, и чтобы содержимое не подпрыгнуло, прокрутка идёт следом.
+                if (Number.isFinite(payload?.by) && payload.by !== 0) {
+                    const position = await callService('dom.scrollPosition', { el: wrapper });
+                    if (position.ok) callService('dom.setScrollPosition', { el: wrapper, top: Math.max(0, position.value.top + payload.by) });
+                }
+            });
             const stopSpacerSync = host.events.subscribe('ui.chatViewport.render.completed', async payload => {
                 syncScrollOffset();
                 const nextTotalHeight = payload?.totalHeight ?? chatViewport.totalHeight();
@@ -1409,7 +1428,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             };
             syncGeometry();
             chatViewportOverlay = {
-                wrapper, spacer, canvas, mirror, chrome, stopSpacerSync, stopSideMarginSync, stopHeightSync,
+                wrapper, spacer, canvas, mirror, chrome, stopSpacerSync, stopScrollRequest, stopSideMarginSync, stopHeightSync,
                 stopDrag: () => stopDrag?.(),
             };
             await callServiceOrThrow('dom.setProp', { el: spacer, key: 'style', value: { height: `${chatViewport.totalHeight()}px` } });
@@ -1426,6 +1445,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         chatViewportBusy.set(true);
         try {
             chatViewportOverlay.stopSpacerSync();
+            chatViewportOverlay.stopScrollRequest?.();
             chatViewportOverlay.stopSideMarginSync();
             chatViewportOverlay.stopHeightSync?.();
             chatViewportOverlay.stopDrag();
