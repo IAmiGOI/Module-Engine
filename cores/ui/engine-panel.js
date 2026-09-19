@@ -6,6 +6,7 @@ import {
     Field, Row, Card, Section, Badge, EmptyState, TwoColumn, EditableList, ProgressBar,
 } from '../../libraries/shared/widgets.js';
 import { createCollapseState } from '../../libraries/shared/collapse-state.js';
+import { createSyncCard } from './sync-card.js';
 import { TRIGGER_MODES, computeTriggers, resolveTriggerMode } from '../../libraries/core/trigger-modes.js';
 
 const FORMATS = Object.freeze([
@@ -1491,6 +1492,9 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         );
     }
 
+    // Карточка «Sync» (cores/ui/sync-card.js): своё состояние, свои события; панель лишь встраивает её и передаёт ей общую свёртку.
+    const syncCard = createSyncCard({ host, collapse, notify: (tone, text) => notify(tone, text) });
+
     async function refreshBackgrounds() {
         const result = await request(host.own, 'backgrounds.status', { params: {} });
         if (!result.ok) return;
@@ -1776,6 +1780,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             chatViewportCard(),
             presetCard(),
             updatesCard(),
+            syncCard.card(),
             backgroundsCard(),
         );
     }
@@ -1798,6 +1803,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
             // его doc-comment) — список здесь обязан узнать об этом без
             // ручного нажатия Rescan в этой карточке.
             host.events.subscribe('lorebook.scanned', () => loadLorebook()),
+            ...syncCard.watch(),
             // Свёртка происходит САМА на каждой генерации (`generation.prepare`
             // держит порог) — панель узнаёт о новых/пропавших саммари тем же
             // событием, без ручного Rescan. Тост здесь — для АВТОМАТИЧЕСКОЙ
@@ -1876,6 +1882,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         await loadMemoryGraphCount();
         await loadMemoryGraphSettings();
         await refreshBackgrounds();
+        await syncCard.refresh();
         // Список контрактов приходит от сборщика движка: своя шина доступна
         // через host.own, а шины сервисов и сети — нет (у Ядра туда только
         // Гейт-аксессор, и это правильно). Так что «что вообще подключено»

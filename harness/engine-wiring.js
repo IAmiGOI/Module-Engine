@@ -7,6 +7,11 @@ import { registerRasterCacheService } from '../services/raster-cache.js';
 import { registerGlAnimationService } from '../services/gl-animation.js';
 import { registerStBackgroundsService } from '../services/st-backgrounds.js';
 import { registerImageScaleService } from '../services/image-scale.js';
+import { registerStUserDataService } from '../services/st-user-data.js';
+import { registerSyncStateService } from '../services/sync-state.js';
+import { registerSyncSignalService } from '../services/sync-signal.js';
+import { registerSyncPeerService } from '../services/sync-peer.js';
+import { createSyncCore } from '../cores/sync/index.js';
 import { createBackgroundsCore } from '../cores/backgrounds/index.js';
 import { createGlAnimationsCore } from '../cores/ui/gl-animations.js';
 import { registerHttpService } from '../services/http.js';
@@ -454,6 +459,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerGlAnimationService(engine.buses.services);
     registerStBackgroundsService(engine.buses.services, { getContext });
     registerImageScaleService(engine.buses.services);
+    registerStUserDataService(engine.buses.services, { getContext });
+    registerSyncStateService(engine.buses.services);
+    // Сеть синхронизации — на сетевой Шине (как `http.request`): проходит сетевой Гейт, доступна только Ядрам с `networkAccess`.
+    registerSyncSignalService(engine.buses.network);
+    registerSyncPeerService(engine.buses.network);
     // Локальный эмбединг — не сетевой вызов через `http.request` (см.
     // doc-comment services/embedding.js за честной оговоркой: сама закачка
     // весов модели идёт мимо нашего Гейта сети, это делает сторонняя
@@ -636,6 +646,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         engine.registerCaller('core.backgrounds', 'cores', { tier: 'official', networkAccess: true }),
         { ...BACKGROUNDS_REPO, publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.backgrounds' }) },
     );
+    // Синхронизация файлов между устройствами (напрямую по WebRTC) и с репозиторием GitHub. Запускается из index.js вместе с фонами.
+    const syncCore = createSyncCore(
+        engine.registerCaller('core.sync', 'cores', { tier: 'official', networkAccess: true }),
+        { publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.sync' }) },
+    );
     const activityLight = createActivityLightCore(
         engine.registerCaller('core.ui.activityLight', 'cores', { tier: 'official' }),
     );
@@ -804,5 +819,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }

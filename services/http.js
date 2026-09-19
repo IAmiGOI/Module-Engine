@@ -25,7 +25,8 @@ export function registerHttpService(networkBus, { fetch: fetchImpl = globalThis.
         // что вернул fetch, — конвертация в data:/objectURL — забота UI-ядра.
         // Параметр ОПЦИОНАЛЬНЫЙ: без него поведение прежнее, весь остальной
         // код движка не затронут.
-        const payload = responseType === 'blob' ? { blob: await response.blob() } : { text: await response.text() };
+        // Ошибочный ответ на запрос blob отдаётся текстом: по нему вызывающий отличает «нет такого файла» от сбоя (облако).
+        const payload = responseType === 'blob' && response.ok ? { blob: await response.blob() } : { text: await response.text() };
         return {
             status: response.status,
             ok: response.ok,
