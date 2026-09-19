@@ -106,6 +106,9 @@ const GLYPH_GAP = 10;
  * левого края текста и левого края аватарки/имени над ним.
  */
 const TEXT_PADDING = 10;
+const AVATAR_CSS_WIDTH = 102;  // как `Avatar()` (libraries/shared/widgets.js) по умолчанию
+const AVATAR_CSS_HEIGHT = 136;
+const AVATAR_SUPERSAMPLE = 2; // во сколько раз подготовленная аватарка больше физического размера на экране
 const SKELETON_POOL_MAX = 14;
 const MEASURE_BATCH_MS = 3; // окно сбора измерений в одну пачку
 const EDIT_MIN_HEIGHT = 96; // минимальная высота тела в режиме правки, px
@@ -390,6 +393,22 @@ export function createChatViewportCore(host, {
     async function coreOrNull(contract, params) {
         const result = await request(host.own, contract, { params });
         return result.ok ? result.value : null;
+    }
+
+    // Аватарки готовятся один раз нужного размера (`imageScale.toBlobUrl`): оригинал в сотни пикселей, сжатый браузером в слое
+    // `will-change: transform`, получался рваным, а миниатюра ST 96×144 при DPR > 1 — мыльной. Пока не готово, показывается оригинал.
+    const avatarScaled = new Map(); // "url|dpr" -> { ready: blob-URL | null }
+    function scaledAvatarUrl(url) {
+        if (!url) return url;
+        const key = `${url}|${devicePixelRatio}`;
+        const hit = avatarScaled.get(key);
+        if (hit) return hit.ready ?? url;
+        const entry = { ready: null };
+        avatarScaled.set(key, entry);
+        serviceOrNull('imageScale.toBlobUrl', { url, width: AVATAR_CSS_WIDTH * devicePixelRatio * AVATAR_SUPERSAMPLE, height: AVATAR_CSS_HEIGHT * devicePixelRatio * AVATAR_SUPERSAMPLE })
+            .then(result => { if (result) { entry.ready = result; render({ fresh: false }); } })
+            .catch(() => {});
+        return url;
     }
 
     /** Сумма времени генерации по всем сообщениям глифа; `null`, если ни у одного нет измеренного времени. */
@@ -1425,7 +1444,7 @@ export function createChatViewportCore(host, {
                 const avatarFloatHeight = (chromeMounts && !isGlyphStart) ? Math.max(0, AVATAR_WRAP - (glyphOffset + padTop)) : 0;
                 const chromeHeight = await ensureRowChrome(mesid, {
                     padTop, padBottom, tight, avatarFloatHeight,
-                    name: message.name, avatarUrl: message.avatarUrl, isUser: message.isUser,
+                    name: message.name, avatarUrl: scaledAvatarUrl(message.avatarUrl), isUser: message.isUser,
                     turnIndex: Number(mesid),
                     // Таймер в шапке глифа — суммарное время генерации ВСЕХ склеенных сообщений глифа, а не только первого.
                     genDurationMs: isGlyphStart ? sumGlyphDuration(glyphMembersByHeader?.get(glyphHeaderMesid), byMesid, message) : message.genDurationMs,

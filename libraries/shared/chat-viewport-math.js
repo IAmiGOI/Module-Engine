@@ -138,10 +138,17 @@ export function computeGlyphs(messages) {
     for (const message of list) {
         const name = String(message?.name ?? '');
         const isPassthrough = Boolean(message?.isToolCall);
-        if (current && (isPassthrough || current.name === name)) {
+        // Сообщение ИИ продолжает открытый глиф только если это ПРОДОЛЖЕНИЕ ТОГО ЖЕ ХОДА: предыдущее сообщение глифа — вызов инструмента
+        // либо ещё не ответ (пустой текст — рассуждение/раунд инструментов). Два законченных ответа ИИ подряд (например, после удаления
+        // сообщения пользователя между ними) — два разных глифа, а не один. Сообщения пользователя подряд по-прежнему склеиваются.
+        const last = current?.last;
+        const continuesTurn = Boolean(last) && (Boolean(last.isToolCall) || String(last.text ?? '').trim() === '');
+        const merges = current && (isPassthrough || (current.name === name && (Boolean(message?.isUser) || continuesTurn)));
+        if (merges) {
             current.mesids.push(message.mesid);
+            current.last = message;
         } else {
-            current = { name, headerMesid: message.mesid, mesids: [message.mesid] };
+            current = { name, headerMesid: message.mesid, mesids: [message.mesid], last: message };
             glyphs.push(current);
         }
     }

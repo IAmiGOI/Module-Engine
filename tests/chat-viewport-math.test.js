@@ -158,3 +158,33 @@ test('computeGlyphs treats two same-named messages separated by a DIFFERENT name
         { headerMesid: '2', mesids: ['2'] },
     ]);
 });
+
+test('two finished assistant replies in a row (e.g. after the user message between them was deleted) stay TWO glyphs; a tool-loop chain of the same turn is still ONE', () => {
+    const afterDeletion = computeGlyphs([
+        { mesid: '0', name: 'Lena', text: 'First full reply.' },
+        { mesid: '1', name: 'Lena', text: 'Second full reply.' },
+    ]);
+    assert.deepEqual(afterDeletion, [
+        { headerMesid: '0', mesids: ['0'] },
+        { headerMesid: '1', mesids: ['1'] },
+    ]);
+
+    const toolLoop = computeGlyphs([
+        { mesid: '0', name: 'Lena', text: '' },                                   // рассуждение без ответа
+        { mesid: '1', name: 'SillyTavern System', isToolCall: true, text: 'x' },
+        { mesid: '2', name: 'Lena', text: 'Now the real answer.' },              // продолжение после инструмента
+        { mesid: '3', name: 'Lena', text: 'A separate later reply.' },            // законченный ответ уже был — это новый глиф
+    ]);
+    assert.deepEqual(toolLoop, [
+        { headerMesid: '0', mesids: ['0', '1', '2'] },
+        { headerMesid: '3', mesids: ['3'] },
+    ]);
+});
+
+test('consecutive USER messages from the same user still merge into one glyph', () => {
+    const glyphs = computeGlyphs([
+        { mesid: '0', name: 'Sasha', isUser: true, text: 'one' },
+        { mesid: '1', name: 'Sasha', isUser: true, text: 'two' },
+    ]);
+    assert.deepEqual(glyphs, [{ headerMesid: '0', mesids: ['0', '1'] }]);
+});
