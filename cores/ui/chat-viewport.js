@@ -106,6 +106,8 @@ const GLYPH_GAP = 10;
  * левого края текста и левого края аватарки/имени над ним.
  */
 const TEXT_PADDING = 10;
+/** Пачка изменений высоты хрома за это время — один пересчёт строк. */
+const CHROME_REFLOW_MS = 30;
 const AVATAR_CSS_WIDTH = 102;  // как `Avatar()` (libraries/shared/widgets.js) по умолчанию
 const AVATAR_CSS_HEIGHT = 136;
 const AVATAR_SUPERSAMPLE = 2; // во сколько раз подготовленная аватарка больше физического размера на экране
@@ -332,6 +334,44 @@ export function createChatViewportCore(host, {
         }, 60);
     }
     const chromeHeightCache = new Map();
+    // Хром строки (имя, бейджи, время) измеряется ОДИН раз и кэшируется, а верх текста считается от этой высоты. Но у хрома она может
+    // измениться ПОСТФАКТУМ: имя переносится на вторую строку на узком экране (телефон), позже подгружается шрифт, колонка получает
+    // окончательную ширину. Раньше такая правка не замечалась вовсе — текст оставался на прежнем месте и НАЛЕЗАЛ на шапку (скриншоты
+    // владельца с телефона). Теперь за реальной высотой хрома следит `ResizeObserver` (сервис `dom.observeResize`): изменилась — кэш строки
+    // сбрасывается, а строки пересчитываются одним общим проходом.
+    const chromeObservers = new Map();   // mesid -> { el, handler }
+    let chromeReflowTimer = null;
+    function queueChromeReflow() {
+        if (chromeReflowTimer !== null) return;   // пачка правок за это время — один пересчёт
+        chromeReflowTimer = setTimeout(() => {
+            chromeReflowTimer = null;
+            toggleRender = true;                    // рост высоты от пересчёта — не повод автопрокручивать вниз
+            render({ fresh: false });
+        }, CHROME_REFLOW_MS);
+    }
+    async function watchChromeHeight(mesid, el) {
+        const current = chromeObservers.get(mesid);
+        if (current?.el === el) return;
+        if (current) await serviceOrNull('dom.unobserveResize', { el: current.el, handler: current.handler });
+        // Сами размеры из уведомления не берём (это content-box без рамок и отступов) — перемеряем ТЕМ ЖЕ способом, каким кэш и заполнялся.
+        const handler = async () => {
+            const cached = chromeHeightCache.get(mesid);
+            if (!cached) return;   // ещё не измеряли — обычный путь измерит сам
+            const rect = await serviceOrNull('dom.measureRect', { el });
+            const measured = cached.pad + Math.max(0, Math.round(rect?.height ?? 0));
+            if (Math.abs(measured - cached.height) < 1) return;
+            chromeHeightCache.delete(mesid);
+            queueChromeReflow();
+        };
+        const observing = await serviceOrNull('dom.observeResize', { el, handler });
+        if (observing) chromeObservers.set(mesid, { el, handler }); else chromeObservers.delete(mesid);
+    }
+    async function stopWatchingChromeHeight(mesid) {
+        const current = chromeObservers.get(mesid);
+        if (!current) return;
+        chromeObservers.delete(mesid);
+        await serviceOrNull('dom.unobserveResize', { el: current.el, handler: current.handler });
+    }
     // Измерения зеркал копятся и выполняются пачкой (`dom.measureRects`): при параллельной подготовке нескольких строк
     // (прелаунч окна, камера предзагрузки) браузер делает ОДНУ принудительную раскладку на пачку вместо одной на строку.
     let measureQueue = [];
@@ -806,13 +846,14 @@ export function createChatViewportCore(host, {
         // фолбэк практически не нужен, только на случай сбоя querySelector.
         const { text: _omitted, finalText: _omittedFinal, ...chromeContent } = content;
         const sig = `${viewportWidth}|${hashString(JSON.stringify(chromeContent))}`;
+        const measureTarget = contentCols.get(mesid) ?? root;
+        await watchChromeHeight(mesid, measureTarget);
         const cached = chromeHeightCache.get(mesid);
         if (cached && cached.sig === sig) return cached.height;
-        const measureTarget = contentCols.get(mesid) ?? root;
         const rect = await serviceOrNull('dom.measureRect', { el: measureTarget });
         // Padding строки (`root`) в измеряемую обёртку не входит — добавляем.
         const measured = (content.padTop ?? ROW_PAD) + (content.padBottom ?? ROW_PAD) + Math.max(0, Math.round(rect?.height ?? 0));
-        chromeHeightCache.set(mesid, { sig, height: measured });
+        chromeHeightCache.set(mesid, { sig, height: measured, pad: measured - Math.max(0, Math.round(rect?.height ?? 0)) });
         return measured;
     }
 
@@ -822,6 +863,7 @@ export function createChatViewportCore(host, {
         chromeMounts.unmount(mesid);
         rowStates.delete(mesid);
         chromeHeightCache.delete(mesid);
+        await stopWatchingChromeHeight(mesid);
         rowPositionApplied.delete(mesid);
         toolCallHtmlWritten.delete(mesid);
         footerSlots.delete(mesid);

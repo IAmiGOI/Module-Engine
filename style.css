@@ -1,5 +1,18 @@
 @import url('./harness/panel.css');
 
+/* ===== Корень страницы: реальная высота для всего, что `position: fixed` (док, окна, оверлеи) =====
+   У SillyTavern на `<html>` стоит фильтр против мерцания блюра: `transform: translateZ(0)` + `perspective`. Любой предок с `transform` становится
+   рамкой отсчёта для `position: fixed`, а высота `<html>` у ST равна НУЛЮ (`body` у неё `position: fixed`, в потоке ничего нет). Итог на
+   телефоне: док с `bottom: 96px` уезжал на −336px за верх экрана, а оверлеи с `top: 0; bottom: 0` схлопывались в нулевую высоту и
+   центрировались на верхней кромке («окно обновления уезжает очень высоко»). С включённым Chat Viewport этого не было — он сам снимает
+   `transform` с корня (cores/ui/engine-panel.js, `dom.overrideRootStyles`), — а без него (режим по умолчанию) ломалось всё.
+   Лечим причину, а не следствия: корню — высота экрана. Фильтр ST остаётся, `fixed` снова считается от экрана. `vh` понимают все, `dvh`
+   (учёт адресной строки) — запасной слой поверх. Ширина у корня и так равна экрану. */
+html {
+    height: 100vh;
+    height: 100dvh;
+}
+
 .stmeBeta-drawer { margin-bottom: 10px; }
 
 /* Page-width overlay (harness/full-screen-panel.js) — only used inside real

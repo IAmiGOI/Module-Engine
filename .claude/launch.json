@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "harness",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["harness/serve.js"],
+      "port": 8420
+    },
+    {
+      "name": "sillytavern",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:\\MAIN\\Hermes\\SillyTavern-1.18.0\\server.js"],
+      "port": 8000
+    }
+  ]
+}

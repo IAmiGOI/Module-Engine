@@ -188,3 +188,14 @@ test('consecutive USER messages from the same user still merge into one glyph', 
     ]);
     assert.deepEqual(glyphs, [{ headerMesid: '0', mesids: ['0', '1'] }]);
 });
+
+test('Chat Viewport starts enabled by default on a phone, disabled on a computer, and an explicit choice always wins', async () => {
+    const { resolveChatViewportEnabled } = await import('../libraries/shared/chat-viewport-math.js');
+    assert.equal(resolveChatViewportEnabled({}, { mobile: true }), true, 'phone, nothing chosen yet');
+    assert.equal(resolveChatViewportEnabled(undefined, { mobile: true }), true);
+    assert.equal(resolveChatViewportEnabled({}, { mobile: false }), false, 'computer, nothing chosen yet');
+    assert.equal(resolveChatViewportEnabled({ enabled: false }, { mobile: true }), false, 'a phone user who turned it off stays off');
+    assert.equal(resolveChatViewportEnabled({ enabled: true }, { mobile: false }), true, 'a computer user who turned it on stays on');
+    assert.equal(resolveChatViewportEnabled({ enabled: 'yes' }, { mobile: true }), true, 'a garbage value is not a choice');
+    assert.equal(resolveChatViewportEnabled({ sideMargin: 20 }, { mobile: false }), false);
+});

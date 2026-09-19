@@ -1,9 +1,8 @@
 import './harness/boot-start.js';
-import { wireBootScreen } from './harness/boot-screen.js';
 import { wireEngine } from './harness/engine-wiring.js';
 import { createFullScreenPanel } from './harness/full-screen-panel.js';
 import { isMobileSurface } from './cores/ui/final-ui-android.js';
-import { effect } from './cores/ui/reactive.js';
+import { createLauncherDockCore } from './cores/ui/launcher-dock.js';
 import { createActivityLightDom } from './cores/ui/activity-light-dom.js';
 import { h } from './cores/ui/tree.js';
 import { createEdgeDrag } from './libraries/shared/edge-drag.js';
@@ -24,7 +23,7 @@ import { FloatingPanel, Button } from './libraries/shared/widgets.js';
  * instead (see [harness/full-screen-panel.js](harness/full-screen-panel.js)),
  * same shape as Alpha's own full-screen panel and for the same reason:
  * several rows of fields simply don't fit a narrow drawer. The REAL, one-
- * click way in is a persistent floating launcher dock (`addLauncherDock()`
+ * click way in is a persistent floating launcher dock (`cores/ui/launcher-dock.js`
  * below), not a top-bar icon — see that function's own doc-comment for why.
  */
 
@@ -48,156 +47,7 @@ function getContext() {
     return window.SillyTavern.getContext();
 }
 
-/**
- * A persistent floating launcher, fixed to the right edge of the viewport —
- * NOT inserted into ST's own top-bar. Used to be a `.drawer` icon appended
- * next to `#rightNavHolder`/inside `#top-bar` (same shape as Alpha's own
- * `addTopBarLauncher()`), but that made it disappear completely under the
- * popular third-party extension "SillyTavern-ProbablyTooManyTabs": its own
- * `style.css` sets `#top-bar, #top-settings-holder { display: none !important; }`
- * UNCONDITIONALLY (checked against its real source, not just its README) —
- * the whole container is hidden, not filtered by content, so nothing placed
- * there survives, regardless of id/class. A `position: fixed` element on
- * `<body>` doesn't depend on that container at all, so the SAME code shows
- * the SAME launcher whether or not that extension (or any other that
- * reorganizes the top bar) is installed.
- *
- * Five icon-sized slots by height — THREE of them real now
- * (`stme-launcher-dock-btn`, opens the engine panel; `stme-launcher-dock-btn-graph`,
- * opens the Memory Graph editor's own floating window directly, without
- * detouring through the settings panel's card first — решено с пользователем:
- * "вынеси заход в граф в боковую панель тоже"; `stme-launcher-dock-btn-music`,
- * показывает HUD-плеер Модуля «Music» через GENERIC `modules.requestHud(id)`
- * Раннера — кнопка знает только id и не знает, включён ли Модуль: если нет,
- * клик честно ничего не откроет), `stme-launcher-dock-btn-image` — кнопка с
- * видом картинки (fa-image), ПОКА БЕЗ ФУНКЦИОНАЛА (решено с пользователем):
- * клик ничего не делает, а сама она внесена в :not()-цепочку селектора
- * главной кнопки ниже, чтобы клик по ней не тумблерил панель. Шестерёнка
- * (`stme-launcher-dock-btn-settings`) переехала В НИЖНИЙ СЛОТ: пустых слотов
- * в доке больше нет, все пять мест заняты настоящими кнопками.
- *
- * Wrapped in a `.stme-launcher-dock-zone` — a stationary hover hitbox, NOT
- * the pill itself. An earlier version put `:hover` directly on the sliding
- * pill: moving the mouse to the very edge made the pill slide out from under
- * the cursor, dropping `:hover`, sliding back under it, re-triggering
- * `:hover` — a visible vibration (caught live). The zone never moves; only
- * the pill inside it does.
- */
-function addLauncherDock(panel, { openMemoryGraphPanel, openSettingsPanel, toggleMain, requestModuleHud, activityState, glAnimations, memoryGraphPanel, picturePanel } = {}) {
-    if (document.getElementById('stmeBetaLauncherDock')) return;
-    const zone = document.createElement('div');
-    zone.id = 'stmeBetaLauncherDock';
-    zone.className = 'stme-launcher-dock-zone';
-    zone.innerHTML = `
-        <div class="stme-launcher-dock">
-            <button type="button" class="stme-launcher-dock-btn" title="Open ST Module Engine (Beta)" data-i18n="[title]Open ST Module Engine (Beta)">
-                <i class="fa-solid fa-flask fa-fw"></i>
-            </button>
-            <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-graph" title="Open Memory Graph" data-i18n="[title]Open Memory Graph">
-                <i class="fa-solid fa-diagram-project fa-fw"></i>
-            </button>
-            <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-music" title="Show Music player" data-i18n="[title]Show Music player">
-                <i class="fa-solid fa-music fa-fw"></i>
-            </button>
-            <!-- Кнопка-картинка: только ВИД, функционала пока нет (решено с
-                 пользователем: «добавь кнопку с видом картинки, пока без
-                 функционала»). Клик честно ничего не делает — обработчика нет.
-                 Обязана быть в :not()-цепочке селектора главной кнопки ниже,
-                 иначе клик по ней тумблерил бы панель движка. -->
-            <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-image" title="Picture">
-                <i class="fa-solid fa-image fa-fw"></i>
-            </button>
-            <button type="button" class="stme-launcher-dock-btn stme-launcher-dock-btn-settings" title="Open engine settings" data-i18n="[title]Open engine settings">
-                <i class="fa-solid fa-gear fa-fw"></i>
-            </button>
-        </div>`;
-    // Graph и Music в доке — тоже ТУМБЛЕРЫ (решено с пользователем: «с
-    // музыкой и графом сделай также, чтобы закрывались»). Граф умеет
-    // show()/hide()/isVisible() — переключаем по его собственному ответу;
-    // Music идёт через GENERIC requestHud(id) Раннера, который сам стал
-    // тумблером (engine-wiring.js).
-    const toggleGraph = () => {
-        if (memoryGraphPanel?.isVisible?.()) { memoryGraphPanel.hide(); return; }
-        openMemoryGraphPanel?.();
-    };
-    // Кнопка-картинка — тумблер Плавающего окна «Картинка» (тот же контракт,
-    // что у графа выше: show()/hide()/isVisible(), окно ведёт себя как у
-    // музыки/трекера, только крупнее — дефолт 3:4).
-    const togglePicture = () => {
-        if (picturePanel?.isVisible?.()) { picturePanel.hide(); return; }
-        picturePanel?.show();
-    };
-    zone.querySelector('.stme-launcher-dock-btn:not(.stme-launcher-dock-btn-graph):not(.stme-launcher-dock-btn-music):not(.stme-launcher-dock-btn-settings):not(.stme-launcher-dock-btn-image)').addEventListener('click', () => (toggleMain ?? (() => panel.toggle()))());
-    zone.querySelector('.stme-launcher-dock-btn-graph').addEventListener('click', toggleGraph);
-    zone.querySelector('.stme-launcher-dock-btn-image').addEventListener('click', togglePicture);
-    zone.querySelector('.stme-launcher-dock-btn-settings').addEventListener('click', () => openSettingsPanel?.());
-    // GENERIC-канал: кнопка знает только id Модуля и просит Раннер показать
-    // его HUD. Модуль выключен — requestHud вернёт false, клик не сделает вид,
-    // что что-то открыл.
-    zone.querySelector('.stme-launcher-dock-btn-music').addEventListener('click', () => { requestModuleHud?.('module.music'); });
-    // На тач-экране :hover не существует — пилюля, спрятанная за край экрана
-    // (видны только 10px щели), для пальца НЕ СУЩЕСТВУЕТ, что и ловил
-    // пользователь: «вообще не видно». Поэтому платформа помечается классом
-    // `stme-launcher-dock-touch` на ЗОНЕ (пилюля живёт мимо движка, у неё нет
-    // дерева Android-ядра — см. panel.css), и на тач-поверхности пилюля
-    // постоянно видна: полупрозрачная у края, по тапу выезжает целиком
-    // и становится непрозрачной. Первый тап по кнопке только раскрывает,
-    // второй — выполняет действие (как у iOS-браузера с тулбаром).
-    if (isMobileSurface()) {
-        zone.classList.add('stme-launcher-dock-touch');
-        const pill = zone.querySelector('.stme-launcher-dock');
-        pill.addEventListener('click', event => {
-            if (!zone.classList.contains('stme-launcher-dock-open')) {
-                event.stopPropagation();
-                zone.classList.add('stme-launcher-dock-open');
-            }
-        }, true); // capture: перехватить клик кнопки ДО её собственного обработчика
-        document.addEventListener('click', event => {
-            if (!zone.contains(event.target)) zone.classList.remove('stme-launcher-dock-open');
-        });
-    }
-    // Светофор активности: полоска пилюли — «лампочка» состояния движка
-    // (cores/ui/activity-light.js сводит события всех Ядер в одно состояние).
-    // СТАТИЧНАЯ DOM-полоска (::before в panel.css, градиент + свечение на
-    // переменной --stme-light): Ядро кладёт класс stme-light-<state> на ЗОНУ
-    // (cores/ui/activity-light-dom.js), CSS перекрашивает переменную обычным
-    // transition. Никакого бесконечного animation и никакого canvas:
-    // канвас-версия (activity-light-canvas.js) по замерам всё равно красила
-    // пол-окна каждый кадр — в этом окружении любой canvas в DOM инвалидирует
-    // paint вверх по дереву (живые замеры 09.09–11.09).
-    if (activityState) {
-        createActivityLightDom(zone, activityState);
-    }
-    // Вертикальное перетаскивание по правому краю — Библиотека
-    // ([edge-drag.js](./libraries/shared/edge-drag.js)), здесь только проводка.
-    // Двигается САМА зона (неподвижная по договору «анти-вибрации» выше — но
-    // ЦЕЛИКОМ и только ПОКА её тащат; пилюля внутри по-прежнему ездит одна,
-    // так что вибрации это не возвращает). Раскрытие по наведению не тронуто:
-    // `:hover` живёт на зоне и после отпускания пилюля сворачивается на новом
-    // месте сама, как только мышь уйдёт.
-    const edgeDrag = createEdgeDrag({
-        // localStorage, а не storage-Сервис движка: пилюля живёт МИМО дерева
-        // Ядер (см. panel.css) и до Раннера с его шинами не добирается — ей
-        // доступен только браузер.
-        storage: {
-            getItem: () => { try { return localStorage.getItem('stmeBetaLauncherDockY'); } catch { return null; } },
-            setItem: value => { try { localStorage.setItem('stmeBetaLauncherDockY', value); } catch { /* приватный режим — место просто не сохранится */ } },
-        },
-        getViewportHeight: () => window.innerHeight,
-        getHeight: () => zone.offsetHeight,
-        getBottom: () => window.innerHeight - zone.getBoundingClientRect().bottom,
-        setBottom: px => { zone.style.bottom = `${px}px`; },
-    });
-    edgeDrag.restore();
-    for (const handler of ['on:pointerdown', 'on:pointermove', 'on:pointerup', 'on:pointercancel']) {
-        zone.addEventListener(handler.slice(3).toLowerCase(), edgeDrag[handler]);
-    }
-    // Гашение досланного после драга клика — ДО обработчиков кнопок (capture).
-    zone.addEventListener('click', event => {
-        if (edgeDrag.suppressClick) { event.stopPropagation(); event.preventDefault(); }
-    }, true);
-    document.body.append(zone);
-}
+// Плавающий док (пилюля у правого края) — Ядро `cores/ui/launcher-dock.js`; здесь только сборка его действий (см. init() ниже).
 
 /**
  * Онбординг, шаг 1 — ТОЛЬКО сцена (решено с пользователем: содержимое окна
@@ -386,17 +236,11 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, selfUpdate, backgrounds, syncCore, memoryGraphPanel, picturePanel, activityLight, glAnimations, modules, enginePanel, firstLoad, firstLoadResult, uiEngine } = await wireEngine({
+    const { engine, panelUi, startup, memoryGraphPanel, picturePanel, activityLight, modules, enginePanel, firstLoad, firstLoadResult, uiEngine } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
     });
-
-    // Экран загрузки показывает стадии самообновления (проверка, скачивание, перезапуск) и закрывается, когда ход закончен.
-    // Подписка ДО `selfUpdate.run()` ниже: иначе событие `selfUpdate.checking` уйдёт раньше подписчика.
-    // Держать ли экран загрузки ради синхронизации (включена и есть с кем/куда) — решается ДО хода самообновления, по одним настройкам.
-    const holdForSync = await syncCore.planLoadSync().catch(() => false);
-    wireBootScreen(globalThis.__stmeBoot, engine.events, { holdForSync });
 
     // Первый запуск движка — `firstLoad` уже посчитал запуски и (при счётчике
     // 0 → 1) объявил событие `firstLoad.firstLaunch` ещё внутри wireEngine().
@@ -410,27 +254,9 @@ async function init() {
     // с настоящим сценарием.
     if (firstLoadResult?.firstLaunch) { void showOnboardingIntro(uiEngine); }
 
-    // Обновление запускается РАНЬШЕ интерфейса: если мы отстали, страница всё
-    // равно перезагрузится, и строить панель дважды незачем. Ход молчит, когда
-    // сказать нечего — не git-установка, нет сети, уже свежее.
-    // Итог хода печатается ВСЕГДА. «Молчит, когда сказать нечего» задумывалось
-    // против шума в интерфейсе, а не против диагностики: без строчки в консоли
-    // отличить работающее самообновление от сломанного было нечем.
-    selfUpdate.run()
-        .then(result => {
-            console.info('[ST Module Engine (Beta)] Self-update:', result?.outcome ?? 'no result', result?.reason ?? result?.error ?? '');
-            // Фоны из репозитория — уже ПОСЛЕ проверки обновления и не блокируя интерфейс; если движок обновился, страница сейчас перезагрузится.
-            if (result?.outcome !== 'updated') backgrounds.sync().catch(error => console.warn('[ST Module Engine (Beta)] Backgrounds sync skipped:', error));
-            // Синхронизация устройств — тоже после проверки обновления и не блокируя интерфейс.
-            // Как и обновление: если включена, проход идёт при загрузке страницы (экран загрузки держится, пока он идёт, но ограниченно).
-            if (result?.outcome !== 'updated') {
-                syncCore.start()
-                    .then(() => (holdForSync ? syncCore.runOnLoad() : null))
-                    .catch(error => console.warn('[ST Module Engine (Beta)] Sync skipped:', error))
-                    .finally(() => { if (holdForSync) globalThis.__stmeBoot?.finish({ afterMs: 300 }); });
-            }
-        })
-        .catch(error => console.warn('[ST Module Engine (Beta)] Self-update skipped:', error));
+    // Порядок запуска — Ядро запуска (cores/startup): самообновление → (если страница не перезагружается) фоны и синхронизация → экран загрузки.
+    // Идёт РАНЬШЕ интерфейса и без ожидания: интерфейс строится параллельно. Итог самообновления печатается в консоль всегда.
+    startup.begin().catch(error => console.warn('[ST Module Engine (Beta)] Startup skipped:', error));
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
     if (!target) throw new Error('SillyTavern extensions settings container was not found.');
@@ -477,18 +303,24 @@ async function init() {
     document.getElementById('stmeBetaOpenPanel').addEventListener('click', () => openMain());
     // Запасной путь к настройкам НЕ через док: на телефоне пилюлю может закрыть интерфейс браузера или ST, а меню расширений доступно всегда.
     document.getElementById('stmeBetaOpenSettings')?.addEventListener('click', () => openSettings());
-    addLauncherDock(panel, {
-        openMemoryGraphPanel: () => memoryGraphPanel.show(),
-        openSettingsPanel: toggleSettings,
-        requestModuleHud: id => modules.requestHud(id),
+    // Тумблеры окон в доке: граф и картинка умеют show()/hide()/isVisible() — переключаем по их собственному ответу; музыка идёт через
+    // GENERIC requestHud(id) Раннера, который сам стал тумблером. Модуль выключен — requestHud вернёт false, клик не сделает вид, что что-то открыл.
+    const toggleGraph = () => { if (memoryGraphPanel?.isVisible?.()) { memoryGraphPanel.hide(); return; } memoryGraphPanel.show(); };
+    const togglePicture = () => { if (picturePanel?.isVisible?.()) { picturePanel.hide(); return; } picturePanel?.show(); };
+    createLauncherDockCore(engine.registerCaller('core.ui.launcherDock', 'cores', { tier: 'official' }), {
+        document,
+        touch: isMobileSurface(),
         activityState: activityLight.state,
-        glAnimations,
-        memoryGraphPanel,
-        picturePanel,
-        // Пилюля знает только `panel` для своего toggle — обёртка ниже
-        // подменяет поведение, не трогая сам createFullScreenPanel.
-        toggleMain,
-    });
+        mountActivityLight: createActivityLightDom,
+        createEdgeDrag,
+        actions: {
+            main: toggleMain,
+            graph: toggleGraph,
+            music: () => { modules.requestHud('module.music'); },
+            image: togglePicture,
+            settings: toggleSettings,
+        },
+    }).mount();
 
     window.STModuleEngineBeta = engine;
     console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the floating launcher dock.');

@@ -898,6 +898,9 @@ export function createSyncCore(host, {
 
     const unregisters = [
         host.own.register('sync.status', () => status()),
+        host.own.register('sync.start', () => start()),
+        host.own.register('sync.planLoad', () => planLoadSync()),
+        host.own.register('sync.runOnLoad', () => runOnLoad()),
         host.own.register('sync.configure', params => configure(params)),
         host.own.register('sync.run', params => run(params)),
         host.own.register('sync.abort', () => { abortRequested = true; return true; }),

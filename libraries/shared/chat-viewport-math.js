@@ -154,3 +154,12 @@ export function computeGlyphs(messages) {
     }
     return glyphs.map(({ headerMesid, mesids }) => ({ headerMesid, mesids }));
 }
+
+/**
+ * Включён ли Chat Viewport при запуске. Явный выбор пользователя (`saved.enabled` — `true` или `false`, записывается переключателем в
+ * настройках) важнее всего. Если выбора ещё не было: на ТЕЛЕФОНЕ включён по умолчанию — родной DOM чата ST там ломает раскладку (то, что
+ * на ПК работает), а наш вьюпорт даёт предсказуемую; на ПК по умолчанию выключен (там родной чат в порядке, а вьюпорт ещё экспериментальный).
+ */
+export function resolveChatViewportEnabled(saved, { mobile = false } = {}) {
+    return typeof saved?.enabled === 'boolean' ? saved.enabled : Boolean(mobile);
+}
