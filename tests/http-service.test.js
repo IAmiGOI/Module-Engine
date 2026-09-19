@@ -66,6 +66,15 @@ test('registerHttpService()\'s returned unregister function retires the contract
     assert.equal(result.ok, false);
 });
 
+test('a FAILED response to a blob request still comes back as text, so the caller can read the error', async () => {
+    const bus = createContractBus();
+    registerHttpService(bus, { fetch: async () => ({ ok: false, status: 409, headers: new Headers(), text: async () => '{"error_summary":"path/not_found/"}', blob: async () => { throw new Error('the blob of an error is never read'); } }) });
+    const result = await new Promise(resolve => bus.subscribe('http.request', { params: { url: 'https://example.com/x', responseType: 'blob' } }, resolve));
+    assert.equal(result.value.status, 409);
+    assert.match(result.value.text, /not_found/);
+    assert.equal(result.value.blob, undefined);
+});
+
 test('http.request with responseType:"blob" returns the body as a blob instead of text — text() would UTF-8-mangle image bytes (picture panel)', async () => {
     const fakeBlob = { size: 3, type: 'image/webp' };
     const { fetch, calls } = fakeFetch({
