@@ -1,14 +1,19 @@
 import { signal } from './reactive.js';
+import { createActivityTracker } from '../../libraries/core/activity-tracker.js';
 
 /**
- * Ядро «светофора активности» —Activity Light на полоске пилюли-дока.
+ * Ядро «светофора активности» — Activity Light на полоске пилюли-дока.
  *
  * **Что это.** Одна полоска на краю экрана — единственный элемент движка,
  * который виден ВСЕГДА, не открывая никаких панелей. Поэтому именно ей
  * отдана роль «индикаторной лампочки»: она красится в цвет ТЕКУЩЕЙ фазы
  * жизни движка. Ядро принимает события начала/конца работы от ВСЕХ
  * источников — Ядра генерации, трекинг, саммари, самообновление — и сводит
- * их в одно состояние (последний громкий факт приоритетнее фона).
+ * их в одно состояние по ПАРАЛЛЕЛЬНЫМ ЗАДАЧАМ (см.
+ * libraries/core/activity-tracker.js): пока идёт хоть одна — `working`;
+ * итог показывается, когда закончились ВСЕ. Раньше побеждало последнее
+ * событие, и «саммари свернулось» гасило оранжевый посреди ещё идущей
+ * генерации.
  *
  * **Почему Ядро, а не Модуль.** По критерию из ARCHITECTURE.md: состояние
  * «движок занят/упал» — не фича, которую пользователь подключает, а
@@ -45,62 +50,49 @@ const ERROR_HOLD_MS = 6000;
 const NOTIFY_HOLD_MS = 5000;
 
 /**
- * Карта «событие → состояние». Здесь перечислены ВСЕ источники движка,
- * говорящие о начале/конце работы; новый источник просто добавляет строку —
- * ядро остаётся тем же.
+ * Правила «событие → действие над задачами». Действие: `{ job, phase: 'start' | 'touch' | 'end', result? }` для событий с парой
+ * начало/конец; `{ phase: 'result', result }` для событий без своей задачи (итог откладывается, пока идёт другая работа);
+ * `{ phase: 'notify' }` — уведомление. Новый источник добавляет строку — ядро остаётся тем же.
  *
  * Разбор по смыслу (не «любое событие = working»):
- *  - beforeSend/sending/toolCall — машина генерации в работе;
- *  - tracking.poll.started — опрос модели трекером;
- *  - selfUpdate.started — самообновление тянет код из сети;
- *  - completed(ended) — успех; stopped БЕЗ ошибки — «жёлтый» (прервано
- *    пользователем/системой, ошибка не случилась); aborted/superseded/failed —
- *    ошибки; superseded — вытесненный прогон тоже сбой знания о мире, но
- *    частый при свайпах — поэтому «жёлтый», не «красный»;
- *  - notifications (`ui.notify` Ядра уведомлений объявляется событием
- *    `notifications.shown` — проводка добавляет publish в Ядро) — белый.
+ *  - beforeSend/sending/toolCall/st.generationStarted — задача `generation`; completed/aborted/prepareFailed — её конец
+ *    (stopped без ошибки — «жёлтый»); `superseded` — прогон вытеснен НОВЫМ, который стартует сразу за ним, поэтому это не
+ *    конец задачи (иначе свайп показывал бы красное посреди живой генерации);
+ *  - `tracking.poll.*` — задача на каждый трекер (`tracking:<id>`): несколько опросов идут параллельно;
+ *  - `selfUpdate.*`, `memoryGraph.bootstrap*` — свои задачи;
+ *  - `summary.folded/foldFailed` — итог без собственной задачи: свёртка идёт ВНУТРИ подготовки генерации (этап
+ *    `generation.prepare`), то есть посреди работающей задачи `generation`, и без учёта задач гасила бы лампочку раньше времени;
+ *  - `notifications.shown` — белое мигание, перекрывает всё на время.
  */
+const GENERATION = { job: 'generation', phase: 'start' };
 const EVENT_MAP = Object.freeze({
-    // --- генерация (Ядро генерации) ---
-    // Начало генерации основной LLM ловим ПРЯМО с мостированного
-    // `st.generationStarted`: живой прогон показал, что на обычной генерации
-    // полоска оставалась синей до ToolCall, если полагаться только на
-    // `generation.beforeSend`. Третий аргумент события ST — `dryRun` (сухой
-    // прогон, конца у него не бывает) — рабочим состоянием не считается.
-    'st.generationStarted': payload => (payload?.args?.[2] ? null : { state: 'working' }),
-    'generation.beforeSend': { state: 'working' },
-    'generation.sending': { state: 'working' },
-    'generation.toolCall': { state: 'working' },
-    'generation.completed': payload => ({ state: payload?.outcome === 'stopped' ? 'warning' : 'success' }),
-    'generation.superseded': { state: 'warning' },
-    'generation.aborted': { state: 'error' },
-    'generation.prepareFailed': { state: 'error' },
-    // --- трекинг (Ядро трекинга) ---
-    'tracking.poll.started': { state: 'working' },
-    'tracking.poll.completed': { state: 'success' },
-    'tracking.poll.failed': { state: 'error' },
-    // --- саммари (Ядро саммари) ---
-    'summary.folded': { state: 'success' },
-    'summary.foldFailed': { state: 'error' },
-    // --- самообновление (Ядро самообновления) ---
-    'selfUpdate.started': { state: 'working' },
-    'selfUpdate.applied': { state: 'success' },
-    'selfUpdate.failed': { state: 'error' },
-    // --- уведомления (Ядро уведомлений) — единственное МИГАНИЕ ---
-    'notifications.shown': { state: 'notify' },
-    // --- Граф памяти: построение из Lorebook (реальная жалоба: "боковой
-    // бар (светофор) не показывает построение графа дефолтным для
-    // генерации оранжевым") — может идти минутами, ровно тот случай, для
-    // которого светофор и существует: что-то идёт прямо сейчас, а
-    // единственное окно, которое это показывало (панель графа/движка),
-    // не всегда открыто. `bootstrapStarted` публикуется ТОЛЬКО когда
-    // реальная работа подтверждена (непустой Lorebook) — значит и парный
-    // `bootstrapFinished` с `success:false` здесь означает настоящий отказ
-    // (звонок к SideCar упал, или ответ не разобрался), не тривиальный
-    // "нечего импортировать" (тот выходит РАНЬШЕ, до `started`, светофора
-    // вообще не касаясь) — красный, не жёлтый.
-    'memoryGraph.bootstrapStarted': { state: 'working' },
-    'memoryGraph.bootstrapFinished': payload => ({ state: payload?.success ? 'success' : 'error' }),
+    // Начало генерации основной LLM ловим ПРЯМО с мостированного `st.generationStarted` (живой прогон показал, что иначе
+    // полоска оставалась синей до ToolCall). Третий аргумент события ST — `dryRun` (сухой прогон, конца у него не бывает).
+    'st.generationStarted': payload => (payload?.args?.[2] ? null : GENERATION),
+    'generation.beforeSend': GENERATION,
+    'generation.sending': GENERATION,
+    'generation.toolCall': GENERATION,
+    'generation.completed': payload => ({ job: 'generation', phase: 'end', result: payload?.outcome === 'stopped' ? 'warning' : 'success' }),
+    'generation.superseded': { job: 'generation', phase: 'touch' },
+    'generation.aborted': { job: 'generation', phase: 'end', result: 'error' },
+    'generation.prepareFailed': { job: 'generation', phase: 'end', result: 'error' },
+    // --- трекинг ---
+    'tracking.poll.started': payload => ({ job: `tracking:${payload?.trackerId ?? ''}`, phase: 'start' }),
+    'tracking.poll.completed': payload => ({ job: `tracking:${payload?.trackerId ?? ''}`, phase: 'end', result: 'success' }),
+    'tracking.poll.failed': payload => ({ job: `tracking:${payload?.trackerId ?? ''}`, phase: 'end', result: 'error' }),
+    // --- саммари: итоги без задачи ---
+    'summary.folded': { phase: 'result', result: 'success' },
+    'summary.foldFailed': { phase: 'result', result: 'error' },
+    // --- самообновление ---
+    'selfUpdate.started': { job: 'selfUpdate', phase: 'start' },
+    'selfUpdate.applied': { job: 'selfUpdate', phase: 'end', result: 'success' },
+    'selfUpdate.failed': { job: 'selfUpdate', phase: 'end', result: 'error' },
+    // --- уведомления — единственное МИГАНИЕ ---
+    'notifications.shown': { phase: 'notify' },
+    // --- Граф памяти: построение из Lorebook (может идти минутами — ровно тот случай, для которого светофор и существует).
+    // `bootstrapStarted` публикуется ТОЛЬКО когда реальная работа подтверждена, значит `success:false` в конце — настоящий отказ.
+    'memoryGraph.bootstrapStarted': { job: 'memoryGraph', phase: 'start' },
+    'memoryGraph.bootstrapFinished': payload => ({ job: 'memoryGraph', phase: 'end', result: payload?.success ? 'success' : 'error' }),
 });
 
 /** Сколько держится каждый конечный цвет. */
@@ -108,27 +100,45 @@ const HOLD_MS = { success: SUCCESS_HOLD_MS, warning: WARNING_HOLD_MS, error: ERR
 
 export function createActivityLightCore(host, { schedule = setTimeout, cancel = clearTimeout, now = Date.now } = {}) {
     const state = signal(ACTIVITY_STATES.idle);
+    const tracker = createActivityTracker({ now });
     let holdTimer = null;
+    let notifyTimer = null;
     const subscriptions = [];
 
-    /** `notify` приоритетнее всего (единственное мигание — его видно всегда), `working` перебивает конечные цвета. */
-    function setState(next) {
+    /** Показанное состояние — из задач; уведомление (мигание) перекрывает его на своё время, потом лампочка возвращается к тому, что есть на деле. */
+    function render() {
+        if (notifyTimer) return;
+        const shown = tracker.display();
         if (holdTimer) { cancel(holdTimer); holdTimer = null; }
-        state.set(next);
-        const hold = HOLD_MS[next];
-        if (hold) holdTimer = schedule(() => { holdTimer = null; state.set(ACTIVITY_STATES.idle); }, hold);
+        state.set(shown);
+        const hold = HOLD_MS[shown];
+        if (hold) {
+            holdTimer = schedule(() => {
+                holdTimer = null;
+                tracker.clearTerminal();
+                render();
+            }, hold);
+        }
+    }
+
+    function showNotify() {
+        if (holdTimer) { cancel(holdTimer); holdTimer = null; }
+        if (notifyTimer) cancel(notifyTimer);
+        state.set(ACTIVITY_STATES.notify);
+        notifyTimer = schedule(() => { notifyTimer = null; render(); }, HOLD_MS.notify);
     }
 
     function onEvent(eventName, payload) {
         const rule = EVENT_MAP[eventName];
         if (!rule) return;
-        const resolved = typeof rule === 'function' ? rule(payload) : rule;
-        if (!resolved?.state || !ACTIVITY_STATES[resolved.state]) return;
-        // «Работаю» не гасит ошибку: ошибка держится свой тик, работа после неё
-        // всё равно перекрасит полоску, когда начнётся. А вот уведомление
-        // перекрывает всё — оно на то и мигание.
-        if (resolved.state !== 'notify' && state.peek() === 'notify') return;
-        setState(resolved.state);
+        const action = typeof rule === 'function' ? rule(payload) : rule;
+        if (!action?.phase) return;
+        if (action.phase === 'notify') { showNotify(); return; }
+        if (action.phase === 'start') tracker.start(action.job);
+        else if (action.phase === 'touch') tracker.touch(action.job);
+        else if (action.phase === 'end') tracker.end(action.job, action.result);
+        else if (action.phase === 'result') tracker.result(action.result);
+        render();
     }
 
     function load() {
@@ -143,8 +153,11 @@ export function createActivityLightCore(host, { schedule = setTimeout, cancel = 
         state,
         /** Ручной вызов для тестов: как будто пришло событие. */
         onEvent,
+        /** Какие задачи сейчас считаются идущими — для диагностики и тестов. */
+        activeJobs: () => tracker.jobs(),
         stop: () => {
             if (holdTimer) cancel(holdTimer);
+            if (notifyTimer) cancel(notifyTimer);
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
         },
     };

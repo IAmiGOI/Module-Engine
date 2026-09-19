@@ -128,3 +128,68 @@ test('unknown events are ignored — adding a new source is opt-in via the map',
     engine.events.emit('some.random.event', {});
     assert.equal(core.state.peek(), 'idle');
 });
+
+// ── Параллельная работа: светофор считает ЗАДАЧИ, а не «последнее событие» ─────────────────────────
+
+test('a summary fold finishing WHILE the answer is still generating does not turn the light green — the generation task keeps it working', () => {
+    const { engine, core, timers } = setup();
+    engine.events.emit('generation.beforeSend', { runId: 'r1' });
+    engine.events.emit('generation.sending', { runId: 'r1' });
+    assert.equal(core.state.peek(), 'working');
+
+    engine.events.emit('summary.folded', { count: 3 });
+    assert.equal(core.state.peek(), 'working', 'the fold result is deferred, generation is still running');
+    assert.equal(timers.length, 0, 'no hold timer while work is running');
+
+    engine.events.emit('generation.completed', { runId: 'r1', outcome: 'ended' });
+    assert.equal(core.state.peek(), 'success');
+});
+
+test('when several tasks overlap, the final colour is the WORST result of all of them (error beats success), shown only once everything has finished', () => {
+    const { engine, core } = setup();
+    engine.events.emit('generation.beforeSend', { runId: 'r1' });
+    engine.events.emit('tracking.poll.started', { trackerId: 'mood' });
+    engine.events.emit('tracking.poll.failed', { trackerId: 'mood', message: 'x' });
+    assert.equal(core.state.peek(), 'working', 'generation is still running, the poll failure waits');
+    engine.events.emit('generation.completed', { runId: 'r1', outcome: 'ended' });
+    assert.equal(core.state.peek(), 'error', 'the failed poll is not forgotten');
+});
+
+test('two trackers polling at once: the light stays working until BOTH are done', () => {
+    const { engine, core } = setup();
+    engine.events.emit('tracking.poll.started', { trackerId: 'a' });
+    engine.events.emit('tracking.poll.started', { trackerId: 'b' });
+    engine.events.emit('tracking.poll.completed', { trackerId: 'a' });
+    assert.equal(core.state.peek(), 'working');
+    engine.events.emit('tracking.poll.completed', { trackerId: 'b' });
+    assert.equal(core.state.peek(), 'success');
+});
+
+test('a superseded run (swipe/regenerate) is NOT an end of generation — no red flash between the old run and the new one', () => {
+    const { engine, core } = setup();
+    engine.events.emit('generation.beforeSend', { runId: 'r1' });
+    engine.events.emit('generation.superseded', { runId: 'r1' });
+    engine.events.emit('generation.beforeSend', { runId: 'r2' });
+    assert.equal(core.state.peek(), 'working');
+    engine.events.emit('generation.completed', { runId: 'r2', outcome: 'ended' });
+    assert.equal(core.state.peek(), 'success');
+});
+
+test('after a notification blink the light returns to what is really going on', () => {
+    const { engine, core, timers } = setup();
+    engine.events.emit('generation.beforeSend', { runId: 'r1' });
+    engine.events.emit('notifications.shown', {});
+    assert.equal(core.state.peek(), 'notify');
+    timers.at(-1).fn();
+    assert.equal(core.state.peek(), 'working');
+});
+
+test('a task that never reports back is dropped after its TTL — the light must not burn orange forever over a lost event', async () => {
+    const { createActivityTracker } = await import('../libraries/core/activity-tracker.js');
+    let clock = 0;
+    const tracker = createActivityTracker({ now: () => clock, ttlMs: 1000 });
+    tracker.start('generation');
+    assert.equal(tracker.display(), 'working');
+    clock = 5000;
+    assert.notEqual(tracker.display(), 'working');
+});

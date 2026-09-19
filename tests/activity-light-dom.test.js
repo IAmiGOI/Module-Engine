@@ -84,5 +84,8 @@ test('notify blink survives a working event and returns to idle via the hold tim
     assert.ok(zone.classList.contains('stme-light-notify'), 'working must not steal the blink');
 
     timers.at(-1).fn(); // тик удержания вышел
-    assert.ok(zone.classList.contains('stme-light-idle'));
+    // Мигание кончилось — лампочка возвращается к тому, что происходит на деле: генерация идёт, значит `working`, не `idle`.
+    assert.ok(zone.classList.contains('stme-light-working'));
+    core.onEvent('generation.completed', { outcome: 'ended' });
+    assert.ok(zone.classList.contains('stme-light-success'));
 });
