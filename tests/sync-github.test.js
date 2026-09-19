@@ -133,3 +133,18 @@ test('a wrong token gives a readable error instead of a crash', async () => {
     const http = async () => ({ status: 401, ok: false, text: '{"message":"Bad credentials"}', headers: {} });
     await assert.rejects(createGithubRemote({ http, settings }).manifest(), /token/);
 });
+
+test('a GitHub rate limit or a rejected token stops the pass instead of failing every remaining file', async () => {
+    const github = createFakeGithub();
+    let blobs = 0;
+    const http = async request => {
+        if (request.method === 'POST' && request.url.endsWith('/git/blobs')) { blobs += 1; if (blobs === 2) return { status: 403, ok: false, text: '{"message":"API rate limit exceeded"}', headers: { 'x-ratelimit-remaining': '0' } }; }
+        return github.http(request);
+    };
+    const local = localSide({ a: '1', b: '2', c: '3', d: '4' });
+    const result = await runSync({ local, remote: createGithubRemote({ http, settings }), base: {} });
+    assert.equal(blobs, 2, 'no more uploads after the refusal');
+    assert.match(result.stopped.reason, /rate limit/);
+    assert.equal(result.stopped.remaining, 2);
+    assert.equal(result.errors.length, 1);
+});

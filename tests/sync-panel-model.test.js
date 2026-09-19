@@ -73,3 +73,11 @@ test('the card subtitle sums up devices, GitHub and the last pass', () => {
     assert.equal(describeSummary(null, NOW), 'Sync status is not available yet.');
     assert.match(describeSummary({ config: { pairs: [], github: { enabled: false }, cloud: { enabled: true, provider: 'google' } }, connections: [], last: null }, NOW), /Google Drive on/);
 });
+
+test('a stopped pass says how many files were not tried and that what was sent is kept', () => {
+    const view = describeLastRun({ at: NOW, peers: [], cloud: { outcome: 'done', provider: 'google', ok: false, counts: { pushed: 3, failed: 1 }, errors: ['Google Drive is full.'], stopped: { reason: 'Google Drive is full.', remaining: 470 } } }, NOW);
+    assert.ok(view.lines.includes('Stopped after the first refusal — 470 files not tried. Fix the problem and sync again; what was already sent is kept.'));
+    assert.notEqual(view.tone, 'ok');
+    const one = describeLastRun({ at: NOW, peers: [], github: { outcome: 'done', ok: false, counts: {}, errors: ['x'], stopped: { reason: 'x', remaining: 1 } } }, NOW);
+    assert.ok(one.lines.some(line => line.includes('1 file not tried')));
+});

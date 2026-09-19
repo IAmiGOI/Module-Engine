@@ -162,3 +162,87 @@ test('a deferred file (open chat) is not a failure: the pass stays ok and the fi
     assert.equal(result.ok, true);
     assert.deepEqual(result.base, {}, 'not remembered, so it is planned again next time');
 });
+
+test('a fatal refusal (no space, token rejected) stops the pass at once instead of trying every remaining file', async () => {
+    const { FatalSyncError } = await import('../libraries/core/sync-errors.js');
+    const local = memorySide({ 'a': '1', 'b': '2', 'c': '3', 'd': '4', 'e': '5' });
+    const remote = memorySide({});
+    let attempts = 0;
+    remote.write = async (path, blob) => {
+        attempts += 1;
+        if (attempts === 2) throw new FatalSyncError('Google Drive is full');
+        remote.files.set(path, { text: await blob.text(), modified: 1 });
+    };
+    const result = await runSync({ local, remote, base: {} });
+    assert.equal(attempts, 2, 'the third, fourth and fifth files were never tried');
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.stopped, { reason: 'Google Drive is full', remaining: 3 });
+    assert.equal(result.counts.pushed, 1);
+    assert.equal(result.counts.failed, 1);
+    assert.equal(result.errors.length, 1, 'one clear message, not a wall of identical ones');
+    assert.equal('a' in result.base, true, 'what was already sent is remembered');
+    assert.equal('b' in result.base, false);
+});
+
+test('an ordinary per-file failure does not stop the pass, only a fatal one does', async () => {
+    const local = memorySide({ 'a': '1', 'b': '2', 'c': '3' });
+    const remote = memorySide({}, { failWrite: path => path === 'a' });
+    const result = await runSync({ local, remote, base: {} });
+    assert.equal(result.counts.pushed, 2);
+    assert.equal(result.counts.failed, 1);
+    assert.equal(result.stopped, null);
+});
+
+test('after a fatal stop on a batched side the already-uploaded files are still committed, and a failing commit is not reported a second time', async () => {
+    const { FatalSyncError } = await import('../libraries/core/sync-errors.js');
+    const local = memorySide({ 'a': '1', 'b': '2', 'c': '3' });
+    const remote = memorySide({}, { batched: true });
+    const originalWrite = remote.write;
+    let count = 0;
+    remote.write = async (...args) => { count += 1; if (count === 2) throw new FatalSyncError('quota'); return originalWrite(...args); };
+    const good = await runSync({ local, remote, base: {} });
+    assert.equal(remote.commitCalls, 1, 'the one file that made it is committed');
+    assert.equal('a' in good.base, true);
+
+    const broken = memorySide({}, { batched: true });
+    const writeThenFail = broken.write;
+    let n = 0;
+    broken.write = async (...args) => { n += 1; if (n === 2) throw new FatalSyncError('quota'); return writeThenFail(...args); };
+    broken.commit = async () => { throw new Error('index could not be written'); };
+    const result = await runSync({ local, remote: broken, base: {} });
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0].message, 'quota');
+    assert.deepEqual(result.base, {}, 'nothing is remembered when the index could not be written');
+});
+
+test('a batched side that asks for checkpoints is committed every N changes, so an interrupted pass keeps what was already sent', async () => {
+    const { FatalSyncError } = await import('../libraries/core/sync-errors.js');
+    const local = memorySide({ a: '1', b: '2', c: '3', d: '4', e: '5', f: '6' });
+    const remote = memorySide({}, { batched: true });
+    remote.checkpointEvery = 2;
+    const originalWrite = remote.write;
+    let count = 0;
+    remote.write = async (...args) => { count += 1; if (count === 6) throw new FatalSyncError('quota'); return originalWrite(...args); };
+    const result = await runSync({ local, remote, base: {} });
+    assert.equal(remote.commitCalls, 3, 'after 2, after 4, and the final commit for the fifth file');
+    assert.deepEqual(Object.keys(result.base).sort(), ['a', 'b', 'c', 'd', 'e'], 'everything before the refusal is remembered as synced');
+    assert.equal(result.stopped.remaining, 0);
+});
+
+test('without checkpoints a batched side commits once at the end, as before (GitHub keeps one commit per pass)', async () => {
+    const local = memorySide({ a: '1', b: '2', c: '3', d: '4' });
+    const remote = memorySide({}, { batched: true });
+    await runSync({ local, remote, base: {} });
+    assert.equal(remote.commitCalls, 1);
+});
+
+test('a failing checkpoint commit does not lose the changes: they stay pending and the final commit tries again', async () => {
+    const local = memorySide({ a: '1', b: '2', c: '3' });
+    const remote = memorySide({}, { batched: true });
+    remote.checkpointEvery = 2;
+    let attempts = 0;
+    remote.commit = async () => { attempts += 1; remote.commitCalls += 1; if (attempts === 1) throw new Error('temporary failure'); };
+    const result = await runSync({ local, remote, base: {} });
+    assert.equal(result.counts.failed, 1, 'the failed checkpoint is reported once');
+    assert.equal(Object.keys(result.base).length, 3, 'the final commit succeeded, so all three are remembered');
+});

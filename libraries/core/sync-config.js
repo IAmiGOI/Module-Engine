@@ -43,6 +43,31 @@ export function sanitizeCategories(raw) {
 
 const CLOUD_PROVIDERS = ['dropbox', 'google'];
 
+/** STUN — узнать свой внешний адрес; нужен всегда. Прямое соединение через него проходит не везде (см. TURN ниже). */
+export const DEFAULT_ICE_SERVERS = Object.freeze([{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }]);
+
+const ICE_URL = /^(stuns?|turns?):[^\s]+$/i;
+
+/** Свои серверы соединения: только корректные адреса; `null` — нет своих. */
+export function sanitizeIceServers(raw) {
+    if (!Array.isArray(raw)) return null;
+    const servers = raw.map(server => {
+        const urls = (Array.isArray(server?.urls) ? server.urls : [server?.urls]).map(String).filter(url => ICE_URL.test(url));
+        if (!urls.length) return null;
+        const clean = { urls };
+        if (server.username) clean.username = String(server.username);
+        if (server.credential) clean.credential = String(server.credential);
+        return clean;
+    }).filter(Boolean);
+    return servers.length ? servers : null;
+}
+
+/** Всё, что отдаётся соединению: STUN по умолчанию плюс свой ретранслятор (если задан). */
+export const buildIceServers = custom => [...DEFAULT_ICE_SERVERS, ...(custom ?? [])];
+
+/** Один ретранслятор из полей карточки → список серверов (`null`, если адрес пуст или некорректен). */
+export const relayToIceServers = ({ url, username, credential } = {}) => sanitizeIceServers([{ urls: [String(url ?? '').trim()], username, credential }]);
+
 /** Облачный диск: провайдер, токены (обновляются Ядром), свои ключи приложений, включён ли и в фоне ли. */
 export function sanitizeCloudSettings(raw = {}) {
     const input = raw && typeof raw === 'object' ? raw : {};
@@ -79,7 +104,7 @@ export function sanitizeSyncConfig(raw = {}, { generateDeviceId, defaultDeviceNa
         autoSync: input.autoSync !== false,
         intervalMin: clampInterval(input.intervalMin),
         signalServer: /^https:\/\/[^\s/]+(\/[^\s]*)?$/.test(String(input.signalServer ?? '')) ? String(input.signalServer).replace(/\/+$/, '') : 'https://ntfy.sh',
-        iceServers: Array.isArray(input.iceServers) && input.iceServers.length ? input.iceServers.filter(server => server && server.urls) : null,
+        iceServers: sanitizeIceServers(input.iceServers),
         pairs,
         github: { ...github, auto: Boolean(input.github?.auto) },
         cloud: sanitizeCloudSettings(input.cloud),
@@ -96,6 +121,7 @@ export function describeConfigForUi(config) {
         intervalMin: config.intervalMin,
         signalServer: config.signalServer,
         customIceServers: Boolean(config.iceServers),
+        relay: { url: config.iceServers?.[0]?.urls?.[0] ?? '', username: config.iceServers?.[0]?.username ?? '', hasCredential: Boolean(config.iceServers?.[0]?.credential) },
         pairs: config.pairs.map(pair => ({ id: pair.id, name: pair.name, pairedAt: pair.pairedAt, lastSync: pair.lastSync })),
         cloud: {
             provider: config.cloud.provider,

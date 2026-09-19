@@ -78,3 +78,17 @@ test('what is shown in the interface never contains pair secrets or the GitHub t
     assert.match(shown, /"hasToken":true/);
     assert.match(shown, /o\/r/);
 });
+
+test('own connection servers: only well-formed stun/turn addresses survive, and the defaults are always kept', async () => {
+    const { sanitizeIceServers, buildIceServers, relayToIceServers, DEFAULT_ICE_SERVERS } = await import('../libraries/core/sync-config.js');
+    assert.equal(sanitizeIceServers(undefined), null);
+    assert.equal(sanitizeIceServers([{ urls: 'http://not-ice' }, null, {}]), null);
+    assert.deepEqual(sanitizeIceServers([{ urls: 'turn:t.example.com:3478', username: 'u', credential: 'c' }, { urls: ['stun:s.example.com', 'bogus'] }]), [
+        { urls: ['turn:t.example.com:3478'], username: 'u', credential: 'c' },
+        { urls: ['stun:s.example.com'] },
+    ]);
+    assert.deepEqual(buildIceServers(null), [...DEFAULT_ICE_SERVERS]);
+    assert.equal(buildIceServers([{ urls: ['turn:x:1'] }]).length, DEFAULT_ICE_SERVERS.length + 1);
+    assert.equal(relayToIceServers({ url: '   ' }), null);
+    assert.deepEqual(relayToIceServers({ url: ' turns:t.example.com:443 ', username: 'u', credential: 'p' }), [{ urls: ['turns:t.example.com:443'], username: 'u', credential: 'p' }]);
+});

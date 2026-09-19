@@ -1641,6 +1641,7 @@ body:has(.stme-chat-viewport-overlay) .stme-launcher-dock::before { display: non
 }
 .stme-sync-result { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .stme-sync-result .stme-update-status { margin: 0; }
+.stme-sync-problem { flex-basis: 100%; margin: 2px 0 0; }
 .stme-sync-link { text-align: center; text-decoration: underline; }
 .stme-sync-cloud-connected { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
 .stme-sync-progress { display: flex; align-items: center; gap: 8px; }

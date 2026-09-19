@@ -14,8 +14,11 @@
  * свой TURN в настройках.
  */
 
-export const DEFAULT_ICE_SERVERS = Object.freeze([{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }]);
-const GATHER_TIMEOUT_MS = 4000;
+import { DEFAULT_ICE_SERVERS } from '../libraries/core/sync-config.js';
+
+export { DEFAULT_ICE_SERVERS };
+// Мобильной сети на сбор адресов (STUN/TURN) нужно дольше, чем домашней: обрезанный список — соединение без нужных кандидатов.
+const GATHER_TIMEOUT_MS = 8000;
 const BUFFER_HIGH = 1024 * 1024;
 const BUFFER_LOW = 256 * 1024;
 const CHANNEL_LABEL = 'stme-sync';

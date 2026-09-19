@@ -16,6 +16,7 @@ export function createFakeNetwork() {
     let nextSubscription = 1;
     let nextPeer = 1;
     const peers = new Map();       // id -> { onOpen, onFrame, onClose, peer, open }
+    const opens = [];              // с какими серверами соединения открывались каналы
 
     const topic = name => { if (!topics.has(name)) topics.set(name, { history: [], subscribers: new Map() }); return topics.get(name); };
 
@@ -41,8 +42,9 @@ export function createFakeNetwork() {
             return false;
         });
 
-        networkBus.register('syncPeer.open', ({ initiator, remote, onSignal, onOpen, onFrame, onClose }) => {
+        networkBus.register('syncPeer.open', ({ initiator, remote, onSignal, onOpen, onFrame, onClose, iceServers }) => {
             const id = nextPeer; nextPeer += 1;
+            opens.push({ initiator, iceServers });
             const entry = { id, onOpen, onFrame, onClose, peer: null, open: false, label };
             peers.set(id, entry);
             if (initiator) {
@@ -85,7 +87,7 @@ export function createFakeNetwork() {
         peers.clear();
     }
 
-    return { registerOn, dropAll, posted, topics, peers };
+    return { registerOn, dropAll, posted, topics, peers, opens };
 }
 
 /** Часы и таймеры, которыми управляет тест. */

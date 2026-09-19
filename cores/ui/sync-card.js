@@ -39,6 +39,7 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
     const categories = Object.fromEntries(CATEGORY_LABELS.map(([id]) => [id, signal(true)]));
     const github = { enabled: signal(false), repository: signal(''), branch: signal('main'), token: signal(''), rootDir: signal(''), maxFileMb: signal(25), auto: signal(false) };
     const cloud = { provider: signal('dropbox'), enabled: signal(false), auto: signal(false), code: signal(''), message: signal(''), dropboxKey: signal(''), googleId: signal(''), googleSecret: signal('') };
+    const relay = { url: signal(''), username: signal(''), credential: signal('') };
     let applying = false;
 
     function applyStatus(next) {
@@ -57,6 +58,9 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
         github.maxFileMb.set(config.github.maxFileMb);
         github.auto.set(config.github.auto);
         github.token.set('');
+        relay.url.set(config.relay.url);
+        relay.username.set(config.relay.username);
+        relay.credential.set('');
         cloud.provider.set(config.cloud.provider);
         cloud.enabled.set(config.cloud.enabled);
         cloud.auto.set(config.cloud.auto);
@@ -101,6 +105,9 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
         bindAutosave(github.maxFileMb, value => ({ github: { maxFileMb: value } })),
         bindAutosave(github.auto, value => ({ github: { auto: value } })),
         bindAutosave(github.token, value => (value ? { github: { token: value } } : {})),
+        bindAutosave(relay.url, () => ({ relay: { url: relay.url.peek(), username: relay.username.peek(), credential: relay.credential.peek() } })),
+        bindAutosave(relay.username, () => ({ relay: { url: relay.url.peek(), username: relay.username.peek(), credential: relay.credential.peek() } })),
+        bindAutosave(relay.credential, value => (value ? { relay: { url: relay.url.peek(), username: relay.username.peek(), credential: value } } : {})),
         bindAutosave(cloud.provider, value => ({ cloud: { provider: value } })),
         bindAutosave(cloud.enabled, value => ({ cloud: { enabled: value } })),
         bindAutosave(cloud.auto, value => ({ cloud: { auto: value } })),
@@ -173,6 +180,7 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
                         Badge(view.state, { tone: view.tone }),
                         h('small', {}, view.lastSync),
                         HoldButton('Hold to unpair', () => removePair(connection.id), { holdMs: 900 }),
+                        connection.problem ? h('small', { class: 'stme-update-status stme-update-error stme-sync-problem' }, connection.problem) : null,
                     );
                 }));
             }),
@@ -191,6 +199,19 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
                 Button('Connect', joinPairing, { disabled: computed(() => busy() || !pairCodeInput().trim()) }),
             ),
             Field('This device is called', TextInput(deviceName)),
+        );
+    }
+
+    /** Справка по соединению: почему устройства могут не соединиться и как это лечится своим ретранслятором TURN. */
+    function connectionHelpSection() {
+        return Section('Connection help (advanced)', collapse.bind('section:sync-connection'),
+            h('p', { class: 'stme-summary-help' }, 'Two devices connect directly. That fails when one of them is on mobile data or behind a strict router (the devices still see each other, but no channel opens). A relay (TURN) server carries the traffic instead — it only sees encrypted data. Add one of your own (for example a free coturn or a TURN service account) and both devices will use it automatically.'),
+            Field('Relay (TURN) address', TextInput(relay.url, { placeholder: 'turn:turn.example.com:3478  or  turns:turn.example.com:443' })),
+            Row(
+                Field('Username', TextInput(relay.username)),
+                Field('Password', TextInput(relay.credential, { type: 'password', placeholder: computed(() => (status()?.config.relay?.hasCredential ? 'saved — type to replace' : '')) })),
+            ),
+            h('p', { class: 'stme-summary-help' }, 'Put the same relay on both devices. Leave the address empty to go back to direct connections only.'),
         );
     }
 
@@ -292,6 +313,7 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
             resultBlock(),
             devicesSection(),
             contentSection(),
+            connectionHelpSection(),
             githubSection(),
             cloudSection(),
         );

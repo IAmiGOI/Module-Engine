@@ -1,4 +1,5 @@
 import { computeSyncPlan, SYNC_ACTIONS } from './sync-plan.js';
+import { isFatalError } from './sync-errors.js';
 
 /**
  * Исполнитель синхронизации — один на оба направления (другое устройство и репозиторий GitHub). Знает только форму двух
@@ -11,6 +12,9 @@ import { computeSyncPlan, SYNC_ACTIONS } from './sync-plan.js';
  *   write(path, blob, { hash, modified })
  *   remove(path)
  *   batched?: true + commit()       → сторона копит изменения и применяет их одним махом (GitHub: один коммит на весь проход).
+ *   checkpointEvery?: N             → пакетная сторона просит делать `commit()` каждые N изменений, а не только в конце (облако: индекс —
+ *                                     единственный список «что где лежит», и без промежуточных записей оборванный проход оставлял бы
+ *                                     на диске данные, которых другое устройство не видит, потому что индекса нет).
  *
  * Отказ одного файла не валит проход: остальные доезжают, а неудачный остаётся в прежнем состоянии базы и повторится в
  * следующий раз. Базу (что было у обеих сторон при прошлой удачной синхронизации) исполнитель отдаёт целиком — сохраняет вызывающий.
@@ -46,11 +50,14 @@ export async function runSync({
     const deferred = [];   // изменения базы, которые вступают в силу только после удачного commit() у пакетной стороны
     const applyBase = changes => { for (const [path, hash] of Object.entries(changes)) { if (hash === null) delete nextBase[path]; else nextBase[path] = hash; } };
     const finishOne = (changes, remoteTouched) => (remote.batched && remoteTouched ? deferred.push(changes) : applyBase(changes));
+    /** Контрольная точка: записать накопленное у пакетной стороны и только после успеха считать это синхронизированным. */
+    const flushBatch = async () => { await remote.commit(); for (const changes of deferred.splice(0)) applyBase(changes); };
     const total = actions.filter(action => action.op !== SYNC_ACTIONS.settle).length;
     let done = 0;
     let aborted = false;
+    let stopped = null;   // { reason, remaining } — проход остановлен фатальной ошибкой (нет места, токен отклонён, лимит запросов)
 
-    for (const action of actions) {
+    for (const [index, action] of actions.entries()) {
         if (isAborted()) { aborted = true; break; }
         if (action.op !== SYNC_ACTIONS.settle) onProgress({ done, total, path: action.path, op: action.op });
         try {
@@ -89,10 +96,19 @@ export async function runSync({
                 default:
                     break;
             }
+            if (remote.batched && remote.checkpointEvery && deferred.length >= remote.checkpointEvery) await flushBatch();
         } catch (error) {
             // Отложенное (например, открытый сейчас чат) — не сбой: файл остаётся в прежнем состоянии базы и доедет в следующий раз.
             if (isDeferredError(error)) counts.deferred += 1;
-            else { counts.failed += 1; errors.push({ path: action.path, op: action.op, message: error?.message ?? String(error) }); }
+            else {
+                counts.failed += 1;
+                errors.push({ path: action.path, op: action.op, message: error?.message ?? String(error) });
+                // Фатальная ошибка: те же слова получит каждый следующий файл — останавливаемся, вместо сотни одинаковых отказов.
+                if (isFatalError(error)) {
+                    stopped = { reason: error.message, remaining: actions.slice(index + 1).filter(next => next.op !== SYNC_ACTIONS.settle).length };
+                    break;
+                }
+            }
         }
         if (action.op !== SYNC_ACTIONS.settle) done += 1;
     }
@@ -103,13 +119,16 @@ export async function runSync({
             if (deferred.length) await remote.commit();
             for (const changes of deferred) applyBase(changes);
         } catch (error) {
-            commitError = error?.message ?? String(error);
-            counts.failed += deferred.length;
-            errors.push({ path: '*', op: 'commit', message: commitError });
+            // После фатальной ошибки запись индекса чаще всего упадёт по той же причине — второй раз о ней не сообщаем.
+            if (!stopped) {
+                commitError = error?.message ?? String(error);
+                counts.failed += deferred.length;
+                errors.push({ path: '*', op: 'commit', message: commitError });
+            }
         }
     }
     onProgress({ done: total, total, path: null, op: null });
-    return { ok: !commitError && counts.failed === 0 && !aborted, aborted, counts, errors, base: nextBase, plan: plan.counts };
+    return { ok: !commitError && counts.failed === 0 && !aborted, aborted, stopped, counts, errors, base: nextBase, plan: plan.counts };
 }
 
 /** Обе версии сохраняются на обеих сторонах: проигравшая — под именем-копией, победившая — на прежнем месте. */
