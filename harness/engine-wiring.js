@@ -6,6 +6,7 @@ import { registerWebglRendererService } from '../services/webgl-renderer.js';
 import { registerRasterCacheService } from '../services/raster-cache.js';
 import { registerGlAnimationService } from '../services/gl-animation.js';
 import { registerStBackgroundsService } from '../services/st-backgrounds.js';
+import { registerImageScaleService } from '../services/image-scale.js';
 import { createBackgroundsCore } from '../cores/backgrounds/index.js';
 import { createGlAnimationsCore } from '../cores/ui/gl-animations.js';
 import { registerHttpService } from '../services/http.js';
@@ -452,6 +453,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerRasterCacheService(engine.buses.services);
     registerGlAnimationService(engine.buses.services);
     registerStBackgroundsService(engine.buses.services, { getContext });
+    registerImageScaleService(engine.buses.services);
     // Локальный эмбединг — не сетевой вызов через `http.request` (см.
     // doc-comment services/embedding.js за честной оговоркой: сама закачка
     // весов модели идёт мимо нашего Гейта сети, это делает сторонняя

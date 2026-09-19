@@ -2677,8 +2677,8 @@ body:has(#chat .welcomePanel) .stme-chat-viewport-overlay { visibility: hidden !
 .stme-chat-viewport-row { text-shadow: 0 0 5px rgba(0, 0, 0, .30), 0 0 2px rgba(0, 0, 0, .18); }
 .stme-chat-viewport-row .stme-badge,
 .stme-chat-viewport-row .stme-avatar,
-.stme-chat-viewport-row .stme-icon-button,
-.stme-chat-viewport-row .stme-details > summary { box-shadow: 0 0 9px rgba(0, 0, 0, .22); }
+.stme-chat-viewport-row .stme-icon-button { box-shadow: 0 0 9px rgba(0, 0, 0, .22); }
+/* Заголовки Reasoning/Tool calls (`.stme-details > summary`) тени НЕ получают: три подряд, они ложились затемнёнными полосами поверх соседней аватарки. */
 .stme-chat-viewport-row .stme-badge,
 .stme-chat-viewport-row .stme-icon-button { border-radius: 999px; }
 

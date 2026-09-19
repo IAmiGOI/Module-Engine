@@ -161,7 +161,8 @@ function fakeCreateFinalUi() {
 }
 
 function msg(mesid, text) {
-    return { mesid, text, isUser: false, isSystem: false, name: 'Alice' };
+    // Сообщения пользователя: подряд идущие от одного пользователя склеиваются в один глиф (ИИ подряд — только продолжение хода, см. computeGlyphs()).
+    return { mesid, text, isUser: true, isSystem: false, name: 'Alice' };
 }
 
 test('attach() returns false and touches nothing else when the platform has no WebGL', async () => {
@@ -464,7 +465,7 @@ test('a newly mounted row pulls message-footer.js in immediately — RP Time cla
 // подряд... Глифы должны иметь отдельный бэкграунд") ---
 
 function msgAs(mesid, text, name) {
-    return { mesid, text, isUser: false, isSystem: false, name };
+    return { mesid, text, isUser: true, isSystem: false, name };
 }
 
 test('a run of consecutive same-name messages gets ONE glyph background, not one per message', async () => {
