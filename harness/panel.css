@@ -1355,7 +1355,9 @@
     padding: 12px 0;
     border: 2px solid rgba(141, 168, 255, .45);
     border-right: 0;
-    border-radius: 999px 0 0 999px;
+    /* Радиус равен половине ширины (26px), а не 999px: при 999px левый край превращался в почти полуэллипс высотой во весь док, и
+       прямая полоска светофора выступала за его контур сверху и снизу («полоска не на месте»). */
+    border-radius: 26px 0 0 26px;
     background: rgba(28, 30, 38, .9);
     opacity: .85;
     transition: opacity .2s ease;
@@ -1363,8 +1365,15 @@
 .stme-launcher-dock-zone.stme-launcher-dock-touch.stme-launcher-dock-open .stme-launcher-dock {
     opacity: 1;
 }
+.stme-launcher-dock-zone.stme-launcher-dock-touch .stme-light-flow-strip { margin-left: 3px; }   /* бегущая полоска (Chat Viewport) — внутрь от рамки пилюли */
+/* Светофор на телефоне: статичная полоска у левого края пилюли (раньше здесь стояло `content: none` — светофор на тач-экране не
+   показывался вовсе, хотя красится тем же классом stme-light-* на зоне). Пилюля в тач-режиме не абсолютная (`position: static`),
+   поэтому полоска считается от ЗОНЫ, чья высота равна высоте пилюли. Со включённым Chat Viewport её по-прежнему подменяет
+   бегущая полоска (`body:has(.stme-chat-viewport-overlay)` выше). Раскрытая пилюля прячет полоску, как и на ПК. */
 .stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock::before {
-    content: none;
+    left: 5px;
+    top: 14%;
+    bottom: 14%;
 }
 @media (prefers-reduced-motion: reduce) {
     .stme-launcher-dock::before { animation: none; opacity: 1; }
