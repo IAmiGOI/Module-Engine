@@ -157,3 +157,74 @@
     #preloader::before, #preloader::after, #loader.splash-screen::after,
     #loader.splash-screen #load-spinner::before, #loader.splash-screen .splash-message { animation: none; }
 }
+
+/* ===== Экран первой загрузки движка (harness/boot-screen.js): стадии самообновления поверх родного сплеша ST ===== */
+html.stme-boot-active #loader.splash-screen, html.stme-boot-active #preloader { visibility: hidden; }
+.stme-boot {
+    position: fixed;
+    inset: 0;
+    z-index: 1000000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2.2rem;
+    overflow: hidden;
+    background: var(--SmartThemeBlurTintColor, #1a1c24);
+    color: var(--SmartThemeBodyColor, #dcdcd2);
+    transition: opacity .45s ease, filter .45s ease;
+}
+.stme-boot::before, .stme-boot::after {
+    content: '';
+    position: absolute;
+    inset: -20%;
+    pointer-events: none;
+    animation: stme-splash-drift 9s ease-in-out infinite alternate;
+}
+.stme-boot::before { background: radial-gradient(38% 42% at 28% 32%, rgba(255, 90, 77, .22), transparent 70%); }
+.stme-boot::after { background: radial-gradient(40% 44% at 72% 68%, rgba(91, 184, 255, .22), transparent 70%); animation-duration: 12s; animation-direction: alternate-reverse; }
+.stme-boot.stme-boot-out { opacity: 0; filter: blur(12px); pointer-events: none; }
+.stme-boot-brand { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: clamp(14px, 3vw, 28px); }
+.stme-boot-st { width: min(150px, 34vw); height: auto; filter: drop-shadow(0 4px 18px rgba(0, 0, 0, .4)); }
+.stme-boot-me {
+    width: min(150px, 34vw);
+    height: auto;
+    aspect-ratio: 512 / 461;
+    border-radius: 22%;
+    box-shadow: 0 0 28px rgba(91, 140, 255, .45);
+    animation: stme-splash-glow 2.6s ease-in-out infinite;
+}
+.stme-boot-times { font-size: clamp(28px, 5vw, 44px); font-weight: 300; line-height: 1; opacity: .75; }
+.stme-boot-track {
+    position: relative;
+    z-index: 1;
+    width: min(260px, 52vw);
+    height: 3px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, .12);
+}
+.stme-boot-fill {
+    position: absolute;
+    inset: 0;
+    transform-origin: left center;
+    transform: scaleX(.08);
+    border-radius: 3px;
+    background: linear-gradient(90deg, #ff5a4d, #c86bff, #5bb8ff);
+    transition: transform .6s cubic-bezier(.3, .7, .2, 1);
+}
+.stme-boot-stage {
+    position: relative;
+    z-index: 1;
+    min-height: 1.2em;
+    font-size: .95rem;
+    font-weight: 500;
+    letter-spacing: .3em;
+    text-transform: uppercase;
+    opacity: .9;
+}
+.stme-boot[data-stage="checking"] .stme-boot-fill, .stme-boot[data-stage="downloading"] .stme-boot-fill { animation: stme-boot-pulse 1.4s ease-in-out infinite; }
+@keyframes stme-boot-pulse { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+    .stme-boot::before, .stme-boot::after, .stme-boot-me, .stme-boot .stme-boot-fill { animation: none; }
+}
