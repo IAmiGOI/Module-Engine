@@ -4,6 +4,7 @@ import { request } from '../../libraries/shared/request.js';
 import { selectTrack, shouldSwitch } from '../../libraries/core/track-selection.js';
 import { clampToViewport, createDragHandlers } from '../../libraries/shared/draggable.js';
 import { Button, TextInput, TextArea, Slider, Toggle, Field, Row, EmptyState, FloatingPanel } from '../../libraries/shared/widgets.js';
+import { MusicPlayerBody } from '../../libraries/shared/music-player-view.js';
 
 /**
  * Модуль «Music» — переработка Alpha'вского концепта, и разница ПОДХОДА, не
@@ -74,6 +75,8 @@ export function createMusicModule(host) {
     const minSimilarity = signal(DEFAULTS.minSimilarity);
     const switchMargin = signal(DEFAULTS.switchMargin);
     const volume = signal(DEFAULTS.volume);
+    const muted = signal(false);
+    const progress = signal({ time: 0, duration: 0 }); // секунды; обновляется опросом Сервиса, пока трек играет
 
     const nowPlaying = signal({ trackId: null, name: null, playing: false, blocked: false, similarity: null });
     const busy = signal(false); // идёт пересчёт вектора сцены — защита от повторного входа
@@ -103,7 +106,7 @@ export function createMusicModule(host) {
             namespace: SETTINGS_NAMESPACE,
             key: PLAYER_KEY,
             value: {
-                volume: volume.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
+                volume: volume.peek(), muted: muted.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
                 minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(), player: {
                     collapsed: hudCollapsed.peek(), visible: hudVisible.peek(), position: hudPosition.peek(), size: hudSize.peek(),
                 },
@@ -131,9 +134,49 @@ export function createMusicModule(host) {
 
     /** Громкость: сигнал → Сервис. Читаем ЧЕРЕЗ tracked-вызов `volume()`, а не `peek()`: peek не регистрирует зависимость, и эффект не перезапускался бы никогда — ползунок ходил, громкость стояла (поймано вживую). */
     effect(() => {
-        const value = volume();
+        const value = muted() ? 0 : volume();
         void request(host.services, 'audio.playback.volume', { params: { value } });
     });
+
+    /**
+     * Позиция трека — опрос `audio.playback.state` раз в полсекунды, ТОЛЬКО пока трек играет: на паузе и без трека таймера нет (в тестах и в фоне он не висит).
+     * Обновление — небольшой сигнал, перерисовываются только время и заливка полосы в плавающем окне.
+     */
+    const POLL_MS = 500;
+    let pollTimer = null;
+    function stopPolling() {
+        if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+    }
+    async function pollProgress() {
+        const result = await request(host.services, 'audio.playback.state', {});
+        if (result?.ok) {
+            const { currentTime = 0, duration = 0 } = result.value ?? {};
+            const prev = progress.peek();
+            if (prev.time !== currentTime || prev.duration !== duration) progress.set({ time: currentTime, duration });
+        }
+        if (!nowPlaying.peek().playing) stopPolling();
+    }
+    function startPolling() {
+        if (pollTimer !== null) return;
+        pollTimer = setInterval(() => { void pollProgress(); }, POLL_MS);
+        pollTimer?.unref?.();
+    }
+
+    /** Перемотка из окна: Сервису и сразу в сигнал — полоса не ждёт следующего опроса. */
+    function seek(time) {
+        void request(host.services, 'audio.playback.seek', { params: { time } });
+        progress.set({ ...progress.peek(), time });
+    }
+
+    function toggleMute() {
+        muted.set(!muted.peek());
+        savePlayer();
+    }
+
+    function toggleAutoSwitch() {
+        autoSwitch.set(!autoSwitch.peek());
+        savePlayer();
+    }
 
     function setNowPlaying(patch) {
         nowPlaying.set({ ...nowPlaying.peek(), ...patch });
@@ -155,6 +198,8 @@ export function createMusicModule(host) {
         }
         userPaused = false;
         setNowPlaying({ trackId: track.id, name: track.name, playing: true, blocked: false, similarity });
+        if (track.id !== currentTrackId || !progress.peek().duration) progress.set({ time: 0, duration: 0 });
+        startPolling();
         await refreshPlayingState();
     }
 
@@ -291,24 +336,19 @@ export function createMusicModule(host) {
     // --- Плавающий плеер (паттерн HUD Трекера) ---
 
     function playerPanel() {
-        const state = computed(() => nowPlaying());
-        const label = computed(() => {
-            const current = state();
-            if (!current.trackId) return 'Nothing selected — press Skip or play manually.';
-            if (current.blocked) return `${current.name} — press ▶ (browser blocked autoplay)`;
-            return current.playing ? `Playing: ${current.name}` : `Paused: ${current.name}`;
-        });
+        const hasTracks = computed(() => tracks().length > 0);
         return FloatingPanel('Music', {
             position: hudPosition,
             size: hudSize,
             collapsed: hudCollapsed,
+            className: 'stme-music-window',
             onToggle: value => { hudCollapsed.set(value); savePlayer(); },
             onClose: () => { hudVisible.set(false); savePlayer(); },
             drag: createDragHandlers(hudPosition, {
                 onDrop: dropped => {
                     hudPosition.set(clampToViewport(dropped, {
-                        width: hudSize.peek().width ?? 240,
-                        height: hudSize.peek().height ?? 120,
+                        width: hudSize.peek().width ?? 340,
+                        height: hudSize.peek().height ?? 220,
                         viewportWidth: globalThis.innerWidth ?? 1920,
                         viewportHeight: globalThis.innerHeight ?? 1080,
                     }));
@@ -319,15 +359,17 @@ export function createMusicModule(host) {
             // сам ставит resize:none и не вешает обработчик растяжения
             // (см. FloatingPanel в libraries/shared/widgets.js).
         },
-            h('div', { class: 'stme-music-now' }, label),
-            Row(
-                Button(computed(() => (state().playing ? '⏸' : '▶')), () => {
-                    if (state().playing) { pause(); return; }
-                    resume();
-                }),
-                Button('⏭', skip),
-            ),
-            Slider('Volume', volume, { min: 0, max: 1, step: 0.05 }),
+            // Разметка окна — libraries/shared/music-player-view.js (на модели music-player-model.js); здесь только состояние и действия.
+            MusicPlayerBody({
+                now: nowPlaying, progress, volume, muted, autoSwitch, hasTracks,
+                onPlayPause: () => { if (nowPlaying.peek().playing) pause(); else resume(); },
+                onSkip: skip,
+                onRestart: () => seek(0),
+                onSeek: seek,
+                onToggleMute: toggleMute,
+                onToggleAuto: toggleAutoSwitch,
+                onVolumeCommit: savePlayer,
+            }),
         );
     }
 
@@ -410,6 +452,7 @@ export function createMusicModule(host) {
             minSimilarity.set(Number.isFinite(player.value.minSimilarity) ? player.value.minSimilarity : DEFAULTS.minSimilarity);
             switchMargin.set(Number.isFinite(player.value.switchMargin) ? player.value.switchMargin : DEFAULTS.switchMargin);
             volume.set(Number.isFinite(player.value.volume) ? player.value.volume : DEFAULTS.volume);
+            muted.set(Boolean(player.value.muted));
             hudCollapsed.set(Boolean(player.value.player?.collapsed));
             hudVisible.set(player.value.player?.visible !== false);
             hudPosition.set(player.value.player?.position ?? {});
@@ -432,6 +475,8 @@ export function createMusicModule(host) {
         hud,
         tracks,
         nowPlaying,
+        progress,
+        muted,
         busy,
         volume,
         hudVisible,
@@ -440,12 +485,15 @@ export function createMusicModule(host) {
         pause,
         resume,
         skip,
+        seek,
+        toggleMute,
         onGenerationCompleted,
         importFiles,
         updateDescription,
         removeTrack,
         saveSettings,
         stop: () => {
+            stopPolling();
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             void request(host.services, 'audio.playback.pause', {});
         },

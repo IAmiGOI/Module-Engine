@@ -1,0 +1,151 @@
+/* ===== Окно плеера Music (modules/music, libraries/shared/music-player-view.js) =====
+   Обложка из имени трека, крупный заголовок, полоса перемотки с временем, круглая кнопка «играть», громкость. Всё — на токенах темы (`--stme-*`), поэтому окно
+   красится акцентом ST само. БЕЗ анимаций (окно висит поверх чата — любая анимация рядом с его DOM вызывает полный reflow страницы, проверено владельцем):
+   состояние — цветом и заливкой, плавных переходов нет. Окно вне `.stme-panel`, поэтому у кнопок и ползунков сброс родных стилей ST здесь свой. */
+
+.stme-floating-panel.stme-music-window {
+    width: min(336px, calc(100vw - 24px));
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 32%, transparent);
+    border-radius: 20px;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--stme-accent) 16%, var(--stme-surface)), var(--stme-surface) 64%);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .06);
+    contain: layout style;
+}
+.stme-music-window .stme-floating-panel-head {
+    padding: 10px 10px 0 14px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+}
+.stme-music-window .stme-floating-panel-head strong { color: color-mix(in srgb, var(--stme-text) 55%, transparent); font-size: 10.5px; font-weight: 600; letter-spacing: .14em; }
+.stme-music-window .stme-floating-panel-grip { display: none; }
+.stme-music-window .stme-floating-panel-btn { width: 22px; height: 22px; border-radius: 50%; font-size: 15px; }
+.stme-music-window .stme-floating-panel-body { padding: 8px 18px 18px; gap: 0; overflow: visible; }
+
+.stme-music-player { position: relative; display: flex; flex-direction: column; gap: 16px; color: var(--stme-text); }
+/* Подсветка цветом обложки (фон задаёт разметка по имени трека); тянется под шапку окна — окно `overflow: hidden` обрезает лишнее. Только фон, без анимации. */
+.stme-music-glow { position: absolute; left: -18px; right: -18px; top: -48px; height: 230px; pointer-events: none; }
+.stme-music-player > :not(.stme-music-glow) { position: relative; }
+
+/* --- верх: обложка и что играет --- */
+.stme-music-top { display: flex; align-items: center; gap: 14px; }
+.stme-music-cover {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 76px;
+    height: 76px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--stme-accent) 38%, #000), color-mix(in srgb, var(--stme-accent) 10%, #000));
+    box-shadow: 0 10px 26px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255, 255, 255, .18), inset 0 -20px 30px rgba(0, 0, 0, .18);
+    color: rgba(255, 255, 255, .92);
+    overflow: hidden;
+}
+.stme-music-cover-letter { font-size: 34px; font-weight: 700; line-height: 1; text-shadow: 0 2px 10px rgba(0, 0, 0, .35); }
+.stme-music-cover .stme-music-icon { width: 34px; height: 34px; opacity: .7; }
+.stme-music-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.stme-music-title { font-size: 17px; font-weight: 650; line-height: 1.25; letter-spacing: -.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stme-music-subtitle { display: flex; align-items: center; gap: 7px; font-size: 12.5px; line-height: 1.3; color: color-mix(in srgb, var(--stme-text) 62%, transparent); }
+/* Статичная точка состояния (не мигает): играет — акцент, пауза — тусклая, автозапуск заблокирован — жёлтая. */
+.stme-music-player:not([data-status="idle"]) .stme-music-subtitle::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, var(--stme-text) 45%, transparent); }
+.stme-music-player[data-status="playing"] .stme-music-subtitle::before { background: var(--stme-accent); }
+.stme-music-player[data-status="blocked"] .stme-music-subtitle::before { background: #e8a13c; }
+.stme-music-player[data-status="idle"] .stme-music-title { color: color-mix(in srgb, var(--stme-text) 70%, transparent); }
+
+/* --- перемотка: время · полоса · длительность --- */
+.stme-music-seek { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
+.stme-music-time { min-width: 34px; font-size: 11.5px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--stme-text) 58%, transparent); }
+.stme-music-time-total { text-align: right; }
+
+/* Полоса: дорожка и заливка рисуются нами (края с отступом в половину бегунка — заливка кончается ровно под ним), а сверху лежит настоящий невидимый
+   `<input type=range>`: клавиатура, фокус и касания — родные. Бегунок виден при наведении, фокусе и перетаскивании. */
+.stme-music-range { position: relative; display: flex; align-items: center; height: 20px; }
+.stme-music-range-track { position: absolute; left: 6px; right: 6px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--stme-text) 16%, transparent); overflow: hidden; pointer-events: none; }
+.stme-music-range-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, color-mix(in srgb, var(--stme-accent) 70%, #fff 0%), color-mix(in srgb, var(--stme-accent) 78%, #fff)); }
+.stme-music-range:hover .stme-music-range-track { height: 6px; border-radius: 3px; }
+.stme-music-range input[type="range"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+.stme-music-range input[type="range"]:focus { outline: none; }
+.stme-music-range input[type="range"]::-webkit-slider-runnable-track { height: 20px; background: transparent; border: 0; }
+.stme-music-range input[type="range"]::-moz-range-track { height: 20px; background: transparent; border: 0; }
+.stme-music-range input[type="range"]::-moz-range-progress { background: transparent; }
+.stme-music-range input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: 4px;
+    border: 0;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, .5);
+    opacity: 0;
+}
+.stme-music-range input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, .5); opacity: 0; }
+.stme-music-range:hover input[type="range"]::-webkit-slider-thumb,
+.stme-music-range input[type="range"]:focus-visible::-webkit-slider-thumb,
+.stme-music-range input[type="range"]:active::-webkit-slider-thumb { opacity: 1; }
+.stme-music-range:hover input[type="range"]::-moz-range-thumb,
+.stme-music-range input[type="range"]:focus-visible::-moz-range-thumb,
+.stme-music-range input[type="range"]:active::-moz-range-thumb { opacity: 1; }
+.stme-music-range input[type="range"]:focus-visible { outline: 2px solid var(--stme-accent); outline-offset: 2px; border-radius: 6px; }
+
+/* --- кнопки --- */
+.stme-music-btn {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--stme-text);
+    font: inherit;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+.stme-music-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--stme-text) 12%, transparent); }
+.stme-music-btn:active:not(:disabled) { background: color-mix(in srgb, var(--stme-text) 20%, transparent); }
+.stme-music-btn:focus-visible { outline: 2px solid var(--stme-accent); outline-offset: 2px; }
+.stme-music-btn:disabled { opacity: .32; cursor: default; }
+.stme-music-icon { width: 22px; height: 22px; display: block; }
+
+.stme-music-transport { position: relative; display: flex; align-items: center; justify-content: center; gap: 12px; }
+.stme-music-btn-primary {
+    width: 58px;
+    height: 58px;
+    background: var(--stme-accent);
+    color: color-mix(in srgb, var(--stme-accent) 10%, #000);
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--stme-accent) 42%, transparent);
+}
+.stme-music-btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--stme-accent) 88%, #fff); }
+.stme-music-btn-primary:active:not(:disabled) { background: color-mix(in srgb, var(--stme-accent) 80%, #000); }
+.stme-music-btn-primary .stme-music-icon { width: 26px; height: 26px; }
+/* «Подбирать по сцене»: слева от основной группы; включённый — в акценте. */
+.stme-music-btn-auto { position: absolute; left: 0; width: 36px; height: 36px; color: color-mix(in srgb, var(--stme-text) 50%, transparent); }
+.stme-music-btn-auto .stme-music-icon { width: 20px; height: 20px; }
+.stme-music-btn-auto[aria-pressed="true"] { color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 16%, transparent); }
+
+/* --- громкость --- */
+.stme-music-volume { display: flex; align-items: center; gap: 8px; }
+.stme-music-btn-small { width: 32px; height: 32px; margin-left: -6px; color: color-mix(in srgb, var(--stme-text) 72%, transparent); }
+.stme-music-btn-small .stme-music-icon { width: 20px; height: 20px; }
+.stme-music-volume .stme-music-range { flex: 1; }
+.stme-music-volume-value { min-width: 24px; text-align: right; font-size: 11.5px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--stme-text) 58%, transparent); }

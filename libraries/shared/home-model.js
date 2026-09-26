@@ -211,15 +211,46 @@ export function composeFlow({ width, blocks, gap = HOME_GAP, margin = FLOW_MARGI
 }
 
 /**
- * Перетаскивание: новое положение блока со сдвигом курсора, не выходя за сцену и не наезжая на `others` (их прямоугольники). Упёрся в соседа —
- * скользит вдоль него (сохраняется движение по одной оси); если и так нельзя — остаётся на последнем допустимом месте `last`.
+ * Дальняя от `from` свободная точка на отрезке `from → to` (`from` свободна). Отрезок проверяется шагами не крупнее `SWEEP_STEP` (быстрый рывок не «перепрыгнет»
+ * соседа), первый занятый шаг уточняется делением пополам до целого пикселя: блок останавливается РОВНО на зазоре `gap` от соседа, где бы ни оказался указатель.
+ */
+const SWEEP_STEP = 8;
+function sweep(from, to, others, gap) {
+    const dist = Math.hypot(to.x - from.x, to.y - from.y);
+    if (dist === 0) return from;
+    const at = t => ({ ...from, x: Math.round(from.x + (to.x - from.x) * t), y: Math.round(from.y + (to.y - from.y) * t) });
+    const steps = Math.max(1, Math.ceil(dist / SWEEP_STEP));
+    let free = 0;
+    for (let i = 1; i <= steps; i += 1) {
+        if (collides(at(i / steps), others, gap)) {
+            let low = free;
+            let high = i / steps;
+            for (let n = 0; n < 24; n += 1) {
+                const mid = (low + high) / 2;
+                if (collides(at(mid), others, gap)) high = mid; else low = mid;
+            }
+            return at(low);
+        }
+        free = i / steps;
+    }
+    return at(1);
+}
+
+/**
+ * Перетаскивание: новое положение блока со сдвигом курсора, не выходя за сцену и не наезжая на `others` (их прямоугольники). Путь от последнего допустимого места
+ * `last` к цели проходится непрерывно: упёрся в соседа — встал вплотную (на зазор `gap`), остаток движения скользит вдоль него по осям. Результат зависит только от
+ * цели, а не от того, как быстро двигали указатель: рывок и медленное движение останавливают блок в одном и том же месте (раньше блок замирал там, где его
+ * застал последний кадр, — с разным зазором до соседа).
  */
 export function dragPlacement(placement, { dx, dy }, stage, { others = [], last = placement, gap = BLOCK_SPACING } = {}) {
     const target = clampPlacement({ x: placement.x + dx, y: placement.y + dy, w: placement.w, h: placement.h }, stage);
-    const tries = [target, { ...target, y: last.y }, { ...target, x: last.x }];
-    const ok = tries.find(rect => !collides(rect, others, gap));
-    const rect = ok ?? { x: last.x, y: last.y, w: placement.w, h: placement.h };
-    return { ...placement, ...rect };
+    const from = { x: last.x, y: last.y, w: placement.w, h: placement.h };
+    const along = (start, order) => order.reduce((point, axis) => sweep(point, axis === 'x' ? { ...point, x: target.x } : { ...point, y: target.y }, others, gap), start);
+    const diagonal = sweep(from, target, others, gap);
+    const candidates = [along(from, ['x', 'y']), along(from, ['y', 'x']), along(diagonal, ['x', 'y']), along(diagonal, ['y', 'x'])];
+    const distance = point => Math.hypot(point.x - target.x, point.y - target.y);
+    const best = candidates.reduce((winner, point) => (distance(point) < distance(winner) ? point : winner));
+    return { ...placement, x: best.x, y: best.y, w: placement.w, h: placement.h };
 }
 
 /** Порог сдвига, после которого жест — перетаскивание, а не клик по блоку. */

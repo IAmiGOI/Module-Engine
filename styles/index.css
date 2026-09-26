@@ -23,6 +23,7 @@
 @import url('./screens/update-overlay.css');
 @import url('./modules/notebook-postprocess.css');
 @import url('./modules/music-preset.css');
+@import url('./modules/music-player.css');
 @import url('./modules/memory-graph.css');
 @import url('./windows/picture-window.css');
 @import url('./screens/onboarding.css');
