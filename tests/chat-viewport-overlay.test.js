@@ -65,8 +65,8 @@ function makeHarness({ touchPill = false, withPill = false, formTop = { value: 5
         removeEventListener: type => windowListeners.delete(`${type}`),
         requestAnimationFrame: callback => { rafQueue.push(callback); return rafQueue.length; },
     };
-    const margin = signal(sideMargin);
-    const overlay = createChatViewportOverlay({ host, chatViewport, callService, callServiceOrThrow, sideMargin: margin, onMarginCommit: () => {}, win });
+    const margin = signal({ left: sideMargin, right: sideMargin, linked: true });
+    const overlay = createChatViewportOverlay({ host, chatViewport, callService, callServiceOrThrow, margins: margin, onMarginCommit: () => {}, win });
     const names = contract => calls.filter(call => call.contract === contract);
     return { rafQueue, hovers, emitted, resizeHandlers, formTop, overlay, calls, names, subscriptions, unsubscribed, windowListeners, chatViewport, viewportCalls, margin, detachedCount: () => detached };
 }

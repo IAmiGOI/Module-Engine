@@ -1,5 +1,10 @@
 import { hashString, AVATAR_SPACER_WIDTH } from './constants.js';
 
+/** Высота тела, с которой к ней добавляется запас на расхождение движков раскладки (см. `installBodySync`). */
+const LONG_BODY_PX = 400;
+/** Версия правил высоты/запаса текстуры: входит в ключ дискового кэша растра, чтобы прежние текстуры (другой высоты) не подхватывались. */
+const RASTER_LAYOUT_VERSION = 2;
+
 /** Синхронизация зеркала+текстуры одного сообщения с его текстом. */
 export function installBodySync(ctx) {
     const { s, rasterizedText, physicalTextureSize, mirrors, bodyImages, syncInflight, textureHome, bodyHeights, rowHeight, persistentCache, serviceOrThrow, serviceOrNull } = ctx;
@@ -76,7 +81,7 @@ export function installBodySync(ctx) {
         let diskKey = null;
         if (changed && persistentCache) {
             if (s.cssHashCache.css !== s.css) s.cssHashCache = { css: s.css, hash: hashString(s.css) };
-            diskKey = `${hashString(html)}.${html.length}.${s.cssHashCache.hash}.${ctx.contentWidth()}.${s.devicePixelRatio}`;
+            diskKey = `${hashString(html)}.${html.length}.${s.cssHashCache.hash}.${ctx.contentWidth()}.${s.devicePixelRatio}.${RASTER_LAYOUT_VERSION}`;
             const hit = await serviceOrNull('rasterCache.get', { key: diskKey });
             if (hit?.image) {
                 await serviceOrThrow('webglChat.uploadTexture', { canvas: home, textureId: mesid, image: hit.image });
@@ -112,7 +117,11 @@ export function installBodySync(ctx) {
         // срабатывать ТОЛЬКО когда измерение вообще не удалось (не число),
         // а не когда оно честно вернуло ноль.
         const rect = await ctx.measureBatched(mirror);
-        const height = Math.max(1, Number.isFinite(rect.height) ? Math.round(rect.height) : rowHeight);
+        // Запас на расхождение движков: SVG-растр (`foreignObject`) раскладывает текст чуть выше зеркала на странице (живьём: +11px на 2726px, ~0,4%) — без запаса
+        // последняя строка длинного сообщения обрезалась по низу текстуры. Запас растёт с длиной (0,6% + 2px) и нужен только длинным (≥ 400px: у коротких расхождение
+        // меньше зазора между строками); у пустого и короткого его нет.
+        const measured = Number.isFinite(rect.height) ? Math.round(rect.height) : rowHeight;
+        const height = Math.max(1, measured >= LONG_BODY_PX ? measured + Math.ceil(measured * 0.006) + 2 : measured);
 
         if (changed) {
             // `width`/`height` здесь ЛОГИЧЕСКИЕ (совпадают с тем, что измерило

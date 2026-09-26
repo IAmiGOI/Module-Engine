@@ -1,4 +1,4 @@
-import { clampSideMargin } from '../../../libraries/shared/chat-viewport-overlay-math.js';
+import { resolveMargins } from '../../../libraries/shared/chat-viewport-overlay-math.js';
 
 /**
  * Наведение на чат → панель действий сообщения (cores/ui/chat-viewport/message-tools.js). Слушает движение указателя на обёртке и переводит
@@ -6,12 +6,12 @@ import { clampSideMargin } from '../../../libraries/shared/chat-viewport-overlay
  * прокрутки между кадрами). Считает синхронно по данным события и раскладке — без запросов к DOM на каждое движение; не чаще раза за кадр.
  * Тач игнорируется: у пальца нет «наведения» (там панель не показывается).
  */
-export async function startHoverSync({ callOrThrow, chatViewport, refs, layout, sideMargin, pageWidth, win = globalThis }) {
+export async function startHoverSync({ callOrThrow, chatViewport, refs, layout, margins, pageWidth, win = globalThis }) {
     const { wrapper } = refs;
     let frame = null;
     let last = null;
 
-    const columnLeft = () => layout.left + clampSideMargin(sideMargin(), pageWidth.peek(), layout.minMargin ?? 0);
+    const columnLeft = () => layout.left + resolveMargins(margins(), pageWidth.peek(), layout.minMargin ?? 0).left;
     const apply = () => {
         frame = null;
         if (!last) return;
