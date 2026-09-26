@@ -7,6 +7,8 @@ import { createLeftDock } from './left-dock.js';
 const ACTIVE_CLASS = 'stme-input-bar-active';
 /** Боковая панель (верхняя полоса ST → вертикально слева, styles/chrome/side-bar.css) — только на широком экране без тача; на телефоне полоса остаётся родной. */
 const SIDE_BAR_CLASS = 'stme-side-bar-active';
+/** Телефон/планшет: та же панель значков, но горизонтальная и СВЕРХУ (styles/chrome/top-bar.css). */
+const TOP_BAR_CLASS = 'stme-top-bar-active';
 const SIDE_BAR_MIN_WIDTH = 900;
 
 /** Настройка ST «Send on Enter» — у ST её держит `power_user`; недоступна (тесты, ранний старт) → авто. */
@@ -76,6 +78,7 @@ export function createInputBarCore(host, {
         pill.setGenerating(bridge.isGenerating());
         doc.documentElement.classList.add(ACTIVE_CLASS);
         if (!touch && win.innerWidth >= SIDE_BAR_MIN_WIDTH) doc.documentElement.classList.add(SIDE_BAR_CLASS);
+        else doc.documentElement.classList.add(TOP_BAR_CLASS);
         pill.mount(doc.body);
         dock.mount(doc.body);
 
@@ -101,6 +104,7 @@ export function createInputBarCore(host, {
         pill.dispose();
         doc.documentElement.classList.remove(ACTIVE_CLASS);
         doc.documentElement.classList.remove(SIDE_BAR_CLASS);
+        doc.documentElement.classList.remove(TOP_BAR_CLASS);
         emitChanged({ active: false, height: 0 });
     }
 

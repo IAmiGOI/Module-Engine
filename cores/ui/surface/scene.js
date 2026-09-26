@@ -6,6 +6,8 @@
  * Перетаскивание блока — это не растеризация: меняется только `transform` DOM-узла и позиция квада, кадр рисуется одним `drawFrame`.
  * Браузерное (`document`, `devicePixelRatio`) — инъекцией; вызовы сервисов — через `call(contract, params)` → `{ ok, value }`.
  */
+const MAX_CANVAS_SIDE = 4096;
+
 export function createSurfaceScene({ document: doc = globalThis.document, call, getDevicePixelRatio = () => globalThis.devicePixelRatio || 1, className = 'stme-home' }) {
     const root = doc.createElement('div');
     root.className = className;
@@ -19,28 +21,46 @@ export function createSurfaceScene({ document: doc = globalThis.document, call, 
     let attached = false;
     let size = { width: 1, height: 1 };
     let lastQuads = '';
-    let canvasDpr = 0;           // масштаб, в котором сейчас размечен холст
+    let canvasDpr = 0;           // масштаб, в котором сейчас размечен холст (физических пикселей на CSS-пиксель)
+    let content = { width: 1, height: 1 };
 
     const dpr = () => Math.max(1, getDevicePixelRatio());
+    /**
+     * Масштаб холста: не больше `dpr` и такой, чтобы ни одна сторона не превысила `MAX_CANVAS_SIDE` физических пикселей — у мобильных видеокарт предел размера
+     * буфера/текстуры 4096–8192, а прокручиваемое содержимое на телефоне (`contentHeight`) бывает в несколько экранов высотой (3× dpr → 7000+ px).
+     */
+    const canvasScale = () => Math.max(0.5, Math.min(dpr(), MAX_CANVAS_SIDE / Math.max(content.width, content.height, 1)));
 
     async function mount(parent) {
         parent.append(root);
-        const result = await call('webglChat.attach', { canvas, width: size.width * dpr(), height: size.height * dpr() });
+        const result = await call('webglChat.attach', { canvas, width: size.width * canvasScale(), height: size.height * canvasScale() });
         attached = Boolean(result.ok && result.value);
-        if (attached) canvasDpr = dpr();
+        if (attached) canvasDpr = canvasScale();
         return attached;
     }
 
-    /** Прямоугольник сцены в окне (CSS-пиксели). Канвас пересоздаёт размер по физическим пикселям. */
-    async function setRect({ left, top, width, height }) {
+    /**
+     * Прямоугольник сцены в окне (CSS-пиксели). `contentHeight` — высота ВСЕГО содержимого, если оно выше видимой части (телефон: сцена прокручивается, корень
+     * получает `overflow-y: auto`, слои и холст — полную высоту содержимого). Холст пересоздаём и при смене размера, и при смене масштаба (`devicePixelRatio`,
+     * потолок размера): иначе он остаётся в старом разрешении, а квады считаются по новому — WebGL-текст уезжает от плит. Текстуры перерастеризуются сами.
+     */
+    async function setRect({ left, top, width, height, contentHeight = height }) {
         Object.assign(root.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
-        // Пересоздаём холст и при смене размера, и при смене `devicePixelRatio` (масштаб страницы, другой монитор): иначе холст остаётся в старом разрешении, а
-        // квады считаются по новому — WebGL-текст уезжает от плит (найдено живьём). Текстуры перерастеризуются сами: масштаб входит в их ключ.
-        const changed = Math.round(width) !== size.width || Math.round(height) !== size.height || dpr() !== canvasDpr;
-        size = { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
+        const fullH = Math.max(Math.round(height), Math.round(contentHeight));
+        const scrolls = fullH > Math.round(height);
+        root.style.overflowY = scrolls ? 'auto' : 'hidden';
+        blocksLayer.style.height = `${fullH}px`;
+        canvas.style.height = `${fullH}px`;
+        canvas.style.width = `${Math.round(width)}px`;
+        const next = { width: Math.max(1, Math.round(width)), height: Math.max(1, fullH) };
+        const before = canvasDpr;
+        content = next;
+        const scale = canvasScale();
+        const changed = next.width !== size.width || next.height !== size.height || scale !== before;
+        size = next;
         if (attached && changed) {
-            canvasDpr = dpr();
-            await call('webglChat.resize', { canvas, width: size.width * canvasDpr, height: size.height * canvasDpr });
+            canvasDpr = scale;
+            await call('webglChat.resize', { canvas, width: Math.round(size.width * scale), height: Math.round(size.height * scale) });
             lastQuads = '';
         }
     }
@@ -67,7 +87,7 @@ export function createSurfaceScene({ document: doc = globalThis.document, call, 
     /** Рисует кадр: по квадрату на блок (`placements` — CSS-пиксели сцены, квады — физические). Тот же кадр повторно не рисуется. */
     async function draw(placements) {
         if (!attached) return;
-        const scale = dpr();
+        const scale = canvasScale();
         const quads = placements.filter(p => textures.has(p.id)).map(p => ({ textureId: p.id, x: p.x * scale, y: p.y * scale, width: p.w * scale, height: p.h * scale }));
         const key = JSON.stringify(quads);
         if (key === lastQuads) return;

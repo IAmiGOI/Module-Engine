@@ -149,3 +149,20 @@ test('the generic picker filter works on any list (by id, hiding the added ones)
     assert.deepEqual(filterItems(items, 'no').map(item => item.id), ['notes']);
     assert.deepEqual(filterItems(items, '', ['clock']).map(item => item.id), ['notes']);
 });
+
+test('the flow layout (phone): blocks go in order left to right and wrap, rows are centered, the height is NOT capped (the desk scrolls) and nothing overlaps', async () => {
+    const { composeFlow, FLOW_MARGIN, FLOW_MAX_WIDTH } = await import('../libraries/shared/home-model.js');
+    const blocks = [box('a', 340, 200), box('b', 300, 150), box('c', 150, 196), box('d', 150, 196), box('e', 150, 196)];
+    const { placements, height } = composeFlow({ width: 406, blocks });
+    assert.deepEqual(placements.map(p => p.id), ['a', 'b', 'c', 'd', 'e'], 'order is kept');
+    assert.equal(placements[0].x, 33, 'a wide block is centered in its row');
+    assert.equal(placements[0].y, FLOW_MARGIN);
+    assert.ok(placements[1].y >= placements[0].y + 200, 'the next row starts below');
+    assert.equal(placements[2].y, placements[3].y, 'two 150px cards share a row on a 406px screen');
+    assert.ok(placements[4].y > placements[3].y, 'the third card wraps');
+    assert.equal(overlapAny(placements), false);
+    assert.ok(height >= placements.at(-1).y + 196, 'the height covers every block — the stage scrolls instead of squeezing');
+    assert.ok(placements.every(p => p.x >= 0));
+    assert.equal(composeFlow({ width: 400, blocks: [] }).height, 0);
+    assert.equal(FLOW_MAX_WIDTH, 700);
+});

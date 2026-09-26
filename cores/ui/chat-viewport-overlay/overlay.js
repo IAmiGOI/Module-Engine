@@ -1,5 +1,5 @@
 import { signal } from '../reactive.js';
-import { clampSideMargin, computeViewportWidth, minSideMargin, INPUT_PANEL_GAP, SIDE_BAR_INSET, SIDE_TOP_INSET } from '../../../libraries/shared/chat-viewport-overlay-math.js';
+import { PHONE_SIDE_MARGIN, clampSideMargin, computeViewportWidth, minSideMargin, INPUT_PANEL_GAP, SIDE_BAR_INSET, SIDE_TOP_INSET } from '../../../libraries/shared/chat-viewport-overlay-math.js';
 import { buildChatViewportBodyCss } from '../../../libraries/shared/chat-viewport-body-css.js';
 import { buildOverlayLayers } from './layers.js';
 import { startScrollSync } from './scroll-sync.js';
@@ -74,7 +74,12 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
                 minMargin: 0,
             };
             // Своя панель набора → есть левый док, выезжающий вправо: колонка не должна под него наезжать.
-            if (ownPanel) layout.minMargin = minSideMargin(layout.left);
+            // На тач-экране левый док — узкая полоска у края, а не выезжающая пилюля: места под неё колонка не резервирует (иначе на телефоне оставалась половина ширины).
+            const touchDock = await callService('dom.querySelector', { el: body, selector: '.stme-left-dock-touch' });
+            const onTouch = Boolean(touchDock.ok && touchDock.value);
+            if (ownPanel && !onTouch) layout.minMargin = minSideMargin(layout.left);
+            // Отступ из настроек подбирали на широком экране (у него хватает места); на телефоне он съедал бы половину ширины — там свой, небольшой.
+            const columnMargin = onTouch ? Object.assign(() => Math.min(sideMargin(), PHONE_SIDE_MARGIN), { set: value => sideMargin.set(value) }) : sideMargin;
 
             const refs = await buildOverlayLayers(callServiceOrThrow, { parent, pageSize, layout });
             resources.wrapper = refs.wrapper;
@@ -93,7 +98,7 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
             const clientSize = { width: fullSize.width, height: Math.max(120, fullSize.height - layout.top - layout.bottom) };
             // Ширина страницы меняется на лету (окно, панель Chrome, боковая панель) — сигнал, а не константа.
             const pageWidth = signal(clientSize.width);
-            const initialMargin = clampSideMargin(sideMargin(), pageWidth.peek(), layout.minMargin);
+            const initialMargin = clampSideMargin(columnMargin(), pageWidth.peek(), layout.minMargin);
             const ok = await chatViewport.attach({
                 canvas: refs.canvas, lastCanvas: refs.lastCanvas, mirrorContainer: refs.mirror, chromeContainer: refs.chrome,
                 width: Math.max(1, computeViewportWidth(clientSize.width, initialMargin) - layout.rightSpace), height: clientSize.height, css,
@@ -112,8 +117,8 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
             resources.attached = true;
 
             resources.scroll = await startScrollSync({ host, callService, callOrThrow: callServiceOrThrow, chatViewport, refs, layout, win });
-            resources.margin = await startMarginSync({ callService, callOrThrow: callServiceOrThrow, chatViewport, refs, pageWidth, sideMargin, layout, onCommit: onMarginCommit, publish: (event, payload) => host.events.emit?.(event, payload), win });
-            resources.hover = await startHoverSync({ callOrThrow: callServiceOrThrow, chatViewport, refs, layout, sideMargin, pageWidth, win });
+            resources.margin = await startMarginSync({ callService, callOrThrow: callServiceOrThrow, chatViewport, refs, pageWidth, sideMargin: columnMargin, layout, onCommit: onMarginCommit, publish: (event, payload) => host.events.emit?.(event, payload), win });
+            resources.hover = await startHoverSync({ callOrThrow: callServiceOrThrow, chatViewport, refs, layout, sideMargin: columnMargin, pageWidth, win });
 
             // Правила ST `:has(... [style*="..."])` пересчитывают стили сотен элементов на любое изменение style —
             // пока Chat Viewport включён, они убраны (возвращаются при выключении).

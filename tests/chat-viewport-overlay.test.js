@@ -30,6 +30,7 @@ function makeHarness({ touchPill = false, withPill = false, formTop = { value: 5
             case 'dom.readCssVariable': return { ok: true, value: params.name === 'font-family' ? 'Foo, serif' : '#abcdef' };
             case 'dom.querySelector':
                 if (params.selector.includes('stme-side-bar-active')) return { ok: true, value: withPill && !touchPill ? { id: 'holder' } : null };
+                if (params.selector === '.stme-left-dock-touch') return { ok: true, value: touchPill ? { id: 'touch-dock' } : null };
                 return { ok: true, value: params.selector === '.stme-input-bar' && !withPill ? null : { id: 'form' } };
             case 'dom.parentElement': return { ok: true, value: { id: 'sheld' } };
             case 'dom.scrollPosition': return { ok: true, value: scroll };

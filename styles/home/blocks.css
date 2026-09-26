@@ -222,3 +222,8 @@ html.stme-home-active .stme-left-dock-zone { visibility: hidden; pointer-events:
     cursor: text;
 }
 .stme-home-search:focus { outline: none; border-color: var(--stme-accent); }
+
+/* Телефон/узкое окно: стол прокручивается (сцена выше окна, слои и холст — на полную высоту содержимого). Корень ловит касание пустого места, чтобы листалось
+   и там, а не только над блоками; прокрутка внутри не «протекает» в страницу под ним. */
+.stme-home.stme-home-scroll { pointer-events: auto; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+.stme-home.stme-home-scroll .stme-home-block { cursor: default; }

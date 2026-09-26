@@ -101,6 +101,8 @@
 body:has(.stmeBeta-fullscreen:not([hidden])) .stme-home { visibility: hidden; }
 
 /* Вертикальная боковая панель (левый край, `html.stme-side-bar-active`, z-index выше панели) закрывала название в шапке и левый край содержимого: отступаем от неё. */
+/* Без боковой панели (телефон) сверху лежит родная полоса значков ST: прозрачная шапка пропускала её под заголовок — здесь шапка непрозрачная. */
+html:not(.stme-side-bar-active) .stmeBeta-fullscreen .stmeBeta-fullscreen-head { background: var(--SmartThemeBlurTintColor, #1c1e26); }
 html.stme-side-bar-active .stmeBeta-fullscreen .stmeBeta-fullscreen-head { padding-left: calc(var(--stme-side-bar-w, 42px) + 14px); }
 html.stme-side-bar-active .stmeBeta-fullscreen .stmeBeta-fullscreen-body { padding-left: calc(var(--stme-side-bar-w, 42px) + 18px); }
 

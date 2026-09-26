@@ -715,6 +715,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     const home = createHomeCore(engine.registerCaller('core.ui.home', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.home' }),
         // Виджет рабочего стола получает СВОЮ личность на Шине модулей с правами из его описания — Гейт проверяет его, как любой Модуль.
+        touch: isMobileSurface(),
         registerWidgetCaller: (widgetId, allowedContracts) => engine.registerCaller(`widget.${widgetId}`, 'modules', { tier: 'community', allowedContracts }),
     });
 

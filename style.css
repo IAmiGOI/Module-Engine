@@ -59,6 +59,7 @@ html {
     border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
     background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .16));
 }
+html.stme-panel-open .stme-launcher-dock-zone { display: none; }
 .stmeBeta-fullscreen-head strong { flex: 1; font-size: 1.05em; letter-spacing: .02em; }
 /* Прокручивается ВСЯ ширина оверлея, а по центру ограничено только
    содержимое. Раньше `max-width` стоял на самом прокручиваемом элементе, и
