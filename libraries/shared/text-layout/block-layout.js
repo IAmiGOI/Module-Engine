@@ -15,6 +15,9 @@ import { buildFontSpec, computeLineHeight } from './style.js';
 
 const RULE_HEIGHT = 2;
 const BULLETS = ['•', '◦', '▪'];
+const BULLET_SHAPES = ['disc', 'circle', 'square'];
+/** Отступ маркера от начала текста пункта — `cMarkerPaddingPx` у Chrome. */
+const MARKER_PADDING = 7;
 
 function hasLineContent(items) {
     return items.some(item => item.k === 'unit' || item.k === 'img' || item.k === 'br');
@@ -55,6 +58,15 @@ function layoutList(block, box, state, context) {
         const width = env.textWidth(font, text);
         // Маркер кладётся ДО содержимого пункта — порядок коробок совпадает с порядком в документе (вложенный список идёт после маркера пункта).
         const marker = { kind: 'marker', text, font, style: block.markerStyle, x: inner.left - width, baseline: 0, width };
+        if (!block.ordered) {
+            // Фигура размером в треть высоты шрифта над базовой линией; по вертикали — середина
+            // строчных букв. Положение/размер только для отрисовки: на раскладку маркер не влияет.
+            const ascent = Math.round(env.fontMetrics(font).ascent);
+            marker.shape = BULLET_SHAPES[Math.min(block.depth, BULLET_SHAPES.length - 1)];
+            marker.size = Math.max(3, Math.round(ascent / 3));
+            // Коробка маркера у Chrome = фигура + `MARKER_PADDING`, прижата к началу текста, фигура — в её левой части (сверено скриншотом).
+            marker.x = inner.left - MARKER_PADDING - 2 * marker.size;
+        }
         out.boxes.push(marker);
         const firstLine = out.lines.length;
         layoutBlocks(itemBlocks, inner, state, context);
@@ -69,6 +81,7 @@ function layoutList(block, box, state, context) {
             marker.baseline = state.y + splitLeading(lineHeight, ascent, descent).top + ascent;
             state.y += lineHeight;
         }
+        if (marker.shape) marker.y = marker.baseline - Math.round(env.fontMetrics(font).ascent * 0.3) - marker.size / 2;
     });
 }
 

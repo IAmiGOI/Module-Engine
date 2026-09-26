@@ -10,7 +10,8 @@ function createFakeCanvas(width = 1, height = 1, log = []) {
     const context = {
         font: '', fillStyle: '', shadowBlur: 0, shadowColor: '', textBaseline: '', calls: log,
         measureText(text) { return { width: [...text].reduce((sum, char) => sum + (char === ' ' ? 5 : 10), 0), fontBoundingBoxAscent: 15, fontBoundingBoxDescent: 5 }; },
-        fillText(text, x, y) { log.push({ op: 'fillText', text, x, y, font: this.font, fillStyle: this.fillStyle, shadowBlur: this.shadowBlur }); },
+        fillText(text, x, y) { log.push({ op: 'fillText', text, x, y, font: this.font, fillStyle: this.fillStyle, shadowBlur: this.shadowBlur, shadowOffsetX: this.shadowOffsetX ?? 0 }); },
+        beginPath() {}, ellipse(...args) { log.push({ op: 'ellipse', args }); }, fill() { log.push({ op: 'fill', fillStyle: this.fillStyle }); }, stroke() {},
         fillRect(x, y, w, h) { log.push({ op: 'fillRect', x, y, w, h, fillStyle: this.fillStyle }); },
         setTransform(...args) { log.push({ op: 'setTransform', args }); },
     };
@@ -90,24 +91,24 @@ function layoutOf(html, width = 300) {
     });
 }
 
-test('paintLayout draws each run at its layout position and baseline, in its font and resolved colour, once per text-shadow layer', () => {
+test('paintLayout draws each run ONCE at its layout position and baseline, in its font and resolved colour; the shadows are separate text-free passes', () => {
     const layout = layoutOf('<p>ab <em>cd</em></p>');
     const log = [];
     paintLayout(createFakeCanvas(1, 1, log).getContext(), layout, { dpr: 2, colors: { body: '#fff', em: '#aaa' } });
     const texts = log.filter(call => call.op === 'fillText');
-    assert.equal(texts.length, 2 * TEXT_SHADOWS.length);
-    assert.deepEqual(texts.map(call => [call.text, call.x, call.y, call.fillStyle]), [
-        ['ab ', 0, 15, '#fff'], ['ab ', 0, 15, '#fff'],
-        ['cd', 25, 15, '#aaa'], ['cd', 25, 15, '#aaa'],
-    ]);
-    assert.deepEqual(texts.slice(0, 2).map(call => call.shadowBlur), [5 * 2, 2 * 2], 'shadowBlur is not scaled by the transform, so it is given in physical pixels');
+    const visible = texts.filter(call => call.shadowBlur === 0);
+    assert.deepEqual(visible.map(call => [call.text, call.x, call.y, call.fillStyle]), [['ab ', 0, 15, '#fff'], ['cd', 25, 15, '#aaa']], 'drawing text twice would thicken its anti-aliased edges');
+    const shadows = texts.filter(call => call.shadowBlur > 0);
+    assert.equal(shadows.length, 2 * TEXT_SHADOWS.length);
+    assert.deepEqual(shadows.slice(0, 2).map(call => call.shadowBlur), [5 * 2, 2 * 2], 'shadowBlur is not scaled by the transform, so it is given in physical pixels');
+    for (const call of shadows) assert.equal(call.x + call.shadowOffsetX / 2, texts.find(entry => entry.text === call.text && entry.shadowBlur === 0).x, 'the text of a shadow pass is far off-canvas, the shadow lands exactly on the visible run');
 });
 
 test('paintLayout draws underline/strike bars, list markers and the two-pixel hr', () => {
     const log = [];
     paintLayout(createFakeCanvas(1, 1, log).getContext(), layoutOf('<p><u>ab</u></p><ul><li>x</li></ul><hr>'), { colors: { body: '#fff' } });
     assert.ok(log.some(call => call.op === 'fillRect' && call.w === 20), 'underline as wide as the run');
-    assert.ok(log.some(call => call.op === 'fillText' && call.text === '• '), 'bullet marker');
+    assert.ok(log.some(call => call.op === 'ellipse') && log.some(call => call.op === 'fill'), 'bullet marker drawn as a disc shape, like Chrome');
     assert.equal(log.filter(call => call.op === 'fillRect' && call.h === 1 && call.w === 300).length, 2, 'hr: two one-pixel rows');
 });
 

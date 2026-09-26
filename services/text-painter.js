@@ -20,7 +20,6 @@ export const TEXT_SHADOWS = Object.freeze([
 ]);
 /** Типичный безопасный предел текстуры WebGL; выше — плитки. */
 export const DEFAULT_MAX_TEXTURE_SIZE = 4096;
-const RULE_COLORS = ['rgba(128, 128, 128, 0.9)', 'rgba(200, 200, 200, 0.6)'];
 
 /** Роль цвета раскладки (`@body`/`@em`/`@quote`/`@link`) → цвет темы; явный цвет из разметки — как есть. */
 export function resolveTextColor(color, colors = {}) {
@@ -37,21 +36,39 @@ export function computeTiles(height, dpr, maxTextureSize = DEFAULT_MAX_TEXTURE_S
     return tiles;
 }
 
+/** Сдвиг «текст за край, тень на место» (логические px): тень рисуется БЕЗ самого текста. */
+const SHADOW_ONLY_OFFSET = 100000;
+
 function drawTextRun(context, text, x, baseline, dpr) {
-    // Две тени — два прохода: у Canvas 2D одна тень на вызов. Непрозрачный текст поверх себя же не меняется, складываются только ореолы.
+    // У Canvas 2D одна тень на вызов, а в CSS тела их две. Рисовать текст дважды нельзя: полупрозрачные края букв накладываются, и текст
+    // выходит жирнее и ярче, чем в DOM (видно на сравнении). Поэтому тени — отдельными проходами без текста: текст уезжает далеко за край,
+    // а тень сдвигом возвращается на место. `shadowBlur`/`shadowOffsetX` трансформация не масштабирует — они в физических px.
     for (const shadow of TEXT_SHADOWS) {
         context.shadowColor = shadow.color;
-        context.shadowBlur = shadow.blur * dpr; // `shadowBlur` не масштабируется трансформацией — в физических px
-        context.fillText(text, x, baseline);
+        context.shadowBlur = shadow.blur * dpr;
+        context.shadowOffsetX = SHADOW_ONLY_OFFSET * dpr;
+        context.fillText(text, x - SHADOW_ONLY_OFFSET, baseline);
     }
     context.shadowColor = 'transparent';
     context.shadowBlur = 0;
+    context.shadowOffsetX = 0;
+    context.fillText(text, x, baseline);
 }
 
 function drawDecorations(context, part, baseline, fontSize) {
     const thickness = Math.max(1, fontSize / 15);
     if (part.style.underline) context.fillRect(part.x, baseline + fontSize * 0.12, part.width, thickness);
     if (part.style.strike) context.fillRect(part.x, baseline - fontSize * 0.3, part.width, thickness);
+}
+
+/** Маркер `ul` — фигура, как у Chrome (`ListMarkerPainter`): диск, окружность или квадрат, а не символ «•». */
+function drawBullet(context, box) {
+    const { x, y, size } = box;
+    if (box.shape === 'square') { context.fillRect(x, y, size, size); return; }
+    context.beginPath?.();
+    context.ellipse?.(x + size / 2, y + size / 2, size / 2, size / 2, 0, 0, Math.PI * 2);
+    if (box.shape === 'disc') context.fill?.();
+    else { context.lineWidth = 1; context.strokeStyle = context.fillStyle; context.stroke?.(); }
 }
 
 /**
@@ -74,14 +91,16 @@ export function paintLayout(context, layout, { dpr = 1, colors = {}, top = 0, bo
     for (const box of layout.boxes) {
         if (box.kind === 'marker') {
             if (box.baseline < top - 50 || box.baseline > bottom + 50) continue;
-            context.font = box.font;
             context.fillStyle = resolveTextColor(box.style?.color, colors);
-            drawTextRun(context, box.text, box.x, box.baseline, dpr);
+            if (box.shape) drawBullet(context, box);
+            else { context.font = box.font; drawTextRun(context, box.text, box.x, box.baseline, dpr); }
         } else if (box.kind === 'rule') {
-            context.fillStyle = RULE_COLORS[0];
+            // `hr` браузера — рамка `inset` цветом текста: на тёмном фоне светлая линия в 2px (нижний ряд чуть бледнее).
+            context.fillStyle = resolveTextColor('@body', colors);
             context.fillRect(box.x, box.y, box.width, 1);
-            context.fillStyle = RULE_COLORS[1];
+            context.globalAlpha = 0.6;
             context.fillRect(box.x, box.y + 1, box.width, 1);
+            context.globalAlpha = 1;
         }
     }
 }

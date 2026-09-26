@@ -142,8 +142,8 @@ test('centred text is offset by half of the free space, per line', () => {
 test('lists indent by 1.4em and put a marker before the first line of each item; nested bullets change shape; ol honours start', () => {
     const result = layout('<ul><li>aa</li><li>bb<ul><li>cc</li></ul></li></ul><ol start="3"><li>dd</li></ol>', 300);
     assert.deepEqual(result.lines.map(line => line.x), [21, 21, 42, 21]);
-    const markers = result.boxes.filter(box => box.kind === 'marker').map(box => box.text);
-    assert.deepEqual(markers, ['• ', '• ', '◦ ', '3. ']);
+    const markers = result.boxes.filter(box => box.kind === 'marker').map(box => box.shape ?? box.text);
+    assert.deepEqual(markers, ['disc', 'disc', 'circle', '3. ']);
     assert.equal(result.height, 21 * 3 + 10 + 21);
 });
 
