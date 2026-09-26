@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Text paths compared</title>
+<link rel="stylesheet" href="../../styles/chat-viewport/mirror-row.css">
+<style>
+    body { margin: 16px; background: #1b1d22; color: #ddd; font: 13px/1.4 system-ui, sans-serif; }
+    q::before, q::after { content: ''; }
+    .row { display: grid; grid-template-columns: repeat(3, auto); gap: 16px; margin-bottom: 24px; align-items: start; }
+    .cell { background: #2a2d34; border-radius: 8px; padding: 10px; }
+    .cell > h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #9aa; }
+    .dom { color: #dcdcd2; font: 15px/1.4 "Noto Sans", sans-serif; text-rendering: geometricPrecision; text-shadow: 0 0 5px rgba(0,0,0,.3), 0 0 2px rgba(0,0,0,.18); }
+    .dom * { margin: 0; } .dom > * + * { margin-top: 10px; } .dom > .stme-chat-viewport-avatar-spacer + * { margin-top: 0; }
+    .dom ul, .dom ol { padding-left: 1.4em; } .dom blockquote { padding-left: 10px; }
+    .dom q { color: #e18a24; } .dom em, .dom i { color: #919191; } .dom q em, .dom q i, .dom font[color] em, .dom font[color] q { color: inherit; }
+    canvas { display: block; }
+</style>
+</head>
+<body>
+<p id="status">Loading…</p>
+<div id="rows"></div>
+<div class="stme-chat-viewport-mirror-host" id="host"></div>
+<script type="module">
+import { parseBody, computeTextLayout } from '../../libraries/shared/text-layout/index.js';
+import { paintLayout } from '../../services/text-painter.js';
+import { buildForeignObjectSvg } from '../../services/html-rasterizer.js';
+import { buildChatViewportBodyCss, buildChatViewportTextTheme } from '../../libraries/shared/chat-viewport-body-css.js';
+import { createCanvasMeasurer } from './check.js';
+
+/**
+ * Три пути одного тела рядом, на тёмном фоне: DOM (эталон — как текст выглядел бы на странице), старый путь (SVG `foreignObject` → растр,
+ * со шрифтом, который видит растр — только установленные) и новый (раскладчик + canvas, шрифт темы). `?dpr=` — масштаб отрисовки.
+ */
+const params = new URLSearchParams(location.search);
+const dpr = Number(params.get('dpr') ?? devicePixelRatio ?? 1);
+const width = Number(params.get('width') ?? 380);
+const base = params.get('fonts') ?? 'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans@5.1.0/files';
+const faces = [];
+for (const subset of ['latin', 'cyrillic']) for (const [weight, style] of [[400, 'normal'], [700, 'normal'], [400, 'italic'], [700, 'italic']]) {
+    const range = subset === 'latin' ? 'U+0000-00FF, U+2000-206F, U+20AC, U+2122, U+2212' : 'U+0400-045F, U+0490-0491, U+2116';
+    faces.push(new FontFace('Noto Sans', `url(${base}/noto-sans-${subset}-${weight}-${style}.woff2)`, { weight: String(weight), style, unicodeRange: range }));
+}
+await Promise.all(faces.map(face => face.load().then(loaded => document.fonts.add(loaded)).catch(() => {})));
+
+const colors = { bodyColor: '#dcdcd2', quoteColor: '#e18a24', emColor: '#919191' };
+const theme = buildChatViewportTextTheme({ ...colors, fontFamily: '"Noto Sans", sans-serif' });
+const rasterCss = buildChatViewportBodyCss({ ...colors, fontFamily: params.get('rasterFont') ?? 'sans-serif' });
+const spacer = height => `<div class="stme-chat-viewport-avatar-spacer" style="float:left;width:124px;height:${height}px;visibility:hidden;" aria-hidden="true"></div>`;
+const SAMPLES = [
+    `<p>She doesn't let go of your wrist.</p><p>Down the hallway — bare feet slapping hardwood — she yanks open the closet by the front door. <em>Sandals.</em> She kicks them on one-handed, still holding you, still dragging.</p><p><q>"Put those on. I'm not waiting."</q></p>`,
+    `${spacer(90)}<p><q>"I said I need a minute, Sasha. <em>One minute.</em> In here. Alone."</q> Her knuckles whiten around the towel. <span style="color: #8fc1e3;"><q>"That's not — it's not a game."</q></span></p><p>She stops. Swallows. Looks at the tile.</p>`,
+    `<h3>Inventory</h3><ul><li>Rope, fifty feet</li><li>Lantern <strong>(lit)</strong></li><li>A letter sealed with <u>red wax</u></li></ul><hr><p><q>"Ну и что теперь?"</q> — спросила она, не оборачиваясь. <em>Ветер трепал подол платья.</em></p>`,
+];
+
+function cell(title, node) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'cell';
+    wrapper.innerHTML = `<h3>${title}</h3>`;
+    wrapper.append(node);
+    return wrapper;
+}
+
+const measurer = createCanvasMeasurer();
+const mirror = document.createElement('div');
+mirror.className = 'stme-chat-viewport-mirror';
+document.getElementById('host').append(mirror);
+for (const html of SAMPLES) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const dom = document.createElement('div');
+    dom.className = 'dom';
+    dom.style.width = `${width}px`;
+    dom.innerHTML = html;
+    row.append(cell('DOM (reference)', dom));
+
+    // Старый путь: высота по зеркалу со шрифтом растра, текст — SVG foreignObject.
+    mirror.style.width = `${width}px`;
+    mirror.style.fontFamily = params.get('rasterFont') ?? 'sans-serif';
+    mirror.innerHTML = html;
+    const oldHeight = Math.round(mirror.getBoundingClientRect().height);
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    const xml = [...container.childNodes].map(node => new XMLSerializer().serializeToString(node)).join('');
+    const image = new Image();
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(buildForeignObjectSvg({ html: xml, width, height: oldHeight, css: rasterCss, scale: dpr }))}`;
+    await image.decode();
+    const oldCanvas = document.createElement('canvas');
+    oldCanvas.width = Math.round(width * dpr);
+    oldCanvas.height = Math.round(oldHeight * dpr);
+    oldCanvas.style.width = `${width}px`;
+    oldCanvas.getContext('2d').drawImage(image, 0, 0);
+    row.append(cell('Old path (SVG raster)', oldCanvas));
+
+    // Новый путь: раскладка + отрисовка в canvas.
+    const parsed = parseBody(new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html').body);
+    const layout = computeTextLayout({ parsed, width, theme, measure: measurer.measure, metrics: measurer.metrics });
+    const newCanvas = document.createElement('canvas');
+    newCanvas.width = Math.ceil(width * dpr);
+    newCanvas.height = Math.ceil(layout.height * dpr);
+    newCanvas.style.width = `${width}px`;
+    const context = newCanvas.getContext('2d');
+    if ('textRendering' in context) context.textRendering = 'geometricPrecision';
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    paintLayout(context, layout, { dpr, colors: theme.colors });
+    row.append(cell(`New path (engine) · ${Math.ceil(layout.height)}px`, newCanvas));
+    document.getElementById('rows').append(row);
+}
+document.getElementById('status').textContent = `dpr ${dpr}, width ${width}`;
+window.__compareReady = true;
+</script>
+</body>
+</html>
