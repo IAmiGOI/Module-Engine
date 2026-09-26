@@ -112,7 +112,8 @@ html.stme-input-bar-active #form_sheld { background: none !important; border: 0 
 .stme-left-dock-zone:hover .stme-left-dock,
 .stme-left-dock-zone:focus-within .stme-left-dock,
 .stme-left-dock-zone.stme-left-dock-open .stme-left-dock { left: var(--stme-open-x); }
-.stme-left-dock-zone.stme-left-dock-touch { --stme-dock-peek: 22px; }
+/* Касание: пилюля ВЫШЕ поля ввода (на его линии она выезжала прямо поверх текста и кнопок набора — на телефоне колонка идёт во всю ширину); в покое торчит 22px у края. */
+.stme-left-dock-zone.stme-left-dock-touch { --stme-dock-peek: 22px; bottom: calc(9px + var(--stme-input-h) + 10px); }
 /* Родные кнопки ST в доке. У ST на них свои правила по id (`#options_button` — шрифт 28.5px и отступ слева 10px, `#extensionsMenuButton` — свой
    padding), которые бьют класс, поэтому здесь `!important`: одинаковый круглый слот 37×37, значок строго по центру. */
 .stme-left-dock .stme-left-dock-btn {

@@ -1,5 +1,6 @@
 import { request } from '../../../libraries/shared/request.js';
-import { buildBlocks, composeHome, composeFlow, dragPlacement, toSaved, itemsForEvent, checklistProgress } from '../../../libraries/shared/home-model.js';
+import { buildBlocks, composeHome, composeFlow, itemsForEvent, checklistProgress } from '../../../libraries/shared/home-model.js';
+import { applyOrder } from '../../../libraries/shared/home-order.js';
 import { blockHtml, homeCss, visibleRecent } from '../../../libraries/shared/home-html.js';
 import { createSurfaceScene } from '../surface/scene.js';
 import { computeStageRect, resolveTokens, useFlowLayout } from './geometry.js';
@@ -7,7 +8,7 @@ import { createItemPicker } from './picker.js';
 import { createWidgetDesk } from './widget-desk.js';
 import { createCardsApi } from './cards.js';
 import { createBlockDom, captureFocus, restoreFocus } from './blocks-dom.js';
-import { attachDrag } from './drag.js';
+import { createBlockInteraction } from './interaction.js';
 
 const ACTIVE_CLASS = 'stme-home-active';
 const STORAGE = Object.freeze({ namespace: 'core.ui.home', key: 'state' });
@@ -29,21 +30,23 @@ export function createHomeCore(host, {
 } = {}) {
     const call = (contract, params) => request(host.services, contract, { params });
     const emit = publish ?? ((event, data) => host.events.emit(event, data));
-    const persisted = { saved: {}, done: new Set(), dismissed: false, cards: [], widgets: [], widgetData: {} };
+    const persisted = { saved: {}, order: [], done: new Set(), dismissed: false, cards: [], widgets: [], widgetData: {} };
     let active = null;            // { scene, observer, cleanups }
     let shown = false;
     let chats = [];
     let characterList = [];       // персонажи ST (имя и миниатюра для карточек и выбора)
     let refreshTimer = null;
-    let flowMode = false;         // телефон/узкое окно: стол идёт потоком с прокруткой, блоки не таскаются
+    let flowMode = false;         // телефон/узкое окно: стол идёт потоком с прокруткой, блоки переставляются (порядок), а не кладутся куда угодно
+    let lastPlacements = [];
     let queue = Promise.resolve();
     const blocks = new Map();     // id -> { dom, sig, placement, detach }
 
-    const save = () => request(host.own, 'storage.settings.set', { params: { ...STORAGE, value: { saved: persisted.saved, done: [...persisted.done], dismissed: persisted.dismissed, cards: persisted.cards, widgets: persisted.widgets, widgetData: persisted.widgetData } } });
+    const save = () => request(host.own, 'storage.settings.set', { params: { ...STORAGE, value: { saved: persisted.saved, order: persisted.order, done: [...persisted.done], dismissed: persisted.dismissed, cards: persisted.cards, widgets: persisted.widgets, widgetData: persisted.widgetData } } });
     async function load() {
         const result = await request(host.own, 'storage.settings.get', { params: { ...STORAGE, fallback: {} } });
         const value = (result.ok ? result.value : null) ?? {};
         persisted.saved = value.saved && typeof value.saved === 'object' ? value.saved : {};
+        persisted.order = Array.isArray(value.order) ? value.order.filter(id => typeof id === 'string') : [];
         persisted.done = new Set(Array.isArray(value.done) ? value.done : []);
         persisted.dismissed = Boolean(value.dismissed);
         persisted.cards = Array.isArray(value.cards) ? value.cards.filter(avatar => typeof avatar === 'string') : [];
@@ -94,25 +97,11 @@ export function createHomeCore(host, {
     }
     const signature = (block, data) => (block.kind === 'checklist' ? [...persisted.done].sort().join(',') : block.kind === 'actions' ? block.kind : JSON.stringify(data));
 
-    function bindDrag(id, entry) {
-        if (flowMode) return;           // в потоке блоки не таскаются (телефон листается пальцем)
-        entry.detach = attachDrag(entry.dom.el, {
-            win,
-            onStart: () => { entry.base = { ...entry.placement }; entry.dom.setDragging(true); },
-            onMove: delta => {
-                const stage = active.scene.size();
-                const others = [...blocks.entries()].filter(([otherId]) => otherId !== id).map(([, item]) => item.placement);
-                entry.placement = dragPlacement(entry.base, delta, stage, { others, last: entry.placement });
-                entry.dom.place(entry.placement.x, entry.placement.y);
-                void active.scene.draw([...blocks.values()].map(item => item.placement));
-            },
-            onEnd: () => {
-                entry.dom.setDragging(false);
-                persisted.saved[id] = toSaved(entry.placement, active.scene.size());
-                void save();
-            },
-        });
-    }
+    const interaction = createBlockInteraction({
+        win, blocks, getScene: () => active.scene, isFlow: () => flowMode, getPlacements: () => lastPlacements,
+        onMoved: (id, saved) => { persisted.saved[id] = saved; void save(); },
+        onReorder: order => { persisted.order = order; void save(); void render(); },
+    });
 
     /**
      * Перерисовка НЕ перекрывается сама собой (найдено живьём: два `render()` подряд — добавили виджет и пришла перерисовка от таймера — мешали друг другу,
@@ -147,7 +136,7 @@ export function createHomeCore(host, {
         let placements;
         if (flowMode) {
             // Поток: содержимое выше окна — сцена прокручивается (холст и слои на полную высоту), сохранённые положения другого устройства не используются.
-            const flow = composeFlow({ width: rect.width, blocks: list });
+            const flow = composeFlow({ width: rect.width, blocks: applyOrder(list, persisted.order) });
             await scene.setRect({ ...rect, contentHeight: flow.height });
             placements = flow.placements;
         } else {
@@ -155,6 +144,7 @@ export function createHomeCore(host, {
             const stage = scene.size();
             placements = composeHome({ width: stage.width, height: stage.height, blocks: list, saved: persisted.saved });
         }
+        lastPlacements = placements;
         scene.root.classList.toggle('stme-home-scroll', flowMode);
         const css = homeCss(resolveTokens({ doc, win }));
         const wanted = new Set(placements.map(p => p.id));
@@ -174,9 +164,10 @@ export function createHomeCore(host, {
                 blocks.set(placement.id, entry);
                 scene.blocksLayer.append(entry.dom.el);
                 restoreFocus(focus, entry.dom.el);
-                bindDrag(placement.id, entry);
             }
             entry.placement = placement;
+            // Способ движения зависит от раскладки: при смене (окно стало узким) блок перевязывается.
+            if (entry.flow !== flowMode) { entry.detach?.(); interaction.bind(placement.id, entry); entry.flow = flowMode; }
             entry.dom.place(placement.x, placement.y);
             await scene.setBody(placement.id, { html: blockHtml(placement, data), width: placement.w, height: placement.h, css });
         }
