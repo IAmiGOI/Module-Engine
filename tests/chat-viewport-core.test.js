@@ -37,7 +37,7 @@ function buildEngine({ messages = [], heightByHtml = new Map(), glAvailable = tr
         if (key === 'class') calls.classChanges.push(null);
         return true;
     });
-    engine.buses.services.register('dom.append', ({ parent, child }) => { calls.append.push({ parent: parent?.__id ?? parent, child: child?.__id ?? child }); return true; });
+    engine.buses.services.register('dom.append', ({ parent, child }) => { calls.append.push({ parent: parent?.__id ?? parent, child: child?.__id ?? child, el: child }); return true; });
     engine.buses.services.register('dom.remove', ({ node }) => { calls.domRemove.push(node.__id); return true; });
     // Один общий "родитель канваса" — тот же узел, что `ensureGlyphBg()` в
     // `cores/ui/chat-viewport.js` вешает через `dom.parentElement` на
@@ -71,6 +71,11 @@ function buildEngine({ messages = [], heightByHtml = new Map(), glAvailable = tr
     }));
 
     engine.buses.services.register('stChat.messages', () => messages);
+    // Родные кнопки сообщения ST (панель действий): что «доступно» и куда нажали.
+    const nativeAvailable = { hasNative: true, available: ['hide', 'embed', 'prompt'] };
+    engine.buses.services.register('stChat.nativeActions', () => nativeAvailable);
+    engine.buses.services.register('stChat.triggerNative', p => { (calls.triggerNative ??= []).push(p); return true; });
+    engine.buses.services.register('stChat.setHidden', p => { (calls.setHidden ??= []).push(p); return true; });
     engine.buses.services.register('stChat.formatMessage', ({ mesid }) => `<p>${messages.find(m => m.mesid === mesid)?.text}</p>`);
     engine.buses.services.register('stChat.container', () => makeEl('div'));
     engine.buses.services.register('stChat.deleteMessage', p => { calls.deleteMessage.push(p); return true; });
@@ -137,7 +142,7 @@ function buildEngine({ messages = [], heightByHtml = new Map(), glAvailable = tr
     const observers = [];
     engine.buses.services.register('dom.observeResize', ({ el, handler }) => { observers.push({ el, handler, active: true }); return true; });
     engine.buses.services.register('dom.unobserveResize', ({ el, handler }) => { for (const item of observers) if (item.el === el && item.handler === handler) item.active = false; return true; });
-    return { engine, calls, fireStEvent, messageFooterCalls, messages, observers, setChromeHeight: value => { chromeHeightNow = value; } };
+    return { nativeAvailable, engine, calls, fireStEvent, messageFooterCalls, messages, observers, setChromeHeight: value => { chromeHeightNow = value; } };
 }
 
 function buildCore(engineBundle, coreOptions) {
@@ -233,6 +238,27 @@ test('resizing the viewport calls webglChat.resize with PHYSICAL (devicePixelRat
 
     await core.setViewport({ viewportWidth: 400, viewportHeight: 250 });
     assert.deepEqual(bundle.calls.resize.at(-1), { width: 800, height: 500 });
+});
+
+test('changing only the WIDTH re-rasterizes the visible bodies at the new width and resizes their mirrors (side-margin drag: pictures/text used to keep the old width and run off the window)', async () => {
+    const heightByHtml = new Map([['<p>a</p>', 100]]);
+    const bundle = buildEngine({ messages: [msg('0', 'a')], heightByHtml });
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0 });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, width: 300, height: 200 });
+    assert.equal(bundle.calls.rasterize.length, 1);
+    assert.equal(bundle.calls.rasterize[0].width, 280);
+    const mirror = bundle.calls.append.length; // the mirror was appended once
+    assert.ok(mirror >= 1);
+
+    await core.setViewport({ viewportWidth: 200 });
+
+    assert.equal(bundle.calls.rasterize.length, 2, 'the body must be rasterized again for the new width');
+    assert.equal(bundle.calls.rasterize.at(-1).width, 180);
+    assert.equal(bundle.calls.uploadTexture.length, 2);
+    assert.equal(bundle.calls.append.length, mirror, 'the mirror is reused, not recreated');
+    const mirrorEl = bundle.calls.append.find(call => call.el?.props?.class === 'stme-chat-viewport-mirror')?.el;
+    assert.ok(mirrorEl, 'the mirror element was found');
+    assert.equal(mirrorEl.props.style.width, '180px', 'the mirror follows the new width, otherwise its measured height is for the old wrapping');
 });
 
 test('a second render() with UNCHANGED message text does not re-rasterize or re-upload — only the diff matters, not that render ran again', async () => {
@@ -400,7 +426,8 @@ test('a visible message gets its chrome mounted and appended to the chromeContai
     await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, chromeContainer: CHROME_CONTAINER, width: 300, height: 200 });
 
     const appendedToChrome = bundle.calls.append.filter(a => a.parent === 'chrome-container');
-    assert.equal(appendedToChrome.length, 2, 'both visible messages (0 and 1) get their own chrome row appended once');
+    // Первым в слой хрома ложится панель действий сообщения (одна на вьюпорт), дальше — по строке на сообщение.
+    assert.equal(appendedToChrome.length, 1 + 2, 'the message tools panel + both visible messages (0 and 1), each appended once');
 });
 
 test('re-rendering with the SAME visible messages does not re-append chrome (mounted once, updated via signals afterward)', async () => {
@@ -421,7 +448,7 @@ test('scrolling a message out of the window removes its chrome row from the DOM 
     const bundle = buildEngine({ messages, heightByHtml });
     const core = buildCore(bundle, { prerenderFactor: 1, rowHeight: 100, overscan: 0, createFinalUi: fakeCreateFinalUi() });
     await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, chromeContainer: CHROME_CONTAINER, width: 300, height: 60 });
-    const chromeRootsAppended = bundle.calls.append.filter(a => a.parent === 'chrome-container').map(a => a.child);
+    const chromeRootsAppended = bundle.calls.append.filter(a => a.parent === 'chrome-container').map(a => a.child).slice(1);   // без панели действий
     assert.equal(chromeRootsAppended.length, 1);
 
     await core.setViewport({ scrollTop: 400 });
@@ -525,7 +552,7 @@ test('a chat change removes the chrome of EVERY row, including ToolCall rows tha
     const bundle = buildEngine({ messages, heightByHtml });
     const core = buildCore(bundle, { rowHeight: 100, overscan: 0, createFinalUi: fakeCreateFinalUi() });
     await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, chromeContainer: CHROME_CONTAINER, width: 300, height: 400 });
-    const chromeRoots = bundle.calls.append.filter(a => a.parent === 'chrome-container').map(a => a.child);
+    const chromeRoots = bundle.calls.append.filter(a => a.parent === 'chrome-container').map(a => a.child).slice(1);   // без панели действий
     assert.equal(chromeRoots.length, 2, 'both the text row and the ToolCall row mount chrome');
 
     bundle.engine.events.emit('st.chatChanged', {});
@@ -628,4 +655,85 @@ test('several header changes in a burst are laid out ONCE, and watching stops wh
     bundle.engine.events.emit('st.chatChanged', {});
     await new Promise(resolve => setTimeout(resolve, 80));
     assert.equal(bundle.observers.some(item => item.active), false, 'no observer outlives its row');
+});
+
+
+// ── панель действий сообщения (по наведению на глиф) ──────────────────────────────────────────────────────────────
+
+async function attachedWithGlyph(overrides = {}) {
+    const heightByHtml = new Map([['<p>a</p>', 100]]);
+    const bundle = buildEngine({ messages: [msg('0', 'a')], heightByHtml, ...overrides });
+    const copies = [];
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0, createFinalUi: fakeCreateFinalUi(), copyText: text => copies.push(text) });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, chromeContainer: CHROME_CONTAINER, width: 300, height: 400 });
+    return { bundle, core, copies };
+}
+
+test('hovering a glyph opens the tools panel next to it with the native actions ST offers for that message (plus Copy), placed at the glyph top', async () => {
+    const { core } = await attachedWithGlyph();
+    assert.equal(core.messageTools().open, false);
+    await core.hoverAt({ x: 290, y: 20 });
+    const tools = core.messageTools();
+    assert.equal(tools.open, true);
+    assert.deepEqual(tools.tools, ['hide', 'prompt', 'embed', 'copy']);
+    assert.equal(tools.target, '0');
+    assert.equal(tools.y, 0, 'at the top of the glyph');
+    assert.equal(tools.x, 300, 'flush against the right edge of the plate (viewport width 300)');
+});
+
+test('the panel is called and held only by the right edge of the plate: the middle of the glyph neither opens nor keeps it', async () => {
+    const { core } = await attachedWithGlyph();
+    await core.hoverAt({ x: 40, y: 20 });
+    assert.equal(core.messageTools().open, false, 'middle of the glyph — no panel');
+    await core.hoverAt({ x: 290, y: 20 });
+    assert.equal(core.messageTools().open, true, 'right edge — opens');
+    await core.hoverAt({ x: 40, y: 20 });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(core.messageTools().open, false, 'cursor left the edge — panel hides after the grace period');
+});
+
+test('leaving the glyph hides the panel after a short grace period (time to move onto the panel), coming back cancels it', async () => {
+    const { core } = await attachedWithGlyph();
+    await core.hoverAt({ x: 290, y: 20 });
+    await core.hoverAt({ x: 900, y: 20 });      // far right — outside the zone
+    assert.equal(core.messageTools().open, true, 'still open during the grace period');
+    await core.hoverAt({ x: 290, y: 20 });      // back over the glyph
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(core.messageTools().open, true, 'coming back cancelled the hide');
+    core.hoverLeave();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(core.messageTools().open, false);
+});
+
+test('a tool with a native button clicks THAT button through the service; Copy copies the message text itself', async () => {
+    const { bundle, core, copies } = await attachedWithGlyph();
+    await core.hoverAt({ x: 290, y: 20 });
+    await core.messageTools().run('embed');
+    assert.deepEqual(bundle.calls.triggerNative, [{ mesid: '0', action: 'embed' }]);
+    await core.messageTools().run('copy');
+    assert.deepEqual(copies, ['a']);
+    assert.equal(bundle.calls.triggerNative.length, 1, 'copy does not go through ST');
+});
+
+test('for a message ST never rendered, hide/include still works — done by us through stChat.setHidden', async () => {
+    const heightByHtml = new Map([['<p>a</p>', 100]]);
+    const { bundle, core } = await attachedWithGlyph({ heightByHtml });
+    bundle.nativeAvailable.hasNative = false;
+    bundle.nativeAvailable.available = [];
+    await core.hoverAt({ x: 290, y: 20 });
+    assert.deepEqual(core.messageTools().tools, ['hide', 'copy']);
+    await core.messageTools().run('hide');
+    assert.deepEqual(bundle.calls.setHidden, [{ mesid: '0', hidden: true }]);
+    assert.equal(bundle.calls.triggerNative, undefined, 'no native button for a message ST did not render');
+});
+
+test('a message hidden from prompts offers "include" instead of "exclude", its body is drawn dimmed', async () => {
+    const heightByHtml = new Map([['<p>a</p>', 100]]);
+    const bundle = buildEngine({ messages: [{ ...msg('0', 'a'), isSystem: true }], heightByHtml });
+    bundle.nativeAvailable.available = ['unhide'];
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0, createFinalUi: fakeCreateFinalUi() });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, chromeContainer: CHROME_CONTAINER, width: 300, height: 400 });
+    await core.hoverAt({ x: 290, y: 20 });
+    assert.deepEqual(core.messageTools().tools, ['unhide', 'copy']);
+    assert.equal(bundle.calls.drawFrame.at(-1)[0].opacity, 0.5, 'dimmed body');
 });

@@ -40,7 +40,7 @@ function makeFakeGl() {
     const gl = {
         VERTEX_SHADER: 'VERTEX_SHADER', FRAGMENT_SHADER: 'FRAGMENT_SHADER',
         COMPILE_STATUS: 'COMPILE_STATUS', LINK_STATUS: 'LINK_STATUS',
-        BLEND: 'BLEND', SRC_ALPHA: 'SRC_ALPHA', ONE_MINUS_SRC_ALPHA: 'ONE_MINUS_SRC_ALPHA',
+        BLEND: 'BLEND', ONE: 'ONE', SRC_ALPHA: 'SRC_ALPHA', ONE_MINUS_SRC_ALPHA: 'ONE_MINUS_SRC_ALPHA',
         ARRAY_BUFFER: 'ARRAY_BUFFER', DYNAMIC_DRAW: 'DYNAMIC_DRAW', FLOAT: 'FLOAT',
         TEXTURE_2D: 'TEXTURE_2D', TEXTURE0: 'TEXTURE0', RGBA: 'RGBA', UNSIGNED_BYTE: 'UNSIGNED_BYTE',
         TEXTURE_WRAP_S: 'TEXTURE_WRAP_S', TEXTURE_WRAP_T: 'TEXTURE_WRAP_T', CLAMP_TO_EDGE: 'CLAMP_TO_EDGE',
@@ -60,7 +60,7 @@ function makeFakeGl() {
         getAttribLocation: (_p, name) => name,
         getUniformLocation: (_p, name) => name,
         enable: () => {},
-        blendFunc: () => {},
+        blendFuncSeparate: (...args) => calls.push(['blendFuncSeparate', ...args]),
         viewport: (...args) => calls.push(['viewport', ...args]),
         createTexture: () => ({ __texture: textureCounter += 1 }),
         deleteTexture: texture => calls.push(['deleteTexture', texture]),
@@ -97,6 +97,13 @@ test('attach() sizes the canvas drawing buffer and sets up the GL program', () =
     assert.equal(canvas.width, 321);
     assert.equal(canvas.height, 200);
     assert.deepEqual(calls.find(c => c[0] === 'viewport'), ['viewport', 0, 0, 321, 200]);
+});
+
+test('attach() blends colour normally but keeps the canvas alpha UNSQUARED (premultiplied canvas: alpha a, colour c·a — not a·a, which made text edges glow)', () => {
+    const canvas = makeFakeCanvas();
+    const { gl, calls } = makeFakeGl();
+    webglRendererOperations.attach(canvas, 100, 100, () => gl);
+    assert.deepEqual(calls.find(c => c[0] === 'blendFuncSeparate'), ['blendFuncSeparate', 'SRC_ALPHA', 'ONE_MINUS_SRC_ALPHA', 'ONE', 'ONE_MINUS_SRC_ALPHA']);
 });
 
 test('uploadTexture() creates one texture per NEW textureId, and reuses it on a second upload for the same id (e.g. a streaming re-rasterization)', () => {

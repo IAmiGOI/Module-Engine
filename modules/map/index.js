@@ -993,7 +993,7 @@ export function createMapModule(host, {
      * "Маршруты должны... быть более отличимыми") — noticeably THICKER than
      * a region border (`DEFAULT_STROKE_WIDTH`) and dashed, so a route reads
      * as a distinct kind of line rather than "a border that goes nowhere,"
-     * on top of already using its own `--stme-ok` color (panel.css) instead
+     * on top of already using its own `--stme-ok` color (styles/) instead
      * of the border's accent color. Divided by zoom just like border widths
      * (ROADMAP.md 5.62) — same reasoning, a fixed fraction of the 0..1 space
      * would otherwise get visibly thicker/dash-longer the more zoomed in.
@@ -1133,7 +1133,7 @@ export function createMapModule(host, {
      */
     /**
      * `class: 'stme-map-tile-image'` (ROADMAP.md 5.58) is what actually
-     * kills the seam now — `image-rendering: pixelated` in panel.css. The
+     * kills the seam now — `image-rendering: pixelated` in styles/. The
      * real cause was never the tile CONTENT (that was fixed for real in
      * 5.56/5.57) — it's the BROWSER's own smoothing of each independently
      * rasterized `<image>` as it scales it onto the canvas, blurring each
@@ -1234,7 +1234,7 @@ export function createMapModule(host, {
      * multi-field form regularly is). Whichever direction has MORE room is
      * picked, and `max-height` is capped to exactly that room so the popup
      * can never extend past the canvas edge — if content still doesn't fit,
-     * its own `overflow-y: auto` (panel.css) scrolls internally instead of
+     * its own `overflow-y: auto` (styles/) scrolls internally instead of
      * clipping invisibly. Horizontal position is `clamp()`ed between fixed
      * pixel margins (not just `left: X%` + `translateX(-50%)`) so a node
      * near the left/right edge doesn't push the card half off-canvas either.

@@ -1,0 +1,44 @@
+/* ===== Панель действий сообщения (cores/ui/chat-viewport/message-tools.js) =====
+   По наведению на глиф справа от него выезжает продолжение плиты: тот же фон и контур, что у `.stme-chat-viewport-glyph-bg` (одна формула,
+   тот же `--stme-glyph-opacity`), вплотную к ней. Плита под курсором срастается с панелью (`.stme-glyph-joined`: справа без контура и скруглений),
+   так что видна одна фигура. Кнопки — те же круглые `.stme-icon-button` 26px с кольцом акцента, что действия в шапке сообщения; идут столбцами
+   (`grid-auto-flow: column`), число строк, ширину и высоту ставит JS по видимой части глифа (`computeToolsLayout`). Анимации нет — только `opacity`. */
+.stme-msg-tools {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 26px;
+    align-content: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border: 1.5px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-left: 0;
+    border-radius: 0 var(--stme-radius-card, 10px) var(--stme-radius-card, 10px) 0;
+    background: color-mix(in srgb, color-mix(in srgb, #fff 9%, var(--stme-surface)) var(--stme-glyph-opacity, 78%), transparent);
+    pointer-events: auto;
+    z-index: 4;
+    transition: opacity .12s ease;
+}
+.stme-msg-tools .stme-msg-tools-btn {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-width: 1px;
+    border-radius: 999px;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+.stme-chat-viewport-glyph-bg.stme-glyph-joined {
+    border-right-color: transparent;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+/* Значок «скрыто от промптов» рядом с именем (как у родного чата ST). */
+.stme-message-ghost { opacity: .7; font-size: 12px; align-self: center; }

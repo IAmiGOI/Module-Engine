@@ -1,0 +1,198 @@
+/* --- Док запуска (index.js's addLauncherDock) ------------------------------
+   Заменил top-bar иконку: у стороннего расширения «ProbablyTooManyTabs»
+   реальный `#top-bar` (и весь top-settings-holder) уходит в
+   `display: none !important` целиком — не выборочно, а весь контейнер, так
+   что ЛЮБАЯ иконка, вставленная туда, пропадает вместе с ним (проверено по
+   их же `style.css`). Этот док не зависит ни от одного ST-контейнера вообще
+   — `position: fixed` прямо на `<body>`, поэтому виден и с этим расширением,
+   и без него, одним и тем же кодом.
+   Тот же «стеклянный» рецепт, что уже есть у `.stme-floating-panel`
+   (blur+saturate, полупрозрачный `--SmartThemeBlurTintColor`, мягкая тень) —
+   просто в форме узкой пилюли на 5 мест по высоте, а не окна.
+   Размеры — от исходных +15% (40→46 / 32→37 / 6→7 / 8→9 / 15→17).
+
+   **Выезжает по наведению — через СТАЦИОНАРНУЮ зону, не сам на себе.**
+   Первая версия вешала `:hover` прямо на пилюлю, которая сама же и уезжала
+   от курсора при наведении — как только она отъезжала настолько, что мышь
+   оказывалась уже вне её, `:hover` снимался, пилюля ехала обратно под мышь,
+   `:hover` срабатывал снова — видимая вибрация взад-вперёд (баг, пойманный
+   живьём). Раздельно: `.stme-launcher-dock-zone` — invisible, НЕПОДВИЖНЫЙ
+   `position: fixed` хитбокс у самого края, с запасом покрывающий что покой
+   (щель 10px), что раскрытое положение (right:16px + сама пилюля); `:hover`/
+   `:focus-within` вешаются на НЕЁ, а едет уже дочерняя пилюля
+   (`position: absolute` внутри зоны) — зона с места не двигается, значит и
+   вибрировать нечему.
+   `--stme-dock-peek` (10px) — сколько видно в покое; на этой же щели лежит
+   мерцающая синяя линия (`::before`), которая при раскрытии полностью
+   растворяется (`opacity` transition), а не просто едет вместе с пилюлей —
+   так и просили: индикатор ЗАКРЫТОГО состояния, а не постоянная деталь. */
+.stme-launcher-dock-zone {
+    position: fixed;
+    right: 0;
+    bottom: 14%; /* нижняя треть экрана, но с запасом от самого края */
+    z-index: 6950;
+    width: 80px;
+    height: 260px;
+}
+.stme-launcher-dock {
+    --stme-dock-peek: 10px;
+    position: absolute;
+    right: calc(-1 * (46px - var(--stme-dock-peek)));
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+    width: 46px;
+    padding: 9px 0;
+    /* ЗАПАСНЫЕ значения перед color-mix: старый Android WebView (тот же, что
+       не понял `inset`) не знает color-mix (Chrome <111) и выбрасывает ОБА
+       объявления разом, если fallback не объявить отдельно — пилюля
+       становилась полностью прозрачной («вообще не видно»). Каскад: старый
+       браузер берёт первую строку, современный — вторую. */
+    border: 2px solid rgba(141, 168, 255, .45);
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 45%, transparent);
+    /* Больше половины ширины — гарантированно даёт полностью скруглённые
+       (полукруглые) верх и низ независимо от того, сколько мест реально
+       занято, без пересчёта под высоту. */
+    border-radius: 999px;
+    /* Стекло (фон + блюр) переехало на статичный ::after ниже: backdrop-filter
+       НЕ должен жить на самом доке — пилюля содержит анимированную полоску,
+       и блюр в одном слое с ней пересчитывался бы каждый кадр (~80% GPU,
+       живые замеры 2026-09-09; правь слой, не возвращай блюр сюда). */
+    background: none;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+    overflow: hidden;
+    transition: right .25s ease;
+}
+.stme-launcher-dock-zone:hover .stme-launcher-dock,
+.stme-launcher-dock-zone:focus-within .stme-launcher-dock,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock {
+    right: 16px;
+}
+/* Полоска на краю в закрытом состоянии — та же часть пилюли, что торчит из-за
+   края экрана, цвет = состояние Светофора активности (cores/ui/activity-light.js):
+   Ядро кладёт класс stme-light-<state> на ЗОНУ, здесь цветом становится
+   CSS-переменная --stme-light. Переливка — старый shimmer (background-position
+   по градиенту), возвращённый как просил архитектор; мигание (blink) — только
+   у notify.
+
+   ПОЧЕМУ ПЕРЕЛИВКА БОЛЬШЕ НЕ ЖРЁТ GPU (живые замеры 2026-09-09): дорога была
+   не переливка, а её СОСЕДСТВО с backdrop-filter — любой repaint внутри
+   элемента с блюром заставлял композитор пересчитывать блюр каждый кадр
+   (~80% GPU; сворачивание браузера снимало — rAF стоит). Поэтому СТЕКЛО
+   с блюром вынесено на ОТДЕЛЬНЫЙ статичный слой ::after (z-index:-1 ниже):
+   он не анимируется вовсе, его блюр-текстура считается один раз и кэшится,
+   а полоска переливается поверх, не задевая его.
+   История провала первой попытки: правила для блюр-слоя и бегущего блика
+   ОБА описывали ::after — селекторы склеились, блюр оказался на двигающемся
+   ползунке, нагрузка не ушла (диагноз пользователя: «считается вместе
+   с ползунком»). */
+.stme-launcher-dock::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    /* БЛЮР ВЕРНУЛСЯ (09.09) — итоговый диагноз оказался НЕ backdrop-filter,
+       а сам факт бесконечного `animation` у ::before (см. его doc-comment):
+       перепробовано пять заходов (свойство/тайминг/блюр/слои), помогло
+       только полное отсутствие бесконечного цикла. Сейчас ::before
+       статичен (переливка не бежит), единственная анимация рядом —
+       КОНЕЧНОЕ 3-кратное мигание notify (не infinite, ~2.7s и
+       заканчивается) — так что блюру рядом больше нечего пересчитывать
+       вечно, можно возвращать. Если после проверки GPU снова начнёт расти
+       именно во время notify — тогда порядок причин был обратный, и блюр
+       придётся снова убрать. ЗАПАСНЫЕ значения перед color-mix — см.
+       комментарий у border выше. */
+    background: rgba(28, 30, 38, .82);
+    background: color-mix(in srgb, var(--stme-surface) 72%, transparent);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    z-index: -1;
+}
+.stme-launcher-dock::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10%;
+    bottom: 10%;
+    width: 4px;
+    border-radius: 999px;
+    /* НАШЁЛСЯ РЕАЛЬНЫЙ БАГ (не в анимации): здесь СТОЯЛО `--stme-light:
+       #5b8dff;` — локальное объявление ПРЯМО на ::before. Custom property
+       с локальным значением НЕ наследуется от родителя вообще — у ::before
+       был свой захардкоженный синий, который .stme-light-working/success/
+       warning/error на РОДИТЕЛЕ (.stme-launcher-dock) физически не мог
+       перебить (наследование просто не участвовало). Поэтому светящийся
+       контур (box-shadow, у него цвет ЗАШИТ отдельно по каждому классу
+       ниже) менял цвет верно, а сама заливка полоски — никогда, даже до
+       всех правок с анимацией. Убрано — теперь ::before честно наследует
+       переменную от .stme-launcher-dock (дефолт ниже) и её же перебивают
+       .stme-light-* правила. Статичный градиент (НЕ анимируется больше сам по себе — см. ниже) —
+       переливка теперь целиком через opacity, тот же compositor-only
+       механизм, что у mигания (`stme-dock-blink`), уже доказанно дешёвого
+       (0% GPU). Раньше "переливалось" через `animation-name:
+       stme-dock-shimmer` на `background-position`: PAINT-свойство —
+       браузер обязан перерисовывать растр градиента КАЖДЫЙ кадр, что бы ни
+       происходило вокруг (слои/изоляция это не лечат, will-change/contain
+       из прошлой правки — мимо цели). `background-position` сам пользователь
+       и вычислил как виновника, сравнив с миганием на opacity — тот вывод
+       и применён здесь напрямую. */
+    /* АНИМАЦИЯ УБРАНА СОВСЕМ (09.09, четвёртая попытка) — реальный вывод
+       пользователя, проверенный на живом стенде: заглушка со СТАТИЧНЫМ
+       цветом (никакого `animation`, никакого `@keyframes`) полностью
+       снимает нагрузку. Три предыдущих захода (смена свойства
+       background-position→opacity, смена тайминга ease-in-out→steps(90),
+       удаление backdrop-filter у соседа) НЕ помогли, потому что все они
+       сохраняли САМ ФАКТ бесконечно тикающего `animation` на этом
+       элементе — а именно он держит браузер в режиме "перерисовывать
+       каждый кадр" независимо от того, ЧТО и КАК анимируется. Цвет теперь
+       меняется ТОЛЬКО при смене состояния (класс `stme-light-*`), обычным
+       `transition`, не бесконечным циклом — "светофор" стал в буквальном
+       смысле светофором: держит цвет, не мигает и не переливается. */
+    background: linear-gradient(180deg, var(--stme-light), color-mix(in srgb, var(--stme-light) 55%, #ffffff), color-mix(in srgb, var(--stme-light) 70%, #000000), var(--stme-light));
+    box-shadow: 0 0 10px var(--stme-light);
+    opacity: 1;
+    /* ПЯТАЯ попытка (09.09, will-change+translateZ(0) на самом ::before,
+       не на соседнем блюре) — тоже НЕ помогла: те же 60-80%, при этом
+       paint flashing не показывал НИЧЕГО (opacity — честно чистый
+       compositor-only, без paint) — то есть дело не в paint и не в
+       layer-boundary, раз оба уже исключены по очереди. На этой машине
+       перепробовано: свойство, тайминг, блюр, изоляция слоем — помогает
+       ТОЛЬКО полное отсутствие бесконечного `animation`. Дальше техниками
+       внутри CSS не лечится — оставлено статично, см. п.4 в истории выше. */
+    transition: background .35s ease, box-shadow .35s ease, opacity .35s ease;
+}
+/* idle — синий (дефолт выше); дальше — состояния Ядра. Переменная ставится
+   на САМ док: её наследуют ::before (полоска) — цвет светофора единый. */
+.stme-launcher-dock { --stme-light: #5b8dff; }
+.stme-light-working .stme-launcher-dock { --stme-light: var(--stme-status-working); }
+.stme-light-success .stme-launcher-dock { --stme-light: var(--stme-status-success); }
+.stme-light-warning .stme-launcher-dock { --stme-light: #d9c545; }
+.stme-light-error   .stme-launcher-dock { --stme-light: var(--stme-status-error); }
+.stme-light-working .stme-launcher-dock::before { box-shadow: 0 0 10px rgba(232, 161, 60, .75); }
+.stme-light-success .stme-launcher-dock::before { box-shadow: 0 0 10px rgba(79, 174, 127, .75); }
+.stme-light-warning .stme-launcher-dock::before { box-shadow: 0 0 10px rgba(217, 197, 69, .75); }
+.stme-light-error   .stme-launcher-dock::before { box-shadow: 0 0 12px rgba(229, 69, 63, .85); }
+/* Уведомление — было единственное МИГАНИЕ, теперь тоже статичный белый
+   (та же причина, см. doc-comment у ::before выше — ЛЮБОЙ бесконечный
+   `animation` рядом с этим доком грузит GPU, независимо от свойства). */
+.stme-light-notify .stme-launcher-dock { --stme-light: #ffffff; }
+.stme-light-notify .stme-launcher-dock::before {
+    box-shadow: 0 0 14px rgba(255, 255, 255, .95);
+    /* КОНЕЧНОЕ мигание — не `infinite`. Именно бесконечный цикл (не
+       конкретное свойство/тайминг/блюр) грузил GPU — 3 коротких мигания
+       (~2.7s) физически ЗАВЕРШАЮТСЯ и оставляют полоску статичной белой
+       до конца NOTIFY_HOLD_MS (5000ms, cores/ui/activity-light.js), а не
+       тикают вечно. */
+    animation: stme-dock-blink .9s steps(1) 3;
+}
+/* При наведении/раскрытии прячем полоску. Блюр-слой ::after НЕ
+   трогаем: это СТЕКЛО пилюли, оно видно всегда — раньше здесь был селектор
+   ::after, потому что ::after был полоской-бликом; теперь это стекло. */
+.stme-launcher-dock-zone:hover .stme-launcher-dock::before,
+.stme-launcher-dock-zone:focus-within .stme-launcher-dock::before,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before {
+    opacity: 0;
+}

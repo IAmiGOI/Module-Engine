@@ -1,0 +1,11 @@
+/* Memory Graph: боковая панель в стиле модуля Music — плоская, без заголовков и рамок: управление рядами, ползунки рядом. */
+.stme-mg-flat { gap: 8px; }
+.stme-mg-flat .stme-row { align-items: center; gap: 8px; }
+.stme-mg-slider { flex: 1 1 150px; min-width: 130px; gap: 2px; margin: 0; }
+.stme-mg-slider input[type="range"] { margin: 0; }
+.stme-mg-progress-row { display: flex; align-items: center; gap: 8px; }
+.stme-mg-progress-row .stme-progress { flex: 1; min-width: 0; }
+.stme-mg-node { display: flex; flex-direction: column; gap: 6px; }
+.stme-mg-node .stme-row > .stme-field { flex: 1 1 0; }
+.stme-mg-flat .stme-memory-graph-status { margin: 0; }
+.stme-mg-flat > .stme-module-hint { flex: none; }

@@ -1,0 +1,158 @@
+/* --- Плавающее окно модуля (Tracker HUD) ---------------------------------- */
+/*
+   Постоянное окно поверх страницы, в отличие от .stme-floating — потока
+   временных сообщений. Показывает то, что пришло НА ШИНУ: трекер публикует
+   значение, а окно его читает. В промпт при этом не попадает ничего.
+*/
+.stme-floating-panel {
+    position: fixed;
+    /* Место по умолчанию, пока пользователь не перетащил окно сам. Как только
+       он это сделает, инлайновые left/top перебьют — они специфичнее. */
+    right: 16px;
+    bottom: 16px;
+    z-index: 6900;
+    display: flex;
+    flex-direction: column;
+    /* Изменение размера — родное браузерное, без своей рамки-хватки.
+       overflow: hidden обязателен: без него ручка resize не появляется. */
+    resize: both;
+    overflow: hidden;
+    min-width: 210px;
+    min-height: 44px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--stme-surface) 94%, transparent);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+    color: var(--stme-text);
+    font-family: var(--mainFontFamily, inherit);
+    font-size: 14px;
+}
+/* Когда позицию задали перетаскиванием, правый/нижний якорь надо снять —
+   иначе окно растягивается между двумя противоположными краями. */
+.stme-floating-panel[style*="left"] { right: auto; }
+.stme-floating-panel[style*="top"] { bottom: auto; }
+.stme-floating-panel-head {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 8px;
+    cursor: grab;
+    touch-action: none; /* иначе на тач-экране перетаскивание съедает прокрутка страницы */
+    user-select: none;
+    padding: 8px 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--stme-border) 55%, transparent);
+    background: linear-gradient(105deg, var(--stme-surface), color-mix(in srgb, var(--stme-surface) 86%, var(--stme-accent)));
+    border-radius: 10px 10px 0 0;
+}
+.stme-floating-panel-head:active { cursor: grabbing; }
+.stme-floating-panel-head strong { flex: 1; color: var(--stme-accent); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
+.stme-floating-panel-grip { flex-shrink: 0; opacity: .45; font-size: 12px; line-height: 1; }
+.stme-floating-panel-btn {
+    flex-shrink: 0;
+    width: 20px; height: 20px;
+    border: 0; border-radius: 5px;
+    background: none;
+    color: inherit;
+    opacity: .55;
+    line-height: 1;
+    cursor: pointer;
+}
+.stme-floating-panel-btn:hover { opacity: 1; background: rgba(255, 255, 255, .08); }
+/* position: relative — так EdgeDrawer (absolute, top/right/bottom:0) якорится
+   на теле окна, а не на весь .stme-floating-panel (что накрыло бы и шапку). */
+/* `flex: 1; min-height: 0` (ROADMAP.md 5.49) — lets the body actually fill
+   whatever definite height the PANEL has (the map's fullscreen-ish
+   `--map` variant, or any panel a user has resized taller) rather than
+   collapsing to its own content's height regardless of the panel's real
+   size. A no-op for small utility panels that have no definite height of
+   their own to begin with (their height stays content-driven either way). */
+.stme-floating-panel-body { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 9px 10px; overflow: auto; flex: 1; min-height: 0; }
+/* Своё `display` у класса бьёт браузерное правило для [hidden] при равной
+   специфичности — без этой строки свойство hidden ставилось, а окно
+   оставалось развёрнутым. Та же ловушка уже задокументирована у оверлея
+   .stmeBeta-fullscreen[hidden]; здесь она повторилась. */
+.stme-floating-panel-body[hidden] { display: none !important; }
+/* Свёрнутое окно не должно тянуться вниз пустотой и не нуждается в ручке. */
+.stme-floating-panel:has(> .stme-floating-panel-body[hidden]) { height: auto !important; resize: none; }
+
+/* Корень hud()-дерева Модуля «Карта» — ВНЕ скоупа .stme-panel (мостится
+   прямо в document.body, как у Ядра «Картинка»/графа). Токены на :root
+   (styles/tokens/), поэтому color-mix() ниже пустой переменной не получает. */
+.stme-map-hud-root {
+    accent-color: var(--stme-accent);
+}
+/* `.menu_button`/`.text_pole` styling in panel.css is scoped to `.stme-panel`
+   (see its own comment: ST's raw defaults collapse a multi-word label to a
+   narrow column and fill white on hover) — this window lives OUTSIDE that
+   scope (mounted straight to `<body>`, like the graph/picture windows
+   before it), so EVERY `Button()`/`Field()` in it was silently falling back
+   to ST's own ugly defaults the whole time (owner: "Боковая панель имеет
+   убогий интерфейс"). Same fix as `.stme-memory-graph-panel-root`'s own
+   block below — copied verbatim, not reinvented, so a future shared style
+   change only needs applying in one more place, not devising a new one. */
+.stme-map-hud-root .menu_button {
+    width: auto;
+    flex-shrink: 0;
+    padding: 7px 18px;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 70%, transparent);
+    border-radius: var(--stme-radius-sm);
+    background: transparent;
+    color: var(--stme-text);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.25;
+    transition: border-color .15s ease, color .15s ease;
+}
+.stme-map-hud-root .menu_button:not(.disabled):not([disabled]):hover,
+.stme-map-hud-root .menu_button:not(.disabled):not([disabled]).active,
+.stme-map-hud-root .menu_button:not(.disabled):not([disabled]):active,
+.stme-map-hud-root .menu_button:not(.disabled):not([disabled]):focus {
+    background-color: transparent;
+}
+.stme-map-hud-root .menu_button:not(.disabled):not([disabled]):hover {
+    border-color: var(--stme-accent);
+    color: var(--stme-accent);
+    animation: stme-pulse 1.5s ease-out infinite;
+}
+.stme-map-hud-root .menu_button:not(.disabled):not([disabled]):active { border-color: var(--stme-accent); animation: none; }
+.stme-map-hud-root .menu_button:focus-visible { outline: 2px solid var(--stme-accent); outline-offset: 2px; }
+.stme-map-hud-root .menu_button.stme-danger { border-color: var(--stme-danger); color: var(--stme-text); }
+.stme-map-hud-root .menu_button.stme-danger:not(.disabled):not([disabled]):hover {
+    background-color: transparent;
+    border-color: var(--stme-danger-bright);
+    color: var(--stme-danger-bright);
+    animation-name: stme-pulse-danger;
+}
+.stme-map-hud-root .menu_button.stme-ok { border-color: var(--stme-ok); }
+.stme-map-hud-root .menu_button.stme-ok:not(.disabled):not([disabled]):hover {
+    background-color: transparent;
+    border-color: var(--stme-ok-bright);
+    color: var(--stme-ok-bright);
+    animation-name: stme-pulse-ok;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-map-hud-root .menu_button:hover { animation: none; }
+}
+.stme-map-hud-root input.text_pole,
+.stme-map-hud-root select.text_pole,
+.stme-map-hud-root textarea.text_pole {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--stme-border) 70%, transparent);
+    border-radius: var(--stme-radius-sm);
+    background: color-mix(in srgb, #fff 7%, var(--stme-surface));
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+.stme-map-hud-root input.text_pole:focus,
+.stme-map-hud-root select.text_pole:focus,
+.stme-map-hud-root textarea.text_pole:focus {
+    border-color: var(--stme-accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--stme-accent) 28%, transparent);
+    outline: none;
+}
+.stme-map-hud-root ::placeholder { opacity: .45; }
+

@@ -331,3 +331,50 @@ test('a Модуль without the right to stChat.setHidden is refused before the
     assert.equal(result.ok, false);
     assert.equal(context.chat[0].is_system, false, 'the Гейт must block the write, not just the response');
 });
+
+// ── родные кнопки сообщения ST (панель действий вьюпорта) ─────────────────────────────────────────────────────────
+
+function withFakeMessageDom(buttons, run) {
+    const previous = globalThis.document;
+    const clicks = [];
+    const nodes = Object.fromEntries(Object.entries(buttons).map(([selector, display]) => [selector, { display, click: () => clicks.push(selector) }]));
+    const root = { querySelector: selector => nodes[selector] ?? null };
+    globalThis.document = {
+        querySelector: selector => (selector.includes('mesid="7"') ? root : null),
+        defaultView: { getComputedStyle: el => ({ display: el.display }) },
+    };
+    return Promise.resolve(run(clicks)).finally(() => { globalThis.document = previous; });
+}
+
+function nativeCaller() {
+    const { engine } = buildService([]);
+    return engine.registerCaller('module.probe2', 'modules', { tier: 'community', allowedContracts: ['stChat.nativeActions', 'stChat.triggerNative'] });
+}
+
+test('stChat.nativeActions lists the native buttons ST shows for that message right now (a hidden Prompt or Swipe-picker button is not offered)', async () => {
+    const caller = nativeCaller();
+    await withFakeMessageDom({ '.mes_hide': 'flex', '.mes_unhide': 'none', '.mes_prompt': 'none', '.mes_embed': 'flex', '.mes_create_branch': 'flex' }, async () => {
+        const result = await call(caller, 'stChat.nativeActions', { mesid: '7' });
+        assert.deepEqual(result.value, { hasNative: true, available: ['hide', 'embed', 'branch'] });
+    });
+});
+
+test('stChat.nativeActions says there is no native message when ST never rendered it', async () => {
+    const caller = nativeCaller();
+    await withFakeMessageDom({ '.mes_hide': 'flex' }, async () => {
+        const result = await call(caller, 'stChat.nativeActions', { mesid: '99' });
+        assert.deepEqual(result.value, { hasNative: false, available: [] });
+    });
+});
+
+test('stChat.triggerNative clicks the native button (ST does the real work) and refuses a button ST is not showing', async () => {
+    const caller = nativeCaller();
+    await withFakeMessageDom({ '.mes_embed': 'flex', '.mes_prompt': 'none' }, async clicks => {
+        assert.equal((await call(caller, 'stChat.triggerNative', { mesid: '7', action: 'embed' })).value, true);
+        assert.deepEqual(clicks, ['.mes_embed']);
+        assert.equal((await call(caller, 'stChat.triggerNative', { mesid: '7', action: 'prompt' })).value, false, 'hidden by ST — no click');
+        assert.equal((await call(caller, 'stChat.triggerNative', { mesid: '7', action: 'nonsense' })).value, false);
+        assert.equal((await call(caller, 'stChat.triggerNative', { mesid: '8', action: 'embed' })).value, false, 'no native message');
+        assert.deepEqual(clicks, ['.mes_embed']);
+    });
+});

@@ -63,6 +63,12 @@ export function createBootScreen(doc = globalThis.document) {
         if (timeoutMs) timer = setTimeout(() => finish(), timeoutMs);
     }
 
+    /** Родной сплеш ST ещё может жить (его `hideOverlay` заканчивается позже нас): класс, прячущий его, снимаем, только когда он исчез, — иначе он мелькнул бы под уходящим экраном. Не дольше 2 с. */
+    function releaseSplash(tries = 0) {
+        if (doc.getElementById?.('loader') && tries < 20) { setTimeout(() => releaseSplash(tries + 1), 100); return; }
+        doc.documentElement.classList.remove(ACTIVE_CLASS);
+    }
+
     /** Закрывает экран (плавно). `afterMs` — сколько показать итоговую стадию перед закрытием. */
     function finish({ afterMs = 0 } = {}) {
         if (closed) return;
@@ -70,7 +76,7 @@ export function createBootScreen(doc = globalThis.document) {
         clearTimeout(timer);
         setTimeout(() => {
             root.classList.add('stme-boot-out');
-            setTimeout(() => { root.remove(); doc.documentElement.classList.remove(ACTIVE_CLASS); }, FADE_MS);
+            setTimeout(() => { root.remove(); releaseSplash(); }, FADE_MS);
         }, afterMs);
     }
 

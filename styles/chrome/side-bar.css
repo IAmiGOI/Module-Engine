@@ -1,0 +1,111 @@
+/* ===== Верхняя панель ST → вертикальная боковая панель в левом верхнем углу (владелец) =====
+   Пока включена своя панель набора на широком экране без тача (класс `html.stme-side-bar-active` ставит cores/ui/input-bar/; на телефоне полоса значков остаётся родной): родная полоса значков (`#top-bar`) вписана в левый верхний
+   угол и идёт вдоль левого края окна вертикально, а ВСЕ блоки (`.drawer-content`) раскрываются ВПРАВО от неё. Вид — наш: как пилюля (тот же контур и стекло, что у доков), но монолитная: левой и верхней сторонами вросла в край окна, не выезжает и не двигается.
+   Высота полосы ST (`--topBarBlockSize`) обнуляется — раскладка ST (чат, попапы, тосты) сама перестаёт держать место под верхней полосой.
+   Ширину (`--stme-side-bar-w`) держит в паре `SIDE_BAR_INSET` в libraries/shared/chat-viewport-overlay-math.js (ширина + зазор). */
+html.stme-side-bar-active {
+    --topBarBlockSize: 0px;
+    --stme-side-bar-w: 42px;
+}
+
+/* `#top-bar` у ST — пустой фон-подложка полосы, а значки лежат в СОСЕДНЕМ `#top-settings-holder`: подложку убираем, а сам держатель значков
+   делаем панелью (у ST у него `position: relative; width: var(--sheldWidth); z-index: 3005`). */
+html.stme-side-bar-active #top-bar { display: none !important; }
+html.stme-side-bar-active #top-settings-holder {
+    position: fixed;
+    left: 0;
+    top: 0;
+    right: auto;
+    bottom: auto;
+    width: var(--stme-side-bar-w);
+    height: auto;
+    margin: 0;
+    padding: 4px 0 10px;   /* значки начинаются у самого верха */
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    /* Контур только с открытых сторон: левая и верхняя вросли в край окна. */
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 45%, transparent);
+    border-left: 0;
+    border-top: 0;
+    /* Сверху скругления нет (панель упирается в верхний край), снизу — резкое: небольшой радиус. */
+    border-radius: 0 0 12px 0;
+    background: color-mix(in srgb, var(--stme-surface) 88%, transparent);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+    /* Без размытия: оно ловило бы `position: fixed` потомков (раскрытые блоки) в свой контейнер и пересчитывалось бы под едущим чатом. */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    z-index: 7000;   /* выше пилюли набора (6900) и левого дока (6950): раскрытые блоки ложатся поверх */
+}
+html.stme-side-bar-active #top-settings-holder .drawer {
+    position: static;
+    width: auto;
+    flex: none;
+}
+
+/* Значок — тот же круглый слот 37×37, что у кнопок доков. Закрытый чуть притушен, открытый и наведённый — в цвет акцента. */
+html.stme-side-bar-active #top-settings-holder .drawer-icon {
+    box-sizing: border-box;
+    width: 37px;
+    height: 37px;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 17px;
+    line-height: 1;
+    color: var(--stme-text);
+    transition: background .12s ease, color .12s ease, opacity .12s ease;
+}
+html.stme-side-bar-active #top-settings-holder .drawer-icon.closedIcon { opacity: .75; }
+html.stme-side-bar-active #top-settings-holder .drawer-icon.closedIcon:hover,
+html.stme-side-bar-active #top-settings-holder .drawer-icon:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--stme-accent) 22%, transparent);
+    color: var(--stme-accent);
+}
+html.stme-side-bar-active #top-settings-holder .drawer-icon.openIcon {
+    opacity: 1;
+    background: color-mix(in srgb, var(--stme-accent) 30%, transparent);
+    color: var(--stme-accent);
+}
+
+/* Раскрытые блоки — вправо от панели, у верхнего края, на всю доступную высоту. У ST они `position: absolute` под полосой по центру (или `fixed` у
+   краёв — левая/правая панели); все переводим на `fixed` справа от панели. Ширину общих блоков оставляем ST (`--sheldWidth`), боковые панели
+   (`#left-nav-panel`, `#right-nav-panel`) — свои 299px. */
+html.stme-side-bar-active #top-settings-holder .drawer-content,
+html.stme-side-bar-active #left-nav-panel,
+html.stme-side-bar-active #right-nav-panel {
+    position: fixed !important;
+    left: calc(var(--stme-side-bar-w) + 10px) !important;
+    right: auto !important;
+    top: 10px !important;
+    margin: 0 !important;
+    max-height: calc(100dvh - 20px) !important;
+}
+html.stme-side-bar-active #top-settings-holder .drawer-content:not(#left-nav-panel):not(#right-nav-panel) {
+    max-width: calc(100vw - var(--stme-side-bar-w) - 30px);
+}
+
+/* ===== Рамка основных блоков ST в нашем стиле =====
+   Блоки (`.drawer-content`) и боковые панели ST — того же вида, что доки и пилюля набора: стекло `--stme-surface`, контур 2px в цвет акцента,
+   скруглённые углы и тень. Без `backdrop-filter`: блоки лежат поверх едущего чата, размытие пересчитывалось бы на каждый кадр прокрутки. Внутренности
+   (формы, списки ST) не трогаем — только рамку и полосу прокрутки. */
+html.stme-side-bar-active #top-settings-holder .drawer-content,
+html.stme-side-bar-active #left-nav-panel,
+html.stme-side-bar-active #right-nav-panel {
+    box-sizing: border-box;
+    background: color-mix(in srgb, var(--stme-surface) 94%, transparent) !important;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 45%, transparent) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--stme-accent) 45%, transparent) transparent;
+}

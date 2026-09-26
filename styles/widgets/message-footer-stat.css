@@ -1,0 +1,103 @@
+/* --- Полоса под сообщением (cores/ui/message-footer.js) ------------------- */
+/*
+   Во всю ширину сообщения, ровно три места под независимые виджеты. Живёт
+   только в DOM: в текст сообщения не пишется ничего, поэтому модель её не
+   видит и видеть не может.
+*/
+.stme-message-footer {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    width: 100%;
+    margin-top: 14px;
+    box-sizing: border-box;
+    font-family: var(--mainFontFamily, inherit);
+}
+/* Пустая полоса не должна занимать место и рисовать рамку вокруг ничего. */
+.stme-message-footer:empty { display: none; }
+.stme-message-footer-slot { min-width: 0; overflow-wrap: anywhere; }
+.stme-message-footer-slot:empty { display: none; }
+
+/* На узком экране три колонки нечитаемы — складываем в строку. */
+@media (max-width: 720px) {
+    .stme-message-footer { grid-template-columns: 1fr; }
+}
+
+/* Демонстрационные виджеты харнесса внутри полосы. */
+.stme-footer-widget { display: flex; flex-direction: column; gap: 2px; }
+.stme-footer-widget small { opacity: .6; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.stme-footer-widget strong { color: var(--stme-accent); font-size: 14px; }
+
+/* --- Показание (StatBlock) ------------------------------------------------ */
+/*
+   Форма бейджа Alpha: акцентная полоса слева, лёгкий градиент, кружок-иконка,
+   подпись капителью и КРУПНОЕ значение под ней. Первая версия рисовала подпись
+   и значение одного кегля в одну строку — это читалось как случайный текст, а
+   не как показание.
+*/
+.stme-stat {
+    box-sizing: border-box;
+    min-width: 0;
+    padding: 10px 14px 11px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 78%, var(--stme-border));
+    border-left: 4px solid var(--stme-accent);
+    border-radius: 10px;
+    background: linear-gradient(120deg, color-mix(in srgb, var(--stme-surface) 84%, var(--stme-accent)), var(--stme-surface));
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .22);
+    transition: border-color .2s ease;
+}
+.stme-stat-head { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.stme-stat-icon {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 21px; height: 21px;
+    border-radius: 50%;
+    background: var(--stme-accent);
+    color: var(--stme-surface);
+    font-size: 13px;
+    line-height: 1;
+}
+.stme-stat-label {
+    color: var(--stme-text);
+    opacity: .7;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+}
+.stme-stat-value {
+    color: var(--stme-text);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: .025em;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+/* Пока показания нет — не пишем НИЧЕГО, а рамка тихо пульсирует: видно, что
+   значение готовится, и при этом на экран не лезет ни заглушка, ни прошлое
+   значение, выдающее себя за свежее. */
+.stme-stat-pending { animation: stme-stat-waiting 1.8s ease-in-out infinite; }
+.stme-stat-pending .stme-stat-value { min-height: 1.25em; }
+@keyframes stme-stat-waiting {
+    0%, 100% { border-color: color-mix(in srgb, var(--stme-accent) 30%, transparent); border-left-color: color-mix(in srgb, var(--stme-accent) 35%, transparent); }
+    50%      { border-color: var(--stme-accent); border-left-color: var(--stme-accent); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-stat-pending { animation: none; border-style: dashed; }
+}
+
+/* Состояние обновления. Тон — цветом текста, без заливки и без рамки: это
+   строка отчёта внутри карточки, а не самостоятельный блок. */
+.stme-update-status {
+    margin: 8px 0;
+    font-size: 12px;
+    line-height: 1.45;
+    opacity: .82;
+}
+.stme-update-ok { color: var(--stme-ok-bright); }
+.stme-update-error { color: var(--stme-danger-bright); }
+.stme-update-warn { color: #e8c15a; }
+.stme-badge-warn { border-color: #dba617; color: #e8c15a; }
+

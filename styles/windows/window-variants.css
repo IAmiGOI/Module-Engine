@@ -1,0 +1,94 @@
+/* --- Кнопка дока карты (modules/map/index.js, ROADMAP.md 5.43) ------------
+   ОТДЕЛЬНАЯ от общего .stme-launcher-dock (index.js) — тот раскрывается по
+   HOVER и не двигается вовсе; эта — своя, перетаскиваемая, круглая, для
+   ОДНОГО конкретного Модуля. Тот же "стеклянный" рецепт и тот же приём
+   right/bottom-якоря по умолчанию, снимаемого инлайновым left/top после
+   первого перетаскивания, что и у .stme-floating-panel. */
+.stme-dock-button {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 6900;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    background: color-mix(in srgb, var(--stme-surface) 90%, transparent);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+    color: var(--stme-text);
+    font-size: 22px;
+    line-height: 1;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+.stme-dock-button:active { cursor: grabbing; }
+.stme-dock-button:hover { border-color: var(--stme-accent); }
+/* Как только позицию задали перетаскиванием — снимаем противоположный якорь,
+   иначе кнопка растягивается/прыгает между двумя углами разом. */
+.stme-dock-button[style*="left"] { right: auto; }
+.stme-dock-button[style*="top"] { bottom: auto; }
+
+/* --- Полноэкранный вариант плавающего окна (Карта, ROADMAP.md 5.43) -------
+   FloatingPanel() по умолчанию открывается небольшим окном в углу — карта
+   просила "открывается во весь экран". Инлайновые width/height (после
+   первого ручного resize) всё равно перебивают эти дефолты — тот же
+   принцип, что у right/bottom-якоря. min-width/min-height здесь НЕ дублируем:
+   FloatingPanel сам пишет их инлайном из props (minWidth/minHeight),
+   которые обязаны действовать ВСЕГДА, а не только до первого resize. */
+.stme-floating-panel--map {
+    width: calc(100vw - 48px);
+    height: calc(100vh - 48px);
+    right: 24px;
+    bottom: 24px;
+}
+
+/* --- Выступ-вкладка настроек сбоку окна (EdgeDrawer, ROADMAP.md 5.43) -----
+   Клик, не наведение — в отличие от .stme-launcher-dock: владелец окна
+   должен уметь оставить панель открытой и убрать курсор, не закрыв её.
+   Занимает всю высоту ТЕЛА окна (родитель — flex-колонка тела), выступ
+   вкладки виден всегда, сама панель настроек выезжает от 0 до полной
+   ширины по классу -open. */
+.stme-edge-drawer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: stretch;
+    z-index: 1;
+    pointer-events: none;
+}
+.stme-edge-drawer-tab {
+    pointer-events: auto;
+    align-self: center;
+    width: 18px;
+    height: 64px;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-right: none;
+    border-radius: 8px 0 0 8px;
+    background: color-mix(in srgb, var(--stme-surface) 90%, transparent);
+    color: var(--stme-accent);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+.stme-edge-drawer-tab:hover { background: color-mix(in srgb, var(--stme-accent) 16%, var(--stme-surface)); }
+.stme-edge-drawer-body {
+    pointer-events: auto;
+    width: 0;
+    overflow: hidden;
+    border-left: 1px solid color-mix(in srgb, var(--stme-border) 55%, transparent);
+    background: color-mix(in srgb, var(--stme-surface) 96%, transparent);
+    transition: width .2s ease;
+    white-space: nowrap;
+}
+.stme-edge-drawer-open .stme-edge-drawer-body {
+    width: 280px;
+    white-space: normal;
+    padding: 12px;
+    overflow-y: auto;
+}
+

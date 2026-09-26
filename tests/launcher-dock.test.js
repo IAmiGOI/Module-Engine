@@ -8,7 +8,7 @@ import {
 
 // ── Чистая модель ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('the dock has five buttons in a fixed order, and the class of each matches what panel.css styles', () => {
+test('the dock has five buttons in a fixed order, and the class of each matches what styles/ styles', () => {
     assert.deepEqual(DOCK_BUTTONS.map(button => button.id), ['main', 'graph', 'music', 'image', 'settings']);
     assert.equal(buttonClassOf('main'), 'stme-launcher-dock-btn');
     assert.equal(buttonClassOf('settings'), 'stme-launcher-dock-btn stme-launcher-dock-btn-settings');

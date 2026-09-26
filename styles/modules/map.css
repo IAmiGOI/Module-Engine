@@ -1,0 +1,232 @@
+/* --- Dropzone картинки карты (modules/map/index.js, ROADMAP.md 5.44) ------
+   Тот же рецепт, что у .stme-picture-dropzone (рамка-пунктир в акцент,
+   подсветка на dragover) — своя копия класса, а не переиспользование
+   чужого: у карты, в отличие от Картинки, есть ЕЩЁ EdgeDrawer поверх того
+   же тела окна, поэтому dropzone обязана оставаться за position:relative
+   тела и не перекрывать выступ вкладки (z-index выступа/шторки — 1, у
+   dropzone своего z-index нет вовсе, стоит ниже по порядку в дереве). */
+.stme-map-dropzone {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    /* NOT auto (ROADMAP.md 5.48, owner: "Окно... не должно иметь рычагов
+       прокрутки как основное окно") — the canvas below is a flex CHILD that
+       shrinks to whatever room is actually left (`flex:1; min-height:0`),
+       rather than the image dictating a height that then needs scrolling
+       to reach. The one exception is the movement-log LIST specifically
+       (its own small internal scroll, not the whole window's). */
+    overflow: hidden;
+    border: 2px dashed color-mix(in srgb, var(--stme-accent) 35%, transparent);
+    border-radius: var(--stme-radius-sm);
+    margin: 8px;
+    padding: 8px;
+    gap: 8px;
+    transition: border-color .15s ease;
+}
+.stme-map-dropzone.stme-map-dropzone-over { border-color: var(--stme-accent); }
+/* Empty/loading/error states still want to sit centered in the middle of the (otherwise now top-aligned) dropzone. */
+.stme-map-dropzone-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+.stme-map-dropzone-hint { opacity: .55; font-size: 11px; text-align: center; }
+
+/* --- Холст региона/узлов/pathfinding (modules/map/index.js, ROADMAP.md 5.45) -
+   `.stme-map-canvas` (`flex:1` — takes whatever vertical room is left in
+   the window; the main window shows ONLY the canvas now, ROADMAP.md 5.49
+   — position/pathfind/log/remove-image moved into the settings drawer) is
+   just a CENTERING frame. `.stme-map-canvas-inner` is the box that
+   actually matters: its `aspect-ratio` is set INLINE from the image's own
+   real pixel dimensions (`mapContentTree()`), so it is ALWAYS exactly the
+   image's true shape, scaled down (never distorted) to fit within
+   whatever room the outer frame has (`max-width/max-height: 100%`).
+   Deformation (ROADMAP.md 5.49, owner: "Карта деформируется при
+   растягивании экрана, а не уменьшается") happened when the image/SVG
+   were stretched directly onto the OUTER, arbitrarily-shaped flex box —
+   now that box only ever centers a correctly-shaped inner one, and the
+   image/SVG inside IT can stretch to 100%/100% losslessly, because the
+   container is already the right shape. */
+.stme-map-toolbar-hint { font-size: 12px; opacity: .75; }
+.stme-map-canvas { position: relative; flex: 1; min-height: 0; }
+/* `position: absolute; inset: 0; margin: auto;` (rather than flex-centering
+   the inner box) is what actually makes a plain, non-replaced element with
+   `aspect-ratio` size itself as LARGE AS POSSIBLE while fitting inside its
+   container and preserving that ratio — flexbox alone gives it no sizing
+   hint to grow from (a flex item with only `aspect-ratio` and no width/
+   height collapses to ~0, tested live: it rendered as a 1x1px box). */
+.stme-map-canvas-inner { position: absolute; inset: 0; margin: auto; max-width: 100%; max-height: 100%; overflow: hidden; border-radius: var(--stme-radius-sm); }
+/* No more `.stme-map-image` (ROADMAP.md 5.52) — the root image is now drawn
+   as a plain SVG `<image>` INSIDE `.stme-map-svg` itself (base layer, native
+   resolution), sharing the same viewBox-driven pan/zoom transform as the
+   upscaled tile layers, edges and nodes on top of it — one coordinate
+   system for everything, not a separate `<img>` to keep in sync. */
+.stme-map-svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+/* Real seam cause (ROADMAP.md 5.58, owner screenshot proved the seam
+   survived even a brand-new image with a perfectly pixel-aligned tile
+   pipeline): the BROWSER itself smooths each independently-rasterized SVG
+   `<image>` tile as it scales it onto the canvas, sampling only within
+   that one tile's own bounds — two tiles meeting at a shared edge each get
+   smoothed/blurred right at their OWN border in isolation, with no shared
+   context, producing a visible blur/color seam that has nothing to do
+   with the tile CONTENT being correctly aligned (verified live: a
+   nearest-neighbor reconstruction of the exact same tile bitmaps, at the
+   exact same positions, showed no seam at all). `pixelated` disables that
+   per-tile smoothing — the crisp/blocky look at extreme zoom is an honest
+   reflection of what a LOCAL algorithm (not an AI upscaler) actually
+   computed, not a regression. Root layer only — the single base `<image>`
+   (`mapContentTree()`) has no neighbor to seam against, left smooth. */
+.stme-map-tile-image { image-rendering: pixelated; }
+
+/* Icon tool palette, floating on the LEFT edge of the canvas (owner:
+   "Сделай их значками в левой части карты") — replaces the old top text
+   toolbar. Same glass recipe as .stme-dock-button, just a vertical strip. */
+.stme-map-tools {
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.stme-icon-button {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--stme-surface) 90%, transparent);
+    backdrop-filter: blur(10px) saturate(160%);
+    -webkit-backdrop-filter: blur(10px) saturate(160%);
+    color: var(--stme-text);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+}
+.stme-icon-button:hover { border-color: var(--stme-accent); }
+.stme-icon-button-active { border-color: var(--stme-ok); color: var(--stme-ok); }
+.stme-icon-button:disabled { opacity: .4; cursor: default; }
+.stme-icon-svg { width: 18px; height: 18px; fill: currentColor; }
+/* Stroke widths/dasharrays are set INLINE by the Module now, not here (ROADMAP.md
+   5.49) — the viewBox is the image's REAL pixel size, not a fixed 0..1
+   square, so a constant CSS fraction would draw a different-looking line
+   depending on each map's own resolution; the Module computes it from
+   `Math.min(width, height)` instead. Only COLOR (and the current-position
+   animation) stays here. */
+/* Stroke widths are FRACTIONS of the 0..1 viewBox again (no vector-effect:
+   with one applied here the width would be measured in ~1 outer CSS pixel
+   per unit, i.e. a barely-visible 0.003px line) — safe because
+   `.stme-map-canvas-inner` guarantees the viewBox always stretches onto a
+   box of the image's own true aspect ratio, never a distorted one. */
+/* Region (polygon) vs marker (circle) now render differently (ROADMAP.md
+   5.60, owner: "Маркеры не должны иметь прозрачную заливку внутри, они
+   должны быть полными") — a region stays semi-transparent (so overlapping/
+   nested regions remain visually legible), a marker is fully opaque. Both
+   accept a PER-NODE custom color via an inline `style.fill`/`style.stroke`
+   (`node.color`, `hexToRgba()` for the region's own translucency) set
+   directly by the Module — these class rules are only the DEFAULT look
+   when no custom color was ever picked. `:hover` uses `filter: brightness()`
+   rather than a `fill` override so it still visibly reacts even when an
+   inline `style.fill` (an already-picked custom color) would otherwise
+   out-rank a plain CSS `fill` rule by specificity. */
+/* `stroke-width` here is only the fallback for a shape the Module somehow
+   rendered without its own inline width — in practice `nodeShapes()`
+   (ROADMAP.md 5.62) ALWAYS sets `style.strokeWidth` itself now, scaled by
+   the current zoom so a region's border stays the same ON-SCREEN thickness
+   at any zoom level (a fixed fraction of the 0..1 space got visibly
+   thicker the further zoomed in, owner: "Границы под-регионов слишком
+   толстые") — the inline value wins by specificity, these numbers never
+   actually apply once the Module has rendered at all. */
+.stme-map-node-region {
+    fill: color-mix(in srgb, var(--stme-accent) 28%, transparent);
+    stroke: var(--stme-accent);
+    stroke-width: .003;
+    cursor: pointer;
+}
+.stme-map-node-region:hover { filter: brightness(1.3); }
+/* A region whose own sub-regions are now the active (filled) layer stays
+   on screen as a border only — never fully hidden (ROADMAP.md 5.62, owner:
+   "Не нужно полностью скрывать регионы при зуме, просто убирать заливку").
+   `nodeShapes()` sets `style.fill = 'none'` directly; `fill: none` here
+   too only so this class alone (e.g. inspected outside the Module) already
+   reads as intentional, not an accidental transparent region. */
+.stme-map-node-region-outline { fill: none; }
+.stme-map-node-marker {
+    fill: var(--stme-accent);
+    stroke: var(--stme-accent);
+    stroke-width: .003;
+    cursor: pointer;
+}
+.stme-map-node-marker:hover { filter: brightness(1.3); }
+.stme-map-node-selected { stroke: var(--stme-ok); stroke-width: .005; }
+/* Routes get their OWN color (`--stme-ok`, green — already in the palette,
+   not a new one) instead of sharing the region border's accent color, PLUS
+   a dashed pattern (ROADMAP.md 5.64, owner: "Маршруты должны... быть более
+   отличимыми" — routes used to be nearly the same thin blue-ish line as a
+   region's own border, easy to mistake for one). `stroke-width`/
+   `stroke-dasharray` here are only the pre-inline-style fallback —
+   `edgeLines()` always sets both itself, zoom-divided like every other
+   border since ROADMAP.md 5.62 (this one was missed the first time). */
+.stme-map-edge { stroke: var(--stme-ok); stroke-width: .005; stroke-dasharray: .014 .008; }
+.stme-map-draft { fill: none; stroke: var(--stme-danger); stroke-width: .003; stroke-dasharray: .01; }
+/* The preview of the segment that would CLOSE the polygon (ROADMAP.md
+   5.64) — same color as the rest of the draft outline but a lighter dash so
+   it reads as "this is what will connect back," not yet a committed edge. */
+.stme-map-draft-closing { fill: none; stroke: var(--stme-danger); stroke-width: .003; stroke-dasharray: .004 .006; opacity: .6; }
+/* One dot per already-placed click while drawing a region (ROADMAP.md
+   5.64, owner: "границы не совсем интуитивны") — makes it obvious exactly
+   where a point (possibly snapped, ROADMAP.md 5.60) actually landed. */
+.stme-map-draft-vertex { fill: var(--stme-danger); stroke: none; }
+/* A popup card ANCHORED to the node's own point on the canvas (ROADMAP.md
+   5.48) — `left`/`top` come from the Module as percentages of the SAME 0..1
+   normalized space the SVG shapes use, so it always sits at the node's
+   real position regardless of window size. Offset up-and-centered like a
+   callout, not sat directly on top of the marker it's annotating. */
+.stme-map-node-form {
+    position: absolute;
+    z-index: 3;
+    box-sizing: border-box;
+    transform: translate(-50%, calc(-100% - 14px));
+    max-height: calc(100% - 8px);
+    overflow-y: auto;
+    width: 220px;
+    max-width: calc(100% - 16px);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: var(--stme-radius-sm);
+    background: color-mix(in srgb, var(--stme-surface) 96%, transparent);
+    backdrop-filter: blur(10px) saturate(160%);
+    -webkit-backdrop-filter: blur(10px) saturate(160%);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .4);
+}
+/* Opens downward when the point is in the top half (more room below than
+   above) — see the Module's `nodeFormPanel()` doc-comment (ROADMAP.md 5.50)
+   for why this replaced a fixed magic-number threshold. */
+.stme-map-node-form-below { transform: translate(-50%, 14px); }
+
+/* Region right-click action strip (ROADMAP.md 5.61, owner: "не в попап...
+   пусть вылезает рамка... где будут разные функции региона") — same
+   anchor mechanics as `.stme-map-node-form` (see `anchorForPoint()` in the
+   Module) but a plain horizontal row of buttons/tabs, not a form card. */
+.stme-map-context-menu {
+    position: absolute;
+    z-index: 3;
+    box-sizing: border-box;
+    transform: translate(-50%, calc(-100% - 14px));
+    display: flex;
+    flex-direction: row;
+    gap: 6px;
+    padding: 6px;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: var(--stme-radius-sm);
+    background: color-mix(in srgb, var(--stme-surface) 96%, transparent);
+    backdrop-filter: blur(10px) saturate(160%);
+    -webkit-backdrop-filter: blur(10px) saturate(160%);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .4);
+}
+.stme-map-context-menu-below { transform: translate(-50%, 14px); }
+

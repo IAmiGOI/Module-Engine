@@ -349,7 +349,7 @@ document.getElementById('cvAttach').addEventListener('click', async () => {
         width: cvCanvas.width,
         height: cvCanvas.height,
         // Тема ST в харнессе не грузится по-настоящему — берём то же
-        // минимальное подмножество, что panel.css уже определяет как
+        // минимальное подмножество, что styles/ уже определяет как
         // запасные значения для автономного рига.
         css: 'body{margin:0} p{margin:0 0 8px;font:14px/1.4 system-ui,sans-serif;color:#e0e0e0}',
     });

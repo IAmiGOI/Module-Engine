@@ -1,0 +1,148 @@
+/* ===== Переливка светофора — ТОЛЬКО ПОКА АКТИВЕН Chat Viewport, и только через `transform` =====
+   Замеры владельца: `background-position` (перерисовка слоя) ~60–80% GPU, WebGL-канвас на 30 fps ~20–30%, а анимация
+   `opacity` — 0%: композитору достаточно сдвинуть готовую текстуру. Поэтому переливка — высокий (200%) элемент с
+   периодичным градиентом (A B A B A), который `transform: translateY` едет на ровно один период, обрезанный
+   `overflow: hidden`. Ни перерисовки, ни шейдера. `steps(29)` на 2.4 с ≈ 12 обновлений в секунду (лимит FPS, снижен с 30 по замеру владельца).
+   Цвет — та же `--stme-light`, что у статичной полоски, так что перекраска по состоянию — без JS. */
+.stme-light-flow-strip {
+    --stme-light: #5b8dff;
+    display: none;
+    position: absolute;
+    /* По горизонтали — на CSS, а не по замеру дока: у покоящегося дока левый край на `10px` (peek) левее правого края зоны, полоска —
+       на 2px внутрь от него: `right: 4px`. Раньше `left` замерялся один раз в покое, и когда док выезжал по наведению, полоска оставалась
+       на месте («появляется, а не двигается вместе с панелью, и накладывается поверх»). Вертикаль и высоту уточняет JS (activity-light-dom.js). */
+    right: 4px;
+    top: 38px;
+    width: 4px;
+    height: 185px;
+    border-radius: 999px;
+    overflow: hidden;
+    pointer-events: none;
+    box-shadow: 0 0 10px var(--stme-light), 0 0 22px color-mix(in srgb, var(--stme-light) 55%, transparent);
+    transition: transform .25s ease, box-shadow .35s ease, opacity .35s ease;   /* transform — тем же временем и кривой, что `right` у дока: едут синхронно */
+}
+.stme-light-working .stme-light-flow-strip { --stme-light: var(--stme-status-working); }
+.stme-light-success .stme-light-flow-strip { --stme-light: var(--stme-status-success); }
+.stme-light-warning .stme-light-flow-strip { --stme-light: #d9c545; }
+.stme-light-error   .stme-light-flow-strip { --stme-light: var(--stme-status-error); }
+.stme-light-notify  .stme-light-flow-strip { --stme-light: #ffffff; }
+.stme-light-flow {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 200%;
+    background: linear-gradient(180deg,
+        var(--stme-light),
+        color-mix(in srgb, var(--stme-light) 55%, #ffffff),
+        var(--stme-light),
+        color-mix(in srgb, var(--stme-light) 55%, #ffffff),
+        var(--stme-light));
+    animation: stme-dock-flow 2.4s steps(29) infinite;
+    will-change: transform;
+}
+@keyframes stme-dock-flow {
+    from { transform: translateY(0); }
+    to   { transform: translateY(-50%); }
+}
+body:has(.stme-chat-viewport-overlay) .stme-light-flow-strip { display: block; }
+body:has(.stme-chat-viewport-overlay) .stme-launcher-dock::before { display: none; }
+.stme-light-notify .stme-light-flow-strip { animation: stme-dock-blink .9s steps(1) 3; }
+.stme-launcher-dock-zone:hover .stme-light-flow-strip,
+.stme-launcher-dock-zone:focus-within .stme-light-flow-strip,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-light-flow-strip {
+    opacity: 0;
+    /* Док при раскрытии уезжает влево на 52px (right: -36px → 16px) — полоска едет с ним, а не остаётся на месте поверх. Только `transform`
+       (композитор): ни раскладки, ни перерисовки всей страницы, ни шейдера. */
+    transform: translateX(-52px);
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-light-flow { animation: none; }
+}
+@keyframes stme-dock-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .12; }
+}
+.stme-launcher-dock-btn {
+    width: 37px;
+    height: 37px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--stme-text);
+    font-size: 17px;
+    cursor: pointer;
+    transition: background .12s ease, color .12s ease;
+}
+.stme-launcher-dock-btn:hover {
+    background: rgba(141, 168, 255, .22);
+    background: color-mix(in srgb, var(--stme-accent, var(--stme-accent)) 22%, transparent);
+    color: var(--stme-accent, var(--stme-accent));
+}
+/* Пустые места — задел на будущее (другие быстрые действия движка), не
+   декорация: тот же круглый слот, что у настоящей кнопки, просто притушенный
+   и некликабельный, чтобы форма дока не менялась, когда там появится вторая
+   настоящая иконка. */
+.stme-launcher-dock-slot {
+    width: 37px;
+    height: 37px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--stme-text) 10%, transparent);
+}
+
+/*
+   Строка состояния читается как показание в игре, а не как строка лога:
+   подпись сверху мелко и капителью, значение под ней — крупно и жирно.
+   Раньше и то и другое стояло в одну строку одинаково мелким кеглем, и
+   отличить название от значения можно было только по цвету — то есть почти
+   никак. Это ГЛАВНОЕ, ради чего окно вообще открывают: оно обязано читаться
+   мельком.
+*/
+.stme-hud-row {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 5px 0;
+}
+.stme-hud-row + .stme-hud-row { border-top: 1px solid color-mix(in srgb, var(--stme-border) 35%, transparent); }
+.stme-hud-name {
+    opacity: .55;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}
+.stme-hud-value {
+    /* Не моноширинный: у большинства тем он заметно уже и хуже читается.
+       Цифры всё равно выравниваются — за это отвечает tabular-nums. */
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+    color: var(--stme-accent);
+    overflow-wrap: anywhere;
+}
+.stme-hud-empty { opacity: .55; font-size: 12px; }
+/* Заголовок группы — только когда трекеров несколько; у одного он повторял бы
+   заголовок самого окна. */
+.stme-hud-group {
+    margin-top: 8px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid color-mix(in srgb, var(--stme-accent) 40%, transparent);
+    color: var(--stme-accent);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+.stme-hud-group:first-child { margin-top: 0; }
+/* Строка сразу после заголовка группы уже отделена им самим. */
+.stme-hud-group + .stme-hud-row { border-top: 0; }
+.stme-hud-value-muted { opacity: .5; font-weight: 400; }
+

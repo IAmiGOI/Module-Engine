@@ -209,7 +209,7 @@ export function FloatingPanel(title, {
         if (height) next.height = `${height}px`;
         if (minWidth) next.minWidth = `${minWidth}px`;
         if (minHeight) next.minHeight = `${minHeight}px`;
-        // Неизменяемое окно: CSS `resize: both` из panel.css бьётся инлайном
+        // Неизменяемое окно: CSS `resize: both` из styles/ бьётся инлайном
         // `resize: none` (инлайн специфичнее любого правила таблицы).
         if (!resizable) next.resize = 'none';
         return next;
@@ -397,7 +397,7 @@ function collapsible({ root, head, body }, title, { subtitle, actions, key, open
  * Существует затем, что рамка внутри рамки внутри рамки читается отвратительно:
  * «Модули» → «Трекер» → «Трекер» → «status» — четыре вложенных обрамления, и
  * взгляду не за что зацепиться. Рамку рисует ТОЛЬКО верхний уровень (Card), а
- * вложенность внутри него видна по фону (шкала глубины в panel.css).
+ * вложенность внутри него видна по фону (шкала глубины в styles/).
  */
 export function Section(title, options = {}, ...children) {
     return collapsible({ root: 'stme-section', head: 'stme-section-head', body: 'stme-section-body' }, title, options, children);
@@ -662,7 +662,7 @@ export function EdgeDrawer(open, { onToggle, title = 'Settings' } = {}, ...child
  * не прямоугольная" именно про ЭТО, квадрат с скруглением всё ещё квадрат.
  * 102×136 — owner: "увеличь аватарку в 1.5 раза в ширину" (68 × 1.5 = 102)
  * "и так, чтобы она была 3x4 в портретном варианте" (102 / 3 × 4 = 136).
- * `border-radius: 14px` — см. `.stme-avatar` в panel.css.
+ * `border-radius: 14px` — см. `.stme-avatar` в styles/.
  */
 export function Avatar(url, { width = 102, height = 136, name = '' } = {}) {
     const style = { width: `${width}px`, height: `${height}px` };
@@ -743,9 +743,9 @@ export function GenStripe(status) {
  * кнопки должны быть в ряд с именем") — `margin-left: auto` в CSS прижимает
  * его к правому краю ряда, не раздувая высоту шапки. Сам ряд несёт класс
  * `stme-message-header-name-row`, под который и написано скрытие-по-наведению
- * (см. panel.css) — виджет только даёт разметку, наведение целиком на CSS.
+ * (см. styles/) — виджет только даёт разметку, наведение целиком на CSS.
  *
- * `align-items: flex-start` (panel.css), не `center` — owner: "Имя
+ * `align-items: flex-start` (styles/), не `center` — owner: "Имя
  * персонажа не выровнены по верху фото": аватар вырос до портрета 102×136
  * (был квадрат 72×72, до этого 56×56) — центрирование стало заметно
  * сдвигать имя вниз от видимого верхнего края аватарки.
@@ -770,12 +770,14 @@ export function GenStripe(status) {
  * flex` на паре "аватар+инфо" — сейчас аватар снаружи, инфо просто
  * блочный элемент, обтекающий чужой float естественно).
  */
-export function MessageHeader({ name = '', turnIndex, genDurationMs, timestampText, isUser = false, actions } = {}) {
+export function MessageHeader({ name = '', turnIndex, genDurationMs, timestampText, isUser = false, hidden = false, actions } = {}) {
     return h('div', { class: 'stme-message-header-info' },
         h('div', { class: 'stme-message-header-name-row' },
             h('strong', { class: 'stme-message-header-name' }, name || (isUser ? 'You' : 'Narrator')),
             turnIndex != null ? Badge(`#${turnIndex}`, { tone: 'muted' }) : null,
             !isUser && genDurationMs != null ? Badge(`${(genDurationMs / 1000).toFixed(1)}s`, { tone: 'muted' }) : null,
+            // Скрыто от промптов (как у родного чата ST: значок-призрак рядом с именем).
+            hidden ? h('i', { class: 'stme-message-ghost fa-solid fa-ghost', title: 'This message is invisible for the AI', 'aria-label': 'Hidden from prompts' }) : null,
             actions ?? null,
         ),
         timestampText ? Timestamp(timestampText) : null,

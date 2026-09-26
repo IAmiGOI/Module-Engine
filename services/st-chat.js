@@ -315,6 +315,40 @@ export function registerStChatService(bus, { getContext } = {}) {
         return root?.querySelector('.mes_text') ?? null;
     }
 
+    /**
+     * Кнопки родного сообщения ST (`.mes_button` в шаблоне `#message_template`): id действия вьюпорта → CSS-селектор кнопки. У ST всю работу
+     * (диалог промпта, выбор файла, перевод, ветка чата, скрытие с сохранением) делает обработчик КЛИКА на этой кнопке — вьюпорт нажимает её,
+     * а не переписывает логику ST (тот же принцип, что у остальных методов файла). Узла `.mes` может не быть: ST рисует в `#chat` не все сообщения.
+     */
+    const NATIVE_BUTTONS = Object.freeze({
+        hide: '.mes_hide', unhide: '.mes_unhide', prompt: '.mes_prompt', embed: '.mes_embed', translate: '.mes_translate',
+        image: '.sd_message_gen', narrate: '.mes_narrate', swipePicker: '.mes_swipe_picker', checkpoint: '.mes_create_bookmark',
+        branch: '.mes_create_branch', openCheckpoint: '.mes_bookmark',
+    });
+
+    const nativeMessage = mesid => document.querySelector(`#chat .mes[mesid="${mesid}"]`) ?? document.querySelector(`.mes[mesid="${mesid}"]`);
+    /** Кнопка «есть» только когда ST её сейчас показывает: одни (промпт, свайпы) ST прячет, пока действие невозможно, другие приходят с расширениями. */
+    const nativeButtonAvailable = button => Boolean(button) && document.defaultView.getComputedStyle(button).display !== 'none';
+
+    /** Доступные СЕЙЧАС родные действия сообщения: `{ hasNative, available: [id, …] }`. */
+    function nativeActions({ mesid } = {}) {
+        const root = nativeMessage(mesid);
+        if (!root) return { hasNative: false, available: [] };
+        const available = Object.entries(NATIVE_BUTTONS)
+            .filter(([, selector]) => nativeButtonAvailable(root.querySelector(selector)))
+            .map(([id]) => id);
+        return { hasNative: true, available };
+    }
+
+    /** Нажимает родную кнопку действия. `false` — кнопки нет или ST её сейчас не показывает. */
+    function triggerNative({ mesid, action } = {}) {
+        const selector = NATIVE_BUTTONS[action];
+        const button = selector ? nativeMessage(mesid)?.querySelector(selector) : null;
+        if (!nativeButtonAvailable(button)) return false;
+        button.click();
+        return true;
+    }
+
     const unregisters = [
         bus.register('stChat.messages', params => readChat(params), { loadMetric: () => 0 }),
         bus.register('stChat.setHidden', params => setMessageHidden(params), { loadMetric: () => 0 }),
@@ -323,6 +357,8 @@ export function registerStChatService(bus, { getContext } = {}) {
         bus.register('stChat.swipe', params => swipeMessage(params), { loadMetric: () => 0 }),
         bus.register('stChat.regenerate', () => regenerate(), { loadMetric: () => 0 }),
         bus.register('stChat.formatMessage', params => formatMessage(params), { loadMetric: () => 0 }),
+        bus.register('stChat.nativeActions', params => nativeActions(params), { loadMetric: () => 0 }),
+        bus.register('stChat.triggerNative', params => triggerNative(params), { loadMetric: () => 0 }),
         bus.register('stChat.messageElement', params => messageElement(params?.mesid), { loadMetric: () => 0 }),
         bus.register('stChat.messageTextElement', params => messageTextElement(params?.mesid), { loadMetric: () => 0 }),
         /** Контейнер всего чата — за ним наблюдают, чтобы заметить перерисовку, о которой никто не сообщил. */

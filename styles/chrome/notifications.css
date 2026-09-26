@@ -1,0 +1,57 @@
+/* --- Плавающие уведомления (cores/ui/notifications.js) --------------------- */
+/*
+   Живут в углу ЭКРАНА, а не в потоке страницы: у сообщения нет причины
+   занимать место в разметке — оно временное. Раньше результат проверки был
+   плашкой во всю ширину карточки, и длинная строка растягивала блок, к
+   которому относилась.
+   Позиционируются от вьюпорта, поэтому им НЕ нужен .stme-panel как предок.
+*/
+.stme-floating {
+    position: fixed;
+    z-index: 7000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(380px, calc(100vw - 32px));
+    pointer-events: none;
+}
+.stme-floating-top-left { top: 16px; left: 16px; }
+
+.stme-toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 2px solid var(--stme-accent);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--stme-surface) 94%, transparent);
+    backdrop-filter: blur(14px) saturate(160%);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
+    color: var(--stme-text);
+    font-size: 12.5px;
+    line-height: 1.4;
+    pointer-events: auto;
+    animation: stme-toast-in .18s ease-out;
+}
+.stme-toast-ok { border-color: var(--stme-ok); }
+.stme-toast-error { border-color: var(--stme-danger); }
+.stme-toast-muted { border-color: color-mix(in srgb, var(--stme-accent) 45%, transparent); }
+.stme-toast-text { flex: 1; overflow-wrap: anywhere; }
+.stme-toast-close {
+    flex-shrink: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    opacity: .5;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+.stme-toast-close:hover { opacity: 1; }
+
+@keyframes stme-toast-in {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: none; }
+}
+
