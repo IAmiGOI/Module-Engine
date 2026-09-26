@@ -33,6 +33,8 @@ export const MODULE_ID = 'module.music';
 const SETTINGS_NAMESPACE = MODULE_ID;
 const TRACKS_KEY = 'tracks';
 const PLAYER_KEY = 'player';
+/** Размер плавающего окна плеера — по CSS (`styles/modules/music-player.css`); нужен только для удержания окна в пределах экрана при перетаскивании. */
+const WINDOW_SIZE = Object.freeze({ width: 336, height: 300 });
 
 const DEFAULTS = Object.freeze({
     autoSwitch: true,     // менять трек по сцене или только вручную
@@ -83,7 +85,6 @@ export function createMusicModule(host) {
     const hudCollapsed = signal(false);
     const hudVisible = signal(true);
     const hudPosition = signal({});
-    const hudSize = signal({});
 
     let currentTrackId = null;
     let currentSimilarity = null;
@@ -108,7 +109,7 @@ export function createMusicModule(host) {
             value: {
                 volume: volume.peek(), muted: muted.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
                 minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(), player: {
-                    collapsed: hudCollapsed.peek(), visible: hudVisible.peek(), position: hudPosition.peek(), size: hudSize.peek(),
+                    collapsed: hudCollapsed.peek(), visible: hudVisible.peek(), position: hudPosition.peek(),
                 },
             },
         });
@@ -339,7 +340,8 @@ export function createMusicModule(host) {
         const hasTracks = computed(() => tracks().length > 0);
         return FloatingPanel('Music', {
             position: hudPosition,
-            size: hudSize,
+            // Размера у окна нет: оно фиксированное (CSS `.stme-music-window`). Сохранённый размер прежнего изменяемого окна больше не читается — иначе его инлайновые
+            // width/height обрезали бы новое (владелец: «старый размер остался в кэше, окно обрезано»).
             collapsed: hudCollapsed,
             className: 'stme-music-window',
             onToggle: value => { hudCollapsed.set(value); savePlayer(); },
@@ -347,8 +349,8 @@ export function createMusicModule(host) {
             drag: createDragHandlers(hudPosition, {
                 onDrop: dropped => {
                     hudPosition.set(clampToViewport(dropped, {
-                        width: hudSize.peek().width ?? 340,
-                        height: hudSize.peek().height ?? 220,
+                        width: WINDOW_SIZE.width,
+                        height: WINDOW_SIZE.height,
                         viewportWidth: globalThis.innerWidth ?? 1920,
                         viewportHeight: globalThis.innerHeight ?? 1080,
                     }));
@@ -455,8 +457,11 @@ export function createMusicModule(host) {
             muted.set(Boolean(player.value.muted));
             hudCollapsed.set(Boolean(player.value.player?.collapsed));
             hudVisible.set(player.value.player?.visible !== false);
-            hudPosition.set(player.value.player?.position ?? {});
-            hudSize.set(player.value.player?.size ?? {});
+            // Позицию, сохранённую при другом размере окна (или экрана), возвращаем в пределы экрана: окно у края, ставшее шире, иначе оказалось бы обрезанным.
+            const savedPosition = player.value.player?.position ?? {};
+            hudPosition.set(Number.isFinite(savedPosition.left) && Number.isFinite(savedPosition.top)
+                ? clampToViewport(savedPosition, { ...WINDOW_SIZE, viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })
+                : savedPosition);
         }
     }
 

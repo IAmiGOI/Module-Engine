@@ -110,7 +110,7 @@ function buildEngine({ chat = [] } = {}) {
 
     const module = createMusicModule(moduleHost);
 
-    return { engine, module, audio: playback, blobs, notifications };
+    return { engine, module, audio: playback, blobs, notifications, moduleHost, settingsContext };
 }
 
 test('load() restores tracks from settings; import computes vectors and persists both bytes and metadata', async () => {
@@ -276,4 +276,31 @@ test('mute silences the Service without touching the remembered volume, and unmu
     module.toggleMute();
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(audio.volume, 0.4);
+});
+
+test('a window size saved by the old resizable player is ignored: the window keeps its own fixed size instead of being cut to the old one', async () => {
+    const { module, moduleHost, settingsContext } = buildEngine();
+    await module.load();
+    module.setHudVisible(true);                                  // пишет состояние окна в настройки
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // Кладём «старый» размер туда же, где его хранил прежний плеер (player.size), и поднимаем свежий экземпляр.
+    const namespaces = Object.values(settingsContext.extensionSettings).filter(value => value && typeof value === 'object');
+    let injected = false;
+    const visit = node => {
+        if (!node || typeof node !== 'object') return;
+        if (node.player && typeof node.player === 'object' && 'collapsed' in node.player) { node.player.size = { width: 200, height: 80 }; node.player.position = { left: 1900, top: 1000 }; injected = true; }
+        Object.values(node).forEach(visit);
+    };
+    namespaces.forEach(visit);
+    assert.ok(injected, 'the saved player state was found and given an old size');
+    const fresh = createMusicModule(moduleHost);
+    await fresh.load();
+    const panel = fresh.hud().children[0]();                     // корень hud() — обёртка; её ребёнок — окно
+    const style = panel.props.style();
+    assert.equal(style.width, undefined, 'no inline width from the old size');
+    assert.equal(style.height, undefined, 'no inline height from the old size');
+    assert.equal(panel.props.class, 'stme-floating-panel stme-music-window');
+    assert.equal(style.left, '1584px', 'a position saved near the right edge is pulled back so the wider window is not cut off (1920 − 336)');
+    assert.equal(style.top, '780px', '1080 − 300');
+    fresh.stop();
 });
