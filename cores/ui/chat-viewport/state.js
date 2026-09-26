@@ -47,6 +47,8 @@ export function createChatViewportContext(host, {
         lastTotalHeight: 0,                // сумма высот ВСЕХ сообщений — для родного скроллбара обёртки в UI движка
         // Правка, начатая кнопкой в шапке глифа, когда строка финального сообщения ещё не смонтирована: применится, как только она появится.
         pendingEditMesid: null,
+        // Своя раскладка текста (`body-text-engine.js`): включена ли и тема для неё (шрифт страницы, цвета) — приходит в `attach`.
+        textEngine: false, textTheme: null,
     };
 
     const ctx = {

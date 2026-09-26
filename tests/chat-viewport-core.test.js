@@ -737,3 +737,64 @@ test('a message hidden from prompts offers "include" instead of "exclude", its b
     assert.deepEqual(core.messageTools().tools, ['unhide', 'copy']);
     assert.equal(bundle.calls.drawFrame.at(-1)[0].opacity, 0.5, 'dimmed body');
 });
+
+// --- Своя раскладка текста (`body-text-engine.js`): настоящий Сервис `textPainter` с фейковым canvas и мини-парсером HTML ---
+
+import { registerTextPainterService } from '../services/text-painter.js';
+import { parseMiniHtml } from './helpers/mini-html.js';
+
+const TEXT_THEME = { fontFamily: 'T', fontSize: 15, lineHeight: 1.4, blockGap: 10, colors: { body: '#fff', em: '#aaa', quote: '#fa0', link: '#fff' } };
+
+function withTextPainter(bundle) {
+    const painted = [];
+    const fakeCanvas = (width, height) => {
+        const canvas = { width, height, __painted: true };
+        canvas.getContext = () => ({
+            measureText: text => ({ width: [...text].length * 10, fontBoundingBoxAscent: 15, fontBoundingBoxDescent: 5 }),
+            fillText: () => {}, fillRect: () => {}, setTransform: () => {},
+        });
+        painted.push(canvas);
+        return canvas;
+    };
+    registerTextPainterService(bundle.engine.buses.services, { createCanvas: fakeCanvas, parseHtml: parseMiniHtml, loadFont: async () => {}, loadImageSize: async () => null });
+    return painted;
+}
+
+test('with the text engine on, a supported message is laid out and painted by the engine: no mirror, no SVG raster, height from the layout', async () => {
+    const bundle = buildEngine({ messages: [msg('0', 'hello world')] });
+    const painted = withTextPainter(bundle);
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0, textEngine: true });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, width: 300, height: 400, textTheme: TEXT_THEME });
+
+    assert.equal(bundle.calls.rasterize.length, 0, 'the SVG rasterizer is not used');
+    assert.deepEqual(bundle.calls.uploadTexture, ['0']);
+    assert.equal(bundle.calls.uploadOn[0].canvas, CANVAS);
+    assert.ok(painted.some(canvas => canvas.height === 21), 'one 21px line, painted at its own height (DPR 1)');
+    assert.equal(bundle.calls.setInnerHtml.filter(html => html.includes('hello world')).length, 0, 'no mirror was filled with the body');
+});
+
+test('a message the engine does not support falls back to the mirror + SVG raster path, the others stay on the engine', async () => {
+    const table = '<table><tr><td>x</td></tr></table>';
+    const bundle = buildEngine({ messages: [msg('0', 'plain'), { ...msg('1', table), isUser: false, name: 'Bot' }], heightByHtml: new Map([[`<p>${table}</p>`, 40]]) });
+    withTextPainter(bundle);
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0, textEngine: true });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, width: 300, height: 600, textTheme: TEXT_THEME });
+
+    assert.equal(bundle.calls.rasterize.length, 1, 'only the table message went through the rasterizer');
+    assert.match(bundle.calls.rasterize[0].html, /<table>/);
+    assert.deepEqual(bundle.calls.uploadTexture.sort(), ['0', '1']);
+});
+
+test('the text engine is off by default; switching it on later re-syncs every body through the engine', async () => {
+    const bundle = buildEngine({ messages: [msg('0', 'hello')] });
+    withTextPainter(bundle);
+    const core = buildCore(bundle, { rowHeight: 100, overscan: 0 });
+    await core.attach({ canvas: CANVAS, mirrorContainer: MIRROR_CONTAINER, width: 300, height: 400, textTheme: TEXT_THEME });
+    assert.equal(bundle.calls.rasterize.length, 1, 'engine off by default: old path');
+
+    const uploadsBefore = bundle.calls.uploadOn.length;
+    core.setTextEngine({ enabled: true });   // сам запускает полный проход — ждём, пока он (и поставленный в очередь) доработают
+    for (let tick = 0; tick < 20 && !bundle.calls.uploadOn.slice(uploadsBefore).length; tick += 1) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(bundle.calls.rasterize.length, 1, 'switched on: the body is re-synced by the engine, not rasterized again');
+    assert.ok(bundle.calls.uploadOn.slice(uploadsBefore).some(entry => entry.textureId === '0'), 'the body texture was uploaded again, from the engine');
+});
