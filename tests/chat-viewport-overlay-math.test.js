@@ -35,6 +35,7 @@ test('the body css is the exact expected string (paragraph rules included)', () 
         + 'text-shadow: 0 0 5px rgba(0, 0, 0, .30), 0 0 2px rgba(0, 0, 0, .18); } '
         + '.stme-chat-viewport-body * { margin: 0; } '
         + '.stme-chat-viewport-body > * + * { margin-top: 10px; } '
+        + '.stme-chat-viewport-body > .stme-chat-viewport-avatar-spacer + * { margin-top: 0; } '
         + '.stme-chat-viewport-body ul, .stme-chat-viewport-body ol { padding-left: 1.4em; } '
         + '.stme-chat-viewport-body blockquote { padding-left: 10px; } '
         + '.stme-chat-viewport-body q { color: #222222; } '

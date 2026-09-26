@@ -1,5 +1,5 @@
 import { computeVisibleRange } from '../../../libraries/shared/chat-viewport-math.js';
-import { GLYPH_GAP, PREFETCH_HORIZON_MS, hashString, PRELAUNCH_CONCURRENCY, ROW_PAD, AVATAR_WRAP } from './constants.js';
+import { GLYPH_GAP, PREFETCH_HORIZON_MS, PRELAUNCH_CONCURRENCY, ROW_PAD, AVATAR_WRAP } from './constants.js';
 
 /** Фоновая подготовка тел: прогрев кэша, предзагрузка по ходу прокрутки, параллельный прелаунч окна. */
 export function installPrefetch(ctx) {
@@ -62,9 +62,7 @@ export function installPrefetch(ctx) {
                     if (!message || message.isToolCall || s.lastNeeded?.has(message.mesid)) continue;
                     const remainder = ctx.guessRemainder(frame, i);
                     const html = ctx.avatarSpacerHtml(remainder) + await ctx.paintedBodyHtml(message);
-                    if (s.cssHashCache.css !== s.css) s.cssHashCache = { css: s.css, hash: hashString(s.css) };
-                    const diskKey = `${hashString(html)}.${html.length}.${s.cssHashCache.hash}.${ctx.contentWidth()}.${s.devicePixelRatio}`;
-                    if (await serviceOrNull('rasterCache.has', { key: diskKey })) continue;
+                    if (await serviceOrNull('rasterCache.has', { key: ctx.rasterDiskKey(html) })) continue;
                     await ctx.syncMesid(message, remainder);
                     if (!s.lastNeeded?.has(message.mesid)) await ctx.forgetBody(message.mesid);
                     await sleep(120);

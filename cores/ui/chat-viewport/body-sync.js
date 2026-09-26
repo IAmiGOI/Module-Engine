@@ -1,9 +1,10 @@
 import { hashString, AVATAR_SPACER_WIDTH } from './constants.js';
+import { AVATAR_SPACER_CLASS } from '../../../libraries/shared/chat-viewport-body-css.js';
 
 /** Высота тела, с которой к ней добавляется запас на расхождение движков раскладки (см. `installBodySync`). */
 const LONG_BODY_PX = 400;
-/** Версия правил высоты/запаса текстуры: входит в ключ дискового кэша растра, чтобы прежние текстуры (другой высоты) не подхватывались. */
-const RASTER_LAYOUT_VERSION = 2;
+/** Версия правил высоты/запаса текстуры: входит в ключ дискового кэша растра, чтобы прежние текстуры (другой высоты) не подхватывались. 3 — абзац после заглушки аватарки без отступа. */
+const RASTER_LAYOUT_VERSION = 3;
 
 /** Синхронизация зеркала+текстуры одного сообщения с его текстом. */
 export function installBodySync(ctx) {
@@ -27,7 +28,16 @@ export function installBodySync(ctx) {
      */
     function avatarSpacerHtml(avatarRemainder) {
         if (!(avatarRemainder > 0)) return '';
-        return `<div style="float:left;width:${AVATAR_SPACER_WIDTH}px;height:${avatarRemainder}px;visibility:hidden;" aria-hidden="true"></div>`;
+        return `<div class="${AVATAR_SPACER_CLASS}" style="float:left;width:${AVATAR_SPACER_WIDTH}px;height:${avatarRemainder}px;visibility:hidden;" aria-hidden="true"></div>`;
+    }
+
+    /**
+     * Ключ дискового кэша растра. ОДИН для записи (`syncMesidRun`) и для проверки прогрева (`prefetch.js`): раньше прогрев собирал ключ сам, без
+     * `RASTER_LAYOUT_VERSION`, никогда не находил запись и каждый проход заново гонял все сообщения через `syncMesid`.
+     */
+    function rasterDiskKey(html) {
+        if (s.cssHashCache.css !== s.css) s.cssHashCache = { css: s.css, hash: hashString(s.css) };
+        return `${hashString(html)}.${html.length}.${s.cssHashCache.hash}.${ctx.contentWidth()}.${s.devicePixelRatio}.${RASTER_LAYOUT_VERSION}`;
     }
 
     /**
@@ -80,8 +90,7 @@ export function installBodySync(ctx) {
         // Постоянный кэш (IndexedDB): готовая строка + измеренная высота + позиции картинок — без зеркала и растеризации.
         let diskKey = null;
         if (changed && persistentCache) {
-            if (s.cssHashCache.css !== s.css) s.cssHashCache = { css: s.css, hash: hashString(s.css) };
-            diskKey = `${hashString(html)}.${html.length}.${s.cssHashCache.hash}.${ctx.contentWidth()}.${s.devicePixelRatio}.${RASTER_LAYOUT_VERSION}`;
+            diskKey = ctx.rasterDiskKey(html);
             const hit = await serviceOrNull('rasterCache.get', { key: diskKey });
             if (hit?.image) {
                 await serviceOrThrow('webglChat.uploadTexture', { canvas: home, textureId: mesid, image: hit.image });
@@ -147,5 +156,5 @@ export function installBodySync(ctx) {
         return height;
     }
 
-    Object.assign(ctx, { avatarSpacerHtml, syncMesid, syncMesidRun });
+    Object.assign(ctx, { avatarSpacerHtml, rasterDiskKey, syncMesid, syncMesidRun });
 }

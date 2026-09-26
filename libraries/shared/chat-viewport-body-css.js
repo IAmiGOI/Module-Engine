@@ -32,6 +32,12 @@ export const BODY_FONT_SIZE_PX = 15;
 export const BODY_LINE_HEIGHT = 1.4;
 /** Промежуток между соседними блоками (абзацы, списки, цитаты) — как `margin-bottom: 10px` у `.mes_text p` в ST. Пара к CSS зеркала. */
 export const PARAGRAPH_GAP_PX = 10;
+/**
+ * Класс невидимой float-заглушки под аватарку (`cores/ui/chat-viewport/body-sync.js`). Она — первый ЭЛЕМЕНТ тела, и без исключения `> * + *` давал первому
+ * абзацу отступ сверху. У зеркала (не BFC) этот отступ схлопывается наружу и в высоту не входит, а в растре — входит: текст рисовался на 10px ниже измеренного,
+ * и низ последней строки обрезался по краю текстуры (проверено в Chromium: зеркало 52px, чернила растра до 55px).
+ */
+export const AVATAR_SPACER_CLASS = 'stme-chat-viewport-avatar-spacer';
 
 export function buildChatViewportBodyCss({ bodyColor, quoteColor, emColor, fontFamily } = {}) {
     const body = '.stme-chat-viewport-body';
@@ -42,6 +48,7 @@ export function buildChatViewportBodyCss({ bodyColor, quoteColor, emColor, fontF
         + 'text-shadow: 0 0 5px rgba(0, 0, 0, .30), 0 0 2px rgba(0, 0, 0, .18); } '
         + `${body} * { margin: 0; } `
         + `${body} > * + * { margin-top: ${PARAGRAPH_GAP_PX}px; } `
+        + `${body} > .${AVATAR_SPACER_CLASS} + * { margin-top: 0; } `
         + `${body} ul, ${body} ol { padding-left: 1.4em; } `
         + `${body} blockquote { padding-left: 10px; } `
         + `${body} q { color: ${quoteColor || FALLBACK_QUOTE_COLOR}; } `
