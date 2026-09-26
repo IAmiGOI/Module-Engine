@@ -41,6 +41,7 @@ import { createEventsCore } from '../cores/events/index.js';
 import { createGenerationCore } from '../cores/generation/index.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createInternalEngineModelsCore } from '../cores/models/internal-engine.js';
+import { createDiffusionCore } from '../cores/models/diffusion.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createChatHistoryCore } from '../cores/chat-history/index.js';
 import { createSettingsCore } from '../cores/settings/index.js';
@@ -75,6 +76,7 @@ import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../module
 import { createSecretsModule, SECRETS_MODULE_ID as SECRETS_MODULE_ID } from '../modules/tools/index.js';
 import { createPostprocessModule, MODULE_ID as POSTPROCESS_MODULE_ID } from '../modules/postprocess/index.js';
 import { createMusicModule, MODULE_ID as MUSIC_MODULE_ID } from '../modules/music/index.js';
+import { createScenePainterModule, MODULE_ID as SCENE_PAINTER_MODULE_ID } from '../modules/scene-painter/index.js';
 import { createSpeakerColorsModule, MODULE_ID as SPEAKER_COLORS_MODULE_ID } from '../modules/speaker-colors/index.js';
 import { createMapModule, MODULE_ID as MAP_MODULE_ID } from '../modules/map/index.js';
 
@@ -203,6 +205,24 @@ const DEFINITIONS = [{
         ],
     },
     create: host => createMusicModule(host),
+}, {
+    id: SCENE_PAINTER_MODULE_ID,
+    title: 'Scene Painter',
+    description: 'Paints a picture of the current scene under a reply: a model writes the image prompt from the chat, an image backend draws it.',
+    rights: {
+        tier: 'community',
+        allowedContracts: [
+            'storage.settings.get', 'storage.settings.set', 'ui.notify',
+            // Отрывок чата для промпта и привязка картинки к сообщению — через Ядро истории чата; текст сообщения не трогается.
+            'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations',
+            // Промпт пишет текстовая модель, рисует Ядро diffusion; сети у Модуля нет вовсе.
+            'model.generate', 'model.workers.get', 'image.generate', 'image.workers.get', 'image.workers.set',
+            // Показ и уборка картинок — Сервис хранилища.
+            'image.url', 'image.revokeUrl', 'image.delete',
+            'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.attach',
+        ],
+    },
+    create: host => createScenePainterModule(host),
 }, {
     id: SPEAKER_COLORS_MODULE_ID,
     title: 'Speaker Colors',
@@ -526,6 +546,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     const modelsCore = createInternalEngineModelsCore(modelsHost, {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.models.internal' }),
     });
+    // Ядро diffusion — генерация картинок: сеть (бэкенды) и байты (хранилище картинок) только у него, не у Модулей.
+    const diffusionHost = engine.registerCaller('core.models.diffusion', 'cores', { tier: 'official', networkAccess: true });
+    const diffusionCore = createDiffusionCore(diffusionHost, {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.models.diffusion' }),
+    });
 
     // Исполнитель объявленных этапов. `resolveAs` — привилегированная
     // возможность из сборки движка: этап обязан идти под правами СВОЕГО
@@ -791,7 +816,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // silently leaving a real, non-empty Lorebook's graph bootstrap empty
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
-    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), summaryCore.load()]);
+    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), summaryCore.load()]);
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
     // отдельно" — при большом Lorebook эмбединг каждой записи по

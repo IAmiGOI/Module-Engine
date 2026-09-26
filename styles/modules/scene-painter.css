@@ -1,0 +1,20 @@
+/* --- Scene Painter: картинка сцены в подвале сообщения ---------------------------------------------------------------
+   Миниатюра не шире подвала и не выше 220px; по клику — во всю ширину сообщения. Без анимаций: подвал — часть чата
+   (см. запрет на анимацию рядом с DOM чата в styles/chat-viewport/mirror-row.css). */
+.stme-scene-painter { display: flex; align-items: flex-start; min-width: 0; }
+.stme-scene-painter-status { font-size: 12px; opacity: .8; white-space: nowrap; }
+.stme-scene-painter-paint {
+    font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 999px; cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 45%, var(--stme-border));
+    background: color-mix(in srgb, var(--stme-surface) 80%, transparent); color: var(--stme-text);
+}
+.stme-scene-painter-image { display: flex; gap: 6px; align-items: flex-start; max-width: 100%; }
+.stme-scene-painter-image img {
+    display: block; width: auto; height: auto; max-width: min(320px, 100%); max-height: 220px;
+    border-radius: 8px; cursor: zoom-in; border: 1px solid var(--stme-border);
+}
+.stme-scene-painter-image-open { flex-direction: column; }
+.stme-scene-painter-image-open img { max-width: 100%; max-height: none; cursor: zoom-out; }
+.stme-scene-painter-actions { display: flex; flex-direction: column; gap: 4px; }
+.stme-scene-painter-image-open .stme-scene-painter-actions { flex-direction: row; }
+.stme-scene-painter-backend { padding: 6px 0; border-bottom: 1px solid var(--stme-border); }
