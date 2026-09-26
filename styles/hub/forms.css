@@ -1,0 +1,111 @@
+/* ===== Формы панели в стиле хаба =====
+   Раньше формы (карточки, секции, кнопки, поля) жили в СТАРОМ виде: жёлтоватый градиент шапки, толстые обводки 2px, кнопки со скруглением 8px, мигающая
+   пульсация — рядом с плитками обзора (плита глифа, тонкий контур акцента, пилюли) это читалось как два разных интерфейса. Здесь формы подтянуты к плитке:
+   ТА ЖЕ плита (фон `--stme-glyph-opacity`, контур 1.5px акцента 55%, радиус карточки), кнопки — пилюли с тонким кольцом, поля — пилюли, без градиентов,
+   тени и пульсации. Работает только внутри полноэкранных панелей (`.stmeBeta-fullscreen`) — плавающие окна модулей остаются как были.
+   Цвета и радиусы — токены (styles/tokens/), тут нет ни одного своего цвета. */
+
+/* ---- плита: карточки и секции ---- */
+.stmeBeta-fullscreen .stme-card {
+    border: 1.5px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: var(--stme-radius-card, 10px);
+    background: color-mix(in srgb, color-mix(in srgb, #fff 9%, var(--stme-surface)) var(--stme-glyph-opacity, 78%), transparent);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+}
+.stmeBeta-fullscreen .stme-card:hover { border-color: var(--stme-accent); box-shadow: none; }
+.stmeBeta-fullscreen .stme-card-head { background: transparent; border-bottom: 1px solid color-mix(in srgb, var(--stme-accent) 28%, transparent); }
+.stmeBeta-fullscreen .stme-card:not([open]) > .stme-card-head { border-bottom-color: transparent; }
+.stmeBeta-fullscreen .stme-card-body { background: none; }
+.stmeBeta-fullscreen .stme-section {
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 24%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--stme-text) 6%, transparent);
+}
+.stmeBeta-fullscreen .stme-section .stme-section { border-radius: 10px; background: color-mix(in srgb, var(--stme-text) 5%, transparent); }
+.stmeBeta-fullscreen .stme-section-head .stme-card-title strong::before { background: var(--stme-accent); opacity: .7; }
+
+/* ---- кнопки: пилюли с тонким кольцом, как «Quick actions» и кнопки блоков стола ---- */
+.stmeBeta-fullscreen .stme-panel .menu_button,
+.stmeBeta-fullscreen .stme-hub .menu_button {
+    padding: 6px 16px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 45%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stme-text) 10%, transparent);
+    color: var(--stme-text);
+    animation: none;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.stmeBeta-fullscreen .stme-panel .menu_button:not(.disabled):not([disabled]):hover,
+.stmeBeta-fullscreen .stme-hub .menu_button:not(.disabled):not([disabled]):hover {
+    background-color: color-mix(in srgb, var(--stme-accent) 30%, transparent);
+    border-color: var(--stme-accent);
+    color: var(--stme-accent);
+    animation: none;
+}
+.stmeBeta-fullscreen .stme-panel .menu_button:not(.disabled):not([disabled]):active { background-color: color-mix(in srgb, var(--stme-accent) 40%, transparent); }
+.stmeBeta-fullscreen .stme-panel .menu_button.stme-danger { border-color: color-mix(in srgb, var(--stme-danger) 70%, transparent); }
+.stmeBeta-fullscreen .stme-panel .menu_button.stme-danger:not(.disabled):not([disabled]):hover { background-color: color-mix(in srgb, var(--stme-danger) 30%, transparent); border-color: var(--stme-danger-bright); color: var(--stme-danger-bright); animation: none; }
+.stmeBeta-fullscreen .stme-panel .menu_button.stme-ok { border-color: color-mix(in srgb, var(--stme-ok) 70%, transparent); }
+.stmeBeta-fullscreen .stme-panel .menu_button.stme-ok:not(.disabled):not([disabled]):hover { background-color: color-mix(in srgb, var(--stme-ok) 30%, transparent); border-color: var(--stme-ok-bright); color: var(--stme-ok-bright); animation: none; }
+.stmeBeta-fullscreen .stme-panel .stme-icon-button { border-width: 1px; border-radius: 999px; }
+
+/* ---- поля: пилюли (многострочные — с мягким скруглением) ---- */
+.stmeBeta-fullscreen .stme-panel input.text_pole,
+.stmeBeta-fullscreen .stme-panel select.text_pole {
+    padding-inline: 14px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 40%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stme-text) 8%, transparent);
+}
+.stmeBeta-fullscreen .stme-panel textarea.text_pole {
+    padding: 10px 14px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 40%, transparent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--stme-text) 8%, transparent);
+}
+.stmeBeta-fullscreen .stme-panel input.text_pole:focus,
+.stmeBeta-fullscreen .stme-panel select.text_pole:focus,
+.stmeBeta-fullscreen .stme-panel textarea.text_pole:focus { border-color: var(--stme-accent); }
+
+
+/* ---- оболочка панели: фон, шапка, «закрыть» ----
+   Фон был почти чёрным: подложка `--stme-surface` у ST непрозрачная, плюс тёмный слой поверх. Теперь панель — стекло, как плиты: сквозь неё виден фон ST
+   (размытый), текст читается по плитам. Шапка без градиента, «Close» — круглая кнопка-крестик, как кнопки блоков. */
+.stmeBeta-fullscreen.stmeBeta-fullscreen {   /* двойной класс: правило оболочки в style.css грузится позже и иначе перебивает */
+    background: color-mix(in srgb, var(--stme-surface) 48%, transparent);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+}
+.stmeBeta-fullscreen .stmeBeta-fullscreen-head { background: transparent; border-bottom: 1px solid color-mix(in srgb, var(--stme-accent) 28%, transparent); }
+.stmeBeta-fullscreen-head strong { color: var(--stme-accent); font-size: 15px; font-weight: 700; letter-spacing: 0; }
+.stmeBeta-fullscreen-head .stmeBeta-fullscreen-close { width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; border-width: 1px; border-radius: 999px; font-size: 14px; cursor: pointer; }
+/* Строка «Back» — без своей плашки и линий (тёмная полоса со стеклом поверх стекла выглядела чужеродным пятном): просто кнопка и название. */
+.stmeBeta-fullscreen .stme-hub-bar { position: static; padding: 0; background: none; border-bottom: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+/* ---- список внутри формы — блоками ----
+   Карточка, тело которой состоит из секций (Modules: по секции на модуль), раскладывает их сеткой плиток, а не столбиком строк; раскрытая секция занимает всю
+   строку сетки — её форма не должна ужиматься до ширины плитки. */
+.stmeBeta-fullscreen .stme-card-body:has(> .stme-section) { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); grid-auto-rows: minmax(112px, auto); gap: 12px; align-items: stretch; }
+/* Плитки ОДНОГО размера: описание закрытой плитки — не больше трёх строк (полностью оно видно в раскрытой), плитка растягивается на высоту строки сетки. */
+.stmeBeta-fullscreen .stme-card-body:has(> .stme-section) > .stme-section:not([open]) { display: flex; flex-direction: column; justify-content: center; }
+.stmeBeta-fullscreen .stme-card-body:has(> .stme-section) > .stme-section:not([open]) .stme-card-title small {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.stmeBeta-fullscreen .stme-card-body:has(> .stme-section) > .stme-section { margin-top: 0; }
+.stmeBeta-fullscreen .stme-card-body:has(> .stme-section) > .stme-section[open] { grid-column: 1 / -1; }
+.stmeBeta-fullscreen .stme-card-body:has(> .stme-section) > :not(.stme-section) { grid-column: 1 / -1; }
+
+/* Пока открыта полноэкранная панель, рабочий стол под ней прячется: сквозь стекло он читался бы мешаниной блоков (фон ST при этом виден). */
+body:has(.stmeBeta-fullscreen:not([hidden])) .stme-home { visibility: hidden; }
+
+/* Вертикальная боковая панель (левый край, `html.stme-side-bar-active`, z-index выше панели) закрывала название в шапке и левый край содержимого: отступаем от неё. */
+html.stme-side-bar-active .stmeBeta-fullscreen .stmeBeta-fullscreen-head { padding-left: calc(var(--stme-side-bar-w, 42px) + 14px); }
+html.stme-side-bar-active .stmeBeta-fullscreen .stmeBeta-fullscreen-body { padding-left: calc(var(--stme-side-bar-w, 42px) + 18px); }
+
+/* Тумблер в шапке секции (модуль вкл/выкл) — только ползунок: подпись «Enabled» дублировала его состояние. Для скринридера подпись остаётся (визуально скрыта). */
+.stmeBeta-fullscreen .stme-section-head .stme-switch { padding-bottom: 0; }
+.stmeBeta-fullscreen .stme-section-head .stme-switch-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHomeScene } from '../cores/ui/home/scene.js';
+import { createSurfaceScene } from '../cores/ui/surface/scene.js';
 import { attachDrag } from '../cores/ui/home/drag.js';
 
 /** Минимальный фейк DOM-узла: класс, стиль, дети, слушатели. */
@@ -22,7 +22,7 @@ function harness({ dpr = 2 } = {}) {
     const calls = [];
     const doc = { createElement: fakeEl };
     const call = async (contract, params) => { calls.push({ contract, params }); return { ok: true, value: contract === 'htmlRasterizer.rasterize' ? { image: { fake: true }, width: params.width * params.scale, height: params.height * params.scale } : true }; };
-    const scene = createHomeScene({ document: doc, call, getDevicePixelRatio: () => dpr });
+    const scene = createSurfaceScene({ document: doc, call, getDevicePixelRatio: () => dpr });
     return { scene, calls, names: name => calls.filter(item => item.contract === name) };
 }
 
@@ -110,7 +110,7 @@ test('when devicePixelRatio changes (page zoom, another monitor) the canvas is r
     let dpr = 1;
     const calls = [];
     const doc = { createElement: fakeEl };
-    const scene = createHomeScene({ document: doc, call: async (contract, params) => { calls.push({ contract, params }); return { ok: true, value: true }; }, getDevicePixelRatio: () => dpr });
+    const scene = createSurfaceScene({ document: doc, call: async (contract, params) => { calls.push({ contract, params }); return { ok: true, value: true }; }, getDevicePixelRatio: () => dpr });
     await scene.mount(fakeEl());
     await scene.setRect({ left: 0, top: 0, width: 600, height: 400 });
     const resizes = () => calls.filter(item => item.contract === 'webglChat.resize');

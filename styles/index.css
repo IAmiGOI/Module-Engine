@@ -31,5 +31,7 @@
 @import url('./chat-viewport/message-chrome.css');
 @import url('./chat-viewport/states.css');
 @import url('./home/blocks.css');
+@import url('./hub/hub.css');
+@import url('./hub/forms.css');
 @import url('./chat-viewport/message-tools.css');
 @import url('./modules/memory-graph-flat.css');
