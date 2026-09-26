@@ -13,7 +13,7 @@ export function createFullScreenPanel({ title = '' } = {}) {
     overlay.innerHTML = `
         <div class="stmeBeta-fullscreen-head">
             <strong>${title}</strong>
-            <button type="button" class="menu_button stmeBeta-fullscreen-close">Close</button>
+            <button type="button" class="stme-icon-button stmeBeta-fullscreen-close" title="Close" aria-label="Close"><i class="fa-solid fa-xmark fa-fw"></i></button>
         </div>
         <div class="stmeBeta-fullscreen-body"></div>`;
     document.body.append(overlay);

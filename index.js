@@ -186,9 +186,11 @@ function showOnboardingStepFinal() {
  * пульсирующей обводкой, что онбординг (`stme-spotlight-target`). Не нашли карточку — панель просто открыта. Панель рисуется не сразу, поэтому
  * карточку ищем опросом (до секунды).
  */
-function revealPanelCard(openMain, title) {
+function revealPanelCard(openMain, title, hubs = []) {
     openMain();
     if (!title) return;
+    // Форма блока открывается в хабе (карточка появится в DOM видимой), дальше — подсветка, как раньше.
+    for (const hub of hubs) if (hub.groupHas(title)) hub.openCard(title);
     // Опрос по таймеру, а не `requestAnimationFrame`: в скрытой вкладке rAF не идёт, а карточка должна найтись в любом случае.
     let tries = 0;
     const attempt = () => {
@@ -258,7 +260,7 @@ async function init() {
     // расширения, которого ждут git-эндпоинты ST. Передаём явно, потому что
     // сборщик движка лежит в другой папке, и его собственный `import.meta.url`
     // дал бы не то имя.
-    const { engine, panelUi, startup, memoryGraphPanel, picturePanel, activityLight, modules, enginePanel, firstLoad, firstLoadResult, uiEngine } = await wireEngine({
+    const { engine, panelUi, hub, startup, memoryGraphPanel, picturePanel, activityLight, modules, enginePanel, firstLoad, firstLoadResult, uiEngine } = await wireEngine({
         getContext,
         fetch: window.fetch.bind(window),
         scriptUrl: import.meta.url,
@@ -295,6 +297,8 @@ async function init() {
     // общие с основной панелью, потому что это то же Ядро.
     const settingsPanel = createFullScreenPanel({ title: 'ST Module Engine — Settings' });
     settingsPanel.body.append(enginePanel.settingsRoot());
+    // Обзор из блоков над формами: основная панель и экран настроек показывают свои группы; клик по блоку открывает его форму (нынешнюю карточку).
+    const hubs = [hub.mount({ container: panel.body, panelRoot: panelUi.getRoot(), group: 'work' }), hub.mount({ container: settingsPanel.body, panelRoot: enginePanel.settingsRoot(), group: 'settings' })];
     // Взаимное исключение (решено с пользователем: «если открыты настройки и
     // ты открываешь основную панель — они накладываются друг на друга. Я
     // хочу, чтобы они переключались»): оба оверлея — фиксированные слои на
@@ -345,7 +349,7 @@ async function init() {
     }).mount();
 
     // Главный экран (шаги чек-листа): «открой панель на этой карточке» — панель принадлежит этому файлу, поэтому подписка здесь.
-    engine.events.subscribe('ui.enginePanel.reveal', payload => revealPanelCard(openMain, payload?.card));
+    engine.events.subscribe('ui.enginePanel.reveal', payload => revealPanelCard(hubs[1].groupHas(payload?.card) ? openSettings : openMain, payload?.card, hubs));
 
     window.STModuleEngineBeta = engine;
     console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the floating launcher dock.');

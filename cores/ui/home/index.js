@@ -2,7 +2,7 @@ import { request } from '../../../libraries/shared/request.js';
 import { buildBlocks, composeHome, dragPlacement, toSaved, itemsForEvent, checklistProgress } from '../../../libraries/shared/home-model.js';
 import { blockHtml, homeCss, visibleRecent } from '../../../libraries/shared/home-html.js';
 import { SIDE_BAR_INSET, SIDE_TOP_INSET } from '../../../libraries/shared/chat-viewport-overlay-math.js';
-import { createHomeScene } from './scene.js';
+import { createSurfaceScene } from '../surface/scene.js';
 import { createItemPicker } from './picker.js';
 import { createWidgetDesk } from './widget-desk.js';
 import { createCardsApi } from './cards.js';
@@ -250,7 +250,7 @@ export function createHomeCore(host, {
 
     async function enable() {
         if (active) return { ok: true };
-        const scene = createHomeScene({ document: doc, call, getDevicePixelRatio });
+        const scene = createSurfaceScene({ document: doc, call, getDevicePixelRatio });
         scene.root.style.display = 'none';
         await load();
         if (!(await scene.mount(doc.body))) { scene.root.remove(); return { ok: false, reason: 'no-webgl' }; }

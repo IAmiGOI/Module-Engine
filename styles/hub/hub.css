@@ -1,0 +1,44 @@
+/* ===== Хаб — обзор основной панели Module Engine (cores/ui/hub/) =====
+   Сетка блоков «как глифы»: плита — тот же фон и контур, что у плиты глифа и блока рабочего стола (один токен `--stme-glyph-opacity`), тело блока рисует
+   WebGL на общей поверхности (прозрачный канвас поверх, `pointer-events: none`), а точка статуса и стрелка — DOM. Формы блоков — прежние DOM-карточки панели.
+   Всё — под классами `stme-hub*`: чужого не трогаем. Без анимаций. */
+.stme-hub { max-width: 1100px; margin: 0 auto; }
+.stme-hub-overview { position: relative; width: 100%; }
+.stme-hub-overview[hidden], .stme-hub-bar[hidden] { display: none; }
+.stme-hub-scene { position: absolute; left: 0; top: 0; pointer-events: none; overflow: hidden; }
+
+.stme-hub-tile {
+    pointer-events: auto;   /* слой сцены сам не ловит мышь (`pointer-events: none`), плитки — ловят */
+    position: absolute;
+    left: 0;
+    top: 0;
+    box-sizing: border-box;
+    padding: 0;
+    text-align: left;
+    color: var(--stme-text);
+    cursor: pointer;
+    border: 1.5px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: var(--stme-radius-card, 10px);
+    background: color-mix(in srgb, color-mix(in srgb, #fff 9%, var(--stme-surface)) var(--stme-glyph-opacity, 78%), transparent);
+    transition: border-color .12s ease, background .12s ease;
+}
+.stme-hub-tile:hover, .stme-hub-tile:focus-visible { border-color: var(--stme-accent); outline: none; }
+.stme-hub-tile:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--stme-accent) 45%, transparent); }
+.stme-hub-arrow { position: absolute; right: 14px; bottom: 14px; font-size: 13px; opacity: .55; }
+.stme-hub-tile:hover .stme-hub-arrow { opacity: 1; color: var(--stme-accent); }
+.stme-hub-dot { position: absolute; right: 14px; top: 17px; width: 10px; height: 10px; border-radius: 50%; background: color-mix(in srgb, var(--stme-text) 30%, transparent); }
+.stme-hub-tile[data-status="ok"] .stme-hub-dot { background: var(--stme-ok, #6fcf97); }
+.stme-hub-tile[data-status="warn"] .stme-hub-dot { background: var(--stme-status-warn, #f2c94c); }
+.stme-hub-tile[data-status="off"] .stme-hub-dot { background: color-mix(in srgb, var(--stme-text) 30%, transparent); }
+.stme-hub-tile[data-status="info"] .stme-hub-dot { background: color-mix(in srgb, var(--stme-accent) 70%, transparent); }
+
+/* Без WebGL: тот же текст обычным DOM. */
+.stme-hub-text { position: absolute; left: 16px; right: 40px; top: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.stme-hub-text strong { font-size: 15px; color: var(--stme-accent); }
+.stme-hub-text span { color: color-mix(in srgb, var(--stme-text) 70%, transparent); }
+
+/* Форма открытого блока: одна карточка на всю ширину, «Back» сверху. */
+.stme-hub-bar { position: sticky; top: -18px; z-index: 2; display: flex; align-items: center; gap: 14px; margin-bottom: 14px; padding: 10px 0; background: color-mix(in srgb, var(--stme-surface) 92%, transparent); }
+.stme-hub-bar strong { font-size: 1.05em; color: var(--stme-accent); }
+.stme-panel.stme-hub-single .stme-two-column { grid-template-columns: 1fr; }
+.stme-panel.stme-hub-single .stme-column:empty { display: none; }

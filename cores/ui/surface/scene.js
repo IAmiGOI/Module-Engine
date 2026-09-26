@@ -1,14 +1,14 @@
 /**
- * Сцена главного экрана: контейнер на всё окно с ДВУМЯ слоями — снизу DOM блоков (плиты, аватары, кнопки), сверху прозрачный WebGL-канвас с
+ * ОБЩАЯ поверхность блоков (рабочий стол и панель — cores/ui/home/, cores/ui/hub/): контейнер на всё окно с ДВУМЯ слоями — снизу DOM блоков (плиты, аватары, кнопки), сверху прозрачный WebGL-канвас с
  * текстом блоков (`pointer-events: none`, поэтому клики доходят до DOM под ним). Тело блока — растр HTML (`htmlRasterizer`), тот же путь и тот же
  * рендерер (`webglChat`), что у тел сообщений в Chat Viewport; текстура перерисовывается ТОЛЬКО когда изменился HTML блока.
  *
  * Перетаскивание блока — это не растеризация: меняется только `transform` DOM-узла и позиция квада, кадр рисуется одним `drawFrame`.
  * Браузерное (`document`, `devicePixelRatio`) — инъекцией; вызовы сервисов — через `call(contract, params)` → `{ ok, value }`.
  */
-export function createHomeScene({ document: doc = globalThis.document, call, getDevicePixelRatio = () => globalThis.devicePixelRatio || 1 }) {
+export function createSurfaceScene({ document: doc = globalThis.document, call, getDevicePixelRatio = () => globalThis.devicePixelRatio || 1, className = 'stme-home' }) {
     const root = doc.createElement('div');
-    root.className = 'stme-home';
+    root.className = className;
     const blocksLayer = doc.createElement('div');
     blocksLayer.className = 'stme-home-blocks';
     const canvas = doc.createElement('canvas');

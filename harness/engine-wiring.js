@@ -64,6 +64,7 @@ import { createMessageFooterCore } from '../cores/ui/message-footer.js';
 import { createChatViewportCore } from '../cores/ui/chat-viewport.js';
 import { createInputBarCore } from '../cores/ui/input-bar/index.js';
 import { createHomeCore } from '../cores/ui/home/index.js';
+import { createHubCore } from '../cores/ui/hub/index.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
 import { createPicturePanelCore } from '../cores/ui/picture-panel.js';
@@ -737,6 +738,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     );
 
     let enginePanelRef = null;
+    let hubRef = null;
     const modules = createModuleRegistry({
         engine,
         uiModules,
@@ -745,8 +747,12 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         // Своя личность на Шине ядер: состав помнится через то же Ядро
         // сохранения, что и всё остальное, а не отдельным ходом в обход.
         storageHost: engine.registerCaller('core.runner', 'cores', { tier: 'official' }),
-        onChanged: () => enginePanelRef?.refreshModules(),
+        onChanged: () => { enginePanelRef?.refreshModules(); void hubRef?.refresh(); },
     });
+
+    // Хаб — обзор панели из блоков «как глифы» с живым статусом; формы блоков остаются DOM-карточками панели (cores/ui/hub/). Привязывается к панелям в index.js.
+    const hub = createHubCore(engine.registerCaller('core.ui.hub', 'cores', { tier: 'official' }), { modules });
+    hubRef = hub;
 
     // Экран движка — тоже Ядро (движок без интерфейса не работает, и
     // пользователь его не подключает). К моделям он ходит контрактами, а не
@@ -851,5 +857,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }
