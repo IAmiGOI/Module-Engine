@@ -9,6 +9,7 @@ import { installRowChrome } from './chat-viewport/row-chrome.js';
 import { installGlyphBg } from './chat-viewport/glyph-bg.js';
 import { installBodyCache } from './chat-viewport/body-cache.js';
 import { installBodySync } from './chat-viewport/body-sync.js';
+import { installBodyTextEngine } from './chat-viewport/body-text-engine.js';
 import { installBodyImages } from './chat-viewport/body-images.js';
 import { installLastCanvas } from './chat-viewport/last-canvas.js';
 import { installPrefetch } from './chat-viewport/prefetch.js';
@@ -82,17 +83,20 @@ export function createChatViewportCore(host, {
     createFinalUi,
     // Копирование текста сообщения (кнопка панели действий); по умолчанию — буфер обмена браузера.
     copyText,
+    // Своя раскладка текста вместо «зеркало + SVG-растр» (`body-text-engine.js`); переключается и на лету — `setTextEngine`.
+    textEngine = false,
 } = {}) {
     const ctx = createChatViewportContext(host, {
         publish, rowHeight, overscan, prerenderFactor, textureBudgetBytes, prefetchScreens, prefetchConcurrency, persistentCache,
         getDevicePixelRatio, createFinalUi, copyText,
     });
     const { s } = ctx;
+    s.textEngine = Boolean(textEngine);
 
     // Порядок важен только для `installCalls` (остальные берут `serviceOrThrow`/`serviceOrNull`/`coreOrNull` при установке).
     for (const install of [
         installCalls, installSkeletons, installChromeWatch, installMeasure, installRowHelpers, installRowTree, installRowChrome,
-        installGlyphBg, installBodyCache, installBodySync, installBodyImages, installLastCanvas, installPrefetch, installGenerationStatus,
+        installGlyphBg, installBodyCache, installBodySync, installBodyTextEngine, installBodyImages, installLastCanvas, installPrefetch, installGenerationStatus,
         installRenderSnapshot, installRenderRow, installRenderCommit, installMessageTools, installRender, installLifecycle,
     ]) install(ctx);
 
@@ -107,6 +111,8 @@ export function createChatViewportCore(host, {
         host.own.register('chatViewport.editMessage', params => ctx.editMessage(params)),
         host.own.register('chatViewport.visibleMesids', () => [...s.lastNeeded]),
         host.own.register('chatViewport.totalHeight', () => s.lastTotalHeight),
+        host.own.register('chatViewport.setTextEngine', params => ctx.setTextEngine(params)),
+        host.own.register('chatViewport.textEngineStats', () => ({ ...ctx.textEngineStats, reasons: Object.fromEntries(ctx.textEngineStats.reasons) })),
     ];
 
     return {
@@ -118,6 +124,7 @@ export function createChatViewportCore(host, {
         swipe: ctx.swipe,
         regenerate: ctx.regenerate,
         editMessage: ctx.editMessage,
+        setTextEngine: params => ctx.setTextEngine(params),
         render: ctx.render,
         /** Курсор над чатом (координаты слоя кадра) → панель действий сообщения; `hoverLeave` — курсор ушёл. */
         hoverAt: point => ctx.hoverAt(point),

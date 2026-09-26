@@ -1,6 +1,6 @@
 import { signal } from '../reactive.js';
 import { PHONE_SIDE_MARGIN, resolveMargins, marginsWidth, minSideMargin, INPUT_PANEL_GAP, SIDE_BAR_INSET, SIDE_TOP_INSET } from '../../../libraries/shared/chat-viewport-overlay-math.js';
-import { buildChatViewportBodyCss } from '../../../libraries/shared/chat-viewport-body-css.js';
+import { buildChatViewportBodyCss, buildChatViewportTextTheme } from '../../../libraries/shared/chat-viewport-body-css.js';
 import { buildOverlayLayers } from './layers.js';
 import { startScrollSync } from './scroll-sync.js';
 import { startMarginSync } from './margin-sync.js';
@@ -48,7 +48,11 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
         const resolved = await callService('htmlRasterizer.resolveFontFamily', { family: fontFamily });
         const family = resolved.ok && resolved.value ? resolved.value : fontFamily;
         await callService('dom.setProp', { el: mirror, key: 'style', value: { fontFamily: family } });
-        return buildChatViewportBodyCss({ bodyColor, quoteColor, emColor, fontFamily: family });
+        return {
+            css: buildChatViewportBodyCss({ bodyColor, quoteColor, emColor, fontFamily: family }),
+            // Своя раскладка рисует canvas'ом, а он видит веб-шрифт страницы — ей исходный список семейств, без урезания до установленных.
+            textTheme: buildChatViewportTextTheme({ bodyColor, quoteColor, emColor, fontFamily }),
+        };
     }
 
     async function enable() {
@@ -90,7 +94,7 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
 
             const refs = await buildOverlayLayers(callServiceOrThrow, { parent, pageSize, layout });
             resources.wrapper = refs.wrapper;
-            const css = await readBodyCss(refs.mirror);
+            const { css, textTheme } = await readBodyCss(refs.mirror);
 
             // `clientWidth/Height`, НЕ `rect.width/height` (найдено живьём): у обёртки `overflow-y:auto` свой скроллбар отъедает
             // ширину, а по спецификации второй `overflow` тогда тоже `auto` — канвас на внешнюю ширину получал горизонтальный скролл.
@@ -108,7 +112,7 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
             const initialMargins = resolveMargins(columnMargins(), pageWidth.peek(), layout.minMargin);
             const ok = await chatViewport.attach({
                 canvas: refs.canvas, lastCanvas: refs.lastCanvas, mirrorContainer: refs.mirror, chromeContainer: refs.chrome,
-                width: Math.max(1, marginsWidth(clientSize.width, initialMargins) - layout.rightSpace), height: clientSize.height, css,
+                width: Math.max(1, marginsWidth(clientSize.width, initialMargins) - layout.rightSpace), height: clientSize.height, css, textTheme,
             });
             // Слой держит окно предрендера: `overflow: clip` + `overflow-clip-margin` — содержимое за краем видно (подкатка при скролле),
             // но не растягивает scrollHeight. Отрицательный marginBottom гасит собственную высоту слоя — иначе под последним

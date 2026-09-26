@@ -51,7 +51,7 @@ export function installLifecycle(ctx) {
         await serviceOrThrow('dom.setProp', { el: s.canvas, key: 'style', value: { width: `${s.viewportWidth}px`, height: `${ctx.canvasHeight()}px`, top: `${-ctx.canvasPad()}px` } });
     }
 
-    async function attach({ canvas: nextCanvas, lastCanvas: nextLastCanvas, mirrorContainer: nextMirrorContainer, chromeContainer: nextChromeContainer, width, height, css: nextCss = '' } = {}) {
+    async function attach({ canvas: nextCanvas, lastCanvas: nextLastCanvas, mirrorContainer: nextMirrorContainer, chromeContainer: nextChromeContainer, width, height, css: nextCss = '', textTheme = null } = {}) {
         if (!nextCanvas || !nextMirrorContainer) throw new Error('chatViewport.attach: "canvas" and "mirrorContainer" are required.');
         s.canvas = nextCanvas;
         s.mirrorContainer = nextMirrorContainer;
@@ -61,6 +61,7 @@ export function installLifecycle(ctx) {
         // сценарными тестами, которые о хроме ничего не знают.
         s.chromeContainer = nextChromeContainer ?? null;
         s.css = String(nextCss ?? '');
+        s.textTheme = textTheme;
         s.viewportWidth = Math.max(1, Math.round(Number(width) || 0));
         s.viewportHeight = Math.max(1, Math.round(Number(height) || 0));
         s.devicePixelRatio = Math.max(1, Number(getDevicePixelRatio()) || 1);

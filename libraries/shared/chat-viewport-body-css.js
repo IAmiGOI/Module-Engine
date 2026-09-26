@@ -59,3 +59,20 @@ export function buildChatViewportBodyCss({ bodyColor, quoteColor, emColor, fontF
         + `${body} font[color] em, ${body} font[color] i, ${body} font[color] q { color: inherit; } `
         + `${body} q:before, ${body} q:after { content: ''; }`;
 }
+
+/**
+ * Тема для своей раскладки текста (`libraries/shared/text-layout`, `cores/ui/chat-viewport/body-text-engine.js`) — те же числа и цвета, что в
+ * CSS тела выше, одним объектом. `fontFamily` — шрифт СТРАНИЦЫ (веб-шрифт темы ST): canvas его видит, в отличие от SVG-растра.
+ */
+export function buildChatViewportTextTheme({ bodyColor, quoteColor, emColor, fontFamily } = {}) {
+    const body = bodyColor || FALLBACK_BODY_COLOR;
+    return {
+        fontFamily: fontFamily || FALLBACK_FONT_FAMILY,
+        fontSize: BODY_FONT_SIZE_PX,
+        lineHeight: BODY_LINE_HEIGHT,
+        blockGap: PARAGRAPH_GAP_PX,
+        listIndentEm: 1.4,
+        quoteIndent: 10,
+        colors: { body, em: emColor || FALLBACK_EM_COLOR, quote: quoteColor || FALLBACK_QUOTE_COLOR, link: body },
+    };
+}

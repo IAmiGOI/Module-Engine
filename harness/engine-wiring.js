@@ -4,6 +4,7 @@ import { registerDomService } from '../services/dom.js';
 import { registerHtmlRasterizerService } from '../services/html-rasterizer.js';
 import { registerWebglRendererService } from '../services/webgl-renderer.js';
 import { registerRasterCacheService } from '../services/raster-cache.js';
+import { registerTextPainterService } from '../services/text-painter.js';
 import { registerGlAnimationService } from '../services/gl-animation.js';
 import { registerStBackgroundsService } from '../services/st-backgrounds.js';
 import { registerImageScaleService } from '../services/image-scale.js';
@@ -464,6 +465,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerHtmlRasterizerService(engine.buses.services);
     registerWebglRendererService(engine.buses.services);
     registerRasterCacheService(engine.buses.services);
+    registerTextPainterService(engine.buses.services);
     registerGlAnimationService(engine.buses.services);
     registerStBackgroundsService(engine.buses.services, { getContext });
     registerImageScaleService(engine.buses.services);

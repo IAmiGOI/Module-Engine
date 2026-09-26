@@ -39,6 +39,9 @@ export function createChatViewportCard(deps) {
     // разрывает связь: левый край тянется влево/вправо сам по себе, правый
     // сам по себе, колонку можно сместить в одну сторону.
     const chatViewportMargins = signal({ ...DEFAULT_MARGINS });
+    // Своя раскладка текста (бета): тело сообщения раскладывается и рисуется движком, шрифтом темы ST, без зеркала и SVG-растра.
+    // Выключено по умолчанию; неподдерживаемые сообщения всё равно идут старым путём.
+    const ownTextLayout = signal(false);
 
     // Весь DOM оверлея — `cores/ui/chat-viewport-overlay/`; панель только просит включить/выключить и показывает исход.
     const chatViewportOverlay = chatViewport
@@ -91,6 +94,10 @@ export function createChatViewportCard(deps) {
                 onChange: async value => { await (value ? enableChatViewport() : disableChatViewport()); await saveChatViewportState(); },
                 hint: computed(() => (chatViewportBusy() ? 'Starting…' : '')),
             }),
+            Toggle('Own text layout (beta)', ownTextLayout, {
+                onChange: async value => { await chatViewport?.setTextEngine?.({ enabled: value }); await saveChatViewportState(); },
+                hint: 'Lays out and draws message text itself, in the theme font. Messages it cannot handle yet (tables, code, custom HTML) stay on the old renderer.',
+            }),
             // Ползунок ширины нарочно НЕ здесь — owner: "нужно ТЯНУТЬ
             // физически. Не ползунком где-то там". Заужение — ручки по краям
             // самого канваса в чате (см. `leftHandle`/`rightHandle` в
@@ -101,7 +108,7 @@ export function createChatViewportCard(deps) {
     /** Включён ли Chat Viewport и ширина заужения — переживают перезагрузку страницы. */
     function saveChatViewportState() {
         return request(host.own, 'storage.settings.set', {
-            params: { namespace: 'core.ui.panel', key: 'chatViewport', value: { enabled: chatViewportEnabled.peek(), marginLeft: chatViewportMargins.peek().left, marginRight: chatViewportMargins.peek().right, marginLinked: chatViewportMargins.peek().linked } },
+            params: { namespace: 'core.ui.panel', key: 'chatViewport', value: { enabled: chatViewportEnabled.peek(), ownTextLayout: ownTextLayout.peek(), marginLeft: chatViewportMargins.peek().left, marginRight: chatViewportMargins.peek().right, marginLinked: chatViewportMargins.peek().linked } },
         });
     }
 
@@ -111,6 +118,7 @@ export function createChatViewportCard(deps) {
         // Раньше хранился один симметричный `sideMargin` — читается как связанная пара.
         if (Number.isFinite(saved.marginLeft) && Number.isFinite(saved.marginRight)) chatViewportMargins.set({ left: saved.marginLeft, right: saved.marginRight, linked: saved.marginLinked === true });
         else if (Number.isFinite(saved.sideMargin)) chatViewportMargins.set({ left: saved.sideMargin, right: saved.sideMargin, linked: true });
+        if (saved.ownTextLayout === true) { ownTextLayout.set(true); await chatViewport?.setTextEngine?.({ enabled: true }); }
         // Явный выбор пользователя важнее всего; если его не было — на телефоне включаем (см. `resolveChatViewportEnabled`).
         // Неудавшийся запуск выбор НЕ записывает, поэтому на следующей загрузке телефон попробует снова.
         if (resolveChatViewportEnabled(saved, { mobile: isMobile() })) {

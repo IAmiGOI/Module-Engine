@@ -37,7 +37,8 @@ export function installBodySync(ctx) {
      */
     function rasterDiskKey(html) {
         if (s.cssHashCache.css !== s.css) s.cssHashCache = { css: s.css, hash: hashString(s.css) };
-        return `${hashString(html)}.${html.length}.${s.cssHashCache.hash}.${ctx.contentWidth()}.${s.devicePixelRatio}.${RASTER_LAYOUT_VERSION}`;
+        // `.te` — тела нового пути (своя раскладка): другая высота и другой шрифт, со старыми текстурами смешиваться не должны.
+        return `${hashString(html)}.${html.length}.${s.cssHashCache.hash}.${ctx.contentWidth()}.${s.devicePixelRatio}.${RASTER_LAYOUT_VERSION}${ctx.isTextEngineActive() ? '.te1' : ''}`;
     }
 
     /**
@@ -67,7 +68,8 @@ export function installBodySync(ctx) {
 
     async function syncMesidRun(message, avatarRemainder = 0) {
         const { mesid, text } = message;
-        const html = ctx.avatarSpacerHtml(avatarRemainder) + await ctx.paintedBodyHtml(message);
+        const painted = await ctx.paintedBodyHtml(message);
+        const html = ctx.avatarSpacerHtml(avatarRemainder) + painted;
 
         // Сравнение с тем, что записали МЫ прошлый раз — тот же приём, что
         // `dom.js`'s `lastWritten`: без него растеризация/загрузка текстуры
@@ -102,6 +104,12 @@ export function installBodySync(ctx) {
                 bodyHeights.set(mesid, hit.height);
                 return hit.height;
             }
+        }
+
+        // Новый путь (своя раскладка + canvas), если включён и сообщение ему по силам; иначе — зеркало + SVG-растр ниже, как раньше.
+        if (changed && ctx.isTextEngineActive()) {
+            const engineHeight = await ctx.syncWithTextEngine(message, { html: painted, avatarRemainder, home, cacheKey, diskKey });
+            if (engineHeight !== null) return engineHeight;
         }
 
         const mirror = await ctx.ensureMirror(mesid);
