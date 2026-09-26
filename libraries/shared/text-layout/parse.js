@@ -1,4 +1,5 @@
 import { BASE_STYLE, deriveStyle } from './style.js';
+import { legacyColor } from './legacy-color.js';
 
 /**
  * Разбор HTML тела сообщения в блоки раскладки + детектор поддержки. Вход — корень DOM-подобного дерева (настоящий HTML-парсер браузера
@@ -103,7 +104,7 @@ function inlineChild(node, context, out) {
         case 'SPAN': checkAttributes(node, ['style']); style = applySpanStyle(style, parseStyleAttribute(node.getAttribute('style'))); break;
         case 'FONT': {
             checkAttributes(node, ['color']);
-            const color = node.getAttribute('color');
+            const color = legacyColor(node.getAttribute('color'));
             if (color) { style = deriveStyle(style, { color }); inFontColor = true; }
             break;
         }
