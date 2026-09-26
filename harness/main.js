@@ -204,8 +204,9 @@ async function demoAwareFetch(url, init) {
             text: async () => JSON.stringify({ choices: [{ message: { content } }] }),
         };
     }
-    const response = await fetch(url, init);
-    return { status: response.status, ok: response.ok, headers: { entries: () => [...response.headers.entries()] }, text: () => response.text() };
+    // Настоящий ответ целиком, а не урезанный объект: `http.request` читает у него и `blob()` (картинки — Ядро diffusion, окно «Картинка»),
+    // и `body` (стриминг). Урезанная обёртка с одним `text()` ломала оба пути только здесь, в харнессе: в ST сборке передаётся `window.fetch`.
+    return fetch(url, init);
 }
 
 // --- Поддельный «глобальный объект» ST для перехвата генерации --------------

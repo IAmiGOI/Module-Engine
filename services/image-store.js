@@ -44,11 +44,35 @@ async function withStore(mode, run) {
     }
 }
 
-export function registerImageStoreService(bus) {
+/**
+ * `image.url({ id })` — адрес для `<img src>` (object URL) по картинке из хранилища; `null`, если такой нет. Один адрес на картинку, пока
+ * его не отзовут (`image.revokeUrl`): иначе каждая перерисовка подвала создавала бы новый и копила память. Модулю не нужен `URL` браузера —
+ * работа с ним остаётся в Сервисе.
+ */
+export function registerImageStoreService(bus, { createObjectUrl = blob => URL.createObjectURL(blob), revokeObjectUrl = url => URL.revokeObjectURL(url), getBlob = id => withStore('readonly', store => store.get(String(id))) } = {}) {
+    const urls = new Map();
+    async function urlOf(id) {
+        const key = String(id ?? '');
+        if (!key) return null;
+        if (!urls.has(key)) urls.set(key, getBlob(key).then(blob => (blob ? createObjectUrl(blob) : null)));
+        const url = await urls.get(key);
+        if (!url) urls.delete(key);
+        return url;
+    }
+    async function revoke(id) {
+        const key = String(id ?? '');
+        const pending = urls.get(key);
+        urls.delete(key);
+        const url = await pending;
+        if (url) revokeObjectUrl(url);
+        return true;
+    }
     const unregisters = [
+        bus.register('image.url', params => urlOf(params?.id), { loadMetric: () => 0 }),
+        bus.register('image.revokeUrl', params => revoke(params?.id), { loadMetric: () => 0 }),
         bus.register('image.put', params => withStore('readwrite', store => store.put(params?.blob, String(params?.id))), { loadMetric: () => 1 }),
         bus.register('image.get', params => withStore('readonly', store => store.get(String(params?.id))), { loadMetric: () => 1 }),
-        bus.register('image.delete', params => withStore('readwrite', store => store.delete(String(params?.id))), { loadMetric: () => 1 }),
+        bus.register('image.delete', async params => { await revoke(params?.id); return withStore('readwrite', store => store.delete(String(params?.id))); }, { loadMetric: () => 1 }),
     ];
     return () => { for (const unregister of unregisters) unregister(); };
 }
