@@ -60,7 +60,7 @@ function buildEngine({ chat = [] } = {}) {
 
     // Сервис воспроизведения — фейк над тем же контрактом (реальный владеет
     // <audio> и URL.createObjectURL, недоступными в Node).
-    const playback = { id: null, playing: false, playCalls: 0, onEnded: null, volume: 0.7 };
+    const playback = { id: null, playing: false, playCalls: 0, onEnded: null, volume: 0.7, time: 0, duration: 0, seekedTo: null };
     engine.buses.services.register('audio.playback.play', ({ id, blob, onEnded }) => {
         if (!blob) return { ok: false };
         playback.id = id ?? null;
@@ -72,7 +72,8 @@ function buildEngine({ chat = [] } = {}) {
     engine.buses.services.register('audio.playback.pause', () => { playback.playing = false; return { ok: true }; });
     engine.buses.services.register('audio.playback.volume', ({ value }) => { if (Number.isFinite(value)) playback.volume = value; return { ok: true }; });
     // ВАЖНО: шина сама оборачивает ответ в {ok, value} — фейк возвращает голый снимок, как реальный Сервис (см. audio-playback.js).
-    engine.buses.services.register('audio.playback.state', () => ({ id: playback.id, playing: playback.playing }));
+    engine.buses.services.register('audio.playback.state', () => ({ id: playback.id, playing: playback.playing, currentTime: playback.time, duration: playback.duration }));
+    engine.buses.services.register('audio.playback.seek', ({ time }) => { playback.seekedTo = time; playback.time = time; return { ok: true }; });
 
     // Эмбединг-фейк: вектор — СУММА осей, чьи имена встретились в тексте
     // (нормированная). Детерминированно, «ничего не встретилось» — фон города.
@@ -97,7 +98,7 @@ function buildEngine({ chat = [] } = {}) {
         allowedContracts: [
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
-            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume',
+            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek',
             'embedding.compute',
         ],
     });
@@ -237,4 +238,42 @@ test('embedding.compute unavailable — module degrades softly: no throw, notify
 
     await module.onGenerationCompleted(); // не бросает, ничего не играет
     assert.equal(module.nowPlaying.peek().trackId, null);
+});
+
+test('the position is polled while a track plays and NOT after it is paused; seek goes to the Service and moves the bar at once', async () => {
+    const chat = ['Blades clash in the rain — a brutal fight erupts.'];
+    const { module, audio } = buildEngine({ chat });
+    await module.load();
+    await module.importFiles([{ name: 'tense urban fight at night.mp3', blob: new Blob(['a']) }]);
+    audio.time = 42;
+    audio.duration = 180;
+    await module.onGenerationCompleted();
+    await new Promise(resolve => setTimeout(resolve, 650));
+    assert.deepEqual(module.progress.peek(), { time: 42, duration: 180 }, 'the poll took the position and the length from the Service');
+
+    module.seek(90);
+    assert.equal(audio.seekedTo, 90);
+    assert.equal(module.progress.peek().time, 90, 'the bar does not wait for the next poll');
+
+    module.pause();
+    await new Promise(resolve => setTimeout(resolve, 650));   // последний опрос увидит паузу и остановит таймер
+    audio.time = 150;
+    await new Promise(resolve => setTimeout(resolve, 650));
+    assert.equal(module.progress.peek().time, 90, 'no polling on pause: the position stays where it was');
+    module.stop();
+});
+
+test('mute silences the Service without touching the remembered volume, and unmute brings it back', async () => {
+    const { module, audio } = buildEngine();
+    await module.load();
+    module.volume.set(0.4);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(audio.volume, 0.4);
+    module.toggleMute();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(audio.volume, 0);
+    assert.equal(module.volume.peek(), 0.4, 'the level itself is kept');
+    module.toggleMute();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(audio.volume, 0.4);
 });

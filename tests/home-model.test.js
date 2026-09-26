@@ -110,7 +110,7 @@ test('dragging into another block: it stops at the neighbour, slides along it, a
     const wall = { id: 'w', x: 500, y: 100, w: 200, h: 300 };
     const start = { id: 'a', x: 100, y: 200, w: 300, h: 100 };
     const blocked = dragPlacement(start, { dx: 250, dy: 0 }, stage, { others: [wall], last: start });
-    assert.deepEqual([blocked.x, blocked.y], [100, 200], 'straight into the neighbour: stays on the last valid spot');
+    assert.deepEqual([blocked.x, blocked.y], [wall.x - start.w - BLOCK_SPACING, 200], 'straight into the neighbour: stops flush, exactly one gap away');
     const slide = dragPlacement(start, { dx: 250, dy: 300 }, stage, { others: [wall], last: start });
     assert.equal(rectsCollide(slide, wall), false);
     assert.notDeepEqual([slide.x, slide.y], [start.x, start.y], 'it slid instead of freezing');
@@ -165,4 +165,18 @@ test('the flow layout (phone): blocks go in order left to right and wrap, rows a
     assert.ok(placements.every(p => p.x >= 0));
     assert.equal(composeFlow({ width: 400, blocks: [] }).height, 0);
     assert.equal(FLOW_MAX_WIDTH, 700);
+});
+
+test('the gap to the neighbour does not depend on how fast the block was dragged: one big jump and many small steps stop at the same place', () => {
+    const stage = { width: 1000, height: 700 };
+    const wall = { id: 'w', x: 500, y: 100, w: 200, h: 300 };
+    const start = { id: 'a', x: 100, y: 200, w: 300, h: 100 };
+    const jump = dragPlacement(start, { dx: 380, dy: 0 }, stage, { others: [wall], last: start });
+    let last = start;
+    for (let step = 1; step <= 38; step += 1) last = dragPlacement(start, { dx: step * 10, dy: 0 }, stage, { others: [wall], last });
+    assert.deepEqual([jump.x, jump.y], [last.x, last.y]);
+    assert.equal(jump.x + start.w + BLOCK_SPACING, wall.x, 'exactly the block spacing');
+    const through = dragPlacement(start, { dx: 700, dy: 0 }, stage, { others: [wall], last: start });
+    assert.equal(rectsCollide(through, wall), false, 'a fast jump cannot tunnel through the neighbour');
+    assert.equal(through.x, jump.x, 'it stops in front of it, just the same');
 });
