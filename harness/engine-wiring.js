@@ -18,6 +18,7 @@ import { createGlAnimationsCore } from '../cores/ui/gl-animations.js';
 import { registerHttpService } from '../services/http.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerStChatService } from '../services/st-chat.js';
+import { registerStHomeService } from '../services/st-home.js';
 import { registerEmbeddingService } from '../services/embedding.js';
 import { registerAudioStoreService } from '../services/audio-store.js';
 import { registerImageStoreService } from '../services/image-store.js';
@@ -62,6 +63,7 @@ import { createActivityLightCore } from '../cores/ui/activity-light.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
 import { createChatViewportCore } from '../cores/ui/chat-viewport.js';
 import { createInputBarCore } from '../cores/ui/input-bar/index.js';
+import { createHomeCore } from '../cores/ui/home/index.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
 import { createPicturePanelCore } from '../cores/ui/picture-panel.js';
@@ -453,6 +455,8 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // Сами сообщения чата — отдельно от метаданных: без них трекер опрашивал бы
     // модель по переписке, которой она не видела.
     registerStChatService(engine.buses.services, { getContext });
+    // Родной стартовый экран ST (данные недавних чатов и нажатия его кнопок) — для нашего главного экрана из блоков.
+    registerStHomeService(engine.buses.services, { getContext });
     // Растеризация HTML в текстуру и композитинг WebGL для Chat Viewport
     // (план `chat-viewport`) — обе на настоящих браузерных возможностях,
     // никакого фейка/инъекции здесь не нужно вне тестов.
@@ -706,6 +710,13 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.inputBar' }),
     });
 
+    // Главный экран из блоков вместо стартового экрана ST: включается вместе с Chat Viewport (карточка панели зовёт enable/disable).
+    const home = createHomeCore(engine.registerCaller('core.ui.home', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.home' }),
+        // Виджет рабочего стола получает СВОЮ личность на Шине модулей с правами из его описания — Гейт проверяет его, как любой Модуль.
+        registerWidgetCaller: (widgetId, allowedContracts) => engine.registerCaller(`widget.${widgetId}`, 'modules', { tier: 'community', allowedContracts }),
+    });
+
     let panelUi = null;
     // Самообновление: единственное Ядро, которому выдано право выходить в сеть
     // помимо моделей — оно сверяет наш код с GitHub напрямую.
@@ -756,6 +767,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         openMemoryGraphPanel: () => memoryGraphPanel.show(),
         chatViewport,
         inputBar,
+        home,
     });
     enginePanelRef = enginePanel;
 
@@ -839,5 +851,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }

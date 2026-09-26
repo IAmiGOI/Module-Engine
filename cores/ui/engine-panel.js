@@ -38,7 +38,7 @@ export { sanitizeMacroName } from './panel-cards/macros-card.js';
  * править эндпоинты и ключи в обход Шины было бы ровно тем случаем, ради
  * которого Гейты и существуют.
  */
-export function createEnginePanelCore(host, { mount, mountSettings, listContracts, modules: moduleRegistry, openMemoryGraphPanel, chatViewport, inputBar, isMobile = isMobileSurface } = {}) {
+export function createEnginePanelCore(host, { mount, mountSettings, listContracts, modules: moduleRegistry, openMemoryGraphPanel, chatViewport, inputBar, home, isMobile = isMobileSurface } = {}) {
     // Что свёрнуто — помнится между сеансами. По умолчанию свёрнуто всё.
     const collapse = createCollapseState(host.own, { namespace: 'core.ui.panel' });
     const workers = signal([]);
@@ -207,7 +207,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     const syncCard = createSyncCard({ host, collapse, notify: (tone, text) => notify(tone, text) });
 
     const { updatesCard } = createUpdatesCard({ call, flash, notify, collapse, repository });
-    const { chatViewportCard, restoreChatViewportState } = createChatViewportCard({ chatViewport, inputBar, host, callService, callServiceOrThrow, notify, collapse, isMobile });
+    const { chatViewportCard, restoreChatViewportState } = createChatViewportCard({ chatViewport, inputBar, home, host, callService, callServiceOrThrow, notify, collapse, isMobile });
     const { refreshBackgrounds, backgroundsCard } = createBackgroundsCard({ host, collapse });
     const { statusCard } = createStatusCard({ collapse, contracts, generationStage, eventCount });
     const { presetCard } = createPresetCard({ call, flash, notify, callService, collapse });

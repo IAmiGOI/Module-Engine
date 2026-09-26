@@ -181,6 +181,28 @@ function showOnboardingStepFinal() {
  *  4. Карточка под дыркой пульсирует той же обводкой, что кнопка «Test»
  *    подключения (keyframes stme-pulse).
  */
+/**
+ * Открывает основную панель движка на карточке с заголовком `title`: раскрывает её, прокручивает в центр и на несколько секунд подсвечивает той же
+ * пульсирующей обводкой, что онбординг (`stme-spotlight-target`). Не нашли карточку — панель просто открыта. Панель рисуется не сразу, поэтому
+ * карточку ищем опросом (до секунды).
+ */
+function revealPanelCard(openMain, title) {
+    openMain();
+    if (!title) return;
+    // Опрос по таймеру, а не `requestAnimationFrame`: в скрытой вкладке rAF не идёт, а карточка должна найтись в любом случае.
+    let tries = 0;
+    const attempt = () => {
+        const panelRoot = document.querySelector('.stmeBeta-fullscreen:not([hidden])');
+        const card = [...(panelRoot?.querySelectorAll('.stme-card') ?? [])].find(node => node.querySelector('.stme-card-title strong')?.textContent.trim() === title);
+        if (!card) { if ((tries += 1) < 20) setTimeout(attempt, 50); return; }
+        card.open = true;
+        card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        card.classList.add('stme-spotlight-target');
+        setTimeout(() => card.classList.remove('stme-spotlight-target'), 4000);
+    };
+    setTimeout(attempt, 0);
+}
+
 function showOnboardingStepEnginePanel() {
     const openMain = window.STModuleEngineBetaOnboarding.openMain;
     window.STModuleEngineBetaOnboarding.close(); // окно И сцена ушли
@@ -321,6 +343,9 @@ async function init() {
             settings: toggleSettings,
         },
     }).mount();
+
+    // Главный экран (шаги чек-листа): «открой панель на этой карточке» — панель принадлежит этому файлу, поэтому подписка здесь.
+    engine.events.subscribe('ui.enginePanel.reveal', payload => revealPanelCard(openMain, payload?.card));
 
     window.STModuleEngineBeta = engine;
     console.info('[ST Module Engine (Beta)] Verification panel ready — open it from the floating launcher dock.');
