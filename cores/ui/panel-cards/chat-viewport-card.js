@@ -8,7 +8,7 @@ import { resolveChatViewportEnabled } from '../../../libraries/shared/chat-viewp
 
 /** Карточка «Chat Viewport»: тумблер, отступы, сохранение состояния. */
 export function createChatViewportCard(deps) {
-    const { chatViewport, inputBar, host, callService, callServiceOrThrow, notify, collapse, isMobile } = deps;
+    const { chatViewport, inputBar, home, host, callService, callServiceOrThrow, notify, collapse, isMobile } = deps;
 
     // --- Chat Viewport (план `chat-viewport`) — единственная реальная точка
     // включения. Раньше `chatViewport.attach()` вызывался ТОЛЬКО из
@@ -57,6 +57,7 @@ export function createChatViewportCard(deps) {
             // (верхней полосы над чатом больше нет, снизу — пилюля). Не вышло с оверлеем — возвращаем родное.
             await inputBar?.enable();
             const result = await chatViewportOverlay.enable();
+            if (result.ok) await home?.enable();   // главный экран из блоков — вместо стартового экрана ST
             if (!result.ok) {
                 await inputBar?.disable();
                 chatViewportEnabled.set(false);
@@ -75,6 +76,7 @@ export function createChatViewportCard(deps) {
         if (!chatViewportOverlay?.isActive()) return;
         chatViewportBusy.set(true);
         try {
+            await home?.disable();
             await inputBar?.disable();
             await chatViewportOverlay.disable();
         } finally {

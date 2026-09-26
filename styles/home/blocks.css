@@ -1,0 +1,224 @@
+/* ===== Главный экран из блоков (cores/ui/home/) =====
+   Блоки «как глифы»: плита — тот же фон и контур, что у плиты глифа (`.stme-chat-viewport-glyph-bg`, один токен `--stme-glyph-opacity`), кнопки — те же
+   круглые `.stme-icon-button`, что действия в шапке сообщения. Текст блока рисует WebGL-канвас ПОВЕРХ (прозрачный, `pointer-events: none`), поэтому
+   здесь нет текста — только плита, аватар, кнопки и галочки; размеры пары к `libraries/shared/home-html.js` и `home-model.js`. Анимаций нет. */
+html.stme-home-active #chat { visibility: hidden; pointer-events: none; }
+
+.stme-home {
+    position: fixed;
+    z-index: 100;   /* над страницей ST, под пилюлей набора (6900), доками и боковой панелью (7000) и ящиками ST (3005) */
+    pointer-events: none;
+    overflow: hidden;
+}
+.stme-home-blocks, .stme-home-canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.stme-home-canvas { pointer-events: none; }
+
+.stme-home-block {
+    position: absolute;
+    left: 0;
+    top: 0;
+    box-sizing: border-box;
+    pointer-events: auto;
+    cursor: grab;
+    user-select: none;
+    border: 1.5px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: var(--stme-radius-card, 10px);
+    background: color-mix(in srgb, color-mix(in srgb, #fff 9%, var(--stme-surface)) var(--stme-glyph-opacity, 78%), transparent);
+    will-change: transform;
+}
+.stme-home-block.stme-home-dragging { cursor: grabbing; box-shadow: 0 14px 34px rgba(0, 0, 0, .45); z-index: 2; }
+/* Кнопки блоков — те же круглые, что у действий в шапке сообщения. */
+.stme-home .stme-icon-button {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-width: 1px;
+    border-radius: 999px;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+.stme-home .stme-home-pinned { border-color: var(--stme-accent); color: var(--stme-accent); }
+
+/* «Недавние чаты»: строка на чат (клик — открыть), аватар слева, круглые кнопки справа; текст строки рисует WebGL поверх. */
+.stme-home-row {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    box-sizing: border-box;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background .12s ease;
+}
+.stme-home-row:hover { background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
+.stme-home-row-avatar {
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    width: 34px;
+    height: 34px;
+    margin-top: -17px;
+    box-sizing: border-box;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    pointer-events: none;
+}
+.stme-home-row-actions { position: absolute; right: 6px; top: 50%; margin-top: -13px; display: flex; gap: 4px; }
+
+/* Карточка персонажа, созданная пользователем: аватар и имя (имя — в растре), ✕ убирает карточку. */
+.stme-home-character { cursor: pointer; }
+.stme-home-character.stme-home-dragging { cursor: grabbing; }
+.stme-home-character-avatar {
+    position: absolute;
+    left: 15px;
+    top: 15px;
+    width: 116px;
+    height: 148px;
+    box-sizing: border-box;
+    object-fit: cover;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    background: color-mix(in srgb, var(--stme-text) 8%, transparent);
+    pointer-events: none;
+}
+.stme-home-remove { position: absolute; right: 8px; top: 8px; opacity: .75; }
+.stme-home-remove:hover { opacity: 1; }
+
+/* Окно выбора персонажа. Лежит над сценой (над блоками), под доками и боковой панелью. */
+.stme-home-picker-backdrop { position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .35); }
+.stme-home-picker {
+    width: min(360px, calc(100vw - 32px));
+    max-height: min(520px, calc(100vh - 48px));
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-sizing: border-box;
+    padding: 14px;
+    border: 1.5px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: var(--stme-radius-card, 10px);
+    background: color-mix(in srgb, var(--stme-surface) 94%, transparent);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, .5);
+    color: var(--stme-text);
+}
+.stme-home-picker-head { display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 700; color: var(--stme-accent); }
+.stme-home-picker-search {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 45%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stme-text) 8%, transparent);
+    color: var(--stme-text);
+    font: inherit;
+    font-size: 13px;
+}
+.stme-home-picker-list { overflow-y: auto; display: flex; flex-direction: column; gap: 4px; scrollbar-width: thin; }
+.stme-home-pick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--stme-text);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+}
+.stme-home-pick:hover { background: color-mix(in srgb, var(--stme-accent) 22%, transparent); }
+.stme-home-pick img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1px solid color-mix(in srgb, var(--stme-accent) 55%, transparent); }
+.stme-home-picker-empty { padding: 14px 8px; font-size: 13px; color: color-mix(in srgb, var(--stme-text) 62%, transparent); }
+
+.stme-home-action-grid { position: absolute; left: 14px; right: 14px; display: grid; grid-template-columns: 1fr 1fr; column-gap: 8px; }
+.stme-home-action {
+    height: 36px;
+    min-width: 0;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 45%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stme-text) 10%, transparent);
+    color: var(--stme-text);
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background .12s ease, color .12s ease;
+}
+.stme-home-action span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.stme-home-action:hover { background: color-mix(in srgb, var(--stme-accent) 30%, transparent); color: var(--stme-accent); }
+
+.stme-home-check {
+    position: absolute;
+    left: 14px;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: color-mix(in srgb, var(--stme-text) 55%, transparent);
+    font-size: 15px;
+    cursor: pointer;
+}
+.stme-home-check:hover { color: var(--stme-accent); }
+.stme-home-check-done { color: var(--stme-accent); }
+.stme-home-dismiss { position: absolute; right: 12px; top: 12px; }
+
+/* Главный экран без пилюли набора и без левого дока (владелец): они скрыты, пока показаны блоки; место в раскладке не держат. Меню и расширения доступны быстрыми действиями. */
+html.stme-home-active .stme-input-bar,
+html.stme-home-active .stme-left-dock-zone { visibility: hidden; pointer-events: none; }
+
+/* Шаг чек-листа: вся строка ведёт к карточке панели движка; кружок слева отмечает вручную. */
+.stme-home-step {
+    position: absolute;
+    left: 42px;
+    right: 8px;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--stme-accent);
+    cursor: pointer;
+    transition: background .12s ease;
+}
+.stme-home-step:hover { background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
+.stme-home-step i { position: absolute; right: 10px; top: 50%; margin-top: -7px; font-size: 12px; opacity: 0; transition: opacity .12s ease; }
+.stme-home-step:hover i { opacity: .85; }
+
+/* «Add widget» и виджеты стола. Тело виджета рисует он сам (WebGL) — здесь только плита, кнопка добавления и кнопки виджета. */
+.stme-home-action-wide { grid-column: 1 / -1; }
+.stme-home-widget-actions { position: absolute; right: 10px; top: 10px; display: flex; gap: 4px; }
+.stme-home-pick-text { display: flex; flex-direction: column; min-width: 0; }
+.stme-home-pick-text small { font-size: 11.5px; color: color-mix(in srgb, var(--stme-text) 62%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Строки списка внутри виджета: без клика по самой строке (кнопки — у каждой свои). */
+.stme-home-row-static { cursor: default; }
+.stme-home-row-static:hover { background: transparent; }
+
+/* Строка поиска в виджете (`instance.search`): поле-пилюля под шапкой. */
+.stme-home-search {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    height: 30px;
+    box-sizing: border-box;
+    padding: 0 12px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 45%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stme-text) 8%, transparent);
+    color: var(--stme-text);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: text;
+}
+.stme-home-search:focus { outline: none; border-color: var(--stme-accent); }
