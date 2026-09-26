@@ -143,3 +143,35 @@ test('handleDrop() wires the raw DOM drop event through classifyDrop: file wins 
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.deepEqual(core.showState.peek(), before, 'a junk drop changes nothing');
 });
+// --- ui.picture.show: картинка из хранилища (Модуль «Scene Painter» и др.) ---
+
+import { createEngine } from '../libraries/shared/engine.js';
+
+function buildPictureEngine({ urlFor = id => `blob:${id}` } = {}) {
+    const engine = createEngine();
+    const settings = new Map();
+    engine.buses.cores.register('storage.settings.get', ({ namespace, key, fallback }) => settings.get(`${namespace}/${key}`) ?? fallback);
+    engine.buses.cores.register('storage.settings.set', ({ namespace, key, value }) => { settings.set(`${namespace}/${key}`, value); return true; });
+    engine.buses.services.register('image.url', ({ id }) => urlFor(id));
+    const core = createPicturePanelCore(engine.registerCaller('core.ui.picture', 'cores', { tier: 'official', networkAccess: true }), { mount: () => ({ settled: async () => {} }) });
+    const module = engine.registerCaller('module.probe', 'modules', { tier: 'community', allowedContracts: ['ui.picture.show'] });
+    const show = params => new Promise(resolve => module.cores.subscribe('ui.picture.show', { params }, resolve));
+    return { core, show };
+}
+
+test('ui.picture.show opens and expands the window and shows a stored picture with its caption — a module outputs into THIS window, not its own', async () => {
+    const { core, show } = buildPictureEngine();
+    assert.equal(core.isVisible(), false);
+    const result = await show({ assetId: 'diffusion:1', caption: 'a lighthouse at dusk' });
+    assert.equal(result.ok, true);
+    assert.equal(core.isVisible(), true);
+    assert.deepEqual(core.showState.peek(), { kind: 'ready', objectUrl: 'blob:diffusion:1', source: 'a lighthouse at dusk', caption: 'a lighthouse at dusk' });
+});
+
+test('ui.picture.show with a picture that is no longer stored lands in an honest error state; without an assetId it is refused', async () => {
+    const { core, show } = buildPictureEngine({ urlFor: () => null });
+    await show({ assetId: 'gone' });
+    assert.equal(core.showState.peek().kind, 'error');
+    assert.match(core.showState.peek().message, /no longer stored/);
+    assert.equal((await show({})).ok, false);
+});

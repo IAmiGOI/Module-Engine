@@ -20,14 +20,13 @@ let backendCounter = 0;
  * Интерфейс Scene Painter: форма настроек (дерево модуля в панели) и виджет подвала сообщения. Состояние — сигналы модуля; здесь только
  * черновики формы и то, как это выглядит.
  */
-export function createScenePainterView({ settings, images, urls, busy, errors, textWorkers, imageWorkers, paint, removeImage, saveSettings, saveImageWorkers, ensureUrl }) {
+export function createScenePainterView({ settings, images, busy, errors, textWorkers, imageWorkers, paint, removeImage, showInWindow, saveSettings, saveImageWorkers }) {
     // --- Черновик формы: правится свободно, в настройки уходит по «Save» ---
     const draft = Object.fromEntries(Object.keys(settings.peek()).map(key => [key, signal(settings.peek()[key])]));
     const syncDraft = () => { for (const [key, value] of Object.entries(settings.peek())) draft[key].set(value); };
     const readDraft = () => Object.fromEntries(Object.entries(draft).map(([key, value]) => [key, value.peek()]));
     const backends = signal([]);
     const syncBackends = () => backends.set(imageWorkers.peek().map(worker => ({ ...worker })));
-    const expanded = signal({});
 
     function backendRow(backend) {
         const field = (key, placeholder, type) => {
@@ -56,10 +55,11 @@ export function createScenePainterView({ settings, images, urls, busy, errors, t
         syncBackends();
         return h('div', { class: 'stme-module-body' },
             Row(
-                h('small', { class: 'stme-module-hint' }, 'Paints the current scene under a reply. A text model reads the last messages and writes the image prompt; an image backend draws it. The message text is never changed.'),
+                h('small', { class: 'stme-module-hint' }, 'Paints the current scene into the Picture window. A text model reads the last messages and writes the image prompt; an image backend draws it. The message text is never changed.'),
                 Button('Save settings', () => saveSettings(readDraft())),
             ),
             Toggle('Paint automatically after every reply', draft.autoPaint, { hint: 'Otherwise use the 🎨 button under a reply.' }),
+            Toggle('Open the Picture window when a picture is ready', draft.openWindow, { hint: 'Off: the picture waits under its reply — 🖼 shows it.' }),
             Row(
                 Field('Prompt writer (text model)', Select(draft.promptWorkerId, workerOptions(textWorkers, 'Any model worker'))),
                 Field('Image backend', Select(draft.imageWorkerId, workerOptions(imageWorkers, 'Any image backend'))),
@@ -85,7 +85,7 @@ export function createScenePainterView({ settings, images, urls, busy, errors, t
         );
     }
 
-    /** Подвал сообщения: только под ответами модели. Картинка, «рисую…», ошибка или кнопка «Paint». */
+    /** Подвал сообщения: только под ответами модели и только кнопки — сама картинка выводится в окно «Картинка». */
     function footerWidget(message) {
         if (message.isUser || message.isSystem) return null;
         const mesid = String(message.mesid);
@@ -94,18 +94,11 @@ export function createScenePainterView({ settings, images, urls, busy, errors, t
             if (state) return h('span', { class: 'stme-scene-painter-status' }, `🎨 ${BUSY_TEXT[state]}`);
             const entry = images()[mesid];
             if (entry) {
-                const url = urls()[entry.assetId];
-                if (!url) { void ensureUrl(entry.assetId); return h('span', { class: 'stme-scene-painter-status' }, '🎨 Loading…'); }
-                const big = Boolean(expanded()[mesid]);
-                return h('div', { class: `stme-scene-painter-image${big ? ' stme-scene-painter-image-open' : ''}` },
-                    h('img', {
-                        src: url, alt: entry.prompt, title: entry.prompt, width: entry.width, height: entry.height, loading: 'lazy',
-                        'on:click': () => expanded.set({ ...expanded.peek(), [mesid]: !big }),
-                    }),
-                    h('div', { class: 'stme-scene-painter-actions' },
-                        IconButton('↻', () => paint(mesid), { title: 'Paint again (new prompt)' }),
-                        IconButton('⟳', () => paint(mesid, { prompt: entry.prompt }), { title: 'Paint again with the same prompt' }),
-                        IconButton('✕', () => removeImage(mesid), { title: 'Remove picture' })));
+                return h('div', { class: 'stme-scene-painter-actions' },
+                    h('button', { type: 'button', class: 'stme-scene-painter-paint', title: entry.prompt, 'on:click': () => showInWindow(mesid) }, '🖼 Show'),
+                    IconButton('↻', () => paint(mesid), { title: 'Paint again (new prompt)' }),
+                    IconButton('⟳', () => paint(mesid, { prompt: entry.prompt }), { title: 'Paint again with the same prompt' }),
+                    IconButton('✕', () => removeImage(mesid), { title: 'Remove picture' }));
             }
             const error = errors()[mesid];
             return h('button', { type: 'button', class: 'stme-scene-painter-paint', title: error ?? 'Paint this scene', 'on:click': () => paint(mesid) }, error ? '🎨 Retry' : '🎨 Paint');

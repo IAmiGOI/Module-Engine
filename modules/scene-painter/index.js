@@ -6,8 +6,9 @@ export const MODULE_ID = 'module.scenePainter';
 
 /**
  * Модуль «Scene Painter» — картинка к сцене: модель читает последние сообщения и пишет промпт для картинки, Ядро diffusion рисует
- * (`image.generate`), картинка встаёт в подвал сообщения. По мотивам Contextual Scene Painter и IkarusAutoImage, но на контрактах движка:
- * ни одного импорта из ST, ни `fetch`, ни `Blob`, ни права на сеть — сеть и байты у Ядра, показ картинки — у Сервиса хранилища (`image.url`).
+ * (`image.generate`), картинка выводится в окно «Картинка» движка (`ui.picture.show`, cores/ui/picture-panel.js) — своего окна у Модуля
+ * нет. В подвале сообщения — только кнопки: нарисовать, показать в окне, перерисовать, убрать. По мотивам Contextual Scene Painter и
+ * IkarusAutoImage, но на контрактах движка: ни одного импорта из ST, ни `fetch`, ни `Blob`, ни права на сеть — сеть и байты у Ядра.
  *
  * Текст сообщения не трогается: картинка — пометка к сообщению (`chatHistory.annotate`), живёт в памяти чата и в модель не уходит.
  * Реролл и удаление сообщения пометку не ломают: она по `mesid`, а подвал перерисовывается сам.
@@ -36,6 +37,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     width: 1024,
     height: 768,
     instruction: DEFAULT_INSTRUCTION,
+    openWindow: true,
 });
 
 /** Защитное чтение настроек: мусор с диска превращается в допустимые значения. */
@@ -53,6 +55,7 @@ export function sanitizeSettings(value = {}) {
         width: number(source.width, 256, 2048, DEFAULT_SETTINGS.width),
         height: number(source.height, 256, 2048, DEFAULT_SETTINGS.height),
         instruction: text(source.instruction, DEFAULT_INSTRUCTION).trim() || DEFAULT_INSTRUCTION,
+        openWindow: source.openWindow !== false,
     };
 }
 
@@ -81,7 +84,6 @@ export function createScenePainterModule(host) {
 
     const settings = signal({ ...DEFAULT_SETTINGS });
     const images = signal({});        // mesid → { assetId, prompt, width, height, createdAt }
-    const urls = signal({});          // assetId → object URL
     const busy = signal({});          // mesid → 'writing' | 'painting'
     const errors = signal({});        // mesid → текст ошибки
     const textWorkers = signal([]);
@@ -94,10 +96,13 @@ export function createScenePainterModule(host) {
     };
     const refreshFooter = () => call('ui.messageFooter.attach', {});
 
-    async function ensureUrl(assetId) {
-        if (!assetId || urls.peek()[assetId]) return;
-        const result = await callService('image.url', { id: assetId });
-        if (result.ok && result.value) patch(urls, assetId, result.value);
+    /** Вывести картинку сообщения в окно «Картинка» движка. */
+    async function showInWindow(mesid) {
+        const entry = images.peek()[String(mesid)];
+        if (!entry) return false;
+        const result = await call('ui.picture.show', { assetId: entry.assetId, caption: entry.prompt });
+        if (!result.ok) await call('ui.notify', { tone: 'error', text: `Scene Painter: ${result.error.message}` });
+        return result.ok;
     }
 
     async function writeScenePrompt(mesid) {
@@ -139,7 +144,7 @@ export function createScenePainterModule(host) {
             const entry = { assetId: generated.value.assetId, prompt: finalPrompt, width: generated.value.width, height: generated.value.height, createdAt: Date.now() };
             await call('chatHistory.annotate', { namespace: ANNOTATIONS_NAMESPACE, mesid: key, value: entry });
             patch(images, key, entry);
-            await ensureUrl(entry.assetId);
+            if (current.openWindow) await showInWindow(key);
             if (previous?.assetId) await callService('image.delete', { id: previous.assetId });
             return true;
         } catch (error) {
@@ -166,7 +171,6 @@ export function createScenePainterModule(host) {
         const map = result.ok && result.value ? result.value : {};
         images.set(map);
         errors.set({});
-        await Promise.all(Object.values(map).map(entry => ensureUrl(entry?.assetId)));
         await refreshFooter();
     }
 
@@ -199,7 +203,7 @@ export function createScenePainterModule(host) {
         await paint(message.mesid);
     }
 
-    const view = createScenePainterView({ settings, images, urls, busy, errors, textWorkers, imageWorkers, paint, removeImage, saveSettings, saveImageWorkers, ensureUrl });
+    const view = createScenePainterView({ settings, images, busy, errors, textWorkers, imageWorkers, paint, removeImage, showInWindow, saveSettings, saveImageWorkers });
 
     const subscriptions = [
         host.events.subscribe('generation.completed', () => { void onGenerationCompleted(); }),
@@ -232,13 +236,14 @@ export function createScenePainterModule(host) {
     return {
         id: MODULE_ID,
         title: 'Scene Painter',
-        description: 'Paints a picture of the current scene under a reply: a model writes the image prompt from the chat, an image backend draws it.',
+        description: 'Paints a picture of the current scene into the Picture window: a model writes the image prompt from the chat, an image backend draws it.',
         load,
         tree: view.tree,
         settings,
         images,
         paint,
         removeImage,
+        showInWindow,
         saveSettings,
         saveImageWorkers,
         onGenerationCompleted,

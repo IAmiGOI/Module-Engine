@@ -30,6 +30,18 @@
     object-fit: contain;
     border-radius: var(--stme-radius-sm);
 }
+/* Подпись под картинкой (`ui.picture.show`, например промпт Scene Painter): не больше трёх строк, полностью — во всплывающей подсказке. */
+.stme-picture-caption {
+    font-size: 12px;
+    line-height: 1.35;
+    padding: 6px 4px 0;
+    text-align: center;
+    opacity: .85;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
 .stme-picture-hint {
     opacity: .55;
     font-size: 11px;
