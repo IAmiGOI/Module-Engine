@@ -66,6 +66,8 @@
    (абзацы слипаются, под сообщением пустота). Менять ТОЛЬКО вместе. */
 .stme-chat-viewport-mirror * { margin: 0; }
 .stme-chat-viewport-mirror > * + * { margin-top: 10px; }
+/* Первый блок после float-заглушки под аватарку — без отступа (см. `AVATAR_SPACER_CLASS`). */
+.stme-chat-viewport-mirror > .stme-chat-viewport-avatar-spacer + * { margin-top: 0; }
 .stme-chat-viewport-mirror ul, .stme-chat-viewport-mirror ol { padding-left: 1.4em; }
 .stme-chat-viewport-mirror blockquote { padding-left: 10px; }
 .stme-chat-viewport-mirror {
