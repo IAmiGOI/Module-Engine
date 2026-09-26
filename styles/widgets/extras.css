@@ -1,0 +1,56 @@
+/* --- Виджеты, добавленные вместе с Модулем «Трекер» ------------------------ */
+
+.stme-panel textarea.text_pole { width: 100%; min-width: 0; resize: vertical; font-family: var(--monoFontFamily, ui-monospace, monospace); font-size: 11px; }
+.stme-panel input.stme-number { max-width: 92px; }
+
+.stme-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; width: fit-content; white-space: nowrap; padding-bottom: 6px; }
+.stme-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.stme-switch-track {
+    position: relative; flex-shrink: 0;
+    width: 44px; height: 24px; border-radius: 999px;
+    background: var(--SmartThemeBorderColor, #555);
+    transition: background .15s ease;
+}
+.stme-switch-track::after {
+    content: '';
+    position: absolute; top: 3px; left: 3px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    transition: transform .15s ease;
+}
+.stme-switch input:checked + .stme-switch-track { background: var(--stme-accent); }
+.stme-switch input:checked + .stme-switch-track::after { transform: translateX(20px); }
+.stme-switch input:focus-visible + .stme-switch-track { outline: 2px solid var(--stme-accent); outline-offset: 2px; }
+.stme-switch input:disabled + .stme-switch-track { opacity: .5; cursor: not-allowed; }
+.stme-switch-label { display: flex; flex-direction: column; gap: 1px; font-size: 13px; }
+.stme-switch-label small { opacity: .62; font-size: 11px; }
+
+/* Тумблер в шапке Card/Section живёт в колонке `auto` без реального
+   ограничения ширины (см. `.stme-card-head`/`.stme-section-head`) — унаследованный
+   от `.stme-switch` `white-space: nowrap` там растягивал бы `hint` в одну
+   гигантскую строку и выталкивал остальные actions (например, Save) за
+   пределы карточки, где `overflow: hidden` их просто обрезает — кнопка
+   существует, но недостижима. Тут `hint` обязан переноситься. */
+.stme-card-actions .stme-switch { white-space: normal; max-width: 190px; }
+.stme-card-actions .stme-switch-label small { white-space: normal; }
+
+.stme-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px;
+    border: 1px solid color-mix(in srgb, var(--stme-border) 65%, var(--stme-accent));
+    border-radius: 999px;
+    background: var(--stme-panel-tint);
+    color: inherit;
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+    font-size: 10px;
+    cursor: pointer;
+    transition: transform .12s ease, filter .12s ease, border-color .12s ease;
+}
+.stme-chip:hover { transform: translateY(-1px); filter: brightness(1.14); border-color: var(--stme-accent); }
+
+.stme-details { border-top: 1px solid var(--SmartThemeBorderColor, #3a3a3a); padding-top: 8px; }
+.stme-details > summary { cursor: pointer; font-size: 11px; opacity: .75; }
+.stme-details > summary:hover { opacity: 1; }
+.stme-details > *:not(summary) { margin-top: 8px; }
+

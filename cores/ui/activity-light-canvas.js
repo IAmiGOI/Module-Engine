@@ -2,7 +2,7 @@ import { effect } from './reactive.js';
 
 /**
  * Canvas-полоска Светофора активности — замена CSS-градиента на ::before
- * пилюли ([panel.css](../../harness/panel.css)). Причина переноса: repaint
+ * пилюли ([styles/](../../styles/index.css)). Причина переноса: repaint
  * полоски в paint-конвейере DOM пересчитывал backdrop-filter стекла пилюли
  * каждый кадр (живой замер 2026-09-09: ~80% GPU, doc-comment у ::after).
  *

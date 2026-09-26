@@ -1,0 +1,118 @@
+/* --- Онбординг (шаг 1: сцена) --------------------------------------------- */
+/*
+   Первый запуск движка: жидкое стекло на всю страницу (как у обновляющего
+   оверлея .stme-overlay — страница видна, работать с ней нельзя) и пустое
+   окно-контейнер по центру. Содержимое окна придёт с настоящим сценарием.
+*/
+.stme-onboarding {
+    position: fixed;
+    /* Явные стороны вместо `inset: 0` — тот же Android-фикс, что у
+       .stme-overlay (WebView < Chrome 87 сокращение не понимает). */
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 9100; /* выше оверлея обновления: онбординг — самый передний слой */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Жидкое стекло, один в один с .stme-overlay */
+    background: linear-gradient(rgba(8, 9, 12, .55), rgba(8, 9, 12, .55));
+    backdrop-filter: blur(16px) saturate(140%);
+    font-family: var(--mainFontFamily, inherit);
+    color: var(--SmartThemeBodyColor, #eee);
+    /* Плавное появление */
+    opacity: 0;
+    transition: opacity .45s ease;
+}
+.stme-onboarding-visible { opacity: 1; }
+.stme-onboarding-window {
+    /* «Примерно 1/5 экрана»: окно среднего размера по центру. Реальную
+       высоту содержимому задаст сценарий позже. position: relative гасит
+       `right/bottom` дефолта FloatingPanel — окно центрирует flex-родитель. */
+    position: relative;
+    right: auto;
+    bottom: auto;
+    width: min(480px, calc(100vw - 40px));
+    min-height: 30vh;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-onboarding { transition: none; }
+}
+/* Вопрос онбординга: текст сверху, кнопки «Yes»/«No» — по ЛЕВОМУ и
+   ПРАВОМУ краю окна (space-between), не в куче по центру. */
+.stme-onboarding-question {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    height: 100%;
+    padding: 4px 6px;
+}
+.stme-onboarding-question-text {
+    text-align: center;
+    font-size: 15px;
+    line-height: 1.45;
+    margin: 0;
+}
+.stme-onboarding-buttons {
+    margin-top: auto; /* кнопки прижаты к низу окна: вопрос читается сверху */
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+/* Полноценные кнопки heбординга: library-Button рисует `menu_button` ST,
+   здесь добирается размах — во всю ширину своей половины, крупный текст,
+   заметная рамка и ховер в тему движка. */
+.stme-onboarding-buttons .menu_button {
+    flex: 1 1 0;          /* поровну делят строку: левый край — Yes, правый — No */
+    padding: 12px 18px;
+    font-size: 15px;
+    font-weight: 600;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 70%, transparent);
+    border-radius: var(--stme-radius-sm, 10px);
+    color: var(--stme-text);
+    transition: border-color .15s ease, color .15s ease, background-color .15s ease;
+}
+.stme-onboarding-buttons .menu_button:hover,
+.stme-onboarding-buttons .menu_button:focus-visible {
+    border-color: var(--stme-accent);
+    color: var(--stme-accent);
+    background-color: color-mix(in srgb, var(--stme-accent) 12%, transparent);
+}
+/* Вариант шага «API key»: Yes и Local model — в РЯД (тот же расклад, что
+   Yes/No первого окна), а «Get one» — ПОД ними во всю ширину. Общий
+   контейнер .stme-onboarding-buttons задаёт кнопкам одинаковый размах. */
+.stme-onboarding-buttons-wide {
+    margin-top: 0; /* сразу под рядом Yes/Local model, не прижата к низу */
+}
+/* --- Онбординг, шаг 3: «прожектор» над вкладкой моделей ------------------- */
+/*
+   Четыре сегмента жидкого стекла вокруг ДЫРКИ над карточкой «Model
+   connections»: всё, кроме карточки, остаётся затемнено. Позиция сегментов
+   считается в index.js по getBoundingClientRect карточки и ставится
+   инлайновыми стилями — CSS задаёт только саму фактуру стекла и слои.
+*/
+.stme-onboarding-spotlight {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 9200; /* НАД панелью движка (6000) и НАД сценой (9100): панель видна только сквозь дырку */
+    pointer-events: none; /* стекло не ловит клики: панелью под ним пользоваться нельзя (сцена ниже ловит), но дырка не должна «съедать» события сама */
+}
+.stme-onboarding-spotlight-part {
+    position: absolute;
+    /* Тот же жидкий орк, что у сцены и .stme-overlay */
+    background: linear-gradient(rgba(8, 9, 12, .55), rgba(8, 9, 12, .55));
+    backdrop-filter: blur(16px) saturate(140%);
+}
+/* Карточка под дыркой пульсирует той же обводкой, что кнопка «Test»
+   подключения — узнаваемый «вот сюда» языка движка. */
+.stme-spotlight-target {
+    animation: stme-pulse 1.5s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stme-spotlight-target { animation: none; }
+}
+

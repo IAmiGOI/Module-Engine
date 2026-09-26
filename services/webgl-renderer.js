@@ -125,7 +125,10 @@ function attach(canvas, width, height, createContext) {
     canvas.height = Math.max(1, Math.round(Number(height) || 0));
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // Цвет — обычное смешение, а АЛЬФА канваса копится как есть (ONE, а не SRC_ALPHA): канвас композитится браузером как
+    // premultiplied. С единым `blendFunc(SRC_ALPHA, ONE_MINUS_SRC_ALPHA)` альфа выходила квадратом (a·a) при цвете c·a — цвет
+    // больше альфы, края букв «светились» и добавляли фон, а тень текста слабела до a² (живые замеры: край текста 251–255 вместо 220).
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
     const program = createProgram(gl);
     gl.useProgram(program);

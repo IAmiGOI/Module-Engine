@@ -1,0 +1,75 @@
+/* ===== Светофор активности: CANVAS вместо ::before (2026-09-11) =====
+   Полоска рисуется cores/ui/activity-light-canvas.js: repaint'ы DOM (и
+   пересчёт backdrop-filter стекла) из-за переливки исчезают — канвас рисует
+   вне paint-конвейера. CSS-классы stme-light-* на зоне больше НЕ красят
+   полоску (цвет приходит сигналом внутрь канваса), но остаются рабочими
+   для всего остального, что на них завязано. ::before отключён display:none —
+   его градиент/box-shadow больше не рисуются вовсе.
+   ЗАПАС PAD=14px (см. activity-light-canvas.js): канвас шире/выше самой
+   полоски, в запасе рисуется свечение (бывший box-shadow 10-14px), иначе
+   оно обрезалось бы краем канваса. */
+/* ===== Светофор активности: ФИНАЛ — статичная DOM-полоска (11.09) =====
+   Решение архитектора: анимация полоски убрана совсем, вместо неё —
+   СТАТИЧНЫЙ, но красивый многослойный градиент на --stme-light. Цвет
+   состояния приходит сигналом: Ядро (cores/ui/activity-light.js) → класс
+   stme-light-<state> на ЗОНУ (cores/ui/activity-light-dom.js) → переменная
+   на доке → transition при смене. Ни бесконечного `animation`, ни canvas:
+   канвас-версия (activity-light-canvas.js) по замерам всё равно красила
+   пол-окна каждый кадр — в этом окружении (Thorium 138) любой canvas в DOM
+   инвалидирует paint вверх по дереву. Полоска — чистый светофор: горит
+   цветом фазы, плавно перекрашивается при смене (transition), единственная
+   анимация — конечное мигание notify (см. ниже).
+   Градиент (внутри цвета состояния, без белого «предмета»): верх —
+   lighten-блик, середина — сам цвет, низ — затемнение, всё с мягким
+   свечением box-shadow того же цвета. */
+.stme-launcher-dock::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10%;
+    bottom: 10%;
+    width: 4px;
+    border-radius: 999px;
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--stme-light) 82%, #ffffff),
+        var(--stme-light) 30%,
+        color-mix(in srgb, var(--stme-light) 72%, #000000) 82%,
+        color-mix(in srgb, var(--stme-light) 88%, #000000));
+    box-shadow: 0 0 10px var(--stme-light), 0 0 22px color-mix(in srgb, var(--stme-light) 55%, transparent);
+    opacity: 1;
+    transition: background .35s ease, box-shadow .35s ease, opacity .35s ease;
+}
+/* idle — синий (дефолт ниже); дальше — состояния Ядра. Переменная ставится
+   на САМ док: её наследуют ::before (полоска) — цвет светофора единый. */
+.stme-launcher-dock { --stme-light: #5b8dff; }
+.stme-light-working .stme-launcher-dock { --stme-light: var(--stme-status-working); }
+.stme-light-success .stme-launcher-dock { --stme-light: var(--stme-status-success); }
+.stme-light-warning .stme-launcher-dock { --stme-light: #d9c545; }
+.stme-light-error   .stme-launcher-dock { --stme-light: var(--stme-status-error); }
+/* Свечение перекрашивается ВМЕСТЕ с переменной: rgba-хардкоды цветов (были
+   по классам) больше не нужны — box-shadow цвета можно положить на
+   color-mix от переменной. */
+.stme-launcher-dock::before {
+    box-shadow: 0 0 10px var(--stme-light), 0 0 22px color-mix(in srgb, var(--stme-light) 55%, transparent);
+}
+/* Уведомление — конечное МИГАНИЕ (3 шага, не infinite — бесконечный цикл
+   рядом с блюром грузил GPU, конечный завершается) + статичный белый на
+   время удержания (NOTIFY_HOLD_MS, cores/ui/activity-light.js). По правке
+   11.09 мигание и смену цветов оставлено, убрана только бесконечная
+   переливка — вместо неё статичный градиент. */
+.stme-light-notify .stme-launcher-dock { --stme-light: #ffffff; }
+.stme-light-notify .stme-launcher-dock::before {
+    animation: stme-dock-blink .9s steps(1) 3;
+    box-shadow: 0 0 12px rgba(255, 255, 255, .95), 0 0 26px rgba(255, 255, 255, .55);
+}
+/* При наведении/раскрытии прячем полоску. Блюр-слой ::after НЕ
+   трогаем: это СТЕКЛО пилюли, оно видно всегда. */
+.stme-launcher-dock-zone:hover .stme-launcher-dock::before,
+.stme-launcher-dock-zone:focus-within .stme-launcher-dock::before,
+.stme-launcher-dock-zone.stme-launcher-dock-open .stme-launcher-dock::before {
+    opacity: 0;
+}
+/* Canvas-версия полоски отключена (история: activity-light-canvas.js и
+   блок ниже удалены за бесполезностью — канвас в этом окружении грузит
+   paint так же, как CSS-анимация). Селекторы .stme-activity-light-canvas
+   оставлены пустыми НЕ были: блок удалён целиком. */

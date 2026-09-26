@@ -1,0 +1,203 @@
+.stme-card {
+    border: 1px solid color-mix(in srgb, var(--stme-border) 78%, var(--stme-accent));
+    border-radius: var(--stme-radius-card);
+    transition: border-color .18s ease, box-shadow .18s ease;
+    /* Поверхность почти непрозрачная. Было 58% с сильным блюром — поверх и
+       без того тёмной подложки это давало не стекло, а мутное серое пятно,
+       из-за которого весь экран читался обесцвеченным. */
+    background: color-mix(in srgb, var(--stme-surface) 92%, transparent);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 8px 24px rgba(0, 0, 0, .28);
+    min-width: 0;
+    overflow: hidden; /* чтобы градиент шапки не торчал за скруглённый угол */
+}
+.stme-card:hover { border-color: var(--stme-accent); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07), 0 10px 28px rgba(0, 0, 0, .28); }
+/* Вот отсюда и берётся цвет — акцентный градиент поперёк шапки, ровно приём
+   Alpha (`linear-gradient(105deg, BlurTint, panel)`, где panel это тинт,
+   подмешанный к акценту). Раньше здесь был градиент из прозрачного в чёрный,
+   то есть цвета не было вообще ни капли. */
+/* Шапка карточки — это `<summary>`: она же и переключатель сворачивания.
+   list-style: none убирает браузерный треугольник, вместо него свой шеврон
+   справа, который поворачивается при раскрытии. */
+.stme-card-head, .stme-section-head { cursor: pointer; list-style: none; user-select: none; }
+.stme-card-head::-webkit-details-marker, .stme-section-head::-webkit-details-marker { display: none; }
+.stme-card-head::after, .stme-section-head::after {
+    content: '›';
+    flex-shrink: 0;
+    margin-left: 2px;
+    opacity: .45;
+    font-size: 17px;
+    line-height: 1;
+    transition: transform .18s ease, opacity .18s ease;
+}
+.stme-card[open] > .stme-card-head::after, .stme-section[open] > .stme-section-head::after { transform: rotate(90deg); }
+.stme-card-head:hover::after, .stme-section-head:hover::after { opacity: .9; }
+
+/* СЕТКА, а не space-between. Со шевроном в шапке стало три элемента, и при
+   space-between кнопки оказывались СРЕДНИМ — то есть их место начинало
+   зависеть от длины заголовка, и они разъезжались от любой правки текста.
+   Три колонки «заголовок | действия | шеврон» держат кнопки на одном месте
+   всегда: ширина последней колонки фиксирована. */
+.stme-card-head, .stme-section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 14px;
+    align-items: center;
+    gap: 12px;
+}
+.stme-card-head::after, .stme-section-head::after { justify-self: center; }
+
+.stme-card-head {
+    padding: 14px 18px;
+    background: linear-gradient(105deg, var(--stme-surface), var(--stme-panel-tint));
+    border-bottom: 1px solid color-mix(in srgb, var(--stme-border) 60%, var(--stme-accent));
+}
+.stme-card-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stme-card-title strong { color: var(--stme-accent); font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+.stme-card-title small { opacity: .62; font-size: 12px; line-height: 1.45; }
+.stme-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.stme-card-body {
+    display: flex; flex-direction: column; gap: 14px; padding: 16px 18px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--stme-accent) 4%, transparent), transparent 220px);
+}
+
+/* Карточка внутри карточки (одно подключение внутри списка подключений) —
+   тише родителя, иначе список выглядит как набор равных панелей. */
+/* ПЛОСКАЯ секция внутри карточки: ни рамки, ни фона, ни тени — только
+   волосяная линия между соседями и тонкая акцентная засечка у заголовка.
+   Обрамление даёт исключительно верхний уровень, иначе получается матрёшка
+   из рамок, в которой не видно, что к чему относится. */
+.stme-section {
+    min-width: 0;
+    padding: 14px 16px;
+    border-radius: var(--stme-radius);
+    background: var(--stme-level-1);
+}
+.stme-section + .stme-section { margin-top: 10px; }
+/* Уровень берётся из РЕАЛЬНОЙ вложенности, а не проставляется руками:
+   секция внутри секции автоматически на ступень глубже. */
+.stme-section .stme-section { border-radius: var(--stme-radius-sm); background: var(--stme-level-2); }
+.stme-section-head { padding: 0 0 10px; }
+.stme-section:not([open]) > .stme-section-head { padding-bottom: 0; }
+.stme-section-head .stme-card-title strong {
+    position: relative;
+    padding-left: 11px;
+    color: var(--stme-text);
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: .01em;
+}
+.stme-section-head .stme-card-title strong::before {
+    content: '';
+    position: absolute; left: 0; top: .15em; bottom: .15em;
+    width: 3px; border-radius: 2px;
+    background: var(--SmartThemeBorderColor, #555);
+    opacity: .9;
+}
+.stme-section-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Тело Модуля — просто содержимое: заголовок ему уже дала панель. */
+.stme-module-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.stme-module-hint { flex: 1; opacity: .65; font-size: 11px; }
+
+.stme-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.stme-row > * { min-width: 0; }
+
+.stme-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
+.stme-field-label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; opacity: .78; }
+.stme-field-label small { opacity: .62; font-size: 11px; line-height: 1.4; }
+/* Поля: собственный фон и акцентная рамка в фокусе. До этого они брали
+   только тему ST и на нашей поверхности сливались с ней в одно серое пятно.
+   accent-color красит range/checkbox системными средствами — одной строкой
+   на весь экран. */
+.stme-panel { accent-color: var(--stme-accent); }
+.stme-panel input.text_pole,
+.stme-panel select.text_pole,
+.stme-panel textarea.text_pole {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--stme-border) 70%, transparent);
+    border-radius: var(--stme-radius-sm);
+    /* Светлее подложки, а не темнее: шкала глубины уходит в тёмное, и поле
+       ввода обязано всплывать над ней, иначе на третьем уровне его границы
+       просто не видно. */
+    background: color-mix(in srgb, #fff 7%, var(--stme-surface));
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+.stme-panel input.text_pole:focus,
+.stme-panel select.text_pole:focus,
+.stme-panel textarea.text_pole:focus {
+    border-color: var(--stme-accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--stme-accent) 28%, transparent);
+    outline: none;
+}
+.stme-panel ::placeholder { opacity: .45; }
+
+/* Ползунок */
+.stme-slider { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+.stme-slider-head { display: flex; justify-content: space-between; gap: 8px; opacity: .8; }
+.stme-slider output {
+    padding: 0 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stme-accent) 22%, transparent);
+    color: var(--stme-accent);
+    font-variant-numeric: tabular-nums;
+}
+.stme-slider input[type="range"] { width: 100%; accent-color: var(--stme-accent); }
+
+.stme-editable-list { display: flex; flex-direction: column; gap: 10px; }
+.stme-empty { margin: 0; padding: 10px 0; opacity: .6; font-size: 12px; line-height: 1.5; }
+
+.stme-badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    font-size: 11px; white-space: nowrap; overflow-wrap: anywhere;
+}
+.stme-badge { border: 1px solid transparent; background: transparent; }
+.stme-badge-ok { border-color: var(--stme-ok); color: var(--stme-ok-bright); }
+.stme-badge-error { border-color: var(--stme-danger); color: var(--stme-danger-bright); }
+.stme-badge-muted {
+    border-color: color-mix(in srgb, var(--stme-accent) 45%, transparent);
+    color: color-mix(in srgb, var(--stme-accent) 70%, var(--stme-text));
+}
+
+
+/* Прогресс-бар бутстрапа Memory Graph (решено с пользователем: "нет индикатора прогресса. Это очень плохо" → "добавь прогресс-бар") — рядом с пульсацией обводки самой карточки (`.stme-flash-testing`), не вместо неё: пульсация видна и свёрнутой, полоса — только раскрытой. */
+.stme-progress { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+.stme-progress-track {
+    height: 6px; border-radius: 999px; overflow: hidden;
+    background: color-mix(in srgb, var(--stme-accent) 12%, rgba(0, 0, 0, .3));
+}
+.stme-progress-fill {
+    height: 100%; border-radius: 999px; background: var(--stme-accent);
+    transition: width .3s ease-out;
+}
+.stme-progress-label { opacity: .7; font-size: 11px; }
+
+/* HoldButton (libraries/shared/widgets.js) — заливка поверх обычного
+   .menu_button (переиспользует уже готовую рамку/hover/danger-раскраску
+   из обоих scope'ов панели, здесь только сама механика удержания, без
+   привязки к конкретному окну). Заливка — CSS transition на ширину,
+   запускается добавлением .stme-holding на pointerdown; расчёт без него
+   стоит на 0% статично, никакого мигания при обычном клике мимо кнопки. */
+.stme-hold-button { position: relative; overflow: hidden; isolation: isolate; user-select: none; }
+.stme-hold-button-label { position: relative; z-index: 1; }
+.stme-hold-button-fill {
+    position: absolute; inset: 0; width: 0%;
+    background: color-mix(in srgb, var(--stme-accent) 40%, transparent);
+    z-index: 0;
+}
+.stme-hold-button.stme-danger .stme-hold-button-fill { background: color-mix(in srgb, var(--stme-danger) 45%, transparent); }
+.stme-hold-button.stme-holding .stme-hold-button-fill {
+    width: 100%;
+    transition: width var(--stme-hold-ms, 1200ms) linear;
+}
+
+.stme-contract-list { display: flex; flex-wrap: wrap; gap: 4px; max-height: 160px; overflow-y: auto; }
+.stme-contract {
+    padding: 1px 7px; border-radius: 999px;
+    background: color-mix(in srgb, var(--stme-accent) 10%, rgba(0, 0, 0, .25));
+    color: color-mix(in srgb, var(--stme-accent) 45%, var(--stme-text));
+    font: 10px/1.6 var(--monoFontFamily, ui-monospace, monospace);
+    opacity: .85;
+}
+

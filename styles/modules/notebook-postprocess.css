@@ -1,0 +1,57 @@
+/* --- Модуль «Notebook» (modules/notebook/index.js) ------------------------- */
+.stme-note-editor { display: flex; flex-direction: column; gap: 8px; }
+.stme-note-list { display: flex; flex-direction: column; gap: 6px; }
+.stme-note-title { flex: 1; min-width: 120px; font-size: 12.5px; }
+.stme-note-meta { flex-shrink: 0; opacity: .55; font-size: 10.5px; }
+.stme-note-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; opacity: .9; line-height: 1.5; }
+
+/* Модуль «Post-Turn Processor»: панель pass'ов и кнопка в подвале сообщения. */
+.stme-postprocess-help { margin: 0; line-height: 1.4; opacity: .85; }
+.stme-postprocess-pass { display: flex; flex-direction: column; gap: 10px; padding: 8px; border: 1px solid var(--border, #4444); border-radius: 6px; }
+
+/* Кнопка — StatBlock из библиотеки, размеры виджета НЕ переопределяются (они и
+   есть размеры блока времени). Своя только ширина — модуль просил «уже». */
+.stme-postprocess-pill {
+    width: 64px;
+    padding: 10px 0 11px;
+    cursor: pointer;
+    font-family: inherit;
+}
+.stme-postprocess-pill .stme-stat-head { justify-content: center; margin-bottom: 4px; }
+.stme-postprocess-pill.stme-postprocess-open { border-color: var(--stme-accent); }
+
+/* Всплывающее окно с изменениями. Живёт в ОТДЕЛЬНОМ дереве модуля (hud()),
+   которое хост монтирует прямо в body — как окно трекера. Только так
+   position: fixed считается от настоящего вьюпорта: внутри подвала сообщения
+   у предков ST есть transform, и fixed «прибивается» к нему, уезжая вверху
+   чата (этот баг и был репортом). Центр экрана, поверх страницы. */
+.stme-postprocess-hud-root { display: contents; }
+.stme-postprocess-popup {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 7000;
+    width: min(460px, calc(100vw - 24px));
+    max-height: 60vh;
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 60%, var(--stme-border));
+    border-radius: 10px;
+    background: var(--stme-surface);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
+}
+.stme-postprocess-popup-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.stme-postprocess-popup-close {
+    border: none; background: transparent; color: inherit; cursor: pointer;
+    font-size: 14px; line-height: 1; opacity: .7; padding: 2px 4px;
+}
+.stme-postprocess-popup-close:hover { opacity: 1; }
+.stme-postprocess-diff { display: flex; flex-direction: column; gap: 8px; }
+.stme-postprocess-step strong { display: block; margin-bottom: 2px; font-size: .9em; opacity: .85; }
+.stme-postprocess-step-skipped { opacity: .6; }
+.stme-postprocess-skip-reason { font-style: italic; }
+.stme-postprocess-diff-text { line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.stme-postprocess-add { background: color-mix(in srgb, #4caf50 35%, transparent); text-decoration: none; border-radius: 2px; }
+.stme-postprocess-remove { background: color-mix(in srgb, #f44336 30%, transparent); text-decoration: line-through; border-radius: 2px; opacity: .8; }
+

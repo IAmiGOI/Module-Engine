@@ -1,4 +1,4 @@
-@import url('./harness/panel.css');
+@import url('./styles/index.css');
 
 /* ===== Корень страницы: реальная высота для всего, что `position: fixed` (док, окна, оверлеи) =====
    У SillyTavern на `<html>` стоит фильтр против мерцания блюра: `transform: translateZ(0)` + `perspective`. Любой предок с `transform` становится
@@ -172,7 +172,11 @@ html {
 }
 
 /* ===== Экран первой загрузки движка (harness/boot-screen.js): стадии самообновления поверх родного сплеша ST ===== */
-html.stme-boot-active #loader.splash-screen, html.stme-boot-active #preloader { visibility: hidden; }
+/* Родной сплеш прячется МГНОВЕННО: у `#loader.splash-screen` в ST `transition: all` — с ним `visibility` при переключении держится `visible` всё время
+   перехода, и сплеш (он в `<dialog>` верхнего слоя, то есть ВЫШЕ любого z-index) проступал поверх нашего экрана на долю секунды («ST × ME» в двух копиях).
+   `display: none` перехода не имеет; сам `<dialog>` с загрузчиком тоже убираем, чтобы не оставался его слой. */
+html.stme-boot-active #loader.splash-screen, html.stme-boot-active #preloader,
+html.stme-boot-active dialog:has(#loader.splash-screen) { display: none !important; transition: none !important; animation: none !important; }
 .stme-boot {
     position: fixed;
     inset: 0;
@@ -183,7 +187,10 @@ html.stme-boot-active #loader.splash-screen, html.stme-boot-active #preloader { 
     justify-content: center;
     gap: 2.2rem;
     overflow: hidden;
-    background: var(--SmartThemeBlurTintColor, #1a1c24);
+    /* Непрозрачная подложка ПОД цветом темы: у многих тем `--SmartThemeBlurTintColor` полупрозрачный, и сквозь экран загрузки
+       просвечивали чат и фон ST (владелец: «фоны загрузки наслаиваются»). Родной `#preloader` прячет это `backdrop-filter: blur(30px)`. */
+    background: linear-gradient(var(--SmartThemeBlurTintColor, #1a1c24), var(--SmartThemeBlurTintColor, #1a1c24)), #0d0e12;
+    backdrop-filter: blur(30px);
     color: var(--SmartThemeBodyColor, #dcdcd2);
     transition: opacity .45s ease, filter .45s ease;
 }

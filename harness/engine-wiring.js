@@ -61,6 +61,7 @@ import { createSyncToastsCore } from '../cores/ui/sync-toasts.js';
 import { createActivityLightCore } from '../cores/ui/activity-light.js';
 import { createMessageFooterCore } from '../cores/ui/message-footer.js';
 import { createChatViewportCore } from '../cores/ui/chat-viewport.js';
+import { createInputBarCore } from '../cores/ui/input-bar/index.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
 import { createPicturePanelCore } from '../cores/ui/picture-panel.js';
@@ -698,6 +699,13 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.chatViewport' }),
     });
 
+    // Собственная панель набора текста и левый док: включаются вместе с оверлеем Chat Viewport (карточка панели зовёт enable/disable).
+    const inputBarHost = engine.registerCaller('core.ui.inputBar', 'cores', { tier: 'official' });
+    const inputBar = createInputBarCore(inputBarHost, {
+        touch: isMobileSurface(),
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.inputBar' }),
+    });
+
     let panelUi = null;
     // Самообновление: единственное Ядро, которому выдано право выходить в сеть
     // помимо моделей — оно сверяет наш код с GitHub напрямую.
@@ -747,6 +755,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         modules,
         openMemoryGraphPanel: () => memoryGraphPanel.show(),
         chatViewport,
+        inputBar,
     });
     enginePanelRef = enginePanel;
 
@@ -830,5 +839,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
 }

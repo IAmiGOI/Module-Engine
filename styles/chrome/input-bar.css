@@ -1,0 +1,145 @@
+/* ===== Собственная панель набора текста (cores/ui/input-bar/) — пилюля внизу окна =====
+   Слева круглая «Перегенерировать», по центру поле (растёт вместе с текстом), справа круглая «Отправить»/«Стоп».
+   Кнопки по краям — концевые сегменты на всю высоту (см. `.stme-input-circle`). Левый край и ширину ставит JS (колонка сообщений). Без backdrop-filter: под пилюлей едет
+   канвас чата, и размытие пересчитывалось бы на каждый кадр прокрутки. */
+:root { --stme-input-h: 46px; --stme-input-border: 2px; }
+
+/* Родная панель набора прячется целиком, но остаётся в документе (текст/отправка идут через неё — native-bridge.js). `#dialogue_del_mes`
+   (подтверждение удаления) живёт в `#form_sheld` и должен остаться видимым, поэтому прячем только `#send_form`, а сам `#form_sheld` обнуляем. */
+html.stme-input-bar-active #send_form { display: none !important; }
+/* «Закрыть чат» переехал из меню ☰ отдельной кнопкой в левый док. */
+html.stme-input-bar-active #options #option_close_chat { display: none !important; }
+html.stme-input-bar-active #form_sheld { background: none !important; border: 0 !important; box-shadow: none !important; min-height: 0 !important; }
+
+.stme-input-bar {
+    position: fixed;
+    bottom: 9px;   /* было 14px — на треть меньше (владелец) */
+    z-index: 6900;
+    box-sizing: border-box;
+    display: flex;
+    align-items: stretch;
+    overflow: hidden;   /* скругляет внешние углы концевых кнопок по радиусу пилюли */
+    min-height: var(--stme-input-h);
+    border: var(--stme-input-border) solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: calc(var(--stme-input-h) / 2);
+    background: color-mix(in srgb, var(--stme-surface) 88%, transparent);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .35);
+    /* Пока JS не поставил колонку — не мигаем на полширины. */
+    left: 12px;
+    width: calc(100% - 24px);
+}
+.stme-input-field {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+    height: 42px;              /* = 20px строка + 2 × 11px; дальше высоту ведёт JS по тексту */
+    padding: 11px 8px;
+    margin: 0;
+    border: 0;
+    outline: 0;
+    resize: none;
+    overflow-y: hidden;
+    background: transparent;
+    color: var(--stme-text);
+    font: inherit;
+    font-size: 15px;
+    line-height: 20px;
+}
+.stme-input-field::placeholder { color: color-mix(in srgb, var(--stme-text) 50%, transparent); }
+
+/* Кнопки по краям — не кружки с зазором, а КОНЦЕВЫЕ СЕГМЕНТЫ пилюли: заполняют всю область от края до поля ввода на полную высоту
+   (внешние углы скругляет `overflow: hidden` пилюли), поэтому при росте поля вверх остаются на месте, растягиваются вместе с пилюлей и
+   держат значок строго по середине — при любом числе строк. В однострочном виде сегмент 46×42 почти круг, совпадающий с гранью пилюли. */
+.stme-input-circle {
+    flex: none;
+    align-self: stretch;
+    width: var(--stme-input-h);
+    min-height: calc(var(--stme-input-h) - 2 * var(--stme-input-border));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background .12s ease, color .12s ease;
+}
+.stme-input-send { background: var(--stme-accent); color: #14151b; }
+.stme-input-send:hover { background: color-mix(in srgb, var(--stme-accent) 85%, #fff); }
+.stme-input-send-stop { background: var(--stme-status-error, #e5453f); color: #fff; }
+.stme-input-regenerate { background: color-mix(in srgb, var(--stme-text) 14%, transparent); color: var(--stme-text); }
+.stme-input-regenerate:hover { background: color-mix(in srgb, var(--stme-accent) 30%, transparent); color: var(--stme-accent); }
+.stme-input-circle:active { filter: brightness(.9); }
+
+/* ===== Левый док (cores/ui/input-bar/left-dock.js): как правый, только на уровне нижней строки у ЛЕВОГО края окна, без светофора =====
+   Горизонтальная пилюля из двух кнопок: в покое торчит на `--stme-dock-peek` из-за левого края окна на высоте пилюли набора и выезжает вправо
+   ТОЛЬКО когда курсор у самого края (зона-хитбокс — узкая полоска у края, а не всё место слева от пилюли набора: раньше она раскрывалась от
+   любого места до пилюли — владелец: «не интуитивно»). Открытая пилюля встаёт на 8px от края (`--stme-open-x`) и вплотную примыкает к зоне, поэтому
+   курсор переходит с края на неё без разрыва; уходит с неё — закрывается. Зона неподвижная, едет дочерняя пилюля — иначе `:hover` на едущей
+   пилюле вибрировал бы (как у правого дока). */
+.stme-left-dock-zone {
+    --stme-dock-peek: 10px;
+    --stme-dock-w: 147px;   /* три слота: 3×37 + 2×7 + 2×9 + 2×2 */
+    --stme-open-x: 8px;
+    position: fixed;
+    left: 0;
+    bottom: 9px;   /* на одной линии с пилюлей набора */
+    z-index: 6950;
+    width: 24px;
+    height: var(--stme-input-h);
+}
+.stme-left-dock {
+    position: absolute;
+    bottom: 0;
+    left: calc(-1 * (var(--stme-dock-w) - var(--stme-dock-peek)));
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: var(--stme-dock-w);
+    height: var(--stme-input-h);
+    padding: 0 9px;
+    box-sizing: border-box;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 45%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stme-surface) 88%, transparent);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+    transition: left .25s ease;
+}
+.stme-left-dock-zone:hover .stme-left-dock,
+.stme-left-dock-zone:focus-within .stme-left-dock,
+.stme-left-dock-zone.stme-left-dock-open .stme-left-dock { left: var(--stme-open-x); }
+.stme-left-dock-zone.stme-left-dock-touch { --stme-dock-peek: 22px; }
+/* Родные кнопки ST в доке. У ST на них свои правила по id (`#options_button` — шрифт 28.5px и отступ слева 10px, `#extensionsMenuButton` — свой
+   padding), которые бьют класс, поэтому здесь `!important`: одинаковый круглый слот 37×37, значок строго по центру. */
+.stme-left-dock .stme-left-dock-btn {
+    box-sizing: border-box !important;
+    width: 37px !important;
+    height: 37px !important;
+    flex: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    position: static !important;
+    border-radius: 50%;
+    color: var(--stme-text);
+    font-size: 17px !important;
+    line-height: 1 !important;
+    text-align: center;
+    cursor: pointer;
+    opacity: 1;
+    transition: background .12s ease, color .12s ease;
+}
+.stme-left-dock .stme-left-dock-btn::before { display: block; width: auto !important; line-height: 1; text-align: center; }
+.stme-left-dock .stme-left-dock-btn:hover {
+    background: color-mix(in srgb, var(--stme-accent) 22%, transparent);
+    color: var(--stme-accent);
+}
+
+/* Кнопка «Закрыть чат» — созданная нами, а не родная: у неё нет ID-правил ST, но вид тот же слот. */
+.stme-left-dock .stme-left-dock-close { border: 0; background: transparent; }

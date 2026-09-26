@@ -1,0 +1,22 @@
+/* Карточка «Sync» (cores/ui/sync-card.js): устройства, код сопряжения, ход и итог прохода. */
+.stme-sync-devices { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.stme-sync-device { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stme-sync-device small { opacity: .7; margin-right: auto; }
+.stme-sync-pairing { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 8px 0; }
+.stme-sync-code {
+    font: 700 24px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: .2em;
+    text-align: center;
+    padding: 10px 8px;
+    border: 1px dashed var(--SmartThemeBorderColor, currentColor);
+    border-radius: 8px;
+    user-select: all;
+}
+.stme-sync-result { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.stme-sync-result .stme-update-status { margin: 0; }
+.stme-sync-problem { flex-basis: 100%; margin: 2px 0 0; }
+.stme-sync-link { text-align: center; text-decoration: underline; }
+.stme-sync-cloud-connected { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.stme-sync-progress { display: flex; align-items: center; gap: 8px; }
+.stme-sync-progress .stme-progress { flex: 1; min-width: 0; }
+

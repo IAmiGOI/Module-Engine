@@ -1,0 +1,74 @@
+/* Правка сообщения прямо на месте его тела (cores/ui/chat-viewport.js): textarea ровно по границам тела, кнопки — в углу. */
+.stme-chat-viewport-edit-inline { display: flex; flex-direction: column; z-index: 3; }
+.stme-chat-viewport-edit-area { flex: 1; min-height: 0; width: 100%; resize: none; box-sizing: border-box; font: inherit; line-height: inherit; }
+.stme-chat-viewport-edit-buttons { position: absolute; right: 6px; bottom: 6px; display: flex; gap: 6px; opacity: .85; }
+
+/* Заглушка строки, пока она грузится при быстрой прокрутке: карточка и серые «строчки текста» вместо пустого экрана. */
+.stme-chat-viewport-skeleton {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    box-sizing: border-box;
+    padding: 14px 24px 14px 152px;
+    pointer-events: none;
+    border-radius: 12px;
+    background:
+        repeating-linear-gradient(to bottom, rgba(255,255,255,.22) 0 11px, transparent 11px 21px) content-box,
+        rgba(28, 30, 38, .55);
+    background-clip: content-box, border-box;
+    background-repeat: no-repeat;
+}
+
+/* ===== Линия шапки глифа: продолжение полоски-светофора вправо (вместо чёрной линии над Reasoning) =====
+   Владелец: убрать чёрную линию из глифа; светофор должен плавно переходить в такую же линию, только без подсветки, идущую
+   вправо от него и чуть ниже — виджет времени (RP Time) лежит справа в шапке и раньше сидел прямо на линии. Линия — нижний край
+   шапки (`::after`, ниже виджета времени за счёт padding-bottom), на левом краю у неё скругления-«галтели» (`::before`), которые
+   соединяют её с вертикальной полоской. Цвет — цвет полоски по статусу генерации, БЕЗ свечения (box-shadow нет). */
+.stme-chat-viewport-row .stme-details { border-top: none; }
+.stme-chat-viewport-row-top-line {
+    --stme-line: color-mix(in srgb, var(--stme-text) 30%, transparent);
+    --stme-line-thickness: 4px;
+    --stme-line-fillet: 6px;
+    position: relative;
+    padding-bottom: calc(var(--stme-line-thickness) + 10px);
+}
+.stme-chat-viewport-row-top-line-working { --stme-line: var(--stme-status-working); }
+.stme-chat-viewport-row-top-line-success { --stme-line: var(--stme-status-success); }
+.stme-chat-viewport-row-top-line-error   { --stme-line: var(--stme-status-error); }
+.stme-chat-viewport-row-top-line::after {
+    content: '';
+    position: absolute;
+    left: -10px;   /* до самой полоски: между ней и текстовой колонкой зазор TEXT_PADDING = 10px */
+    right: 0;
+    bottom: 0;
+    height: var(--stme-line-thickness);
+    border-radius: 0 999px 999px 0;
+    background: var(--stme-line);
+    transition: background .35s ease;
+}
+.stme-chat-viewport-row-top-line::before {
+    content: '';
+    position: absolute;
+    left: -10px;
+    bottom: calc(-1 * var(--stme-line-fillet));
+    width: var(--stme-line-fillet);
+    height: calc(var(--stme-line-thickness) + 2 * var(--stme-line-fillet));
+    background:
+        radial-gradient(circle at 100% 0, transparent calc(var(--stme-line-fillet) - .5px), var(--stme-line) var(--stme-line-fillet)) top / 100% var(--stme-line-fillet) no-repeat,
+        radial-gradient(circle at 100% 100%, transparent calc(var(--stme-line-fillet) - .5px), var(--stme-line) var(--stme-line-fillet)) bottom / 100% var(--stme-line-fillet) no-repeat;
+}
+
+/* ===== Слабое затемнение за содержимым глифа (владелец: «любые элементы кроме самого глифа имели очень слабое затемнение за ними;
+   где нет текста и других элементов — просто обычный глиф») =====
+   Текст тела сообщения (WebGL-текстура) получает такое же гало при растеризации (`text-shadow` в CSS текстуры, cores/ui/engine-panel.js);
+   здесь — то же для настоящего DOM хрома: текст шапки, бейджи, аватар, кнопки, Reasoning. Только тень вокруг самих элементов —
+   пустые места глифа остаются как были. */
+.stme-chat-viewport-row { text-shadow: 0 0 5px rgba(0, 0, 0, .30), 0 0 2px rgba(0, 0, 0, .18); }
+.stme-chat-viewport-row .stme-badge,
+.stme-chat-viewport-row .stme-avatar,
+.stme-chat-viewport-row .stme-icon-button { box-shadow: 0 0 9px rgba(0, 0, 0, .22); }
+/* Заголовки Reasoning/Tool calls (`.stme-details > summary`) тени НЕ получают: три подряд, они ложились затемнёнными полосами поверх соседней аватарки. */
+.stme-chat-viewport-row .stme-badge,
+.stme-chat-viewport-row .stme-icon-button { border-radius: 999px; }
+

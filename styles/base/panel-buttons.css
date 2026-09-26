@@ -1,0 +1,108 @@
+/* Экран движка (cores/ui/engine-panel.js) + виджеты
+   (libraries/shared/widgets.js). Цвета берутся из темы ST с запасным
+   значением — те же правила, что и у остальной нашей вёрстки: внутри
+   реального ST панель наследует тему, в автономном харнессе выглядит
+   разумно сама по себе. */
+/* Акцент, цвета состояний, радиусы и шкала глубины — токены на :root (styles/tokens/). */
+.stme-panel {
+    color: var(--stme-text);
+    font-family: var(--mainFontFamily, inherit);
+    font-size: 13px;
+    line-height: 1.5;
+    container-type: inline-size;
+}
+
+/* ST задаёт своим кнопкам `width: min-content`. Для её собственных подписей
+   в одно слово это безобидно, но для наших («+ Add connection», «Poll now»)
+   min-content схлопывается до ширины САМОГО ДЛИННОГО СЛОВА, и подпись
+   переносится по словам в узкий столбик. Ровно эта же правка есть в Alpha, и
+   именно её отсутствие тут выглядело как «качество кнопок упало».
+   flex-shrink: 0 — чтобы в строке-флексе кнопку не сжимали обратно. */
+/* Кнопки: смысл несёт ОБВОДКА, а текст остаётся читаемым — белым или
+   акцентным. Заливка у ST блёклая и на нашей поверхности превращала кнопку в
+   серое пятно; красный текст на «Remove» читался хуже обычного, а не
+   опаснее. Теперь опасность — это красная рамка при живом белом тексте. */
+.stme-panel .menu_button {
+    width: auto;
+    flex-shrink: 0;
+    padding: 7px 18px;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 70%, transparent);
+    border-radius: var(--stme-radius-sm);
+    background: transparent;
+    color: var(--stme-text);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.25;
+    transition: border-color .15s ease, color .15s ease;
+}
+/* На наведении кнопка НЕ заливается: ярче становится обводка, и она же тихо
+   пульсирует. Заливка меняет вес пятна на экране и сбивает ритм строки —
+   свечение по контуру сообщает то же самое, ничего не перекраивая. */
+/* Селектор повторяет форму ST-шного намеренно. В её style.css есть
+       .menu_button:not(.disabled):not([disabled]):hover { background-color: var(--white30a) }
+   — это специфичность (0,4,0), а у простого `.stme-panel .menu_button:hover`
+   всего (0,3,0), и белая заливка выигрывала независимо от порядка файлов.
+   Повторив :not()-ы под своим scope, получаем (0,5,0) и честно перебиваем —
+   без !important, который потом нечем было бы перекрыть. */
+.stme-panel .menu_button:not(.disabled):not([disabled]):hover,
+.stme-panel .menu_button:not(.disabled):not([disabled]).active,
+.stme-panel .menu_button:not(.disabled):not([disabled]):active,
+.stme-panel .menu_button:not(.disabled):not([disabled]):focus {
+    background-color: transparent;
+}
+.stme-panel .menu_button:not(.disabled):not([disabled]):hover {
+    border-color: var(--stme-accent);
+    color: var(--stme-accent);
+    animation: stme-pulse 1.5s ease-out infinite;
+}
+.stme-panel .menu_button:not(.disabled):not([disabled]):active { border-color: var(--stme-accent); animation: none; }
+.stme-panel .menu_button:focus-visible { outline: 2px solid var(--stme-accent); outline-offset: 2px; }
+
+@keyframes stme-pulse {
+    0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stme-accent) 55%, transparent); }
+    70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--stme-accent) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stme-accent) 0%, transparent); }
+}
+@keyframes stme-pulse-danger {
+    0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stme-danger) 75%, transparent); }
+    70%  { box-shadow: 0 0 0 7px color-mix(in srgb, var(--stme-danger) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stme-danger) 0%, transparent); }
+}
+@keyframes stme-pulse-ok {
+    0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stme-ok) 70%, transparent); }
+    70%  { box-shadow: 0 0 0 7px color-mix(in srgb, var(--stme-ok) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stme-ok) 0%, transparent); }
+}
+/* Бесконечная пульсация — ровно то, что выключают этим запросом. Обводка при
+   наведении остаётся, уходит только движение. */
+@media (prefers-reduced-motion: reduce) {
+    .stme-panel .menu_button:hover { animation: none; }
+}
+
+/* Опасное и успешное — свои чистые цвета, а не приглушённые оттенки: рядом с
+   синей обводкой полупрозрачный красный читался как «грязно-розовый», то есть
+   ни как опасность, ни как акцент. */
+.stme-panel .menu_button.stme-danger { border-color: var(--stme-danger); color: var(--stme-text); }
+.stme-panel .menu_button.stme-danger:not(.disabled):not([disabled]):hover {
+    background-color: transparent;
+    border-color: var(--stme-danger-bright);
+    color: var(--stme-danger-bright);
+    animation-name: stme-pulse-danger;
+}
+
+.stme-panel .menu_button.stme-ok { border-color: var(--stme-ok); }
+.stme-panel .menu_button.stme-ok:not(.disabled):not([disabled]):hover {
+    background-color: transparent;
+    border-color: var(--stme-ok-bright);
+    color: var(--stme-ok-bright);
+    animation-name: stme-pulse-ok;
+}
+
+/* Пополам: слева ядро и сервисы, справа модули. На узком месте — в одну
+   колонку, потому что две по 300px читаются хуже одной. */
+.stme-two-column { display: grid; grid-template-columns: 1fr; gap: 16px; }
+@container (min-width: 860px) {
+    .stme-two-column { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+.stme-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+

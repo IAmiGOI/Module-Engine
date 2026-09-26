@@ -1,0 +1,39 @@
+/* --- Плавающее окно «Картинка» (cores/ui/picture-panel.js) ----------------- */
+/* Корень висит на body ВНЕ скоупа .stme-panel; токены — на :root (styles/tokens/). Пока нужен только accent-color. */
+.stme-picture-panel-root {
+    accent-color: var(--stme-accent);
+}
+
+/* Тело окна — зона приёма drop-а: занимает всё доступное место, flex-колонка.
+   Подсветка при перетаскивании НАД окном (dragover) — рамка в цвет акцента. */
+.stme-picture-dropzone {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: auto;
+    border: 2px dashed color-mix(in srgb, var(--stme-accent) 35%, transparent);
+    border-radius: var(--stme-radius-sm);
+    margin: 8px;
+    padding: 8px;
+    align-items: center;
+    justify-content: center;
+    transition: border-color .15s ease;
+}
+.stme-picture-dropzone.stme-picture-over {
+    border-color: var(--stme-accent);
+}
+/* Сама картинка: вписывается в окно, не растягивает его за пределы 3:4-размера. */
+.stme-picture-image {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: var(--stme-radius-sm);
+}
+.stme-picture-hint {
+    opacity: .55;
+    font-size: 11px;
+    padding: 6px 0 2px;
+    text-align: center;
+}
+

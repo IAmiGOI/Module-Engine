@@ -1,0 +1,27 @@
+/*
+ * Токены — смысловые: как наш интерфейс называет то, что берёт у темы ST. Всё
+ * остальное читает ЭТИ имена, а не `--SmartTheme*` напрямую — так тема ST
+ * подмешивается в одном месте, а запасные значения (для автономного харнесса,
+ * где ST-переменных нет) не разъезжаются по сотне мест.
+ *
+ * Производные (`--stme-panel-tint`, `--stme-level-*`) считаются от акцента здесь же:
+ * чтобы сменить оттенок всего интерфейса, переопределяется ТОЛЬКО `--stme-accent`
+ * на :root (переопределение ниже по дереву не обновит производные — так
+ * устроены пользовательские свойства CSS).
+ */
+:root {
+    --stme-accent: var(--SmartThemeQuoteColor, #8da8ff);
+    --stme-text: var(--SmartThemeBodyColor, #dfe3ea);
+    --stme-surface: var(--SmartThemeBlurTintColor, #1c1e26);
+    /* Доля непрозрачности плашки глифа в чате (0–100%): остальное — фон ST сквозь неё. */
+    --stme-glyph-opacity: 78%;
+    --stme-border: var(--SmartThemeBorderColor, #444);
+
+    --stme-panel-tint: color-mix(in srgb, var(--stme-surface) 86%, var(--stme-accent));
+
+    /* Шкала ГЛУБИНЫ: вложенность показывается фоном, а не рамками. Глубже — темнее;
+       лёгкая примесь акцента не даёт ступеням уйти в мёртвый серый. */
+    --stme-level-1: color-mix(in srgb, var(--stme-accent) 6%, rgba(0, 0, 0, .18));
+    --stme-level-2: color-mix(in srgb, var(--stme-accent) 6%, rgba(0, 0, 0, .28));
+    --stme-level-3: color-mix(in srgb, var(--stme-accent) 6%, rgba(0, 0, 0, .38));
+}

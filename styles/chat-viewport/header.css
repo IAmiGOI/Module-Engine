@@ -1,0 +1,133 @@
+/* Ручка заужения — owner: "нужно ТЯНУТЬ физически. Не ползунком где-то
+   там" (см. `leftHandle`/`rightHandle` в `enableChatViewport()`). Невидима
+   в покое (шире, чем видимая полоска, чтобы было легче попасть мышью — тот
+   же приём, что у обычных resize-хватал в браузерных панелях), подсвечена
+   на hover/при захвате, чтобы было понятно, что тут можно тянуть. Своя
+   translateX(-50%) центрирует хватал-зону НА краю канваса (а не левым краем
+   самой ручки), чтобы курсор мог промахнуться и туда, и сюда на несколько px
+   и всё равно попасть. */
+.stme-chat-viewport-resize-handle {
+    width: 14px;
+    transform: translateX(-50%);
+    cursor: ew-resize;
+    z-index: 2;
+    touch-action: none;
+}
+.stme-chat-viewport-resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 3px;
+    height: 100%;
+    transform: translateX(-50%);
+    background: transparent;
+    border-radius: 2px;
+    transition: background 0.12s ease;
+}
+.stme-chat-viewport-resize-handle:hover::after,
+.stme-chat-viewport-resize-handle:active::after {
+    background: color-mix(in srgb, var(--stme-accent) 70%, transparent);
+}
+.stme-message-header-compact {
+    /* Продолжение глифа (не первое сообщение цепочки) — своей аватарки/
+       имени нет (см. `buildRowTree()`'s `c.isGlyphStart`), только строка
+       действий той же высоты, что обычно занимает `.stme-message-header`,
+       чтобы кнопки не прыгали по высоте между первым сообщением глифа и
+       продолжением. */
+    min-height: 24px;
+}
+/* owner: "Компановка должна быть такая: Красный... Синий — виджеты, рядом
+   на одной строке" — шапка (или компактная замена) слева, заглушка
+   подвала (RP Time и т.п.) справа, оба ТОП-выровнены (см. также
+   `.stme-message-header`'s `align-items: flex-start` выше). Шапка не
+   растягивается на всю ширину (`flex: none` у неё нет, но и `flex-grow`
+   тоже нет — её собственная ширина остаётся её собственным контентом),
+   поэтому `space-between` просто прижимает подвал к правому краю. */
+.stme-chat-viewport-row-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+/* Owner: "Спейсинг между пустым сообщением где только ризонинг и ToolCall,
+   затем между ToolCall и полноценным сообщением внутри одного глифа
+   все-еще слишком большой". НАЙДЕНО ЖИВЬЁМ: зазор МЕЖДУ строками сам по
+   себе уже ~0px (нет `GLYPH_GAP` внутри одного глифа) — "спейсинг"
+   оказался не межстрочным, а раздутой ВЫСОТОЙ каждой отдельной строки:
+   `.stme-details`/`.stme-toolcall-body` несут свой `border-top`/
+   `padding-top: 8px`, рассчитанные на случай, когда перед ними стоит
+   полноразмерная шапка (аватар+имя). После КОМПАКТНОЙ шапки продолжения
+   глифа (`.stme-message-header-compact`, всего 24-26px, у нейё уже есть
+   собственный нижний край) этот же отступ — лишний, дублирующий: три-
+   четыре свёрнутых Reasoning/ToolCall подряд (частый случай — несколько
+   раундов инструментов в одном ходу) визуально раздувались на ~8px
+   каждый сверх уже принятой компактности. `~` (любой последующий
+   сиблинг), НЕ `+` (непосредственно следующий) — НАЙДЕНО ЖИВЬЁМ: между
+   шапкой и `.stme-details`/`.stme-toolcall-body` встала ещё
+   `.stme-chat-viewport-footer-slot` (owner: "RP Time не вверху"), и `+`
+   перестал попадать вовсе — селектор требует БУКВАЛЬНОЙ смежности в DOM.
+   `.stme-chat-viewport-row-top-compact`, НЕ `.stme-message-header-compact`
+   — НАЙДЕНО ЖИВЬЁМ ЕЩЁ РАЗ: шапка/заглушка подвала переехали в ОБЩУЮ
+   обёртку `.stme-chat-viewport-row-top` (owner: "Красный... Синий —
+   рядом, на одной строке" — см. `buildRowTree()`), и `.stme-message-
+   header-compact` перестал быть СИБЛИНГОМ `.stme-details` вовсе (стал
+   племянником — на уровень глубже); маркер компактности пришлось
+   продублировать НА САМОЙ обёртке (`stme-chat-viewport-row-top-compact`),
+   чтобы `~` снова видел его на ТОМ ЖЕ уровне, что и раскрывашки. */
+.stme-chat-viewport-row-top-compact ~ .stme-details {
+    border-top: none;
+    padding-top: 0;
+}
+.stme-chat-viewport-row-top-compact ~ .stme-toolcall-body {
+    padding-top: 0;
+}
+.stme-message-header {
+    display: flex;
+    /* owner: "Имя персонажа не выровнены по верху фото" — было `center`:
+       с портретной 136px-аватаркой центрирование заметно уводило имя вниз
+       от её видимого верхнего края. */
+    align-items: flex-start;
+    /* Не единый gap на всех троих детей — между аватаркой и полоской-
+       светофором зазор УЖЕ есть (сама полоска несёт `margin-left`, см.
+       `.stme-chat-viewport-gen-stripe` ниже, вплотную к краю аватарки), а
+       между полоской и текстовым блоком нужен полноценный отступ. */
+    gap: 10px;
+}
+/*
+ * Колонка аватарки+полоски-светофора — owner: "Оно должно быть СПРАВА от
+ * аватарки. Блоки ризонинга тоже. И только после заполнения той зоны
+ * спускаться вниз." Настоящий `float: left` (не `flex`-ребёнок шапки, как
+ * было раньше) — см. doc-comment `AVATAR_HEIGHT` в `cores/ui/chat-
+ * viewport.js` за тем, почему float и почему НАМЕРЕННО без clearfix здесь.
+ * `margin-right` РОВНО `TEXT_PADDING` (10px, тот же файл) — квад тела
+ * сообщения уже сдвинут на этот же отступ на экране, отсюда и совпадение:
+ * `AVATAR_SPACER_WIDTH` там специально БЕЗ добавочного `+TEXT_PADDING`,
+ * чтобы не задваивать этот же зазор.
+ */
+.stme-chat-viewport-avatar-col {
+    float: left;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-right: 10px;
+}
+/* Невидимый float в строках-продолжениях: держит зону аватарки первой строки глифа. */
+.stme-chat-viewport-avatar-float { float: left; width: 124px; visibility: hidden; }
+/* CoT-строки (ризонинг/ToolCall) внутри глифа — без пустой строки действий сверху. */
+.stme-chat-viewport-content-col-tight .stme-chat-viewport-row-top-compact { height: 0; min-height: 0; justify-content: flex-end; }
+.stme-avatar {
+    /* owner: "иконка персонажа должна быть не круглой, а прямоугольной, со
+       скруглёнными краями" — раньше 50% (идеальный круг). */
+    border-radius: 14px;
+    object-fit: cover;
+    flex: none;
+}
+.stme-avatar-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--stme-accent) 35%, var(--stme-surface));
+    color: var(--stme-text);
+    font-weight: 600;
+}

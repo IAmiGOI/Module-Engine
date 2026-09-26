@@ -1,0 +1,44 @@
+/* --- Модуль «Трекер» ------------------------------------------------------- */
+
+.stme-module-slot:empty { display: none; }
+.stme-module-slot { margin-top: 4px; }
+.stme-module-off { opacity: .55; font-size: 11px; }
+
+/* Блоки внутри карточки трекера: поля, условие опроса, отображение,
+   состояние. Каждый — свой утопленный блок, чтобы «поля» не сливались с
+   «когда опрашивать» в один поток строк. */
+.stme-tracker-fields,
+.stme-tracker-trigger,
+.stme-tracker-display,
+.stme-tracker-current {
+    padding: 9px 10px;
+    border-radius: var(--stme-radius-sm);
+    background: var(--stme-level-3);
+}
+.stme-tracker-fields, .stme-tracker-trigger, .stme-tracker-display { display: flex; flex-direction: column; gap: 8px; }
+
+.stme-tracker-field { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.stme-tracker-field-name {
+    flex-shrink: 0;
+    min-width: 96px;
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--stme-accent);
+}
+.stme-tracker-field .text_pole { flex: 1; }
+
+.stme-tracker-when {
+    display: block;
+    opacity: .6;
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+    font-size: 10px;
+}
+.stme-tracker-tokens { display: flex; flex-wrap: wrap; gap: 4px; }
+.stme-tracker-current { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.stme-tracker-current strong { font-size: 11px; opacity: .7; flex-shrink: 0; }
+.stme-tracker-current-value { font-family: var(--monoFontFamily, ui-monospace, monospace); }
+
+/* Строка действий под списком: «добавить» слева, всё остальное справа. */
+.stme-list-actions { display: flex; align-items: center; gap: 8px; }
+.stme-list-actions > *:last-child:not(:only-child) { margin-left: auto; }
+

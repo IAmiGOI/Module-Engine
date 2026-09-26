@@ -3,7 +3,7 @@ import { effect } from './reactive.js';
 /**
  * Светофор активности пилюли-дока: покраска ЗОНЫ классом stme-light-<state>
  * по сигналу Ядра (cores/ui/activity-light.js). Возвращает статичную
- * DOM-полоску (::before в panel.css): градиент и свечение живут в CSS на
+ * DOM-полоску (::before в styles/): градиент и свечение живут в CSS на
  * переменной --stme-light, которую перекрашивают классы состояний — обычный
  * `transition`, без бесконечного `animation`.
  *
@@ -20,7 +20,7 @@ import { effect } from './reactive.js';
  */
 export function createActivityLightDom(zone, activityState) {
     // Бегущая переливка: `transform` (только композитор, без перерисовки и без шейдера) — см. `.stme-light-flow-strip`
-    // в panel.css. Включается CSS'ом, пока активен Chat Viewport; сам элемент создаётся один раз.
+    // в styles/. Включается CSS'ом, пока активен Chat Viewport; сам элемент создаётся один раз.
     const dock = zone.querySelector?.('.stme-launcher-dock');
     let flow = null;
     if (dock && zone.ownerDocument) {
@@ -32,11 +32,11 @@ export function createActivityLightDom(zone, activityState) {
         // внутри него заставляло композитор пересобирать маску и размытие дока на каждом кадре (замер владельца: 16% GPU,
         // раскрытие дока при наведении скрывает полоску — и нагрузка пропадает). Снаружи — чистый слой без эффектов.
         zone.append(flow);
+        // По горизонтали полоска стоит на CSS (`right`, см. `.stme-light-flow-strip`) и едет вместе с доком через `transform` — здесь только вертикаль и высота.
         const place = () => {
             const zoneRect = zone.getBoundingClientRect();
             const dockRect = dock.getBoundingClientRect();
             if (!dockRect.height) return;
-            flow.style.left = `${Math.round(dockRect.left - zoneRect.left + 2)}px`;
             flow.style.top = `${Math.round(dockRect.top - zoneRect.top + dockRect.height * 0.1)}px`;
             flow.style.height = `${Math.round(dockRect.height * 0.8)}px`;
         };

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>ST Module Engine — Beta harness</title>
-<link rel="stylesheet" href="panel.css">
+<link rel="stylesheet" href="../styles/index.css">
 <style>
     :root { color-scheme: light dark; }
     body { font: 14px/1.4 system-ui, sans-serif; max-width: 1200px; margin: 24px auto; padding: 0 16px; }
@@ -67,7 +67,7 @@
     <div id="stme-chat-viewport-mirror" style="position:absolute; inset:0; overflow:hidden; visibility:hidden;"></div>
     <!-- Хром (widgets.js: MessageHeader/MessageActionsRow/ReasoningBlock) —
          реальный DOM поверх канваса. pointer-events:none на контейнере, auto
-         на самих строках (panel.css) — иначе прозрачные промежутки между
+         на самих строках (styles/) — иначе прозрачные промежутки между
          сообщениями перехватывали бы клики/скролл, предназначенные канвасу. -->
     <div id="stme-chat-viewport-chrome" style="position:absolute; inset:0; pointer-events:none;"></div>
 </div>

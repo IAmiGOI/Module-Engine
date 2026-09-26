@@ -103,3 +103,30 @@ test('progress events that arrive before the sync stage began (or with no progre
 test('the boot stages know the two sync steps', () => {
     assert.ok(BOOT_STAGES.syncing.text.length > 0 && BOOT_STAGES.syncDone.progress === 1);
 });
+
+test('the class that hides ST\'s own splash is released only after that splash is gone — otherwise it flashes under the closing boot screen', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const classes = new Set();
+    let splashPresent = true;
+    const el = () => ({
+        className: '', dataset: {}, style: {}, hidden: false, textContent: '',
+        classList: { add: name => classes.add(`el:${name}`), remove: () => {} },
+        setAttribute() {}, addEventListener() {}, remove() {},
+        querySelector: () => el(),
+    });
+    const doc = {
+        body: { append() {} },
+        documentElement: { classList: { add: name => classes.add(name), remove: name => classes.delete(name) } },
+        createElement: el,
+        getElementById: id => (id === 'loader' && splashPresent ? {} : null),
+    };
+    const screen = createBootScreen(doc);
+    assert.ok(classes.has('stme-boot-active'));
+    screen.finish();
+    t.mock.timers.tick(450 + 10);
+    t.mock.timers.tick(450 + 10);
+    assert.ok(classes.has('stme-boot-active'), 'the splash is still there — keep it hidden');
+    splashPresent = false;
+    t.mock.timers.tick(150);
+    assert.equal(classes.has('stme-boot-active'), false, 'the splash is gone — release');
+});
