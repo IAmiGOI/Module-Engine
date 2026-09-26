@@ -37,6 +37,46 @@ export function computeViewportWidth(pageWidth, margin) {
     return Math.max(1, pageWidth - margin * 2);
 }
 
+/**
+ * Отступы колонки слева и справа. `linked: true` — прежнее поведение (один симметричный отступ, колонка по центру; так и остаётся, пока владелец не потянул ручку);
+ * после первого перетаскивания одной из ручек отступы независимы (`linked: false`): левый край тянется влево/вправо сам по себе, правый — сам по себе, и колонку
+ * можно сместить в одну сторону.
+ */
+export const DEFAULT_MARGINS = Object.freeze({ left: DEFAULT_SIDE_MARGIN, right: DEFAULT_SIDE_MARGIN, linked: true });
+
+/**
+ * Действующие отступы `{left, right}` для страницы `pageWidth`; ширина колонки не меньше `MIN_WIDTH_FRACTION` страницы. Связанные — как `clampSideMargin`, симметрично и
+ * не меньше `minLeft` (место под выезжающий левый док, колонка по центру не наезжает на него). Независимые (владелец растянул сами) — от края окна, без этой границы:
+ * выдвинутый док лишь ненадолго перекроет колонку. Если сумма велика, излишек срезается с обоих отступов пропорционально.
+ */
+export function resolveMargins(margins, pageWidth, minLeft = 0) {
+    const max = Math.max(0, pageWidth * (1 - MIN_WIDTH_FRACTION));
+    if (margins.linked) {
+        const side = clampSideMargin(margins.left, pageWidth, minLeft);
+        return { left: side, right: side };
+    }
+    let left = Math.max(0, margins.left);
+    let right = Math.max(0, margins.right);
+    const excess = left + right - max;
+    if (excess > 0) {
+        const shrinkLeft = excess * left / (left + right);
+        left -= shrinkLeft;
+        right -= excess - shrinkLeft;
+    }
+    return { left: Math.round(left), right: Math.round(right) };
+}
+
+/** Перетаскивание одной ручки: `start` — действующие отступы в начале жеста, `dx` — сдвиг указателя вправо. Левый край вправо — левый отступ растёт; правый край вправо — правый отступ уменьшается. Второй отступ не трогается. */
+export function dragMargins(side, start, dx, pageWidth) {
+    const max = Math.max(0, pageWidth * (1 - MIN_WIDTH_FRACTION));
+    const clamp = (value, low, high) => Math.max(low, Math.min(value, Math.max(low, high)));
+    if (side === 'left') return { left: Math.round(clamp(start.left + dx, 0, max - start.right)), right: start.right, linked: false };
+    return { left: start.left, right: Math.round(clamp(start.right - dx, 0, max - start.left)), linked: false };
+}
+
+/** Ширина колонки при отступах `{left, right}`: не меньше 1 px. */
+export const marginsWidth = (pageWidth, { left, right }) => Math.max(1, pageWidth - left - right);
+
 /** Прижат ли низ окна к концу содержимого высотой `totalHeight` (с допуском `threshold`). */
 export function isNearBottom({ scrollTop, clientHeight, totalHeight, threshold = BOTTOM_THRESHOLD }) {
     return scrollTop + clientHeight >= totalHeight - threshold;

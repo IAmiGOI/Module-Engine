@@ -62,9 +62,17 @@
  * `cores/ui/engine-panel.js` для `htmlRasterizer.rasterize`.
  */
 .stme-chat-viewport-mirror img { max-width: 100%; height: auto; }
+/* Абзацы и блоки — ТЕ ЖЕ правила, что у текстуры (libraries/shared/chat-viewport-body-css.js, `PARAGRAPH_GAP_PX`): иначе высота зеркала и нарисованный текст расходятся
+   (абзацы слипаются, под сообщением пустота). Менять ТОЛЬКО вместе. */
+.stme-chat-viewport-mirror * { margin: 0; }
+.stme-chat-viewport-mirror > * + * { margin-top: 10px; }
+.stme-chat-viewport-mirror ul, .stme-chat-viewport-mirror ol { padding-left: 1.4em; }
+.stme-chat-viewport-mirror blockquote { padding-left: 10px; }
 .stme-chat-viewport-mirror {
     font-size: 15px;
     line-height: 1.4;
+    /* Как у текстуры: линейные ширины глифов без округления хинтингом — иначе перенос строк на странице и в растре расходится (последняя строка обрезалась). */
+    text-rendering: geometricPrecision;
     /* БЕЗ `overflow: hidden`: невидимый float-заглушка под аватарку не должен
        раздувать измеренную высоту зеркала — иначе пустое/короткое тело
        (напр. у сообщения, где только ризонинг) получало бы высоту заглушки, и

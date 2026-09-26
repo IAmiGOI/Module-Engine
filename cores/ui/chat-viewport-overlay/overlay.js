@@ -1,5 +1,5 @@
 import { signal } from '../reactive.js';
-import { PHONE_SIDE_MARGIN, clampSideMargin, computeViewportWidth, minSideMargin, INPUT_PANEL_GAP, SIDE_BAR_INSET, SIDE_TOP_INSET } from '../../../libraries/shared/chat-viewport-overlay-math.js';
+import { PHONE_SIDE_MARGIN, resolveMargins, marginsWidth, minSideMargin, INPUT_PANEL_GAP, SIDE_BAR_INSET, SIDE_TOP_INSET } from '../../../libraries/shared/chat-viewport-overlay-math.js';
 import { buildChatViewportBodyCss } from '../../../libraries/shared/chat-viewport-body-css.js';
 import { buildOverlayLayers } from './layers.js';
 import { startScrollSync } from './scroll-sync.js';
@@ -22,7 +22,7 @@ const STYLE_KEY = 'chat-viewport';
  * Геометрия оверлея снимается с `#chat` РОВНО ОДИН РАЗ, пока он ещё виден: `getBoundingClientRect()` скрытого (`display:none`)
  * элемента навсегда возвращает нули, а родитель `#chat` даёт свой размер, не его. Дальше размер ведёт `geometry-sync`.
  */
-export function createChatViewportOverlay({ host, chatViewport, callService, callServiceOrThrow, sideMargin, onMarginCommit, win = globalThis }) {
+export function createChatViewportOverlay({ host, chatViewport, callService, callServiceOrThrow, margins, onMarginCommit, win = globalThis }) {
     let active = null;
 
     async function teardown(resources) {
@@ -44,7 +44,11 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
             callServiceOrThrow('dom.readCssVariable', { name: '--SmartThemeEmColor' }),
             callServiceOrThrow('dom.readCssVariable', { name: 'font-family', el: mirror }),
         ]);
-        return buildChatViewportBodyCss({ bodyColor, quoteColor, emColor, fontFamily });
+        // Зеркало и текстура должны стоять на ОДНОМ шрифте: растр не видит веб-шрифтов страницы (libraries/shared/raster-font.js) — берём только то, что он нарисует.
+        const resolved = await callService('htmlRasterizer.resolveFontFamily', { family: fontFamily });
+        const family = resolved.ok && resolved.value ? resolved.value : fontFamily;
+        await callService('dom.setProp', { el: mirror, key: 'style', value: { fontFamily: family } });
+        return buildChatViewportBodyCss({ bodyColor, quoteColor, emColor, fontFamily: family });
     }
 
     async function enable() {
@@ -78,8 +82,11 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
             const touchDock = await callService('dom.querySelector', { el: body, selector: '.stme-left-dock-touch' });
             const onTouch = Boolean(touchDock.ok && touchDock.value);
             if (ownPanel && !onTouch) layout.minMargin = minSideMargin(layout.left);
-            // Отступ из настроек подбирали на широком экране (у него хватает места); на телефоне он съедал бы половину ширины — там свой, небольшой.
-            const columnMargin = onTouch ? Object.assign(() => Math.min(sideMargin(), PHONE_SIDE_MARGIN), { set: value => sideMargin.set(value) }) : sideMargin;
+            // Связанный (по умолчанию) отступ мог быть подобран на широком экране и на телефоне съел бы половину ширины — там он небольшой. Отступы, которые владелец
+            // растянул сам (`linked: false`), уважаются везде.
+            const columnMargins = onTouch
+                ? Object.assign(() => { const m = margins(); return m.linked ? { ...m, left: Math.min(m.left, PHONE_SIDE_MARGIN), right: Math.min(m.right, PHONE_SIDE_MARGIN) } : m; }, { set: value => margins.set(value) })
+                : margins;
 
             const refs = await buildOverlayLayers(callServiceOrThrow, { parent, pageSize, layout });
             resources.wrapper = refs.wrapper;
@@ -98,10 +105,10 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
             const clientSize = { width: fullSize.width, height: Math.max(120, fullSize.height - layout.top - layout.bottom) };
             // Ширина страницы меняется на лету (окно, панель Chrome, боковая панель) — сигнал, а не константа.
             const pageWidth = signal(clientSize.width);
-            const initialMargin = clampSideMargin(columnMargin(), pageWidth.peek(), layout.minMargin);
+            const initialMargins = resolveMargins(columnMargins(), pageWidth.peek(), layout.minMargin);
             const ok = await chatViewport.attach({
                 canvas: refs.canvas, lastCanvas: refs.lastCanvas, mirrorContainer: refs.mirror, chromeContainer: refs.chrome,
-                width: Math.max(1, computeViewportWidth(clientSize.width, initialMargin) - layout.rightSpace), height: clientSize.height, css,
+                width: Math.max(1, marginsWidth(clientSize.width, initialMargins) - layout.rightSpace), height: clientSize.height, css,
             });
             // Слой держит окно предрендера: `overflow: clip` + `overflow-clip-margin` — содержимое за краем видно (подкатка при скролле),
             // но не растягивает scrollHeight. Отрицательный marginBottom гасит собственную высоту слоя — иначе под последним
@@ -117,8 +124,8 @@ export function createChatViewportOverlay({ host, chatViewport, callService, cal
             resources.attached = true;
 
             resources.scroll = await startScrollSync({ host, callService, callOrThrow: callServiceOrThrow, chatViewport, refs, layout, win });
-            resources.margin = await startMarginSync({ callService, callOrThrow: callServiceOrThrow, chatViewport, refs, pageWidth, sideMargin: columnMargin, layout, onCommit: onMarginCommit, publish: (event, payload) => host.events.emit?.(event, payload), win });
-            resources.hover = await startHoverSync({ callOrThrow: callServiceOrThrow, chatViewport, refs, layout, sideMargin: columnMargin, pageWidth, win });
+            resources.margin = await startMarginSync({ callService, callOrThrow: callServiceOrThrow, chatViewport, refs, pageWidth, margins: columnMargins, layout, onCommit: onMarginCommit, publish: (event, payload) => host.events.emit?.(event, payload), win });
+            resources.hover = await startHoverSync({ callOrThrow: callServiceOrThrow, chatViewport, refs, layout, margins: columnMargins, pageWidth, win });
 
             // Правила ST `:has(... [style*="..."])` пересчитывают стили сотен элементов на любое изменение style —
             // пока Chat Viewport включён, они убраны (возвращаются при выключении).

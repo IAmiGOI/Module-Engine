@@ -1,3 +1,5 @@
+import { resolveRasterFontFamily } from '../libraries/shared/raster-font.js';
+
 /**
  * Сервис растеризации HTML — превращает уже готовый HTML (обычно результат
  * `stChat.formatMessage`, то есть родного `messageFormatting()` ST) в
@@ -106,6 +108,19 @@ async function defaultRasterizeToImage(svgString) {
     });
 }
 
+/** Установлено ли семейство в системе (а не только загружено веб-шрифтом страницы): `local()` в `FontFace` находит ТОЛЬКО установленные шрифты. Результат запоминается. */
+const installedCache = new Map();
+async function defaultIsInstalled(family) {
+    if (installedCache.has(family)) return installedCache.get(family);
+    let installed = false;
+    try {
+        await new FontFace('stme-font-probe', `local("${family.replace(/"/g, '')}")`).load();
+        installed = true;
+    } catch { installed = false; }
+    installedCache.set(family, installed);
+    return installed;
+}
+
 /**
  * Регистрирует `htmlRasterizer.rasterize` на `servicesBus`. Возвращает
  * `{ image, width, height }` — `image` готов как источник текстуры
@@ -118,6 +133,7 @@ async function defaultRasterizeToImage(svgString) {
 export function registerHtmlRasterizerService(servicesBus, {
     rasterizeToImage = defaultRasterizeToImage,
     normalizeHtmlToXml = defaultNormalizeHtmlToXml,
+    isFontInstalled = defaultIsInstalled,
 } = {}) {
     async function rasterize(params) {
         const logicalWidth = Math.max(1, Math.round(Number(params?.width) || 0));
@@ -131,6 +147,8 @@ export function registerHtmlRasterizerService(servicesBus, {
 
     const unregisters = [
         servicesBus.register('htmlRasterizer.rasterize', params => rasterize(params), { loadMetric: () => 1 }),
+        // Список семейств, который растр нарисует так же, как измерит зеркало (см. libraries/shared/raster-font.js).
+        servicesBus.register('htmlRasterizer.resolveFontFamily', params => resolveRasterFontFamily(params?.family, isFontInstalled), { loadMetric: () => 1 }),
     ];
     return () => { for (const unregister of unregisters) unregister(); };
 }

@@ -2,7 +2,7 @@ import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
 import { request } from '../../../libraries/shared/request.js';
 import { Toggle, Card } from '../../../libraries/shared/widgets.js';
-import { DEFAULT_SIDE_MARGIN } from '../../../libraries/shared/chat-viewport-overlay-math.js';
+import { DEFAULT_MARGINS } from '../../../libraries/shared/chat-viewport-overlay-math.js';
 import { createChatViewportOverlay } from '../chat-viewport-overlay/overlay.js';
 import { resolveChatViewportEnabled } from '../../../libraries/shared/chat-viewport-math.js';
 
@@ -34,17 +34,17 @@ export function createChatViewportCard(deps) {
     // владельца (которая может отличаться), а именно до захардкоженного
     // ST-дефолта. `DEFAULT_SIDE_MARGIN`/`MIN_WIDTH_FRACTION` — см.
     // `libraries/shared/chat-viewport-overlay-math.js`.
-    // px, симметрично с обеих сторон (одна ручка сужает сразу оба края,
-    // держа контент по центру; независимые отступы слева/справа —
-    // усложнение, не запрошенное явно, не делаем, пока owner не попросит
-    // именно это).
-    const chatViewportSideMargin = signal(DEFAULT_SIDE_MARGIN);
+    // px. По умолчанию симметрично (`linked`, колонка по центру); владелец
+    // попросил тянуть края по отдельности — первое перетаскивание ручки
+    // разрывает связь: левый край тянется влево/вправо сам по себе, правый
+    // сам по себе, колонку можно сместить в одну сторону.
+    const chatViewportMargins = signal({ ...DEFAULT_MARGINS });
 
     // Весь DOM оверлея — `cores/ui/chat-viewport-overlay/`; панель только просит включить/выключить и показывает исход.
     const chatViewportOverlay = chatViewport
         ? createChatViewportOverlay({
             host, chatViewport, callService, callServiceOrThrow,
-            sideMargin: chatViewportSideMargin,
+            margins: chatViewportMargins,
             onMarginCommit: () => saveChatViewportState(),
         })
         : null;
@@ -101,14 +101,16 @@ export function createChatViewportCard(deps) {
     /** Включён ли Chat Viewport и ширина заужения — переживают перезагрузку страницы. */
     function saveChatViewportState() {
         return request(host.own, 'storage.settings.set', {
-            params: { namespace: 'core.ui.panel', key: 'chatViewport', value: { enabled: chatViewportEnabled.peek(), sideMargin: chatViewportSideMargin.peek() } },
+            params: { namespace: 'core.ui.panel', key: 'chatViewport', value: { enabled: chatViewportEnabled.peek(), marginLeft: chatViewportMargins.peek().left, marginRight: chatViewportMargins.peek().right, marginLinked: chatViewportMargins.peek().linked } },
         });
     }
 
     async function restoreChatViewportState() {
         const result = await request(host.own, 'storage.settings.get', { params: { namespace: 'core.ui.panel', key: 'chatViewport', fallback: {} } });
         const saved = (result.ok ? result.value : null) ?? {};
-        if (Number.isFinite(saved.sideMargin)) chatViewportSideMargin.set(saved.sideMargin);
+        // Раньше хранился один симметричный `sideMargin` — читается как связанная пара.
+        if (Number.isFinite(saved.marginLeft) && Number.isFinite(saved.marginRight)) chatViewportMargins.set({ left: saved.marginLeft, right: saved.marginRight, linked: saved.marginLinked === true });
+        else if (Number.isFinite(saved.sideMargin)) chatViewportMargins.set({ left: saved.sideMargin, right: saved.sideMargin, linked: true });
         // Явный выбор пользователя важнее всего; если его не было — на телефоне включаем (см. `resolveChatViewportEnabled`).
         // Неудавшийся запуск выбор НЕ записывает, поэтому на следующей загрузке телефон попробует снова.
         if (resolveChatViewportEnabled(saved, { mobile: isMobile() })) {
