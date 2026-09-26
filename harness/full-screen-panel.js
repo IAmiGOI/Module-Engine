@@ -19,8 +19,10 @@ export function createFullScreenPanel({ title = '' } = {}) {
     document.body.append(overlay);
 
     const body = overlay.querySelector('.stmeBeta-fullscreen-body');
-    const open = () => { overlay.hidden = false; };
-    const close = () => { overlay.hidden = true; };
+    /** Класс на <html>, пока открыта любая панель: по нему прячется док запуска (он выше панели по z-index и на телефоне закрывал плитки). */
+    const syncRootClass = () => document.documentElement.classList.toggle('stme-panel-open', Boolean(document.querySelector('.stmeBeta-fullscreen:not([hidden])')));
+    const open = () => { overlay.hidden = false; syncRootClass(); };
+    const close = () => { overlay.hidden = true; syncRootClass(); };
     overlay.querySelector('.stmeBeta-fullscreen-close').addEventListener('click', close);
 
     return { body, open, close, toggle: () => (overlay.hidden ? open() : close()) };

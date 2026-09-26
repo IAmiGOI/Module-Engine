@@ -122,3 +122,25 @@ test('when devicePixelRatio changes (page zoom, another monitor) the canvas is r
     assert.equal(resizes().length, 2, 'same CSS size, new ratio — resized');
     assert.deepEqual([resizes().at(-1).params.width, resizes().at(-1).params.height], [750, 500]);
 });
+
+test('a scrolling stage (phone): the root scrolls, layers and canvas take the FULL content height, and the canvas scale is capped so no side exceeds the GPU limit', async () => {
+    const calls = [];
+    const doc = { createElement: fakeEl };
+    const scene = createSurfaceScene({ document: doc, call: async (contract, params) => { calls.push({ contract, params }); return { ok: true, value: true }; }, getDevicePixelRatio: () => 3 });
+    await scene.mount(fakeEl());
+    await scene.setRect({ left: 0, top: 60, width: 406, height: 700, contentHeight: 2400 });
+    assert.equal(scene.root.style.overflowY, 'auto');
+    assert.equal(scene.blocksLayer.style.height, '2400px');
+    assert.equal(scene.canvas.style.height, '2400px');
+    const resize = calls.filter(item => item.contract === 'webglChat.resize').at(-1).params;
+    assert.ok(resize.height <= 4096 && resize.width <= 4096, `capped: ${resize.width}x${resize.height}`);
+    assert.ok(resize.height >= 4000, 'but as sharp as the cap allows');
+    assert.deepEqual([scene.size().width, scene.size().height], [406, 2400]);
+    await scene.setBody('b', { html: 'x', width: 300, height: 100, css: '' });
+    await scene.draw([{ id: 'b', x: 10, y: 1000, w: 300, h: 100 }]);
+    const quad = calls.filter(item => item.contract === 'webglChat.drawFrame').at(-1).params.quads[0];
+    const scale = resize.height / 2400;
+    assert.ok(Math.abs(quad.y - 1000 * scale) < 1 && Math.abs(quad.width - 300 * scale) < 1, 'quads use the SAME scale as the canvas');
+    await scene.setRect({ left: 0, top: 60, width: 406, height: 700 });
+    assert.equal(scene.root.style.overflowY, 'hidden', 'content that fits does not scroll');
+});

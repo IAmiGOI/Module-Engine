@@ -173,6 +173,43 @@ export function composeHome({ width, height, blocks, saved = {}, gap = HOME_GAP,
     return blocks.map(block => placed.get(block.id));
 }
 
+/** Поле вокруг потока и предел ширины окна, ниже которого стол идёт потоком (а не раскладкой по сцене): на телефоне и в узком окне. */
+export const FLOW_MARGIN = 12;
+export const FLOW_MAX_WIDTH = 700;
+
+/**
+ * ПОТОК для узкого экрана (телефон): блоки идут по порядку слева направо и переносятся на новую строку, когда не влезают; строка центрируется, высота потока
+ * не ограничена — стол ПРОКРУЧИВАЕТСЯ, а не сжимается в высоту окна (на сцене окна блоки наезжали друг на друга). Положения, заданные перетаскиванием на
+ * компьютере, тут не используются (на телефоне блоки не таскаются, а доли свободного места другого устройства смысла не имеют).
+ * Возвращает `{ placements: [{ id, kind, x, y, w, h }], height }` — `height` — полная высота содержимого для прокрутки.
+ */
+export function composeFlow({ width, blocks, gap = HOME_GAP, margin = FLOW_MARGIN }) {
+    const placements = [];
+    let row = [];
+    let rowW = 0;
+    let y = margin;
+    const flush = () => {
+        if (!row.length) return;
+        const rowH = Math.max(...row.map(item => item.h));
+        const left = Math.max(0, Math.floor((width - rowW) / 2));
+        let x = left;
+        for (const item of row) { placements.push({ ...item, x, y }); x += item.w + gap; }
+        y += rowH + gap;
+        row = [];
+        rowW = 0;
+    };
+    for (const block of blocks) {
+        const nextW = rowW + (row.length ? gap : 0) + block.w;
+        if (row.length && nextW > width - 2 * margin) flush();
+        rowW += (row.length ? gap : 0) + block.w;
+        row.push(block);
+    }
+    flush();
+    const order = new Map(blocks.map((block, index) => [block.id, index]));
+    placements.sort((a, b) => order.get(a.id) - order.get(b.id));
+    return { placements, height: placements.length ? y - gap + margin : 0 };
+}
+
 /**
  * Перетаскивание: новое положение блока со сдвигом курсора, не выходя за сцену и не наезжая на `others` (их прямоугольники). Упёрся в соседа —
  * скользит вдоль него (сохраняется движение по одной оси); если и так нельзя — остаётся на последнем допустимом месте `last`.

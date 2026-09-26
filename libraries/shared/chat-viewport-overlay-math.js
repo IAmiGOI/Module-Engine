@@ -11,6 +11,8 @@
  */
 export const DEFAULT_SIDE_MARGIN = 24;
 export const MIN_WIDTH_FRACTION = 0.5;
+/** Отступ колонки на телефоне (тач): широкая настройка с ПК там съедала бы половину ширины. */
+export const PHONE_SIDE_MARGIN = 8;
 
 /** «Почти у низа» — тоже прижат: иначе суб-пиксельные расхождения округления никогда не давали бы `true`. */
 export const BOTTOM_THRESHOLD = 48;

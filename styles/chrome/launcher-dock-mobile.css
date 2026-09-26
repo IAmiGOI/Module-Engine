@@ -14,8 +14,6 @@
     height: auto;
 }
 .stme-launcher-dock-zone.stme-launcher-dock-touch .stme-launcher-dock {
-    position: static;
-    right: auto;
     transform: none;
     width: 100%;
     box-sizing: border-box;
@@ -27,10 +25,15 @@
     border-radius: 26px 0 0 26px;
     background: rgba(28, 30, 38, .9);
     opacity: .85;
-    transition: opacity .2s ease;
+    /* В покое пилюля СВЁРНУТА: за правым краем, на виду только полоска 20px (светофор); первое касание выдвигает, касание вне — задвигает. Сдвиг — `right` у
+       относительного элемента, а не transform (см. историю выше). */
+    position: relative;
+    right: -32px;
+    transition: opacity .2s ease, right .2s ease;
 }
 .stme-launcher-dock-zone.stme-launcher-dock-touch.stme-launcher-dock-open .stme-launcher-dock {
     opacity: 1;
+    right: 0;
 }
 .stme-launcher-dock-zone.stme-launcher-dock-touch .stme-light-flow-strip { margin-left: 3px; }   /* бегущая полоска (Chat Viewport) — внутрь от рамки пилюли */
 /* Светофор на телефоне: статичная полоска у левого края пилюли (раньше здесь стояло `content: none` — светофор на тач-экране не

@@ -16,7 +16,7 @@ function fakeChat({ avatar = 'a.png', group = '', file = 'c1', character = 'Sera
     return { getAttribute: name => attrs[name] ?? null, querySelector: selector => children[selector] ?? null, click: () => clicks.push('open') };
 }
 
-function setup({ welcome = true, chats = [], buttons = {}, context = null, script = null } = {}) {
+function setup({ welcome = true, chats = [], buttons = {}, context = null, script = null, welcomeModule = null } = {}) {
     const engine = createEngine();
     const panel = welcome ? {} : null;
     const doc = {
@@ -24,8 +24,8 @@ function setup({ welcome = true, chats = [], buttons = {}, context = null, scrip
         querySelectorAll: selector => (selector === '#chat .welcomePanel .recentChat' ? chats : []),
         getElementById: id => (id === 'chat' ? { id } : null),
     };
-    registerStHomeService(engine.buses.services, { document: doc, getContext: () => context, importScript: async () => script });
-    const caller = engine.registerCaller('module.probe', 'modules', { tier: 'community', allowedContracts: ['stHome.state', 'stHome.chatAction', 'stHome.quick', 'stHome.container', 'stHome.characters', 'stHome.openCharacter', 'stHome.importCharacter', 'stHome.deleteCharacter'] });
+    registerStHomeService(engine.buses.services, { document: doc, getContext: () => context, importScript: async () => script, importWelcome: async () => welcomeModule });
+    const caller = engine.registerCaller('module.probe', 'modules', { tier: 'community', allowedContracts: ['stHome.state', 'stHome.chatAction', 'stHome.quick', 'stHome.container', 'stHome.characters', 'stHome.openCharacter', 'stHome.importCharacter', 'stHome.deleteCharacter', 'stHome.reloadWelcome'] });
     return { caller };
 }
 const call = (caller, contract, params) => new Promise(resolve => caller.services.subscribe(contract, { params }, resolve));
@@ -107,4 +107,14 @@ test('stHome.deleteCharacter calls the own deleteCharacter of ST for a known ava
     assert.equal(calls.length, 2, 'an unknown avatar never reaches ST');
     assert.equal((await call(setup({ context, script: {} }).caller, 'stHome.deleteCharacter', { avatar: 'a.png' })).value, false);
     assert.equal((await call(setup({ context, script: { deleteCharacter: async () => false } }).caller, 'stHome.deleteCharacter', { avatar: 'a.png' })).value, false);
+});
+
+test('stHome.reloadWelcome re-renders the NATIVE welcome screen after a sync brought new chats/characters — only while that screen is open (it clears #chat)', async () => {
+    const calls = [];
+    const welcomeModule = { openWelcomeScreen: async options => { calls.push(options); } };
+    assert.equal((await call(setup({ welcome: true, welcomeModule }).caller, 'stHome.reloadWelcome')).value, true);
+    assert.deepEqual(calls, [{ force: true }]);
+    assert.equal((await call(setup({ welcome: false, welcomeModule }).caller, 'stHome.reloadWelcome')).value, false, 'a chat is open — nothing to reload, nothing cleared');
+    assert.equal(calls.length, 1);
+    assert.equal((await call(setup({ welcome: true, welcomeModule: {} }).caller, 'stHome.reloadWelcome')).value, false, 'no such function in this ST build');
 });

@@ -44,7 +44,7 @@ export function readRecentChat(item) {
     };
 }
 
-export function registerStHomeService(bus, { document: doc, getContext = () => null, importScript = () => import('/script.js') } = {}) {
+export function registerStHomeService(bus, { document: doc, getContext = () => null, importScript = () => import('/script.js'), importWelcome = () => import('/scripts/welcome-screen.js') } = {}) {
     const dom = () => doc ?? globalThis.document;
     const items = () => [...(dom()?.querySelectorAll?.('#chat .welcomePanel .recentChat') ?? [])];
 
@@ -116,7 +116,20 @@ export function registerStHomeService(bus, { document: doc, getContext = () => n
         return Boolean(await script.deleteCharacter(avatar, { deleteChats: Boolean(deleteChats) }));
     }
 
+    /**
+     * Перерисовать РОДНОЙ стартовый экран ST (список недавних чатов, из которого читает наш стол): нужно после синхронизации, принёсшей новые чаты или
+     * персонажей. Только пока открыт именно он (нет чата): `openWelcomeScreen({ force: true })` чистит `#chat`. `false` — стартового экрана сейчас нет.
+     */
+    async function reloadWelcome() {
+        if (!state().welcome) return false;
+        const module = await importWelcome();
+        if (typeof module?.openWelcomeScreen !== 'function') return false;
+        await module.openWelcomeScreen({ force: true });
+        return true;
+    }
+
     const unregisters = [
+        bus.register('stHome.reloadWelcome', () => reloadWelcome(), { loadMetric: () => 0 }),
         bus.register('stHome.importCharacter', () => importCharacter(), { loadMetric: () => 0 }),
         bus.register('stHome.deleteCharacter', params => deleteCharacter(params), { loadMetric: () => 0 }),
         bus.register('stHome.characters', () => characters(), { loadMetric: () => 0 }),

@@ -1,8 +1,8 @@
 import { request } from '../../../libraries/shared/request.js';
-import { buildBlocks, composeHome, dragPlacement, toSaved, itemsForEvent, checklistProgress } from '../../../libraries/shared/home-model.js';
+import { buildBlocks, composeHome, composeFlow, dragPlacement, toSaved, itemsForEvent, checklistProgress } from '../../../libraries/shared/home-model.js';
 import { blockHtml, homeCss, visibleRecent } from '../../../libraries/shared/home-html.js';
-import { SIDE_BAR_INSET, SIDE_TOP_INSET } from '../../../libraries/shared/chat-viewport-overlay-math.js';
 import { createSurfaceScene } from '../surface/scene.js';
+import { computeStageRect, resolveTokens, useFlowLayout } from './geometry.js';
 import { createItemPicker } from './picker.js';
 import { createWidgetDesk } from './widget-desk.js';
 import { createCardsApi } from './cards.js';
@@ -11,8 +11,6 @@ import { attachDrag } from './drag.js';
 
 const ACTIVE_CLASS = 'stme-home-active';
 const STORAGE = Object.freeze({ namespace: 'core.ui.home', key: 'state' });
-/** Отступ сцены от нижнего края окна (пилюли набора на главном экране нет). */
-const HOME_BOTTOM_MARGIN = 12;
 const REFRESH_DELAY_MS = 60;
 
 /**
@@ -27,7 +25,7 @@ const REFRESH_DELAY_MS = 60;
  */
 export function createHomeCore(host, {
     document: doc = globalThis.document, win = globalThis, getDevicePixelRatio, publish, MutationObserverCtor = globalThis.MutationObserver,
-    registerWidgetCaller, widgetOptions = {},
+    registerWidgetCaller, widgetOptions = {}, touch = false,
 } = {}) {
     const call = (contract, params) => request(host.services, contract, { params });
     const emit = publish ?? ((event, data) => host.events.emit(event, data));
@@ -37,6 +35,7 @@ export function createHomeCore(host, {
     let chats = [];
     let characterList = [];       // персонажи ST (имя и миниатюра для карточек и выбора)
     let refreshTimer = null;
+    let flowMode = false;         // телефон/узкое окно: стол идёт потоком с прокруткой, блоки не таскаются
     let queue = Promise.resolve();
     const blocks = new Map();     // id -> { dom, sig, placement, detach }
 
@@ -50,37 +49,6 @@ export function createHomeCore(host, {
         persisted.cards = Array.isArray(value.cards) ? value.cards.filter(avatar => typeof avatar === 'string') : [];
         persisted.widgets = Array.isArray(value.widgets) ? value.widgets.filter(item => item && typeof item.instanceId === 'string' && typeof item.widgetId === 'string') : [];
         persisted.widgetData = value.widgetData && typeof value.widgetData === 'object' ? value.widgetData : {};
-    }
-
-    /** Сцена: окно минус боковая панель слева, небольшой отступ сверху (как у чата) и место под пилюлю набора снизу. */
-    function computeRect() {
-        const side = doc.documentElement.classList.contains('stme-side-bar-active');
-        const left = side ? SIDE_BAR_INSET : 0;
-        const top = side ? SIDE_TOP_INSET : 0;
-        // Пилюля набора на главном экране скрыта (владелец), поэтому снизу — только небольшой отступ, а не место под неё.
-        const bottom = HOME_BOTTOM_MARGIN;
-        return { left, top, width: Math.max(1, win.innerWidth - left), height: Math.max(1, win.innerHeight - top - bottom) };
-    }
-
-    /** Цвета растра. `foreignObject` не видит переменных страницы, а `getPropertyValue` отдаёт их НЕразрешёнными (`var(--SmartThemeBodyColor, …)`) — поэтому цвет разрешает браузер на пробном узле. */
-    function tokens() {
-        const probe = doc.createElement('span');
-        probe.style.cssText = 'position:fixed;left:-9999px;top:0;visibility:hidden;pointer-events:none';
-        doc.body.append(probe);
-        const resolve = (value, fallback) => {
-            probe.style.color = '';
-            probe.style.color = value;
-            const color = win.getComputedStyle(probe).color;
-            return color || fallback;
-        };
-        const result = {
-            text: resolve('var(--stme-text)', '#e8e6df'),
-            muted: resolve('color-mix(in srgb, var(--stme-text) 62%, transparent)', 'rgba(232,230,223,.62)'),
-            accent: resolve('var(--stme-accent)', '#f5c518'),
-            font: win.getComputedStyle(doc.body).fontFamily || 'system-ui, sans-serif',
-        };
-        probe.remove();
-        return result;
     }
 
     // Виджеты рабочего стола (папка `widgets/` + регистрация на лету) — см. widget-desk.js.
@@ -127,6 +95,7 @@ export function createHomeCore(host, {
     const signature = (block, data) => (block.kind === 'checklist' ? [...persisted.done].sort().join(',') : block.kind === 'actions' ? block.kind : JSON.stringify(data));
 
     function bindDrag(id, entry) {
+        if (flowMode) return;           // в потоке блоки не таскаются (телефон листается пальцем)
         entry.detach = attachDrag(entry.dom.el, {
             win,
             onStart: () => { entry.base = { ...entry.placement }; entry.dom.setDragging(true); },
@@ -172,12 +141,22 @@ export function createHomeCore(host, {
             const fresh = await call('stHome.characters');
             if (fresh.ok) characterList = fresh.value;
         }
-        const rect = computeRect();
-        await scene.setRect(rect);
-        const stage = scene.size();
+        const rect = computeStageRect({ doc, win });
+        flowMode = useFlowLayout({ touch, width: rect.width });
         const list = buildBlocks({ recentChats: chats, checklistDone: persisted.done, checklistDismissed: persisted.dismissed, characterCards: persisted.cards, widgets: desk.blockSpecs() });
-        const placements = composeHome({ width: stage.width, height: stage.height, blocks: list, saved: persisted.saved });
-        const css = homeCss(tokens());
+        let placements;
+        if (flowMode) {
+            // Поток: содержимое выше окна — сцена прокручивается (холст и слои на полную высоту), сохранённые положения другого устройства не используются.
+            const flow = composeFlow({ width: rect.width, blocks: list });
+            await scene.setRect({ ...rect, contentHeight: flow.height });
+            placements = flow.placements;
+        } else {
+            await scene.setRect(rect);
+            const stage = scene.size();
+            placements = composeHome({ width: stage.width, height: stage.height, blocks: list, saved: persisted.saved });
+        }
+        scene.root.classList.toggle('stme-home-scroll', flowMode);
+        const css = homeCss(resolveTokens({ doc, win }));
         const wanted = new Set(placements.map(p => p.id));
         for (const [id, entry] of blocks) {
             if (wanted.has(id)) continue;
@@ -263,8 +242,15 @@ export function createHomeCore(host, {
         }
         const onResize = () => { void render(); };
         win.addEventListener('resize', onResize);
+        // Синхронизация приносит персонажей и чаты: после прохода перечитываем родной стартовый экран ST и список персонажей; смена списка персонажей
+        // (импорт, удаление, обновление после синхронизации) обновляет карточки и «Recent chats».
+        const onSynced = () => { if (shown) void call('stHome.reloadWelcome').then(() => scheduleRefresh()); };
+        const onCharacters = () => { if (shown) scheduleRefresh(); };
         active.cleanups.push(
             () => win.removeEventListener('resize', onResize),
+            host.events.subscribe('sync.finished', onSynced),
+            host.events.subscribe('st.characterPageLoaded', onCharacters),
+            host.events.subscribe('st.characterDeleted', onCharacters),
             // Пункт «настроить модель» отмечается сам, когда появился хотя бы один воркер (при удалении последнего галочка остаётся: шаг уже пройден).
             host.events.subscribe('model.workers.changed', payload => { if (payload?.count > 0) markDone(itemsForEvent('model.workers.changed')); }),
         );

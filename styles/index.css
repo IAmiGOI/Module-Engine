@@ -17,6 +17,7 @@
 @import url('./chrome/activity-light-shimmer.css');
 @import url('./chrome/input-bar.css');
 @import url('./chrome/side-bar.css');
+@import url('./chrome/top-bar.css');
 @import url('./widgets/message-footer-stat.css');
 @import url('./modules/sync-card.css');
 @import url('./screens/update-overlay.css');
