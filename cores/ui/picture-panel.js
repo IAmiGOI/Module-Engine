@@ -103,6 +103,29 @@ export function createPicturePanelCore(host, { mount, requestTimeoutMs = 20000, 
         }));
     }
 
+    /**
+     * Показать картинку из хранилища (`image.put` — например, результат Ядра diffusion для Модуля «Scene Painter»): окно открывается и
+     * разворачивается, картинка встаёт на место текущей, `caption` — подпись под ней. Адрес для `<img>` даёт Сервис хранилища
+     * (`image.url`), он же им и владеет — здесь его не отзывают. Контракт `ui.picture.show` — чтобы Модули выводили картинки в ЭТО окно,
+     * а не заводили каждый своё.
+     */
+    async function showAsset({ assetId, caption } = {}) {
+        const id = String(assetId ?? '').trim();
+        if (!id) throw new Error('ui.picture.show: "assetId" is required.');
+        const text = String(caption ?? '').trim();
+        showState.set({ kind: 'loading', source: text || id });
+        panelVisible.set(true);
+        panelCollapsed.set(false);
+        saveWindowState();
+        const result = await request(host.services, 'image.url', { params: { id } });
+        if (!result.ok || !result.value) {
+            showState.set({ kind: 'error', message: result.ok ? 'The picture is no longer stored.' : result.error.message, source: text || id });
+            return false;
+        }
+        showState.set({ kind: 'ready', objectUrl: result.value, source: text, caption: text });
+        return true;
+    }
+
     /** Обработчик drop: классификация → показ. Не ссылка и не файл — молча ничего. */
     function handleDrop(dropEvent) {
         const event = dropEvent?.dataTransfer ? dropEvent : { dataTransfer: dropEvent };
@@ -202,6 +225,7 @@ export function createPicturePanelCore(host, { mount, requestTimeoutMs = 20000, 
             if (state.kind === 'ready') {
                 return [
                     h('img', { class: 'stme-picture-image', src: state.objectUrl, alt: state.source ?? '' }),
+                    state.caption ? h('div', { class: 'stme-picture-caption', title: state.caption }, state.caption) : null,
                     h('div', { class: 'stme-picture-hint' }, 'Drop another image or link to replace'),
                 ];
             }
@@ -237,11 +261,16 @@ export function createPicturePanelCore(host, { mount, requestTimeoutMs = 20000, 
         saveWindowState();
     }
 
+    const unregisters = [
+        host.own.register('ui.picture.show', params => showAsset(params)),
+    ];
+
     return {
         tree,
         open,
         show,
         hide,
+        showAsset,
         /** Тестам и харнессу: текущее состояние показа без чтения DOM. */
         showState,
         /** Ручной вход для тестов: тот же путь, что у handleDrop. */
@@ -250,6 +279,9 @@ export function createPicturePanelCore(host, { mount, requestTimeoutMs = 20000, 
         isVisible: () => panelVisible.peek(),
         // Выгрузка: отозвать последний blob-URL локального файла — иначе
         // он жил бы до конца жизни страницы (утечка на каждый drop файла).
-        stop: () => { if (lastObjectUrl) { URL.revokeObjectURL(lastObjectUrl); lastObjectUrl = null; } },
+        stop: () => {
+            for (const unregister of unregisters.splice(0)) unregister();
+            if (lastObjectUrl) { URL.revokeObjectURL(lastObjectUrl); lastObjectUrl = null; }
+        },
     };
 }

@@ -208,7 +208,7 @@ const DEFINITIONS = [{
 }, {
     id: SCENE_PAINTER_MODULE_ID,
     title: 'Scene Painter',
-    description: 'Paints a picture of the current scene under a reply: a model writes the image prompt from the chat, an image backend draws it.',
+    description: 'Paints a picture of the current scene into the Picture window: a model writes the image prompt from the chat, an image backend draws it.',
     rights: {
         tier: 'community',
         allowedContracts: [
@@ -217,8 +217,8 @@ const DEFINITIONS = [{
             'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations',
             // Промпт пишет текстовая модель, рисует Ядро diffusion; сети у Модуля нет вовсе.
             'model.generate', 'model.workers.get', 'image.generate', 'image.workers.get', 'image.workers.set',
-            // Показ и уборка картинок — Сервис хранилища.
-            'image.url', 'image.revokeUrl', 'image.delete',
+            // Картинка выводится в окно «Картинка» движка; старые — убираются из хранилища.
+            'ui.picture.show', 'image.delete',
             'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.attach',
         ],
     },

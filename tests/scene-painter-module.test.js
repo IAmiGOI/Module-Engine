@@ -14,7 +14,7 @@ const RIGHTS = {
         'storage.settings.get', 'storage.settings.set', 'ui.notify',
         'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations',
         'model.generate', 'model.workers.get', 'image.generate', 'image.workers.get', 'image.workers.set',
-        'image.url', 'image.revokeUrl', 'image.delete',
+        'ui.picture.show', 'image.delete',
         'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.attach',
     ],
 };
@@ -35,7 +35,7 @@ const CHAT = [
 
 async function build({ generate = async () => 'Prompt: "an old keeper with a lantern on a cliff, dusk"', httpFails = false, takenFooterSlots = [] } = {}) {
     const engine = createEngine();
-    const calls = { generate: [], http: [], annotate: [], notify: [], attach: 0, deleted: [], stored: new Map() };
+    const calls = { generate: [], http: [], annotate: [], notify: [], attach: 0, deleted: [], stored: new Map(), shown: [] };
     const annotations = {};
     const settings = new Map();
     engine.buses.cores.register('storage.settings.get', ({ namespace, key, fallback }) => settings.get(`${namespace}/${key}`) ?? fallback);
@@ -54,6 +54,7 @@ async function build({ generate = async () => 'Prompt: "an old keeper with a lan
         return slot;
     });
     engine.buses.cores.register('ui.messageFooter.release', () => true);
+    engine.buses.cores.register('ui.picture.show', params => { calls.shown.push(params); return true; });
     engine.buses.cores.register('ui.messageFooter.attach', () => { calls.attach += 1; return true; });
     engine.buses.services.register('image.put', ({ id, blob }) => { calls.stored.set(id, blob); return id; });
     engine.buses.services.register('image.url', ({ id }) => (calls.stored.has(id) ? `blob:${id}` : null));
@@ -101,6 +102,17 @@ test('Paint: a text model writes the prompt from the scene, the diffusion core d
     assert.ok(calls.stored.has(entry.assetId));
     assert.equal(module.images.peek()['1'].assetId, entry.assetId);
     assert.ok(calls.attach >= 3, 'the footer is refreshed while writing, while painting and when done');
+    assert.deepEqual(calls.shown, [{ assetId: entry.assetId, caption: entry.prompt }], 'the picture goes to the engine\'s Picture window, with the prompt as its caption');
+});
+
+test('with "open the Picture window" off the picture waits under its reply; 🖼 Show puts it into the window on demand', async () => {
+    const { module, calls, annotations } = await build();
+    await module.saveSettings({ ...module.settings.peek(), openWindow: false });
+    await module.paint('1');
+    assert.deepEqual(calls.shown, []);
+    assert.equal(await module.showInWindow('1'), true);
+    assert.deepEqual(calls.shown, [{ assetId: annotations['1'].assetId, caption: annotations['1'].prompt }]);
+    assert.equal(await module.showInWindow('0'), false, 'no picture under this message: nothing to show');
 });
 
 test('"Paint again with the same prompt" skips the text model and deletes the previous picture', async () => {
