@@ -151,3 +151,30 @@
    (вне Chat Viewport, где reflow ничем не грозит) она остаётся как была. */
 .stme-chat-viewport-footer-slot .stme-stat-pending { animation: none; }
 
+
+/* Узкий экран / касание: подвал (RP Time и др.) рядом с шапкой не помещается — его ячейки `flex: none` шире остатка строки и ложились ПОВЕРХ шапки и текста
+   (скриншот владельца), а имя сжималось в узкий столбец. Строка шапки переносится: подвал уходит отдельной строкой под шапку, слева, ячейки могут сужаться. */
+@media (max-width: 700px), (pointer: coarse) {
+    .stme-chat-viewport-row-top { flex-wrap: wrap; }
+    .stme-chat-viewport-footer-slot { flex: 1 1 100%; min-width: 0; }
+    /* Линия шапки (styles/chat-viewport/states.css) — по низу ИМЕНИ И ВРЕМЕНИ, а не всей строки: иначе подвал делал шапку выше полоски-светофора (та 136px), линия
+       уходила ниже её конца и «разрывалась». Подвал теперь под линией. Те же размеры, цвет и «галтели», что у исходной линии. */
+    .stme-chat-viewport-row .stme-chat-viewport-row-top-line { padding-bottom: 0; }   /* двойной класс: states.css грузится позже и иначе перебивает */
+    .stme-chat-viewport-row .stme-chat-viewport-row-top-line::before, .stme-chat-viewport-row .stme-chat-viewport-row-top-line::after { content: none; }
+    .stme-chat-viewport-row-top-line > .stme-message-header-info { position: relative; padding-bottom: calc(var(--stme-line-thickness) + 10px); }
+    .stme-chat-viewport-row-top-line > .stme-message-header-info::after {
+        content: ''; position: absolute; left: -10px; right: 0; bottom: 0; height: var(--stme-line-thickness);
+        border-radius: 0 999px 999px 0; background: var(--stme-line); transition: background .35s ease;
+    }
+    .stme-chat-viewport-row-top-line > .stme-message-header-info::before {
+        content: ''; position: absolute; left: -10px; bottom: calc(-1 * var(--stme-line-fillet)); width: var(--stme-line-fillet);
+        height: calc(var(--stme-line-thickness) + 2 * var(--stme-line-fillet));
+        background:
+            radial-gradient(circle at 100% 0, transparent calc(var(--stme-line-fillet) - .5px), var(--stme-line) var(--stme-line-fillet)) top / 100% var(--stme-line-fillet) no-repeat,
+            radial-gradient(circle at 100% 100%, transparent calc(var(--stme-line-fillet) - .5px), var(--stme-line) var(--stme-line-fillet)) bottom / 100% var(--stme-line-fillet) no-repeat;
+    }
+    .stme-chat-viewport-footer-slot .stme-message-footer { justify-content: flex-start; }
+    .stme-chat-viewport-footer-slot .stme-message-footer-slot { flex: 0 1 auto; }
+    .stme-chat-viewport-footer-slot .stme-stat { text-align: left; }
+    .stme-chat-viewport-footer-slot .stme-stat-head { justify-content: flex-start; }
+}
