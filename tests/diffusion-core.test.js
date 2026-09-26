@@ -28,10 +28,21 @@ test('resolveImageRequest clamps sizes to 64…2048 in steps of 8 and treats a m
     assert.equal(resolveImageRequest({ prompt: 'x', seed: 42 }).seed, 42);
 });
 
-test('OpenAI sizes come from the model\'s fixed set, nearest by aspect ratio', () => {
+test('OpenAI\'s own models get the nearest size from their fixed set; other models on an OpenAI-compatible gateway get exactly the requested size', () => {
     assert.equal(resolveOpenAiSize(1920, 1080, 'gpt-image-1'), '1536x1024');
     assert.equal(resolveOpenAiSize(768, 1024, 'dall-e-3'), '1024x1792');
     assert.equal(resolveOpenAiSize(512, 512, 'dall-e-2'), '256x256', 'dall-e-2 sizes are all square: the first one wins the tie');
+    assert.equal(resolveOpenAiSize(1024, 768, 'qwen-image-2.1/text-to-image'), '1024x768');
+});
+
+test('an OpenAI-compatible gateway (NanoGPT) is asked for base64, so no second download from its CDN is needed', () => {
+    const built = buildImageRequest(
+        { format: 'openai', endpoint: 'https://nano-gpt.com/api/v1', apiKey: 'k', model: 'qwen-image-2.1/text-to-image' },
+        resolveImageRequest({ prompt: 'A serene mountain landscape at sunset.', width: 1024, height: 1024 }),
+    );
+    assert.equal(built.url, 'https://nano-gpt.com/api/v1/images/generations');
+    assert.equal(built.headers.Authorization, 'Bearer k');
+    assert.deepEqual(JSON.parse(built.body), { model: 'qwen-image-2.1/text-to-image', prompt: 'A serene mountain landscape at sunset.', n: 1, size: '1024x1024', response_format: 'b64_json' });
 });
 
 test('pollinations is a keyless GET returning the image itself; the prompt is URL-encoded into the path', () => {
@@ -42,7 +53,7 @@ test('pollinations is a keyless GET returning the image itself; the prompt is UR
     assert.match(built.url, /width=512&height=768&nologo=true&seed=7/);
 });
 
-test('openai asks for base64 only from dall-e (gpt-image rejects response_format), a1111 sends Basic auth for user:pass keys', () => {
+test('openai asks for base64 from everything but gpt-image (which rejects response_format), a1111 sends Basic auth for user:pass keys', () => {
     const request = resolveImageRequest({ prompt: 'p', width: 1024, height: 1024 });
     assert.equal(JSON.parse(buildImageRequest({ format: 'openai', model: 'dall-e-3', apiKey: 'k' }, request).body).response_format, 'b64_json');
     assert.equal(JSON.parse(buildImageRequest({ format: 'openai', apiKey: 'k' }, request).body).response_format, undefined);

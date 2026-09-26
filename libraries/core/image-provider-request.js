@@ -5,9 +5,11 @@
  * Форматы:
  * - **pollinations** — `GET {endpoint}/prompt/{prompt}?width&height&seed&model&nologo` → сама картинка. Без ключа: годится попробовать
  *   модуль сразу, ничего не настраивая.
- * - **openai** — `POST {endpoint}/images/generations` (DALL·E, gpt-image и совместимые). Размеры у OpenAI — из фиксированного набора, берётся
- *   ближайший по пропорции. `response_format: b64_json` только у `dall-e-*`: gpt-image всегда отдаёт base64 и на этот параметр отвечает
- *   ошибкой. Совместимые серверы иногда отдают `url` вместо base64 — тогда картинку забирает вторым запросом Ядро.
+ * - **openai** — `POST {endpoint}/images/generations` (DALL·E, gpt-image и совместимые: NanoGPT, OpenRouter-подобные шлюзы). Размер
+ *   подгоняется к фиксированному набору только у настоящих моделей OpenAI (`dall-e-*`, `gpt-image*`); остальным уходит ровно запрошенный.
+ *   `response_format: b64_json` — всем, кроме gpt-image (он всегда отдаёт base64 и на этот параметр отвечает ошибкой): иначе совместимый
+ *   сервер может вернуть ссылку на свой CDN, а без CORS у CDN картинку со страницы не скачать. Если ссылка всё же пришла — Ядро пробует
+ *   забрать её вторым запросом.
  * - **a1111** — `POST {endpoint}/sdapi/v1/txt2img` (Automatic1111, Forge, SD.Next): base64 PNG в `images[0]`. Ключ вида `user:pass` —
  *   Basic-авторизация (`--api-auth`).
  */
@@ -19,7 +21,7 @@ const MAX_SIDE = 2048;
 const OPENAI_SIZES = Object.freeze({
     'dall-e-3': ['1024x1024', '1792x1024', '1024x1792'],
     'dall-e-2': ['256x256', '512x512', '1024x1024'],
-    default: ['1024x1024', '1536x1024', '1024x1536'],
+    'gpt-image': ['1024x1024', '1536x1024', '1024x1536'],
 });
 
 export function resolveImageFormat(format) {
@@ -45,9 +47,11 @@ export function resolveImageRequest(params = {}) {
     };
 }
 
-/** Ближайший по пропорции из размеров, которые принимает модель OpenAI. */
+/** Размер для `size`: у моделей OpenAI — ближайший по пропорции из их набора, у остальных (совместимые шлюзы) — ровно запрошенный. */
 export function resolveOpenAiSize(width, height, model = '') {
-    const sizes = OPENAI_SIZES[Object.keys(OPENAI_SIZES).find(key => String(model).startsWith(key))] ?? OPENAI_SIZES.default;
+    const family = Object.keys(OPENAI_SIZES).find(key => String(model).startsWith(key));
+    if (!family) return `${width}x${height}`;
+    const sizes = OPENAI_SIZES[family];
     const wanted = Math.log(width / height);
     let best = sizes[0];
     for (const size of sizes) {
@@ -88,7 +92,7 @@ export function buildImageRequest(worker, request) {
     if (format === 'openai') {
         const model = worker?.model || 'gpt-image-1';
         const body = { model, prompt: request.prompt, n: 1, size: resolveOpenAiSize(request.width, request.height, model) };
-        if (model.startsWith('dall-e')) body.response_format = 'b64_json';
+        if (!model.startsWith('gpt-image')) body.response_format = 'b64_json';
         return {
             url: `${endpoint}/images/generations`,
             method: 'POST',
