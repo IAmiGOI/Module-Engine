@@ -140,7 +140,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         await (enable ? moduleRegistry.enable(entry.id) : moduleRegistry.disable(entry.id));
     }
 
-    const { loadWorkers, modelsCard } = createModelsCard({ call, workers, notify, flash, collapse });
+    const { loadWorkers, modelsCard, applyStatus: applyWorkerStatus } = createModelsCard({ call, callService, workers, notify, flash, collapse });
     const { loadMacros, loadTrackerFields, macrosCard } = createMacrosCard({ call, macros, trackerFields, notify, flash, collapse });
     const { loadLorebook, lorebookCard } = createLorebookCard({ call, lorebookEntries, lorebookBooks, flash, notify, collapse });
     const { loadSummaries, loadMemoryGraphCount, loadMemoryGraphSettings, saveMemoryGraphThresholdK, loadSummarySettings, summaryCard } = createSummaryCard({ call, summaries, memoryGraphNodeCount, memoryGraphThresholdK, notify, summaryLevels, summaryProtectedWindow, summaryWorkerId, summaryVerifyEnabled, summaryVerifyWorkerId, flash, collapse, workers });
@@ -252,6 +252,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     const { tree, settingsTree } = createPanelTrees({ modelsCard, macrosCard, lorebookCard, summaryCard, modulesCard, statusCard, chatViewportCard, presetCard, updatesCard, syncCard, backgroundsCard });
 
     const subscriptions = watch();
+    subscriptions.push(host.events.subscribe('model.workers.status.changed', payload => applyWorkerStatus(payload?.workers)));
     // Корень второго дерева (экран настроек) — забирает index.js. null, пока
     // open() не отработал или хост не дал mountSettings.
     let settingsUi = null;

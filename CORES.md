@@ -30,7 +30,16 @@
 [libraries/core/dispatch-queue.js](libraries/core/dispatch-queue.js), уже
 используется Ядром внутренних моделей движка выше и предназначена для
 остальных 4 модельных Ядер тоже (сам по себе не знает ни про HTTP, ни про
-конкретную форму запроса — только "какой воркер и когда"). Формат
+конкретную форму запроса — только "какой воркер и когда"). Политика
+(ROADMAP 5.102): без затора в голове очереди, `maxConcurrent` на воркер,
+плавный взвешенный round-robin по здоровью воркера
+([worker-health.js](libraries/core/worker-health.js)), пул читается в момент
+запуска, настоящая отмена через `AbortSignal` (просроченная попытка
+обрывается, а не висит). Живое состояние воркеров Ядра моделей — пробы раз в
+10 минут, статистика недоступности, `model.workers.status`/`.probe` —
+[cores/models/worker-status.js](cores/models/worker-status.js). Основное
+подключение SillyTavern — тоже воркер (`format: 'sillytavern'`,
+[st-main-request.js](libraries/core/st-main-request.js), `stGeneration.direct`). Формат
 запроса/ответа для HTTP-совместимых провайдеров —
 [libraries/core/provider-request.js](libraries/core/provider-request.js),
 чистые функции, без сети.

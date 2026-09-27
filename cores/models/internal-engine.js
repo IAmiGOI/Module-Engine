@@ -2,6 +2,9 @@ import { createDispatchQueue } from '../../libraries/core/dispatch-queue.js';
 import { buildProviderRequest, resolveProviderResponseText, resolveStreamDelta } from '../../libraries/core/provider-request.js';
 import { createPersistedList } from '../../libraries/core/persisted-list.js';
 import { request } from '../../libraries/shared/request.js';
+import { buildCustomPreset, resolveGenerateRequest } from './generate-request.js';
+import { createWorkerStatus } from './worker-status.js';
+import { ST_MAIN_FORMAT } from '../../libraries/core/st-main-request.js';
 
 let requestCounter = 0;
 /** Own counter, not `crypto.randomUUID()` — this Ядро already runs in both the real ST page and a bare `node --test`; a monotonic counter needs nothing from either environment and is trivially readable in logs/events ("request #7"), where a UUID would only add noise. */
@@ -12,155 +15,10 @@ function generateRequestId() {
 
 const PERSISTENCE_NAMESPACE = 'core.models.internal';
 
-const REQUEST_DEFAULTS = Object.freeze({ systemPrompt: '', temperature: 0.7, maxTokens: 1000, topP: 1, topK: 0, seed: 0 });
-
-/** `inherit` — не трогать: провайдер решает сам, и в запрос не уходит вообще ничего про ризонинг (см. provider-request.js). Названия и смысл — те же, что в SideCar Alpha (`REASONING_MODE_OPTIONS`). */
-export const REASONING_MODES = Object.freeze(['inherit', 'enabled', 'disabled']);
-/** Смысла нет ни у Anthropic, ни у Google — эффорт понимает только OpenRouter'овский unified `reasoning`; для остальных полей это просто отправная точка на случай, если включат вручную. */
-export const REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
-
-/**
- * Пресеты сэмплера — и, теперь, ризонинга. Ни разу не про то, КАКОЙ воркер
- * («сайдкар») возьмётся отвечать: воркера выбирает `dispatchQueue` сама (или
- * пиннинг через `workerId` — см. doc-comment Ядра ниже), это отдельный, уже
- * решённый вопрос. Ровно тот же приём, что `TIME_PRESETS` у Модуля «RP Time»:
- * готовая отправная точка одним нажатием, а не восемь полей вслепую, — но
- * подкрутить дальше вручную по-прежнему можно, пресет лишь заполняет их.
- *
- * Сэмплерные значения — не выдумка: те же самые границы (0–2 / 0–1 / 0–200),
- * что были проверены на практике в SideCar Alpha (core/sidecar-service.js).
- * Ризонинг у "Deterministic"/"Precise" выключен НАМЕРЕННО, не забыт: это
- * пресеты под трекеры и строгий JSON, а рассуждающая модель отвечает
- * заметно дольше и на этом не выигрывает ничего. У "Balanced"/"Creative" —
- * `inherit` (решает сам провайдер): включать ризонинг никому не в убыток
- * (запрос его просит только если явно включён), но и настаивать на нём тоже
- * незачем, раз задача не требует.
- */
-export const SAMPLER_PRESETS = Object.freeze([
-    {
-        id: 'deterministic',
-        name: 'Deterministic (greedy)',
-        description: 'Same input, same output every time — for anything that must parse the same way twice.',
-        temperature: 0, topP: 1, topK: 1, maxTokens: 1000,
-        reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
-    },
-    {
-        id: 'precise',
-        name: 'Precise',
-        description: 'Low temperature, mostly consistent — a safe default for trackers and strict JSON.',
-        temperature: 0.2, topP: 0.9, topK: 0, maxTokens: 1000,
-        reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
-    },
-    {
-        id: 'balanced',
-        name: 'Balanced',
-        description: 'A reasonable middle ground for most tasks.',
-        temperature: 0.7, topP: 1, topK: 0, maxTokens: 1000,
-        reasoningMode: 'inherit', reasoningEffort: 'medium', reasoningBudget: 0,
-    },
-    {
-        id: 'creative',
-        name: 'Creative',
-        description: 'Higher temperature — more varied wording, less predictable.',
-        temperature: 1.1, topP: 0.95, topK: 0, maxTokens: 1000,
-        reasoningMode: 'inherit', reasoningEffort: 'medium', reasoningBudget: 0,
-    },
-]);
-
-/**
- * Свой пресет — тот же контракт «одна кнопка заполняет ползунки», что и у
- * `SAMPLER_PRESETS`, но заведённый пользователем: «строгий JSON под мой
- * промпт», «разговорный без ризонинга», что угодно, для чего четырёх готовых
- * мало. Живёт РЯДОМ со встроенными, не вместо них — `model.presets.get`
- * отдаёт только свои, готовые уже держит `SAMPLER_PRESETS`, а собрать их
- * вместе для формы — дело вызывающего (Модуль «Трекер», Модуль «RP Time»).
- *
- * `id` — слаг от имени, не случайный: «Save as preset» под уже занятым
- * именем тем самым ОБНОВЛЯЕТ его, а не плодит дубликат рядом. Префикс
- * `custom:` не даёт столкнуться со встроенными id (`deterministic` и т.п.),
- * у которых двоеточия никогда не бывает.
- */
-export function slugifyPresetName(name) {
-    const slug = String(name ?? '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
-    return slug ? `custom:${slug}` : '';
-}
-
-/** Пресет из текущих значений формы — та же форма, что у `SAMPLER_PRESETS`, плюс `custom: true`: только это отличает сохранённый пользователем от готового из коробки (см. `GenerationSettingsPanel` в widgets.js — там же ЭТИМ решается, можно ли пресет удалить). */
-export function buildCustomPreset(name, values = {}) {
-    const sampler = clampSamplerSettings(values);
-    const reasoning = clampReasoningSettings(values);
-    return { id: slugifyPresetName(name), name: String(name ?? '').trim(), custom: true, ...sampler, ...reasoning };
-}
-
-function clampNumber(value, min, max, fallback) {
-    const number = Number(value);
-    const chosen = Number.isFinite(number) ? number : fallback;
-    return Math.max(min, Math.min(max, chosen));
-}
-
-/**
- * Защитное чтение настроек сэмплера у ОДНОГО воркера — те же границы, что и
- * у ползунков в панели, применённые и к тому, что реально лежит на диске:
- * ручная правка сохранённого файла или старая запись без этих полей вообще
- * не должны уйти к провайдеру как есть.
- */
-export function clampSamplerSettings(values = {}) {
-    return {
-        temperature: clampNumber(values.temperature, 0, 2, REQUEST_DEFAULTS.temperature),
-        topP: clampNumber(values.topP, 0, 1, REQUEST_DEFAULTS.topP),
-        topK: Math.round(clampNumber(values.topK, 0, 200, REQUEST_DEFAULTS.topK)),
-        maxTokens: Math.round(clampNumber(values.maxTokens, 1, 32768, REQUEST_DEFAULTS.maxTokens)),
-    };
-}
-
-/** Тот же приём, отдельной функцией: ризонинг — самостоятельный набор настроек рядом с сэмплером, а не его часть, и клэмп у него свой (перечисление, а не диапазон, для двух из трёх полей). */
-export function clampReasoningSettings(values = {}) {
-    return {
-        reasoningMode: REASONING_MODES.includes(values.reasoningMode) ? values.reasoningMode : 'inherit',
-        reasoningEffort: REASONING_EFFORTS.includes(values.reasoningEffort) ? values.reasoningEffort : 'medium',
-        reasoningBudget: Math.round(clampNumber(values.reasoningBudget, 0, 32768, 0)),
-    };
-}
-
-/**
- * Defensive reader — any missing/malformed field falls back to a sane
- * default rather than reaching a provider with `undefined` in it.
- *
- * Пресет сэмплера/ризонинга — свойство ЗАПРОСА (трекера, «Времени» и т.д.),
- * а не воркера: один и тот же сайдкар должен уметь тем же вызовом что строго
- * трекать JSON, что вести творческую генерацию, с разными настройками
- * одновременно — привязать это к воркеру такую возможность бы отняло.
- * Поэтому явный параметр САМОГО запроса (`params.temperature` и т.п.)
- * побеждает всегда; `worker` читается вторым слоем НА СЛУЧАЙ, если у него
- * когда-либо будут свои поля (сейчас панель воркеров их не заводит — см.
- * cores/ui/engine-panel.js), а `REQUEST_DEFAULTS` — запасное дно под обоими.
- */
-export function resolveGenerateRequest(params, worker) {
-    const source = params ?? {};
-    const samplerDefaults = clampSamplerSettings(worker);
-    const reasoningDefaults = clampReasoningSettings(worker);
-    return {
-        prompt: String(source.prompt ?? ''),
-        systemPrompt: String(source.systemPrompt ?? REQUEST_DEFAULTS.systemPrompt),
-        // Multi-turn escape hatch, `openai` format only (see buildOpenAiRequest()
-        // in provider-request.js) — `null` (not `[]`) when absent so the openai
-        // builder can tell "no messages given" apart from "given but empty" and
-        // fall back to the prompt/systemPrompt sugar above unambiguously. First
-        // real caller: Summary Core's verify-expand/redo cycle (ROADMAP.md),
-        // which needs a real assistant turn (the previous draft) plus a second
-        // system turn (the reviewer's instruction) — something prompt/systemPrompt
-        // alone cannot express at all.
-        messages: Array.isArray(source.messages) && source.messages.length ? source.messages : null,
-        temperature: Number.isFinite(source.temperature) ? source.temperature : samplerDefaults.temperature,
-        maxTokens: Number.isFinite(source.maxTokens) ? source.maxTokens : samplerDefaults.maxTokens,
-        topP: Number.isFinite(source.topP) ? source.topP : samplerDefaults.topP,
-        topK: Number.isFinite(source.topK) ? source.topK : samplerDefaults.topK,
-        seed: Number.isFinite(source.seed) ? source.seed : REQUEST_DEFAULTS.seed,
-        reasoningMode: REASONING_MODES.includes(source.reasoningMode) ? source.reasoningMode : reasoningDefaults.reasoningMode,
-        reasoningEffort: REASONING_EFFORTS.includes(source.reasoningEffort) ? source.reasoningEffort : reasoningDefaults.reasoningEffort,
-        reasoningBudget: Number.isFinite(source.reasoningBudget) ? source.reasoningBudget : reasoningDefaults.reasoningBudget,
-    };
-}
+export {
+    REASONING_MODES, REASONING_EFFORTS, SAMPLER_PRESETS, slugifyPresetName, buildCustomPreset, clampSamplerSettings, clampReasoningSettings,
+    resolveGenerateRequest,
+} from './generate-request.js';
 
 /**
  * Ядро внутренних моделей движка (CORES.md, приоритет 1 среди модельных
@@ -196,13 +54,20 @@ export function resolveGenerateRequest(params, worker) {
  * даёт любому открытому экрану (карточке трекера, «RP Time») узнать о новом
  * пресете, сохранённом СОСЕДНИМ, без ручной перезагрузки страницы.
  */
-export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3000 } = {}) {
-    const dispatchQueue = createDispatchQueue();
+export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3000, now = () => Date.now(), probeIntervalMs, timers } = {}) {
+    // Вес воркера в очереди — его здоровье (worker-status.js): менее стабильный выбирается реже, лежащий — только если живых нет.
+    const dispatchQueue = createDispatchQueue({ weightOf: worker => status.weightOf(worker) });
     let workers = [];
     let customPresets = [];
     // Тот же фоллбэк на прямой эмит, что и у Ядра трекинга — только для узких
     // тестов, которые поднимают это Ядро в одиночку, без Ядра событий рядом.
     const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
+
+    const status = createWorkerStatus(host, {
+        namespace: PERSISTENCE_NAMESPACE, publish: publishEvent, now, getWorkers: () => workers, getQueue: () => dispatchQueue,
+        runProbe: (worker, timeoutMs) => probeWorker(worker, timeoutMs),
+        ...(probeIntervalMs !== undefined ? { probeIntervalMs } : {}), ...(timers ? { timers } : {}),
+    });
 
     const persisted = createPersistedList(host, {
         namespace: PERSISTENCE_NAMESPACE,
@@ -218,6 +83,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
     async function configureWorkers(list) {
         await persisted.save(list);
         publishEvent('model.workers.changed', { count: workers.length });
+        status.prune();
     }
     /**
      * `restoreWorkers()` ТОЖЕ публикует `model.workers.changed`, не только
@@ -231,6 +97,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
     async function restoreWorkers() {
         const list = await persisted.restore();
         publishEvent('model.workers.changed', { count: workers.length });
+        await status.restore().catch(() => {}); // статистика — не повод не поднять воркеры
         return list;
     }
 
@@ -264,12 +131,13 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
      * такой эндпоинт молча отвечал бы пустой строкой — silent regression
      * ровно там, где аддитивность контракта была обещана.
      */
-    async function dispatchToWorker(worker, generateRequest, { onChunk, stallMs, stream = true } = {}) {
+    async function dispatchToWorker(worker, generateRequest, { onChunk, stallMs, stream = true, signal } = {}) {
+        if (worker.format === ST_MAIN_FORMAT) return dispatchToMainConnection(worker, generateRequest, { onChunk, stallMs, signal });
         const providerRequest = buildProviderRequest(worker, generateRequest, { stream });
         let accumulated = '';
         const result = await request(host.network, 'http.request', {
             params: {
-                ...providerRequest, stream, stallMs,
+                ...providerRequest, stream, stallMs, signal,
                 onChunk: stream ? frame => {
                     const { delta } = resolveStreamDelta(worker.format, frame);
                     if (!delta) return;
@@ -277,48 +145,74 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     onChunk?.(delta, accumulated);
                 } : undefined,
             },
-            // Нестриминговый путь не читается чанками — тут ждём весь ответ
-            // разом, тем же `timeoutMs`, что уже применён у самообновления
-            // (см. ROADMAP.md 5.17): "дать вызывающему сдаться", а не реально
-            // оборвать fetch — стриминговый путь абортит по-настоящему сам,
-            // внутри http.js, именно потому что там watchdog должен реально
-            // остановить зависший поток, а не просто перестать его ждать.
+            // Нестриминговый путь ждёт ответ целиком тем же сроком; сам fetch обрывает `signal` очереди (стрим — ещё и watchdog в http.js).
             timeoutMs: stream ? undefined : stallMs,
         });
         if (!result.ok) throw new Error(result.error.message);
-        if (!result.value.ok) throw new Error(`Model worker "${worker.id}" replied with HTTP ${result.value.status}.`);
+        if (!result.value.ok) throw httpError(worker, result.value.status);
         if (accumulated) return accumulated;
         return resolveProviderResponseText(worker.format, result.value.text);
     }
 
-    // `workerId`, if given, PINS the request to that one worker (still through
-    // the same queue — a busy pinned worker still queues, it just never
-    // load-balances onto a different one). Omitted (the normal case): the
-    // full pool, load-balanced as usual. First real caller — Ядро трекинга,
-    // where "каждый трекер привязан к сайдкару" means every poll must land
-    // on the SAME configured worker every time, not whichever is least busy.
-    // An unknown `workerId` naturally reaches the existing "No worker is
-    // available" failure below — no special-casing needed for that case.
-    //
-    // `fallbackWorkerIds`/`restartOnStall`/`stallMs` — ВСЕ opt-in, default
-    // off (see doc-comment above `resolveGenerateRequest()` re: pinning being
-    // a deliberate invariant, not an oversight). A pinned tracker that never
-    // passes `fallbackWorkerIds` behaves EXACTLY as before: one worker, one
-    // attempt. An UNPINNED caller with no fallback list also behaves exactly
-    // as before — the "full pool, load-balanced" tier is still just one tier.
     /**
-     * Ждёт ОДИН `model.workers.changed` (или сдаётся по таймауту) — вызывается
-     * ТОЛЬКО когда пул для этого запроса прямо сейчас пуст. Закрывает
-     * реальную гонку старта (harness/engine-wiring.js: `restoreWorkers()` и
-     * `summaryCore.load()` идут в одном `Promise.all`, параллельно — фолд на
-     * первом ходу мог поймать момент ДО того, как воркеры восстановились) и
-     * заодно "юзер только что переименовал/добавил подключение" — без этого
-     * `model.generate` мгновенно и шумно падал бы `"No worker is available."`
-     * ровно тогда, когда воркер был на подходе. НЕ бесконечно — искренне
-     * отсутствующий воркер (опечатка, реально удалённое подключение) обязан
-     * дойти до настоящей ошибки, а не тихо повиснуть навсегда и застопорить
-     * всё, что сериализовано ЗА этим вызовом (Summary Core's `enqueueWrite()`,
-     * например).
+     * Основное подключение SillyTavern (`format: 'sillytavern'`, libraries/core/st-main-request.js): запрос уходит на сервер ST с его
+     * текущими настройками через Сервис перехвата генерации. Стрима нет — ответ приходит целиком одним «чанком».
+     */
+    async function dispatchToMainConnection(worker, generateRequest, { onChunk, stallMs, signal }) {
+        const result = await request(host.services, 'stGeneration.direct', {
+            params: {
+                messages: generateRequest.messages, prompt: generateRequest.prompt, systemPrompt: generateRequest.systemPrompt,
+                maxTokens: generateRequest.maxTokens, temperature: generateRequest.temperature, signal,
+            },
+            timeoutMs: stallMs,
+        });
+        if (!result.ok) throw new Error(result.error.message);
+        if (!result.value.ok) throw httpError(worker, result.value.status, result.value.error);
+        const text = String(result.value.text ?? '');
+        if (text) onChunk?.(text, text);
+        return text;
+    }
+
+    /** Ошибка ответа с `status` — по нему worker-health.js отличает «воркер недоступен» (5xx, 429) от «запрос не тот» (4xx). */
+    function httpError(worker, statusCode, detail = '') {
+        const error = new Error(`Model worker "${worker.id}" replied with HTTP ${statusCode}${detail ? `: ${String(detail).slice(0, 200)}` : ''}.`);
+        error.status = statusCode;
+        return error;
+    }
+
+    /**
+     * Попытка на конкретном воркере с учётом исхода в его здоровье. Тайм-аут попытки (очередь обрывает её сигналом с причиной
+     * `timeout`) — недоступность; отмена без такой причины — не вина воркера и в статистику не идёт.
+     */
+    async function attempt(worker, generateRequest, options) {
+        const startedAt = now();
+        try {
+            const text = await dispatchToWorker(worker, generateRequest, options);
+            status.recordOutcome(worker.id, { ok: true, latencyMs: now() - startedAt });
+            return text;
+        } catch (error) {
+            const reason = options.signal?.aborted ? options.signal.reason : null;
+            status.recordOutcome(worker.id, { ok: false, error: reason?.timeout ? reason : error });
+            throw error;
+        }
+    }
+
+    /** Проба «жив ли воркер»: минимальный запрос без стрима, через ту же очередь, что и рабочие. */
+    function probeWorker(worker, timeoutMs) {
+        const probeRequest = resolveGenerateRequest({ prompt: 'Reply with the single word OK.', maxTokens: 16, temperature: 0 }, worker);
+        return dispatchQueue.enqueueWithFallback(
+            [{ workers: () => workers.filter(item => item.id === worker.id), timeoutMs }],
+            (target, { signal }) => dispatchToWorker(target, probeRequest, { stream: false, signal }),
+        );
+    }
+
+    // `workerId` ПРИВЯЗЫВАЕТ запрос к одному воркеру (через ту же очередь: занятый — ждёт, на другой не уходит) — так трекер всегда
+    // опрашивает свой сайдкар. Без него — весь пул с балансировкой. `fallbackWorkerIds`/`restartOnStall`/`stallMs` — всё по желанию:
+    // без них запрос — одна попытка на одном пуле, как раньше.
+    /**
+     * Ждёт ОДИН `model.workers.changed` (или сдаётся по тайм-ауту), только когда пул для запроса пуст: при старте воркеры
+     * восстанавливаются параллельно с первыми вызовами (harness/engine-wiring.js), и без выдержки `model.generate` падал бы
+     * «No worker is available.» ровно тогда, когда воркер на подходе. Не бесконечно — опечатка в `workerId` обязана дойти до ошибки.
      */
     function waitForWorkersChangeOnce(timeoutMs) {
         return new Promise(resolve => {
@@ -341,6 +235,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
     const unregisters = [
         host.own.register('model.generate', async (params, meta) => {
             const requestId = params?.requestId ?? generateRequestId();
+            // Пулы — функции: очередь читает их в момент запуска, и воркер, удалённый из настроек, пока запрос ждал, его уже не получит.
             const resolvePrimaryPool = () => (params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers);
             let primaryPool = resolvePrimaryPool();
             if (!primaryPool.length) {
@@ -350,11 +245,11 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             const stallMs = params?.stallMs || undefined;
             const restartOnStall = stallMs && params?.restartOnStall !== false;
             const fallbackPools = (params?.fallbackWorkerIds ?? [])
-                .map(id => workers.filter(worker => worker.id === id))
-                .filter(pool => pool.length);
+                .filter(id => workers.some(worker => worker.id === id))
+                .map(id => () => workers.filter(worker => worker.id === id));
             const tiers = [
-                { workers: primaryPool, timeoutMs: stallMs },
-                ...(restartOnStall ? [{ workers: primaryPool, timeoutMs: stallMs }] : []),
+                { workers: resolvePrimaryPool, timeoutMs: stallMs },
+                ...(restartOnStall ? [{ workers: resolvePrimaryPool, timeoutMs: stallMs }] : []),
                 ...fallbackPools.map(pool => ({ workers: pool, timeoutMs: stallMs })),
             ];
 
@@ -362,11 +257,11 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             let lastWorkerId = params?.workerId;
             return dispatchQueue.enqueueWithFallback(
                 tiers,
-                worker => {
+                (worker, { signal }) => {
                     lastWorkerId = worker.id;
-                    return dispatchToWorker(worker, resolveGenerateRequest(params, worker), {
+                    return attempt(worker, resolveGenerateRequest(params, worker), {
                         stream: params?.stream !== false,
-                        stallMs,
+                        stallMs, signal,
                         onChunk: (delta, text) => publishEvent('model.generate.chunk', { requestId, workerId: worker.id, delta, text }),
                     });
                 },
@@ -379,7 +274,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     priority: meta?.priority === 'pipeline',
                     onAttemptFailed: ({ tierIndex, error }) => publishEvent('model.generate.retrying', {
                         requestId, failedWorkerId: lastWorkerId, reason: error.message,
-                        nextWorkerId: tiers[tierIndex + 1]?.workers?.[0]?.id,
+                        nextWorkerId: tiers[tierIndex + 1]?.workers()?.[0]?.id,
                     }),
                 },
             ).then(
@@ -387,12 +282,8 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                 error => { publishEvent('model.generate.failed', { requestId, error: { message: error.message } }); throw error; },
             );
         }),
-        // Configuration as real CONTRACTS, not just the plain `configureWorkers()`
-        // method below: the engine's own UI is a Модуль, and a Модуль editing
-        // endpoints/API keys through a direct JS reference would bypass the Гейт
-        // and the whole rights system for the single most sensitive thing here.
-        // The plain methods stay for assembly-time use by the Раннер, which
-        // holds the reference legitimately (see harness/engine-wiring.js).
+        // Настройка — настоящими контрактами: UI движка — Модуль, и правка ключей API в обход Гейта обошла бы всю систему прав.
+        // Простые методы (`configureWorkers()` и т. п.) остаются сборщику движка.
         host.own.register('model.workers.get', () => workers),
         host.own.register('model.workers.set', params => configureWorkers(params?.workers ?? [])),
         host.own.register('model.presets.get', () => customPresets),
@@ -401,6 +292,9 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
 
     return {
         configureWorkers, restoreWorkers, configurePresets, restorePresets,
-        unregister: () => { for (const unregister of unregisters) unregister(); },
+        /** Плановые пробы раз в 10 минут — включает сборка движка после восстановления воркеров, не конструктор (тестам таймер не нужен). */
+        startMonitoring: () => status.start(),
+        probeWorkers: workerId => status.probeNow(workerId),
+        unregister: () => { status.unregister(); for (const unregister of unregisters) unregister(); },
     };
 }

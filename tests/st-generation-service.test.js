@@ -196,3 +196,34 @@ test('the service reports what is actually installed, so the panel never has to 
 
     assert.deepEqual((await call(bus, 'stGeneration.installed', {})).value, { interceptor: 'stmeBetaIntercept', sendHook: true });
 });
+
+// --- Основное подключение ST как воркер движка ------------------------------
+
+test('stGeneration.direct sends to ST\'s own backend with its current connection and skips the engine\'s send hook', async () => {
+    const bus = createContractBus();
+    const { target, sent } = fakeGlobal();
+    const context = {
+        mainApi: 'openai', chatCompletionSettings: { chat_completion_source: 'openrouter' }, getChatCompletionModel: () => 'some/model',
+        getRequestHeaders: () => ({ 'Content-Type': 'application/json', 'X-CSRF-Token': 't' }),
+    };
+    registerStGenerationService(bus, { target, getContext: () => context });
+    let hookCalls = 0;
+    await request(bus, 'stGeneration.installSendHook', { params: { handler: async () => { hookCalls += 1; return {}; } } });
+
+    const result = await request(bus, 'stGeneration.direct', { params: { prompt: 'ping', maxTokens: 4 } });
+
+    assert.deepEqual(result, { ok: true, value: { ok: true, status: 200, text: 'real backend reply' } });
+    assert.equal(hookCalls, 0, 'a background worker call is not a chat generation and must not run generation.payload');
+    assert.equal(sent[0].url, '/api/backends/chat-completions/generate');
+    assert.equal(JSON.parse(sent[0].body).model, 'some/model');
+});
+
+test('stGeneration.direct reports a failing backend with its HTTP status instead of throwing', async () => {
+    const bus = createContractBus();
+    const target = { fetch: async () => new Response(JSON.stringify({ error: { message: 'upstream down' } }), { status: 502 }) };
+    registerStGenerationService(bus, { target, getContext: () => ({ mainApi: 'openai', chatCompletionSettings: {} }) });
+
+    const result = await request(bus, 'stGeneration.direct', { params: { prompt: 'ping' } });
+
+    assert.deepEqual(result.value, { ok: false, status: 502, error: 'upstream down' });
+});

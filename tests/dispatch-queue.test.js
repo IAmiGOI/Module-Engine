@@ -246,3 +246,158 @@ test('enqueueWithFallback() still load-balances WITHIN one tier\'s pool — a fa
     assert.equal(result, 'ran on b2');
     dBusy.resolve('done');
 });
+
+// --- Переписанная политика: без затора, параллельность, веса, отмена -------
+
+test('a request for a busy worker no longer blocks a later request for an idle worker queued behind it', async () => {
+    const queue = createDispatchQueue();
+    const busy = deferred();
+    queue.enqueue([{ id: 'a' }], () => busy.promise);
+    const blocked = queue.enqueue([{ id: 'a' }], () => Promise.resolve('second on a'));
+
+    const result = await queue.enqueue([{ id: 'b' }], worker => Promise.resolve(`ran on ${worker.id}`));
+
+    assert.equal(result, 'ran on b');
+    busy.resolve('first');
+    assert.equal(await blocked, 'second on a');
+});
+
+test('a worker with maxConcurrent 2 runs two requests at once and queues the third', async () => {
+    const queue = createDispatchQueue();
+    const pool = [{ id: 'cloud', maxConcurrent: 2 }];
+    const first = deferred();
+    const second = deferred();
+    let thirdStarted = false;
+    queue.enqueue(pool, () => first.promise);
+    queue.enqueue(pool, () => second.promise);
+    const third = queue.enqueue(pool, () => { thirdStarted = true; return Promise.resolve('third'); });
+    await flushMicrotasks();
+
+    assert.equal(queue.runningCount('cloud'), 2);
+    assert.equal(thirdStarted, false);
+    first.resolve('one');
+    assert.equal(await third, 'third');
+    second.resolve('two');
+});
+
+test('weighted selection sends a half-reliable worker a quarter as many requests as a healthy one', async () => {
+    const weights = { good: 1, flaky: 0.25 };
+    const queue = createDispatchQueue({ weightOf: worker => weights[worker.id] });
+    const pool = [{ id: 'good' }, { id: 'flaky' }];
+    const picks = { good: 0, flaky: 0 };
+
+    for (let index = 0; index < 50; index += 1) await queue.enqueue(pool, worker => { picks[worker.id] += 1; return Promise.resolve(); });
+
+    assert.equal(picks.good, 40);
+    assert.equal(picks.flaky, 10);
+});
+
+test('equal weights alternate between idle workers instead of always picking the first in the list', async () => {
+    const queue = createDispatchQueue();
+    const pool = [{ id: 'a' }, { id: 'b' }];
+    const picks = [];
+
+    for (let index = 0; index < 4; index += 1) await queue.enqueue(pool, worker => { picks.push(worker.id); return Promise.resolve(); });
+
+    assert.deepEqual(picks, ['a', 'b', 'a', 'b']);
+});
+
+test('a worker with weight 0 is skipped while a live worker exists, and still used when it is the only choice', async () => {
+    const queue = createDispatchQueue({ weightOf: worker => (worker.id === 'down' ? 0 : 1) });
+    const picks = [];
+
+    for (let index = 0; index < 3; index += 1) await queue.enqueue([{ id: 'down' }, { id: 'up' }], worker => { picks.push(worker.id); return Promise.resolve(); });
+    await queue.enqueue([{ id: 'down' }], worker => { picks.push(worker.id); return Promise.resolve(); });
+
+    assert.deepEqual(picks, ['up', 'up', 'up', 'down']);
+});
+
+test('a pool given as a function is read when the request starts, so a worker removed while it waited never receives it', async () => {
+    const queue = createDispatchQueue();
+    let pool = [{ id: 'a' }];
+    const busy = deferred();
+    queue.enqueue([{ id: 'a' }], () => busy.promise);
+    const waiting = queue.enqueue(() => pool, worker => Promise.resolve(`ran on ${worker.id}`));
+
+    pool = [{ id: 'replacement' }];
+    busy.resolve();
+
+    assert.equal(await waiting, 'ran on replacement');
+});
+
+test('aborting the signal of a waiting request removes it from the queue and rejects it', async () => {
+    const queue = createDispatchQueue();
+    const busy = deferred();
+    queue.enqueue([{ id: 'a' }], () => busy.promise);
+    const controller = new AbortController();
+    let ran = false;
+    const waiting = queue.enqueue([{ id: 'a' }], () => { ran = true; return Promise.resolve(); }, { signal: controller.signal });
+
+    controller.abort();
+
+    await assert.rejects(waiting, { name: 'AbortError' });
+    assert.equal(queue.queueLength(), 0);
+    busy.resolve();
+    await flushMicrotasks();
+    assert.equal(ran, false);
+});
+
+test('a timed-out fallback attempt is aborted with a timeout reason, so the worker is freed instead of finishing a paid call nobody reads', async () => {
+    const queue = createDispatchQueue();
+    let seenSignal = null;
+    const tiers = [{ workers: [{ id: 'slow' }], timeoutMs: 10 }, { workers: [{ id: 'backup' }] }];
+
+    const result = await queue.enqueueWithFallback(tiers, (worker, { signal }) => {
+        if (worker.id === 'backup') return Promise.resolve('from backup');
+        seenSignal = signal;
+        return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted by caller'))));
+    });
+
+    assert.equal(result, 'from backup');
+    assert.equal(seenSignal.aborted, true);
+    assert.equal(seenSignal.reason.timeout, true);
+    await flushMicrotasks();
+    assert.equal(queue.runningCount('slow'), 0);
+});
+
+test('a fallback attempt that timed out while still waiting in the queue is removed and never runs later', async () => {
+    const queue = createDispatchQueue();
+    const busy = deferred();
+    queue.enqueue([{ id: 'a' }], () => busy.promise);
+    const ranOn = [];
+
+    const result = await queue.enqueueWithFallback(
+        [{ workers: [{ id: 'a' }], timeoutMs: 10 }, { workers: [{ id: 'b' }] }],
+        worker => { ranOn.push(worker.id); return Promise.resolve(`ran on ${worker.id}`); },
+    );
+    busy.resolve();
+    await flushMicrotasks();
+
+    assert.equal(result, 'ran on b');
+    assert.deepEqual(ranOn, ['b']);
+});
+
+test('an external signal cancels the whole fallback chain', async () => {
+    const queue = createDispatchQueue();
+    const controller = new AbortController();
+    const chain = queue.enqueueWithFallback([{ workers: [{ id: 'a' }] }, { workers: [{ id: 'b' }] }],
+        (worker, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('stopped')))),
+        { signal: controller.signal });
+    await flushMicrotasks();
+
+    controller.abort();
+
+    await assert.rejects(chain, { name: 'AbortError' });
+});
+
+test('waitingFor() counts the queued requests whose pool includes the worker', async () => {
+    const queue = createDispatchQueue();
+    const busy = deferred();
+    queue.enqueue([{ id: 'a' }], () => busy.promise);
+    const second = queue.enqueue([{ id: 'a' }], () => Promise.resolve());
+
+    assert.equal(queue.waitingFor('a'), 1);
+    assert.equal(queue.waitingFor('b'), 0);
+    busy.resolve();
+    await second;
+});
