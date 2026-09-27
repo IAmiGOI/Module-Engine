@@ -12,7 +12,7 @@
  *   instance = {
  *     html(),                              // тело блока: HTML-строка для WebGL-растра (классы `wg-*`, см. `widgetCss`); рисует ТОЛЬКО внутри блока
  *     actions?: [{ id, icon, title }],     // круглые кнопки блока (DOM); нажатие → onAction(id)
- *     rows?(),                             // необязательный СПИСОК строк: [{ id, image?, imageFallback?, click?, actions: [{ id, icon, title }] }] — `click` — id действия при нажатии на саму строку (не на кнопку); рабочий стол рисует для каждой аватар (`image`, DOM)
+ *     rows?(),                             // необязательный СПИСОК строк: [{ id, image?, imageFallback?, click?, actions: [{ id, icon, title }] }] — `portrait: true` — портрет 3×4 во всю высоту блока слева (вместо круглого аватара строки; текст кладётся правее, от x = высота·¾ + 26); `click` — id действия при нажатии на саму строку (не на кнопку); рабочий стол рисует для каждой аватар (`image`, DOM)
  *                                          // и круглые кнопки; текст строки виджет кладёт в `html()` по `host.layout` (строка i — `rowsTop + i * rowH`, слева колонка аватара)
  *     search?: { placeholder, value },     // необязательная строка ПОИСКА над списком (DOM-поле рабочего стола); ввод → onSearch(value), список строк сдвигается на `layout.searchH`
  *     onAction?(id, rowId?), onSearch?(value), start?(), stop?()   // нажатие кнопки блока (rowId — у кнопки строки); start после монтирования, stop при снятии (обязателен для всего запущенного)
@@ -77,4 +77,8 @@ export const widgetCss = ({ text, muted, accent }) => `
 .wg-big { color: ${text}; font-size: 38px; font-weight: 700; line-height: 46px; letter-spacing: 1px; }
 .wg-text { color: ${text}; font-size: 13px; line-height: 18px; }
 .wg-muted { color: ${muted}; font-size: 12px; line-height: 16px; }
+.wg-lead { color: ${text}; font-size: 14px; line-height: 20px; }
+/* Полоса прогресса из сегментов: подложка (приглушённая) и залитая часть (акцент) — соседние блоки одной высоты. */
+.wg-track { background: ${muted}; opacity: .28; border-radius: 3px; }
+.wg-fill { background: ${accent}; border-radius: 3px; }
 `;
