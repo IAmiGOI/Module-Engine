@@ -6,12 +6,18 @@
 
 const yesNo = value => (value ? 'on' : 'off');
 
-/** Глобальные настройки World Info → строка с пояснением каждого поля. */
+/**
+ * Глобальные настройки World Info → строка с пояснением каждого поля.
+ *
+ * `budget` — НЕ токены: сама ST хранит его как ПРОЦЕНТ от общего контекста (`world-info.js`: `budget = round(world_info_budget * maxContext / 100)`,
+ * `world_info_budget` — то самое поле в `settings`) — найдено на реальном ответе гида, читавшей его как «25 токенов». `budgetCap`, в отличие от
+ * него, уже абсолютное число токенов (сравнивается напрямую с вычисленным `budget` в токенах) — оставлен как есть.
+ */
 export function describeWorldInfo(settings) {
     if (!settings) return '';
     const parts = [
         `scan depth ${settings.depth} messages`,
-        `token budget ${settings.budget}${settings.budgetCap ? ` (hard cap ${settings.budgetCap})` : ''}`,
+        `token budget ${settings.budget}% of the total context${settings.budgetCap ? ` (hard cap ${settings.budgetCap} tokens)` : ''}`,
         `insertion order ${settings.insertionStrategy}`,
         `recursive scanning ${yesNo(settings.recursive)}${settings.recursive && settings.maxRecursionSteps ? ` (max ${settings.maxRecursionSteps} steps)` : ''}`,
         `include character/persona names in the scan text ${yesNo(settings.includeNames)}`,
