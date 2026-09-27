@@ -120,6 +120,10 @@ export function normalizePassParams(action, params = {}) {
 /** Числовые и словесные настройки генерации прохода (ползунки «Temperature» и т. д. в карточке Модуля). */
 export const PASS_NUMBERS = Object.freeze(['temperature', 'topP', 'topK', 'maxTokens', 'reasoningBudget']);
 export const PASS_WORDS = Object.freeze(['reasoningMode', 'reasoningEffort']);
+const PROMPT_PREVIEW_CHARS = 600;
+const wordCount = text => (String(text ?? '').trim().match(/\S+/g) ?? []).length;
+/** Превью инструкции в карточке: достаточно длинное, чтобы судить о реальном брифе (короткий 240-символьный обрезок выглядел как слабый промпт, даже когда сохранённый был полным), плюс число слов — сколько бы ни обрезали превью, длину видно точно. */
+const promptPreview = prompt => `${prompt.slice(0, PROMPT_PREVIEW_CHARS)}${prompt.length > PROMPT_PREVIEW_CHARS ? '…' : ''} (${wordCount(prompt)} words total)`;
 const samplerLine = fields => {
     const parts = [...PASS_NUMBERS, ...PASS_WORDS].filter(key => fields[key] !== undefined).map(key => `${key} ${fields[key]}`);
     return parts.length ? [`Generation: ${parts.join(', ')}`] : [];
@@ -131,14 +135,14 @@ function describePass(action, params) {
     const { value } = made;
     if (action === 'postprocess.pass.add') {
         const { fields } = value;
-        return { ok: true, title: `New pass “${fields.name}”`, lines: [`Instruction: ${fields.prompt.slice(0, 240)}`, `Model: ${fields.workerId || 'any connection'}`, ...(fields.includeContext ? [`Sees the last ${fields.contextDepth ?? 6} chat messages too`] : []), ...samplerLine(fields), value.position ? `Position: ${value.position}` : 'Runs last'] };
+        return { ok: true, title: `New pass “${fields.name}”`, lines: [`Instruction: ${promptPreview(fields.prompt)}`, `Model: ${fields.workerId || 'any connection'}`, ...(fields.includeContext ? [`Sees the last ${fields.contextDepth ?? 6} chat messages too`] : []), ...samplerLine(fields), value.position ? `Position: ${value.position}` : 'Runs last'] };
     }
     if (action === 'postprocess.pass.remove') return { ok: true, danger: true, title: 'Delete a Post-Turn pass', lines: [`Pass ${value.id} is removed; the other passes keep their order.`] };
     if (action === 'postprocess.pass.move') return { ok: true, title: 'Reorder Post-Turn passes', lines: [`Pass ${value.id} → position ${value.position}. Each pass sees the result of the one before it.`] };
     const { fields } = value;
     return { ok: true, title: `Change Post-Turn pass ${value.id}`, lines: [
         ...(fields.name !== undefined ? [`Name: ${fields.name}`] : []),
-        ...(fields.prompt !== undefined ? [`Instruction: ${fields.prompt.slice(0, 240)}`] : []),
+        ...(fields.prompt !== undefined ? [`Instruction: ${promptPreview(fields.prompt)}`] : []),
         ...(fields.workerId !== undefined ? [`Model: ${fields.workerId || 'any connection'}`] : []),
         ...(fields.enabled !== undefined ? [fields.enabled ? 'Turn on' : 'Turn off'] : []),
         ...(fields.includeContext !== undefined ? [fields.includeContext ? 'Also sees recent chat messages' : 'Sees only the text it rewrites'] : []),

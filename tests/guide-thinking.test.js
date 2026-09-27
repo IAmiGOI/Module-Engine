@@ -360,6 +360,13 @@ test('only a task opens the block: a plain question, a module that is off, a blo
     assert.equal(follow.revealed.length, 1, 'the same topic — opened once');
     assert.equal(isTaskRequest('why is it slow?'), false);
     assert.equal(isTaskRequest('I want less slop'), true);
+    assert.equal(isTaskRequest('Okay, can you do than good anti-slop post turn processor pass for me?'), true, 'the exact live phrase that used to slip through — no old verb, just a plain request');
+    assert.equal(isTaskRequest('what is the post-turn processor?'), false);
+    assert.equal(isTaskRequest("Can you build me good anti-slop post turn processor pass?"), true);
+    for (const phrase of ['could you make me a health tracker', 'would you set up a macro', 'please add a pass', "let's make a tracker", "I'd like a pass for grammar", 'give me a tracker']) assert.equal(isTaskRequest(phrase), true, phrase);
+    assert.equal(isTaskRequest('why does this keep failing?'), false);
+    assert.equal(isTaskRequest('which module should I turn on?'), false);
+
 });
 
 test('the focus is sticky, but a task that NAMES the module opens its block again if it is closed now — a repeated request in the same chat does not leave the window shut', async () => {
@@ -428,4 +435,20 @@ test('a reply that goes to look at a block carries no card and no buttons: the p
     await noLink.guide.load();
     await noLink.guide.ask('make a tracker');
     assert.match(noLink.guide.messages.peek().at(-1).text, /```proposal/, 'nothing to look at — the card stays');
+});
+
+test('the same everyday phrase that failed to open the panel now does; a pure "what/why/which" question still does not', async () => {
+    const { guide, revealed } = buildLook();
+    await guide.load();
+    await guide.ask('Okay, can you do than good anti-slop post turn processor pass for me?');
+    assert.deepEqual(revealed, ['module:module.postprocess']);
+});
+
+test('the proposal card preview is long enough to actually judge a real brief, and always states the true word count no matter how much the preview cuts off', async () => {
+    const { describeProposal } = await import('../libraries/core/guide-proposals.js');
+    const short = describeProposal('postprocess.pass.add', { prompt: 'Fix grammar and spelling.' });
+    assert.match(short.lines[0], /^Instruction: Fix grammar and spelling\. \(4 words total\)$/);
+    const long = describeProposal('postprocess.pass.add', { prompt: 'Keep every event unchanged. '.repeat(60).trim() });
+    assert.match(long.lines[0], /…\s\(240 words total\)$/);
+    assert.ok(long.lines[0].length > 240, 'the preview itself is longer than the old 240-character cut, so a real brief no longer LOOKS short');
 });

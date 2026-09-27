@@ -43,10 +43,23 @@ export function detectFocus({ query = '', anchors = [], modules = [] } = {}) {
     return found.trackers || found.macros || found.lorebook || found.allSettings || found.modules.length ? found : null;
 }
 
-const TASK = /\b(build|make|create|add|change|set|edit|write|rewrite|configure|tune|improve|fix|remove|delete|rework|update|adjust|design|need|want|help me)\b/i;
+/** Начинается с этого — почти наверняка вопрос «что/почему это», а не просьба сделать: живой случай (владелец) — «why is it slow?», «what is the post-turn processor?» не должны открывать панель. */
+const QUESTION_START = /^\s*(what|why|which|who)\b/i;
+
+/**
+ * Просьба СДЕЛАТЬ что-то — глаголы действия ПЛЮС обычные разговорные формы просьбы («can/could/would you», «please», «for me», «let's», «I'd like»):
+ * живой случай (владелец) — «Okay, can you do that good anti-slop post turn processor pass for me?» не содержит ни одного из старых глаголов и не
+ * открывал панель вообще. Ложное срабатывание на чистом вопросе (без глагола просьбы) отсекается `QUESTION_START` выше; ложное срабатывание на
+ * уточняющем вопросе внутри уже открытой темы безвредно — открывать там уже нечего.
+ */
+const REQUEST = /\b(build|make|create|add|change|set|edit|write|rewrite|configure|tune|improve|fix|remove|delete|rework|update|adjust|design|need|want|help me|give me|show me a|can you|could you|would you|will you|please|for me|let'?s|i'?d like|i would like|do (?:this|that|it|one|a)\b)/i;
 
 /** Реплика просит СДЕЛАТЬ что-то (а не объяснить): по такой гид сама открывает блок нужного Модуля, чтобы увидеть его состояние, — не полагаясь на то, что модель об этом вспомнит. */
-export const isTaskRequest = text => TASK.test(String(text ?? ''));
+export function isTaskRequest(text) {
+    const source = String(text ?? '');
+    if (QUESTION_START.test(source)) return false;
+    return REQUEST.test(source);
+}
 
 /** Человек закрыл разговор сам — короткая реплика «спасибо / всё / отмена» без новой темы. */
 export const isClosing = text => String(text ?? '').trim().length <= 60 && CLOSING.test(text);
