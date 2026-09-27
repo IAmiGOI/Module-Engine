@@ -66,11 +66,15 @@ function hostOf(url) {
     try { return new URL(String(url ?? '')).hostname; } catch { return ''; }
 }
 
-/** Строка к промпту, связывающая картинки с именами: «Reference images: 1 — Alice, 2 — Bob. Keep …». Без имён — пусто. */
+/**
+ * Строка к промпту, связывающая картинки с именами. С фото берётся только личность (лицо, волосы, телосложение); выражение, поза и
+ * одежда — из описания сцены: «держи всё как на фото» убивало живые эмоции и смену одежды. Без имён — пусто.
+ */
 export function referencePromptNote(labels) {
     const named = (labels ?? []).map((label, index) => (label ? `${index + 1} — ${label}` : null)).filter(Boolean);
     if (!named.length) return '';
-    return `Reference images: ${named.join(', ')}. Keep these characters' faces, hair, build and outfits exactly as in their reference images.`;
+    return `Reference images: ${named.join(', ')}. Use them only for who each character is — face, hair, body type. `
+        + 'Expression, pose and clothing follow the description above, not the photos.';
 }
 
 /** Размер для `size`: у моделей OpenAI — ближайший по пропорции из их набора, у остальных (совместимые шлюзы) — ровно запрошенный. */

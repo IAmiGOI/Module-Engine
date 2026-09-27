@@ -2,6 +2,9 @@ import { signal } from '../../cores/ui/reactive.js';
 import { supportsReferences } from '../../libraries/core/image-provider-request.js';
 import { request } from '../../libraries/shared/request.js';
 import { createScenePainterView } from './view.js';
+import { DEFAULT_INSTRUCTION, buildWriterSystemPrompt, looksLikeRefusal, buildSceneTranscript, sanitizeImagePrompt, buildFinalPrompt } from './prompting.js';
+
+export { DEFAULT_INSTRUCTION, MATURE_RULE, referenceRule, buildWriterSystemPrompt, looksLikeRefusal, buildSceneTranscript, sanitizeImagePrompt, buildFinalPrompt } from './prompting.js';
 
 export const MODULE_ID = 'module.scenePainter';
 
@@ -19,19 +22,14 @@ export const MODULE_ID = 'module.scenePainter';
 
 const SETTINGS_NAMESPACE = MODULE_ID;
 const ANNOTATIONS_NAMESPACE = MODULE_ID;
-const MAX_PROMPT_LENGTH = 900;
 
-export const DEFAULT_INSTRUCTION = [
-    'You write prompts for an image generator.',
-    'Read the roleplay excerpt and describe ONE picture of the latest moment: who is in it, what they look like, what they are doing, where, the lighting and the mood.',
-    'Use concrete visual words, comma-separated phrases, no dialogue, no names the generator would not know unless you also describe the person.',
-    'Answer with the prompt only — no preface, no quotes, no explanations.',
-].join(' ');
 
 export const DEFAULT_SETTINGS = Object.freeze({
     autoPaint: false,
     contextMessages: 6,
     promptWorkerId: '',
+    // Запасной писатель: когда первый отказался (или вернул пусто) — часто так бывает на откровенных сценах.
+    backupPromptWorkerId: '',
     imageWorkerId: '',
     style: 'detailed digital painting, cinematic lighting',
     negativePrompt: 'text, watermark, signature, lowres, blurry',
@@ -42,6 +40,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Фото персонажей как основа (только для бэкендов, принимающих референсы — NanoGPT): аватары участников чата, по желанию — персоны.
     useReferences: true,
     includePersona: false,
+    // Откровенные сцены описываются как написаны, без смягчения и отказов (правило в prompting.js).
+    matureContent: true,
 });
 
 /** Защитное чтение настроек: мусор с диска превращается в допустимые значения. */
@@ -53,6 +53,7 @@ export function sanitizeSettings(value = {}) {
         autoPaint: source.autoPaint === true,
         contextMessages: number(source.contextMessages, 1, 20, DEFAULT_SETTINGS.contextMessages),
         promptWorkerId: text(source.promptWorkerId, ''),
+        backupPromptWorkerId: text(source.backupPromptWorkerId, ''),
         imageWorkerId: text(source.imageWorkerId, ''),
         style: text(source.style, DEFAULT_SETTINGS.style),
         negativePrompt: text(source.negativePrompt, DEFAULT_SETTINGS.negativePrompt),
@@ -62,21 +63,8 @@ export function sanitizeSettings(value = {}) {
         openWindow: source.openWindow !== false,
         useReferences: source.useReferences !== false,
         includePersona: source.includePersona === true,
+        matureContent: source.matureContent !== false,
     };
-}
-
-/** Отрывок для модели: последние `count` сообщений ДО `mesid` включительно, «Имя: текст», без разметки HTML. */
-export function buildSceneTranscript(messages, mesid, count) {
-    const upTo = messages.filter(message => !message.isSystem && Number(message.mesid) <= Number(mesid));
-    return upTo.slice(-count).map(message => `${message.name || (message.isUser ? 'User' : 'Character')}: ${String(message.text ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()}`).join('\n\n');
-}
-
-/** Ответ модели → промпт: без кода-заборов, «Prompt:», кавычек и переводов строк, не длиннее `MAX_PROMPT_LENGTH`. */
-export function sanitizeImagePrompt(text) {
-    let prompt = String(text ?? '').replace(/```[a-z]*\n?|```/gi, ' ');
-    prompt = prompt.replace(/^\s*(image\s+)?prompt\s*:\s*/i, '').replace(/\s+/g, ' ').trim();
-    prompt = prompt.replace(/^["'«“]+|["'»”]+$/g, '').trim();
-    return prompt.length > MAX_PROMPT_LENGTH ? prompt.slice(0, MAX_PROMPT_LENGTH).replace(/[,\s]+[^,]*$/, '') : prompt;
 }
 
 /** Аватары из `stCharacter.avatars` → референсы для `image.generate`: персонажи, затем (по желанию) персона; имя — подпись картинки. */
@@ -84,11 +72,6 @@ export function buildReferences(avatars, { includePersona = false } = {}) {
     const list = (avatars?.characters ?? []).map(character => ({ url: character.url, label: character.name }));
     if (includePersona && avatars?.persona?.url) list.push({ url: avatars.persona.url, label: avatars.persona.name });
     return list.filter(reference => reference.url);
-}
-
-export function buildFinalPrompt(scenePrompt, style) {
-    const styleText = String(style ?? '').trim();
-    return styleText ? `${scenePrompt}, ${styleText}` : scenePrompt;
 }
 
 export function createScenePainterModule(host) {
@@ -133,20 +116,23 @@ export function createScenePainterModule(host) {
         if (!history.ok) throw new Error(history.error.message);
         const transcript = buildSceneTranscript(history.value, mesid, current.contextMessages);
         if (!transcript) throw new Error('There is nothing in the chat to paint yet.');
-        // С фото персонажей их внешность задают референсы: описание лица/одежды словами только спорило бы с картинкой.
-        const names = references.map(reference => reference.label).filter(Boolean);
-        const referenceRule = names.length
-            ? ` The image generator also receives reference photos of: ${names.join(', ')}. Call these characters by name and do not describe their faces, hair or clothes — describe everything else.`
-            : '';
-        const reply = await call('model.generate', {
-            systemPrompt: current.instruction + referenceRule,
-            prompt: `${transcript}\n\nWrite the image prompt for the last moment above.`,
-            temperature: 0.7, maxTokens: 300, stream: false, reasoningMode: 'disabled',
-            ...(current.promptWorkerId ? { workerId: current.promptWorkerId } : {}),
+        const systemPrompt = buildWriterSystemPrompt({
+            instruction: current.instruction, matureContent: current.matureContent,
+            names: references.map(reference => reference.label).filter(Boolean),
         });
-        if (!reply.ok) throw new Error(`Prompt writer: ${reply.error.message}`);
-        const prompt = sanitizeImagePrompt(reply.value);
-        if (!prompt) throw new Error('The prompt writer returned an empty prompt.');
+        const ask = async workerId => {
+            const reply = await call('model.generate', {
+                systemPrompt, prompt: `${transcript}\n\nWrite the image prompt for the last moment above.`,
+                temperature: 0.6, maxTokens: 300, stream: false, reasoningMode: 'disabled', ...(workerId ? { workerId } : {}),
+            });
+            if (!reply.ok) throw new Error(`Prompt writer: ${reply.error.message}`);
+            return looksLikeRefusal(reply.value) ? '' : sanitizeImagePrompt(reply.value);
+        };
+        // Отказ или пустой ответ — один повтор у запасного писателя, если он задан и это другая модель.
+        let prompt = await ask(current.promptWorkerId);
+        const backup = current.backupPromptWorkerId;
+        if (!prompt && backup && backup !== current.promptWorkerId) prompt = await ask(backup);
+        if (!prompt) throw new Error(backup ? 'Both prompt writers refused this scene or answered empty.' : 'The prompt writer refused this scene or answered empty — set a backup prompt writer in the settings.');
         return prompt;
     }
 

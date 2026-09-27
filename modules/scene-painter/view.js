@@ -71,8 +71,12 @@ export function createScenePainterView({ settings, images, busy, errors, textWor
                 hint: 'The picture keeps their looks. Needs a backend that accepts image input — NanoGPT models such as nano-banana, seedream, flux-kontext, gpt-image. Others ignore it.',
             }),
             Toggle('Also send the persona avatar', draft.includePersona),
+            Toggle('Describe mature scenes as written', draft.matureContent, {
+                hint: 'Tells the prompt writer not to soften, censor or refuse explicit scenes (all characters depicted as adults). The image backend has its own filter.',
+            }),
             Row(
                 Field('Prompt writer (text model)', Select(draft.promptWorkerId, workerOptions(textWorkers, 'Any model worker'))),
+                Field('Backup prompt writer', Select(draft.backupPromptWorkerId, workerOptions(textWorkers, 'None')), { hint: 'Asked when the first one refuses' }),
                 Field('Image backend', Select(draft.imageWorkerId, workerOptions(imageWorkers, 'Any image backend'))),
             ),
             Row(
