@@ -1,7 +1,7 @@
 import { signal } from '../ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { parseArticle, selectArticles, buildGuideSystemPrompt, trimHistory } from '../../libraries/core/guide-knowledge.js';
-import { plainText, splitAutoActions, extractAnchors, hasChoice, stripChoices } from '../../libraries/core/guide-markup.js';
+import { plainText, splitAutoActions, extractAnchors, hasChoice, stripChoices, stripBlocks } from '../../libraries/core/guide-markup.js';
 import { describeProposal } from '../../libraries/core/guide-proposals.js';
 import { createGuideWindow } from './window.js';
 import { createGuideActions } from './actions.js';
@@ -271,13 +271,16 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             if (thought.notes !== undefined) { notes = thought.notes.slice(0, MAX_NOTES_CHARS); void saveChat(); }
             // Предохранитель: варианты ответа — не на каждом ходу. Была ли в прошлой реплике гида кнопка выбора — в этой её нет.
             const lastReply = [...messages.peek()].reverse().find(message => message.role === 'assistant');
-            const calm = lastReply && hasChoice(lastReply.text) ? stripChoices(thought.visible) : thought.visible;
+            const quiet = lastReply && hasChoice(lastReply.text) ? stripChoices(thought.visible) : thought.visible;
+            // «Сначала посмотри, потом отвечай»: реплика, которая уходит смотреть блок (`<continue/>` + ссылка), не несёт готовой карточки и вариантов — настоящий ответ будет на следующем ходу.
+            const looking = thought.more && extractAnchors(quiet).length > 0 && continues < MAX_CONTINUES;
+            const calm = looking ? stripBlocks(quiet, ['proposal', 'choice']) : quiet;
             const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
             const opening = openLinked(shown).catch(() => {});
             for (const run of autoRuns) await runAction(run.action, run.params);
             // Ей нужно посмотреть блок, чтобы продолжить: ждём, пока он раскроется, и даём ещё один ход без участия человека (не больше MAX_CONTINUES подряд).
-            if (thought.more && extractAnchors(shown).length && continues < MAX_CONTINUES) {
+            if (looking) {
                 continues += 1;
                 await opening;
                 await sleep(REVEAL_SETTLE_MS);

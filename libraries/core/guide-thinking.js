@@ -34,13 +34,13 @@ export const notesBlock = notes => (String(notes ?? '').trim()
 const PARTIAL_TAG = /<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|n(?:o(?:t(?:e(?:s)?)?)?)?|c(?:o(?:n(?:t(?:i(?:n(?:u(?:e)?)?)?)?)?)?)?)?$/i;
 
 /**
- * Что показывать, пока ответ ещё идёт (стриминг): то же, что `splitThinking().visible`, плюс два правила против «мигания»: (1) обрывок открывающего тега в конце
- * (`<thi`) не показывается; (2) блок с незакрытой оградой ``` (карточка, предложение — JSON ещё дописывается) не показывается совсем до закрытия: сырой JSON на экране
- * недопустим, текст до него — пожалуйста.
+ * Что показывать, пока ответ ещё идёт (стриминг): то же, что `splitThinking().visible`, но (1) обрывок открывающего тега в конце (`<thi`) не показывается; (2) всё от первой
+ * ограды ``` не показывается — карточки, предложения и кнопки появятся, когда придёт финальная реплика (их ещё может вырезать предохранитель «сначала посмотри»), а сырой JSON
+ * на экране недопустим. Текст ДО блока показывается сразу.
  */
 export function streamingText(raw) {
     let visible = splitThinking(raw).visible.replace(PARTIAL_TAG, '');
-    const fences = [...visible.matchAll(/```/g)];
-    if (fences.length % 2 === 1) visible = visible.slice(0, fences.at(-1).index);
+    const fence = visible.indexOf('```');
+    if (fence >= 0) visible = visible.slice(0, fence);
     return visible.trimEnd();
 }

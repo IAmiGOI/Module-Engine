@@ -172,17 +172,19 @@ export function extractAnchors(reply) {
 export const hasChoice = reply => parseGuideReply(reply).some(segment => segment.type === 'block' && segment.block.kind === 'choice');
 
 /**
- * Убирает из реплики блоки выбора (остальное не трогает). Нужен как предохранитель: варианты ответа на КАЖДОМ ходу — привычка модели, а не помощь; если прошлая реплика гида
- * уже предлагала варианты, в этой их не оставляем.
+ * Убирает из реплики блоки заданных видов (остальное не трогает). Два применения: предохранитель от вариантов ответа на каждом ходу (`choice`) и предохранитель «сначала посмотри,
+ * потом отвечай» — реплика с `<continue/>` не должна нести готовую карточку (`proposal`) или варианты: настоящий ответ будет на следующем ходу, когда блок откроется.
  */
-export function stripChoices(reply) {
+export function stripBlocks(reply, kinds) {
     const source = String(reply ?? '');
     let out = '';
     let last = 0;
     for (const match of source.matchAll(FENCE)) {
-        if (match[1] !== 'choice') continue;
+        if (!kinds.includes(match[1])) continue;
         out += source.slice(last, match.index);
         last = match.index + match[0].length;
     }
     return (out + source.slice(last)).replace(/\n{3,}/g, '\n\n').trim();
 }
+
+export const stripChoices = reply => stripBlocks(reply, ['choice']);
