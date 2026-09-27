@@ -10,7 +10,7 @@ import { parseGuideReply, parseInline } from '../../libraries/core/guide-markup.
  * сигналы Ядра (cores/guide/index.js); здесь только то, как это выглядит. Список сообщений идёт в обратном порядке внутри
  * `flex-direction: column-reverse` — так прокрутка сама держится у последней реплики без доступа к DOM.
  */
-export function createGuideWindow({ defaultAvatar = '', persona, messages, busy, visible, view, ask, chooseOption, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
+export function createGuideWindow({ defaultAvatar = '', persona, messages, busy, visible, view, ask, chooseOption, pick, preview, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 540, height: 680 });
     const collapsed = signal(false);
@@ -40,10 +40,31 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
         }));
     }
 
+    const proposalStates = new Map();
+
+    /** Карточка «что будет создано» + Apply. Показывает то, что реально запишется (`preview`), а не слова модели; после нажатия — итог, повторно не создаёт. */
+    function proposalBlock(data) {
+        const shown = preview(data.action, data.params);
+        if (!shown.ok) return h('div', { class: 'stme-guide-block stme-guide-proposal' }, h('small', {}, `I can't create that: ${shown.error}`));
+        // Список сообщений перерисовывается при каждой реплике — состояние кнопки живёт вне блока, иначе «Applied» сбрасывался бы в «Apply».
+        const key = JSON.stringify([data.action, data.params]);
+        if (!proposalStates.has(key)) proposalStates.set(key, signal('idle'));   // idle | busy | done | failed
+        const state = proposalStates.get(key);
+        const apply = async () => {
+            if (state.peek() === 'busy' || state.peek() === 'done') return;
+            state.set('busy');
+            const result = await runAction(data.action, data.params);
+            state.set(result.ok ? 'done' : 'failed');
+        };
+        return h('div', { class: 'stme-guide-block stme-guide-proposal' }, h('strong', {}, shown.title),
+            h('ul', {}, shown.lines.map(line => h('li', {}, line))),
+            computed(() => Button(({ idle: 'Apply', busy: 'Applying…', done: '✓ Applied', failed: 'Try again' })[state()], apply)));
+    }
+
     function block(data) {
         if (data.kind === 'choice') {
             return h('div', { class: 'stme-guide-block stme-guide-choice' }, data.prompt ? h('small', {}, data.prompt) : null,
-                h('div', { class: 'stme-guide-options' }, data.options.map(option => Button(option.label, () => ask(option.send || option.label)))));
+                h('div', { class: 'stme-guide-options' }, data.options.map(option => Button(option.label, () => pick(option)))));
         }
         if (data.kind === 'card') {
             return h('div', { class: 'stme-guide-block stme-guide-card' }, data.title ? h('strong', {}, data.title) : null,
@@ -53,6 +74,7 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
             return h('div', { class: 'stme-guide-block stme-guide-steps' }, data.title ? h('strong', {}, data.title) : null,
                 h('ol', {}, data.items.map(item => h('li', {}, inline(item.text), item.anchor ? anchorChip('→', item.anchor) : null))));
         }
+        if (data.kind === 'proposal') return proposalBlock(data);
         if (data.kind === 'action') return h('div', { class: 'stme-guide-block stme-guide-action' }, Button(`⚡ ${data.label}`, () => runAction(data.action, data.params)));
         return checklistBlock();
     }

@@ -59,6 +59,10 @@ const MARKUP_RULES = [
     '  ```steps\n  {"title": "Add a connection", "items": [{"text": "Open Model connections", "anchor": "card:models"}, {"text": "Press + Add connection"}]}\n  ```',
     '  ```action\n  {"label": "Enable Tracker", "action": "modules.enable", "params": {"id": "module.tracker"}}\n  ```  — a button that does it; the user\'s click is the consent. Offer actions, never claim you already did them.',
     '  ```checklist\n  {}\n  ```  — the live first-start checklist.',
+    '  ```proposal\n  {"action": "tracker.create", "params": {…}}\n  ```  — for CREATING something (tracker.create, macro.create, lorebook.addEntry; params are in the action list). It shows the user a card with exactly what will be created and an Apply button. Never say you created it — the user applies it.',
+    'Doing things:',
+    '- If the user already asked for something (typed it or picked it), do it — do not ask again and never say "click here" for a harmless check. For read-only actions (models.check, ui.reveal, checklist.mark) put "auto": true in the action block and it runs at once.',
+    '- A choice option can run an action itself: {"label": "Check all connections now", "action": "models.check"} — one click, no second button. Changes (turning a module on or off, adding a connection, creating things) always need the user\'s click.',
 ];
 
 /**
