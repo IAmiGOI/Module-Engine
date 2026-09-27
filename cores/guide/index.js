@@ -19,6 +19,8 @@ import { createGuideActions } from './actions.js';
  */
 
 const NAMESPACE = 'core.guide';
+/** Аватар по умолчанию — картинка, выбранная владельцем (`assets/guide-avatar.png`); своя в настройках заменяет её. */
+export const DEFAULT_AVATAR_URL = new URL('../../assets/guide-avatar.png', import.meta.url).href;
 const HISTORY_LIMIT = 80;
 const CONTEXT_TURNS = 16;
 
@@ -230,12 +232,12 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     function status() {
         const last = [...messages.peek()].reverse().find(message => message.role === 'assistant');
         return {
-            name: nameOf(), avatar: persona.peek().avatar, visible: visible.peek(), busy: busy.peek(), mode: mode.peek(),
+            name: nameOf(), avatar: persona.peek().avatar || DEFAULT_AVATAR_URL, visible: visible.peek(), busy: busy.peek(), mode: mode.peek(),
             lastLine: last ? plainText(last.text).split('\n')[0].slice(0, 140) : '',
         };
     }
 
-    const ui = createGuideWindow({ persona, messages, busy, visible, view, mode, ask, chooseOption, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
+    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, persona, messages, busy, visible, view, mode, ask, chooseOption, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
 
     const unregisters = [
         host.own.register('guide.open', () => open()),
