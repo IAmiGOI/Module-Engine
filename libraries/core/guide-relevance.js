@@ -43,6 +43,14 @@ export function detectFocus({ query = '', anchors = [], modules = [] } = {}) {
     return found.trackers || found.macros || found.lorebook || found.allSettings || found.modules.length ? found : null;
 }
 
+const TASK = /\b(build|make|create|add|change|set|edit|write|rewrite|configure|tune|improve|fix|remove|delete|rework|update|adjust|design|need|want|help me)\b/i;
+
+/** Реплика просит СДЕЛАТЬ что-то (а не объяснить): по такой гид сама открывает блок нужного Модуля, чтобы увидеть его состояние, — не полагаясь на то, что модель об этом вспомнит. */
+export const isTaskRequest = text => TASK.test(String(text ?? ''));
+
+/** Модули, которых в новом фокусе стало больше, чем в прежнем. */
+export const freshModules = (previous, next) => (next.modules ?? []).filter(id => !(previous.modules ?? []).includes(id));
+
 /** Человек закрыл разговор сам — короткая реплика «спасибо / всё / отмена» без новой темы. */
 export const isClosing = text => String(text ?? '').trim().length <= 60 && CLOSING.test(text);
 

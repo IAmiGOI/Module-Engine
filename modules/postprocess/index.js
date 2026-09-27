@@ -1,5 +1,6 @@
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
+import { booleanSetting } from '../../libraries/core/guide-settings.js';
 import { request } from '../../libraries/shared/request.js';
 import { Button, TextInput, TextArea, Select, Toggle, Slider, Field, Row, EditableList, EmptyState, StatBlock } from '../../libraries/shared/widgets.js';
 import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
@@ -704,6 +705,7 @@ export function createPostprocessModule(host) {
          * Инструменты для гида (cores/guide/edit-actions.js): проходы читаются и правятся тем же живым списком и тем же сохранением, что в карточке. Значения проверяются
          * здесь же: подключение — только существующее, остальное — общей `sanitizePasses`. Возвращают `{ ok, message }`.
          */
+        guideSettings: () => ({ specs: [booleanSetting('autoRun', 'Auto-run after each reply', autoRun)], save }),
         guideTools: () => {
             const current = () => passes.peek().map(collectPass);
             const validWorker = id => !id || workers.peek().some(option => option.value === id);
@@ -721,7 +723,7 @@ export function createPostprocessModule(host) {
                 describe: () => {
                     const list = current();
                     const workerIds = workers.peek().filter(option => option.value).map(option => option.value);
-                    return `Post-Turn passes (run in this order after each reply; each sees the previous result): ${list.length
+                    return `Post-Turn Processor: auto-run after each reply is ${autoRun.peek() ? 'ON' : 'OFF (passes only run by hand — "Process last reply now")'}. Passes (run in this order; each sees only the previous result): ${list.length
                         ? list.map((pass, index) => `${index + 1}. ${pass.id} “${pass.name}” [${pass.enabled ? 'on' : 'off'}, model: ${pass.workerId || 'any'}, temperature ${pass.temperature}, max ${pass.maxTokens} tokens${pass.includeContext ? `, sees ${pass.contextDepth} chat messages` : ''}] — ${pass.prompt.slice(0, 160)}${pass.prompt.length > 160 ? '…' : ''}`).join(' | ')
                         : 'none yet'}. Model connections: ${workerIds.join(', ') || 'none'}.`;
                 },

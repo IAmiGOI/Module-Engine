@@ -299,3 +299,66 @@ test('automatic rounds are capped at three per request; a <continue/> with nothi
     await again.guide.ask('second');
     assert.equal(again.sent.length, 4, 'the counter starts over with every new question of the user');
 });
+
+// --- Сначала зайти в блок ---
+
+import { isTaskRequest, freshModules } from '../libraries/core/guide-relevance.js';
+
+function buildLook({ enabled = true, alreadyOpen = false } = {}) {
+    const engine = createEngine();
+    const bus = engine.buses.cores;
+    const sent = [];
+    const revealed = [];
+    let open = alreadyOpen;
+    bus.register('storage.settings.get', ({ fallback }) => fallback);
+    bus.register('storage.settings.set', () => true);
+    bus.register('model.workers.get', () => [{ id: 'w' }]);
+    bus.register('model.workers.status', () => [{ workerId: 'w', state: 'up' }]);
+    bus.register('ui.anchors.list', () => []);
+    bus.register('ui.reveal', ({ anchor }) => { revealed.push(anchor); open = true; return true; });
+    bus.register('ui.context', () => (open ? { text: 'Blocks the user has open right now:\n- Panel › Post-Turn Processor\n  · Auto-run after each reply: off', blocks: [{ anchor: 'module:module.postprocess', path: 'Panel › Post-Turn Processor' }] } : { text: '', blocks: [] }));
+    bus.register('tracking.trackers', () => []);
+    bus.register('macros.programs', () => []);
+    bus.register('lorebook.find', () => []);
+    bus.register('model.generate', params => { sent.push(params); return 'ok'; });
+    const dir = new URL('../guide/', import.meta.url);
+    const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official' }), {
+        publish: () => {}, mount: () => ({}), sleep: async () => {},
+        modules: { list: () => [{ id: 'module.postprocess', title: 'Post-Turn Processor' }], enabled: () => (enabled ? ['module.postprocess'] : []) },
+        loadText: async path => fs.readFileSync(new URL(path, dir), 'utf8'),
+    });
+    return { guide, sent, revealed };
+}
+
+test('a TASK about a module starts with going into its block: it opens by itself and the very first model call already sees its fields — no reliance on the model remembering to look', async () => {
+    const { guide, sent, revealed } = buildLook();
+    await guide.load();
+    await guide.ask('Can you build a good anti-slop post turn processor for me?');
+    assert.deepEqual(revealed, ['module:module.postprocess']);
+    assert.equal(sent.length, 1, 'one call — the looking happened before it');
+    assert.match(sent[0].messages[0].content, /Auto-run after each reply: off/, 'the opened block is in the state');
+    assert.match(sent[0].messages[0].content, /## How it really works/, 'with the mechanics article');
+});
+
+test('only a task opens the block: a plain question, a module that is off, a block already open, or a follow-up in the same topic do not', async () => {
+    const question = buildLook();
+    await question.guide.load();
+    await question.guide.ask('what is the post-turn processor?');
+    assert.deepEqual(question.revealed, [], 'a question is answered without touching the screen');
+    const off = buildLook({ enabled: false });
+    await off.guide.load();
+    await off.guide.ask('please build a post-turn pass');
+    assert.deepEqual(off.revealed, [], 'the module is off — there is no block to open');
+    const open = buildLook({ alreadyOpen: true });
+    await open.guide.load();
+    await open.guide.ask('please build a post-turn pass');
+    assert.deepEqual(open.revealed, [], 'already open');
+    const follow = buildLook();
+    await follow.guide.load();
+    await follow.guide.ask('build a post-turn pass');
+    await follow.guide.ask('make it shorter');
+    assert.equal(follow.revealed.length, 1, 'the same topic — opened once');
+    assert.equal(isTaskRequest('why is it slow?'), false);
+    assert.equal(isTaskRequest('I want less slop'), true);
+    assert.deepEqual(freshModules({ modules: ['a'] }, { modules: ['a', 'b'] }), ['b']);
+});
