@@ -225,3 +225,77 @@ test('the guide on writing strong prompts comes with the Post-Turn Processor (an
     await guide.ask('make it a bit shorter');
     assert.match(sent[1].messages[0].content, /### Writing strong prompts/, 'the sticky focus keeps the guide in the prompt on follow-ups');
 });
+
+// --- Зайти в блок за сведениями и продолжить ---
+
+test('<continue/> is cut from the visible text and reported; the prompt teaches how to get information (open the block, continue) and to split a job into steps', () => {
+    const split = splitThinking('Let me look at [Music](stme:module:module.music).<continue/>');
+    assert.equal(split.more, true);
+    assert.equal(split.visible, 'Let me look at [Music](stme:module:module.music).');
+    assert.equal(splitThinking('<think>maybe <continue/> later</think>Plain answer.').more, false, 'a tag inside her private thinking does not count');
+    assert.equal(streamingText('Looking now <c'), 'Looking now');
+    const prompt = buildGuideSystemPrompt({});
+    assert.match(prompt, /you do NOT see everything at once/);
+    assert.match(prompt, /open the block: link it[^\n]*end the reply with <continue\/>/);
+    assert.match(prompt, /At most three such rounds/);
+    assert.match(prompt, /Split a complex job into steps[^\n]*gather the information first[^\n]*only after you have seen the current values/);
+});
+
+function buildLoop(replies) {
+    const engine = createEngine();
+    const bus = engine.buses.cores;
+    const sent = [];
+    const revealed = [];
+    const pauses = [];
+    let open = false;
+    let turn = 0;
+    bus.register('storage.settings.get', ({ fallback }) => fallback);
+    bus.register('storage.settings.set', () => true);
+    bus.register('model.workers.get', () => [{ id: 'w' }]);
+    bus.register('model.workers.status', () => [{ workerId: 'w', state: 'up' }]);
+    bus.register('ui.anchors.list', () => [{ anchor: 'module:module.music', path: 'Panel › Music' }]);
+    bus.register('ui.reveal', ({ anchor }) => { revealed.push(anchor); open = true; return true; });
+    bus.register('ui.context', () => (open ? { text: 'Blocks the user has open right now:\n- Panel › Music\n  · Min similarity: 0.55', blocks: [{ anchor: 'module:module.music', path: 'Panel › Music' }] } : { text: '', blocks: [] }));
+    bus.register('tracking.trackers', () => []);
+    bus.register('macros.programs', () => []);
+    bus.register('lorebook.find', () => []);
+    bus.register('model.generate', params => { sent.push(params); return replies[Math.min(turn++, replies.length - 1)]; });
+    const dir = new URL('../guide/', import.meta.url);
+    const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official' }), {
+        publish: () => {}, mount: () => ({}), modules: { list: () => [{ id: 'module.music', title: 'Music' }], enabled: () => [] }, sleep: async ms => { pauses.push(ms); },
+        loadText: async path => fs.readFileSync(new URL(path, dir), 'utf8'),
+    });
+    return { guide, sent, revealed, pauses };
+}
+
+test('she opens a block to look and gets the next turn by herself: the block is revealed, the second call sees it on screen with an automatic hint, the user typed once', async () => {
+    const { guide, sent, revealed, pauses } = buildLoop(['<think>need the values</think><notes>1. look at Music 2. propose</notes>Let me look at [Music](stme:module:module.music) first.<continue/>', 'Min similarity is 0.55 — lower it to 0.4?']);
+    await guide.load();
+    await guide.ask('make the music less picky');
+    assert.equal(sent.length, 2, 'two model calls for one question');
+    assert.deepEqual(revealed, ['module:module.music']);
+    assert.ok(!sent[0].messages[0].content.includes('Min similarity: 0.55'), 'the first turn could not see it');
+    assert.match(sent[1].messages[0].content, /Panel › Music\n {2}· Min similarity: 0\.55/, 'the second turn sees the opened block');
+    assert.match(sent[1].messages[0].content, /1\. look at Music 2\. propose/, 'and her own plan');
+    assert.match(sent[1].messages.at(-1).content, /^\(automatic — the user did not type this\)/);
+    assert.ok(pauses.includes(800), 'she waited for the block to open');
+    assert.deepEqual(guide.messages.peek().map(message => message.role), ['user', 'assistant', 'assistant'], 'no invented user message in the chat');
+    assert.match(guide.messages.peek().at(-1).text, /Min similarity is 0\.55/);
+    assert.ok(!guide.messages.peek().some(message => message.text.includes('automatic')));
+});
+
+test('automatic rounds are capped at three per request; a <continue/> with nothing to open, or a plain answer, never loops', async () => {
+    const endless = buildLoop(['Looking: [Music](stme:module:module.music).<continue/>']);
+    await endless.guide.load();
+    await endless.guide.ask('go on forever');
+    assert.equal(endless.sent.length, 4, 'one real turn + three automatic ones, then she stops');
+    const nothing = buildLoop(['I already know it.<continue/>']);
+    await nothing.guide.load();
+    await nothing.guide.ask('hello');
+    assert.equal(nothing.sent.length, 1, 'no link, nothing new to see — no extra turn');
+    const again = buildLoop(['Looking: [Music](stme:module:module.music).<continue/>', 'Done looking.', 'Looking again: [Music](stme:module:module.music).<continue/>', 'Done again.']);
+    await again.guide.load();
+    await again.guide.ask('first');
+    await again.guide.ask('second');
+    assert.equal(again.sent.length, 4, 'the counter starts over with every new question of the user');
+});

@@ -59,6 +59,10 @@ export const CHECKLIST = Object.freeze([
 const REVEAL_LIMIT = 4;
 const REVEAL_GAP_MS = 900;
 const STREAM_PAINT_MS = 60;
+/** Сколько раз подряд гид может сама «зайти в блок и продолжить» за один запрос человека, и сколько ждать, пока блок раскроется на экране. */
+const MAX_CONTINUES = 3;
+const REVEAL_SETTLE_MS = 800;
+const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 
 export function createGuideCore(host, { publish, mount, loadText = async () => null, modules = null, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
     const emit = publish ?? ((event, payload) => host.events.emit(event, payload));
@@ -209,10 +213,14 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         streamDraft.set(streamingText(payload.text));
     });
 
-    async function ask(text, { echo = true } = {}) {
-        const question = String(text ?? '').trim();
-        if (!question || busy.peek()) return false;
-        if (echo) push({ role: 'user', text: question });
+    let continues = 0;
+
+    /** `internal` — автоматический ход после того, как гид открыла блок и попросила `<continue/>`: без реплики человека, в разгар её же запроса. */
+    async function ask(text, { echo = true, internal = false } = {}) {
+        const question = internal ? '' : String(text ?? '').trim();
+        if (internal ? false : (!question || busy.peek())) return false;
+        if (!internal) continues = 0;
+        if (echo && !internal) push({ role: 'user', text: question });
         if (!(await hasModel())) {
             mode.set('scenario');
             push({ role: 'assistant', text: 'I can\'t think freely without a model yet — let\'s connect one first.' });
@@ -239,6 +247,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)] }), notes,
             });
             const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
+            if (internal) turns.push({ role: 'user', content: FOLLOW_UP });
             const requestId = `guide-${now()}-${(counter += 1)}`;
             streaming = { requestId, painted: 0 };
             const reply = await call('model.generate', {
@@ -256,8 +265,15 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const calm = lastReply && hasChoice(lastReply.text) ? stripChoices(thought.visible) : thought.visible;
             const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
-            void openLinked(shown).catch(() => {});
+            const opening = openLinked(shown).catch(() => {});
             for (const run of autoRuns) await runAction(run.action, run.params);
+            // Ей нужно посмотреть блок, чтобы продолжить: ждём, пока он раскроется, и даём ещё один ход без участия человека (не больше MAX_CONTINUES подряд).
+            if (thought.more && extractAnchors(shown).length && continues < MAX_CONTINUES) {
+                continues += 1;
+                await opening;
+                await sleep(REVEAL_SETTLE_MS);
+                return await ask(null, { internal: true });
+            }
             return true;
         } catch (error) {
             push({ role: 'note', text: `I couldn't answer: ${error.message}`, ok: false });
