@@ -31,13 +31,15 @@ export function createGuideContext({ call, callService, modules }) {
         const counts = countsLine({ trackers: mine.length, macros: programs.length, entries: found.length }, focus);
         if (counts) lines.push(counts);
         // World Info и пресет генерации — настройки самой ST, не движка: только для анализа, действий на их правку у гида нет (см. Сервисы).
+        // Явно НЕ card:lorebook / card:preset — те карточки движка про другое (записи лорбука; экспорт-импорт настроек), у самих
+        // ST-настроек анкора нет вовсе, и путать их с движковыми карточками (в т.ч. ссылкой на них) нельзя (ROADMAP 5.105щ).
         if (focus.lorebook) {
             const worldInfo = await callService('stWorldInfo.settings');
-            if (worldInfo.ok && worldInfo.value) lines.push(`World Info settings (SillyTavern's own, global — not the engine's): ${describeWorldInfo(worldInfo.value)}.`);
+            if (worldInfo.ok && worldInfo.value) lines.push(`SillyTavern's own global World Info settings (NOT the engine's Lorebook card — there is no anchor for these, do not link to card:lorebook for them): ${describeWorldInfo(worldInfo.value)}.`);
         }
         if (focus.preset) {
             const preset = await callService('stPreset.current');
-            if (preset.ok && preset.value) lines.push(`Current generation preset (SillyTavern's own): ${describePreset(preset.value)}.`);
+            if (preset.ok && preset.value) lines.push(`SillyTavern's own active generation preset (NOT the engine's Preset card, which only exports/imports the engine's own settings — there is no anchor for this, do not link to card:preset for it): ${describePreset(preset.value)}.`);
         }
         const known = modules?.list?.() ?? [];
         const quiet = [];

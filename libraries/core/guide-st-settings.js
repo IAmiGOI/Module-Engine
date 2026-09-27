@@ -24,12 +24,24 @@ export function describeWorldInfo(settings) {
     return parts.join('; ');
 }
 
-const SAMPLER_KEYS = Object.freeze(['temperature', 'top_p', 'top_k', 'top_a', 'min_p', 'typical_p', 'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'rep_pen', 'max_tokens', 'genamt', 'openai_max_tokens']);
+/**
+ * Каждый API называет одно и то же по-своему (temperature/temp, repetition_penalty/rep_pen…) — списки ниже сводят их к общим подписям.
+ * Взято по исходнику самой ST (openai.js, textgen-settings.js, kai-settings.js, nai-settings.js), не угадано.
+ */
+const KOBOLD_FIELDS = [['temp', 'temperature'], ['top_p', 'top_p'], ['top_k', 'top_k'], ['top_a', 'top_a'], ['min_p', 'min_p'], ['typical', 'typical_p'], ['tfs', 'tail-free sampling'], ['rep_pen', 'repetition penalty'], ['rep_pen_range', 'repetition penalty range']];
+const SAMPLER_FIELDS = Object.freeze({
+    openai: [['temperature', 'temperature'], ['top_p', 'top_p'], ['top_k', 'top_k'], ['frequency_penalty', 'frequency penalty'], ['presence_penalty', 'presence penalty'], ['repetition_penalty', 'repetition penalty'], ['openai_max_tokens', 'max tokens']],
+    textgenerationwebui: [['temp', 'temperature'], ['top_p', 'top_p'], ['top_k', 'top_k'], ['top_a', 'top_a'], ['min_p', 'min_p'], ['typical_p', 'typical_p'], ['tfs', 'tail-free sampling'], ['rep_pen', 'repetition penalty'], ['freq_pen', 'frequency penalty'], ['presence_pen', 'presence penalty']],
+    kobold: KOBOLD_FIELDS,
+    koboldhorde: KOBOLD_FIELDS,
+    novel: [['temperature', 'temperature'], ['top_p', 'top_p'], ['top_k', 'top_k'], ['top_a', 'top_a'], ['min_p', 'min_p'], ['typical_p', 'typical_p'], ['tail_free_sampling', 'tail-free sampling'], ['repetition_penalty', 'repetition penalty']],
+});
 
-/** Пресет генерации → строка: известные параметры сэмплера человеческими именами, плюс шаблоны контекста/инструкции. Неизвестные поля API не выдумываются — просто не упоминаются. */
+/** Пресет генерации → строка: известные параметры сэмплера человеческими именами (по своей раскладке полей для этого API), плюс шаблоны контекста/инструкции. Неизвестные поля API не выдумываются — просто не упоминаются. */
 export function describePreset(preset) {
-    if (!preset?.values) return '';
-    const known = SAMPLER_KEYS.filter(key => preset.values[key] !== undefined).map(key => `${key}: ${preset.values[key]}`);
+    if (!preset?.api) return '';
+    const fields = SAMPLER_FIELDS[preset.api] ?? [];
+    const known = preset.values ? fields.filter(([key]) => preset.values[key] !== undefined).map(([key, label]) => `${label}: ${preset.values[key]}`) : [];
     const parts = [`API: ${preset.api}`, `preset name: "${preset.name || 'unnamed'}"`];
     if (known.length) parts.push(`sampler: ${known.join(', ')}`);
     if (preset.contextTemplate) parts.push(`context template: "${preset.contextTemplate}"`);
