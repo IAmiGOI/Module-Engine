@@ -81,7 +81,7 @@ export function createGuideActions({ host, call, modules, reveal, hide, checklis
             description: 'Change the chat background SillyTavern is showing right now. Params: {"name": "<filename or a distinctive part of it>"} — matching is fuzzy (SillyTavern\'s own /bg), so a close guess from background.list is fine.',
             async run({ name } = {}) {
                 if (!name) return { ok: false, message: 'Which background?' };
-                const result = await request(host.services, 'stBackgrounds.setActive', { name });
+                const result = await request(host.services, 'stBackgrounds.setActive', { params: { name } });
                 if (!result.ok) return { ok: false, message: result.error.message };
                 return { ok: result.value.ok, message: result.value.ok ? `Background set to "${result.value.applied}".` : `No background found matching "${name}".` };
             },
