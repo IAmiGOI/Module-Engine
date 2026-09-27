@@ -1,6 +1,6 @@
 import { signal } from '../ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
-import { parseArticle, selectArticles, buildGuideSystemPrompt } from '../../libraries/core/guide-knowledge.js';
+import { parseArticle, selectArticles, buildGuideSystemPrompt, trimHistory } from '../../libraries/core/guide-knowledge.js';
 import { plainText, splitAutoActions, extractAnchors } from '../../libraries/core/guide-markup.js';
 import { describeProposal } from '../../libraries/core/guide-create.js';
 import { createGuideWindow } from './window.js';
@@ -25,7 +25,8 @@ const NAMESPACE = 'core.guide';
 /** Аватар по умолчанию — картинка, выбранная владельцем (`assets/guide-avatar.png`); своя в настройках заменяет её. */
 export const DEFAULT_AVATAR_URL = new URL('../../assets/guide-avatar.png', import.meta.url).href;
 const HISTORY_LIMIT = 80;
-const CONTEXT_TURNS = 16;
+/** Сколько истории уходит модели: ~10 тысяч токенов, дальше верх истории просто отрезается (в самом чате всё остаётся). */
+export const HISTORY_TOKEN_LIMIT = 10000;
 
 export const DEFAULT_PERSONA = Object.freeze({
     name: 'Mea',
@@ -199,7 +200,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         try {
             const anchorsResult = await call('ui.anchors.list');
             const screen = await screenContext();
-            const history = messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note').slice(-CONTEXT_TURNS);
+            const history = messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note');
             const query = history.slice(-4).map(message => message.text).join(' ');
             const system = buildGuideSystemPrompt({
                 persona: persona.peek(), context: await liveContext(screen.text),
@@ -207,7 +208,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
                 articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: screen.anchors }),
             });
-            const turns = history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text }));
+            const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
             const reply = await call('model.generate', {
                 messages: [{ role: 'system', content: system }, ...turns],
                 systemPrompt: system, prompt: turns.map(turn => `${turn.role === 'user' ? 'User' : nameOf()}: ${turn.content}`).join('\n\n'),

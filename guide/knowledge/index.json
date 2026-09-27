@@ -3,6 +3,6 @@
   "articles": [
     "about-guide.md", "engine-overview.md", "models.md", "modules.md", "tracker.md", "rp-time.md", "notebook-secrets.md",
     "postprocess.md", "music.md", "scene-painter.md", "speaker-colors-map.md", "lorebook-macros.md", "summary-memory.md",
-    "chat-viewport-home.md", "preset-sync-updates.md", "troubleshooting.md"
+    "chat-viewport-home.md", "preset-sync-updates.md", "troubleshooting.md", "creator.md"
   ]
 }

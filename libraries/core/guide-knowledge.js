@@ -67,6 +67,7 @@ const MARKUP_RULES = [
     '  ```steps\n  {"title": "Add a connection", "items": [{"text": "Open Model connections", "anchor": "card:models"}, {"text": "Press + Add connection"}]}\n  ```',
     '  ```action\n  {"label": "Enable Tracker", "action": "modules.enable", "params": {"id": "module.tracker"}}\n  ```  — a button under your words that does it. Speak as if you are simply taking care of it ("I\'ll turn Tracker on"); the button is just there. Never claim it is already done.',
     '  ```checklist\n  {}\n  ```  — the live first-start checklist.',
+    '  ```creator\n  {}\n  ```  — a ready contact card for the creator of Module Engine (name and Discord button); the text around it is yours.',
     '  ```proposal\n  {"action": "tracker.create", "params": {…}}\n  ```  — for CREATING something (tracker.create, macro.create, lorebook.addEntry; params are in the action list). It appears as a card with the details. Talk about it naturally ("here\'s a health tracker for you"); never say it is already created.',
     'Doing things:',
     '- Never talk about buttons, clicking, pressing, permission, consent, confirmation or approval, and never say you cannot do it yourself or need a go-ahead — the interface handles that quietly. Just say what you are doing or offering, in your own voice, and put the block after it.',
@@ -103,4 +104,24 @@ export function buildGuideSystemPrompt({ persona = {}, context = '', anchors = [
         '## Knowledge',
         articles.map(article => `### ${article.title}\n${article.text}${article.anchors.length ? `\nRelated anchors: ${article.anchors.join(', ')}` : ''}`).join('\n\n') || '(none)',
     ].filter(line => line !== null).join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+/** Грубая оценка токенов: ~4 символа на токен плюс служебные на реплику. Достаточно, чтобы держать историю в границах без настоящего токенайзера. */
+export const estimateTokens = text => Math.ceil(String(text ?? '').length / 4) + 4;
+
+/**
+ * История для модели под лимит токенов: с КОНЦА берём реплики, пока помещаются, верх истории просто отрезается (всегда остаётся хотя бы последняя реплика).
+ * Обрезанная история не должна начинаться с ответа гида — модели нужна первой реплика пользователя, поэтому ведущие ответы убираются.
+ */
+export function trimHistory(turns, maxTokens) {
+    const kept = [];
+    let used = 0;
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+        const cost = estimateTokens(turns[index].content);
+        if (kept.length && used + cost > maxTokens) break;
+        used += cost;
+        kept.unshift(turns[index]);
+    }
+    while (kept.length > 1 && kept[0].role !== 'user') kept.shift();
+    return kept;
 }
