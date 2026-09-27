@@ -1,7 +1,7 @@
 import { signal } from '../ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { parseArticle, selectArticles, buildGuideSystemPrompt, trimHistory } from '../../libraries/core/guide-knowledge.js';
-import { plainText, splitAutoActions, extractAnchors } from '../../libraries/core/guide-markup.js';
+import { plainText, splitAutoActions, extractAnchors, hasChoice, stripChoices } from '../../libraries/core/guide-markup.js';
 import { describeProposal } from '../../libraries/core/guide-proposals.js';
 import { createGuideWindow } from './window.js';
 import { createGuideActions } from './actions.js';
@@ -251,7 +251,10 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             // Безопасные действия, которые модель пометила «auto», выполняются сразу; результат — заметкой в чате.
             const thought = splitThinking(reply.value);
             if (thought.notes !== undefined) { notes = thought.notes.slice(0, MAX_NOTES_CHARS); void saveChat(); }
-            const { text: shown, actions: autoRuns } = splitAutoActions(thought.visible, id => ACTIONS[id]?.safe === true);
+            // Предохранитель: варианты ответа — не на каждом ходу. Была ли в прошлой реплике гида кнопка выбора — в этой её нет.
+            const lastReply = [...messages.peek()].reverse().find(message => message.role === 'assistant');
+            const calm = lastReply && hasChoice(lastReply.text) ? stripChoices(thought.visible) : thought.visible;
+            const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
             void openLinked(shown).catch(() => {});
             for (const run of autoRuns) await runAction(run.action, run.params);

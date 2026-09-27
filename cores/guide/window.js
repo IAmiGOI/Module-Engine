@@ -11,6 +11,8 @@ import { CREATOR } from '../../libraries/core/guide-creator.js';
  * сигналы Ядра (cores/guide/index.js); здесь только то, как это выглядит. Список сообщений идёт в обратном порядке внутри
  * `flex-direction: column-reverse` — так прокрутка сама держится у последней реплики без доступа к DOM.
  */
+const CLEAR_CONFIRM_MS = 4000;
+
 export function createGuideWindow({ defaultAvatar = '', persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 540, height: 680 });
@@ -128,7 +130,22 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
         void ask(text);
     }
 
-    /** Пилюля ввода — тот же вид, что у нижней панели набора: поле и концевой сегмент «отправить» (стоит на месте при росте поля). */
+    /** Пилюля ввода — тот же вид, что у нижней панели набора: слева сегмент «очистить историю», поле, справа сегмент «отправить» (стоят на месте при росте поля). */
+    /** «Очистить историю» — необратимо, поэтому в два касания: первое превращает сегмент в красную галочку на несколько секунд, второе очищает чат. */
+    const confirmingClear = signal(false);
+    let clearTimer = null;
+    function clearHistory() {
+        if (busy.peek()) return;
+        clearTimeout(clearTimer);
+        if (!confirmingClear.peek()) {
+            confirmingClear.set(true);
+            clearTimer = setTimeout(() => confirmingClear.set(false), CLEAR_CONFIRM_MS);
+            return;
+        }
+        confirmingClear.set(false);
+        void resetChat();
+    }
+
     function composer() {
         const autosize = element => { element.style.height = 'auto'; element.style.height = `${Math.min(element.scrollHeight, 160)}px`; };
         const field = h('textarea', {
@@ -136,7 +153,11 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
             'on:input': event => { draft.set(event.target.value); autosize(event.target); },
             'on:keydown': event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } },
         });
-        return h('div', { class: 'stme-guide-composer' }, field,
+        const clear = h('button', {
+            type: 'button', class: computed(() => `stme-input-circle stme-input-regenerate stme-guide-clear${confirmingClear() ? ' stme-input-send-stop' : ''}`),
+            title: computed(() => (confirmingClear() ? 'Press again to clear the chat history' : 'Clear the chat history')), 'aria-label': 'Clear the chat history', 'on:click': clearHistory,
+        }, h('i', { class: computed(() => `fa-solid ${confirmingClear() ? 'fa-check' : 'fa-broom'}`), 'aria-hidden': 'true' }));
+        return h('div', { class: 'stme-guide-composer' }, clear, field,
             h('button', { type: 'button', class: computed(() => `stme-input-circle stme-input-send${busy() ? ' stme-guide-send-busy' : ''}`), title: 'Send', 'aria-label': 'Send', 'on:click': send },
                 h('i', { class: 'fa-solid fa-paper-plane', 'aria-hidden': 'true' })));
     }

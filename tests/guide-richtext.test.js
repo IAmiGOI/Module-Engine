@@ -24,3 +24,21 @@ test('inline: italic and code join bold and links; underscores in names and lone
     ]);
     assert.equal(plainText('The *time* is `12:00`.'), 'The time is 12:00.');
 });
+
+// --- Варианты ответа: только когда нужно ---
+
+import { hasChoice, stripChoices } from '../libraries/core/guide-markup.js';
+import { buildGuideSystemPrompt } from '../libraries/core/guide-knowledge.js';
+
+test('choice blocks can be detected and cut out without touching the rest of the reply', () => {
+    const reply = 'Here is the answer.\n```choice\n{"options":["A","B"]}\n```\n```card\n{"title":"T","text":"t"}\n```';
+    assert.equal(hasChoice(reply), true);
+    assert.equal(hasChoice('Just text.'), false);
+    const stripped = stripChoices(reply);
+    assert.ok(!stripped.includes('choice') && stripped.includes('```card') && stripped.startsWith('Here is the answer.'));
+    assert.equal(stripChoices('No blocks.'), 'No blocks.');
+});
+
+test('the prompt says buttons are for a real decision only — no "what next" menu at the end of an answer', () => {
+    assert.match(buildGuideSystemPrompt({}), /Use it ONLY when there is a real decision[^\n]*Never as a habit/);
+});

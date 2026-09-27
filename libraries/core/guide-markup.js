@@ -167,3 +167,22 @@ export function extractAnchors(reply) {
     }
     return found;
 }
+
+/** Есть ли в реплике блок выбора (```choice```). */
+export const hasChoice = reply => parseGuideReply(reply).some(segment => segment.type === 'block' && segment.block.kind === 'choice');
+
+/**
+ * Убирает из реплики блоки выбора (остальное не трогает). Нужен как предохранитель: варианты ответа на КАЖДОМ ходу — привычка модели, а не помощь; если прошлая реплика гида
+ * уже предлагала варианты, в этой их не оставляем.
+ */
+export function stripChoices(reply) {
+    const source = String(reply ?? '');
+    let out = '';
+    let last = 0;
+    for (const match of source.matchAll(FENCE)) {
+        if (match[1] !== 'choice') continue;
+        out += source.slice(last, match.index);
+        last = match.index + match[0].length;
+    }
+    return (out + source.slice(last)).replace(/\n{3,}/g, '\n\n').trim();
+}

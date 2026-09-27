@@ -181,3 +181,16 @@ test('the reply streams into a draft (throttled, thinking hidden) and is replace
     assert.equal(guide.streamDraft.peek(), null, 'and none after a failure');
     assert.match(guide.messages.peek().at(-1).text, /I couldn't answer: provider down/);
 });
+
+test('buttons are not offered on every turn: if her previous reply had a choice block, the next one comes without it; after a reply without buttons they are allowed again', async () => {
+    const choice = '\n```choice\n{"options":["Tracker","Macro"]}\n```';
+    const { guide } = build({ replies: [`Which one?${choice}`, `Got it, tracker.${choice}`, `Here it is.${choice}`] });
+    await guide.load();
+    await guide.ask('I want to create something');
+    assert.match(guide.messages.peek().at(-1).text, /```choice/, 'a real fork — the buttons are kept');
+    await guide.ask('a tracker');
+    assert.ok(!guide.messages.peek().at(-1).text.includes('choice'), 'the very next reply is calm: no buttons again');
+    assert.match(guide.messages.peek().at(-1).text, /^Got it, tracker\./);
+    await guide.ask('thanks, and one more thing');
+    assert.match(guide.messages.peek().at(-1).text, /```choice/, 'the previous reply had none, so buttons are allowed');
+});
