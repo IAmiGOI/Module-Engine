@@ -44,6 +44,8 @@ export function createCollapseState(bus, { namespace, key = 'collapsed', default
         if (!states.has(id)) states.set(id, signal(id in stored ? Boolean(stored[id]) : open));
         const state = states.get(id);
         return {
+            // Адрес блока для ссылок гида (`stme:<id>`, cores/ui/anchors.js): ключ сворачивания и так уникален и стабилен.
+            anchor: id,
             open: state,
             onToggle: next => {
                 if (state.peek() === next) return; // эхо от нашей же записи в DOM — не повод писать на диск

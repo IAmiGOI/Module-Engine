@@ -366,8 +366,12 @@ export function Row(...children) {
  * останавливать: иначе нажатие «Remove» заодно сворачивало бы карточку —
  * `<summary>` переключается от любого клика по себе.
  */
-function collapsible({ root, head, body }, title, { subtitle, actions, key, open = false, onToggle, className } = {}, children) {
+/** Адрес блока без ключа сворачивания — по заголовку (`t:model-connections`): так ссылаться можно и на секции внутри Модулей. */
+export const titleAnchor = title => (typeof title === 'string' && title.trim() ? `t:${title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}` : undefined);
+
+function collapsible({ root, head, body }, title, { subtitle, actions, key, open = false, onToggle, className, anchor } = {}, children) {
     return h('details', {
+        'data-stme-anchor': anchor ?? titleAnchor(title),
         // `className` может быть сигналом: им помечается ВРЕМЕННОЕ состояние
         // (например, вспышка обводки после удачной проверки), и оно обязано
         // сниматься само, не перестраивая дерево.

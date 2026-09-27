@@ -1,6 +1,7 @@
 import { request } from '../../../libraries/shared/request.js';
 import { buildBlocks, composeHome, composeFlow, itemsForEvent, checklistProgress } from '../../../libraries/shared/home-model.js';
 import { applyOrder } from '../../../libraries/shared/home-order.js';
+import { nextInstanceId } from '../../../libraries/shared/widget-contract.js';
 import { blockHtml, homeCss, visibleRecent } from '../../../libraries/shared/home-html.js';
 import { createSurfaceScene } from '../surface/scene.js';
 import { computeStageRect, resolveTokens, useFlowLayout } from './geometry.js';
@@ -41,7 +42,7 @@ export function createHomeCore(host, {
     let queue = Promise.resolve();
     const blocks = new Map();     // id -> { dom, sig, placement, detach }
 
-    const save = () => request(host.own, 'storage.settings.set', { params: { ...STORAGE, value: { saved: persisted.saved, order: persisted.order, done: [...persisted.done], dismissed: persisted.dismissed, cards: persisted.cards, widgets: persisted.widgets, widgetData: persisted.widgetData } } });
+    const save = () => request(host.own, 'storage.settings.set', { params: { ...STORAGE, value: { saved: persisted.saved, order: persisted.order, done: [...persisted.done], dismissed: persisted.dismissed, cards: persisted.cards, widgets: persisted.widgets, widgetData: persisted.widgetData, guidePlaced: true } } });
     async function load() {
         const result = await request(host.own, 'storage.settings.get', { params: { ...STORAGE, fallback: {} } });
         const value = (result.ok ? result.value : null) ?? {};
@@ -52,6 +53,8 @@ export function createHomeCore(host, {
         persisted.cards = Array.isArray(value.cards) ? value.cards.filter(avatar => typeof avatar === 'string') : [];
         persisted.widgets = Array.isArray(value.widgets) ? value.widgets.filter(item => item && typeof item.instanceId === 'string' && typeof item.widgetId === 'string') : [];
         persisted.widgetData = value.widgetData && typeof value.widgetData === 'object' ? value.widgetData : {};
+        // Виджет гида ставится на стол сам — один раз; убранный пользователем больше не возвращается.
+        if (!value.guidePlaced && !persisted.widgets.some(item => item.widgetId === 'guide')) persisted.widgets.unshift({ instanceId: nextInstanceId(persisted.widgets.map(item => item.instanceId)), widgetId: 'guide' });
     }
 
     // Виджеты рабочего стола (папка `widgets/` + регистрация на лету) — см. widget-desk.js.
@@ -132,7 +135,7 @@ export function createHomeCore(host, {
         }
         const rect = computeStageRect({ doc, win });
         flowMode = useFlowLayout({ touch, width: rect.width });
-        const list = buildBlocks({ recentChats: chats, checklistDone: persisted.done, checklistDismissed: persisted.dismissed, characterCards: persisted.cards, widgets: desk.blockSpecs() });
+        const list = buildBlocks({ recentChats: chats, checklistDone: persisted.done, checklistDismissed: true /* чек-лист первого запуска теперь у гида (cores/guide) */, characterCards: persisted.cards, widgets: desk.blockSpecs() });
         let placements;
         if (flowMode) {
             // Поток: содержимое выше окна — сцена прокручивается (холст и слои на полную высоту), сохранённые положения другого устройства не используются.

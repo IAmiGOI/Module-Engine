@@ -1,0 +1,49 @@
+{
+  "comment": "Scripted dialogue shown while no model works yet. {{name}} is the guide's name. Options: next (go to node), action (+ onSuccess / onFailure nodes), send (switch to free chat and send this text). Node 'ready' ends the scenario.",
+  "start": "hello",
+  "nodes": {
+    "hello": {
+      "say": "Hi, I'm **{{name}}** — I live inside Module Engine and I'll help you set it up.\n\nOne thing first: to actually talk (and to run trackers, summaries and the rest), I need a **model**. Right now none is connected.",
+      "options": [
+        { "label": "Use SillyTavern's current connection", "action": "models.addSillyTavern", "onSuccess": "ready", "onFailure": "st-failed" },
+        { "label": "I have my own API key", "next": "api" },
+        { "label": "What is a model here?", "next": "explain" }
+      ]
+    },
+    "explain": {
+      "say": "SillyTavern already talks to a model for your chats. Module Engine makes **its own** calls on the side — for trackers, summaries, scene pictures, and for me. Those go to **model connections**: either the same model SillyTavern uses, or a separate one (often cheaper and faster).\n\nThe quickest start is to reuse SillyTavern's connection — you can add a separate one later in [Model connections](stme:card:models).",
+      "options": [
+        { "label": "Reuse SillyTavern's connection", "action": "models.addSillyTavern", "onSuccess": "ready", "onFailure": "st-failed" },
+        { "label": "Set up a separate one", "next": "api" }
+      ]
+    },
+    "api": {
+      "say": "Here's how:\n```steps\n{\"title\": \"Add a model connection\", \"items\": [{\"text\": \"Open Model connections\", \"anchor\": \"card:models\"}, {\"text\": \"Press + Add connection\"}, {\"text\": \"Pick the format (OpenAI-compatible fits most providers), paste the endpoint, API key and model name\"}, {\"text\": \"Press Save, then Check now\"}]}\n```\nTell me when it's saved and I'll check it.",
+      "options": [
+        { "label": "Done — check it", "action": "models.check", "onSuccess": "ready", "onFailure": "api-failed" },
+        { "label": "Use SillyTavern's connection instead", "action": "models.addSillyTavern", "onSuccess": "ready", "onFailure": "st-failed" }
+      ]
+    },
+    "api-failed": {
+      "say": "The check didn't pass — the connection didn't answer. Open [Model connections](stme:card:models): the line under the connection shows the last error. Most often it's the endpoint (it usually ends with **/v1**), the key, or a model name the provider doesn't know.",
+      "options": [
+        { "label": "Fixed — check again", "action": "models.check", "onSuccess": "ready", "onFailure": "api-failed" },
+        { "label": "Try SillyTavern's connection", "action": "models.addSillyTavern", "onSuccess": "ready", "onFailure": "st-failed" }
+      ]
+    },
+    "st-failed": {
+      "say": "SillyTavern's connection didn't answer. Make sure SillyTavern itself is connected (the plug icon at the top) and uses **Chat Completion** or **Text Completion** — then try again. Or set up a separate connection.",
+      "options": [
+        { "label": "Try again", "action": "models.addSillyTavern", "onSuccess": "ready", "onFailure": "st-failed" },
+        { "label": "Set up a separate connection", "next": "api" }
+      ]
+    },
+    "ready": {
+      "say": "Connected — now I can really talk. Ask me anything about Module Engine, or pick a start:",
+      "options": [
+        { "label": "What can Module Engine do?", "send": "What can Module Engine do? Give me a quick tour." },
+        { "label": "Show me the first-start checklist", "send": "Show me the first-start checklist." }
+      ]
+    }
+  }
+}
