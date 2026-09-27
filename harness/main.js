@@ -298,8 +298,11 @@ const footerHealth = signal('90');
 // Слот `left` намеренно оставлен свободным: его занимает настоящий Модуль
 // «RP Time», когда его включают. Демо-виджеты харнесса — только для двух
 // оставшихся мест.
-wired.messageFooter.claim({ slot: 'center', ownerId: 'harness.tracker', node: StatBlock('Health', footerHealth, { icon: '♥' }) });
-wired.messageFooter.claim({ slot: 'right', ownerId: 'harness.notes', node: StatBlock('Scene', signal('Tavern doorway'), { icon: '◈' }) });
+// Слот уже мог занять включённый Модуль (восстановленный с прошлого запуска) — демо тогда уступает. Раньше исключение отсюда обрывало весь
+// скрипт харнесса, и всё, что вешается ниже (кнопки Chat Viewport и прочее), молча не работало.
+const claimDemo = params => { try { wired.messageFooter.claim(params); } catch (error) { console.info(`[harness] demo footer skipped: ${error.message}`); } };
+claimDemo({ slot: 'center', ownerId: 'harness.tracker', node: StatBlock('Health', footerHealth, { icon: '♥' }) });
+claimDemo({ slot: 'right', ownerId: 'harness.notes', node: StatBlock('Scene', signal('Tavern doorway'), { icon: '◈' }) });
 await wired.messageFooter.render();
 
 const footerState = document.getElementById('harnessFooterState');
