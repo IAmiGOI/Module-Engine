@@ -51,18 +51,19 @@ export function selectArticles(articles, query, { limit = 3 } = {}) {
 
 const MARKUP_RULES = [
     'Formatting you can use in replies:',
-    '- Link to any block of the interface: [Label](stme:ANCHOR) — use only anchors from the list below; the user clicks it and the block opens highlighted.',
+    '- Link to any block of the interface: [Label](stme:ANCHOR) — use only anchors from the list below; it shows up as a small chip that opens the block.',
     '- **bold** for emphasis. Keep paragraphs short.',
     '- Rich blocks, each as a fenced code block with JSON (use them when they help, not in every reply):',
     '  ```choice\n  {"prompt": "What next?", "options": ["Set up a tracker", "Show me the modules"]}\n  ```  — buttons; the chosen option comes back as the user\'s message.',
     '  ```card\n  {"title": "Tracker", "text": "Keeps values like health or mood up to date.", "anchor": "card:modules"}\n  ```',
     '  ```steps\n  {"title": "Add a connection", "items": [{"text": "Open Model connections", "anchor": "card:models"}, {"text": "Press + Add connection"}]}\n  ```',
-    '  ```action\n  {"label": "Enable Tracker", "action": "modules.enable", "params": {"id": "module.tracker"}}\n  ```  — a button that does it; the user\'s click is the consent. Offer actions, never claim you already did them.',
+    '  ```action\n  {"label": "Enable Tracker", "action": "modules.enable", "params": {"id": "module.tracker"}}\n  ```  — a button under your words that does it. Speak as if you are simply taking care of it ("I\'ll turn Tracker on"); the button is just there. Never claim it is already done.',
     '  ```checklist\n  {}\n  ```  — the live first-start checklist.',
-    '  ```proposal\n  {"action": "tracker.create", "params": {…}}\n  ```  — for CREATING something (tracker.create, macro.create, lorebook.addEntry; params are in the action list). It shows the user a card with exactly what will be created and an Apply button. Never say you created it — the user applies it.',
+    '  ```proposal\n  {"action": "tracker.create", "params": {…}}\n  ```  — for CREATING something (tracker.create, macro.create, lorebook.addEntry; params are in the action list). It appears as a card with the details. Talk about it naturally ("here\'s a health tracker for you"); never say it is already created.',
     'Doing things:',
-    '- If the user already asked for something (typed it or picked it), do it — do not ask again and never say "click here" for a harmless check. For read-only actions (models.check, ui.reveal, checklist.mark) put "auto": true in the action block and it runs at once.',
-    '- A choice option can run an action itself: {"label": "Check all connections now", "action": "models.check"} — one click, no second button. Changes (turning a module on or off, adding a connection, creating things) always need the user\'s click.',
+    '- Never talk about buttons, clicking, pressing, permission, consent, confirmation or approval, and never say you cannot do it yourself or need a go-ahead — the interface handles that quietly. Just say what you are doing or offering, in your own voice, and put the block after it.',
+    '- If the user already asked for something (typed it or picked it), do it. For read-only actions (models.check, ui.reveal, checklist.mark) put "auto": true in the action block and it runs at once; then just say what you are checking.',
+    '- A choice option can run an action itself: {"label": "Check all connections now", "action": "models.check"}.',
 ];
 
 /**
