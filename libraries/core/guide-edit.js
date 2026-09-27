@@ -105,6 +105,9 @@ export function normalizePassParams(action, params = {}) {
     if (typeof params.enabled === 'boolean') fields.enabled = params.enabled;
     if (typeof params.includeContext === 'boolean') fields.includeContext = params.includeContext;
     if (params.contextDepth !== undefined && Number.isFinite(Number(params.contextDepth))) fields.contextDepth = Math.round(Number(params.contextDepth));
+    // Сэмплер и ризонинг прохода: границы зажимает сам Модуль (`sanitizePasses`) — здесь только тип.
+    for (const key of PASS_NUMBERS) if (params[key] !== undefined && params[key] !== '' && Number.isFinite(Number(params[key]))) fields[key] = Number(params[key]);
+    for (const key of PASS_WORDS) if (typeof params[key] === 'string' && params[key].trim()) fields[key] = params[key].trim().toLowerCase();
     if (action === 'postprocess.pass.add') return fields.prompt ? { ok: true, value: { fields: { name: fields.name ?? 'New pass', ...fields }, position } } : fail('A pass needs an instruction (what to do with the reply).');
     if (!id) return fail('Which pass? Its id is needed.');
     if (action === 'postprocess.pass.remove') return { ok: true, value: { id } };
@@ -112,13 +115,21 @@ export function normalizePassParams(action, params = {}) {
     return Object.keys(fields).length ? { ok: true, value: { id, fields } } : fail('Nothing to change in the pass.');
 }
 
+/** Числовые и словесные настройки генерации прохода (ползунки «Temperature» и т. д. в карточке Модуля). */
+export const PASS_NUMBERS = Object.freeze(['temperature', 'topP', 'topK', 'maxTokens', 'reasoningBudget']);
+export const PASS_WORDS = Object.freeze(['reasoningMode', 'reasoningEffort']);
+const samplerLine = fields => {
+    const parts = [...PASS_NUMBERS, ...PASS_WORDS].filter(key => fields[key] !== undefined).map(key => `${key} ${fields[key]}`);
+    return parts.length ? [`Generation: ${parts.join(', ')}`] : [];
+};
+
 function describePass(action, params) {
     const made = normalizePassParams(action, params);
     if (!made.ok) return made;
     const { value } = made;
     if (action === 'postprocess.pass.add') {
         const { fields } = value;
-        return { ok: true, title: `New pass “${fields.name}”`, lines: [`Instruction: ${fields.prompt.slice(0, 240)}`, `Model: ${fields.workerId || 'any connection'}`, ...(fields.includeContext ? [`Sees the last ${fields.contextDepth ?? 6} chat messages too`] : []), value.position ? `Position: ${value.position}` : 'Runs last'] };
+        return { ok: true, title: `New pass “${fields.name}”`, lines: [`Instruction: ${fields.prompt.slice(0, 240)}`, `Model: ${fields.workerId || 'any connection'}`, ...(fields.includeContext ? [`Sees the last ${fields.contextDepth ?? 6} chat messages too`] : []), ...samplerLine(fields), value.position ? `Position: ${value.position}` : 'Runs last'] };
     }
     if (action === 'postprocess.pass.remove') return { ok: true, danger: true, title: 'Delete a Post-Turn pass', lines: [`Pass ${value.id} is removed; the other passes keep their order.`] };
     if (action === 'postprocess.pass.move') return { ok: true, title: 'Reorder Post-Turn passes', lines: [`Pass ${value.id} → position ${value.position}. Each pass sees the result of the one before it.`] };
@@ -130,6 +141,7 @@ function describePass(action, params) {
         ...(fields.enabled !== undefined ? [fields.enabled ? 'Turn on' : 'Turn off'] : []),
         ...(fields.includeContext !== undefined ? [fields.includeContext ? 'Also sees recent chat messages' : 'Sees only the text it rewrites'] : []),
         ...(fields.contextDepth !== undefined ? [`Chat context: ${fields.contextDepth} messages`] : []),
+        ...samplerLine(fields),
     ] };
 }
 

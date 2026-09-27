@@ -236,7 +236,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 persona: persona.peek(), context: await liveContext(screen.text, { focus }),
                 anchors: anchorsResult.ok ? anchorsResult.value ?? [] : [],
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
-                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: screen.anchors }), notes,
+                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)] }), notes,
             });
             const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
             const requestId = `guide-${now()}-${(counter += 1)}`;

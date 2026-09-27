@@ -194,3 +194,34 @@ test('buttons are not offered on every turn: if her previous reply had a choice 
     await guide.ask('thanks, and one more thing');
     assert.match(guide.messages.peek().at(-1).text, /```choice/, 'the previous reply had none, so buttons are allowed');
 });
+
+// --- Настройки генерации прохода и гайд по сильным промптам ---
+
+test('a pass can carry its generation settings (temperature, top-p, max tokens, reasoning); the card shows them; bad values never reach the module as numbers', () => {
+    const made = normalizePassParams('postprocess.pass.update', { id: 'p1', temperature: '0.3', maxTokens: 4000, reasoningMode: ' Disabled ', topP: 'lots' });
+    assert.deepEqual(made.value, { id: 'p1', fields: { temperature: 0.3, maxTokens: 4000, reasoningMode: 'disabled' } });
+    const card = describeProposal('postprocess.pass.update', { id: 'p1', temperature: 0.3, maxTokens: 4000 });
+    assert.ok(card.lines.includes('Generation: temperature 0.3, maxTokens 4000'));
+    const add = describeProposal('postprocess.pass.add', { prompt: 'Rewrite it.', temperature: 0.7 });
+    assert.ok(add.lines.some(line => line === 'Generation: temperature 0.7'));
+    assert.equal(normalizePassParams('postprocess.pass.update', { id: 'p1', temperature: 'hot' }).ok, false, 'nothing valid to change');
+});
+
+test('the guide on writing strong prompts comes with the Post-Turn Processor (and trackers, painter): by an open block or by the sticky focus, and it teaches the craft, not one-liners', async () => {
+    const dir = new URL('../guide/knowledge/', import.meta.url);
+    const { parseArticle, selectArticles } = await import('../libraries/core/guide-knowledge.js');
+    const index = JSON.parse(fs.readFileSync(new URL('index.json', dir), 'utf8')).articles;
+    assert.ok(index.includes('prompt-craft.md'));
+    const articles = index.map(file => parseArticle(fs.readFileSync(new URL(file, dir), 'utf8'), file));
+    const titles = selectArticles(articles, 'make me a pass', { openAnchors: ['module:module.postprocess'] }).map(article => article.title);
+    assert.ok(titles.includes('Writing strong prompts (passes, trackers, painter)') && titles.includes('Post-Turn Processor'));
+    const craft = articles.find(article => article.title.startsWith('Writing strong prompts')).text;
+    for (const rule of ['must be precise — it does not have to be short', 'never pad with filler', 'One job per pass', 'Say what stays', 'Output contract', 'temperature 0.2–0.4', 'Return only the rewritten text']) assert.ok(craft.includes(rule), rule);
+    assert.ok(!articles.find(article => article.title === 'Post-Turn Processor').text.includes('"Fix grammar and spelling.'), 'the weak one-liner examples are gone');
+    const { guide, sent } = build({ passes: [{ id: 'pass_1' }] });
+    await guide.load();
+    await guide.ask('write me a better pass for the post-turn processor');
+    assert.match(sent[0].messages[0].content, /### Writing strong prompts/);
+    await guide.ask('make it a bit shorter');
+    assert.match(sent[1].messages[0].content, /### Writing strong prompts/, 'the sticky focus keeps the guide in the prompt on follow-ups');
+});
