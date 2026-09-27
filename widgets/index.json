@@ -1,6 +1,7 @@
 {
   "widgets": [
     "characters",
-    "clock"
+    "clock",
+    "guide"
   ]
 }

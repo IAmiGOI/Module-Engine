@@ -36,6 +36,7 @@ import { registerStExtensionsService } from '../services/st-extensions.js';
 import { registerSessionService } from '../services/session.js';
 import { createSelfUpdateCore } from '../cores/self-update/index.js';
 import { createFirstLoadCore, FIRST_LAUNCH_EVENT } from '../cores/first-load/index.js';
+import { createGuideCore } from '../cores/guide/index.js';
 import { deriveExtensionName } from '../libraries/core/update-check.js';
 import { createEventsCore } from '../cores/events/index.js';
 import { createGenerationCore } from '../cores/generation/index.js';
@@ -782,6 +783,15 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         onChanged: () => { enginePanelRef?.refreshModules(); void hubRef?.refresh(); },
     });
 
+    // Гид — маскот движка и его отдельный чат (не чат ST): знакомство, объяснения, ссылки на блоки, действия. Файлы сценария и знаний —
+    // в папке `guide/` расширения; Модули — через реестр (действия «включить/выключить»).
+    const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.guide' }),
+        mount: node => uiEngine.mount('guide', node),
+        loadText: async path => { const response = await globalThis.fetch(new URL(`../guide/${path}`, import.meta.url), { cache: 'no-cache' }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); },
+        modules,
+    });
+
     // Хаб — обзор панели из блоков «как глифы» с живым статусом; формы блоков остаются DOM-карточками панели (cores/ui/hub/). Привязывается к панелям в index.js.
     const hub = createHubCore(engine.registerCaller('core.ui.hub', 'cores', { tier: 'official' }), { modules });
     hubRef = hub;
@@ -878,6 +888,9 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // инициализации) у окна нет — содержимого пока нет.
     const picturePanelUi = await picturePanel.open();
     document.body.append(picturePanelUi.getRoot());
+    await guide.load();
+    const guideUi = await guide.mountWindow();
+    document.body.append(guideUi.getRoot());
 
     // Слух движка включается ПОСЛЕ восстановления конфигурации: иначе
     // событие ST могло бы прилететь трекеру, которого ещё нет.
@@ -889,5 +902,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT };
+    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
 }
