@@ -7,7 +7,7 @@ import { normalizePassParams } from '../libraries/core/guide-edit.js';
 import { describeProposal } from '../libraries/core/guide-proposals.js';
 import { detectFocus } from '../libraries/core/guide-relevance.js';
 import { buildGuideSystemPrompt } from '../libraries/core/guide-knowledge.js';
-import { createGuideCore } from '../cores/guide/index.js';
+import { createGuideCore, TOKEN_BUDGET, HISTORY_TOKEN_LIMIT, COMPLETION_TOKEN_LIMIT } from '../cores/guide/index.js';
 
 // --- Внутренние рассуждения ---
 
@@ -25,7 +25,9 @@ test('thinking and notes are cut out of what the user sees; notes are reported s
     assert.equal(notesBlock('  '), '');
     assert.match(notesBlock('step 2 next'), /## Your working notes from earlier in this task \(private[^\n]*\nstep 2 next/);
     assert.match(buildGuideSystemPrompt({ notes: 'plan A' }), /plan A/);
-    assert.ok(buildGuideSystemPrompt({}).includes('Reason first inside <think>'), 'the prompt teaches the habit');
+    const prompt = buildGuideSystemPrompt({});
+    assert.ok(prompt.includes('Think carefully and thoroughly'), 'the prompt teaches the habit');
+    assert.match(prompt, /Do not walk the user through your thinking[^\n]*only when the user asks/, 'and keeps the user out of it unless they ask');
 });
 
 function build({ replies = ['ok'], passes = null } = {}) {
@@ -70,7 +72,8 @@ test('her notes are hidden from the chat, kept, and handed back on the next turn
     assert.match(sent[2].messages[0].content, /2\. macro — next/, 'still there while the job runs');
     await guide.ask('anything else?');
     assert.ok(!sent[3].messages[0].content.includes('## Your working notes'), 'she cleared them with an empty <notes>');
-    assert.equal(sent[0].maxTokens, 1800, 'room for thinking');
+    assert.equal(sent[0].maxTokens, 5000, 'room for thinking and a long answer');
+    assert.deepEqual([TOKEN_BUDGET, HISTORY_TOKEN_LIMIT, COMPLETION_TOKEN_LIMIT], [15000, 10000, 5000], '15k in all: 10k of history, 5k for the answer with its thinking');
 });
 
 test('the user closing the talk wipes the notes; clearing the chat wipes them too', async () => {
@@ -118,4 +121,63 @@ test('the pass tools reach the module only when it is on; the list of passes app
     assert.equal((await on.guide.runAction('postprocess.pass.remove', { id: 'pass_1' })).ok, true);
     assert.deepEqual(on.calls.map(entry => entry[0]), ['add', 'update', 'move', 'remove']);
     assert.deepEqual(on.calls[0][1], { fields: { name: 'Grammar', prompt: 'Fix grammar.' }, position: undefined });
+});
+
+// --- Стриминг ---
+
+import { streamingText } from '../libraries/core/guide-thinking.js';
+
+test('while the reply is still arriving the user sees only finished text: no thoughts, no half a tag, no raw JSON of a card that is still being written', () => {
+    assert.equal(streamingText('<think>hmm, first'), '');
+    assert.equal(streamingText('<think>done</think>Here is'), 'Here is');
+    assert.equal(streamingText('Hello <thi'), 'Hello');
+    assert.equal(streamingText('Hello <'), 'Hello');
+    assert.equal(streamingText('a < b is fine'), 'a < b is fine', 'a lone comparison sign in the middle is text');
+    assert.equal(streamingText('Here it is.\n```proposal\n{"action":"tracker.cre'), 'Here it is.', 'the unfinished card waits');
+    assert.equal(streamingText('Here it is.\n```proposal\n{"action":"tracker.create","params":{}}\n```\nDone'), 'Here it is.\n```proposal\n{"action":"tracker.create","params":{}}\n```\nDone');
+    assert.equal(streamingText('<notes>plan</notes>Answer<notes>next'), 'Answer');
+});
+
+test('the reply streams into a draft (throttled, thinking hidden) and is replaced by the final message; no draft is left behind, also after an error', async () => {
+    const engine = createEngine();
+    const bus = engine.buses.cores;
+    const seen = [];
+    let clock = 0;
+    bus.register('storage.settings.get', ({ fallback }) => fallback);
+    bus.register('storage.settings.set', () => true);
+    bus.register('model.workers.get', () => [{ id: 'w' }]);
+    bus.register('model.workers.status', () => [{ workerId: 'w', state: 'up' }]);
+    bus.register('ui.anchors.list', () => []);
+    bus.register('tracking.trackers', () => []);
+    bus.register('macros.programs', () => []);
+    bus.register('lorebook.find', () => []);
+    let guide;
+    let fail = false;
+    bus.register('model.generate', params => {
+        assert.equal(params.stream, true);
+        assert.match(params.requestId, /^guide-/);
+        const parts = ['<think>plan the answer', '</think>Sure, ', 'here is the ', 'result.'];
+        let text = '';
+        for (const part of parts) {
+            text += part;
+            clock += 100;
+            engine.events.emit('model.generate.chunk', { requestId: params.requestId, delta: part, text });
+            seen.push(guide.streamDraft.peek());
+        }
+        engine.events.emit('model.generate.chunk', { requestId: 'someone-else', delta: 'X', text: 'LEAK' });
+        seen.push(guide.streamDraft.peek());
+        if (fail) throw new Error('provider down');
+        return text;
+    });
+    const dir = new URL('../guide/', import.meta.url);
+    guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official' }), { publish: () => {}, mount: () => ({}), modules: { list: () => [], enabled: () => [] }, now: () => clock, loadText: async path => fs.readFileSync(new URL(path, dir), 'utf8') });
+    await guide.load();
+    await guide.ask('hello');
+    assert.deepEqual(seen, ['', 'Sure,', 'Sure, here is the', 'Sure, here is the result.', 'Sure, here is the result.'], 'thinking hidden, foreign requests ignored');
+    assert.equal(guide.messages.peek().at(-1).text, 'Sure, here is the result.');
+    assert.equal(guide.streamDraft.peek(), null, 'no draft is left once the final message is in');
+    fail = true;
+    await guide.ask('again');
+    assert.equal(guide.streamDraft.peek(), null, 'and none after a failure');
+    assert.match(guide.messages.peek().at(-1).text, /I couldn't answer: provider down/);
 });

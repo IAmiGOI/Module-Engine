@@ -10,7 +10,7 @@ import { createEditActions } from './edit-actions.js';
 import { createWhatsNew } from './whats-new.js';
 import { createGuideContext } from './context.js';
 import { NEUTRAL, nextFocus, detectFocus, isClosing, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
-import { splitThinking, MAX_NOTES_CHARS } from '../../libraries/core/guide-thinking.js';
+import { splitThinking, streamingText, MAX_NOTES_CHARS } from '../../libraries/core/guide-thinking.js';
 
 /**
  * Ядро гида — маскот движка и его отдельный чат (замена старого окна онбординга). Чат НЕ чат SillyTavern: история лежит в настройках
@@ -29,8 +29,13 @@ const NAMESPACE = 'core.guide';
 /** Аватар по умолчанию — картинка, выбранная владельцем (`assets/guide-avatar.png`); своя в настройках заменяет её. */
 export const DEFAULT_AVATAR_URL = new URL('../../assets/guide-avatar.png', import.meta.url).href;
 const HISTORY_LIMIT = 80;
-/** Сколько истории уходит модели: ~10 тысяч токенов, дальше верх истории просто отрезается (в самом чате всё остаётся). */
+/**
+ * Бюджет токенов гида: 15 тысяч на историю и ответ вместе. История режется до 10 тысяч (верх просто отрезается, в самом чате всё остаётся), остальные 5 тысяч — под ответ
+ * с рассуждением (`<think>` + видимый текст + карточки): 1800 не хватало, длинный ответ обрывался на полуслове. Системный промпт (правила, состояние, статьи) — сверх этого.
+ */
+export const TOKEN_BUDGET = 15000;
 export const HISTORY_TOKEN_LIMIT = 10000;
+export const COMPLETION_TOKEN_LIMIT = TOKEN_BUDGET - HISTORY_TOKEN_LIMIT;
 
 export const DEFAULT_PERSONA = Object.freeze({
     name: 'Mea',
@@ -53,6 +58,7 @@ export const CHECKLIST = Object.freeze([
 /** Сколько блоков гид открывает за одну реплику и пауза между ними: больше — скачки экрана, а не помощь. */
 const REVEAL_LIMIT = 4;
 const REVEAL_GAP_MS = 900;
+const STREAM_PAINT_MS = 60;
 
 export function createGuideCore(host, { publish, mount, loadText = async () => null, modules = null, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
     const emit = publish ?? ((event, payload) => host.events.emit(event, payload));
@@ -61,6 +67,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const messages = signal([]);
     const mode = signal('scenario');      // 'scenario' | 'chat'
     const busy = signal(false);
+    const streamDraft = signal(null);   // текст ответа, который ещё идёт (стриминг): строка — показываем, `null` — ничего не идёт
     const visible = signal(false);
     const view = signal('chat');          // 'chat' | 'settings'
     const manualDone = signal(new Set());
@@ -191,6 +198,17 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         ].filter(Boolean).join('\n');
     }
 
+    // Стриминг: чанки приходят событием ядра моделей `model.generate.chunk` с нашим `requestId`; в окно идёт видимая часть (без рассуждений и недописанных карточек),
+    // не чаще раза в STREAM_PAINT_MS — перерисовывать список на каждый токен незачем.
+    let streaming = null;
+    const unsubscribeChunks = host.events?.subscribe?.('model.generate.chunk', payload => {
+        if (!streaming || payload?.requestId !== streaming.requestId) return;
+        const at = now();
+        if (at - streaming.painted < STREAM_PAINT_MS) return;
+        streaming.painted = at;
+        streamDraft.set(streamingText(payload.text));
+    });
+
     async function ask(text, { echo = true } = {}) {
         const question = String(text ?? '').trim();
         if (!question || busy.peek()) return false;
@@ -203,6 +221,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         }
         mode.set('chat');
         busy.set(true);
+        streamDraft.set('');
         changed();
         try {
             const anchorsResult = await call('ui.anchors.list');
@@ -220,10 +239,12 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: screen.anchors }), notes,
             });
             const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
+            const requestId = `guide-${now()}-${(counter += 1)}`;
+            streaming = { requestId, painted: 0 };
             const reply = await call('model.generate', {
                 messages: [{ role: 'system', content: system }, ...turns],
                 systemPrompt: system, prompt: turns.map(turn => `${turn.role === 'user' ? 'User' : nameOf()}: ${turn.content}`).join('\n\n'),
-                temperature: 0.7, maxTokens: 1800, stream: false,
+                temperature: 0.7, maxTokens: COMPLETION_TOKEN_LIMIT, stream: true, requestId,
                 ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}),
             });
             if (!reply.ok) throw new Error(reply.error.message);
@@ -239,6 +260,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             push({ role: 'note', text: `I couldn't answer: ${error.message}`, ok: false });
             return false;
         } finally {
+            streaming = null;
+            streamDraft.set(null);
             busy.set(false);
             changed();
         }
@@ -304,7 +327,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         };
     }
 
-    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
+    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
 
     const unregisters = [
         host.own.register('guide.open', () => open()),
@@ -317,8 +340,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
 
     return {
         load, open, close, ask, chooseOption, pick, runAction, saveSettings, resetChat, status, checklistState,
-        persona, messages, mode, visible,
+        persona, messages, mode, visible, streamDraft,
         mountWindow: async () => { const finalUi = mount(ui.tree()); await finalUi.settled?.(); return finalUi; },
-        unregister: () => { for (const unregister of unregisters) unregister(); },
+        unregister: () => { unsubscribeChunks?.(); for (const unregister of unregisters) unregister(); },
     };
 }

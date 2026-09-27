@@ -11,7 +11,7 @@ import { CREATOR } from '../../libraries/core/guide-creator.js';
  * сигналы Ядра (cores/guide/index.js); здесь только то, как это выглядит. Список сообщений идёт в обратном порядке внутри
  * `flex-direction: column-reverse` — так прокрутка сама держится у последней реплики без доступа к DOM.
  */
-export function createGuideWindow({ defaultAvatar = '', persona, messages, busy, visible, view, ask, chooseOption, pick, preview, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
+export function createGuideWindow({ defaultAvatar = '', persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 540, height: 680 });
     const collapsed = signal(false);
@@ -147,7 +147,10 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
                 const list = messages();
                 const lastAssistant = [...list].reverse().find(message => message.role === 'assistant');
                 const rendered = list.map((message, index) => messageView(message, message === lastAssistant, list[index - 1]?.role !== message.role));
-                if (busy()) rendered.push(row({ key: 'typing', kind: 'assistant', who: persona().name, showAvatar: list.at(-1)?.role !== 'assistant', body: h('div', { class: 'stme-guide-text stme-guide-typing' }, 'is thinking…') }));
+                const draft = streamDraft();
+                const fresh = list.at(-1)?.role !== 'assistant';
+                if (draft) rendered.push(row({ key: 'stream', kind: 'assistant', who: persona().name, showAvatar: fresh, body: h('div', { class: 'stme-guide-text' }, paragraphs(draft)) }));
+                else if (busy()) rendered.push(row({ key: 'typing', kind: 'assistant', who: persona().name, showAvatar: fresh, body: h('div', { class: 'stme-guide-text stme-guide-typing' }, 'is thinking…') }));
                 return rendered.reverse();
             })),
             composer());
