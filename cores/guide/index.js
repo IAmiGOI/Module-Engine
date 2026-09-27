@@ -118,7 +118,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
 
     // Действия — белый список (actions.js); нажатие кнопки в чате пользователем и есть согласие.
     const ACTIONS = {
-        ...createGuideActions({ host, call, modules, reveal: anchor => reveal(anchor), checklist: CHECKLIST, markDone: async id => { manualDone.set(new Set([...manualDone.peek(), id])); await saveSetting('checklist', [...manualDone.peek()]); } }),
+        ...createGuideActions({ host, call, modules, reveal: anchor => reveal(anchor), hide: anchor => hide(anchor), checklist: CHECKLIST, markDone: async id => { manualDone.set(new Set([...manualDone.peek(), id])); await saveSetting('checklist', [...manualDone.peek()]); } }),
         ...createCreateActions({ call, modules }),
         ...createEditActions({ call, modules }),
     };
@@ -156,6 +156,11 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
 
     async function reveal(anchor) {
         const result = await call('ui.reveal', { anchor });
+        return result.ok && result.value !== false;
+    }
+
+    async function hide(anchor) {
+        const result = await call('ui.hide', { anchor });
         return result.ok && result.value !== false;
     }
 

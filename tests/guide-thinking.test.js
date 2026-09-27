@@ -452,3 +452,34 @@ test('the proposal card preview is long enough to actually judge a real brief, a
     assert.match(long.lines[0], /…\s\(240 words total\)$/);
     assert.ok(long.lines[0].length > 240, 'the preview itself is longer than the old 240-character cut, so a real brief no longer LOOKS short');
 });
+
+// --- Закрыть блок по её просьбе (не автоматически) ---
+
+test('ui.hide is a real action she can call: it reaches the ui.hide contract and is safe (auto-runnable), but nothing closes anything by itself', async () => {
+    const engine = createEngine();
+    const bus = engine.buses.cores;
+    const hidden = [];
+    bus.register('storage.settings.get', ({ fallback }) => fallback);
+    bus.register('storage.settings.set', () => true);
+    bus.register('model.workers.get', () => [{ id: 'w' }]);
+    bus.register('model.workers.status', () => [{ workerId: 'w', state: 'up' }]);
+    bus.register('ui.anchors.list', () => []);
+    bus.register('ui.hide', ({ anchor }) => { hidden.push(anchor); return true; });
+    const dir = new URL('../guide/', import.meta.url);
+    const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official' }), { publish: () => {}, mount: () => ({}), modules: { list: () => [], enabled: () => [] }, loadText: async path => fs.readFileSync(new URL(path, dir), 'utf8') });
+    await guide.load();
+    const result = await guide.runAction('ui.hide', { anchor: 'module:module.postprocess' });
+    assert.equal(result.ok, true);
+    assert.deepEqual(hidden, ['module:module.postprocess']);
+    assert.match(buildGuideSystemPrompt({ actions: [{ id: 'ui.hide', description: 'x' }] }), /ui\.hide: x/);
+    assert.match(buildGuideSystemPrompt({}), /Use ui\.hide to close a block/);
+});
+
+test('opening a block for a task does not close anything by itself when the topic later moves on — closing is hers to call, not automatic', async () => {
+    const { guide, revealed } = buildLook();
+    await guide.load();
+    await guide.ask('build a post-turn pass');
+    assert.equal(revealed.length, 1);
+    await guide.ask('now help me with the tracker instead');
+    assert.equal(revealed.length, 1, 'the engine never calls ui.hide on its own');
+});
