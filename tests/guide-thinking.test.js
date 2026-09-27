@@ -134,7 +134,7 @@ test('while the reply is still arriving the user sees only finished text: no tho
     assert.equal(streamingText('Hello <'), 'Hello');
     assert.equal(streamingText('a < b is fine'), 'a < b is fine', 'a lone comparison sign in the middle is text');
     assert.equal(streamingText('Here it is.\n```proposal\n{"action":"tracker.cre'), 'Here it is.', 'the unfinished card waits');
-    assert.equal(streamingText('Here it is.\n```proposal\n{"action":"tracker.create","params":{}}\n```\nDone'), 'Here it is.\n```proposal\n{"action":"tracker.create","params":{}}\n```\nDone');
+    assert.equal(streamingText('Here it is.\n```proposal\n{"action":"tracker.create","params":{}}\n```\nDone'), 'Here it is.', 'blocks appear with the final reply, never as raw JSON while streaming');
     assert.equal(streamingText('<notes>plan</notes>Answer<notes>next'), 'Answer');
 });
 
@@ -397,4 +397,35 @@ test('a real pass brief is not cut short: the module keeps 16 000 characters (it
     assert.match(craft, /three to five, not one/);
     const prompt = buildGuideSystemPrompt({});
     assert.match(prompt, /Be concise in the CHAT[^\n]*only for talking to the user[^\n]*several hundred words/, 'brevity is for chat, not for the texts she writes for the tools');
+});
+
+// --- Не отвечать, пока нет полной информации ---
+
+import { stripBlocks } from '../libraries/core/guide-markup.js';
+
+test('the prompt forbids answering before she has the information: a looking turn is one short line, the real answer comes only when everything is visible', () => {
+    const prompt = buildGuideSystemPrompt({});
+    assert.match(prompt, /NEVER give the answer, a proposal card or a guess before you have what you need/);
+    assert.match(prompt, /never "answer now and add more after looking"/);
+    assert.match(prompt, /ONE short line[^\n]*<continue\/>[^\n]*Give the real answer only in the turn where everything you need is visible/);
+    const cut = stripBlocks('Text.\n```proposal\n{"action":"tracker.create","params":{}}\n```\n```card\n{"title":"T"}\n```', ['proposal', 'choice']);
+    assert.ok(cut.startsWith('Text.') && !cut.includes('proposal') && cut.includes('```card'), 'only the named kinds are removed');
+});
+
+test('a reply that goes to look at a block carries no card and no buttons: the proposal she wrote too early is thrown away and appears only in the turn after the block is open', async () => {
+    const early = 'Let me check [Post-Turn](stme:module:module.postprocess) first.\n```proposal\n{"action":"postprocess.pass.add","params":{"prompt":"Fix it."}}\n```<continue/>';
+    const final = 'Now I can see it. Here is the pass.\n```proposal\n{"action":"postprocess.pass.add","params":{"prompt":"A full brief."}}\n```';
+    const { guide, sent } = buildLoop([early, final]);
+    await guide.load();
+    await guide.ask('build me a pass');
+    assert.equal(sent.length, 2);
+    const [first, second] = guide.messages.peek().filter(message => message.role === 'assistant');
+    assert.ok(!first.text.includes('proposal'), 'the early card is gone');
+    assert.match(first.text, /^Let me check/);
+    assert.match(second.text, /```proposal/);
+    assert.match(second.text, /A full brief\./);
+    const noLink = buildLoop(['Here is the pass.\n```proposal\n{"action":"tracker.create","params":{}}\n```<continue/>']);
+    await noLink.guide.load();
+    await noLink.guide.ask('make a tracker');
+    assert.match(noLink.guide.messages.peek().at(-1).text, /```proposal/, 'nothing to look at — the card stays');
 });
