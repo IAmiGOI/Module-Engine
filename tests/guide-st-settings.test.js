@@ -20,7 +20,7 @@ test('describeWorldInfo() turns the raw global settings into one readable line; 
         minActivations: 0, minActivationsDepthMax: 0, overflowAlert: false,
     });
     assert.match(wi, /scan depth 4 messages/);
-    assert.match(wi, /token budget 25/);
+    assert.match(wi, /token budget 25% of the total context/, 'found live: budget is a PERCENT of context in ST, not a token count — the model read "25" as 25 tokens');
     assert.ok(!wi.includes('hard cap'), 'no cap set — not mentioned');
     assert.match(wi, /recursive scanning on \(max 3 steps\)/);
     assert.equal(describeWorldInfo(null), '', 'no data — no line, never a fake description');
