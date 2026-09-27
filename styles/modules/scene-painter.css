@@ -23,4 +23,11 @@
 /* В строке шапки Chat Viewport подвал сдвинут на 4px вниз (`margin-top` для бейджа RP Time с подписью) — пилюля без подписи возвращается
    на линию кнопок сообщения (замер в харнессе: кнопки 499…525px, пилюля была 503…526px). */
 .stme-chat-viewport-footer-slot .stme-scene-painter { margin-top: -4px; }
+/* Ячейка пилюли — ПЕРВОЙ в подвале Chat Viewport (владелец: «иконка Paint двигает RP Time»). Подвал там прижат вправо, а ячейки идут в порядке
+   добавления: пилюля вставала справа от бейджа RP Time и сдвигала его при появлении и при каждой смене ширины («Paint» → «Show │ ↻ │ ⟳ │ ✕»).
+   Слева от него бейдж остаётся у правого края на своём месте, что бы ни происходило с пилюлей. На узком экране / касании подвал прижат ВЛЕВО
+   (styles/chat-viewport/message-chrome.css) — там всё наоборот: бейдж неподвижен, пока пилюля справа от него, поэтому правило только для широкого. */
+@media not ((max-width: 700px) or (pointer: coarse)) {
+    .stme-chat-viewport-footer-slot .stme-message-footer-slot:has(.stme-scene-painter) { order: -1; }
+}
 .stme-scene-painter-backend { padding: 6px 0; border-bottom: 1px solid var(--stme-border); }
