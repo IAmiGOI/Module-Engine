@@ -785,7 +785,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
 
     // Гид — маскот движка и его отдельный чат (не чат ST): знакомство, объяснения, ссылки на блоки, действия. Файлы сценария и знаний —
     // в папке `guide/` расширения; Модули — через реестр (действия «включить/выключить»).
-    const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official' }), {
+    const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official', networkAccess: true }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.guide' }),
         mount: node => uiEngine.mount('guide', node),
         loadText: async path => { const response = await globalThis.fetch(new URL(`../guide/${path}`, import.meta.url), { cache: 'no-cache' }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); },

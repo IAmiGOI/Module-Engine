@@ -1,3 +1,5 @@
+import { CREATE_ACTIONS } from './guide-create.js';
+
 /**
  * Разметка ответов гида (маскот движка, cores/guide) — чистые функции: текст модели → сегменты для окна чата.
  *
@@ -9,17 +11,20 @@
  *   ```card     {"title": "…", "text": "…", "anchor": "card:models"}                  — карточка с заголовком и ссылкой;
  *   ```steps    {"title": "…", "items": [{"text": "…", "anchor": "…"}]}              — нумерованные шаги со ссылками;
  *   ```action   {"label": "Enable Tracker", "action": "modules.enable", "params": {"id": "module.tracker"}} — кнопка действия (нажатие = согласие);
+ *               с `"auto": true` безопасное (только чтение) действие выполняется сразу, без кнопки — см. `splitAutoActions`;
+ *   ```proposal {"action": "tracker.create", "params": {…}}                          — карточка «что будет создано» с кнопкой Apply (guide-create.js);
+ * Кнопка выбора может сама запускать действие: `{"label": "Check now", "action": "models.check"}` — один клик, второй кнопки нет.
  *   ```checklist {}                                                                   — живой чек-лист первого запуска.
  * Битый JSON или неизвестное имя не ломают ответ: такой кусок показывается как текст.
  */
 
-export const BLOCK_KINDS = Object.freeze(['choice', 'card', 'steps', 'action', 'checklist']);
+export const BLOCK_KINDS = Object.freeze(['choice', 'card', 'steps', 'action', 'proposal', 'checklist']);
 const FENCE = /```([a-z]+)[ \t]*\n?([\s\S]*?)```/g;
 
 function normalizeBlock(kind, data) {
     const text = value => (typeof value === 'string' ? value.trim() : '');
     if (kind === 'choice') {
-        const options = (Array.isArray(data.options) ? data.options : []).map(option => (typeof option === 'string' ? { label: option.trim() } : { label: text(option?.label), send: text(option?.send) || undefined })).filter(option => option.label);
+        const options = (Array.isArray(data.options) ? data.options : []).map(option => (typeof option === 'string' ? { label: option.trim() } : { label: text(option?.label), send: text(option?.send) || undefined, action: text(option?.action) || undefined, params: option?.params && typeof option.params === 'object' ? option.params : undefined })).filter(option => option.label);
         return options.length ? { kind, prompt: text(data.prompt), options: options.slice(0, 6) } : null;
     }
     if (kind === 'card') return text(data.title) || text(data.text) ? { kind, title: text(data.title), text: text(data.text), anchor: text(data.anchor) || undefined } : null;
@@ -29,7 +34,11 @@ function normalizeBlock(kind, data) {
     }
     if (kind === 'action') {
         const action = text(data.action);
-        return action ? { kind, label: text(data.label) || action, action, params: data.params && typeof data.params === 'object' ? data.params : {} } : null;
+        return action ? { kind, label: text(data.label) || action, action, params: data.params && typeof data.params === 'object' ? data.params : {}, auto: data.auto === true } : null;
+    }
+    if (kind === 'proposal') {
+        const action = text(data.action);
+        return CREATE_ACTIONS.includes(action) ? { kind, action, params: data.params && typeof data.params === 'object' ? data.params : {} } : null;
     }
     if (kind === 'checklist') return { kind };
     return null;
@@ -80,8 +89,31 @@ export function plainText(reply) {
         const { block } = segment;
         if (block.kind === 'choice') return `${block.prompt ? `${block.prompt} ` : ''}[${block.options.map(option => option.label).join(' / ')}]`;
         if (block.kind === 'action') return `[${block.label}]`;
+        if (block.kind === 'proposal') return `[proposal: ${block.action}]`;
         if (block.kind === 'steps') return block.items.map((item, index) => `${index + 1}. ${item.text}`).join('\n');
         if (block.kind === 'card') return [block.title, block.text].filter(Boolean).join(': ');
         return '[checklist]';
     }).join('\n').trim();
+}
+
+/**
+ * Безопасные действия, которые модель пометила `"auto": true`, выполняются сразу (человек уже попросил — второй раз кликать незачем). Возвращает
+ * `{ text, actions }`: реплика без этих блоков и список того, что выполнить. Остальные блоки (и действия, меняющие состояние) не трогаются.
+ */
+export function splitAutoActions(reply, isSafe) {
+    const source = String(reply ?? '');
+    const actions = [];
+    let text = '';
+    let last = 0;
+    for (const match of source.matchAll(FENCE)) {
+        const [whole, kind, body] = match;
+        let block = null;
+        if (kind === 'action') { try { block = normalizeBlock('action', body.trim() ? JSON.parse(body) : {}); } catch { block = null; } }
+        if (block?.auto && isSafe(block.action)) {
+            actions.push({ action: block.action, params: block.params });
+            text += source.slice(last, match.index);
+            last = match.index + whole.length;
+        }
+    }
+    return { text: (text + source.slice(last)).replace(/\n{3,}/g, '\n\n').trim(), actions };
 }

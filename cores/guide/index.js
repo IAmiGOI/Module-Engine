@@ -1,9 +1,12 @@
 import { signal } from '../ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { parseArticle, selectArticles, buildGuideSystemPrompt } from '../../libraries/core/guide-knowledge.js';
-import { plainText } from '../../libraries/core/guide-markup.js';
+import { plainText, splitAutoActions } from '../../libraries/core/guide-markup.js';
+import { describeProposal } from '../../libraries/core/guide-create.js';
 import { createGuideWindow } from './window.js';
 import { createGuideActions } from './actions.js';
+import { createCreateActions } from './create-actions.js';
+import { createWhatsNew } from './whats-new.js';
 
 /**
  * Ядро гида — маскот движка и его отдельный чат (замена старого окна онбординга). Чат НЕ чат SillyTavern: история лежит в настройках
@@ -90,7 +93,10 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     }
 
     // Действия — белый список (actions.js); нажатие кнопки в чате пользователем и есть согласие.
-    const ACTIONS = createGuideActions({ host, call, modules, reveal: anchor => reveal(anchor), checklist: CHECKLIST, markDone: async id => { manualDone.set(new Set([...manualDone.peek(), id])); await saveSetting('checklist', [...manualDone.peek()]); } });
+    const ACTIONS = {
+        ...createGuideActions({ host, call, modules, reveal: anchor => reveal(anchor), checklist: CHECKLIST, markDone: async id => { manualDone.set(new Set([...manualDone.peek(), id])); await saveSetting('checklist', [...manualDone.peek()]); } }),
+        ...createCreateActions({ call, modules }),
+    };
 
     async function runAction(action, params) {
         const entry = ACTIONS[action];
@@ -101,6 +107,17 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         changed();
         return result;
     }
+
+    /** Кнопка выбора внутри блока: с действием — выполняется сразу (клик и есть согласие, второй кнопки нет), без — уходит вопросом. */
+    async function pick(option) {
+        if (busy.peek()) return false;
+        if (!option?.action) return ask(option?.send || option?.label);
+        push({ role: 'user', text: option.label });
+        return (await runAction(option.action, option.params)).ok;
+    }
+
+    /** Карточка предложения: что реально будет создано (по той же нормализации, что и при создании). */
+    const preview = (action, params) => describeProposal(action, params);
 
     async function reveal(anchor) {
         const result = await call('ui.reveal', { anchor });
@@ -175,7 +192,10 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}),
             });
             if (!reply.ok) throw new Error(reply.error.message);
-            push({ role: 'assistant', text: String(reply.value ?? '').trim() || '…' });
+            // Безопасные действия, которые модель пометила «auto», выполняются сразу; результат — заметкой в чате.
+            const { text: shown, actions: autoRuns } = splitAutoActions(String(reply.value ?? '').trim(), id => ACTIONS[id]?.safe === true);
+            if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
+            for (const run of autoRuns) await runAction(run.action, run.params);
             return true;
         } catch (error) {
             push({ role: 'note', text: `I couldn't answer: ${error.message}`, ok: false });
@@ -191,8 +211,11 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     }
 
     // --- Жизненный цикл ------------------------------------------------------
+    const readSetting = async (key, fallback) => { const result = await call('storage.settings.get', { namespace: NAMESPACE, key, fallback }); return result.ok ? result.value ?? fallback : fallback; };
+    const whatsNew = createWhatsNew({ host, call, read: readSetting, write: saveSetting });
+
     async function load() {
-        const read = async (key, fallback) => { const result = await call('storage.settings.get', { namespace: NAMESPACE, key, fallback }); return result.ok ? result.value ?? fallback : fallback; };
+        const read = readSetting;
         persona.set({ ...DEFAULT_PERSONA, ...(await read('settings', {})) });
         const chat = await read('chat', {});
         messages.set(Array.isArray(chat.messages) ? chat.messages : []);
@@ -203,6 +226,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const index = JSON.parse(await loadText('knowledge/index.json'));
             articles = (await Promise.all((index.articles ?? []).map(async file => parseArticle(await loadText(`knowledge/${file}`), file.replace(/\.md$/, ''))))).filter(article => article.text);
         } catch { articles = []; }
+        // «Что нового» после обновления — в фоне и молча, если сказать нечего.
+        void whatsNew.check({ hasChat: messages.peek().length > 0 }).then(text => { if (text) push({ role: 'assistant', text }); }).catch(() => {});
     }
 
     /** Открыть чат. Пустой чат начинается сценарием (нет модели) или приветствием. */
@@ -237,7 +262,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         };
     }
 
-    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, persona, messages, busy, visible, view, mode, ask, chooseOption, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
+    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
 
     const unregisters = [
         host.own.register('guide.open', () => open()),
@@ -248,7 +273,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     ];
 
     return {
-        load, open, close, ask, chooseOption, runAction, saveSettings, resetChat, status, checklistState,
+        load, open, close, ask, chooseOption, pick, runAction, saveSettings, resetChat, status, checklistState,
         persona, messages, mode, visible,
         mountWindow: async () => { const finalUi = mount(ui.tree()); await finalUi.settled?.(); return finalUi; },
         unregister: () => { for (const unregister of unregisters) unregister(); },

@@ -23,6 +23,7 @@ export function createGuideActions({ host, call, modules, reveal, checklist, mar
             },
         },
         'models.check': {
+            safe: true,
             description: 'Check all model connections now. No params.',
             async run() {
                 const probe = await call('model.workers.probe', {});
@@ -48,10 +49,12 @@ export function createGuideActions({ host, call, modules, reveal, checklist, mar
             },
         },
         'ui.reveal': {
+            safe: true,
             description: 'Open and highlight a block. Params: {"anchor": "<anchor>"}. Prefer a plain link for this.',
             async run({ anchor } = {}) { const result = await reveal(anchor); return { ok: result, message: result ? '' : `Couldn't find "${anchor}".` }; },
         },
         'checklist.mark': {
+            safe: true,
             description: `Mark a first-start checklist item done. Params: {"id": one of ${checklist.map(item => `"${item.id}"`).join(', ')}}.`,
             async run({ id } = {}) {
                 if (!checklist.some(item => item.id === id)) return { ok: false, message: `Unknown checklist item "${id}".` };
