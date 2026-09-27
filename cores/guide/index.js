@@ -9,7 +9,8 @@ import { createCreateActions } from './create-actions.js';
 import { createEditActions } from './edit-actions.js';
 import { createWhatsNew } from './whats-new.js';
 import { createGuideContext } from './context.js';
-import { NEUTRAL, nextFocus, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
+import { NEUTRAL, nextFocus, detectFocus, isClosing, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
+import { splitThinking, MAX_NOTES_CHARS } from '../../libraries/core/guide-thinking.js';
 
 /**
  * Ядро гида — маскот движка и его отдельный чат (замена старого окна онбординга). Чат НЕ чат SillyTavern: история лежит в настройках
@@ -70,7 +71,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const saveSetting = (key, value) => call('storage.settings.set', { namespace: NAMESPACE, key, value });
     // Липкий фокус разговора (guide-relevance.js): какие списки и настройки идут в промпт полностью. Живёт вместе с чатом.
     let focus = { ...NEUTRAL };
-    const saveChat = () => saveSetting('chat', { messages: messages.peek().slice(-HISTORY_LIMIT), mode: mode.peek(), focus });
+    // Рабочие заметки гида к длинной задаче (guide-thinking.js): живут, пока задача не закончена или тема не сменилась.
+    let notes = '';
+    const saveChat = () => saveSetting('chat', { messages: messages.peek().slice(-HISTORY_LIMIT), mode: mode.peek(), focus, notes });
     const changed = () => emit('guide.changed', status());
     const nameOf = () => persona.peek().name || DEFAULT_PERSONA.name;
 
@@ -204,25 +207,30 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         try {
             const anchorsResult = await call('ui.anchors.list');
             const screen = await context.screen();
-            focus = nextFocus(focus, { query: question, anchors: screen.anchors, modules: modules?.list?.() ?? [] });
+            const known = modules?.list?.() ?? [];
+            focus = nextFocus(focus, { query: question, anchors: screen.anchors, modules: known });
+            // Заметки к задаче ведёт сама модель (пустой <notes> = закончено): завершение одного шага — не конец длинной задачи. Стираем только когда человек закрыл разговор.
+            if (isClosing(question) && !detectFocus({ query: question, modules: known })) notes = '';
             const history = messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note');
             const query = history.slice(-4).map(message => message.text).join(' ');
             const system = buildGuideSystemPrompt({
                 persona: persona.peek(), context: await liveContext(screen.text, { focus }),
                 anchors: anchorsResult.ok ? anchorsResult.value ?? [] : [],
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
-                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: screen.anchors }),
+                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: screen.anchors }), notes,
             });
             const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
             const reply = await call('model.generate', {
                 messages: [{ role: 'system', content: system }, ...turns],
                 systemPrompt: system, prompt: turns.map(turn => `${turn.role === 'user' ? 'User' : nameOf()}: ${turn.content}`).join('\n\n'),
-                temperature: 0.7, maxTokens: 900, stream: false,
+                temperature: 0.7, maxTokens: 1800, stream: false,
                 ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}),
             });
             if (!reply.ok) throw new Error(reply.error.message);
             // Безопасные действия, которые модель пометила «auto», выполняются сразу; результат — заметкой в чате.
-            const { text: shown, actions: autoRuns } = splitAutoActions(String(reply.value ?? '').trim(), id => ACTIONS[id]?.safe === true);
+            const thought = splitThinking(reply.value);
+            if (thought.notes !== undefined) { notes = thought.notes.slice(0, MAX_NOTES_CHARS); void saveChat(); }
+            const { text: shown, actions: autoRuns } = splitAutoActions(thought.visible, id => ACTIONS[id]?.safe === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
             void openLinked(shown).catch(() => {});
             for (const run of autoRuns) await runAction(run.action, run.params);
@@ -251,6 +259,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         messages.set(Array.isArray(chat.messages) ? chat.messages : []);
         mode.set(chat.mode === 'chat' ? 'chat' : 'scenario');
         focus = sanitizeFocus(chat.focus);
+        notes = typeof chat.notes === 'string' ? chat.notes.slice(0, MAX_NOTES_CHARS) : '';
         manualDone.set(new Set(await read('checklist', [])));
         try { scenario = JSON.parse(await loadText('setup-scenario.json')) ?? scenario; } catch { /* сценарий не загрузился — чат всё равно работает */ }
         try {
@@ -282,6 +291,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         messages.set([]);
         mode.set('scenario');
         focus = { ...NEUTRAL };
+        notes = '';
         await saveChat();
         if (withScenario) sayNode(scenario.start); else await open();
     }
