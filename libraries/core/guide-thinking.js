@@ -25,3 +25,17 @@ export function splitThinking(reply) {
 export const notesBlock = notes => (String(notes ?? '').trim()
     ? `## Your working notes from earlier in this task (private — the user never sees them)\n${String(notes).trim()}`
     : '');
+
+const PARTIAL_TAG = /<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|n(?:o(?:t(?:e(?:s)?)?)?)?)?$/i;
+
+/**
+ * Что показывать, пока ответ ещё идёт (стриминг): то же, что `splitThinking().visible`, плюс два правила против «мигания»: (1) обрывок открывающего тега в конце
+ * (`<thi`) не показывается; (2) блок с незакрытой оградой ``` (карточка, предложение — JSON ещё дописывается) не показывается совсем до закрытия: сырой JSON на экране
+ * недопустим, текст до него — пожалуйста.
+ */
+export function streamingText(raw) {
+    let visible = splitThinking(raw).visible.replace(PARTIAL_TAG, '');
+    const fences = [...visible.matchAll(/```/g)];
+    if (fences.length % 2 === 1) visible = visible.slice(0, fences.at(-1).index);
+    return visible.trimEnd();
+}
