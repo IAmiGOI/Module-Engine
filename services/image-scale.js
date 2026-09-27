@@ -92,5 +92,56 @@ export function registerImageScaleService(servicesBus, {
         return cache.get(key);
     }
 
-    return servicesBus.register('imageScale.toBlobUrl', params => toBlobUrl(params), { loadMetric: () => 0 });
+    /**
+     * Картинка-референс для генерации изображений: вписана целиком (без обрезки) в `maxSide`×`maxSide`, JPEG → `data:` URL. Облачные
+     * бэкенды принимают референс только base64 и с лимитом размера (NanoGPT — 4 МБ после кодирования); 1024px JPEG — сотни килобайт.
+     * Источник — `blob` или адрес ТОГО ЖЕ сервера (`/characters/…`, `/User Avatars/…`): чужие адреса не качаем. `null` — не вышло.
+     */
+    async function toDataUrl({ url, blob, maxSide = 1024, quality = 0.9 } = {}) {
+        let source = blob ?? null;
+        if (!source) {
+            if (!isSameOriginPath(url)) return null;
+            const response = await fetchImpl(avatarSourceUrl(url));
+            if (!response.ok) return null;
+            source = await response.blob();
+        }
+        const bitmap = await createBitmap(source);
+        const { width, height } = fitInside(bitmap.width, bitmap.height, maxSide);
+        const scaled = await createBitmap(bitmap, { resizeWidth: width, resizeHeight: height, resizeQuality: 'high' });
+        const canvas = createCanvas(width, height);
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#fff'; // у PNG с прозрачностью JPEG иначе дал бы чёрный фон
+        context.fillRect(0, 0, width, height);
+        context.drawImage(scaled, 0, 0);
+        const out = canvas.convertToBlob ? await canvas.convertToBlob({ type: 'image/jpeg', quality }) : await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+        bitmap.close?.();
+        scaled.close?.();
+        return out ? blobToDataUrl(out) : null;
+    }
+
+    const unregisters = [
+        servicesBus.register('imageScale.toBlobUrl', params => toBlobUrl(params), { loadMetric: () => 0 }),
+        servicesBus.register('imageScale.toDataUrl', params => toDataUrl(params ?? {}).catch(() => null), { loadMetric: () => 1 }),
+    ];
+    return () => { for (const unregister of unregisters) unregister(); };
+}
+
+/** Только путь того же сервера: `/characters/a.png` — да; `https://…`, `//host/…`, `data:` — нет. */
+export function isSameOriginPath(url) {
+    const text = String(url ?? '');
+    return text.startsWith('/') && !text.startsWith('//') || /^thumbnail\?/.test(text);
+}
+
+/** Размер, вписанный в квадрат `maxSide` с сохранением пропорций; меньшие картинки не увеличиваются. */
+export function fitInside(width, height, maxSide) {
+    const scale = Math.min(1, maxSide / Math.max(width, height));
+    return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
+async function blobToDataUrl(blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    const base64 = typeof btoa === 'function' ? btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
+    return `data:${blob.type || 'image/jpeg'};base64,${base64}`;
 }

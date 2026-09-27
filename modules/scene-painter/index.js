@@ -1,4 +1,5 @@
 import { signal } from '../../cores/ui/reactive.js';
+import { supportsReferences } from '../../libraries/core/image-provider-request.js';
 import { request } from '../../libraries/shared/request.js';
 import { createScenePainterView } from './view.js';
 
@@ -38,6 +39,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     height: 768,
     instruction: DEFAULT_INSTRUCTION,
     openWindow: true,
+    // Фото персонажей как основа (только для бэкендов, принимающих референсы — NanoGPT): аватары участников чата, по желанию — персоны.
+    useReferences: true,
+    includePersona: false,
 });
 
 /** Защитное чтение настроек: мусор с диска превращается в допустимые значения. */
@@ -56,6 +60,8 @@ export function sanitizeSettings(value = {}) {
         height: number(source.height, 256, 2048, DEFAULT_SETTINGS.height),
         instruction: text(source.instruction, DEFAULT_INSTRUCTION).trim() || DEFAULT_INSTRUCTION,
         openWindow: source.openWindow !== false,
+        useReferences: source.useReferences !== false,
+        includePersona: source.includePersona === true,
     };
 }
 
@@ -71,6 +77,13 @@ export function sanitizeImagePrompt(text) {
     prompt = prompt.replace(/^\s*(image\s+)?prompt\s*:\s*/i, '').replace(/\s+/g, ' ').trim();
     prompt = prompt.replace(/^["'«“]+|["'»”]+$/g, '').trim();
     return prompt.length > MAX_PROMPT_LENGTH ? prompt.slice(0, MAX_PROMPT_LENGTH).replace(/[,\s]+[^,]*$/, '') : prompt;
+}
+
+/** Аватары из `stCharacter.avatars` → референсы для `image.generate`: персонажи, затем (по желанию) персона; имя — подпись картинки. */
+export function buildReferences(avatars, { includePersona = false } = {}) {
+    const list = (avatars?.characters ?? []).map(character => ({ url: character.url, label: character.name }));
+    if (includePersona && avatars?.persona?.url) list.push({ url: avatars.persona.url, label: avatars.persona.name });
+    return list.filter(reference => reference.url);
 }
 
 export function buildFinalPrompt(scenePrompt, style) {
@@ -105,14 +118,28 @@ export function createScenePainterModule(host) {
         return result.ok;
     }
 
-    async function writeScenePrompt(mesid) {
+    /** Референсы к этой картинке — только если их примет хоть один бэкенд, куда уйдёт запрос; иначе незачем читать аватары. */
+    async function collectReferences(current) {
+        if (!current.useReferences) return [];
+        const pool = imageWorkers.peek().filter(worker => !current.imageWorkerId || worker.id === current.imageWorkerId);
+        if (!pool.some(supportsReferences)) return [];
+        const avatars = await callService('stCharacter.avatars');
+        return avatars.ok ? buildReferences(avatars.value, { includePersona: current.includePersona }) : [];
+    }
+
+    async function writeScenePrompt(mesid, references = []) {
         const current = settings.peek();
         const history = await call('chatHistory.messages', { limit: Math.max(50, current.contextMessages * 4) });
         if (!history.ok) throw new Error(history.error.message);
         const transcript = buildSceneTranscript(history.value, mesid, current.contextMessages);
         if (!transcript) throw new Error('There is nothing in the chat to paint yet.');
+        // С фото персонажей их внешность задают референсы: описание лица/одежды словами только спорило бы с картинкой.
+        const names = references.map(reference => reference.label).filter(Boolean);
+        const referenceRule = names.length
+            ? ` The image generator also receives reference photos of: ${names.join(', ')}. Call these characters by name and do not describe their faces, hair or clothes — describe everything else.`
+            : '';
         const reply = await call('model.generate', {
-            systemPrompt: current.instruction,
+            systemPrompt: current.instruction + referenceRule,
             prompt: `${transcript}\n\nWrite the image prompt for the last moment above.`,
             temperature: 0.7, maxTokens: 300, stream: false, reasoningMode: 'disabled',
             ...(current.promptWorkerId ? { workerId: current.promptWorkerId } : {}),
@@ -132,16 +159,20 @@ export function createScenePainterModule(host) {
         try {
             patch(busy, key, 'writing');
             await refreshFooter();
-            const finalPrompt = givenPrompt || buildFinalPrompt(await writeScenePrompt(key), current.style);
+            const references = await collectReferences(current);
+            const finalPrompt = givenPrompt || buildFinalPrompt(await writeScenePrompt(key, references), current.style);
             patch(busy, key, 'painting');
             await refreshFooter();
             const generated = await call('image.generate', {
-                prompt: finalPrompt, negativePrompt: current.negativePrompt, width: current.width, height: current.height,
+                prompt: finalPrompt, negativePrompt: current.negativePrompt, width: current.width, height: current.height, references,
                 ...(current.imageWorkerId ? { workerId: current.imageWorkerId } : {}),
             });
             if (!generated.ok) throw new Error(`Image: ${generated.error.message}`);
             const previous = images.peek()[key];
-            const entry = { assetId: generated.value.assetId, prompt: finalPrompt, width: generated.value.width, height: generated.value.height, createdAt: Date.now() };
+            const entry = {
+                assetId: generated.value.assetId, prompt: finalPrompt, width: generated.value.width, height: generated.value.height,
+                references: generated.value.referencesUsed ?? 0, createdAt: Date.now(),
+            };
             await call('chatHistory.annotate', { namespace: ANNOTATIONS_NAMESPACE, mesid: key, value: entry });
             patch(images, key, entry);
             if (current.openWindow) await showInWindow(key);

@@ -12,6 +12,11 @@ const BACKEND_TEMPLATES = {
     openai: { name: 'OpenAI', format: 'openai', endpoint: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-image-1' },
     a1111: { name: 'Local Stable Diffusion', format: 'a1111', endpoint: 'http://127.0.0.1:7860', apiKey: '', model: '' },
 };
+const REFERENCE_OPTIONS = [
+    { value: 'auto', label: 'References: auto (NanoGPT)' },
+    { value: 'on', label: 'References: send' },
+    { value: 'off', label: 'References: never' },
+];
 const BUSY_TEXT = { writing: 'Writing the scene prompt…', painting: 'Painting…' };
 
 let backendCounter = 0;
@@ -34,10 +39,12 @@ export function createScenePainterView({ settings, images, busy, errors, textWor
             return TextInput(value, { placeholder, type, onInput: text => { backend[key] = text; } });
         };
         const format = signal(backend.format);
+        const references = signal(backend.references ?? 'auto');
         return h('div', { class: 'stme-scene-painter-backend', key: backend.id },
             Row(field('name', 'Name'), Select(format, FORMAT_OPTIONS, { onChange: value => { backend.format = value; } }),
                 IconButton('✕', () => backends.set(backends.peek().filter(item => item !== backend)), { title: 'Remove backend' })),
             Row(field('endpoint', 'Endpoint (empty = default)'), field('model', 'Model (optional)'), field('apiKey', 'API key / user:pass', 'password')),
+            computed(() => (format() === 'openai' ? Select(references, REFERENCE_OPTIONS, { onChange: value => { backend.references = value; } }) : null)),
         );
     }
 
@@ -60,6 +67,10 @@ export function createScenePainterView({ settings, images, busy, errors, textWor
             ),
             Toggle('Paint automatically after every reply', draft.autoPaint, { hint: 'Otherwise use the 🎨 button under a reply.' }),
             Toggle('Open the Picture window when a picture is ready', draft.openWindow, { hint: 'Off: the picture waits under its reply — 🖼 shows it.' }),
+            Toggle('Use character avatars as reference photos', draft.useReferences, {
+                hint: 'The picture keeps their looks. Needs a backend that accepts image input — NanoGPT models such as nano-banana, seedream, flux-kontext, gpt-image. Others ignore it.',
+            }),
+            Toggle('Also send the persona avatar', draft.includePersona),
             Row(
                 Field('Prompt writer (text model)', Select(draft.promptWorkerId, workerOptions(textWorkers, 'Any model worker'))),
                 Field('Image backend', Select(draft.imageWorkerId, workerOptions(imageWorkers, 'Any image backend'))),

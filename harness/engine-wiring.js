@@ -221,6 +221,8 @@ const DEFINITIONS = [{
             'model.generate', 'model.workers.get', 'image.generate', 'image.workers.get', 'image.workers.set',
             // Картинка выводится в окно «Картинка» движка; старые — убираются из хранилища.
             'ui.picture.show', 'image.delete',
+            // Аватары персонажей и персоны — референсы для бэкендов, которые их принимают (только адреса, байты читает Ядро diffusion).
+            'stCharacter.avatars',
             'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.attach',
         ],
     },
