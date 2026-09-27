@@ -6,7 +6,7 @@ import { stMainWorkerRecord, ST_MAIN_FORMAT } from '../../libraries/core/st-main
  * под правами Ядра гида или через реестр Модулей, переданный сборщиком; `description` уходит модели в системный промпт.
  * `run(params)` → `{ ok, message }`: сообщение показывается в чате заметкой.
  */
-export function createGuideActions({ host, call, modules, reveal, checklist, markDone }) {
+export function createGuideActions({ host, call, modules, reveal, hide, checklist, markDone }) {
     return {
         'models.addSillyTavern': {
             description: 'Add SillyTavern\'s current connection as a model worker and check it. No params.',
@@ -52,6 +52,11 @@ export function createGuideActions({ host, call, modules, reveal, checklist, mar
             safe: true,
             description: 'Open and highlight a block. Params: {"anchor": "<anchor>"}. Prefer a plain link for this.',
             async run({ anchor } = {}) { const result = await reveal(anchor); return { ok: result, message: result ? '' : `Couldn't find "${anchor}".` }; },
+        },
+        'ui.hide': {
+            safe: true,
+            description: 'Close a block that is open, e.g. one you opened earlier for a task that is now done. Params: {"anchor": "<anchor>"}.',
+            async run({ anchor } = {}) { const result = await hide(anchor); return { ok: result, message: '' }; },
         },
         'checklist.mark': {
             safe: true,

@@ -5,7 +5,8 @@
  * карточка сразу доступны гиду.
  *
  * Контракты: `ui.anchors.list` → `[{ anchor, path }]` (путь — «Panel › Modules › Tracker»), `ui.reveal({ anchor })` → открыть нужный экран,
- * раскрыть блок и его родителей, прокрутить к нему и подсветить на несколько секунд. `false` — такого адреса нет.
+ * раскрыть блок и его родителей, прокрутить к нему и подсветить на несколько секунд. `ui.hide({ anchor })` → свернуть блок обратно (родителей не трогает — human
+ * может держать открытой саму панель). `false` — такого адреса нет.
  *
  * `ui.context` → `{ blocks, text }` — что раскрыто СЕЙЧАС (поля, значения, подсказки, кнопки; секреты не отдаются) — см. libraries/core/ui-context.js.
  *
@@ -50,6 +51,16 @@ export function createAnchorNavigator(host, { document: doc = globalThis.documen
         return null;
     }
 
+    /** Свернуть блок обратно — пара к `reveal()`: закрывает ТОЛЬКО сам блок (не экран и не родителей — их мог раскрыть человек, не гид). `false` — такого адреса нет или блок не сворачивается. */
+    function hide({ anchor } = {}) {
+        const found = find(String(anchor ?? ''));
+        if (!found) return false;
+        found.element.classList.remove('stme-spotlight-target');
+        if (found.element.tagName !== 'DETAILS') return false;
+        found.element.open = false;
+        return true;
+    }
+
     function reveal({ anchor } = {}) {
         const found = find(String(anchor ?? ''));
         if (!found) return false;
@@ -83,7 +94,8 @@ export function createAnchorNavigator(host, { document: doc = globalThis.documen
         host.own.register('ui.anchors.list', () => list()),
         host.own.register('ui.context', () => context()),
         host.own.register('ui.reveal', params => reveal(params)),
+        host.own.register('ui.hide', params => hide(params)),
     ];
     void doc;
-    return { list, reveal, context, unregister: () => { for (const unregister of unregisters) unregister(); } };
+    return { list, reveal, hide, context, unregister: () => { for (const unregister of unregisters) unregister(); } };
 }
