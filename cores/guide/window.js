@@ -9,7 +9,7 @@ import { parseGuideReply, parseInline } from '../../libraries/core/guide-markup.
  * сигналы Ядра (cores/guide/index.js); здесь только то, как это выглядит. Список сообщений идёт в обратном порядке внутри
  * `flex-direction: column-reverse` — так прокрутка сама держится у последней реплики без доступа к DOM.
  */
-export function createGuideWindow({ persona, messages, busy, visible, view, ask, chooseOption, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
+export function createGuideWindow({ defaultAvatar = '', persona, messages, busy, visible, view, ask, chooseOption, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 420, height: 600 });
     const collapsed = signal(false);
@@ -68,7 +68,8 @@ export function createGuideWindow({ persona, messages, busy, visible, view, ask,
     }
 
     function avatar() {
-        const { avatar: url, name } = persona.peek();
+        const { name } = persona.peek();
+        const url = persona.peek().avatar || defaultAvatar;
         return url ? h('img', { class: 'stme-guide-avatar', src: url, alt: name }) : h('div', { class: 'stme-guide-avatar stme-guide-avatar-empty' }, (name || 'G').slice(0, 1));
     }
 
@@ -105,7 +106,7 @@ export function createGuideWindow({ persona, messages, busy, visible, view, ask,
         const read = () => Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value.peek()]));
         return h('div', { class: 'stme-guide-settings' },
             Row(Field('Name', TextInput(fields.name)), Field('Model', Select(fields.workerId, () => [{ value: '', label: 'Any connection' }, ...workers().map(worker => ({ value: worker.id, label: worker.name || worker.id }))]))),
-            Field('Avatar image URL', TextInput(fields.avatar, { placeholder: '/characters/guide.png or https://…' })),
+            Field('Avatar image URL', TextInput(fields.avatar, { placeholder: 'Empty = the built-in picture' })),
             Field('Personality', TextArea(fields.personality, { rows: 3 })),
             Field('Speech style', TextArea(fields.style, { rows: 2 })),
             Field('Greeting (new chat, model connected)', TextArea(fields.greeting, { rows: 2 })),
