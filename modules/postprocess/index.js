@@ -60,7 +60,7 @@ const SETTINGS_NAMESPACE = MODULE_ID;
 const HISTORY_NAMESPACE = MODULE_ID;
 
 const MAX_NAME_LENGTH = 60;
-const MAX_PROMPT_LENGTH = 4000;
+const MAX_PROMPT_LENGTH = 16000;   // настоящий бриф прохода — сотни слов; прежние 4000 символов резали его на полуслове
 const MIN_CONTEXT_DEPTH = 1;
 const MAX_CONTEXT_DEPTH = 20;
 const DEFAULT_CONTEXT_DEPTH = 6;

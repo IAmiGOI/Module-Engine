@@ -101,7 +101,7 @@ export function createEditActions({ call, modules }) {
         },
         'postprocess.pass.add': {
             ...passTool('postprocess.pass.add', 'addPass'),
-            description: 'Add a pass to the Post-Turn Processor (it rewrites each fresh reply; passes run in order, each sees the previous result). Params: {"name": "Fix grammar", "prompt": "Fix grammar and spelling. Do not change the story or tone.", "workerId": "optional connection id from the state", "includeContext": false, "contextDepth": 6, "position": 1 (optional, default last), plus optional generation settings of the pass: "temperature" 0–2, "topP" 0–1, "topK" 0–200, "maxTokens" 1–32768, "reasoningMode", "reasoningEffort", "reasoningBudget"}. Send it in a ```proposal``` block.',
+            description: 'Add a pass to the Post-Turn Processor (it rewrites each fresh reply; passes run in order, each sees the previous result). Params: {"name": "Fix grammar", "prompt": "<the full brief, usually 400–900 words — see Writing strong prompts>", "workerId": "optional connection id from the state", "includeContext": false, "contextDepth": 6, "position": 1 (optional, default last), plus optional generation settings of the pass: "temperature" 0–2, "topP" 0–1, "topK" 0–200, "maxTokens" 1–32768, "reasoningMode", "reasoningEffort", "reasoningBudget"}. Send it in a ```proposal``` block.',
         },
         'postprocess.pass.update': {
             ...passTool('postprocess.pass.update', 'updatePass'),

@@ -377,3 +377,24 @@ test('the focus is sticky, but a task that NAMES the module opens its block agai
     await closing.ask('now build me a good post turn pass');
     assert.ok(seen.length <= 1);
 });
+
+// --- Длина настоящего брифа ---
+
+test('a real pass brief is not cut short: the module keeps 16 000 characters (it cut at 4 000), the guide accepts them, and the guide teaches the size of a real brief with a full exemplar', async () => {
+    const { sanitizePasses } = await import('../modules/postprocess/index.js');
+    const long = 'Keep every event. '.repeat(500);   // 9 000 characters
+    assert.equal(sanitizePasses([{ id: 'p', prompt: long }])[0].prompt.length, long.trim().length, 'nothing is cut off at 4 000');
+    assert.equal(sanitizePasses([{ id: 'p', prompt: 'x'.repeat(20000) }])[0].prompt.length, 16000, 'a sane ceiling remains');
+    const made = normalizePassParams('postprocess.pass.add', { prompt: long });
+    assert.equal(made.value.fields.prompt.length, long.trim().length);
+    const dir = new URL('../guide/knowledge/', import.meta.url);
+    const craft = fs.readFileSync(new URL('prompt-craft.md', dir), 'utf8');
+    assert.match(craft, /expect 400–900 words/);
+    assert.match(craft, /A 100–200 word instruction is a sketch, not a brief/);
+    const exemplar = craft.slice(craft.indexOf('Exemplar for an anti-slop pass'), craft.indexOf('Tracker field prompts'));
+    assert.ok(exemplar.split(/\s+/).length > 600, 'the exemplar itself is a full-size brief');
+    for (const part of ['WHAT MUST NOT CHANGE', 'WHAT TO FIX', 'HOW TO DECIDE', 'HOW TO REWRITE', 'EXAMPLES', 'OUTPUT']) assert.ok(exemplar.includes(part), part);
+    assert.match(craft, /three to five, not one/);
+    const prompt = buildGuideSystemPrompt({});
+    assert.match(prompt, /Be concise in the CHAT[^\n]*only for talking to the user[^\n]*several hundred words/, 'brevity is for chat, not for the texts she writes for the tools');
+});

@@ -20,6 +20,8 @@ export const EDIT_ACTIONS = Object.freeze(['tracker.update', 'tracker.delete', '
 
 const text = (value, max) => (typeof value === 'string' || typeof value === 'number' ? String(value).trim().slice(0, max) : '');
 const fail = error => ({ ok: false, error });
+/** Инструкция прохода — развёрнутый бриф; потолок совпадает с `MAX_PROMPT_LENGTH` Модуля. */
+export const PASS_PROMPT_MAX = 16000;
 const TRACKER_WHEN = TRIGGER_MODES.map(mode => mode.value);
 
 /** Правка трекера: `{ id, fields, removeFields, when, every, enabled }` (только названное) либо ошибка. */
@@ -100,7 +102,7 @@ export function normalizePassParams(action, params = {}) {
     const position = Number.isInteger(Number(params.position)) && Number(params.position) >= 1 ? Number(params.position) : undefined;
     const fields = {};
     if (typeof params.name === 'string' && params.name.trim()) fields.name = text(params.name, 60);
-    if (typeof params.prompt === 'string' && params.prompt.trim()) fields.prompt = text(params.prompt, 4000);
+    if (typeof params.prompt === 'string' && params.prompt.trim()) fields.prompt = text(params.prompt, PASS_PROMPT_MAX);
     if (typeof params.workerId === 'string') fields.workerId = text(params.workerId, 120);
     if (typeof params.enabled === 'boolean') fields.enabled = params.enabled;
     if (typeof params.includeContext === 'boolean') fields.includeContext = params.includeContext;

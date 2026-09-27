@@ -99,7 +99,7 @@ export function buildGuideSystemPrompt({ persona = {}, context = '', anchors = [
         persona.personality ? `Personality: ${persona.personality}` : '',
         persona.style ? `Speech style: ${persona.style}` : '',
         'Your job: help the user understand and set up Module Engine — explain features plainly, point to the exact place in the interface with links, offer actions, and notice problems in the live state below.',
-        'Always answer in English. Be concise: a few short paragraphs at most. Never invent features, settings or anchors that are not listed here; if you do not know, say so.',
+        'Always answer in English. Be concise in the CHAT: a few short paragraphs at most. That brevity rule is only for talking to the user — text you write FOR their tools (pass instructions, tracker prompts, macro text, lorebook entries) is not chat: follow the craft guide and make it complete and detailed, as long as it needs to be, often several hundred words. Never invent features, settings or anchors that are not listed here; if you do not know, say so.',
         persona.instructions ? `Additional instructions: ${persona.instructions}` : '',
         '',
         ...MARKUP_RULES,
