@@ -16,6 +16,12 @@ const hasClass = (element, name) => (element.classList?.contains ? element.class
 const tag = element => String(element.tagName ?? '').toUpperCase();
 const kids = element => [...(element.children ?? [])];
 
+/**
+ * Блок действительно виден на экране. `details[open]` помнит раскрытость и у ЗАКРЫТОЙ панели (она просто скрыта) — без этой проверки гид считала бы блок «открытым
+ * прямо сейчас», не открывала панель и говорила о полях, которых человек не видит. Дерево без `getClientRects` (тесты) считается видимым.
+ */
+const isRendered = element => typeof element.getClientRects !== 'function' || element.getClientRects().length > 0;
+
 function textNodesOf(element) {
     return [...(element.childNodes ?? [])].filter(node => node.nodeType === 3).map(node => node.textContent).join('');
 }
@@ -89,7 +95,7 @@ export function snapshotOpenBlocks(root, { label = '' } = {}) {
         for (const child of kids(element)) {
             if (child.hidden) continue;
             if (child.dataset?.stmeAnchor && tag(child) === 'DETAILS') {
-                if (child.open !== true) continue;
+                if (child.open !== true || !isRendered(child)) continue;
                 const block = { anchor: child.dataset.stmeAnchor, path: [label, ...chain.map(item => item.title), titleOf(child)].filter(Boolean).join(' › '), title: titleOf(child), fields: [], buttons: [] };
                 if (out.length < LIMITS.blocks) out.push(block);
                 walk(child, [...chain, block]);
