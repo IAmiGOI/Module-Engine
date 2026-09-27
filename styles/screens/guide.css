@@ -12,10 +12,10 @@
 
 .stme-guide-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
 /* column-reverse: последняя реплика внизу, прокрутка сама держится у неё. */
-.stme-guide-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 10px; padding: 10px; }
-.stme-guide-msg { display: flex; gap: 8px; align-items: flex-start; }
+.stme-guide-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column-reverse; gap: 10px; padding: 10px; }
+.stme-guide-msg { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
 .stme-guide-user { justify-content: flex-end; }
-.stme-guide-bubble { max-width: 85%; padding: 8px 11px; border-radius: 12px; background: var(--stme-surface); border: 1px solid var(--stme-border); line-height: 1.45; }
+.stme-guide-bubble { min-width: 0; overflow-wrap: anywhere; box-sizing: border-box; max-width: 85%; padding: 8px 11px; border-radius: 12px; background: var(--stme-surface); border: 1px solid var(--stme-border); line-height: 1.45; }
 .stme-guide-user .stme-guide-bubble { background: color-mix(in srgb, var(--stme-accent) 18%, var(--stme-surface)); white-space: pre-wrap; }
 .stme-guide-bubble p { margin: 0 0 6px; }
 .stme-guide-bubble p:last-child { margin-bottom: 0; }
@@ -29,10 +29,18 @@
 .stme-guide-checklist ul { list-style: none; padding-left: 0; }
 .stme-guide-check { display: inline-block; width: 18px; }
 .stme-guide-done { opacity: .6; }
-.stme-guide-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.stme-guide-assistant .stme-guide-bubble { flex: 1; }
+/* Варианты выбора — столбиком во всю ширину пузыря. `.menu_button` у ST — узкая кнопка с фиксированными полями: без сброса варианты
+   сжимались в столбики по слову (скриншот владельца). */
+.stme-guide-options { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 10px; }
+.stme-guide-options .menu_button, .stme-guide-action .menu_button {
+    width: 100%; max-width: none; min-width: 0; margin: 0; padding: 7px 12px; box-sizing: border-box;
+    white-space: normal; text-align: left; justify-content: flex-start; line-height: 1.35; height: auto;
+}
 .stme-guide-note { align-self: center; font-size: 12px; opacity: .8; }
 .stme-guide-note-error { color: var(--stme-danger, #e66); opacity: 1; }
 .stme-guide-typing { font-size: 12px; opacity: .7; padding-left: 40px; }
 .stme-guide-input { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--stme-border); align-items: flex-end; }
 .stme-guide-input textarea { flex: 1; resize: none; }
 .stme-guide-settings { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.stme-guide-toolbar .menu_button, .stme-guide-input .menu_button { flex: none; width: auto; margin: 0; }
