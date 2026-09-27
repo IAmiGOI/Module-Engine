@@ -149,7 +149,13 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     }
 
     // --- Свободный чат -------------------------------------------------------
-    async function liveContext() {
+    /** Что раскрыто на экране сейчас (`ui.context`): текст для промпта и адреса для подбора статей. Нет ответа — как будто ничего не открыто. */
+    async function screenContext() {
+        const result = await call('ui.context');
+        return result.ok && result.value ? { text: String(result.value.text ?? ''), anchors: (result.value.blocks ?? []).map(block => block.anchor) } : { text: '', anchors: [] };
+    }
+
+    async function liveContext(screenText = '') {
         const workers = await workerStatus();
         const list = modules?.list?.() ?? [];
         const enabled = new Set(modules?.enabled?.() ?? []);
@@ -158,7 +164,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             `Model connections: ${workers.length ? workers.map(worker => `${worker.workerId} — ${worker.state}${worker.lastError ? ` (last error: ${worker.lastError.message})` : ''}`).join('; ') : 'none configured'}.`,
             `Modules: ${list.map(item => `${item.title} (${item.id}) — ${enabled.has(item.id) ? 'on' : 'off'}`).join('; ') || 'none'}.`,
             `First-start checklist: ${checklist.map(item => `${item.title} — ${item.done ? 'done' : 'not yet'}`).join('; ')}.`,
-        ].join('\n');
+            screenText,
+        ].filter(Boolean).join('\n');
     }
 
     async function ask(text, { echo = true } = {}) {
@@ -176,13 +183,14 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         changed();
         try {
             const anchorsResult = await call('ui.anchors.list');
+            const screen = await screenContext();
             const history = messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note').slice(-CONTEXT_TURNS);
             const query = history.slice(-4).map(message => message.text).join(' ');
             const system = buildGuideSystemPrompt({
-                persona: persona.peek(), context: await liveContext(),
+                persona: persona.peek(), context: await liveContext(screen.text),
                 anchors: anchorsResult.ok ? anchorsResult.value ?? [] : [],
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
-                articles: selectArticles([...articles, ...customArticles()], query),
+                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: screen.anchors }),
             });
             const turns = history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text }));
             const reply = await call('model.generate', {

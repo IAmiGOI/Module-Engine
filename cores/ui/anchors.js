@@ -7,9 +7,13 @@
  * Контракты: `ui.anchors.list` → `[{ anchor, path }]` (путь — «Panel › Modules › Tracker»), `ui.reveal({ anchor })` → открыть нужный экран,
  * раскрыть блок и его родителей, прокрутить к нему и подсветить на несколько секунд. `false` — такого адреса нет.
  *
+ * `ui.context` → `{ blocks, text }` — что раскрыто СЕЙЧАС (поля, значения, подсказки, кнопки; секреты не отдаются) — см. libraries/core/ui-context.js.
+ *
  * `roots` — экраны с деревьями: `[{ root: () => Element, open: () => void, label }]`; `hubs` — обзоры блоков над формами (им надо открыть
  * карточку, прежде чем она станет видимой).
  */
+import { snapshotOpenBlocks, formatOpenBlocks } from '../../libraries/core/ui-context.js';
+
 const MAX_ANCHORS = 200;
 const SPOTLIGHT_MS = 4000;
 
@@ -69,10 +73,17 @@ export function createAnchorNavigator(host, { document: doc = globalThis.documen
         return true;
     }
 
+    /** Раскрытые блоки всех экранов: только то, что человек видит сейчас. */
+    function context() {
+        const blocks = roots.flatMap(({ root, label }) => { const element = root(); return element ? snapshotOpenBlocks(element, { label }) : []; });
+        return { blocks: blocks.map(({ anchor, path }) => ({ anchor, path })), text: formatOpenBlocks(blocks) };
+    }
+
     const unregisters = [
         host.own.register('ui.anchors.list', () => list()),
+        host.own.register('ui.context', () => context()),
         host.own.register('ui.reveal', params => reveal(params)),
     ];
     void doc;
-    return { list, reveal, unregister: () => { for (const unregister of unregisters) unregister(); } };
+    return { list, reveal, context, unregister: () => { for (const unregister of unregisters) unregister(); } };
 }
