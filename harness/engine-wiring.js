@@ -35,6 +35,8 @@ import { registerStGenerationService } from '../services/st-generation.js';
 import { registerStExtensionsService } from '../services/st-extensions.js';
 import { registerStWorldInfoService } from '../services/st-worldinfo.js';
 import { registerStPresetService } from '../services/st-preset.js';
+import { registerStDrawerGuard } from '../services/st-drawer-guard.js';
+import { createDrawerGuardCore } from '../cores/drawer-guard/index.js';
 import { registerSessionService } from '../services/session.js';
 import { createSelfUpdateCore } from '../cores/self-update/index.js';
 import { createFirstLoadCore, FIRST_LAUNCH_EVENT } from '../cores/first-load/index.js';
@@ -523,6 +525,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // Только для чтения — гид анализирует их, править остаётся за родными экранами ST (см. doc-comment обоих Сервисов).
     registerStWorldInfoService(engine.buses.services);
     registerStPresetService(engine.buses.services, { getContext });
+    registerStDrawerGuard(engine.buses.services);
     // Сервис перехвата: сюда встанут обе точки, которыми движок забирает
     // отправку себе. `interceptTarget` — «глобальный объект», на который
     // ставится именованная функция перехватчика и чей `fetch` подменяется;
@@ -583,6 +586,12 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.generation' }),
         pipelines: pipelineCore,
     });
+    // ST's own drawers (API Connections, World Info, Preset…) close on any click that isn't on them; a click in the engine's own UI
+    // (the panel, the guide's chat) counts as "elsewhere" too — see services/st-drawer-guard.js. Always on, no user-facing toggle.
+    // `install()` MUST actually be awaited here — creating the Core alone does nothing (found live: the guard never engaged at all,
+    // drawers kept closing, because this call was missing entirely on the first pass).
+    const drawerGuardCore = createDrawerGuardCore(engine.registerCaller('core.drawerGuard', 'cores', { tier: 'official' }));
+    await drawerGuardCore.install();
 
     // macrosCore built before trackingCore — its hook needs a real
     // reference to call into (see cores/tracking/index.js's own doc comment
