@@ -77,7 +77,8 @@
    .stmeBeta-fullscreen[hidden]; здесь она повторилась. */
 .stme-floating-panel-body[hidden] { display: none !important; }
 /* Свёрнутое окно не должно тянуться вниз пустотой и не нуждается в ручке. */
-.stme-floating-panel:has(> .stme-floating-panel-body[hidden]) { height: auto !important; resize: none; }
+/* min-height — тоже: у окон с `minHeight` (карта, гид) свёрнутое окно иначе оставалось большим и пустым. */
+.stme-floating-panel:has(> .stme-floating-panel-body[hidden]) { height: auto !important; min-height: 0 !important; resize: none; }
 
 /* Корень hud()-дерева Модуля «Карта» — ВНЕ скоупа .stme-panel (мостится
    прямо в document.body, как у Ядра «Картинка»/графа). Токены на :root

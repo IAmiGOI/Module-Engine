@@ -267,6 +267,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const unregisters = [
         host.own.register('guide.open', () => open()),
         host.own.register('guide.close', () => close()),
+        host.own.register('guide.settings', () => { visible.set(true); view.set('settings'); changed(); return true; }),
         host.own.register('guide.toggle', () => (visible.peek() ? close() : open())),
         host.own.register('guide.status', async () => ({ ...status(), checklist: await checklistState() })),
         host.own.register('guide.send', params => ask(params?.text)),

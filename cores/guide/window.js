@@ -162,8 +162,6 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
             onToggle: value => collapsed.set(value), onClose: () => close(),
             drag: createDragHandlers(position), onResize: next => size.set(next),
         },
-        h('div', { class: 'stme-guide-toolbar' }, avatar({ width: 30, height: 40 }), h('strong', {}, persona().name), h('span', { class: 'stme-guide-spacer' }),
-            Button(view() === 'settings' ? 'Chat' : '⚙ Settings', () => view.set(view.peek() === 'settings' ? 'chat' : 'settings'))),
         view() === 'settings' ? settingsView() : chatView()) : null)));
     }
 

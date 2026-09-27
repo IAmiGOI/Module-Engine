@@ -5,8 +5,6 @@
 @media (prefers-reduced-motion: reduce) { .stme-spotlight-target { animation: none; } }
 
 .stme-guide-window .stme-floating-panel-body, .stme-guide-window { display: flex; flex-direction: column; }
-.stme-guide-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--stme-border); }
-.stme-guide-spacer { flex: 1; }
 /* Аватар — общий `Avatar()` (3×4, скруглённый прямоугольник), кадрируется по лицу. */
 .stme-guide-window .stme-avatar { object-position: 50% 18%; }
 
@@ -52,4 +50,3 @@
 .stme-guide-composer .stme-input-field { padding-left: 16px; }
 .stme-guide-send-busy { opacity: .5; }
 .stme-guide-settings { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-.stme-guide-toolbar .menu_button { flex: none; width: auto; margin: 0; }
