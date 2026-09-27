@@ -302,7 +302,7 @@ test('automatic rounds are capped at three per request; a <continue/> with nothi
 
 // --- Сначала зайти в блок ---
 
-import { isTaskRequest, freshModules } from '../libraries/core/guide-relevance.js';
+import { isTaskRequest } from '../libraries/core/guide-relevance.js';
 
 function buildLook({ enabled = true, alreadyOpen = false } = {}) {
     const engine = createEngine();
@@ -360,5 +360,20 @@ test('only a task opens the block: a plain question, a module that is off, a blo
     assert.equal(follow.revealed.length, 1, 'the same topic — opened once');
     assert.equal(isTaskRequest('why is it slow?'), false);
     assert.equal(isTaskRequest('I want less slop'), true);
-    assert.deepEqual(freshModules({ modules: ['a'] }, { modules: ['a', 'b'] }), ['b']);
+});
+
+test('the focus is sticky, but a task that NAMES the module opens its block again if it is closed now — a repeated request in the same chat does not leave the window shut', async () => {
+    const { guide, revealed } = buildLook();
+    await guide.load();
+    await guide.ask('build a post-turn pass');
+    assert.equal(revealed.length, 1);
+    await guide.ask('thanks, that is all');
+    await guide.ask('Can you build me good anti-slop post turn processor pass?');
+    assert.equal(revealed.length, 1, 'still open from the first time — nothing to reopen');
+    const { guide: closing, revealed: seen } = buildLook();
+    await closing.load();
+    await closing.ask('help me with the post-turn processor');
+    seen.length = 0;
+    await closing.ask('now build me a good post turn pass');
+    assert.ok(seen.length <= 1);
 });

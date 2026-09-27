@@ -119,3 +119,17 @@ test('the guide puts what is open on screen into the prompt and pulls the articl
     assert.match(system, /## Fields on screen/);
     assert.match(system, /Hold the generation until this tracker answers/);
 });
+
+test('a block that is "open" but not on screen (its panel is closed) is not reported as open — otherwise the guide would not open the panel and would talk about fields nobody can see', () => {
+    const hidden = panel();
+    const trackerBlock = hidden.children[0].children[1].children[0];   // Modules → body → Tracker
+    trackerBlock.getClientRects = () => [];
+    const shown = snapshotOpenBlocks(hidden, { label: 'Panel' });
+    assert.ok(!shown.some(block => block.anchor === 'module:module.tracker'));
+    const visible = panel();
+    visible.children[0].children[1].children[0].getClientRects = () => [{}];
+    assert.ok(snapshotOpenBlocks(visible, { label: 'Panel' }).some(block => block.anchor === 'module:module.tracker'));
+    const closedPanel = panel();
+    closedPanel.children[0].getClientRects = () => [];   // the whole Modules card is hidden with its panel
+    assert.deepEqual(snapshotOpenBlocks(closedPanel, { label: 'Panel' }), []);
+});
