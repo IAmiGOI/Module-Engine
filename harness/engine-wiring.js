@@ -33,6 +33,8 @@ import { registerStEventsService } from '../services/st-events.js';
 import { registerStToolsService } from '../services/st-tools.js';
 import { registerStGenerationService } from '../services/st-generation.js';
 import { registerStExtensionsService } from '../services/st-extensions.js';
+import { registerStWorldInfoService } from '../services/st-worldinfo.js';
+import { registerStPresetService } from '../services/st-preset.js';
 import { registerSessionService } from '../services/session.js';
 import { createSelfUpdateCore } from '../cores/self-update/index.js';
 import { createFirstLoadCore, FIRST_LAUNCH_EVENT } from '../cores/first-load/index.js';
@@ -518,6 +520,9 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerStCharacterService(engine.buses.services, { getContext });
     registerStEventsService(engine.buses.services, { getContext });
     registerStToolsService(engine.buses.services, { getContext });
+    // Только для чтения — гид анализирует их, править остаётся за родными экранами ST (см. doc-comment обоих Сервисов).
+    registerStWorldInfoService(engine.buses.services);
+    registerStPresetService(engine.buses.services, { getContext });
     // Сервис перехвата: сюда встанут обе точки, которыми движок забирает
     // отправку себе. `interceptTarget` — «глобальный объект», на который
     // ставится именованная функция перехватчика и чей `fetch` подменяется;

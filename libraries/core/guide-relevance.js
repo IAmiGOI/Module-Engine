@@ -12,11 +12,12 @@ const TRACKERS = /\b(trackers?|tracking|tracked|poll|polling)\b/i;
 const MACROS = /\bmacros?\b|\{\{/i;
 const LOREBOOK = /\b(lore|lorebook|lorebooks|world\s?info|entry|entries)\b/i;
 const SETTINGS = /\b(settings?|sliders?|options?|threshold|tune|tuning)\b/i;
+const PRESET = /\b(preset|presets|sampler|samplers|temperature|top[- ]?p|top[- ]?k|min[- ]?p|repetition penalty|rep(?:etition)?[- ]?pen|frequency penalty|presence penalty|context template|instruct(?:\s+mode|\s+template)?|generation settings)\b/i;
 const CLOSING = /\b(thanks|thank you|thx|done|that'?s (all|it)|all set|never ?mind|cancel|got it|perfect|great|nothing else)\b/i;
 const OPEN_TRACKERS = anchor => anchor === 'module:module.tracker' || anchor.startsWith('tracker:');
 const OPEN_LOREBOOK = anchor => anchor === 'card:lorebook' || anchor.startsWith('lorebook:');
 
-export const NEUTRAL = Object.freeze({ trackers: false, macros: false, lorebook: false, allSettings: false, modules: Object.freeze([]), anchors: Object.freeze([]), done: false });
+export const NEUTRAL = Object.freeze({ trackers: false, macros: false, lorebook: false, allSettings: false, preset: false, modules: Object.freeze([]), anchors: Object.freeze([]), done: false });
 
 const words = text => String(text ?? '').toLowerCase();
 
@@ -38,9 +39,10 @@ export function detectFocus({ query = '', anchors = [], modules = [] } = {}) {
         macros: MACROS.test(query) || anchors.includes('card:macros'),
         lorebook: LOREBOOK.test(query) || anchors.some(OPEN_LOREBOOK),
         allSettings: SETTINGS.test(query),
+        preset: PRESET.test(query) || anchors.includes('card:preset'),
         modules: modules.filter(module => moduleNamed(module, query, anchors)).map(module => module.id),
     };
-    return found.trackers || found.macros || found.lorebook || found.allSettings || found.modules.length ? found : null;
+    return found.trackers || found.macros || found.lorebook || found.allSettings || found.preset || found.modules.length ? found : null;
 }
 
 /** Начинается с этого — почти наверняка вопрос «что/почему это», а не просьба сделать: живой случай (владелец) — «why is it slow?», «what is the post-turn processor?» не должны открывать панель. */
@@ -83,7 +85,7 @@ export const COMPLETING_ACTIONS = Object.freeze(new Set(['tracker.create', 'trac
 export function sanitizeFocus(value) {
     if (!value || typeof value !== 'object') return { ...NEUTRAL };
     return {
-        trackers: value.trackers === true, macros: value.macros === true, lorebook: value.lorebook === true, allSettings: value.allSettings === true,
+        trackers: value.trackers === true, macros: value.macros === true, lorebook: value.lorebook === true, allSettings: value.allSettings === true, preset: value.preset === true,
         modules: Array.isArray(value.modules) ? value.modules.filter(id => typeof id === 'string').slice(0, 20) : [],
         anchors: Array.isArray(value.anchors) ? value.anchors.filter(id => typeof id === 'string').slice(0, 40) : [],
         done: value.done === true,
