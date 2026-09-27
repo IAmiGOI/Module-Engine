@@ -1,7 +1,7 @@
 import { signal } from '../ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { parseArticle, selectArticles, buildGuideSystemPrompt } from '../../libraries/core/guide-knowledge.js';
-import { plainText, splitAutoActions } from '../../libraries/core/guide-markup.js';
+import { plainText, splitAutoActions, extractAnchors } from '../../libraries/core/guide-markup.js';
 import { describeProposal } from '../../libraries/core/guide-create.js';
 import { createGuideWindow } from './window.js';
 import { createGuideActions } from './actions.js';
@@ -45,7 +45,11 @@ export const CHECKLIST = Object.freeze([
     { id: 'hello', title: 'Ask the guide a question' },
 ]);
 
-export function createGuideCore(host, { publish, mount, loadText = async () => null, modules = null, now = () => Date.now() } = {}) {
+/** Сколько блоков гид открывает за одну реплику и пауза между ними: больше — скачки экрана, а не помощь. */
+const REVEAL_LIMIT = 4;
+const REVEAL_GAP_MS = 900;
+
+export function createGuideCore(host, { publish, mount, loadText = async () => null, modules = null, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
     const emit = publish ?? ((event, payload) => host.events.emit(event, payload));
     const call = (contract, params) => request(host.own, contract, { params });
     const persona = signal({ ...DEFAULT_PERSONA });
@@ -119,6 +123,15 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     /** Карточка предложения: что реально будет создано (по той же нормализации, что и при создании). */
     const preview = (action, params) => describeProposal(action, params);
 
+    /** Открывает блоки, на которые сослалась реплика, — сама, без нажатий (чипы в окне остаются информацией). Не ждём: реплика уже показана. */
+    async function openLinked(text) {
+        const anchors = extractAnchors(text).slice(0, REVEAL_LIMIT);
+        for (const [index, anchor] of anchors.entries()) {
+            if (index) await sleep(REVEAL_GAP_MS);
+            await reveal(anchor);
+        }
+    }
+
     async function reveal(anchor) {
         const result = await call('ui.reveal', { anchor });
         return result.ok && result.value !== false;
@@ -128,7 +141,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     function sayNode(id) {
         const node = scenario.nodes[id];
         if (!node) return;
-        push({ role: 'assistant', text: String(node.say ?? '').replaceAll('{{name}}', nameOf()), node: id, options: (node.options ?? []).map(option => ({ ...option })) });
+        const say = String(node.say ?? '').replaceAll('{{name}}', nameOf());
+        push({ role: 'assistant', text: say, node: id, options: (node.options ?? []).map(option => ({ ...option })) });
+        void openLinked(say).catch(() => {});
         if (id === 'ready') { mode.set('chat'); void saveChat(); }
     }
 
@@ -203,6 +218,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             // Безопасные действия, которые модель пометила «auto», выполняются сразу; результат — заметкой в чате.
             const { text: shown, actions: autoRuns } = splitAutoActions(String(reply.value ?? '').trim(), id => ACTIONS[id]?.safe === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
+            void openLinked(shown).catch(() => {});
             for (const run of autoRuns) await runAction(run.action, run.params);
             return true;
         } catch (error) {

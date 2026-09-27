@@ -57,8 +57,9 @@ export function selectArticles(articles, query, { limit = 3, openAnchors = [] } 
 
 const MARKUP_RULES = [
     'Formatting you can use in replies:',
-    '- Link to any block of the interface: [Label](stme:ANCHOR) — use only anchors from the list below; it shows up as a small chip that opens the block.',
-    '- **bold** for emphasis. Keep paragraphs short.',
+    '- Link to any block of the interface: [Label](stme:ANCHOR) — use only anchors from the list below. The block opens by itself the moment you send the reply (the chip stays as a note for the user), so link only what you really want shown, a few at most, and word it as if you are taking the user there ("let me open Model connections").',
+    '- Text formatting (rendered properly in the chat): **bold**, *italic*, `code` for values and names of settings, "- " bullet lists, "1." numbered lists, "## " for a short heading.',
+    '- Keep it easy to scan: one short lead-in sentence, then a list — never a long paragraph, never a wall of text. A list item is one idea: "- **Field name** (current value) — what it does, in one sentence". Put a blank line between a paragraph and a list. Group related fields and skip the obvious ones instead of listing every field; end with one short line, not a recap.',
     '- When the state below lists blocks the user has open, they are looking at them right now: explain the fields they ask about using the knowledge and the current values, and talk about "this" block naturally. Never ask for or repeat a secret (fields shown as set/empty).',
     '- Rich blocks, each as a fenced code block with JSON (use them when they help, not in every reply):',
     '  ```choice\n  {"prompt": "What next?", "options": ["Set up a tracker", "Show me the modules"]}\n  ```  — buttons; the chosen option comes back as the user\'s message.',

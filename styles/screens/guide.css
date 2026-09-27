@@ -53,3 +53,11 @@
 /* Карточка предложения: Apply — во всю ширину карточки, по центру (без сброса `.menu_button` ST давал узкую кнопку с буквами в столбик). */
 .stme-guide-proposal ul { margin: 6px 0 10px; }
 .stme-guide-proposal .menu_button { justify-content: center; text-align: center; font-weight: 600; }
+/* Разметка ответа: списки, заголовки, код, курсив — чтобы разбор полей читался, а не был «простынёй». */
+.stme-guide-text ul, .stme-guide-text ol { margin: 4px 0 10px; padding-left: 22px; }
+.stme-guide-text li { margin: 0 0 6px; padding-left: 2px; line-height: 1.45; }
+.stme-guide-text li::marker { color: var(--stme-accent); }
+.stme-guide-text li:last-child { margin-bottom: 0; }
+.stme-guide-heading { margin: 10px 0 4px; font-weight: 700; color: var(--stme-accent); }
+.stme-guide-text code { padding: 1px 5px; border-radius: 5px; font-size: .92em; background: color-mix(in srgb, var(--stme-text) 12%, transparent); }
+.stme-guide-text em { font-style: italic; opacity: .92; }

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
  * file://) — not part of the engine itself.
  */
 const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-const port = 8420;
+const port = Number(process.argv.find(arg => arg.startsWith('--port='))?.slice(7)) || 8420;   // Windows иногда резервирует 8420 — порт можно задать: `--port=8431`
 
 const MIME = {
     '.html': 'text/html; charset=utf-8',
