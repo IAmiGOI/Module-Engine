@@ -67,6 +67,7 @@ const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you o
 export function createGuideCore(host, { publish, mount, loadText = async () => null, modules = null, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
     const emit = publish ?? ((event, payload) => host.events.emit(event, payload));
     const call = (contract, params) => request(host.own, contract, { params });
+    const callService = (contract, params) => request(host.services, contract, { params });
     const persona = signal({ ...DEFAULT_PERSONA });
     const messages = signal([]);
     const mode = signal('scenario');      // 'scenario' | 'chat'
@@ -191,7 +192,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     }
 
     // --- Свободный чат -------------------------------------------------------
-    const context = createGuideContext({ call, modules });
+    const context = createGuideContext({ call, callService, modules });
 
     async function liveContext(screenText = '', focus = {}) {
         const workers = await workerStatus();

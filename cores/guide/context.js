@@ -1,4 +1,5 @@
 import { describeSpecs } from '../../libraries/core/guide-settings.js';
+import { describeWorldInfo, describePreset } from '../../libraries/core/guide-st-settings.js';
 import { NEUTRAL, countsLine } from '../../libraries/core/guide-relevance.js';
 
 /**
@@ -7,7 +8,7 @@ import { NEUTRAL, countsLine } from '../../libraries/core/guide-relevance.js';
  * но не всё сразу: полный список идёт, только пока тема в ФОКУСЕ (`guide-relevance.js`: липкий — держится до завершения задачи или до перехода на другую тему фразой),
  * иначе одна строка с количеством. Данные в фокусе читаются заново при каждом запросе.
  */
-export function createGuideContext({ call, modules }) {
+export function createGuideContext({ call, callService, modules }) {
     /** Раскрытое сейчас: текст для промпта и адреса для подбора статей. Нет ответа — как будто ничего не открыто. */
     async function screen() {
         const result = await call('ui.context');
@@ -29,6 +30,15 @@ export function createGuideContext({ call, modules }) {
         if (found.length && focus.lorebook) lines.push(`Lorebook entries (uid, book): ${found.slice(0, 30).map(entry => `#${entry.uid} “${entry.name}” (${entry.book})`).join('; ')}${found.length > 30 ? `; …and ${found.length - 30} more` : ''}.`);
         const counts = countsLine({ trackers: mine.length, macros: programs.length, entries: found.length }, focus);
         if (counts) lines.push(counts);
+        // World Info и пресет генерации — настройки самой ST, не движка: только для анализа, действий на их правку у гида нет (см. Сервисы).
+        if (focus.lorebook) {
+            const worldInfo = await callService('stWorldInfo.settings');
+            if (worldInfo.ok && worldInfo.value) lines.push(`World Info settings (SillyTavern's own, global — not the engine's): ${describeWorldInfo(worldInfo.value)}.`);
+        }
+        if (focus.preset) {
+            const preset = await callService('stPreset.current');
+            if (preset.ok && preset.value) lines.push(`Current generation preset (SillyTavern's own): ${describePreset(preset.value)}.`);
+        }
         const known = modules?.list?.() ?? [];
         const quiet = [];
         for (const id of modules?.enabled?.() ?? []) {

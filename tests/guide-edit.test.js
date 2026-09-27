@@ -185,6 +185,7 @@ test('an open block on screen counts as talking about it — but only when it is
     const known = [{ id: 'module.music', title: 'Music' }];
     const context = createGuideContext({
         call: async contract => ({ ok: true, value: ({ 'tracking.trackers': [], 'macros.programs': [], 'lorebook.find': [{ uid: 3, book: 'Book', name: 'Mill' }] })[contract] }),
+        callService: async () => ({ ok: false, value: null }),
         modules: { list: () => known, enabled: () => ['module.music'], guideSettings: () => ({ specs: specs() }) },
     });
     const at = (focus, anchors) => nextFocus(focus, { query: 'hello there', anchors, modules: known });
