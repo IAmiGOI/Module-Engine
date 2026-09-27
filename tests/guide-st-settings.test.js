@@ -36,6 +36,12 @@ test('describeWorldInfo() turns the raw global settings into one readable line; 
     assert.match(preset, /context template: "Default"/);
     assert.ok(!preset.includes('instruct mode'), 'instruct is off and empty — not mentioned');
     assert.equal(describePreset({}), '', 'no values — no line');
+
+    // Each API names the same sampler field differently — describePreset must use ITS OWN field names, not a generic guess.
+    const kobold = describePreset({ api: 'kobold', name: 'GUI KoboldAI Settings', values: { temp: 1.1, rep_pen: 1.05, temperature: 99 } });
+    assert.match(kobold, /sampler: temperature: 1\.1, repetition penalty: 1\.05/);
+    assert.ok(!kobold.includes('99'), 'kobold\'s own field is "temp", not "temperature" — the openai-shaped field is ignored, never misread');
+    assert.equal(describePreset({ api: 'kobold', name: 'GUI KoboldAI Settings', values: 'gui' }), 'API: kobold; preset name: "GUI KoboldAI Settings"', 'the placeholder "gui" preset has no real settings object — reported honestly, no crash, no invented sampler line');
 });
 
 test('stWorldInfo.settings reads the live bindings of the real ST module — a fresh call sees a value changed after the first one, not a snapshot from import time', async () => {
@@ -50,17 +56,30 @@ test('stWorldInfo.settings reads the live bindings of the real ST module — a f
     assert.equal(second.value.depth, 9, 'live binding, not a cached snapshot');
 });
 
-test('stPreset.current reads the active preset through getContext(); with no context (no model connected yet) it answers null, never a crash', async () => {
-    const bus = createEngine().buses.services;
-    const fakeContext = {
+test('stPreset.current reads live sampler values, NOT PresetManager.getSelectedPreset() — found live: that call returns the <option> value ("gui", a name, or an index), never the settings object', async () => {
+    // openai (Chat Completion): the live settings are public on getContext() itself.
+    const openaiBus = createEngine().buses.services;
+    const openaiContext = {
         mainApi: 'openai',
-        getPresetManager: () => ({ getSelectedPreset: () => ({ temperature: 0.7 }), getSelectedPresetName: () => 'Default' }),
+        getPresetManager: () => ({ getSelectedPreset: () => 'my-preset-name', getSelectedPresetName: () => 'My Preset' }),
+        chatCompletionSettings: { temperature: 0.7, top_p: 0.9 },
         powerUserSettings: { context: { preset: 'Default' }, instruct: { enabled: false, preset: 'Alpaca' } },
     };
-    registerStPresetService(bus, { getContext: () => fakeContext });
-    const result = await new Promise(resolve => bus.subscribe('stPreset.current', {}, resolve));
-    assert.equal(result.value.name, 'Default');
-    assert.equal(result.value.values.temperature, 0.7);
+    registerStPresetService(openaiBus, { getContext: () => openaiContext });
+    const openaiResult = await new Promise(resolve => openaiBus.subscribe('stPreset.current', {}, resolve));
+    assert.equal(openaiResult.value.name, 'My Preset');
+    assert.equal(openaiResult.value.values.temperature, 0.7, 'the real settings object, not the option value "my-preset-name"');
+
+    // kobold: not public on getContext() — read live from kai-settings.js, the same trick as st-worldinfo.js.
+    const koboldBus = createEngine().buses.services;
+    const live = { temp: 1, rep_pen: 1.1, preset_settings: 'gui' };
+    const koboldContext = { mainApi: 'kobold', getPresetManager: () => ({ getSelectedPreset: () => 'gui', getSelectedPresetName: () => 'GUI KoboldAI Settings' }) };
+    registerStPresetService(koboldBus, { getContext: () => koboldContext, importKai: async () => ({ kai_settings: live }) });
+    const koboldResult = await new Promise(resolve => koboldBus.subscribe('stPreset.current', {}, resolve));
+    assert.equal(koboldResult.value.values.temp, 1);
+    live.temp = 1.4;
+    const koboldAgain = await new Promise(resolve => koboldBus.subscribe('stPreset.current', {}, resolve));
+    assert.equal(koboldAgain.value.values.temp, 1.4, 'live binding, not a snapshot');
 
     const empty = createEngine().buses.services;
     registerStPresetService(empty, { getContext: () => null });
@@ -98,11 +117,11 @@ test('editable() adds World Info / preset info only while that topic is in focus
     assert.deepEqual(calls, []);
 
     const withLore = await context.editable({ focus: { ...NEUTRAL, lorebook: true, modules: [] } });
-    assert.match(withLore, /World Info settings \(SillyTavern's own, global — not the engine's\): scan depth 4 messages/);
+    assert.match(withLore, /SillyTavern's own global World Info settings \(NOT the engine's Lorebook card.*do not link to card:lorebook.*\): scan depth 4 messages/);
     assert.ok(!withLore.includes('generation preset'));
 
     const withPreset = await context.editable({ focus: { ...NEUTRAL, preset: true, modules: [] } });
-    assert.match(withPreset, /Current generation preset \(SillyTavern's own\): API: openai/);
+    assert.match(withPreset, /SillyTavern's own active generation preset \(NOT the engine's Preset card.*do not link to card:preset.*\): API: openai/);
 });
 
 // --- Знания: статья находится по своим словам ---
@@ -113,4 +132,11 @@ test('the "SillyTavern\'s own World Info settings and generation preset" article
     assert.ok(forWorldInfo.includes("SillyTavern's own World Info settings and generation preset"));
     const forPreset = selectArticles(articles, 'my preset temperature seems high, what does that change?').map(article => article.title);
     assert.ok(forPreset.includes("SillyTavern's own World Info settings and generation preset"));
+});
+
+// --- Не путать с движковыми card:lorebook / card:preset ---
+
+test('found live: the model linked to the engine\'s own Preset/Lorebook cards when discussing ST\'s native settings — this article must carry NO anchors, so it never appears as a suggested link (buildGuideSystemPrompt would print "Related anchors: card:preset" otherwise)', () => {
+    const article = parseArticle(read('knowledge/st-native-settings.md'), 'st-native-settings.md');
+    assert.deepEqual(article.anchors, []);
 });
