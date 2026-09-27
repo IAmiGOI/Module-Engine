@@ -14,11 +14,12 @@ import { CREATE_ACTIONS } from './guide-create.js';
  *               с `"auto": true` безопасное (только чтение) действие выполняется сразу, без кнопки — см. `splitAutoActions`;
  *   ```proposal {"action": "tracker.create", "params": {…}}                          — карточка «что будет создано» с кнопкой Apply (guide-create.js);
  * Кнопка выбора может сама запускать действие: `{"label": "Check now", "action": "models.check"}` — один клик, второй кнопки нет.
- *   ```checklist {}                                                                   — живой чек-лист первого запуска.
+ *   ```checklist {}                                                                   — живой чек-лист первого запуска;
+ *   ```creator  {}                                                                    — карточка создателя (данные — libraries/core/guide-creator.js).
  * Битый JSON или неизвестное имя не ломают ответ: такой кусок показывается как текст.
  */
 
-export const BLOCK_KINDS = Object.freeze(['choice', 'card', 'steps', 'action', 'proposal', 'checklist']);
+export const BLOCK_KINDS = Object.freeze(['choice', 'card', 'steps', 'action', 'proposal', 'creator', 'checklist']);
 const FENCE = /```([a-z]+)[ \t]*\n?([\s\S]*?)```/g;
 
 function normalizeBlock(kind, data) {
@@ -40,7 +41,7 @@ function normalizeBlock(kind, data) {
         const action = text(data.action);
         return CREATE_ACTIONS.includes(action) ? { kind, action, params: data.params && typeof data.params === 'object' ? data.params : {} } : null;
     }
-    if (kind === 'checklist') return { kind };
+    if (kind === 'checklist' || kind === 'creator') return { kind };
     return null;
 }
 
@@ -124,6 +125,7 @@ export function plainText(reply) {
         if (block.kind === 'proposal') return `[proposal: ${block.action}]`;
         if (block.kind === 'steps') return block.items.map((item, index) => `${index + 1}. ${item.text}`).join('\n');
         if (block.kind === 'card') return [block.title, block.text].filter(Boolean).join(': ');
+        if (block.kind === 'creator') return '[creator card]';
         return '[checklist]';
     }).join('\n').trim();
 }

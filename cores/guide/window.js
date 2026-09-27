@@ -3,6 +3,7 @@ import { signal, computed } from '../ui/reactive.js';
 import { createDragHandlers } from '../../libraries/shared/draggable.js';
 import { FloatingPanel, Avatar, Button, TextInput, TextArea, Field, Row, Select } from '../../libraries/shared/widgets.js';
 import { parseGuideReply, parseInline, parseTextBlocks } from '../../libraries/core/guide-markup.js';
+import { CREATOR } from '../../libraries/core/guide-creator.js';
 
 /**
  * Окно чата гида: сообщения с блоками разметки (libraries/core/guide-markup.js), пилюля ввода и экран настройки персонажа. Сообщение устроено как строка
@@ -80,6 +81,11 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
         if (data.kind === 'steps') {
             return h('div', { class: 'stme-guide-block stme-guide-steps' }, data.title ? h('strong', {}, data.title) : null,
                 h('ol', {}, data.items.map(item => h('li', {}, inline(item.text), item.anchor ? anchorChip('→', item.anchor) : null))));
+        }
+        if (data.kind === 'creator') {
+            return h('div', { class: 'stme-guide-block stme-guide-creator' },
+                h('div', { class: 'stme-guide-creator-name' }, CREATOR.name), h('small', {}, CREATOR.role),
+                h('a', { class: 'menu_button stme-guide-creator-link', href: CREATOR.discord, target: '_blank', rel: 'noopener noreferrer' }, CREATOR.discordLabel));
         }
         if (data.kind === 'proposal') return proposalBlock(data);
         if (data.kind === 'action') return h('div', { class: 'stme-guide-block stme-guide-action' }, Button(`⚡ ${data.label}`, () => runAction(data.action, data.params)));

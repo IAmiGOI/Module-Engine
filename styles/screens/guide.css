@@ -61,3 +61,9 @@
 .stme-guide-heading { margin: 10px 0 4px; font-weight: 700; color: var(--stme-accent); }
 .stme-guide-text code { padding: 1px 5px; border-radius: 5px; font-size: .92em; background: color-mix(in srgb, var(--stme-text) 12%, transparent); }
 .stme-guide-text em { font-style: italic; opacity: .92; }
+/* Карточка создателя: имя, роль и кнопка-ссылка на Discord. */
+.stme-guide-creator { display: flex; flex-direction: column; gap: 2px; }
+.stme-guide-creator-name { font-size: 16px; font-weight: 700; color: var(--stme-accent); }
+.stme-guide-creator small { opacity: .75; }
+.stme-guide-creator .stme-guide-creator-link { display: flex; justify-content: center; margin: 10px 0 0; padding: 7px 12px; width: 100%; max-width: none; box-sizing: border-box; text-decoration: none; font-weight: 600; color: inherit; border: 1px solid color-mix(in srgb, var(--stme-accent) 55%, transparent); border-radius: 9px; background: color-mix(in srgb, var(--stme-accent) 16%, transparent); cursor: pointer; }
+.stme-guide-creator .stme-guide-creator-link:hover { background: color-mix(in srgb, var(--stme-accent) 30%, transparent); }
