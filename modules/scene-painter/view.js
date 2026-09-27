@@ -85,23 +85,31 @@ export function createScenePainterView({ settings, images, busy, errors, textWor
         );
     }
 
-    /** Подвал сообщения: только под ответами модели и только кнопки — сама картинка выводится в окно «Картинка». */
+    /**
+     * Подвал сообщения: только под ответами модели и только кнопки — сама картинка выводится в окно «Картинка». Всегда ОДНА пилюля одного
+     * размера: до генерации — «Paint», после — те же рамка и высота, разделённые на сегменты. Круглые кнопки здесь нельзя: в Chat Viewport
+     * подвал стоит в одной строке с кнопками самого сообщения (правка, удаление, свайпы) и путался с ними.
+     */
+    function segment(label, onClick, title) {
+        return h('button', { type: 'button', class: 'stme-scene-painter-seg', title, 'aria-label': title, 'on:click': onClick }, label);
+    }
+
     function footerWidget(message) {
         if (message.isUser || message.isSystem) return null;
         const mesid = String(message.mesid);
         return h('div', { class: 'stme-scene-painter' }, computed(() => {
             const state = busy()[mesid];
-            if (state) return h('span', { class: 'stme-scene-painter-status' }, `🎨 ${BUSY_TEXT[state]}`);
+            if (state) return h('div', { class: 'stme-scene-painter-pill' }, h('span', { class: 'stme-scene-painter-status' }, `🎨 ${BUSY_TEXT[state]}`));
             const entry = images()[mesid];
             if (entry) {
-                return h('div', { class: 'stme-scene-painter-actions' },
-                    h('button', { type: 'button', class: 'stme-scene-painter-paint', title: entry.prompt, 'on:click': () => showInWindow(mesid) }, '🖼 Show'),
-                    IconButton('↻', () => paint(mesid), { title: 'Paint again (new prompt)' }),
-                    IconButton('⟳', () => paint(mesid, { prompt: entry.prompt }), { title: 'Paint again with the same prompt' }),
-                    IconButton('✕', () => removeImage(mesid), { title: 'Remove picture' }));
+                return h('div', { class: 'stme-scene-painter-pill', role: 'group', 'aria-label': 'Scene picture' },
+                    segment('🖼 Show', () => showInWindow(mesid), `Show in the Picture window — ${entry.prompt}`),
+                    segment('↻', () => paint(mesid), 'Paint again with a new prompt'),
+                    segment('⟳', () => paint(mesid, { prompt: entry.prompt }), 'Paint again with the same prompt'),
+                    segment('✕', () => removeImage(mesid), 'Remove the picture'));
             }
             const error = errors()[mesid];
-            return h('button', { type: 'button', class: 'stme-scene-painter-paint', title: error ?? 'Paint this scene', 'on:click': () => paint(mesid) }, error ? '🎨 Retry' : '🎨 Paint');
+            return h('div', { class: 'stme-scene-painter-pill' }, segment(error ? '🎨 Retry' : '🎨 Paint', () => paint(mesid), error ?? 'Paint this scene'));
         }));
     }
 
