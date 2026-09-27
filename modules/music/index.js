@@ -3,8 +3,14 @@ import { signal, computed, effect } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { selectTrack, shouldSwitch } from '../../libraries/core/track-selection.js';
 import { clampToViewport, createDragHandlers } from '../../libraries/shared/draggable.js';
-import { Button, TextInput, TextArea, Slider, Toggle, Field, Row, EmptyState, FloatingPanel } from '../../libraries/shared/widgets.js';
+import { FloatingPanel } from '../../libraries/shared/widgets.js';
 import { MusicPlayerBody } from '../../libraries/shared/music-player-view.js';
+import { sanitizeSource, isRemoteSource } from '../../libraries/shared/music-source.js';
+import { importLink } from './link-import.js';
+import { DEFAULTS, sanitizeTracks, buildSceneText } from './tracks.js';
+import { createMusicCard } from './card.js';
+import { tagWithModel } from './tagging.js';
+import { embeddingText, TAG_KINDS } from '../../libraries/shared/music-tagging.js';
 
 /**
  * Модуль «Music» — переработка Alpha'вского концепта, и разница ПОДХОДА, не
@@ -29,46 +35,13 @@ import { MusicPlayerBody } from '../../libraries/shared/music-player-view.js';
  * неймспейс в `storage.settings`, как у всех Модулей.
  */
 
+export { sanitizeTracks, buildSceneText };   // прежнее место импорта для тестов и Раннера
 export const MODULE_ID = 'module.music';
 const SETTINGS_NAMESPACE = MODULE_ID;
 const TRACKS_KEY = 'tracks';
 const PLAYER_KEY = 'player';
 /** Размер плавающего окна плеера — по CSS (`styles/modules/music-player.css`); нужен только для удержания окна в пределах экрана при перетаскивании. */
 const WINDOW_SIZE = Object.freeze({ width: 336, height: 300 });
-
-const DEFAULTS = Object.freeze({
-    autoSwitch: true,     // менять трек по сцене или только вручную
-    contextMessages: 4,   // сколько последних реплик складывать в вектор сцены
-    minSimilarity: 0.55,  // ниже — «ничего не подходит», играем дальше
-    switchMargin: 0.05,   // насколько кандидат должен быть лучше играющего
-    volume: 0.7,
-    player: {},           // позиция/размер/свёрнутость FloatingPanel
-});
-
-/** Строгая нормализация списка треков из стора — мусор из JSON не должен доходить до плеера. */
-export function sanitizeTracks(tracks) {
-    if (!Array.isArray(tracks)) return [];
-    return tracks
-        .filter(track => track && typeof track === 'object')
-        .map((track, index) => ({
-            id: String(track.id ?? `track_${index}`),
-            name: String(track.name ?? 'Untitled'),
-            description: String(track.description ?? ''),
-            vector: Array.isArray(track.vector) ? track.vector : null,
-            playCount: Number.isFinite(track.playCount) ? track.playCount : 0,
-        }));
-}
-
-/** Текст сцены: последние реплики (системные — мусор для атмосферы, выкидываем). */
-export function buildSceneText(messages, limit) {
-    return (Array.isArray(messages) ? messages : [])
-        .filter(message => !message?.isSystem)
-        .slice(-Math.max(1, limit))
-        .map(message => String(message?.text ?? ''))
-        .filter(Boolean)
-        .join('\n')
-        .trim();
-}
 
 export function createMusicModule(host) {
     const tracks = signal([]);
@@ -78,6 +51,7 @@ export function createMusicModule(host) {
     const switchMargin = signal(DEFAULTS.switchMargin);
     const volume = signal(DEFAULTS.volume);
     const muted = signal(false);
+    const autoTag = signal(DEFAULTS.autoTag);
     const progress = signal({ time: 0, duration: 0 }); // секунды; обновляется опросом Сервиса, пока трек играет
 
     const nowPlaying = signal({ trackId: null, name: null, playing: false, blocked: false, similarity: null });
@@ -107,7 +81,7 @@ export function createMusicModule(host) {
             namespace: SETTINGS_NAMESPACE,
             key: PLAYER_KEY,
             value: {
-                volume: volume.peek(), muted: muted.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
+                volume: volume.peek(), muted: muted.peek(), autoTag: autoTag.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
                 minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(), player: {
                     collapsed: hudCollapsed.peek(), visible: hudVisible.peek(), position: hudPosition.peek(),
                 },
@@ -124,10 +98,14 @@ export function createMusicModule(host) {
      * уточняет у `audio.playback.state` (см. refreshPlayingState).
      */
     async function servicePlay(blob, track, similarity) {
+        const source = sanitizeSource(track.source);
         const result = await request(host.services, 'audio.playback.play', {
-            params: { id: track.id, blob, volume: volume.peek(), onEnded: () => { if (!userPaused) replayCurrent(); } },
+            params: {
+                id: track.id, volume: muted.peek() ? 0 : volume.peek(), onEnded: () => { if (!userPaused) replayCurrent(); },
+                ...(isRemoteSource(source) ? { source } : { blob }),
+            },
         });
-        if (!result?.ok) return false;
+        if (!result?.ok || result.value?.ok === false) return false;
         currentTrackId = track.id;
         currentSimilarity = similarity;
         return true;
@@ -184,14 +162,20 @@ export function createMusicModule(host) {
     }
 
     async function playTrack(track, similarity = null) {
-        const blobResult = await request(host.services, 'audio.get', { params: { id: track.id } });
-        if (!blobResult.ok || !blobResult.value) {
-            await notify('error', `Audio for "${track.name}" is missing from this browser's storage — re-import it.`);
-            return;
+        const source = sanitizeSource(track.source);
+        let blob = null;
+        if (!isRemoteSource(source)) {
+            const blobResult = await request(host.services, 'audio.get', { params: { id: track.id } });
+            if (!blobResult.ok || !blobResult.value) {
+                await notify('error', `Audio for "${track.name}" is missing from this browser's storage — re-import it.`);
+                return;
+            }
+            blob = blobResult.value;
         }
-        const started = await servicePlay(blobResult.value, track, similarity);
+        const isNew = nowPlaying.peek().trackId !== track.id;
+        const started = await servicePlay(blob, track, similarity);
         if (!started) return;
-        if (nowPlaying.peek().trackId !== track.id) {
+        if (isNew) {
             // playCount растёт один раз на трек (не на каждый replay) — ровно тот контракт, что ловят тесты.
             const next = tracks.peek().map(item => (item.id === track.id ? { ...item, playCount: (item.playCount ?? 0) + 1 } : item));
             tracks.set(next);
@@ -199,7 +183,7 @@ export function createMusicModule(host) {
         }
         userPaused = false;
         setNowPlaying({ trackId: track.id, name: track.name, playing: true, blocked: false, similarity });
-        if (track.id !== currentTrackId || !progress.peek().duration) progress.set({ time: 0, duration: 0 });
+        if (isNew || !progress.peek().duration) progress.set({ time: 0, duration: 0 });
         startPolling();
         await refreshPlayingState();
     }
@@ -282,8 +266,45 @@ export function createMusicModule(host) {
 
     // --- Библиотека треков (карточка Модуля) ---
 
+    /**
+     * Разметка МОДЕЛЬЮ: по названию и исполнителю модель пишет описание настроения и сцены, из него локальный эмбединг делает вектор — так трек включается по смыслу сама,
+     * без ручных описаний. `force` — перемаркировать и уже размеченные моделью (кнопка); без него — только размеченные одним названием. Руками правленные (`manual`) не
+     * трогаются никогда. Нет модели/отказ — треки остаются на описании по названию, пользователю говорим об этом ОДНИМ сообщением.
+     */
+    async function tagTracks(ids, { force = false } = {}) {
+        const wanted = new Set(ids);
+        const items = tracks.peek()
+            .filter(track => wanted.has(track.id) && track.tagged !== TAG_KINDS.MANUAL && (force || track.tagged === TAG_KINDS.NAME))
+            .map(track => ({ id: track.id, name: track.name, artist: track.artist }));
+        if (!items.length) return { tagged: 0, total: 0 };
+        busy.set(true);
+        try {
+            const { descriptions, error } = await tagWithModel({ host, items });
+            const updates = new Map();
+            for (const item of items) {
+                const text = descriptions.get(item.id);
+                if (!text) continue;
+                const description = embeddingText({ name: item.name, artist: item.artist, description: text });
+                const vectorResult = await request(host.services, 'embedding.compute', { params: { text: description, kind: 'passage' } });
+                updates.set(item.id, { description, vector: vectorResult.ok ? vectorResult.value : null, tagged: TAG_KINDS.MODEL });
+            }
+            if (updates.size) {
+                // Трек мог быть правлен рукой, пока модель думала — такую запись не перетираем.
+                tracks.set(tracks.peek().map(track => (updates.has(track.id) && track.tagged !== TAG_KINDS.MANUAL ? { ...track, ...updates.get(track.id) } : track)));
+                await saveTracks();
+            }
+            if (error && !updates.size) await notify('error', `The model did not describe the tracks: ${error}. They stay described by title — connect a text model and press "Describe with the model".`);
+            else if (updates.size < items.length) await notify('warn', `The model described ${updates.size} of ${items.length} tracks${error ? ` (${error})` : ''}. The rest stay described by title.`);
+            else await notify('ok', `The model described ${updates.size} track${updates.size === 1 ? '' : 's'}.`);
+            return { tagged: updates.size, total: items.length };
+        } finally {
+            busy.set(false);
+        }
+    }
+
     /** Импорт файлов: байты — в Сервис аудио, метаданные — в стор; вектор считается сразу, чтобы трек сразу участвовал в подборе. Элементы — `{name, blob}` (File в браузере: имя + байты; тесты подсовывают пару явно). */
     async function importFiles(files) {
+        const imported = [];
         busy.set(true);
         try {
             for (const file of [...(files ?? [])]) {
@@ -296,7 +317,8 @@ export function createMusicModule(host) {
                     if (!putResult.ok) throw new Error(putResult.error?.message ?? 'audio.put failed');
                     const vectorResult = await request(host.services, 'embedding.compute', { params: { text: description, kind: 'passage' } });
                     const vector = vectorResult.ok ? vectorResult.value : null;
-                    tracks.set([...tracks.peek(), { id, name, description, vector, playCount: 0 }]);
+                    tracks.set([...tracks.peek(), { id, name, description, vector, playCount: 0, source: { kind: 'local', ref: null }, artist: '', tagged: TAG_KINDS.NAME }]);
+                    imported.push(id);
                 } catch (error) {
                     await notify('error', `Could not import "${rawName}": ${error?.message ?? String(error)}`);
                 }
@@ -305,6 +327,26 @@ export function createMusicModule(host) {
         } finally {
             busy.set(false);
         }
+        if (imported.length && autoTag.peek()) await tagTracks(imported);
+    }
+
+    /** Добавить трек по прямой ссылке на аудиофайл или поток: адрес и вектор, звук не скачивается. */
+    async function importLinkText(text) {
+        let added = [];
+        busy.set(true);
+        try {
+            const result = await importLink({ host, text, knownIds: new Set(tracks.peek().map(item => item.id)) });
+            if (result.error) { await notify('error', result.error); return false; }
+            if (result.tracks.length) { tracks.set([...tracks.peek(), ...result.tracks]); await saveTracks(); }
+            added = result.tracks.map(track => track.id);
+            await notify('ok', result.tracks.length
+                ? `Added ${result.tracks.length} track${result.tracks.length === 1 ? '' : 's'}${result.skipped ? ` (${result.skipped} already in the library)` : ''}.`
+                : 'Nothing new — these tracks are already in the library.');
+            return true;
+        } finally {
+            busy.set(false);
+            if (added.length && autoTag.peek()) await tagTracks(added);
+        }
     }
 
     /** Правка визитки → вектор пересчитывается немедленно (иначе подбор до перезагрузки жил бы по старому описанию). */
@@ -312,7 +354,7 @@ export function createMusicModule(host) {
         const clean = String(description ?? '').trim();
         const vectorResult = await request(host.services, 'embedding.compute', { params: { text: clean, kind: 'passage' } });
         tracks.set(tracks.peek().map(item => (item.id === trackId
-            ? { ...item, description: clean, vector: vectorResult.ok ? vectorResult.value : item.vector }
+            ? { ...item, description: clean, vector: vectorResult.ok ? vectorResult.value : item.vector, tagged: TAG_KINDS.MANUAL }
             : item)));
         await saveTracks();
     }
@@ -382,54 +424,11 @@ export function createMusicModule(host) {
 
     // --- Карточка Модуля в панели движка ---
 
-    function trackRow(track) {
-        const draft = signal(track.description);
-        const input = TextArea(draft, { rows: 2, placeholder: 'Describe the mood, e.g. "tense urban fight at night"' });
-        // TextArea пишeт в сигнал сама (см. widgets.js); правка визитки
-        // коммитится по `change` (он всплывает от textarea до этой обёртки)
-        // через props `on:change` — у vnode нет addEventListener, слушатели
-        // ставит Сервис DOM при рендере.
-        const committed = h('div', { 'on:change': () => { if (draft.peek() !== track.description) updateDescription(track.id, draft.peek()); } }, input);
-        return h('div', { class: 'stme-music-track' },
-            Row(
-                h('strong', {}, track.name),
-                h('small', { class: 'stme-music-plays' }, `${track.playCount ?? 0} plays`),
-                Button('×', () => { removeTrack(track.id); }, { variant: 'danger' }),
-            ),
-            Field('Mood description', committed, { hint: track.vector ? 'Vector computed.' : 'Vector will be computed when embedding is available.' }),
-        );
-    }
-
     function tree() {
-        // Внимание: `h()` даёт АБСТРАКТНОЕ дерево, у узла нет ни addEventListener,
-        // ни click() (в отличие от Alpha, где виджеты — настоящие DOM-узлы).
-        // Слушатели ставит Сервис DOM по props `on:*` при рендере — значит, и
-        // file-input обязан быть видимым элементом со своим `on:change`, а не
-        // скрытым, кликаемым из кнопки: кнопку «нажать» за vnode нечем.
-        const fileInput = h('input', {
-            type: 'file', accept: 'audio/*', multiple: true, class: 'stme-music-file',
-            'on:change': event => {
-                const input = event.target;
-                importFiles([...(input.files ?? [])].map(file => ({ name: file.name, blob: file })));
-                input.value = '';
-            },
+        return createMusicCard({
+            tracks, autoSwitch, contextMessages, minSimilarity, switchMargin, autoTag,
+            actions: { saveSettings, savePlayer, importFiles, importLinkText, tagTracks, updateDescription, removeTrack },
         });
-        return h('div', { class: 'stme-module-body' },
-            Row(
-                h('small', { class: 'stme-module-hint' }, 'Picks background music that matches the scene — locally, by meaning, with no model calls. Describe each track in words; the closer its description to what is happening in the chat, the more likely it plays.'),
-                Button('Save settings', saveSettings),
-            ),
-            Row(
-                Toggle('Auto-switch with the scene', autoSwitch, { onChange: savePlayer }),
-                Slider('Scene depth (last messages)', contextMessages, { min: 1, max: 12, step: 1 }),
-                Slider('Min similarity', minSimilarity, { min: 0, max: 1, step: 0.05 }),
-                Slider('Switch margin', switchMargin, { min: 0, max: 0.5, step: 0.01 }),
-            ),
-            Field('Import audio files', fileInput, { hint: 'Stored locally in this browser — metadata is portable, bytes are not.' }),
-            h('div', { class: 'stme-music-list' },
-                computed(() => (tracks().length ? tracks().map(trackRow) : [EmptyState('No tracks yet — import audio files above.')])),
-            ),
-        );
     }
 
     // --- Жизненный цикл ---
@@ -455,6 +454,7 @@ export function createMusicModule(host) {
             switchMargin.set(Number.isFinite(player.value.switchMargin) ? player.value.switchMargin : DEFAULTS.switchMargin);
             volume.set(Number.isFinite(player.value.volume) ? player.value.volume : DEFAULTS.volume);
             muted.set(Boolean(player.value.muted));
+            autoTag.set(player.value.autoTag !== false);
             hudCollapsed.set(Boolean(player.value.player?.collapsed));
             hudVisible.set(player.value.player?.visible !== false);
             // Позицию, сохранённую при другом размере окна (или экрана), возвращаем в пределы экрана: окно у края, ставшее шире, иначе оказалось бы обрезанным.
@@ -494,6 +494,9 @@ export function createMusicModule(host) {
         toggleMute,
         onGenerationCompleted,
         importFiles,
+        importLinkText,
+        tagTracks,
+        autoTag,
         updateDescription,
         removeTrack,
         saveSettings,

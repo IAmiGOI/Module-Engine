@@ -10,16 +10,17 @@ import { selectTrack, shouldSwitch } from '../libraries/core/track-selection.js'
 
 // --- Чистые функции ---------------------------------------------------------
 
-test('sanitizeTracks() keeps only the five real fields and repairs garbage defaults', () => {
+test('sanitizeTracks() keeps only the real fields (source, artist and tag kind included) and repairs garbage defaults', () => {
     const cleaned = sanitizeTracks([
         { id: 'a', name: 'A', description: 'd', vector: [1, 2], playCount: 3 },
         { name: 'no id' },
         null,
         'junk',
     ]);
+    const local = { kind: 'local', ref: null };
     assert.deepEqual(cleaned, [
-        { id: 'a', name: 'A', description: 'd', vector: [1, 2], playCount: 3 },
-        { id: 'track_1', name: 'no id', description: '', vector: null, playCount: 0 },
+        { id: 'a', name: 'A', description: 'd', vector: [1, 2], playCount: 3, source: local, artist: '', tagged: 'name' },
+        { id: 'track_1', name: 'no id', description: '', vector: null, playCount: 0, source: local, artist: '', tagged: 'name' },
     ]);
     assert.deepEqual(sanitizeTracks('junk'), []);
 });
@@ -46,7 +47,7 @@ const vec = (...names) => {
     return v.map(x => x / norm);
 };
 
-function buildEngine({ chat = [] } = {}) {
+function buildEngine({ chat = [], model = null } = {}) {
     const engine = createEngine();
     const settingsContext = { extensionSettings: {}, chatMetadata: {}, saveSettingsDebounced: () => {}, saveMetadataDebounced: () => {} };
     registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
@@ -60,9 +61,11 @@ function buildEngine({ chat = [] } = {}) {
 
     // Сервис воспроизведения — фейк над тем же контрактом (реальный владеет
     // <audio> и URL.createObjectURL, недоступными в Node).
-    const playback = { id: null, playing: false, playCalls: 0, onEnded: null, volume: 0.7, time: 0, duration: 0, seekedTo: null };
-    engine.buses.services.register('audio.playback.play', ({ id, blob, onEnded }) => {
-        if (!blob) return { ok: false };
+    const playback = { id: null, playing: false, playCalls: 0, onEnded: null, volume: 0.7, time: 0, duration: 0, seekedTo: null, lastSource: null, failWith: null };
+    engine.buses.services.register('audio.playback.play', ({ id, blob, source, onEnded }) => {
+        playback.lastSource = source ?? null;
+        if (playback.failWith) return typeof playback.failWith === 'object' ? { ok: false, ...playback.failWith } : { ok: false, error: playback.failWith };
+        if (!blob && !source) return { ok: false };
         playback.id = id ?? null;
         playback.playing = true;
         playback.playCalls += 1;
@@ -74,6 +77,10 @@ function buildEngine({ chat = [] } = {}) {
     // ВАЖНО: шина сама оборачивает ответ в {ok, value} — фейк возвращает голый снимок, как реальный Сервис (см. audio-playback.js).
     engine.buses.services.register('audio.playback.state', () => ({ id: playback.id, playing: playback.playing, currentTime: playback.time, duration: playback.duration }));
     engine.buses.services.register('audio.playback.seek', ({ time }) => { playback.seekedTo = time; playback.time = time; return { ok: true }; });
+
+    // Текстовая модель пользователя — фейк над `model.generate`; без него вызов отказывает, как без подключённой модели.
+    const modelCalls = [];
+    if (model) engine.buses.cores.register('model.generate', params => { modelCalls.push(params); return model(params); });
 
     // Эмбединг-фейк: вектор — СУММА осей, чьи имена встретились в тексте
     // (нормированная). Детерминированно, «ничего не встретилось» — фон города.
@@ -98,7 +105,7 @@ function buildEngine({ chat = [] } = {}) {
         allowedContracts: [
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
-            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek',
+            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek', 'model.generate',
             'embedding.compute',
         ],
     });
@@ -110,7 +117,7 @@ function buildEngine({ chat = [] } = {}) {
 
     const module = createMusicModule(moduleHost);
 
-    return { engine, module, audio: playback, blobs, notifications, moduleHost, settingsContext };
+    return { engine, module, audio: playback, blobs, notifications, moduleHost, settingsContext, modelCalls };
 }
 
 test('load() restores tracks from settings; import computes vectors and persists both bytes and metadata', async () => {
@@ -303,4 +310,95 @@ test('a window size saved by the old resizable player is ignored: the window kee
     assert.equal(style.left, '1584px', 'a position saved near the right edge is pulled back so the wider window is not cut off (1920 − 336)');
     assert.equal(style.top, '780px', '1080 − 300');
     fresh.stop();
+});
+
+
+// --- Разметка моделью и прямые ссылки ---
+
+/** Файлы для импорта: имена без ключевых слов сцены — смысл появляется только из описания модели. */
+const files = (count, prefix = 'Piece') => Array.from({ length: count }, (_, index) => ({ name: `${prefix} ${String(index + 1).padStart(2, '0')}.mp3`, blob: new Blob(['a']) }));
+
+test('tracks are described BY THE MODEL and then chosen by the meaning of the scene — the file names contain no keyword at all', async () => {
+    const model = () => JSON.stringify([{ n: 1, d: 'Relentless drums and brass for a brutal fight in the rain.' }, { n: 2, d: 'Slow waves and gulls for a quiet evening by the sea.' }]);
+    const { module, audio, modelCalls } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], model });
+    await module.load();
+    await module.importFiles(files(2));
+
+    const [first, second] = module.tracks.peek();
+    assert.deepEqual([first.tagged, second.tagged], ['model', 'model']);
+    assert.match(first.description, /^Piece 01\. Relentless drums/, 'the name and the model text are embedded together');
+    assert.deepEqual(first.vector, vec('fight'), 'the vector comes from the model description, not from the file name');
+    assert.deepEqual(second.vector, vec('sea'));
+    assert.equal(modelCalls.length, 1, 'both tracks went in one batch');
+    assert.match(modelCalls[0].prompt, /1\. Piece 01\n2\. Piece 02/);
+
+    await module.onGenerationCompleted();
+    assert.equal(module.nowPlaying.peek().trackId, first.id, 'the fight scene picks the fight track by meaning');
+    assert.equal(audio.playing, true);
+});
+
+test('with no model connected the tracks stay described by name, and the user is told once how to fix it', async () => {
+    const { module, notifications } = buildEngine();
+    await module.load();
+    await module.importFiles(files(3));
+    assert.deepEqual(module.tracks.peek().map(track => track.tagged), ['name', 'name', 'name']);
+    const errors = notifications.filter(entry => entry.tone === 'error');
+    assert.equal(errors.length, 1, 'one message, not one per track');
+    assert.match(errors[0].text, /Describe with the model/);
+});
+
+test('a big import goes to the model in batches of ten; a cut-off reply tags only what was described', async () => {
+    let call = 0;
+    const model = ({ prompt }) => {
+        call += 1;
+        const count = (prompt.match(/^\d+\./gm) ?? []).length;
+        if (call === 2) return '[{"n":1,"d":"Calm piano for a quiet night of thinking."},{"n":2,"d":"Cut off mid'; // обрыв: только первая запись целая
+        return JSON.stringify(Array.from({ length: count }, (_, index) => ({ n: index + 1, d: 'Gentle strings for a peaceful walk in the calm.' })));
+    };
+    const { module, modelCalls, notifications } = buildEngine({ model });
+    await module.load();
+    await module.importFiles(files(23));
+    assert.equal(modelCalls.length, 3, '23 tracks → 10 + 10 + 3');
+    const tags = module.tracks.peek().map(track => track.tagged);
+    assert.equal(tags.filter(tag => tag === 'model').length, 10 + 1 + 3, 'the cut-off batch gave one description');
+    assert.equal(tags.filter(tag => tag === 'name').length, 9);
+    assert.ok(notifications.some(entry => entry.tone === 'warn' && /14 of 23/.test(entry.text)));
+});
+
+test('a track edited by hand is never overwritten by the model, even on "Describe with the model"', async () => {
+    const model = () => JSON.stringify([{ n: 1, d: 'Model text that must not replace the human one.' }, { n: 2, d: 'Second model description for another track.' }]);
+    const { module } = buildEngine({ model });
+    await module.load();
+    await module.importFiles(files(2));
+    const [first] = module.tracks.peek();
+    await module.updateDescription(first.id, 'my own words about the sea');
+    assert.equal(module.tracks.peek()[0].tagged, 'manual');
+    const result = await module.tagTracks(module.tracks.peek().map(track => track.id), { force: true });
+    assert.equal(result.total, 1, 'only the untouched track was sent');
+    assert.equal(module.tracks.peek()[0].description, 'my own words about the sea');
+});
+
+test('a direct audio link becomes a track that plays from its address; anything else is refused with a clear message', async () => {
+    const { module, audio, notifications } = buildEngine({ chat: ['A quiet afternoon by the sea.'] });
+    await module.load();
+    assert.equal(await module.importLinkText('https://example.com/radio/sea%20shanty.mp3'), true);
+    const track = module.tracks.peek()[0];
+    assert.deepEqual([track.name, track.source], ['sea shanty', { kind: 'url', ref: 'https://example.com/radio/sea%20shanty.mp3' }]);
+    assert.deepEqual(track.vector, vec('sea'));
+    assert.equal(await module.importLinkText('https://example.com/radio/sea%20shanty.mp3'), true, 'the same link twice adds nothing');
+    assert.equal(module.tracks.peek().length, 1);
+    await module.playTrack(track);
+    assert.deepEqual(audio.lastSource, { kind: 'url', ref: 'https://example.com/radio/sea%20shanty.mp3' }, 'the service is asked for the address, no file bytes');
+    assert.equal(module.nowPlaying.peek().playing, true);
+    assert.equal(await module.importLinkText('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), false);
+    assert.ok(notifications.some(entry => entry.tone === 'error' && /not a direct audio link/.test(entry.text)));
+});
+
+test('tracks saved by the earlier YouTube build are dropped on load: they cannot play any more', () => {
+    const cleaned = sanitizeTracks([
+        { id: 'yt_x', name: 'Old', source: { kind: 'youtube', ref: 'dQw4w9WgXcQ' } },
+        { id: 'a', name: 'Kept', source: { kind: 'url', ref: 'https://a.b/c.mp3' } },
+        { id: 'b', name: 'Local' },
+    ]);
+    assert.deepEqual(cleaned.map(track => track.id), ['a', 'b']);
 });
