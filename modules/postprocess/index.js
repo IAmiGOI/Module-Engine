@@ -714,19 +714,21 @@ export function createPostprocessModule(host) {
                 return save();
             };
             const find = (list, id) => list.findIndex(pass => pass.id === id);
+            /** Значения сэмплера, заданные руками, — уже не «пресет такой-то»: метка пресета у прохода сбрасывается. */
+            const withoutPreset = fields => (['temperature', 'topP', 'topK', 'maxTokens', 'reasoningMode', 'reasoningEffort', 'reasoningBudget'].some(key => key in fields) && !('samplerPreset' in fields) ? { ...fields, samplerPreset: '' } : fields);
             const missing = id => ({ ok: false, message: `There is no pass "${id}".` });
             return {
                 describe: () => {
                     const list = current();
                     const workerIds = workers.peek().filter(option => option.value).map(option => option.value);
                     return `Post-Turn passes (run in this order after each reply; each sees the previous result): ${list.length
-                        ? list.map((pass, index) => `${index + 1}. ${pass.id} “${pass.name}” [${pass.enabled ? 'on' : 'off'}, model: ${pass.workerId || 'any'}${pass.includeContext ? `, sees ${pass.contextDepth} chat messages` : ''}] — ${pass.prompt.slice(0, 160)}${pass.prompt.length > 160 ? '…' : ''}`).join(' | ')
+                        ? list.map((pass, index) => `${index + 1}. ${pass.id} “${pass.name}” [${pass.enabled ? 'on' : 'off'}, model: ${pass.workerId || 'any'}, temperature ${pass.temperature}, max ${pass.maxTokens} tokens${pass.includeContext ? `, sees ${pass.contextDepth} chat messages` : ''}] — ${pass.prompt.slice(0, 160)}${pass.prompt.length > 160 ? '…' : ''}`).join(' | ')
                         : 'none yet'}. Model connections: ${workerIds.join(', ') || 'none'}.`;
                 },
                 async addPass({ fields, position }) {
                     if (!validWorker(fields.workerId)) return workerError(fields.workerId);
                     const list = current();
-                    const pass = sanitizePasses([{ ...createPass(), ...fields }])[0];
+                    const pass = sanitizePasses([{ ...createPass(), ...withoutPreset(fields) }])[0];
                     list.splice(position ? Math.min(position - 1, list.length) : list.length, 0, pass);
                     return (await commit(list)) ? { ok: true, message: `Pass “${pass.name}” is added${position ? ` at position ${Math.min(position, list.length)}` : ''}.` } : { ok: false, message: 'Could not save the pass.' };
                 },
@@ -735,7 +737,7 @@ export function createPostprocessModule(host) {
                     const index = find(list, id);
                     if (index < 0) return missing(id);
                     if (fields.workerId !== undefined && !validWorker(fields.workerId)) return workerError(fields.workerId);
-                    list[index] = sanitizePasses([{ ...list[index], ...fields }])[0];
+                    list[index] = sanitizePasses([{ ...list[index], ...withoutPreset(fields) }])[0];
                     return (await commit(list)) ? { ok: true, message: `Pass “${list[index].name}” is updated.` } : { ok: false, message: 'Could not save the pass.' };
                 },
                 async removePass({ id }) {

@@ -101,11 +101,11 @@ export function createEditActions({ call, modules }) {
         },
         'postprocess.pass.add': {
             ...passTool('postprocess.pass.add', 'addPass'),
-            description: 'Add a pass to the Post-Turn Processor (it rewrites each fresh reply; passes run in order, each sees the previous result). Params: {"name": "Fix grammar", "prompt": "Fix grammar and spelling. Do not change the story or tone.", "workerId": "optional connection id from the state", "includeContext": false, "contextDepth": 6, "position": 1 (optional, default last)}. Send it in a ```proposal``` block.',
+            description: 'Add a pass to the Post-Turn Processor (it rewrites each fresh reply; passes run in order, each sees the previous result). Params: {"name": "Fix grammar", "prompt": "Fix grammar and spelling. Do not change the story or tone.", "workerId": "optional connection id from the state", "includeContext": false, "contextDepth": 6, "position": 1 (optional, default last), plus optional generation settings of the pass: "temperature" 0–2, "topP" 0–1, "topK" 0–200, "maxTokens" 1–32768, "reasoningMode", "reasoningEffort", "reasoningBudget"}. Send it in a ```proposal``` block.',
         },
         'postprocess.pass.update': {
             ...passTool('postprocess.pass.update', 'updatePass'),
-            description: 'Change a Post-Turn pass. Params: {"id": "<pass id from the state>", "name", "prompt", "workerId", "enabled", "includeContext", "contextDepth"} — only what you name changes. Send it in a ```proposal``` block.',
+            description: 'Change a Post-Turn pass. Params: {"id": "<pass id from the state>", "name", "prompt", "workerId", "enabled", "includeContext", "contextDepth", and the generation settings "temperature" 0–2, "topP" 0–1, "topK" 0–200, "maxTokens" 1–32768, "reasoningMode", "reasoningEffort", "reasoningBudget"} — only what you name changes, so you CAN set a pass\'s temperature. Send it in a ```proposal``` block.',
         },
         'postprocess.pass.remove': {
             ...passTool('postprocess.pass.remove', 'removePass'),
