@@ -12,7 +12,7 @@ const LIMITS = Object.freeze({ fields: 12, prompt: 300, defaultText: 80, macroTe
 const TRACKER_WHEN = TRIGGER_MODES.map(mode => mode.value);
 
 const text = (value, max) => (typeof value === 'string' || typeof value === 'number' ? String(value).trim().slice(0, max) : '');
-const slug = (value, max = 32) => text(value, 200).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, max);
+export const slug = (value, max = 32) => text(value, 200).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, max);
 const fail = error => ({ ok: false, error });
 
 /** Параметры трекера → запись для `tracking.configure` (без `workerId`: его подставляет действие) либо `{ ok: false, error }`. */

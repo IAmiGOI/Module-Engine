@@ -431,6 +431,8 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
         list: () => DEFS.map(({ id, title, description, folder }) => ({ id, title, description, folder })),
         enabled: () => [...live.keys()],
         instance: id => live.get(id)?.instance,
+        /** Настройки, которые Модуль разрешил менять гиду (`guideSettings()` → `{ specs, save }`); `null` — Модуль выключен или ничего не объявил. */
+        guideSettings: id => live.get(id)?.instance?.guideSettings?.() ?? null,
         requestHud,
         enable,
         disable,

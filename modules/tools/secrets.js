@@ -9,6 +9,7 @@ import {
     stTool,
 } from '../../libraries/shared/module-kit.js';
 import { computeInsertIndex } from '../../libraries/shared/chat-injection.js';
+import { numberSetting } from '../../libraries/core/guide-settings.js';
 export { computeInsertIndex }; // back-compat for existing importers/tests, per drop-classify.js's own precedent
 
 /**
@@ -383,6 +384,14 @@ export function createSecretsModule(host) {
         newTitle,
         newContent,
         save: saveSettings,
+        guideSettings: () => ({
+            specs: [
+                numberSetting('maxSecrets', 'Maximum secrets', maxSecrets, { min: 1, max: 200, step: 1 }),
+                { ...numberSetting('cleanupBatch', 'Cleanup batch', cleanupBatch, { min: 1, step: 1 }), max: () => Math.max(1, maxSecrets.peek()) },
+                numberSetting('injectionDepth', 'Injection depth (@N)', injectionDepth, { min: 0, max: 50, step: 1 }),
+            ],
+            save: saveSettings,
+        }),
         create,
         remove,
         stop: () => {

@@ -263,6 +263,22 @@ export function createScenePainterModule(host) {
         showInWindow,
         saveSettings,
         saveImageWorkers,
+        guideSettings: () => {
+            const spec = (key, label, type, extra = {}) => ({ key, label, type, ...extra, get: () => settings.peek()[key], set: value => settings.set({ ...settings.peek(), [key]: value }) });
+            return {
+                specs: [
+                    spec('autoPaint', 'Paint automatically after every reply', 'boolean'),
+                    spec('contextMessages', 'Scene depth (last messages)', 'number', { min: 1, max: 20, step: 1 }),
+                    spec('width', 'Width', 'number', { min: 256, max: 2048, step: 64 }),
+                    spec('height', 'Height', 'number', { min: 256, max: 2048, step: 64 }),
+                    spec('openWindow', 'Open the Picture window when a picture is ready', 'boolean'),
+                    spec('useReferences', 'Use character avatars as reference photos', 'boolean'),
+                    spec('includePersona', 'Also send the persona avatar', 'boolean'),
+                    spec('matureContent', 'Describe mature scenes as written', 'boolean'),
+                ],
+                save: async () => { await saveSettings(settings.peek()); view.syncDraft(); },
+            };
+        },
         onGenerationCompleted,
         stop: () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();

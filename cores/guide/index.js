@@ -2,11 +2,14 @@ import { signal } from '../ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { parseArticle, selectArticles, buildGuideSystemPrompt, trimHistory } from '../../libraries/core/guide-knowledge.js';
 import { plainText, splitAutoActions, extractAnchors } from '../../libraries/core/guide-markup.js';
-import { describeProposal } from '../../libraries/core/guide-create.js';
+import { describeProposal } from '../../libraries/core/guide-proposals.js';
 import { createGuideWindow } from './window.js';
 import { createGuideActions } from './actions.js';
 import { createCreateActions } from './create-actions.js';
+import { createEditActions } from './edit-actions.js';
 import { createWhatsNew } from './whats-new.js';
+import { createGuideContext } from './context.js';
+import { NEUTRAL, nextFocus, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
 
 /**
  * Ядро гида — маскот движка и его отдельный чат (замена старого окна онбординга). Чат НЕ чат SillyTavern: история лежит в настройках
@@ -65,7 +68,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     let counter = 0;
 
     const saveSetting = (key, value) => call('storage.settings.set', { namespace: NAMESPACE, key, value });
-    const saveChat = () => saveSetting('chat', { messages: messages.peek().slice(-HISTORY_LIMIT), mode: mode.peek() });
+    // Липкий фокус разговора (guide-relevance.js): какие списки и настройки идут в промпт полностью. Живёт вместе с чатом.
+    let focus = { ...NEUTRAL };
+    const saveChat = () => saveSetting('chat', { messages: messages.peek().slice(-HISTORY_LIMIT), mode: mode.peek(), focus });
     const changed = () => emit('guide.changed', status());
     const nameOf = () => persona.peek().name || DEFAULT_PERSONA.name;
 
@@ -101,6 +106,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const ACTIONS = {
         ...createGuideActions({ host, call, modules, reveal: anchor => reveal(anchor), checklist: CHECKLIST, markDone: async id => { manualDone.set(new Set([...manualDone.peek(), id])); await saveSetting('checklist', [...manualDone.peek()]); } }),
         ...createCreateActions({ call, modules }),
+        ...createEditActions({ call, modules }),
     };
 
     async function runAction(action, params) {
@@ -109,6 +115,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         let result;
         try { result = await entry.run(params ?? {}); } catch (error) { result = { ok: false, message: error.message }; }
         if (result.message) push({ role: 'note', text: result.message, ok: result.ok });
+        if (result.ok && COMPLETING_ACTIONS.has(action)) { focus = { ...focus, done: true }; void saveChat(); }   // факт завершения: на следующей реплике — нейтральный режим, если не назовут новую тему
         changed();
         return result;
     }
@@ -122,7 +129,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     }
 
     /** Карточка предложения: что реально будет создано (по той же нормализации, что и при создании). */
-    const preview = (action, params) => describeProposal(action, params);
+    const preview = (action, params) => describeProposal(action, params, { settingsOf: id => modules?.guideSettings?.(id)?.specs ?? null, titleOf: id => modules?.list?.().find(item => item.id === id)?.title });
 
     /** Открывает блоки, на которые сослалась реплика, — сама, без нажатий (чипы в окне остаются информацией). Не ждём: реплика уже показана. */
     async function openLinked(text) {
@@ -165,13 +172,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     }
 
     // --- Свободный чат -------------------------------------------------------
-    /** Что раскрыто на экране сейчас (`ui.context`): текст для промпта и адреса для подбора статей. Нет ответа — как будто ничего не открыто. */
-    async function screenContext() {
-        const result = await call('ui.context');
-        return result.ok && result.value ? { text: String(result.value.text ?? ''), anchors: (result.value.blocks ?? []).map(block => block.anchor) } : { text: '', anchors: [] };
-    }
+    const context = createGuideContext({ call, modules });
 
-    async function liveContext(screenText = '') {
+    async function liveContext(screenText = '', focus = {}) {
         const workers = await workerStatus();
         const list = modules?.list?.() ?? [];
         const enabled = new Set(modules?.enabled?.() ?? []);
@@ -180,6 +183,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             `Model connections: ${workers.length ? workers.map(worker => `${worker.workerId} — ${worker.state}${worker.lastError ? ` (last error: ${worker.lastError.message})` : ''}`).join('; ') : 'none configured'}.`,
             `Modules: ${list.map(item => `${item.title} (${item.id}) — ${enabled.has(item.id) ? 'on' : 'off'}`).join('; ') || 'none'}.`,
             `First-start checklist: ${checklist.map(item => `${item.title} — ${item.done ? 'done' : 'not yet'}`).join('; ')}.`,
+            await context.editable(focus),
             screenText,
         ].filter(Boolean).join('\n');
     }
@@ -199,11 +203,12 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         changed();
         try {
             const anchorsResult = await call('ui.anchors.list');
-            const screen = await screenContext();
+            const screen = await context.screen();
+            focus = nextFocus(focus, { query: question, anchors: screen.anchors, modules: modules?.list?.() ?? [] });
             const history = messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note');
             const query = history.slice(-4).map(message => message.text).join(' ');
             const system = buildGuideSystemPrompt({
-                persona: persona.peek(), context: await liveContext(screen.text),
+                persona: persona.peek(), context: await liveContext(screen.text, { focus }),
                 anchors: anchorsResult.ok ? anchorsResult.value ?? [] : [],
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
                 articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: screen.anchors }),
@@ -245,6 +250,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         const chat = await read('chat', {});
         messages.set(Array.isArray(chat.messages) ? chat.messages : []);
         mode.set(chat.mode === 'chat' ? 'chat' : 'scenario');
+        focus = sanitizeFocus(chat.focus);
         manualDone.set(new Set(await read('checklist', [])));
         try { scenario = JSON.parse(await loadText('setup-scenario.json')) ?? scenario; } catch { /* сценарий не загрузился — чат всё равно работает */ }
         try {
@@ -275,6 +281,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     async function resetChat({ scenario: withScenario = false } = {}) {
         messages.set([]);
         mode.set('scenario');
+        focus = { ...NEUTRAL };
         await saveChat();
         if (withScenario) sayNode(scenario.start); else await open();
     }
