@@ -25,17 +25,26 @@ test('describeWorldInfo() turns the raw global settings into one readable line; 
     assert.match(wi, /recursive scanning on \(max 3 steps\)/);
     assert.equal(describeWorldInfo(null), '', 'no data — no line, never a fake description');
 
+    // found live: describePreset once used the DOM-binding table's KEYS ('temperature', 'top_p'...) as if they were oai_settings'
+    // own field names — they are not. The real object (default_settings in openai.js) keeps them under a "_openai" suffix
+    // (temp_openai, top_p_openai...); the bare names below must be ignored, not misread as the real field.
     const preset = describePreset({
-        api: 'openai', name: 'My Preset', values: { temperature: 0.9, top_p: 0.95, unknownField: 'x' },
+        api: 'openai', name: 'My Preset', values: { temp_openai: 0.9, top_p_openai: 0.95, temperature: 99, unknownField: 'x' },
         contextTemplate: 'Default', instructEnabled: false, instructTemplate: '',
     });
     assert.match(preset, /API: openai/);
     assert.match(preset, /preset name: "My Preset"/);
     assert.match(preset, /sampler: temperature: 0\.9, top_p: 0\.95/);
+    assert.ok(!preset.includes('99'), 'the bare "temperature" is not a real oai_settings field — must not be read');
     assert.ok(!preset.includes('unknownField'), 'fields the API does not define for samplers are never invented');
     assert.match(preset, /context template: "Default"/);
     assert.ok(!preset.includes('instruct mode'), 'instruct is off and empty — not mentioned');
     assert.equal(describePreset({}), '', 'no values — no line');
+
+    // openai_max_tokens is the RESPONSE length, openai_max_context is the total context window — two different numbers, both labelled distinctly.
+    const withTokens = describePreset({ api: 'openai', name: 'X', values: { openai_max_tokens: 4000, openai_max_context: 128000 } });
+    assert.match(withTokens, /max output tokens: 4000/);
+    assert.match(withTokens, /max context: 128000/);
 
     // Each API names the same sampler field differently — describePreset must use ITS OWN field names, not a generic guess.
     const kobold = describePreset({ api: 'kobold', name: 'GUI KoboldAI Settings', values: { temp: 1.1, rep_pen: 1.05, temperature: 99 } });
@@ -62,13 +71,13 @@ test('stPreset.current reads live sampler values, NOT PresetManager.getSelectedP
     const openaiContext = {
         mainApi: 'openai',
         getPresetManager: () => ({ getSelectedPreset: () => 'my-preset-name', getSelectedPresetName: () => 'My Preset' }),
-        chatCompletionSettings: { temperature: 0.7, top_p: 0.9 },
+        chatCompletionSettings: { temp_openai: 0.7, top_p_openai: 0.9 },
         powerUserSettings: { context: { preset: 'Default' }, instruct: { enabled: false, preset: 'Alpaca' } },
     };
     registerStPresetService(openaiBus, { getContext: () => openaiContext });
     const openaiResult = await new Promise(resolve => openaiBus.subscribe('stPreset.current', {}, resolve));
     assert.equal(openaiResult.value.name, 'My Preset');
-    assert.equal(openaiResult.value.values.temperature, 0.7, 'the real settings object, not the option value "my-preset-name"');
+    assert.equal(openaiResult.value.values.temp_openai, 0.7, 'the real settings object, not the option value "my-preset-name"');
 
     // kobold: not public on getContext() — read live from kai-settings.js, the same trick as st-worldinfo.js.
     const koboldBus = createEngine().buses.services;
@@ -104,7 +113,7 @@ test('editable() adds World Info / preset info only while that topic is in focus
     const callService = async (contract) => {
         calls.push(contract);
         if (contract === 'stWorldInfo.settings') return { ok: true, value: { depth: 4, budget: 25, insertionStrategy: 'evenly', recursive: false, includeNames: false, caseSensitive: false, matchWholeWords: false, useGroupScoring: false } };
-        if (contract === 'stPreset.current') return { ok: true, value: { api: 'openai', name: 'Default', values: { temperature: 0.7 } } };
+        if (contract === 'stPreset.current') return { ok: true, value: { api: 'openai', name: 'Default', values: { temp_openai: 0.7 } } };
         return { ok: false };
     };
     const context = createGuideContext({
