@@ -35,10 +35,16 @@ export function parseArticle(markdown, fallbackId = '') {
 const STOP = new Set('the a an and or to of in on for is it i you my me how what why do does can with this that be are was not no yes'.split(' '));
 const words = text => String(text ?? '').toLowerCase().match(/[a-z0-9]+/g)?.filter(word => word.length > 2 && !STOP.has(word)) ?? [];
 
-/** Статьи к запросу: все `always` плюс до `limit` лучших по совпадению слов. */
-export function selectArticles(articles, query, { limit = 3 } = {}) {
+/**
+ * Статьи к запросу: все `always`, затем статьи РАСКРЫТЫХ сейчас блоков (`openAnchors` — адреса из `ui.context`; статья привязана к блоку полем `anchors`; не больше
+ * двух — это глоссарий полей того, на что человек смотрит), затем до `limit` лучших по совпадению слов.
+ */
+export function selectArticles(articles, query, { limit = 3, openAnchors = [] } = {}) {
     const wanted = new Set(words(query));
-    const scored = (articles ?? []).filter(article => !article.always).map(article => {
+    const open = new Set(openAnchors);
+    const pool = (articles ?? []).filter(article => !article.always);
+    const forOpen = pool.filter(article => article.anchors.some(anchor => open.has(anchor))).slice(0, 2);
+    const scored = pool.filter(article => !forOpen.includes(article)).map(article => {
         let score = 0;
         const tagWords = new Set(article.tags.flatMap(words));
         const titleWords = new Set(words(article.title));
@@ -46,13 +52,14 @@ export function selectArticles(articles, query, { limit = 3 } = {}) {
         for (const word of wanted) score += (tagWords.has(word) ? 3 : 0) + (titleWords.has(word) ? 2 : 0) + (textWords.has(word) ? 0.5 : 0);
         return { article, score };
     }).filter(item => item.score >= 2).sort((a, b) => b.score - a.score).slice(0, limit).map(item => item.article);
-    return [...(articles ?? []).filter(article => article.always), ...scored];
+    return [...(articles ?? []).filter(article => article.always), ...forOpen, ...scored];
 }
 
 const MARKUP_RULES = [
     'Formatting you can use in replies:',
     '- Link to any block of the interface: [Label](stme:ANCHOR) — use only anchors from the list below; it shows up as a small chip that opens the block.',
     '- **bold** for emphasis. Keep paragraphs short.',
+    '- When the state below lists blocks the user has open, they are looking at them right now: explain the fields they ask about using the knowledge and the current values, and talk about "this" block naturally. Never ask for or repeat a secret (fields shown as set/empty).',
     '- Rich blocks, each as a fenced code block with JSON (use them when they help, not in every reply):',
     '  ```choice\n  {"prompt": "What next?", "options": ["Set up a tracker", "Show me the modules"]}\n  ```  — buttons; the chosen option comes back as the user\'s message.',
     '  ```card\n  {"title": "Tracker", "text": "Keeps values like health or mood up to date.", "anchor": "card:modules"}\n  ```',
