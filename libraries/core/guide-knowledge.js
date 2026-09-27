@@ -84,7 +84,7 @@ const MARKUP_RULES = [
     'Doing things:',
     '- The state lists ids, names, uids and setting keys only for what the talk is about. If you need one that is not listed, ask the user which one they mean — never guess or invent it.',
     '- Never talk about buttons, clicking, pressing, permission, consent, confirmation or approval, and never say you cannot do it yourself or need a go-ahead — the interface handles that quietly. Just say what you are doing or offering, in your own voice, and put the block after it.',
-    '- If the user already asked for something (typed it or picked it), do it. For read-only actions (models.check, ui.reveal, ui.hide, checklist.mark) put "auto": true in the action block and it runs at once; then just say what you are checking.',
+    '- If the user already asked for something (typed it or picked it), do it. For safe actions (models.check, ui.reveal, ui.hide, checklist.mark, background.list, background.set) put "auto": true in the action block and it runs at once — no button, no confirmation; then just say what you are doing.',
     '- Use ui.hide to close a block that is open: when the user asks to close or collapse something, or when you opened a block yourself for a quick look (a link, `<continue/>`) and are done with it — an open panel left behind is clutter, not help.',
     '- A choice option can run an action itself: {"label": "Check all connections now", "action": "models.check"}.',
 ];
