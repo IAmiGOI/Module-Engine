@@ -11,9 +11,12 @@ import { planSettingChanges, describePlan } from './guide-settings.js';
  *   macro.update    { name, text | code }        macro.delete { name }
  *   lorebook.updateEntry { uid, book?, title?, keys?, content?, always? }     lorebook.deleteEntry { uid, book? }
  *   module.setting.set   { module, changes: { key: value } }   — только то, что Модуль объявил (guide-settings.js)
+ *   postprocess.pass.add { name?, prompt, workerId?, includeContext?, contextDepth?, position? }   .update { id, name?, prompt?, workerId?, enabled?, includeContext?, contextDepth? }
+ *   postprocess.pass.remove { id }   .move { id, position }   — проходы Post-Turn Processor (исполняет сам Модуль через `guideTools()`)
  */
 
-export const EDIT_ACTIONS = Object.freeze(['tracker.update', 'tracker.delete', 'macro.update', 'macro.delete', 'lorebook.updateEntry', 'lorebook.deleteEntry', 'module.setting.set']);
+export const EDIT_ACTIONS = Object.freeze(['tracker.update', 'tracker.delete', 'macro.update', 'macro.delete', 'lorebook.updateEntry', 'lorebook.deleteEntry', 'module.setting.set',
+    'postprocess.pass.add', 'postprocess.pass.update', 'postprocess.pass.remove', 'postprocess.pass.move']);
 
 const text = (value, max) => (typeof value === 'string' || typeof value === 'number' ? String(value).trim().slice(0, max) : '');
 const fail = error => ({ ok: false, error });
@@ -91,6 +94,45 @@ export function normalizeEntryRef(params = {}) {
     return Number.isInteger(uid) ? { ok: true, value: { uid, book: text(params.book, 120) || undefined } } : fail('Which entry? Its uid is needed.');
 }
 
+/** Проходы Post-Turn Processor: параметры → `{ ok, value }` (только названное) либо ошибка. Существование id и подключения проверяет сам Модуль. */
+export function normalizePassParams(action, params = {}) {
+    const id = text(params.id, 80);
+    const position = Number.isInteger(Number(params.position)) && Number(params.position) >= 1 ? Number(params.position) : undefined;
+    const fields = {};
+    if (typeof params.name === 'string' && params.name.trim()) fields.name = text(params.name, 60);
+    if (typeof params.prompt === 'string' && params.prompt.trim()) fields.prompt = text(params.prompt, 4000);
+    if (typeof params.workerId === 'string') fields.workerId = text(params.workerId, 120);
+    if (typeof params.enabled === 'boolean') fields.enabled = params.enabled;
+    if (typeof params.includeContext === 'boolean') fields.includeContext = params.includeContext;
+    if (params.contextDepth !== undefined && Number.isFinite(Number(params.contextDepth))) fields.contextDepth = Math.round(Number(params.contextDepth));
+    if (action === 'postprocess.pass.add') return fields.prompt ? { ok: true, value: { fields: { name: fields.name ?? 'New pass', ...fields }, position } } : fail('A pass needs an instruction (what to do with the reply).');
+    if (!id) return fail('Which pass? Its id is needed.');
+    if (action === 'postprocess.pass.remove') return { ok: true, value: { id } };
+    if (action === 'postprocess.pass.move') return position ? { ok: true, value: { id, position } } : fail('Move to which position (1 = first)?');
+    return Object.keys(fields).length ? { ok: true, value: { id, fields } } : fail('Nothing to change in the pass.');
+}
+
+function describePass(action, params) {
+    const made = normalizePassParams(action, params);
+    if (!made.ok) return made;
+    const { value } = made;
+    if (action === 'postprocess.pass.add') {
+        const { fields } = value;
+        return { ok: true, title: `New pass “${fields.name}”`, lines: [`Instruction: ${fields.prompt.slice(0, 240)}`, `Model: ${fields.workerId || 'any connection'}`, ...(fields.includeContext ? [`Sees the last ${fields.contextDepth ?? 6} chat messages too`] : []), value.position ? `Position: ${value.position}` : 'Runs last'] };
+    }
+    if (action === 'postprocess.pass.remove') return { ok: true, danger: true, title: 'Delete a Post-Turn pass', lines: [`Pass ${value.id} is removed; the other passes keep their order.`] };
+    if (action === 'postprocess.pass.move') return { ok: true, title: 'Reorder Post-Turn passes', lines: [`Pass ${value.id} → position ${value.position}. Each pass sees the result of the one before it.`] };
+    const { fields } = value;
+    return { ok: true, title: `Change Post-Turn pass ${value.id}`, lines: [
+        ...(fields.name !== undefined ? [`Name: ${fields.name}`] : []),
+        ...(fields.prompt !== undefined ? [`Instruction: ${fields.prompt.slice(0, 240)}`] : []),
+        ...(fields.workerId !== undefined ? [`Model: ${fields.workerId || 'any connection'}`] : []),
+        ...(fields.enabled !== undefined ? [fields.enabled ? 'Turn on' : 'Turn off'] : []),
+        ...(fields.includeContext !== undefined ? [fields.includeContext ? 'Also sees recent chat messages' : 'Sees only the text it rewrites'] : []),
+        ...(fields.contextDepth !== undefined ? [`Chat context: ${fields.contextDepth} messages`] : []),
+    ] };
+}
+
 /**
  * Описание для карточки: `{ ok, title, lines, danger }`. `context.settingsOf(moduleId)` → спецификации Модуля (для «было → стало»).
  */
@@ -141,5 +183,6 @@ export function describeEdit(action, params, context = {}) {
         const plan = planSettingChanges(specs, params?.changes);
         return plan.ok ? { ok: true, title: `Settings — ${context.titleOf?.(moduleId) ?? moduleId}`, lines: describePlan(plan.changes) } : plan;
     }
+    if (action.startsWith('postprocess.pass.')) return describePass(action, params);
     return fail(`Unknown proposal "${action}".`);
 }

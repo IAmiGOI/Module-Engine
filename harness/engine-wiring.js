@@ -433,6 +433,8 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
         instance: id => live.get(id)?.instance,
         /** Настройки, которые Модуль разрешил менять гиду (`guideSettings()` → `{ specs, save }`); `null` — Модуль выключен или ничего не объявил. */
         guideSettings: id => live.get(id)?.instance?.guideSettings?.() ?? null,
+        /** Инструменты, которые Модуль дал гиду сверх настроек (`guideTools()`: чтение состояния для промпта и операции над его данными); `null` — выключен или не объявил. */
+        guideTools: id => live.get(id)?.instance?.guideTools?.() ?? null,
         requestHud,
         enable,
         disable,

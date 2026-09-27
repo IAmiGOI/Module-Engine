@@ -20,12 +20,15 @@ export const NEUTRAL = Object.freeze({ trackers: false, macros: false, lorebook:
 
 const words = text => String(text ?? '').toLowerCase();
 
+/** Как люди называют Модуль, не повторяя его название: «passes» — это Post-Turn Processor. */
+const MODULE_ALIASES = Object.freeze({ 'module.postprocess': /\b(post[- ]?turn|post[- ]?process\w*|pass(?:es)?)\b/i });
+
 /** Модуль упомянут: по названию («Scene Painter», «Music») или по короткому id (`scenePainter`) в реплике, либо раскрыт на экране. */
 const moduleNamed = (module, text, anchors) => {
     if (anchors.includes(`module:${module.id}`)) return true;
     const title = words(module.title);
     const shortId = words(String(module.id).replace(/^module\./, ''));
-    return Boolean((title && words(text).includes(title)) || (shortId && words(text).includes(shortId)));
+    return Boolean((title && words(text).includes(title)) || (shortId && words(text).includes(shortId)) || MODULE_ALIASES[module.id]?.test(text));
 };
 
 /** Что назвала эта реплика (и НОВО раскрытые блоки): `null`, если ничего — тогда фокус не меняется. */

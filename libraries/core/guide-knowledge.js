@@ -1,3 +1,5 @@
+import { notesBlock } from './guide-thinking.js';
+
 /**
  * Знания гида — чистые функции: разбор статей (`guide/knowledge/*.md`), выбор нужных к вопросу и сборка системного промпта.
  *
@@ -69,6 +71,9 @@ const MARKUP_RULES = [
     '  ```checklist\n  {}\n  ```  — the live first-start checklist.',
     '  ```creator\n  {}\n  ```  — a ready contact card for the creator of Module Engine (name and Discord button); the text around it is yours.',
     '  ```proposal\n  {"action": "tracker.create", "params": {…}}\n  ```  — for CREATING, CHANGING or DELETING things (trackers, macros, lorebook entries) and for changing module settings; the actions and their params are in the action list. It appears as a card with the details. Talk about it naturally ("here\'s a health tracker for you", "I\'ll lower the similarity a bit"); never say it is already done. Use only ids, names, uids and setting keys that appear in the state below.',
+    'Thinking (for complex jobs only — several steps, changing existing things, checking limits; skip it for a simple answer):',
+    '- Reason first inside <think>…</think>: what is asked, what is needed, which ids and limits apply, the order of steps, what could go wrong. Then write the reply. The user never sees <think>.',
+    '- Keep short working notes in <notes>…</notes> at the start of a reply while a job runs: the plan and what is already done. They come back to you in the next turns; a new <notes> replaces the old one. Write an empty <notes></notes> when the job is finished or the topic changes. Never mention think or notes to the user.',
     'Doing things:',
     '- The state lists ids, names, uids and setting keys only for what the talk is about. If you need one that is not listed, ask the user which one they mean — never guess or invent it.',
     '- Never talk about buttons, clicking, pressing, permission, consent, confirmation or approval, and never say you cannot do it yourself or need a go-ahead — the interface handles that quietly. Just say what you are doing or offering, in your own voice, and put the block after it.',
@@ -81,7 +86,7 @@ const MARKUP_RULES = [
  * `persona` = `{ name, personality, style, instructions }`; `context` — готовый текст состояния; `anchors` — `[{ anchor, path }]`;
  * `actions` — `[{ id, description }]`.
  */
-export function buildGuideSystemPrompt({ persona = {}, context = '', anchors = [], actions = [], articles = [] } = {}) {
+export function buildGuideSystemPrompt({ persona = {}, context = '', anchors = [], actions = [], articles = [], notes = '' } = {}) {
     const name = persona.name || 'the guide';
     return [
         `You are ${name}, the mascot and built-in guide of Module Engine, an extension for SillyTavern. You live inside the extension and talk to its user in a separate chat.`,
@@ -93,6 +98,8 @@ export function buildGuideSystemPrompt({ persona = {}, context = '', anchors = [
         '',
         ...MARKUP_RULES,
         '',
+        notesBlock(notes),
+        notesBlock(notes) ? '' : null,
         '## Live state of the engine',
         context || '(unknown)',
         '',

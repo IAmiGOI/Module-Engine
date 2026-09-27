@@ -12,3 +12,5 @@ The Post-Turn Processor rewrites each fresh reply through a chain of independent
 - **Auto-run after each reply** — process every fresh reply by itself. Off means only by hand.
 - **Process last reply now** — runs the chain on the latest reply once; safe to press twice, an already processed reply is skipped.
 - **Enabled** — the whole module on or off. **Save** stores the chain.
+
+You can add, change, reorder and delete passes for the user yourself (they appear as cards). Pass ideas that actually do something: a clean-up pass ("Fix grammar and spelling. Do not change the story or tone."), a spice-up pass ("Rewrite in a more vivid, sensory style. Keep all events and dialogue intact."), a de-cliché pass ("Remove repetitive phrases and clichés. Keep meaning and tone."). Each pass sees the result of the one before it, so order matters. A pass may use its own model connection — only ones that exist.

@@ -700,6 +700,61 @@ export function createPostprocessModule(host) {
         applySampler,
         savePreset,
         deletePreset,
+        /**
+         * Инструменты для гида (cores/guide/edit-actions.js): проходы читаются и правятся тем же живым списком и тем же сохранением, что в карточке. Значения проверяются
+         * здесь же: подключение — только существующее, остальное — общей `sanitizePasses`. Возвращают `{ ok, message }`.
+         */
+        guideTools: () => {
+            const current = () => passes.peek().map(collectPass);
+            const validWorker = id => !id || workers.peek().some(option => option.value === id);
+            const workerError = id => ({ ok: false, message: `There is no model connection "${id}". Available: ${workers.peek().filter(option => option.value).map(option => option.value).join(', ') || 'none'}.` });
+            const commit = async list => {
+                passUi.clear();   // черновики полей строятся заново из новых данных
+                passes.set(list);
+                return save();
+            };
+            const find = (list, id) => list.findIndex(pass => pass.id === id);
+            const missing = id => ({ ok: false, message: `There is no pass "${id}".` });
+            return {
+                describe: () => {
+                    const list = current();
+                    const workerIds = workers.peek().filter(option => option.value).map(option => option.value);
+                    return `Post-Turn passes (run in this order after each reply; each sees the previous result): ${list.length
+                        ? list.map((pass, index) => `${index + 1}. ${pass.id} “${pass.name}” [${pass.enabled ? 'on' : 'off'}, model: ${pass.workerId || 'any'}${pass.includeContext ? `, sees ${pass.contextDepth} chat messages` : ''}] — ${pass.prompt.slice(0, 160)}${pass.prompt.length > 160 ? '…' : ''}`).join(' | ')
+                        : 'none yet'}. Model connections: ${workerIds.join(', ') || 'none'}.`;
+                },
+                async addPass({ fields, position }) {
+                    if (!validWorker(fields.workerId)) return workerError(fields.workerId);
+                    const list = current();
+                    const pass = sanitizePasses([{ ...createPass(), ...fields }])[0];
+                    list.splice(position ? Math.min(position - 1, list.length) : list.length, 0, pass);
+                    return (await commit(list)) ? { ok: true, message: `Pass “${pass.name}” is added${position ? ` at position ${Math.min(position, list.length)}` : ''}.` } : { ok: false, message: 'Could not save the pass.' };
+                },
+                async updatePass({ id, fields }) {
+                    const list = current();
+                    const index = find(list, id);
+                    if (index < 0) return missing(id);
+                    if (fields.workerId !== undefined && !validWorker(fields.workerId)) return workerError(fields.workerId);
+                    list[index] = sanitizePasses([{ ...list[index], ...fields }])[0];
+                    return (await commit(list)) ? { ok: true, message: `Pass “${list[index].name}” is updated.` } : { ok: false, message: 'Could not save the pass.' };
+                },
+                async removePass({ id }) {
+                    const list = current();
+                    const index = find(list, id);
+                    if (index < 0) return missing(id);
+                    const [removed] = list.splice(index, 1);
+                    return (await commit(list)) ? { ok: true, message: `Pass “${removed.name}” is deleted.` } : { ok: false, message: 'Could not save.' };
+                },
+                async movePass({ id, position }) {
+                    const list = current();
+                    const index = find(list, id);
+                    if (index < 0) return missing(id);
+                    const [moved] = list.splice(index, 1);
+                    list.splice(Math.min(position - 1, list.length), 0, moved);
+                    return (await commit(list)) ? { ok: true, message: `Pass “${moved.name}” is now number ${list.indexOf(moved) + 1}.` } : { ok: false, message: 'Could not save.' };
+                },
+            };
+        },
         refreshWorkers,
         refreshCustomPresets,
         autoRun,

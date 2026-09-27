@@ -32,6 +32,8 @@ export function createGuideContext({ call, modules }) {
         const known = modules?.list?.() ?? [];
         const quiet = [];
         for (const id of modules?.enabled?.() ?? []) {
+            const tools = modules?.guideTools?.(id);
+            if (tools?.describe && focus.modules.includes(id)) lines.push(tools.describe());
             const declared = modules?.guideSettings?.(id);
             if (!declared?.specs?.length) continue;
             const module = known.find(item => item.id === id) ?? { id, title: id };

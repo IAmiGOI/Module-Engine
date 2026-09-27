@@ -1,4 +1,4 @@
-import { normalizeTrackerPatch, applyTrackerPatch, normalizeId, normalizeMacroPatch, normalizeMacroName, normalizeEntryPatch, normalizeEntryRef } from '../../libraries/core/guide-edit.js';
+import { normalizeTrackerPatch, applyTrackerPatch, normalizeId, normalizeMacroPatch, normalizeMacroName, normalizeEntryPatch, normalizeEntryRef, normalizePassParams } from '../../libraries/core/guide-edit.js';
 import { planSettingChanges, describePlan } from '../../libraries/core/guide-settings.js';
 
 /**
@@ -8,6 +8,16 @@ import { planSettingChanges, describePlan } from '../../libraries/core/guide-set
  */
 export function createEditActions({ call, modules }) {
     const failure = message => ({ ok: false, message });
+    /** Проходы Post-Turn Processor исполняет сам Модуль (`guideTools()` в его объекте): у него их живой список и сохранение. Выключен — отказ. */
+    const passTool = (action, method) => ({
+        async run(params = {}) {
+            const tools = modules?.guideTools?.('module.postprocess');
+            if (!tools) return failure('Post-Turn Processor is off — turn it on first.');
+            const made = normalizePassParams(action, params);
+            if (!made.ok) return failure(made.error);
+            return tools[method](made.value);
+        },
+    });
     const ownTracker = (list, id) => list.find(tracker => tracker.id === id && tracker.kind !== 'system' && !tracker.ownerId);
 
     async function trackers() {
@@ -88,6 +98,22 @@ export function createEditActions({ call, modules }) {
                 const removed = await call('lorebook.deleteEntry', { uid: made.value.uid, book: made.value.book });
                 return removed.ok ? { ok: true, message: `Lorebook entry #${made.value.uid} is deleted.` } : failure(removed.error.message);
             },
+        },
+        'postprocess.pass.add': {
+            ...passTool('postprocess.pass.add', 'addPass'),
+            description: 'Add a pass to the Post-Turn Processor (it rewrites each fresh reply; passes run in order, each sees the previous result). Params: {"name": "Fix grammar", "prompt": "Fix grammar and spelling. Do not change the story or tone.", "workerId": "optional connection id from the state", "includeContext": false, "contextDepth": 6, "position": 1 (optional, default last)}. Send it in a ```proposal``` block.',
+        },
+        'postprocess.pass.update': {
+            ...passTool('postprocess.pass.update', 'updatePass'),
+            description: 'Change a Post-Turn pass. Params: {"id": "<pass id from the state>", "name", "prompt", "workerId", "enabled", "includeContext", "contextDepth"} — only what you name changes. Send it in a ```proposal``` block.',
+        },
+        'postprocess.pass.remove': {
+            ...passTool('postprocess.pass.remove', 'removePass'),
+            description: 'Delete a Post-Turn pass. Params: {"id": "<pass id>"}. Send it in a ```proposal``` block.',
+        },
+        'postprocess.pass.move': {
+            ...passTool('postprocess.pass.move', 'movePass'),
+            description: 'Move a Post-Turn pass to a position (1 = runs first). Params: {"id": "<pass id>", "position": 2}. Send it in a ```proposal``` block.',
         },
         'module.setting.set': {
             description: 'Change settings of a module that is ON. Params: {"module": "module.music", "changes": {"minSimilarity": 0.4, "autoSwitch": false}}. Only the keys listed under "Settings you can change" in the state exist. Send it in a ```proposal``` block.',
