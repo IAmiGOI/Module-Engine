@@ -200,6 +200,8 @@ const DEFINITIONS = [{
             'audio.put', 'audio.get', 'audio.delete',
             // Звук — только через Сервис воспроизведения (единственный владелец <audio>).
             'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek',
+            // Разметка треков моделью пользователя (описания настроения → эмбединг).
+            'model.generate',
             // Вектор сцены и вектора треков — локальный эмбединг.
             'embedding.compute', 'embedding.similarity',
         ],

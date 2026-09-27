@@ -6,11 +6,12 @@
  * но и «отдать ему audio-элемент» тоже нельзя, у Гейта модулей нет такого
  * канала. Вместо этого Модуль просит Сервис контрактом:
  *
- *  - `audio.playback.play`   `{ id, blob, volume, onEnded }` — играть трек (Blob; объектный URL живёт здесь);
+ *  - `audio.playback.play`   `{ id, blob | source, volume, onEnded }` — играть трек. Источник: `blob` (свой файл) либо
+ *                            `source: { kind: 'url', ref }` (прямая ссылка на аудиофайл или поток);
  *  - `audio.playback.pause`  `{}` — пауза;
- *  - `audio.playback.volume` `{ value }` — громкость 0…1 (применяется и к ещё не созданному элементу — запомнится до первого play);
- *  - `audio.playback.seek`   `{ time }` — перемотка на `time` секунд (в пределах длительности, если она известна);
- *  - `audio.playback.state`  `{}` — снимок `{ id, playing, currentTime, duration }` (секунды; `duration` — 0, пока неизвестна или у потока).
+ *  - `audio.playback.volume` `{ value }` — громкость 0…1 (применяется и до первого трека — запомнится);
+ *  - `audio.playback.seek`   `{ time }` — перемотка, секунды (в пределах длительности, если она известна);
+ *  - `audio.playback.state`  `{}` — снимок `{ id, playing, currentTime, duration }` (секунды; `duration` — 0, пока неизвестна).
  *
  * Байты трека Модуль достаёт сам через `audio.get` (audio-store.js) и
  * передаёт Blob сюда — объектный URL создаётся и отзывается ЗДЕСЬ, потому
@@ -21,7 +22,7 @@ const clamp01 = value => Math.min(1, Math.max(0, value));
 
 export function registerAudioPlaybackService(bus, { createAudio = () => new Audio() } = {}) {
     let element = null;      // ленивый <audio>; до первого play DOM не трогаем
-    let currentUrl = null;
+    let currentUrl = null;   // объектный URL своего файла (на прямую ссылку не заводится)
     let currentId = null;
     let endedListener = null;
     let volume = 1;          // громкость, заданная до появления элемента
@@ -47,14 +48,15 @@ export function registerAudioPlaybackService(bus, { createAudio = () => new Audi
     const finiteDuration = el => (el && Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 0);
 
     const unregisters = [
-        bus.register('audio.playback.play', async ({ id, blob, onEnded, volume: requested } = {}) => {
-            if (!blob) return { ok: false };
+        bus.register('audio.playback.play', async ({ id, blob, source, onEnded, volume: requested } = {}) => {
+            const stream = source?.kind === 'url';
+            if (stream ? !source.ref : !blob) return { ok: false };
             const el = ensureElement();
             if (!id || id !== currentId) {
                 releaseUrl();
-                currentUrl = URL.createObjectURL(blob);
                 currentId = id ?? null;
-                el.src = currentUrl;
+                if (stream) el.src = source.ref;
+                else { currentUrl = URL.createObjectURL(blob); el.src = currentUrl; }
             }
             endedListener = typeof onEnded === 'function' ? onEnded : null;
             if (Number.isFinite(requested)) { volume = clamp01(requested); el.volume = volume; }

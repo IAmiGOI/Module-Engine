@@ -73,3 +73,17 @@ test('the ended callback of the LATEST play() is the one that fires, also on an 
     audio.emit('ended');
     assert.deepEqual(calls, ['second']);
 });
+
+test('a direct link plays through the same element without an object URL; a link without an address is refused; the state follows the element', async () => {
+    const bus = makeBus();
+    const audio = makeAudio();
+    registerAudioPlaybackService(bus, { createAudio: () => audio });
+    assert.deepEqual(await bus.call('audio.playback.play', { id: 'u1', source: { kind: 'url' } }), { ok: false }, 'no address');
+    assert.deepEqual(await bus.call('audio.playback.play', { id: 'u1', source: { kind: 'url', ref: 'https://example.com/a.mp3' }, volume: 0.5 }), { ok: true, started: true });
+    assert.equal(audio.src, 'https://example.com/a.mp3');
+    assert.equal(audio.volume, 0.5);
+    audio.currentTime = 7; audio.duration = 90;
+    assert.deepEqual(await bus.call('audio.playback.state'), { id: 'u1', playing: true, currentTime: 7, duration: 90 });
+    await bus.call('audio.playback.play', { id: 'u1', source: { kind: 'url', ref: 'https://example.com/other.mp3' } });
+    assert.equal(audio.src, 'https://example.com/a.mp3', 'the same track id is not reloaded');
+});
