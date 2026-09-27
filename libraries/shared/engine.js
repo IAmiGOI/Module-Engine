@@ -110,7 +110,9 @@ export function createEngine() {
      * закрытая тем же способом: не «структурно один путь», а физическая
      * невозможность обойти проверку.
      */
-    function resolveAs(callerId, contract, params) {
+    // `priority` — тот же флаг места вызова, что у `request()`: пайплайн генерации помечает им свои этапы, чтобы запросы к моделям
+    // из них шли вперёд фоновых (dispatch-queue.js).
+    function resolveAs(callerId, contract, params, { priority } = {}) {
         const caller = callers.get(callerId);
         if (!caller) return Promise.resolve({ ok: false, error: { message: `Unknown caller "${callerId}" — an unregistered caller has no rights at all.` } });
         const domain = locateDomain(contract);
@@ -119,7 +121,7 @@ export function createEngine() {
         // особым случаем здесь (см. PIPELINE.md про выдуманный инструмент).
         const accessor = domain && domain !== caller.homeDomain ? caller.host[domain] : caller.host.own;
         if (!accessor) return Promise.resolve({ ok: false, error: { message: `Caller "${callerId}" cannot reach the "${domain}" domain.` } });
-        return request(accessor, contract, { params });
+        return request(accessor, contract, { params, priority });
     }
 
     return { events, buses, rights, registerCaller, resolveAs };

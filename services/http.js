@@ -13,10 +13,12 @@ import { createSseFrameParser } from '../libraries/core/sse-stream.js';
  * this closes).
  */
 export function registerHttpService(networkBus, { fetch: fetchImpl = globalThis.fetch?.bind(globalThis) } = {}) {
-    return networkBus.register('http.request', async ({ url, method = 'GET', headers, body, responseType, stream, onChunk, stallMs }) => {
-        if (stream) return dispatchStreamingRequest(fetchImpl, { url, method, headers, body, onChunk, stallMs });
+    // `signal` (AbortSignal) — отмена вызывающим: очередь моделей обрывает попытку, которая не уложилась в срок или уступила запасному
+    // воркеру, а не бросает её висеть и тратить оплаченный запрос (libraries/core/dispatch-queue.js).
+    return networkBus.register('http.request', async ({ url, method = 'GET', headers, body, responseType, stream, onChunk, stallMs, signal }) => {
+        if (stream) return dispatchStreamingRequest(fetchImpl, { url, method, headers, body, onChunk, stallMs, signal });
 
-        const response = await fetchImpl(url, { method, headers, body });
+        const response = await fetchImpl(url, { method, headers, body, ...(signal ? { signal } : {}) });
         // responseType: 'blob' — БИНАРНЫЙ ответ (например, картинка для окна
         // «Картинка», cores/ui/picture-panel.js). Дефолтный `text` прогоняет
         // тело через UTF-8 декодер: байты картинки портятся безвозвратно
@@ -53,8 +55,11 @@ export function registerHttpService(networkBus, { fetch: fetchImpl = globalThis.
  * вызов от начала", годится лишь нестримингового пути, см. dispatchToWorker
  * в cores/models/internal-engine.js).
  */
-async function dispatchStreamingRequest(fetchImpl, { url, method, headers, body, onChunk, stallMs }) {
+async function dispatchStreamingRequest(fetchImpl, { url, method, headers, body, onChunk, stallMs, signal }) {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const forwardAbort = () => controller?.abort();
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener?.('abort', forwardAbort, { once: true });
     let stalled = false;
     let timer = null;
     const armTimer = () => {
@@ -68,6 +73,7 @@ async function dispatchStreamingRequest(fetchImpl, { url, method, headers, body,
         const response = await fetchImpl(url, { method, headers, body, signal: controller?.signal });
         const text = await readSseBody(response, { onChunk, armTimer });
         clearTimeout(timer);
+        signal?.removeEventListener?.('abort', forwardAbort);
         return {
             status: response.status,
             ok: response.ok,
@@ -76,6 +82,7 @@ async function dispatchStreamingRequest(fetchImpl, { url, method, headers, body,
         };
     } catch (error) {
         clearTimeout(timer);
+        signal?.removeEventListener?.('abort', forwardAbort);
         // Отличаем НАШ таймаут от реального сетевого/провайдерского отказа:
         // без этого вызывающий (Ядро моделей) видел бы generic "AbortError"
         // и не смог бы отличить "стрим завис" от "ключ протух" в событии

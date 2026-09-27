@@ -513,7 +513,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // отправку себе. `interceptTarget` — «глобальный объект», на который
     // ставится именованная функция перехватчика и чей `fetch` подменяется;
     // в реальном ST это window, в харнессе — его собственный поддельный ST.
-    registerStGenerationService(engine.buses.services, { target: interceptTarget });
+    registerStGenerationService(engine.buses.services, { target: interceptTarget, getContext });
     // Git-эндпоинты ST и сессия страницы — всё, что нужно самообновлению.
     // `fetch` передаётся ЯВНО. Значение по умолчанию (`globalThis.fetch`)
     // вызывалось бы без получателя, а браузерный `fetch` требует, чтобы `this`
@@ -816,7 +816,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // silently leaving a real, non-empty Lorebook's graph bootstrap empty
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
-    await Promise.all([modelsCore.restoreWorkers(), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), summaryCore.load()]);
+    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), summaryCore.load()]);
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
     // отдельно" — при большом Lorebook эмбединг каждой записи по

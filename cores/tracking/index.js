@@ -259,7 +259,7 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
      * контракт — любой трекер (не только специализированный Модуль) получает
      * эту наблюдаемость бесплатно.
      */
-    async function poll(trackerId, vars = {}) {
+    async function poll(trackerId, vars = {}, { priority } = {}) {
         const tracker = requireTracker(trackerId);
         publishEvent('tracking.poll.started', { trackerId });
         try {
@@ -281,6 +281,7 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
                     temperature: tracker.temperature, topP: tracker.topP, topK: tracker.topK, maxTokens: tracker.maxTokens,
                     reasoningMode: tracker.reasoningMode, reasoningEffort: tracker.reasoningEffort, reasoningBudget: tracker.reasoningBudget,
                 },
+                priority,
             });
             if (!result.ok) throw new Error(result.error.message);
             const parsed = parseModelJson(result.value);
@@ -407,7 +408,8 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
             return result;
         }),
         host.own.register('tracking.fields', params => listFields(params?.trackerId)),
-        host.own.register('tracking.poll', params => poll(params?.trackerId, params?.vars)),
+        // `meta.priority` пробрасывается в `model.generate`: блокирующий опрос перед ответом (этап пайплайна) не ждёт за фоновыми.
+        host.own.register('tracking.poll', (params, meta) => poll(params?.trackerId, params?.vars, { priority: meta?.priority })),
         host.own.register('tracking.reset', params => reset(params?.trackerId)),
         // Читать и править конфигурацию трекеров через Шину — иначе UI пришлось
         // бы держать JS-ссылку на Ядро, то есть ходить в обход Гейта ровно там,

@@ -155,7 +155,8 @@ export function createPipelineCore(host, { publish, resolveAs, timeouts } = {}) 
             input,
             // Вот та единственная точка, где объявление превращается в
             // работу — и она идёт ПОД ЛИЧНОСТЬЮ владельца этапа.
-            execute: ({ stageId, contract, params }) => resolveAs(stageOwner.get(stageId), contract, params),
+            // Этапы пайплайна — критический путь генерации: их запросы к моделям идут вперёд фоновых (`priority: 'pipeline'`).
+            execute: ({ stageId, contract, params }) => resolveAs(stageOwner.get(stageId), contract, params, { priority: 'pipeline' }),
             resolveTimeout: ({ stage }) => resolveTimeoutFor(pipelineId, stage),
             onEvent: (name, payload) => {
                 if (name === 'stageFinished') rememberDuration(`${pipelineId}:${payload.stageId}`, payload.attemptDurationMs);

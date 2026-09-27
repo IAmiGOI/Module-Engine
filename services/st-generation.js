@@ -1,3 +1,5 @@
+import { buildMainConnectionRequest, describeMainConnection, extractMainConnectionText } from '../libraries/core/st-main-request.js';
+
 /**
  * Сервис перехвата генерации ST — единственное место во всём движке, которое
  * знает, ГДЕ SillyTavern придерживает генерацию и КУДА он её отправляет.
@@ -59,11 +61,12 @@ function jsonResponse(body, status) {
     return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-// `getContext` этому Сервису не нужен — обе точки живут не в контексте ST, а
-// на глобальном объекте (`globalThis[имя]` для перехватчика и `fetch` для
-// отправки). `target` существует ровно чтобы тесты могли подсунуть свой
-// «глобальный объект» вместо настоящего.
-export function registerStGenerationService(bus, { target = globalThis } = {}) {
+// Обе точки перехвата живут не в контексте ST, а на глобальном объекте
+// (`globalThis[имя]` для перехватчика и `fetch` для отправки). `target`
+// существует ровно чтобы тесты могли подсунуть свой «глобальный объект».
+// `getContext` нужен только прямому запросу к основному подключению ST
+// (`stGeneration.direct`): его настройки и заголовки сервера ST.
+export function registerStGenerationService(bus, { target = globalThis, getContext = () => null } = {}) {
     let installedInterceptor = null; // имя глобальной функции
     let originalFetch = null;
 
@@ -128,7 +131,34 @@ export function registerStGenerationService(bus, { target = globalThis } = {}) {
         return true;
     }
 
+    /**
+     * Основное подключение ST как воркер движка (libraries/core/st-main-request.js): запрос к бэкенду самого ST с его текущими
+     * настройками. Идёт через ИСХОДНЫЙ `fetch`, мимо нашей же обёртки отправки: это не генерация чата, и пайплайн `generation.payload`
+     * (вклады лорбука, времени и т. п.) к фоновому запросу трекера не относится. Ошибка сервера возвращается с `status` — по нему Ядро
+     * моделей отличает «провайдер лежит» от «запрос не тот».
+     */
+    async function direct({ messages, prompt, systemPrompt, maxTokens, temperature, signal } = {}) {
+        const context = getContext();
+        if (!context) throw new Error('stGeneration.direct: SillyTavern context is not available.');
+        const { url, body } = buildMainConnectionRequest(context, { messages, prompt, systemPrompt, maxTokens, temperature });
+        const send = originalFetch ?? target.fetch;
+        const response = await send.call(target, url, {
+            method: 'POST', headers: context.getRequestHeaders?.() ?? { 'Content-Type': 'application/json' }, cache: 'no-cache',
+            body: JSON.stringify(body), ...(signal ? { signal } : {}),
+        });
+        const raw = await response.text();
+        let json = null;
+        try { json = JSON.parse(raw); } catch { json = null; }
+        const serverError = json?.error ? String(json.error.message ?? json.error) : '';
+        if (!response.ok || serverError) {
+            return { ok: false, status: response.ok ? 502 : response.status, error: serverError || raw.slice(0, 200) || `HTTP ${response.status}` };
+        }
+        return { ok: true, status: response.status, text: extractMainConnectionText(json) };
+    }
+
     const unregisters = [
+        bus.register('stGeneration.direct', params => direct(params), { loadMetric: () => 0 }),
+        bus.register('stGeneration.mainConnection', () => describeMainConnection(getContext()), { loadMetric: () => 0 }),
         bus.register('stGeneration.installInterceptor', params => installInterceptor(params), { loadMetric: () => 0 }),
         bus.register('stGeneration.uninstallInterceptor', params => uninstallInterceptor(params), { loadMetric: () => 0 }),
         bus.register('stGeneration.installSendHook', params => installSendHook(params), { loadMetric: () => 0 }),
