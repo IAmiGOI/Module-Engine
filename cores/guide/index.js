@@ -9,7 +9,7 @@ import { createCreateActions } from './create-actions.js';
 import { createEditActions } from './edit-actions.js';
 import { createWhatsNew } from './whats-new.js';
 import { createGuideContext } from './context.js';
-import { NEUTRAL, nextFocus, detectFocus, isClosing, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
+import { NEUTRAL, nextFocus, detectFocus, isClosing, isTaskRequest, freshModules, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
 import { splitThinking, streamingText, MAX_NOTES_CHARS } from '../../libraries/core/guide-thinking.js';
 
 /**
@@ -233,9 +233,17 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         changed();
         try {
             const anchorsResult = await call('ui.anchors.list');
-            const screen = await context.screen();
+            let screen = await context.screen();
             const known = modules?.list?.() ?? [];
+            const before = focus;
             focus = nextFocus(focus, { query: question, anchors: screen.anchors, modules: known });
+            // Задача про Модуль: сначала ЗАЙТИ в его блок — она видит поля и значения только у раскрытых блоков, и полагаться на то, что модель сама вспомнит об этом, нельзя.
+            const target = internal ? null : freshModules(before, focus).find(id => (modules?.enabled?.() ?? []).includes(id) && !screen.anchors.includes(`module:${id}`));
+            if (target && isTaskRequest(question) && await reveal(`module:${target}`)) {
+                await sleep(REVEAL_SETTLE_MS);
+                screen = await context.screen();
+                focus = { ...focus, anchors: screen.anchors };
+            }
             // Заметки к задаче ведёт сама модель (пустой <notes> = закончено): завершение одного шага — не конец длинной задачи. Стираем только когда человек закрыл разговор.
             if (isClosing(question) && !detectFocus({ query: question, modules: known })) notes = '';
             const history = messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note');
