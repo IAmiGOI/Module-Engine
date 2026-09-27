@@ -192,8 +192,10 @@ test('one reference goes as imageDataUrl, several as imageDataUrls, in the same 
     assert.equal(JSON.parse(buildImageRequest(worker, request).body).imageDataUrl, undefined);
 });
 
-test('the prompt note ties each reference picture to a name', () => {
-    assert.match(referencePromptNote(['Alice', 'Bob']), /^Reference images: 1 — Alice, 2 — Bob\. Keep/);
+test('the prompt note ties each reference picture to a name and takes only identity from it — expression, pose and clothing follow the scene', () => {
+    const note = referencePromptNote(['Alice', 'Bob']);
+    assert.match(note, /^Reference images: 1 — Alice, 2 — Bob\. Use them only for who each character is/);
+    assert.match(note, /Expression, pose and clothing follow the description above, not the photos/);
     assert.equal(referencePromptNote(['', '']), '');
 });
 

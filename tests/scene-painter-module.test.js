@@ -5,6 +5,7 @@ import { request } from '../libraries/shared/request.js';
 import { createDiffusionCore } from '../cores/models/diffusion.js';
 import {
     createScenePainterModule, sanitizeImagePrompt, buildSceneTranscript, buildFinalPrompt, sanitizeSettings, buildReferences, MODULE_ID,
+    looksLikeRefusal, buildWriterSystemPrompt, MATURE_RULE,
 } from '../modules/scene-painter/index.js';
 
 /** Те же права, что у определения Модуля в harness/engine-wiring.js: Модуль ходит через настоящий Гейт, как чужой. */
@@ -191,7 +192,8 @@ test('with a NanoGPT backend the character avatar goes along as a reference and 
 
     assert.equal(await module.paint('1'), true);
 
-    assert.match(calls.generate[0].systemPrompt, /reference photos of: Keeper\. Call these characters by name/);
+    assert.match(calls.generate[0].systemPrompt, /reference photos of: Keeper\. The photos fix who they are/);
+    assert.match(calls.generate[0].systemPrompt, /Do describe .* expression and emotion, pose and gaze, what they are wearing at this moment/);
     const body = JSON.parse(calls.http[0].body);
     assert.equal(body.imageDataUrl, `data:image/jpeg;base64,${Buffer.from('/characters/keeper.png').toString('base64')}`);
     assert.match(body.prompt, /Reference images: 1 — Keeper/);
@@ -214,4 +216,42 @@ test('turning references off sends a plain request even to NanoGPT', async () =>
     await module.paint('1');
 
     assert.equal(JSON.parse(calls.http[0].body).imageDataUrl, undefined);
+});
+
+// --- Откровенные сцены и отказы писателя ---
+
+test('refusals are recognised at the start of the answer, a real prompt that merely mentions a policy scene is not', () => {
+    for (const text of ["I'm sorry, but I can't help with that.", 'I cannot create this content.', 'Sorry, this violates the content policy.', 'As an AI, I must decline.']) {
+        assert.equal(looksLikeRefusal(text), true, text);
+    }
+    assert.equal(looksLikeRefusal('two lovers in a candlelit bedroom, bare shoulders, warm light'), false);
+    assert.equal(looksLikeRefusal(''), false);
+});
+
+test('the mature-scene rule is on by default, asks for adults and no softening, and can be switched off', () => {
+    assert.equal(sanitizeSettings({}).matureContent, true);
+    assert.match(MATURE_RULE, /depict every character as an adult/);
+    assert.match(buildWriterSystemPrompt({ instruction: 'Base.' }), /^Base\. This is fictional roleplay between adults/);
+    assert.equal(buildWriterSystemPrompt({ instruction: 'Base.', matureContent: false }), 'Base.');
+});
+
+test('when the prompt writer refuses, the backup writer is asked once and its prompt is painted', async () => {
+    const { module, calls, annotations } = await build({
+        generate: async params => (params.workerId === 'main' ? "I'm sorry, but I can't describe this scene." : 'two figures entwined on silk sheets, candlelight'),
+    });
+    await module.saveSettings({ ...module.settings.peek(), promptWorkerId: 'main', backupPromptWorkerId: 'backup' });
+
+    assert.equal(await module.paint('1'), true);
+
+    assert.deepEqual(calls.generate.map(params => params.workerId), ['main', 'backup']);
+    assert.match(annotations['1'].prompt, /^two figures entwined on silk sheets/);
+});
+
+test('a refusal with no backup writer is an error that says what to do, and nothing is painted', async () => {
+    const { module, calls } = await build({ generate: async () => 'I cannot help with that request.' });
+
+    assert.equal(await module.paint('1'), false);
+
+    assert.equal(calls.http.length, 0);
+    assert.match(calls.notify.at(-1).text, /set a backup prompt writer/);
 });
