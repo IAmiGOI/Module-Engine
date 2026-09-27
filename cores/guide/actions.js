@@ -67,5 +67,24 @@ export function createGuideActions({ host, call, modules, reveal, hide, checklis
                 return { ok: true, message: 'Checked off.' };
             },
         },
+        'background.list': {
+            safe: true,
+            description: 'List the chat background filenames currently available in SillyTavern. No params. Check this before background.set if you do not already know a real name from this chat.',
+            async run() {
+                const result = await request(host.services, 'stBackgrounds.list');
+                if (!result.ok) return { ok: false, message: result.error.message };
+                return { ok: true, message: result.value.length ? `Available backgrounds: ${result.value.join(', ')}.` : 'No backgrounds are installed.' };
+            },
+        },
+        'background.set': {
+            safe: true,
+            description: 'Change the chat background SillyTavern is showing right now. Params: {"name": "<filename or a distinctive part of it>"} — matching is fuzzy (SillyTavern\'s own /bg), so a close guess from background.list is fine.',
+            async run({ name } = {}) {
+                if (!name) return { ok: false, message: 'Which background?' };
+                const result = await request(host.services, 'stBackgrounds.setActive', { name });
+                if (!result.ok) return { ok: false, message: result.error.message };
+                return { ok: result.value.ok, message: result.value.ok ? `Background set to "${result.value.applied}".` : `No background found matching "${name}".` };
+            },
+        },
     };
 }

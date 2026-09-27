@@ -1,0 +1,7 @@
+{
+  "comment": "Mea sends this message herself, unprompted (like her setup-scenario lines), the moment cumulative open time first crosses into a new clothing tier — see cores/guide/avatar.js's onTierUp(). Key is the tier number as a string: '2' = shorts (default 10h), '3' = topless (default 25h). Tier 1 has no entry — nothing to announce on a fresh install. Leave a tier's value empty (or the key out entirely) and she stays silent for it. {{name}} is replaced with her configured name, same as setup-scenario.json.",
+  "messages": {
+    "2": "",
+    "3": ""
+  }
+}

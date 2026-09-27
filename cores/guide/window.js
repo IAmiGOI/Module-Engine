@@ -13,7 +13,7 @@ import { CREATOR } from '../../libraries/core/guide-creator.js';
  */
 const CLEAR_CONFIRM_MS = 4000;
 
-export function createGuideWindow({ defaultAvatar = '', persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
+export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 540, height: 680 });
     const collapsed = signal(false);
@@ -98,9 +98,25 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
 
     const AVATAR = Object.freeze({ width: 96, height: 128 });
 
+    /**
+     * Своя картинка в настройках (whole-character override) главнее динамической (ROADMAP: статус/тир/чиби/neko — cores/guide/avatar.js).
+     * Отсутствующий файл — не наша забота предугадывать (`avatarUrl()` не трогает сеть): картинка сама скажет `error`, тогда пробуем
+     * neko→обычный тир того же уровня (`avatarFallback`), а если и это не тот случай (или тоже не нашлось) — статичный дефолт.
+     * Помечаем попытки на самом `<img>` (`dataset`), чтобы не зациклиться, если дефолт тоже вдруг не найдётся.
+     */
+    function onAvatarError(event) {
+        const img = event.target;
+        const stage = img.dataset.stmeAvatarStage ?? '0';
+        if (stage === '0') {
+            const fallback = avatarFallback(img.src);
+            if (fallback && fallback !== img.src) { img.dataset.stmeAvatarStage = '1'; img.src = fallback; return; }
+        }
+        if (stage !== '2' && img.src !== defaultAvatar) { img.dataset.stmeAvatarStage = '2'; img.src = defaultAvatar; }
+    }
+
     function avatar(size = AVATAR) {
         const { name } = persona.peek();
-        return Avatar(persona.peek().avatar || defaultAvatar, { ...size, name });
+        return Avatar(persona.peek().avatar || avatarUrl() || defaultAvatar, { ...size, name, onError: onAvatarError });
     }
 
     /** Строка сообщения как в обычном чате: колонка аватара + колонка «имя / текст». `showAvatar=false` — продолжение серии: колонка остаётся пустой, текст не «прыгает». */
