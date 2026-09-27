@@ -668,13 +668,14 @@ export function EdgeDrawer(open, { onToggle, title = 'Settings' } = {}, ...child
  * "и так, чтобы она была 3x4 в портретном варианте" (102 / 3 × 4 = 136).
  * `border-radius: 14px` — см. `.stme-avatar` в styles/.
  */
-export function Avatar(url, { width = 102, height = 136, name = '' } = {}) {
+/** `onError` — the image 404'd; caller decides what to do (swap `event.target.src`, etc.). Generic: knows nothing about WHY an avatar might be missing. */
+export function Avatar(url, { width = 102, height = 136, name = '', onError } = {}) {
     const style = { width: `${width}px`, height: `${height}px` };
     if (!url) {
         const initial = String(name ?? '').trim().charAt(0).toUpperCase() || '?';
         return h('div', { class: 'stme-avatar stme-avatar-fallback', style, 'aria-hidden': 'true' }, initial);
     }
-    return h('img', { class: 'stme-avatar', style, src: url, alt: name ? `${name}'s avatar` : '' });
+    return h('img', { class: 'stme-avatar', style, src: url, alt: name ? `${name}'s avatar` : '', 'on:error': onError });
 }
 
 /**

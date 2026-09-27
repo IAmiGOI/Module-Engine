@@ -1,4 +1,4 @@
-import { signal } from '../ui/reactive.js';
+import { signal, effect } from '../ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { parseArticle, selectArticles, buildGuideSystemPrompt, trimHistory } from '../../libraries/core/guide-knowledge.js';
 import { plainText, splitAutoActions, extractAnchors, hasChoice, stripChoices, stripBlocks } from '../../libraries/core/guide-markup.js';
@@ -9,6 +9,7 @@ import { createCreateActions } from './create-actions.js';
 import { createEditActions } from './edit-actions.js';
 import { createWhatsNew } from './whats-new.js';
 import { createGuideContext } from './context.js';
+import { createGuideAvatar } from './avatar.js';
 import { NEUTRAL, nextFocus, detectFocus, isClosing, isTaskRequest, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
 import { splitThinking, streamingText, MAX_NOTES_CHARS } from '../../libraries/core/guide-thinking.js';
 
@@ -78,6 +79,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const manualDone = signal(new Set());
     let scenario = { start: 'hello', nodes: {} };
     let articles = [];
+    let chibiPoses = []; // задаёт владелец (guide/chibi-poses.json) — пусто по умолчанию, чиби никогда не включится сама по себе
+    let tierMessages = {}; // задаёт владелец (guide/tier-messages.json): текст, который она сама пишет первой при открытии нового тира одежды
     let counter = 0;
 
     const saveSetting = (key, value) => call('storage.settings.set', { namespace: NAMESPACE, key, value });
@@ -193,6 +196,14 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
 
     // --- Свободный чат -------------------------------------------------------
     const context = createGuideContext({ call, callService, modules });
+    // Динамическая аватарка (ROADMAP): здоровье воркеров ME, накопленное открытое время, её последний СЫРОЙ ответ (для чиби), чек-лист (4/4 = neko).
+    // onTierUp: она сама пишет первой в момент открытия нового тира — текст владельца (guide/tier-messages.json), пустой/отсутствующий тир — молчание.
+    const avatar = createGuideAvatar(host, {
+        chibiPoses: () => chibiPoses, getNekoUnlocked: async () => (await checklistState()).every(item => item.done),
+        onTierUp: tier => { const text = tierMessages[tier]; if (text) push({ role: 'assistant', text: text.replaceAll('{{name}}', nameOf()) }); },
+    });
+    let avatarLoaded = false;
+    const unsubscribeAvatar = effect(() => { avatar.url(); if (avatarLoaded) changed(); }); // первый прогон effect() — ещё не загружено, событие не нужно
 
     async function liveContext(screenText = '', focus = {}) {
         const workers = await workerStatus();
@@ -272,6 +283,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}),
             });
             if (!reply.ok) throw new Error(reply.error.message);
+            avatar.noteReply(reply.value); // её чиби-поза смотрит на СЫРОЙ текст этого ответа целиком (think + видимое) — не на историю и не на реплику юзера
             // Безопасные действия, которые модель пометила «auto», выполняются сразу; результат — заметкой в чате.
             const thought = splitThinking(reply.value);
             if (thought.notes !== undefined) { notes = thought.notes.slice(0, MAX_NOTES_CHARS); void saveChat(); }
@@ -326,6 +338,10 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const index = JSON.parse(await loadText('knowledge/index.json'));
             articles = (await Promise.all((index.articles ?? []).map(async file => parseArticle(await loadText(`knowledge/${file}`), file.replace(/\.md$/, ''))))).filter(article => article.text);
         } catch { articles = []; }
+        try { chibiPoses = JSON.parse(await loadText('chibi-poses.json'))?.poses ?? []; } catch { chibiPoses = []; }
+        try { tierMessages = JSON.parse(await loadText('tier-messages.json'))?.messages ?? {}; } catch { tierMessages = {}; }
+        await avatar.load();
+        avatarLoaded = true;
         // «Что нового» после обновления — в фоне и молча, если сказать нечего.
         void whatsNew.check({ hasChat: messages.peek().length > 0 }).then(text => { if (text) push({ role: 'assistant', text }); }).catch(() => {});
     }
@@ -359,12 +375,13 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     function status() {
         const last = [...messages.peek()].reverse().find(message => message.role === 'assistant');
         return {
-            name: nameOf(), avatar: persona.peek().avatar || DEFAULT_AVATAR_URL, visible: visible.peek(), busy: busy.peek(), mode: mode.peek(),
+            // Явный аватар в настройках (своя картинка вместо Меа целиком) главнее динамики; динамика — главнее статичного дефолта.
+            name: nameOf(), avatar: persona.peek().avatar || avatar.url.peek() || DEFAULT_AVATAR_URL, visible: visible.peek(), busy: busy.peek(), mode: mode.peek(),
             lastLine: last ? plainText(last.text).split('\n')[0].slice(0, 140) : '',
         };
     }
 
-    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
+    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
 
     const unregisters = [
         host.own.register('guide.open', () => open()),
@@ -379,6 +396,6 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         load, open, close, ask, chooseOption, pick, runAction, saveSettings, resetChat, status, checklistState,
         persona, messages, mode, visible, streamDraft,
         mountWindow: async () => { const finalUi = mount(ui.tree()); await finalUi.settled?.(); return finalUi; },
-        unregister: () => { unsubscribeChunks?.(); for (const unregister of unregisters) unregister(); },
+        unregister: () => { unsubscribeChunks?.(); unsubscribeAvatar?.(); avatar.unregister(); for (const unregister of unregisters) unregister(); },
     };
 }
