@@ -86,7 +86,7 @@ test('with no model the chat opens with the setup scenario, and "use SillyTavern
     await guide.open();
     const hello = guide.messages.peek().at(-1);
     assert.equal(hello.node, 'hello');
-    assert.match(hello.text, /I'm \*\*Guide\*\*/);
+    assert.match(hello.text, /I'm \*\*Mea\*\*/);
 
     await guide.chooseOption(hello.id, 0);
 

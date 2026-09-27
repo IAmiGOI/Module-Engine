@@ -1,17 +1,18 @@
 import { h } from '../ui/tree.js';
 import { signal, computed } from '../ui/reactive.js';
 import { createDragHandlers } from '../../libraries/shared/draggable.js';
-import { FloatingPanel, Button, TextInput, TextArea, Field, Row, Select } from '../../libraries/shared/widgets.js';
+import { FloatingPanel, Avatar, Button, TextInput, TextArea, Field, Row, Select } from '../../libraries/shared/widgets.js';
 import { parseGuideReply, parseInline } from '../../libraries/core/guide-markup.js';
 
 /**
- * Окно чата гида: сообщения с блоками разметки (libraries/core/guide-markup.js), поле ввода и экран настройки персонажа. Состояние —
+ * Окно чата гида: сообщения с блоками разметки (libraries/core/guide-markup.js), пилюля ввода и экран настройки персонажа. Сообщение устроено как строка
+ * обычного чата: слева аватар 3×4 (у серии реплик подряд — только у первой), справа имя и текст без пузыря; ввод — та же пилюля, что внизу окна ST. Состояние —
  * сигналы Ядра (cores/guide/index.js); здесь только то, как это выглядит. Список сообщений идёт в обратном порядке внутри
  * `flex-direction: column-reverse` — так прокрутка сама держится у последней реплики без доступа к DOM.
  */
 export function createGuideWindow({ defaultAvatar = '', persona, messages, busy, visible, view, ask, chooseOption, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
-    const size = signal({ width: 420, height: 600 });
+    const size = signal({ width: 540, height: 680 });
     const collapsed = signal(false);
     const draft = signal('');
 
@@ -56,21 +57,31 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
         return checklistBlock();
     }
 
-    function messageView(message, isLast) {
+    const AVATAR = Object.freeze({ width: 96, height: 128 });
+
+    function avatar(size = AVATAR) {
+        const { name } = persona.peek();
+        return Avatar(persona.peek().avatar || defaultAvatar, { ...size, name });
+    }
+
+    /** Строка сообщения как в обычном чате: колонка аватара + колонка «имя / текст». `showAvatar=false` — продолжение серии: колонка остаётся пустой, текст не «прыгает». */
+    function row({ key, kind, who, body, showAvatar }) {
+        const rail = kind === 'assistant'
+            ? h('div', { class: 'stme-guide-rail', style: { width: `${AVATAR.width}px` } }, showAvatar ? avatar() : null)
+            : null;
+        return h('div', { class: `stme-guide-row stme-guide-row-${kind}`, key },
+            rail,
+            h('div', { class: 'stme-guide-col' }, showAvatar ? h('div', { class: 'stme-guide-name' }, who) : null, body));
+    }
+
+    function messageView(message, isLast, showAvatar) {
         if (message.role === 'note') return h('div', { class: `stme-guide-note ${message.ok === false ? 'stme-guide-note-error' : ''}`, key: message.id }, `${message.ok === false ? '⚠' : '✓'} ${message.text}`);
-        if (message.role === 'user') return h('div', { class: 'stme-guide-msg stme-guide-user', key: message.id }, h('div', { class: 'stme-guide-bubble' }, message.text));
-        const body = parseGuideReply(message.text).map(segment => (segment.type === 'text' ? paragraphs(segment.text) : block(segment.block)));
+        if (message.role === 'user') return row({ key: message.id, kind: 'user', who: 'You', showAvatar, body: h('div', { class: 'stme-guide-text stme-guide-user-text' }, message.text) });
+        const parsed = parseGuideReply(message.text).map(segment => (segment.type === 'text' ? paragraphs(segment.text) : block(segment.block)));
         const options = isLast && message.options?.length
             ? h('div', { class: 'stme-guide-options' }, message.options.map((option, index) => Button(option.label, () => chooseOption(message.id, index))))
             : null;
-        return h('div', { class: 'stme-guide-msg stme-guide-assistant', key: message.id },
-            avatar(), h('div', { class: 'stme-guide-bubble' }, body, options));
-    }
-
-    function avatar() {
-        const { name } = persona.peek();
-        const url = persona.peek().avatar || defaultAvatar;
-        return url ? h('img', { class: 'stme-guide-avatar', src: url, alt: name }) : h('div', { class: 'stme-guide-avatar stme-guide-avatar-empty' }, (name || 'G').slice(0, 1));
+        return row({ key: message.id, kind: 'assistant', who: persona.peek().name, showAvatar, body: h('div', { class: 'stme-guide-text' }, parsed, options) });
     }
 
     function send() {
@@ -80,22 +91,29 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
         void ask(text);
     }
 
+    /** Пилюля ввода — тот же вид, что у нижней панели набора: поле и концевой сегмент «отправить» (стоит на месте при росте поля). */
+    function composer() {
+        const autosize = element => { element.style.height = 'auto'; element.style.height = `${Math.min(element.scrollHeight, 160)}px`; };
+        const field = h('textarea', {
+            class: 'stme-input-field stme-guide-field', rows: 1, placeholder: 'Ask anything about Module Engine…', 'aria-label': 'Message', value: draft,
+            'on:input': event => { draft.set(event.target.value); autosize(event.target); },
+            'on:keydown': event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } },
+        });
+        return h('div', { class: 'stme-guide-composer' }, field,
+            h('button', { type: 'button', class: computed(() => `stme-input-circle stme-input-send${busy() ? ' stme-guide-send-busy' : ''}`), title: 'Send', 'aria-label': 'Send', 'on:click': send },
+                h('i', { class: 'fa-solid fa-paper-plane', 'aria-hidden': 'true' })));
+    }
+
     function chatView() {
         return h('div', { class: 'stme-guide-chat' },
             h('div', { class: 'stme-guide-list' }, computed(() => {
                 const list = messages();
                 const lastAssistant = [...list].reverse().find(message => message.role === 'assistant');
-                const rendered = list.map(message => messageView(message, message === lastAssistant));
-                if (busy()) rendered.push(h('div', { class: 'stme-guide-typing', key: 'typing' }, `${persona().name} is thinking…`));
+                const rendered = list.map((message, index) => messageView(message, message === lastAssistant, list[index - 1]?.role !== message.role));
+                if (busy()) rendered.push(row({ key: 'typing', kind: 'assistant', who: persona().name, showAvatar: list.at(-1)?.role !== 'assistant', body: h('div', { class: 'stme-guide-text stme-guide-typing' }, 'is thinking…') }));
                 return rendered.reverse();
             })),
-            h('div', { class: 'stme-guide-input' },
-                h('textarea', {
-                    class: 'text_pole', rows: 2, placeholder: 'Ask anything about Module Engine…', value: draft,
-                    'on:input': event => draft.set(event.target.value),
-                    'on:keydown': event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } },
-                }),
-                Button('Send', send)));
+            composer());
     }
 
     function settingsView() {
@@ -118,11 +136,11 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
 
     function tree() {
         return h('div', { class: 'stme-guide-root' }, computed(() => (visible() ? FloatingPanel(persona().name, {
-            position, size, collapsed, className: 'stme-guide-window', minWidth: 320, minHeight: 360,
+            position, size, collapsed, className: 'stme-guide-window', minWidth: 380, minHeight: 420,
             onToggle: value => collapsed.set(value), onClose: () => close(),
             drag: createDragHandlers(position), onResize: next => size.set(next),
         },
-        h('div', { class: 'stme-guide-toolbar' }, avatar(), h('strong', {}, persona().name), h('span', { class: 'stme-guide-spacer' }),
+        h('div', { class: 'stme-guide-toolbar' }, avatar({ width: 30, height: 40 }), h('strong', {}, persona().name), h('span', { class: 'stme-guide-spacer' }),
             Button(view() === 'settings' ? 'Chat' : '⚙ Settings', () => view.set(view.peek() === 'settings' ? 'chat' : 'settings'))),
         view() === 'settings' ? settingsView() : chatView()) : null)));
     }

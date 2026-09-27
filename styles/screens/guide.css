@@ -7,18 +7,22 @@
 .stme-guide-window .stme-floating-panel-body, .stme-guide-window { display: flex; flex-direction: column; }
 .stme-guide-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--stme-border); }
 .stme-guide-spacer { flex: 1; }
-.stme-guide-avatar { width: 32px; height: 32px; flex: none; border-radius: 50%; object-fit: cover; object-position: 50% 20%; }
-.stme-guide-avatar-empty { display: grid; place-items: center; background: color-mix(in srgb, var(--stme-accent) 30%, var(--stme-surface)); font-weight: 600; }
+/* Аватар — общий `Avatar()` (3×4, скруглённый прямоугольник), кадрируется по лицу. */
+.stme-guide-window .stme-avatar { object-position: 50% 18%; }
 
 .stme-guide-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
 /* column-reverse: последняя реплика внизу, прокрутка сама держится у неё. */
 .stme-guide-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column-reverse; gap: 10px; padding: 10px; }
-.stme-guide-msg { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
-.stme-guide-user { justify-content: flex-end; }
-.stme-guide-bubble { min-width: 0; overflow-wrap: anywhere; box-sizing: border-box; max-width: 85%; padding: 8px 11px; border-radius: 12px; background: var(--stme-surface); border: 1px solid var(--stme-border); line-height: 1.45; }
-.stme-guide-user .stme-guide-bubble { background: color-mix(in srgb, var(--stme-accent) 18%, var(--stme-surface)); white-space: pre-wrap; }
-.stme-guide-bubble p { margin: 0 0 6px; }
-.stme-guide-bubble p:last-child { margin-bottom: 0; }
+/* Строка сообщения — как в обычном чате: колонка аватара + колонка «имя / текст», без пузырей. */
+.stme-guide-row { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.stme-guide-rail { flex: none; }
+.stme-guide-col { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.stme-guide-name { font-weight: 600; margin-bottom: 3px; }
+.stme-guide-text { line-height: 1.5; }
+.stme-guide-row-user { padding-left: calc(96px + 12px); }
+.stme-guide-user-text { white-space: pre-wrap; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--stme-accent) 60%, transparent); }
+.stme-guide-text p { margin: 0 0 6px; }
+.stme-guide-text p:last-child { margin-bottom: 0; }
 .stme-guide-link {
     display: inline; padding: 0 6px; margin: 0 1px; border: 1px solid color-mix(in srgb, var(--stme-accent) 60%, transparent); border-radius: 999px;
     background: color-mix(in srgb, var(--stme-accent) 14%, transparent); color: inherit; font: inherit; cursor: pointer;
@@ -29,7 +33,6 @@
 .stme-guide-checklist ul { list-style: none; padding-left: 0; }
 .stme-guide-check { display: inline-block; width: 18px; }
 .stme-guide-done { opacity: .6; }
-.stme-guide-assistant .stme-guide-bubble { flex: 1; }
 /* Варианты выбора — столбиком во всю ширину пузыря. `.menu_button` у ST — узкая кнопка с фиксированными полями: без сброса варианты
    сжимались в столбики по слову (скриншот владельца). */
 .stme-guide-options { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 10px; }
@@ -39,8 +42,14 @@
 }
 .stme-guide-note { align-self: center; font-size: 12px; opacity: .8; }
 .stme-guide-note-error { color: var(--stme-danger, #e66); opacity: 1; }
-.stme-guide-typing { font-size: 12px; opacity: .7; padding-left: 40px; }
-.stme-guide-input { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--stme-border); align-items: flex-end; }
-.stme-guide-input textarea { flex: 1; resize: none; }
+.stme-guide-typing { font-size: 13px; opacity: .7; }
+/* Пилюля ввода — та же, что нижняя панель набора (styles/chrome/input-bar.css): поле + концевой сегмент, но внутри окна, не fixed. */
+.stme-guide-composer {
+    display: flex; align-items: stretch; overflow: hidden; margin: 8px 12px 12px; box-sizing: border-box; min-height: var(--stme-input-h);
+    border: var(--stme-input-border) solid color-mix(in srgb, var(--stme-accent) 55%, transparent); border-radius: calc(var(--stme-input-h) / 2);
+    background: color-mix(in srgb, var(--stme-surface) 88%, transparent);
+}
+.stme-guide-composer .stme-input-field { padding-left: 16px; }
+.stme-guide-send-busy { opacity: .5; }
 .stme-guide-settings { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-.stme-guide-toolbar .menu_button, .stme-guide-input .menu_button { flex: none; width: auto; margin: 0; }
+.stme-guide-toolbar .menu_button { flex: none; width: auto; margin: 0; }
