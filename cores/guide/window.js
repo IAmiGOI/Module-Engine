@@ -2,7 +2,7 @@ import { h } from '../ui/tree.js';
 import { signal, computed } from '../ui/reactive.js';
 import { createDragHandlers } from '../../libraries/shared/draggable.js';
 import { FloatingPanel, Avatar, Button, TextInput, TextArea, Field, Row, Select } from '../../libraries/shared/widgets.js';
-import { parseGuideReply, parseInline } from '../../libraries/core/guide-markup.js';
+import { parseGuideReply, parseInline, parseTextBlocks } from '../../libraries/core/guide-markup.js';
 
 /**
  * Окно чата гида: сообщения с блоками разметки (libraries/core/guide-markup.js), пилюля ввода и экран настройки персонажа. Сообщение устроено как строка
@@ -21,12 +21,19 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
     function inline(text) {
         return parseInline(text).map(part => {
             if (part.type === 'bold') return h('strong', {}, part.text);
+            if (part.type === 'italic') return h('em', {}, part.text);
+            if (part.type === 'code') return h('code', {}, part.text);
             if (part.type === 'anchor') return anchorChip(part.label, part.anchor);
             if (part.type === 'url') return h('a', { href: part.url, target: '_blank', rel: 'noopener' }, part.label);
             return part.text;
         });
     }
-    const paragraphs = text => text.split(/\n{2,}/).map(chunk => h('p', {}, chunk.split('\n').flatMap((line, index) => (index ? [h('br', {}), ...inline(line)] : inline(line)))));
+    /** Текст → абзацы, списки и заголовки (`parseTextBlocks`); строки внутри абзаца — через перенос. */
+    const paragraphs = text => parseTextBlocks(text).map(block => {
+        if (block.type === 'ul' || block.type === 'ol') return h(block.type, { class: 'stme-guide-list-block' }, block.items.map(item => h('li', {}, inline(item))));
+        if (block.type === 'h') return h('div', { class: 'stme-guide-heading' }, inline(block.text));
+        return h('p', {}, block.lines.flatMap((line, index) => (index ? [h('br', {}), ...inline(line)] : inline(line))));
+    });
 
     function checklistBlock() {
         const items = signal(null);

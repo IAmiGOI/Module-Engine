@@ -5,7 +5,7 @@ import { CREATE_ACTIONS } from './guide-create.js';
  *
  * Модель пишет обычный текст с двумя расширениями:
  * - **ссылка на блок** — `[Model connections](stme:card:models)`: клик открывает панель/окно и подсвечивает блок (адреса — `ui.anchors.list`);
- *   обычные `https://` ссылки тоже понимаются; `**жирный**` — жирный;
+ *   обычные `https://` ссылки тоже понимаются; `**жирный**`, `*курсив*`, `` `код` ``; списки `- пункт` и `1. пункт`, заголовки `## Заголовок` (`parseTextBlocks`);
  * - **блок** — огороженный код с JSON и именем вида:
  *   ```choice   {"prompt": "…", "options": ["Yes", "Not now"]}                       — кнопки выбора, выбранное уходит ответом пользователя;
  *   ```card     {"title": "…", "text": "…", "anchor": "card:models"}                  — карточка с заголовком и ссылкой;
@@ -64,9 +64,9 @@ export function parseGuideReply(reply) {
     return segments;
 }
 
-const INLINE = /\[([^\]]+)\]\((stme:[^)\s]+|https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*/g;
+const INLINE = /\[([^\]]+)\]\((stme:[^)\s]+|https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*|`([^`\n]+)`|(?<![*\w])\*([^*\n]+?)\*(?![*\w])/g;
 
-/** Строка текста → `[{ type: 'text' | 'bold', text } | { type: 'anchor', label, anchor } | { type: 'url', label, url }]`. */
+/** Строка текста → `[{ type: 'text' | 'bold' | 'italic' | 'code', text } | { type: 'anchor', label, anchor } | { type: 'url', label, url }]`. */
 export function parseInline(line) {
     const source = String(line ?? '');
     const parts = [];
@@ -74,12 +74,44 @@ export function parseInline(line) {
     for (const match of source.matchAll(INLINE)) {
         if (match.index > last) parts.push({ type: 'text', text: source.slice(last, match.index) });
         if (match[3] !== undefined) parts.push({ type: 'bold', text: match[3] });
+        else if (match[4] !== undefined) parts.push({ type: 'code', text: match[4] });
+        else if (match[5] !== undefined) parts.push({ type: 'italic', text: match[5] });
         else if (match[2].startsWith('stme:')) parts.push({ type: 'anchor', label: match[1], anchor: match[2].slice(5) });
         else parts.push({ type: 'url', label: match[1], url: match[2] });
         last = match.index + match[0].length;
     }
     if (last < source.length) parts.push({ type: 'text', text: source.slice(last) });
     return parts;
+}
+
+const BULLET = /^\s{0,3}(?:[-*•])\s+(.*)$/;
+const NUMBERED = /^\s{0,3}\d{1,3}[.)]\s+(.*)$/;
+const HEADING = /^\s{0,3}#{1,4}\s+(.*)$/;
+
+/**
+ * Текст реплики → блоки вёрстки: `{ type: 'p', lines: [..] }` (абзац, строки через перенос), `{ type: 'ul' | 'ol', items: [..] }` (списки — пункты `- `, `* `, `• `, `1. `; продолжение
+ * пункта на следующей строке с отступом приклеивается к нему), `{ type: 'h', text }` (заголовок `#`). Пустая строка разделяет абзацы; список и абзац можно писать без пустой строки между ними.
+ */
+export function parseTextBlocks(text) {
+    const blocks = [];
+    const current = () => blocks.at(-1);
+    for (const raw of String(text ?? '').replace(/\r\n/g, '\n').split('\n')) {
+        if (!raw.trim()) { blocks.push({ type: 'gap' }); continue; }
+        const heading = HEADING.exec(raw);
+        if (heading) { blocks.push({ type: 'h', text: heading[1].trim() }); continue; }
+        const bullet = BULLET.exec(raw);
+        const numbered = bullet ? null : NUMBERED.exec(raw);
+        const kind = bullet ? 'ul' : numbered ? 'ol' : null;
+        if (kind) {
+            const item = (bullet ?? numbered)[1].trim();
+            if (current()?.type === kind) current().items.push(item); else blocks.push({ type: kind, items: [item] });
+            continue;
+        }
+        const last = current();
+        if (/^\s+\S/.test(raw) && last && (last.type === 'ul' || last.type === 'ol')) { last.items[last.items.length - 1] += ` ${raw.trim()}`; continue; }
+        if (last?.type === 'p') last.lines.push(raw.trim()); else blocks.push({ type: 'p', lines: [raw.trim()] });
+    }
+    return blocks.filter(block => block.type !== 'gap');
 }
 
 /** Текст реплики для истории модели и облачка виджета: блоки — коротко словами, ссылки — подписью. */
@@ -116,4 +148,20 @@ export function splitAutoActions(reply, isSafe) {
         }
     }
     return { text: (text + source.slice(last)).replace(/\n{3,}/g, '\n\n').trim(), actions };
+}
+
+/**
+ * Адреса блоков интерфейса, на которые ссылается реплика, в порядке появления и без повторов: ссылки в тексте, `anchor` у карточек и у пунктов шагов. Гид сам
+ * открывает их по этому списку (cores/guide) — чипы в окне остаются для информации.
+ */
+export function extractAnchors(reply) {
+    const found = [];
+    const add = anchor => { if (anchor && !found.includes(anchor)) found.push(anchor); };
+    for (const segment of parseGuideReply(reply)) {
+        if (segment.type === 'text') { for (const part of parseInline(segment.text)) if (part.type === 'anchor') add(part.anchor); continue; }
+        const { block } = segment;
+        if (block.kind === 'card') add(block.anchor);
+        if (block.kind === 'steps') for (const item of block.items) add(item.anchor);
+    }
+    return found;
 }
