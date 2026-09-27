@@ -205,6 +205,15 @@ html.stme-home-active .stme-left-dock-zone { visibility: hidden; pointer-events:
 .stme-home-row-static { cursor: default; }
 .stme-home-row-static:hover { background: transparent; }
 
+/* Портрет виджета (`row.portrait`): 3×4 на всю высоту блока слева, скруглённый прямоугольник, как аватар в чате. */
+.stme-home-row-portrait { left: 12px; right: auto; top: 12px; bottom: 12px; height: auto; aspect-ratio: 3 / 4; border-radius: 14px; overflow: hidden; }
+.stme-home-row-portrait:hover { background: transparent; }
+.stme-home-row-portrait .stme-home-row-avatar {
+    position: static; width: 100%; height: 100%; margin: 0; border-radius: 14px; object-position: 50% 18%;
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 45%, transparent); transition: filter .12s ease;
+}
+.stme-home-row-portrait:hover .stme-home-row-avatar { filter: brightness(1.12); }
+
 /* Строка поиска в виджете (`instance.search`): поле-пилюля под шапкой. */
 .stme-home-search {
     position: absolute;

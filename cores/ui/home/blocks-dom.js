@@ -96,9 +96,11 @@ function buildWidget(doc, el, block, data, handlers) {
     // Список строк виджета (`instance.rows()`): аватар и круглые кнопки на каждую; текст строки — в его собственном HTML; клик по строке — `row.click`.
     (data.rows ?? []).forEach((row, index) => {
         const line = doc.createElement('div');
-        line.className = row.click ? 'stme-home-row' : 'stme-home-row stme-home-row-static';
-        line.style.top = `${WIDGET_LAYOUT.rowsTop + searchShift + index * WIDGET_LAYOUT.rowH}px`;
-        line.style.height = `${WIDGET_LAYOUT.rowH - 4}px`;
+        line.className = `${row.click ? 'stme-home-row' : 'stme-home-row stme-home-row-static'}${row.portrait ? ' stme-home-row-portrait' : ''}`;
+        if (!row.portrait) {   // портрет занимает блок по высоте (CSS), обычная строка — по сетке списка
+            line.style.top = `${WIDGET_LAYOUT.rowsTop + searchShift + index * WIDGET_LAYOUT.rowH}px`;
+            line.style.height = `${WIDGET_LAYOUT.rowH - 4}px`;
+        }
         const actions = doc.createElement('div');
         actions.className = 'stme-home-row-actions';
         for (const action of row.actions ?? []) actions.append(button(doc, { cls: 'stme-icon-button', title: action.title, iconClass: action.icon, onClick: () => handlers.onWidgetAction(block.instanceId, action.id, row.id) }));
