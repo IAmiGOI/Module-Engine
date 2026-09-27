@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEngine } from '../libraries/shared/engine.js';
-import { avatarSourceUrl, registerImageScaleService, sharpenImageData } from '../services/image-scale.js';
+import { avatarSourceUrl, registerImageScaleService, sharpenImageData, fitInside, isSameOriginPath } from '../services/image-scale.js';
 
 test('ST thumbnails are swapped for the full-size originals (96×144 previews are too small for our avatar)', () => {
     assert.equal(avatarSourceUrl('/thumbnail?type=persona&file=user-default.png'), '/User Avatars/user-default.png');
@@ -50,4 +50,37 @@ test('sharpenImageData boosts a soft edge, leaves flat areas, alpha and the bord
     assert.equal(sharpened[(2 * w + 1) * 4 + 3], 200, 'alpha is untouched');
     assert.equal(at(sharpened, 0, 0), at(original, 0, 0), 'the border row/column is left as is');
     assert.deepEqual([...sharpenImageData(build(), w, h, 0)], [...original]);
+});
+
+// --- Референсы для генерации картинок ---
+
+test('fitInside keeps proportions within the square and never enlarges', () => {
+    assert.deepEqual(fitInside(2000, 1000, 1024), { width: 1024, height: 512 });
+    assert.deepEqual(fitInside(600, 900, 1024), { width: 600, height: 900 });
+});
+
+test('only paths of the same server are accepted as a reference source', () => {
+    assert.equal(isSameOriginPath('/characters/a.png'), true);
+    assert.equal(isSameOriginPath('/User Avatars/b.png'), true);
+    for (const url of ['https://evil.example/x.png', '//evil.example/x.png', 'data:image/png;base64,AA', '', null]) assert.equal(isSameOriginPath(url), false, String(url));
+});
+
+function buildScaler(fetched) {
+    const engine = createEngine();
+    registerImageScaleService(engine.buses.services, {
+        fetch: async url => { fetched.push(url); return { ok: true, blob: async () => ({ size: 1 }) }; },
+        createBitmap: async () => ({ width: 2048, height: 1024, close() {} }),
+        createCanvas: () => ({ getContext: () => ({ fillRect() {}, drawImage() {} }), convertToBlob: async () => new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }) }),
+    });
+    const caller = engine.registerCaller('test.caller', 'cores', { tier: 'official' });
+    return params => new Promise(resolve => caller.services.subscribe('imageScale.toDataUrl', { params }, resolve));
+}
+
+test('imageScale.toDataUrl turns an avatar into a JPEG data URL and refuses addresses of other servers', async () => {
+    const fetched = [];
+    const ask = buildScaler(fetched);
+
+    assert.equal((await ask({ url: '/characters/Aria.png' })).value, 'data:image/jpeg;base64,AQID');
+    assert.equal((await ask({ url: 'https://evil.example/x.png' })).value, null);
+    assert.deepEqual(fetched, ['/characters/Aria.png']);
 });

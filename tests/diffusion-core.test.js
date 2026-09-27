@@ -4,6 +4,7 @@ import { createEngine } from '../libraries/shared/engine.js';
 import { createDiffusionCore, sanitizeImageWorker } from '../cores/models/diffusion.js';
 import {
     buildImageRequest, resolveImageRequest, resolveImageResponse, resolveOpenAiSize, decodeBase64, readImageInfo,
+    supportsReferences, referencePromptNote,
 } from '../libraries/core/image-provider-request.js';
 import { registerImageStoreService } from '../services/image-store.js';
 
@@ -85,10 +86,13 @@ test('sanitizeImageWorker drops entries without an id and normalises the format'
 
 // --- Ядро: настоящий движок, фейковые только HTTP и хранилище ---
 
-function buildCore({ respond }) {
+function buildCore({ respond, scaled }) {
     const engine = createEngine();
     const stored = new Map();
     const httpCalls = [];
+    const scaleCalls = [];
+    engine.buses.services.register('imageScale.toDataUrl', params => { scaleCalls.push(params); const custom = scaled?.(params); return custom !== undefined ? custom : `data:image/jpeg;base64,REF${scaleCalls.length}`; });
+    engine.buses.services.register('image.get', ({ id }) => stored.get(id) ?? null);
     engine.buses.network.register('http.request', async params => { httpCalls.push(params); return respond(params, httpCalls.length); });
     engine.buses.services.register('image.put', ({ id, blob }) => { stored.set(id, blob); return id; });
     engine.buses.cores.register('storage.settings.get', ({ fallback }) => fallback);
@@ -98,7 +102,7 @@ function buildCore({ respond }) {
     const core = createDiffusionCore(host, { publish: (event, payload) => events.push([event, payload]), workerWaitMs: 5, now: () => 1000 });
     const client = engine.registerCaller('module.probe', 'modules', { tier: 'community', allowedContracts: ['image.generate', 'image.workers.get'] });
     const call = (contract, params) => new Promise(resolve => client.cores.subscribe(contract, { params }, resolve));
-    return { core, call, stored, httpCalls, events };
+    return { core, call, stored, httpCalls, events, scaleCalls };
 }
 
 test('image.generate stores the image and hands the module only an asset id and the REAL size read from the bytes', async () => {
@@ -168,4 +172,65 @@ test('image.url gives one object URL per stored image until it is revoked, and n
     await call('image.revokeUrl', { id: 'a' });
     assert.deepEqual(revoked, ['blob:0']);
     assert.equal((await call('image.url', { id: 'a' })).value, 'blob:1');
+});
+
+// --- Референсы (фото персонажей как основа) ---
+
+test('references are on automatically for a NanoGPT backend, off for OpenAI itself and for other formats, and can be forced either way', () => {
+    assert.equal(supportsReferences({ format: 'openai', endpoint: 'https://nano-gpt.com/api/v1' }), true);
+    assert.equal(supportsReferences({ format: 'openai', endpoint: 'https://api.openai.com/v1' }), false);
+    assert.equal(supportsReferences({ format: 'openai', endpoint: 'https://api.openai.com/v1', references: 'on' }), true);
+    assert.equal(supportsReferences({ format: 'openai', endpoint: 'https://nano-gpt.com/api/v1', references: 'off' }), false);
+    assert.equal(supportsReferences({ format: 'a1111', references: 'on' }), false);
+});
+
+test('one reference goes as imageDataUrl, several as imageDataUrls, in the same generations request', () => {
+    const worker = { format: 'openai', endpoint: 'https://nano-gpt.com/api/v1', model: 'nano-banana' };
+    const request = resolveImageRequest({ prompt: 'x' });
+    assert.equal(JSON.parse(buildImageRequest(worker, request, { referenceDataUrls: ['data:a'] }).body).imageDataUrl, 'data:a');
+    assert.deepEqual(JSON.parse(buildImageRequest(worker, request, { referenceDataUrls: ['data:a', 'data:b'] }).body).imageDataUrls, ['data:a', 'data:b']);
+    assert.equal(JSON.parse(buildImageRequest(worker, request).body).imageDataUrl, undefined);
+});
+
+test('the prompt note ties each reference picture to a name', () => {
+    assert.match(referencePromptNote(['Alice', 'Bob']), /^Reference images: 1 — Alice, 2 — Bob\. Keep/);
+    assert.equal(referencePromptNote(['', '']), '');
+});
+
+test('image.generate shrinks the references and sends them with a naming note to a backend that accepts them', async () => {
+    const { core, call, httpCalls, scaleCalls } = buildCore({ respond: () => ({ ok: true, status: 200, text: JSON.stringify({ data: [{ b64_json: toBase64(pngBytes(8, 8)) }] }) }) });
+    await core.configureWorkers([{ id: 'nano', format: 'openai', endpoint: 'https://nano-gpt.com/api/v1', model: 'nano-banana' }]);
+
+    const result = await call('image.generate', { prompt: 'two friends at a campfire', references: [{ url: '/characters/alice.png', label: 'Alice' }, { url: '/characters/bob.png', label: 'Bob' }] });
+
+    assert.equal(result.ok, true, result.error?.message);
+    assert.equal(result.value.referencesUsed, 2);
+    assert.deepEqual(scaleCalls.map(params => params.url), ['/characters/alice.png', '/characters/bob.png']);
+    const body = JSON.parse(httpCalls[0].body);
+    assert.deepEqual(body.imageDataUrls, ['data:image/jpeg;base64,REF1', 'data:image/jpeg;base64,REF2']);
+    assert.match(body.prompt, /^two friends at a campfire\. Reference images: 1 — Alice, 2 — Bob/);
+});
+
+test('a backend without reference support gets a plain request, and the avatars are not even read', async () => {
+    const { core, call, httpCalls, scaleCalls } = buildCore({ respond: () => ({ ok: true, status: 200, text: JSON.stringify({ images: [toBase64(pngBytes(8, 8))] }) }) });
+    await core.configureWorkers([{ id: 'sd', format: 'a1111' }]);
+
+    const result = await call('image.generate', { prompt: 'a campfire', references: [{ url: '/characters/alice.png', label: 'Alice' }] });
+
+    assert.equal(result.value.referencesUsed, 0);
+    assert.equal(scaleCalls.length, 0);
+    assert.doesNotMatch(JSON.parse(httpCalls[0].body).prompt, /Reference/);
+});
+
+test('a reference that cannot be read is dropped instead of failing the picture', async () => {
+    const { core, call, httpCalls } = buildCore({
+        respond: () => ({ ok: true, status: 200, text: JSON.stringify({ data: [{ b64_json: toBase64(pngBytes(8, 8)) }] }) }),
+        scaled: params => (params.url === '/characters/missing.png' ? null : undefined),
+    });
+    await core.configureWorkers([{ id: 'nano', format: 'openai', endpoint: 'https://nano-gpt.com/api/v1' }]);
+
+    const result = await call('image.generate', { prompt: 'x', references: [{ url: '/characters/missing.png', label: 'Ghost' }, { url: '/characters/a.png', label: 'Alice' }] });
+
+    assert.equal(result.value.referencesUsed, 1);
+    assert.equal(JSON.parse(httpCalls[0].body).imageDataUrl, 'data:image/jpeg;base64,REF2');
 });

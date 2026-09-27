@@ -12,9 +12,16 @@
  *   забрать её вторым запросом.
  * - **a1111** — `POST {endpoint}/sdapi/v1/txt2img` (Automatic1111, Forge, SD.Next): base64 PNG в `images[0]`. Ключ вида `user:pass` —
  *   Basic-авторизация (`--api-auth`).
+ *
+ * Референсы (фото персонажей как основа). Пока — только совместимый с OpenAI формат NanoGPT: картинки base64 `data:` URL прямо в тот
+ * же `/images/generations`, поле `imageDataUrl` (одна) или `imageDataUrls` (несколько; документация NanoGPT, «Image Generation
+ * (OpenAI-Compatible)»). Настоящий OpenAI так не умеет — у него референсы идут multipart в `/images/edits`, — поэтому у бэкенда
+ * настройка `references`: `auto` (включено для адресов NanoGPT), `on`, `off`. Бэкенд без поддержки получает запрос без референсов,
+ * а Ядро сообщает, что они не применены.
  */
 
 const FORMATS = Object.freeze(['pollinations', 'openai', 'a1111']);
+export const REFERENCE_MODES = Object.freeze(['auto', 'on', 'off']);
 const DEFAULT_ENDPOINTS = Object.freeze({ pollinations: 'https://image.pollinations.ai', openai: 'https://api.openai.com/v1', a1111: 'http://127.0.0.1:7860' });
 const MIN_SIDE = 64;
 const MAX_SIDE = 2048;
@@ -47,6 +54,25 @@ export function resolveImageRequest(params = {}) {
     };
 }
 
+/** Примет ли бэкенд референсы: `on`/`off` — как сказано; `auto` — у совместимого с OpenAI бэкенда на адресе NanoGPT. */
+export function supportsReferences(worker) {
+    if (resolveImageFormat(worker?.format) !== 'openai') return false;
+    const mode = REFERENCE_MODES.includes(worker?.references) ? worker.references : 'auto';
+    if (mode !== 'auto') return mode === 'on';
+    return /(^|\.)nano-gpt\.com$/i.test(hostOf(worker?.endpoint));
+}
+
+function hostOf(url) {
+    try { return new URL(String(url ?? '')).hostname; } catch { return ''; }
+}
+
+/** Строка к промпту, связывающая картинки с именами: «Reference images: 1 — Alice, 2 — Bob. Keep …». Без имён — пусто. */
+export function referencePromptNote(labels) {
+    const named = (labels ?? []).map((label, index) => (label ? `${index + 1} — ${label}` : null)).filter(Boolean);
+    if (!named.length) return '';
+    return `Reference images: ${named.join(', ')}. Keep these characters' faces, hair, build and outfits exactly as in their reference images.`;
+}
+
 /** Размер для `size`: у моделей OpenAI — ближайший по пропорции из их набора, у остальных (совместимые шлюзы) — ровно запрошенный. */
 export function resolveOpenAiSize(width, height, model = '') {
     const family = Object.keys(OPENAI_SIZES).find(key => String(model).startsWith(key));
@@ -70,10 +96,11 @@ function toBase64(text) {
 }
 
 /**
- * `worker` = `{ format, endpoint, apiKey, model }`, `request` — из `resolveImageRequest`. Возвращает `{ url, method, headers, body,
+ * `worker` = `{ format, endpoint, apiKey, model }`, `request` — из `resolveImageRequest`, `referenceDataUrls` — уже готовые `data:` URL
+ * (кладутся только в формат openai; решать, отправлять ли их вообще, — `supportsReferences`). Возвращает `{ url, method, headers, body,
  * responseType }` для `http.request`: `responseType: 'blob'`, когда ответ — сама картинка.
  */
-export function buildImageRequest(worker, request) {
+export function buildImageRequest(worker, request, { referenceDataUrls = [] } = {}) {
     const format = resolveImageFormat(worker?.format);
     const endpoint = trimSlash(worker?.endpoint) || DEFAULT_ENDPOINTS[format];
     const apiKey = String(worker?.apiKey ?? '').trim();
@@ -93,6 +120,8 @@ export function buildImageRequest(worker, request) {
         const model = worker?.model || 'gpt-image-1';
         const body = { model, prompt: request.prompt, n: 1, size: resolveOpenAiSize(request.width, request.height, model) };
         if (!model.startsWith('gpt-image')) body.response_format = 'b64_json';
+        if (referenceDataUrls.length === 1) body.imageDataUrl = referenceDataUrls[0];
+        else if (referenceDataUrls.length > 1) body.imageDataUrls = [...referenceDataUrls];
         return {
             url: `${endpoint}/images/generations`,
             method: 'POST',

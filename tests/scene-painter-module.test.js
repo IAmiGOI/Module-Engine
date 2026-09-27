@@ -4,7 +4,7 @@ import { createEngine } from '../libraries/shared/engine.js';
 import { request } from '../libraries/shared/request.js';
 import { createDiffusionCore } from '../cores/models/diffusion.js';
 import {
-    createScenePainterModule, sanitizeImagePrompt, buildSceneTranscript, buildFinalPrompt, sanitizeSettings, MODULE_ID,
+    createScenePainterModule, sanitizeImagePrompt, buildSceneTranscript, buildFinalPrompt, sanitizeSettings, buildReferences, MODULE_ID,
 } from '../modules/scene-painter/index.js';
 
 /** Те же права, что у определения Модуля в harness/engine-wiring.js: Модуль ходит через настоящий Гейт, как чужой. */
@@ -15,6 +15,7 @@ const RIGHTS = {
         'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations',
         'model.generate', 'model.workers.get', 'image.generate', 'image.workers.get', 'image.workers.set',
         'ui.picture.show', 'image.delete',
+        'stCharacter.avatars',
         'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.attach',
     ],
 };
@@ -33,7 +34,7 @@ const CHAT = [
     { mesid: '2', name: 'Alice', isUser: true, isSystem: false, text: 'Later message that must not be in the scene of #1.' },
 ];
 
-async function build({ generate = async () => 'Prompt: "an old keeper with a lantern on a cliff, dusk"', httpFails = false, takenFooterSlots = [] } = {}) {
+async function build({ generate = async () => 'Prompt: "an old keeper with a lantern on a cliff, dusk"', httpFails = false, takenFooterSlots = [], workers = [{ id: 'free', format: 'pollinations' }], avatars = null } = {}) {
     const engine = createEngine();
     const calls = { generate: [], http: [], annotate: [], notify: [], attach: 0, deleted: [], stored: new Map(), shown: [] };
     const annotations = {};
@@ -60,13 +61,19 @@ async function build({ generate = async () => 'Prompt: "an old keeper with a lan
     engine.buses.services.register('image.url', ({ id }) => (calls.stored.has(id) ? `blob:${id}` : null));
     engine.buses.services.register('image.revokeUrl', () => true);
     engine.buses.services.register('image.delete', ({ id }) => { calls.deleted.push(id); calls.stored.delete(id); return true; });
+    calls.avatarReads = 0;
+    engine.buses.services.register('stCharacter.avatars', () => { calls.avatarReads += 1; return avatars ?? { characters: [], persona: null }; });
+    engine.buses.services.register('imageScale.toDataUrl', ({ url }) => `data:image/jpeg;base64,${Buffer.from(url).toString('base64')}`);
     engine.buses.network.register('http.request', params => {
         calls.http.push(params);
-        return httpFails ? { ok: false, status: 503, text: 'busy' } : { ok: true, status: 200, blob: new Blob([png(1024, 768)]) };
+        if (httpFails) return { ok: false, status: 503, text: 'busy' };
+        return params.method === 'POST'
+            ? { ok: true, status: 200, text: JSON.stringify({ data: [{ b64_json: Buffer.from(png(1024, 768)).toString('base64') }] }) }
+            : { ok: true, status: 200, blob: new Blob([png(1024, 768)]) };
     });
     let clock = 0;
     const diffusion = createDiffusionCore(engine.registerCaller('core.models.diffusion', 'cores', { tier: 'official', networkAccess: true }), { publish: () => {}, workerWaitMs: 5, now: () => (clock += 1) });
-    await diffusion.configureWorkers([{ id: 'free', format: 'pollinations' }]);
+    await diffusion.configureWorkers(workers);
     const host = engine.registerCaller(MODULE_ID, 'modules', RIGHTS);
     const module = createScenePainterModule(host);
     await module.load();
@@ -166,4 +173,45 @@ test('a footer slot taken by another module is skipped for the next free one; wi
     const { calls } = await build({ takenFooterSlots: ['right', 'center', 'left'] });
     assert.equal(calls.footerSlot, undefined);
     assert.match(calls.notify.at(-1).text, /footer slots are taken/);
+});
+
+// --- Фото персонажей как основа ---
+
+const AVATARS = { characters: [{ name: 'Keeper', url: '/characters/keeper.png' }], persona: { name: 'Alice', url: '/User Avatars/alice.png' } };
+const NANO = [{ id: 'nano', format: 'openai', endpoint: 'https://nano-gpt.com/api/v1', model: 'nano-banana' }];
+
+test('buildReferences takes the characters, and the persona only when asked', () => {
+    assert.deepEqual(buildReferences(AVATARS), [{ url: '/characters/keeper.png', label: 'Keeper' }]);
+    assert.equal(buildReferences(AVATARS, { includePersona: true }).at(-1).label, 'Alice');
+    assert.deepEqual(buildReferences(null), []);
+});
+
+test('with a NanoGPT backend the character avatar goes along as a reference and the prompt writer names the character instead of describing its looks', async () => {
+    const { module, calls, annotations } = await build({ workers: NANO, avatars: AVATARS });
+
+    assert.equal(await module.paint('1'), true);
+
+    assert.match(calls.generate[0].systemPrompt, /reference photos of: Keeper\. Call these characters by name/);
+    const body = JSON.parse(calls.http[0].body);
+    assert.equal(body.imageDataUrl, `data:image/jpeg;base64,${Buffer.from('/characters/keeper.png').toString('base64')}`);
+    assert.match(body.prompt, /Reference images: 1 — Keeper/);
+    assert.equal(annotations['1'].references, 1);
+});
+
+test('a backend that cannot take references never makes the module read avatars or change the prompt writer\'s instruction', async () => {
+    const { module, calls } = await build({ avatars: AVATARS });
+
+    await module.paint('1');
+
+    assert.equal(calls.avatarReads, 0);
+    assert.doesNotMatch(calls.generate[0].systemPrompt, /reference photos/);
+});
+
+test('turning references off sends a plain request even to NanoGPT', async () => {
+    const { module, calls } = await build({ workers: NANO, avatars: AVATARS });
+    await module.saveSettings({ ...module.settings.peek(), useReferences: false });
+
+    await module.paint('1');
+
+    assert.equal(JSON.parse(calls.http[0].body).imageDataUrl, undefined);
 });

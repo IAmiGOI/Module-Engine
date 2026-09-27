@@ -2,6 +2,7 @@ import { createDispatchQueue } from '../../libraries/core/dispatch-queue.js';
 import { createPersistedList } from '../../libraries/core/persisted-list.js';
 import {
     buildImageRequest, resolveImageResponse, resolveImageRequest, resolveImageFormat, decodeBase64, readImageInfo,
+    supportsReferences, referencePromptNote, REFERENCE_MODES,
 } from '../../libraries/core/image-provider-request.js';
 import { request } from '../../libraries/shared/request.js';
 
@@ -12,9 +13,14 @@ import { request } from '../../libraries/shared/request.js';
  * заказчику только `assetId` и настоящие размеры (прочитанные из байтов). Заказчику (Модулю) не нужен ни `fetch`, ни `Blob`, ни право на сеть.
  *
  * Контракты (Шина ядер):
- * - `image.generate({ prompt, negativePrompt?, width?, height?, steps?, cfgScale?, seed?, workerId?, fallbackWorkerIds?, timeoutMs? })` →
- *   `{ assetId, mime, width, height, workerId, prompt, seed, requestId }`;
- * - `image.workers.get` / `image.workers.set({ workers })` — `{ id, name, format, endpoint, apiKey, model }`.
+ * - `image.generate({ prompt, negativePrompt?, width?, height?, steps?, cfgScale?, seed?, workerId?, fallbackWorkerIds?, timeoutMs?,
+ *   references? })` → `{ assetId, mime, width, height, workerId, prompt, seed, requestId, referencesUsed }`;
+ * - `image.workers.get` / `image.workers.set({ workers })` — `{ id, name, format, endpoint, apiKey, model, references }`.
+ *
+ * Референсы — `references: [{ url?, assetId?, label? }]`, до `MAX_REFERENCES`: адрес ТОГО ЖЕ сервера (аватар ST) или картинка из
+ * хранилища. Ядро само уменьшает их до 1024px JPEG (`imageScale.toDataUrl`) и отдаёт только бэкенду, который их принимает
+ * (`supportsReferences`); к промпту добавляется строка с именами (`label`), чтобы модель знала, кто на какой картинке.
+ * `referencesUsed` в ответе — сколько реально ушло (0 — бэкенд их не понимает).
  *
  * События: `image.generate.started` / `.finished` / `.failed` / `.retrying` — `requestId` в каждом.
  */
@@ -22,6 +28,7 @@ import { request } from '../../libraries/shared/request.js';
 const PERSISTENCE_NAMESPACE = 'core.models.diffusion';
 /** Генерация картинки у медленного бэкенда — десятки секунд; дольше этого ответа ждать нет смысла. */
 const DEFAULT_TIMEOUT_MS = 180000;
+export const MAX_REFERENCES = 4;
 
 let requestCounter = 0;
 
@@ -36,6 +43,7 @@ export function sanitizeImageWorker(worker = {}) {
         endpoint: String(worker.endpoint ?? '').trim(),
         apiKey: String(worker.apiKey ?? '').trim(),
         model: String(worker.model ?? '').trim(),
+        references: REFERENCE_MODES.includes(worker.references) ? worker.references : 'auto',
     };
 }
 
@@ -68,8 +76,8 @@ export function createDiffusionCore(host, { publish, workerWaitMs = 3000, now = 
     }
 
     /** Байты картинки у бэкенда: один запрос, у совместимых с OpenAI серверов, отдающих `url`, — второй за самой картинкой. */
-    async function fetchImageBytes(worker, imageRequest, timeoutMs) {
-        const providerRequest = buildImageRequest(worker, imageRequest);
+    async function fetchImageBytes(worker, imageRequest, timeoutMs, referenceDataUrls) {
+        const providerRequest = buildImageRequest(worker, imageRequest, { referenceDataUrls });
         const response = await http(providerRequest, timeoutMs);
         if (!response.ok) {
             const detail = String(response.text ?? '').slice(0, 200).trim();
@@ -82,8 +90,27 @@ export function createDiffusionCore(host, { publish, workerWaitMs = 3000, now = 
         return new Uint8Array(await blob.arrayBuffer());
     }
 
-    async function generateWith(worker, imageRequest, requestId, timeoutMs) {
-        const bytes = await fetchImageBytes(worker, imageRequest, timeoutMs);
+    /** Референсы → `data:` URL (уменьшенные). Пропадающий аватар не валит генерацию: такой референс просто выпадает. */
+    async function prepareReferences(list) {
+        const prepared = [];
+        for (const reference of (Array.isArray(list) ? list : []).slice(0, MAX_REFERENCES)) {
+            let blob = null;
+            if (reference?.assetId) {
+                const stored = await request(host.services, 'image.get', { params: { id: String(reference.assetId) } });
+                blob = stored.ok ? stored.value : null;
+                if (!blob) continue;
+            } else if (!reference?.url) continue;
+            const scaled = await request(host.services, 'imageScale.toDataUrl', { params: blob ? { blob } : { url: String(reference.url) } });
+            if (scaled.ok && typeof scaled.value === 'string') prepared.push({ dataUrl: scaled.value, label: String(reference.label ?? '').trim() });
+        }
+        return prepared;
+    }
+
+    async function generateWith(worker, imageRequest, requestId, timeoutMs, references = []) {
+        const usable = supportsReferences(worker) ? references : [];
+        const note = referencePromptNote(usable.map(reference => reference.label));
+        const sent = note ? { ...imageRequest, prompt: `${imageRequest.prompt}. ${note}` } : imageRequest;
+        const bytes = await fetchImageBytes(worker, sent, timeoutMs, usable.map(reference => reference.dataUrl));
         const info = readImageInfo(bytes);
         if (!info.mime.startsWith('image/')) throw new Error(`Image backend "${worker.name}" returned data that is not an image.`);
         const assetId = `diffusion:${now()}-${requestId}`;
@@ -92,7 +119,7 @@ export function createDiffusionCore(host, { publish, workerWaitMs = 3000, now = 
         return {
             assetId, mime: info.mime,
             width: info.width || imageRequest.width, height: info.height || imageRequest.height,
-            workerId: worker.id, prompt: imageRequest.prompt, seed: imageRequest.seed, requestId,
+            workerId: worker.id, prompt: imageRequest.prompt, seed: imageRequest.seed, requestId, referencesUsed: usable.length,
         };
     }
 
@@ -121,12 +148,15 @@ export function createDiffusionCore(host, { publish, workerWaitMs = 3000, now = 
         const timeoutMs = Number.isFinite(params.timeoutMs) && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_TIMEOUT_MS;
         const tiers = [primary, ...(params.fallbackWorkerIds ?? []).map(poolOf).filter(pool => pool.length)].map(pool => ({ workers: pool, timeoutMs }));
 
-        publishEvent('image.generate.started', { requestId, workerId: params.workerId ?? null, prompt: imageRequest.prompt });
+        // Готовим референсы, только если хоть один бэкенд цепочки их примет: уменьшение и base64 — не бесплатны.
+        const references = tiers.some(tier => tier.workers.some(supportsReferences)) ? await prepareReferences(params.references) : [];
+
+        publishEvent('image.generate.started', { requestId, workerId: params.workerId ?? null, prompt: imageRequest.prompt, references: references.length });
         let lastWorkerId = null;
         try {
             const result = await dispatchQueue.enqueueWithFallback(tiers, worker => {
                 lastWorkerId = worker.id;
-                return generateWith(worker, imageRequest, requestId, timeoutMs);
+                return generateWith(worker, imageRequest, requestId, timeoutMs, references);
             }, {
                 onAttemptFailed: ({ tierIndex, error }) => publishEvent('image.generate.retrying', {
                     requestId, failedWorkerId: lastWorkerId, reason: error.message, nextWorkerId: tiers[tierIndex + 1]?.workers?.[0]?.id ?? null,
