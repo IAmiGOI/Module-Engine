@@ -1,0 +1,145 @@
+import { TRIGGER_MODES, computeTriggers } from './trigger-modes.js';
+import { slug } from './guide-create.js';
+import { planSettingChanges, describePlan } from './guide-settings.js';
+
+/**
+ * Правка и удаление для гида (cores/guide): чистые функции. Как и создание (guide-create.js), каждое действие приходит блоком ```proposal``` — карточка показывает, что
+ * изменится, кнопка применяет. Здесь параметры приводятся к настоящему изменению (или отвергаются с причиной) и строится описание для карточки.
+ *
+ *   tracker.update  { id, fields?: [{ name, prompt?, default? }] (по имени: есть — правится, нет — добавляется), removeFields?: [name], when?, every?, enabled? }
+ *   tracker.delete  { id }
+ *   macro.update    { name, text | code }        macro.delete { name }
+ *   lorebook.updateEntry { uid, book?, title?, keys?, content?, always? }     lorebook.deleteEntry { uid, book? }
+ *   module.setting.set   { module, changes: { key: value } }   — только то, что Модуль объявил (guide-settings.js)
+ */
+
+export const EDIT_ACTIONS = Object.freeze(['tracker.update', 'tracker.delete', 'macro.update', 'macro.delete', 'lorebook.updateEntry', 'lorebook.deleteEntry', 'module.setting.set']);
+
+const text = (value, max) => (typeof value === 'string' || typeof value === 'number' ? String(value).trim().slice(0, max) : '');
+const fail = error => ({ ok: false, error });
+const TRACKER_WHEN = TRIGGER_MODES.map(mode => mode.value);
+
+/** Правка трекера: `{ id, fields, removeFields, when, every, enabled }` (только названное) либо ошибка. */
+export function normalizeTrackerPatch(params = {}) {
+    const id = slug(params.id);
+    if (!id) return fail('Which tracker? Its id is needed.');
+    const fields = (Array.isArray(params.fields) ? params.fields : []).map(raw => {
+        const name = slug(typeof raw === 'string' ? raw : raw?.name, 24);
+        if (!name) return null;
+        const field = { name };
+        if (raw && typeof raw === 'object' && 'prompt' in raw) field.prompt = text(raw.prompt, 300);
+        if (raw && typeof raw === 'object' && 'default' in raw) field.default = typeof raw.default === 'number' && Number.isFinite(raw.default) ? raw.default : text(raw.default, 80);
+        return field;
+    }).filter(Boolean);
+    const removeFields = (Array.isArray(params.removeFields) ? params.removeFields : []).map(name => slug(name, 24)).filter(Boolean);
+    const patch = { id, fields, removeFields };
+    if (TRACKER_WHEN.includes(params.when)) patch.when = params.when;
+    if (params.every !== undefined) patch.every = Math.min(50, Math.max(1, Math.round(Number(params.every) || 1)));
+    if (typeof params.enabled === 'boolean') patch.enabled = params.enabled;
+    if (!fields.length && !removeFields.length && patch.when === undefined && patch.every === undefined && patch.enabled === undefined) return fail('Nothing to change in the tracker.');
+    return { ok: true, value: patch };
+}
+
+/** Применяет правку к записи трекера (чистая): поля по имени, триггер, включённость. */
+export function applyTrackerPatch(tracker, patch) {
+    const byName = new Map((tracker.fields ?? []).map(field => [field.name, { ...field }]));
+    for (const name of patch.removeFields) byName.delete(name);
+    for (const field of patch.fields) byName.set(field.name, { prompt: '', default: '', ...byName.get(field.name), ...field });
+    const next = { ...tracker, fields: [...byName.values()] };
+    if (patch.enabled !== undefined) next.enabled = patch.enabled;
+    if (patch.when !== undefined || patch.every !== undefined) {
+        const every = patch.every ?? 1;
+        let mode = patch.when ?? (every > 1 ? 'everyNReplies' : 'everyReply');
+        if (mode === 'everyReply' && every > 1) mode = 'everyNReplies';
+        next.triggers = computeTriggers(mode, every);
+    }
+    return next;
+}
+
+export function normalizeId(params = {}) {
+    const id = slug(params.id);
+    return id ? { ok: true, value: { id } } : fail('Which tracker? Its id is needed.');
+}
+
+export function normalizeMacroPatch(params = {}) {
+    const name = text(params.name, 32).replace(/[^A-Za-z0-9_]/g, '_');
+    if (!name) return fail('Which macro? Its name is needed.');
+    const code = text(params.code, 4000);
+    const source = code || text(params.text, 2000);
+    return source ? { ok: true, value: { name, kind: code ? 'code' : 'text', source } } : fail('The macro would be empty.');
+}
+
+export function normalizeMacroName(params = {}) {
+    const name = text(params.name, 32).replace(/[^A-Za-z0-9_]/g, '_');
+    return name ? { ok: true, value: { name } } : fail('Which macro? Its name is needed.');
+}
+
+export function normalizeEntryPatch(params = {}) {
+    const uid = Number(params.uid);
+    if (!Number.isInteger(uid)) return fail('Which entry? Its uid is needed.');
+    const patch = {};
+    if (typeof params.title === 'string' && params.title.trim()) patch.comment = text(params.title, 80);
+    if (Array.isArray(params.keys)) patch.key = [...new Set(params.keys.map(key => text(key, 40)).filter(Boolean))].slice(0, 8);
+    if (typeof params.content === 'string' && params.content.trim()) patch.content = text(params.content, 4000);
+    if (typeof params.always === 'boolean') patch.constant = params.always;
+    if (!Object.keys(patch).length) return fail('Nothing to change in the entry.');
+    return { ok: true, value: { uid, book: text(params.book, 120) || undefined, patch } };
+}
+
+export function normalizeEntryRef(params = {}) {
+    const uid = Number(params.uid);
+    return Number.isInteger(uid) ? { ok: true, value: { uid, book: text(params.book, 120) || undefined } } : fail('Which entry? Its uid is needed.');
+}
+
+/**
+ * Описание для карточки: `{ ok, title, lines, danger }`. `context.settingsOf(moduleId)` → спецификации Модуля (для «было → стало»).
+ */
+export function describeEdit(action, params, context = {}) {
+    if (action === 'tracker.update') {
+        const made = normalizeTrackerPatch(params);
+        if (!made.ok) return made;
+        const { value } = made;
+        const lines = [
+            ...value.fields.map(field => `Field ${field.name}: ${[field.prompt !== undefined ? `“${field.prompt}”` : '', field.default !== undefined ? `starts at ${field.default}` : ''].filter(Boolean).join(', ') || 'kept'}`),
+            ...value.removeFields.map(name => `Remove field ${name}`),
+            ...(value.when !== undefined || value.every !== undefined ? [`Updated: ${value.when === 'everyNReplies' || (value.every > 1) ? `every ${value.every ?? 'N'} replies` : value.when ?? 'after every reply'}`] : []),
+            ...(value.enabled !== undefined ? [value.enabled ? 'Turn on' : 'Turn off'] : []),
+        ];
+        return { ok: true, title: `Change tracker “${value.id}”`, lines };
+    }
+    if (action === 'tracker.delete') {
+        const made = normalizeId(params);
+        return made.ok ? { ok: true, danger: true, title: `Delete tracker “${made.value.id}”`, lines: ['Its fields and settings are removed. Values already saved in chats stay in those chats.'] } : made;
+    }
+    if (action === 'macro.update') {
+        const made = normalizeMacroPatch(params);
+        return made.ok ? { ok: true, title: `Change macro {{${made.value.name}}}`, lines: [made.value.kind === 'code' ? 'New program:' : 'New text:', made.value.source.slice(0, 240)] } : made;
+    }
+    if (action === 'macro.delete') {
+        const made = normalizeMacroName(params);
+        return made.ok ? { ok: true, danger: true, title: `Delete macro {{${made.value.name}}}`, lines: ['Prompts that use it will show the bare {{name}} afterwards.'] } : made;
+    }
+    if (action === 'lorebook.updateEntry') {
+        const made = normalizeEntryPatch(params);
+        if (!made.ok) return made;
+        const { patch } = made.value;
+        return { ok: true, title: `Change lorebook entry #${made.value.uid}`, lines: [
+            ...(patch.comment !== undefined ? [`Title: ${patch.comment}`] : []),
+            ...(patch.key !== undefined ? [`Triggers on: ${patch.key.join(', ') || '—'}`] : []),
+            ...(patch.constant !== undefined ? [patch.constant ? 'Always active' : 'Active only on its trigger words'] : []),
+            ...(patch.content !== undefined ? [`Text: ${patch.content.slice(0, 200)}`] : []),
+        ] };
+    }
+    if (action === 'lorebook.deleteEntry') {
+        const made = normalizeEntryRef(params);
+        return made.ok ? { ok: true, danger: true, title: `Delete lorebook entry #${made.value.uid}`, lines: ['The entry is removed from its lorebook.'] } : made;
+    }
+    if (action === 'module.setting.set') {
+        const moduleId = text(params?.module, 80);
+        const specs = context.settingsOf?.(moduleId);
+        if (!specs) return fail(`"${moduleId || 'that module'}" is not on or has no settings I can change.`);
+        const plan = planSettingChanges(specs, params?.changes);
+        return plan.ok ? { ok: true, title: `Settings — ${context.titleOf?.(moduleId) ?? moduleId}`, lines: describePlan(plan.changes) } : plan;
+    }
+    return fail(`Unknown proposal "${action}".`);
+}

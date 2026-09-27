@@ -66,7 +66,9 @@ export function createGuideWindow({ defaultAvatar = '', persona, messages, busy,
         };
         return h('div', { class: 'stme-guide-block stme-guide-proposal' }, h('strong', {}, shown.title),
             h('ul', {}, shown.lines.map(line => h('li', {}, line))),
-            computed(() => Button(({ idle: 'Apply', busy: 'Applying…', done: '✓ Applied', failed: 'Try again' })[state()], apply)));
+            computed(() => Button((shown.danger
+                ? { idle: 'Delete', busy: 'Deleting…', done: '✓ Deleted', failed: 'Try again' }
+                : { idle: 'Apply', busy: 'Applying…', done: '✓ Applied', failed: 'Try again' })[state()], apply, { variant: shown.danger ? 'danger' : 'default' })));
     }
 
     function block(data) {

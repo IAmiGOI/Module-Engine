@@ -1,4 +1,4 @@
-import { CREATE_ACTIONS } from './guide-create.js';
+import { PROPOSAL_ACTIONS } from './guide-proposals.js';
 
 /**
  * Разметка ответов гида (маскот движка, cores/guide) — чистые функции: текст модели → сегменты для окна чата.
@@ -39,7 +39,7 @@ function normalizeBlock(kind, data) {
     }
     if (kind === 'proposal') {
         const action = text(data.action);
-        return CREATE_ACTIONS.includes(action) ? { kind, action, params: data.params && typeof data.params === 'object' ? data.params : {} } : null;
+        return PROPOSAL_ACTIONS.includes(action) ? { kind, action, params: data.params && typeof data.params === 'object' ? data.params : {} } : null;
     }
     if (kind === 'checklist' || kind === 'creator') return { kind };
     return null;

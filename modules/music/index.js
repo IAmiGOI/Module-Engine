@@ -1,3 +1,4 @@
+import { numberSetting, booleanSetting } from '../../libraries/core/guide-settings.js';
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed, effect } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
@@ -500,6 +501,17 @@ export function createMusicModule(host) {
         updateDescription,
         removeTrack,
         saveSettings,
+        /** Что гиду разрешено менять (libraries/core/guide-settings.js): те же слайдеры и переключатели, что в карточке, с теми же границами. */
+        guideSettings: () => ({
+            specs: [
+                booleanSetting('autoSwitch', 'Auto-switch with the scene', autoSwitch),
+                numberSetting('contextMessages', 'Scene depth (last messages)', contextMessages, { min: 1, max: 12, step: 1 }),
+                numberSetting('minSimilarity', 'Min similarity', minSimilarity, { min: 0, max: 1, step: 0.05 }),
+                numberSetting('switchMargin', 'Switch margin', switchMargin, { min: 0, max: 0.5, step: 0.01 }),
+                booleanSetting('autoTag', 'Describe new tracks with the model', autoTag),
+            ],
+            save: saveSettings,
+        }),
         stop: () => {
             stopPolling();
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
