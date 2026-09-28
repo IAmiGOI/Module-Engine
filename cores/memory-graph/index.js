@@ -2,6 +2,7 @@ import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { estimateTokens, packEntriesIntoChunks } from '../../libraries/core/entry-chunker.js';
+import { extractRecentText } from './context-text.js';
 
 const PERSISTENCE_NAMESPACE = 'core.memoryGraph';
 const SETTINGS_KEY = 'settings';
@@ -48,6 +49,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
     thresholdK: 1.5,
     // `w` в формуле логитов региона (вектор + keyword) — MEMORY_GRAPH.md.
     keywordWeight: 1,
+    // Сколько последних сообщений чата (и какой их суммарный хвост в символах) уходит на извлечение фактов —
+    // MEMORY_GRAPH_FIX_PLAN.md, Этап 1 (ROADMAP 5.107а). До этого извлечение видело ТОЛЬКО последнее сообщение —
+    // на `generation.prepare` это всегда реплика игрока, не ответ модели. 4 сообщения — обычно реплика игрока + ответ
+    // модели с запасом на реролл/короткие фразы; 3000 символов — щедро для десятка строк диалога, но не пустит в
+    // промпт извлечения содержимое на порядки больше самой сцены.
+    extractionContextMessages: 4,
+    extractionContextChars: 3000,
     // Каскад накопителя — числа согласованы с пользователем дословно.
     stagingRetryTurns: 5,
     stagingBatchSize: 5,
@@ -244,6 +252,8 @@ export function clampGraphSettings(values = {}) {
     return {
         thresholdK: clampInt(values.thresholdK * 10, 1, 100, DEFAULT_SETTINGS.thresholdK * 10) / 10,
         keywordWeight: clampInt(values.keywordWeight * 10, 0, 100, DEFAULT_SETTINGS.keywordWeight * 10) / 10,
+        extractionContextMessages: clampInt(values.extractionContextMessages, 1, 20, DEFAULT_SETTINGS.extractionContextMessages),
+        extractionContextChars: clampInt(values.extractionContextChars, 500, 12000, DEFAULT_SETTINGS.extractionContextChars),
         stagingRetryTurns: clampInt(values.stagingRetryTurns, 1, 200, DEFAULT_SETTINGS.stagingRetryTurns),
         stagingBatchSize: clampInt(values.stagingBatchSize, 1, 50, DEFAULT_SETTINGS.stagingBatchSize),
         stagingMaxTurns: clampInt(values.stagingMaxTurns, 1, 500, DEFAULT_SETTINGS.stagingMaxTurns),
@@ -3069,7 +3079,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // "узел вообще не создался". Тот же принцип, что у mergeQueue/
         // reconsolidationQueue выше — сырой снимок очереди.
         host.own.register('memoryGraph.staging', () => Object.values(staging)),
-        host.own.register('memoryGraph.check', params => manualCheck(extractLatestText(params?.chat))),
+        host.own.register('memoryGraph.check', params => manualCheck(extractRecentText(params?.chat, { count: settings.extractionContextMessages, maxChars: settings.extractionContextChars }))),
         // Ручное редактирование графа (UI-редактор) — CRUD нод/рёбер.
         host.own.register('memoryGraph.nodes.create', params => createNodeManually(params ?? {})),
         host.own.register('memoryGraph.nodes.createFromCharacterCard', () => createNodeFromCharacterCard()),
@@ -3118,6 +3128,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     };
 }
 
+/** `injectIntoPrompt()`'s поисковый запрос — намеренно ТОЛЬКО последнее сообщение (MEMORY_GRAPH_FIX_PLAN.md, Этап 1: план явно требует не трогать эту логику). В отличие от извлечения фактов (`extractRecentText()`, context-text.js), здесь текст — ключ для поиска УЖЕ существующих нод по смыслу, а не сырьё для СОЗДАНИЯ новых: то, что игрок только что написал, а не хвост диалога. */
 function extractLatestText(chat) {
     if (!Array.isArray(chat) || !chat.length) return '';
     return String(chat[chat.length - 1]?.mes ?? '');

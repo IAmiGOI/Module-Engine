@@ -20,6 +20,7 @@ import {
     trimCandidatesToBudget, buildSkeletonReducePrompt, buildCentersReducePrompt,
     assignBootstrapUids, entryTitle,
 } from '../cores/memory-graph/index.js';
+import { extractRecentText } from '../cores/memory-graph/context-text.js';
 
 // --- Физика регионов --------------------------------------------------
 
@@ -909,6 +910,67 @@ test('assignBootstrapUids() keeps original uids when they are unique (single boo
     assert.deepEqual(assignBootstrapUids([0, 1, 0, 1]), [0, 1, 2, 3], 'two books both with uids 0 and 1 — sequential handles');
     assert.deepEqual(assignBootstrapUids([5, 7, 5]), [0, 1, 2], 'ANY collision renumbers everything, so handles stay stable and unique');
     assert.deepEqual(assignBootstrapUids([]), []);
+});
+
+test('extractRecentText() includes the model\'s reply, not just the player\'s latest line — this was the actual bug: facts live in what the model says (MEMORY_GRAPH_FIX_PLAN.md, Этап 1)', () => {
+    const chat = [
+        { name: 'User', is_user: true, mes: 'Where are we?' },
+        { name: 'Narrator', mes: 'The tower is cursed.' },
+        { name: 'User', is_user: true, mes: 'I step back.' },
+    ];
+    const text = extractRecentText(chat, { count: 4 });
+    assert.match(text, /The tower is cursed/);
+    assert.match(text, /I step back/);
+    assert.ok(text.indexOf('The tower is cursed') < text.indexOf('I step back'), 'chat order is preserved, not reversed');
+});
+
+test('extractRecentText() names each line by speaker — the user\'s own name if given, "User"/"Character" as a fallback', () => {
+    const chat = [
+        { name: 'Kira', is_user: true, mes: 'Hi there.' },
+        { mes: 'Hello, traveler.' }, // без имени и не is_user -> откат на "Character"
+    ];
+    const text = extractRecentText(chat, { count: 2 });
+    assert.match(text, /^Kira: Hi there\./m);
+    assert.match(text, /Character: Hello, traveler\./);
+});
+
+test('extractRecentText() skips system messages (the graph\'s own sticky-memory injection) — they are not part of the scene', () => {
+    const chat = [
+        { name: 'Narrator', mes: 'A dragon appears.' },
+        { is_system: true, name: 'Memory', mes: '[Reminder: the sword is cursed]' },
+        { name: 'User', is_user: true, mes: 'I draw my sword.' },
+    ];
+    const text = extractRecentText(chat, { count: 3 });
+    assert.match(text, /A dragon appears/);
+    assert.match(text, /I draw my sword/);
+    assert.doesNotMatch(text, /Reminder/);
+});
+
+test('extractRecentText() strips HTML tags and collapses whitespace', () => {
+    const chat = [{ mes: '<p>The   room</p>\n<b>is dark.</b>' }];
+    assert.equal(extractRecentText(chat, { count: 1 }), 'Character: The room is dark.');
+});
+
+test('extractRecentText() only looks at the last `count` messages, oldest of those first', () => {
+    const chat = [{ name: 'A', mes: 'one' }, { name: 'B', mes: 'two' }, { name: 'C', mes: 'three' }, { name: 'D', mes: 'four' }];
+    const text = extractRecentText(chat, { count: 2 });
+    assert.doesNotMatch(text, /one|two/);
+    assert.match(text, /three/);
+    assert.match(text, /four/);
+});
+
+test('extractRecentText() truncates a too-long result from the START, keeping the freshest (most relevant) text intact', () => {
+    const chat = [{ name: 'Narrator', mes: 'x'.repeat(50) }, { name: 'User', is_user: true, mes: 'y'.repeat(50) }];
+    const text = extractRecentText(chat, { count: 2, maxChars: 60 });
+    assert.equal(text.length, 60);
+    assert.ok(text.endsWith('y'.repeat(50)), 'the newest message must survive whole');
+    assert.ok(!text.includes('x'.repeat(50)), 'the older message is the one cut');
+});
+
+test('extractRecentText() returns an empty string for an empty or missing chat', () => {
+    assert.equal(extractRecentText([]), '');
+    assert.equal(extractRecentText(undefined), '');
+    assert.equal(extractRecentText(null), '');
 });
 
 test('entryTitle() appends the book only when the entry carries one (several active lorebooks)', () => {
