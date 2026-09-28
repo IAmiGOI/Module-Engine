@@ -104,3 +104,48 @@ test('conflict copies are recognized so they never conflict again', () => {
 test('base entries can be stored as plain hashes or as objects with a hash', () => {
     assert.deepEqual(resolveBaseHashes({ a: 'h1', b: { hash: 'h2', stamp: 's' }, c: null }), { a: 'h1', b: 'h2' });
 });
+
+// --- Сравнение по семантическому `key` (card-fingerprint.js), не только по байтовому `hash` ---
+
+const withKey = (hash, key, modified = 0, size = 10) => ({ hash, key, modified, size });
+
+test('computeSyncPlan(): a path with the same key on both sides settles with zero transfers, even though the raw hash differs (the whole point of key-comparison)', () => {
+    const plan = computeSyncPlan({
+        local: { 'characters/Alice.png': withKey('bytes-a', 'card1:same') },
+        remote: { 'characters/Alice.png': withKey('bytes-b', 'card1:same') },
+        base: {},
+    });
+    assert.deepEqual(opsOf(plan), ['settle:characters/Alice.png']);
+    assert.equal(plan.actions[0].hash, 'card1:same', 'the base records the KEY, not either side\'s raw byte hash');
+});
+
+test('computeSyncPlan(): key present on only one side falls back to hash comparison for that path', () => {
+    const plan = computeSyncPlan({
+        local: { 'characters/Alice.png': withKey('bytes-a', 'card1:same') },
+        remote: { 'characters/Alice.png': { hash: 'bytes-b', modified: 0, size: 10 } },   // no key — e.g. GitHub side
+        base: {},
+    });
+    assert.equal(plan.actions[0].op, 'conflict', 'without a key on both sides, differing raw bytes still conflict as before');
+});
+
+test('computeSyncPlan(): a real edit (different key) still pushes/pulls, and the transferred `hash` stays the real byte hash while `baseValue` is the key', () => {
+    const plan = computeSyncPlan({
+        local: { 'characters/Alice.png': withKey('new-bytes', 'card1:v2') },
+        remote: { 'characters/Alice.png': withKey('old-bytes', 'card1:v1') },
+        base: { 'characters/Alice.png': 'card1:v1' },
+    });
+    assert.equal(plan.actions[0].op, 'push');
+    assert.equal(plan.actions[0].hash, 'new-bytes', 'meta.hash for the write is the real byte hash, not the key');
+    assert.equal(plan.actions[0].baseValue, 'card1:v2', 'what gets recorded into base is the key');
+});
+
+test('computeSyncPlan(): an old byte-hash base naturally stops matching once both sides carry a key — next pass just re-settles on the key instead of a hardcoded special case', () => {
+    // Base was recorded as a plain byte hash before this pair started reporting `key` for this path (pre-fingerprint history).
+    const plan = computeSyncPlan({
+        local: { 'characters/Alice.png': withKey('bytes-a', 'card1:same') },
+        remote: { 'characters/Alice.png': withKey('bytes-b', 'card1:same') },
+        base: { 'characters/Alice.png': 'bytes-a' },   // old-format base — never equals a `card1:` key by construction
+    });
+    assert.deepEqual(opsOf(plan), ['settle:characters/Alice.png']);
+    assert.equal(plan.actions[0].hash, 'card1:same');
+});

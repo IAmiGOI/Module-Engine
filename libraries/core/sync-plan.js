@@ -12,6 +12,20 @@
  *   L == B (изменился R)  → забрать (или удалить у нас, если там файла больше нет);
  *   иначе (менялись оба)  → КОНФЛИКТ: удаление против правки выигрывает правка (данные не теряются молча); две правки —
  *                           побеждает более свежая по времени изменения, проигравшая версия сохраняется рядом копией.
+ *
+ * **Сравнение по `key`, не только по `hash`** — главный фикс ложных конфликтов персонажей (см. `card-fingerprint.js`): запись
+ * манифеста может нести необязательный `key` — семантический отпечаток («тот же персонаж») в дополнение к обычному байтовому
+ * `hash`. Для пути, где `key` есть у ОБЕИХ сторон, сравнение (`L==R`, `R==B`, `L==B`) идёт по `key`; если хотя бы у одной стороны
+ * его нет (не тот раздел, ещё не пересчитан после миграции, или это GitHub/облако — те всегда отдают только git-blob sha),
+ * сравнение остаётся по `hash`, как раньше. Значение, записанное в `B` после этого прохода, — то же, что сравнивалось (`key` или
+ * `hash`), поэтому следующий проход сравнивает в той же системе координат сам по себе: если старая `B` — байтовый хеш, а сейчас
+ * сравнение идёт по `key` (формат `card1:…`, никогда не совпадёт со строкой байтового хеша), это уже даёт эффект «`B` для этого
+ * пути не в счёт» без отдельного кода — ближайший проход просто мигрирует его на `key` через обычные ветки ниже.
+ *
+ * `action.hash` у `push`/`pull`/`restored`-веток — ВСЕГДА настоящий байтовый хеш переносимого содержимого (нужен получателю для
+ * `meta.hash`/кэша — тот должен уметь дать обычный хеш и стороне, которая `key` не понимает). `action.baseValue` — то, что
+ * записывается в `B` (совпадает с `action.hash`, когда `key` не используется — нулевая разница в поведении для всех остальных
+ * категорий; иначе — семантический `key`). У `settle` своего переноса нет, поэтому там `hash` и есть значение для `B`.
  */
 
 export const SYNC_ACTIONS = Object.freeze({ push: 'push', pull: 'pull', deleteLocal: 'deleteLocal', deleteRemote: 'deleteRemote', conflict: 'conflict', settle: 'settle' });
@@ -44,14 +58,21 @@ export function isConflictCopy(path) {
  * @param {(path:string, entries:{local?:object, remote?:object})=>boolean} [input.include] — фильтр (выбранные категории, потолок размера)
  * @returns {{actions:Array<object>, counts:object}}
  */
+/** Значение для сравнения этого пути: `key` только если оно есть у ОБЕИХ сторон, иначе обычный байтовый `hash` (см. doc-comment файла). */
+function comparable(localEntry, remoteEntry) {
+    const useKey = Boolean(localEntry?.key && remoteEntry?.key);
+    return {
+        l: useKey ? localEntry.key : hashOf(localEntry), r: useKey ? remoteEntry.key : hashOf(remoteEntry),
+    };
+}
+
 export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLabel = 'conflict', include = () => true } = {}) {
     const paths = new Set([...Object.keys(local), ...Object.keys(remote), ...Object.keys(base)]);
     const actions = [];
 
     for (const path of [...paths].sort()) {
         if (!include(path, { local: local[path], remote: remote[path] })) continue;
-        const l = hashOf(local[path]);
-        const r = hashOf(remote[path]);
+        const { l, r } = comparable(local[path], remote[path]);
         const b = base[path] ?? null;
 
         if (l === r) {
@@ -59,21 +80,21 @@ export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLa
             continue;
         }
         if (r === b) {
-            actions.push(l === null ? { op: SYNC_ACTIONS.deleteRemote, path } : { op: SYNC_ACTIONS.push, path, hash: l, size: local[path].size, modified: local[path].modified });
+            actions.push(l === null ? { op: SYNC_ACTIONS.deleteRemote, path } : { op: SYNC_ACTIONS.push, path, hash: hashOf(local[path]), baseValue: l, key: local[path].key, size: local[path].size, modified: local[path].modified });
             continue;
         }
         if (l === b) {
-            actions.push(r === null ? { op: SYNC_ACTIONS.deleteLocal, path } : { op: SYNC_ACTIONS.pull, path, hash: r, size: remote[path].size, modified: remote[path].modified });
+            actions.push(r === null ? { op: SYNC_ACTIONS.deleteLocal, path } : { op: SYNC_ACTIONS.pull, path, hash: hashOf(remote[path]), baseValue: r, key: remote[path].key, size: remote[path].size, modified: remote[path].modified });
             continue;
         }
         // Менялись обе стороны.
-        if (l === null) { actions.push({ op: SYNC_ACTIONS.pull, path, hash: r, size: remote[path].size, modified: remote[path].modified, restored: true }); continue; }
-        if (r === null) { actions.push({ op: SYNC_ACTIONS.push, path, hash: l, size: local[path].size, modified: local[path].modified, restored: true }); continue; }
+        if (l === null) { actions.push({ op: SYNC_ACTIONS.pull, path, hash: hashOf(remote[path]), baseValue: r, key: remote[path].key, size: remote[path].size, modified: remote[path].modified, restored: true }); continue; }
+        if (r === null) { actions.push({ op: SYNC_ACTIONS.push, path, hash: hashOf(local[path]), baseValue: l, key: local[path].key, size: local[path].size, modified: local[path].modified, restored: true }); continue; }
         const lm = local[path].modified ?? 0;
         const rm = remote[path].modified ?? 0;
         // Равное время — выигрывает больший хеш: обе стороны, считая независимо, выберут одну и ту же версию.
         const winner = lm !== rm ? (lm > rm ? 'local' : 'remote') : (l > r ? 'local' : 'remote');
-        actions.push({ op: SYNC_ACTIONS.conflict, path, winner, conflictPath: computeConflictPath(path, conflictLabel), localHash: l, remoteHash: r });
+        actions.push({ op: SYNC_ACTIONS.conflict, path, winner, conflictPath: computeConflictPath(path, conflictLabel), localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
     }
 
     const counts = { push: 0, pull: 0, deleteLocal: 0, deleteRemote: 0, conflict: 0, settle: 0 };

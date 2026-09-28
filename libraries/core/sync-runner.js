@@ -66,14 +66,17 @@ export async function runSync({
                     applyBase({ [action.path]: action.hash });
                     break;
                 case SYNC_ACTIONS.push:
-                    await remote.write(action.path, await local.read(action.path), { hash: action.hash, modified: action.modified });
+                    // `meta.hash` — ВСЕГДА настоящий байтовый хеш (получатель кэширует его как хеш реальных байт на диске); `meta.key` —
+                    // отпечаток ИСТОЧНИКА, безопасно доверять сразу (см. doc-comment `writeLocal` в cores/sync/index.js); то, что идёт
+                    // в базу (`action.baseValue`), может быть тем же `key` — см. doc-comment sync-plan.js.
+                    await remote.write(action.path, await local.read(action.path), { hash: action.hash, modified: action.modified, key: action.key });
                     counts.pushed += 1;
-                    finishOne({ [action.path]: action.hash }, true);
+                    finishOne({ [action.path]: action.baseValue ?? action.hash }, true);
                     break;
                 case SYNC_ACTIONS.pull:
-                    await local.write(action.path, await remote.read(action.path), { hash: action.hash, modified: action.modified });
+                    await local.write(action.path, await remote.read(action.path), { hash: action.hash, modified: action.modified, key: action.key });
                     counts.pulled += 1;
-                    finishOne({ [action.path]: action.hash }, false);
+                    finishOne({ [action.path]: action.baseValue ?? action.hash }, false);
                     break;
                 case SYNC_ACTIONS.deleteLocal:
                     await local.remove(action.path);

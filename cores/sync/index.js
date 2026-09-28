@@ -1,5 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { computeGitBlobSha } from '../../libraries/core/content-hash.js';
+import { computeCardFingerprint } from '../../libraries/core/card-fingerprint.js';
 import { buildManifest } from '../../libraries/core/sync-manifest.js';
 import { runSync } from '../../libraries/core/sync-runner.js';
 import { createRpcEndpoint } from '../../libraries/core/sync-wire.js';
@@ -124,11 +125,17 @@ export function createSyncCore(host, {
         if (cacheState) await writeState('cache', cacheState);
     }
 
+    /** Семантический отпечаток (`card-fingerprint.js`) только для персонажей; не-PNG/без карты — `null`, тогда манифест сравнивает по обычному байтовому хешу (см. doc-comment `sync-plan.js`). Никогда не бросает — отпечаток лучше отсутствующий, чем ломающий скан. */
+    async function fingerprintOf(path, blob) {
+        if (categoryOfPath(path) !== 'characters') return null;
+        try { return await computeCardFingerprint(await blob.arrayBuffer(), { hash: computeGitBlobSha }); } catch { return null; }
+    }
+
     async function scanLocal(categories, onProgress) {
         return exclusive(async () => {
             const cache = await loadCache();
             const listing = await service('stUserData.list', { categories });
-            const result = await buildManifest({ listing, cache, read: path => service('stUserData.read', { path }), hash: computeGitBlobSha, onProgress });
+            const result = await buildManifest({ listing, cache, read: path => service('stUserData.read', { path }), hash: computeGitBlobSha, fingerprint: fingerprintOf, onProgress });
             const scanned = new Set(categories);
             const kept = Object.fromEntries(Object.entries(cache).filter(([path]) => !scanned.has(categoryOfPath(path))));
             cacheState = { ...kept, ...result.cache };
@@ -141,7 +148,9 @@ export function createSyncCore(host, {
         return exclusive(async () => {
             const cache = await loadCache();
             const { stamp } = await service('stUserData.write', { path, blob });
-            if (stamp != null && meta?.hash) cache[path] = { stamp, hash: meta.hash }; else delete cache[path];
+            // `meta.key` — отпечаток ИСТОЧНИКА (см. sync-plan.js): доверять ему безопасно, в отличие от чужого байтового хеша
+            // (Этап 4.3 проверяет ЕГО отдельно) — отпечаток намеренно игнорирует ровно то, что ST меняет при записи.
+            if (stamp != null && meta?.hash) cache[path] = { stamp, hash: meta.hash, ...(meta.key ? { key: meta.key } : {}) }; else delete cache[path];
             touchedPaths.add(path);
         });
     }
@@ -567,7 +576,7 @@ export function createSyncCore(host, {
                 return body ? JSON.parse(await body.text()) : {};
             },
             async read(path) { const { body } = await rpc('read', { path }); return body ?? new Blob([]); },
-            async write(path, blob, meta) { await rpc('write', { path, hash: meta?.hash, modified: meta?.modified }, blob); },
+            async write(path, blob, meta) { await rpc('write', { path, hash: meta?.hash, modified: meta?.modified, key: meta?.key }, blob); },
             async remove(path) { await rpc('remove', { path }); },
         };
     }
@@ -583,7 +592,7 @@ export function createSyncCore(host, {
                 return { result: { enabled: config.categories }, body: new Blob([JSON.stringify(entries)]) };
             },
             async read({ path }) { return { body: await service('stUserData.read', { path }) }; },
-            async write({ path, hash, modified }, { body }) { await writeLocal(path, body ?? new Blob([]), { hash, modified }); return { ok: true }; },
+            async write({ path, hash, modified, key }, { body }) { await writeLocal(path, body ?? new Blob([]), { hash, modified, key }); return { ok: true }; },
             async remove({ path }) { await removeLocal(path); return { ok: true }; },
             async finish(_params, { body }) {
                 if (body) await writeState(`base:pair:${session.pairId}`, JSON.parse(await body.text()));
