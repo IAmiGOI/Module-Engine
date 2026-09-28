@@ -160,6 +160,19 @@ test('layoutGraph() keeps a node inside its own zone even when that zone is NARR
     }
 });
 
+test('layoutGraph() keeps sane, finite coordinates for a graph with EXACTLY ONE region — no staging wedge to share the circle with, so that region\'s halfAngle approaches π', () => {
+    // Реальный найденный баг (не поймали тесты выше — все берут 2+ региона): при ОДНОМ регионе он получает ПОЧТИ
+    // весь круг, halfAngle → π, а `R/sin(halfAngle)` (без зажима сверху π/2) делит на sin(π) ≈ 1.2e-16 и раздувает
+    // anchorRadius до ~1.5e17 — координаты узла улетают в астрономические числа вместо разумных десятков пикселей.
+    const nodes = [{ id: 'n0', regionId: 'Solo', degree: 0, protectedNode: true, createdAt: 0 }];
+    const regions = { Solo: { centerNodeId: 'n0', subCenterIds: [], nodeIds: ['n0'], label: 'Solo' } };
+    const { positions, zones } = layoutGraph(nodes, regions);
+    const pos = positions.get('n0');
+    assert.ok(Number.isFinite(pos.x) && Number.isFinite(pos.y), 'position must be finite');
+    assert.ok(Math.hypot(pos.x, pos.y) < 1000, `a single tiny node's distance from the canvas center must stay sane (got ${Math.hypot(pos.x, pos.y)}), not astronomical`);
+    assert.equal(zoneAt(pos.x, pos.y, zones)?.regionId, 'Solo', 'the node must still land inside its own (now correctly finite) zone');
+});
+
 test('layoutGraph() is deterministic — the same graph always produces the same positions and zones', () => {
     const { nodes, regions } = buildFullGraph();
     const first = layoutGraph(nodes, regions);
