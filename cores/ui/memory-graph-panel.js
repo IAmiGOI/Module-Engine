@@ -32,7 +32,13 @@ export {
 import { layoutGraph, nodeRadius, zoneAt } from './memory-graph/layout.js';
 import { diffElements } from './memory-graph/elements-diff.js';
 import { dropDecision, connectModeStep, edgeTypesInGraph } from './memory-graph/interactions.js';
-import { renderZonesSvg, zonesSignature, ZONES_SVG_ID } from './memory-graph/zones-svg.js';
+// `renderZonesSvg()`/`ZONES_SVG_ID` (zones-svg.js) БОЛЬШЕ НЕ ЗОВУТСЯ отсюда — реальная жалоба пользователя (плюс
+// присланный скриншот): угловатые клинья, подложка не всегда отображается, нет переключателя. Заменены на
+// органичную "плоскость графа" (`plane-field.js`) — canvas + честное поле по расстоянию, см. doc-comment у
+// `paintZonesCanvas()` ниже. Сам `zones-svg.js` и его тесты НЕ трогаем и не удаляем (тот же принцип, что у
+// `legacy-geometry.js` с Этапа 1 — старый код с тестами остаётся, просто больше не в рендер-пути).
+import { zonesSignature } from './memory-graph/zones-svg.js';
+import { computePlaneOutline, planeRadiusAt, regionFieldAt, dominantBlend } from './memory-graph/plane-field.js';
 import { retrievalClasses, routeChainLabels } from './memory-graph/retrieval-overlay.js';
 import { METRICS, findMetric, metricColor, metricDomain } from './memory-graph/metrics.js';
 
@@ -62,6 +68,7 @@ const MODULE_UI_NAMESPACE = 'core.ui.memoryGraph';
 const WINDOW_KEY = 'window';
 const CANVAS_ID = 'stme-memory-graph-canvas';
 const BG_ID = 'stme-memory-graph-region-bg';
+const ZONES_CANVAS_ID = 'stme-memory-graph-zones-canvas';
 
 export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function call(contract, params) {
@@ -77,13 +84,16 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // Подсветка ретрива — ПЕРЕКЛЮЧАТЕЛЬ (MEMORY_GRAPH_UI_PLAN.md, Этап 5, пункт 4 запроса владельца: "не таймер"),
     // по умолчанию выключен, состояние сохраняется вместе с остальным состоянием окна.
     const retrievalOverlayEnabled = signal(false);
+    // Органичная подложка регионов ("плоскость графа") — реальная жалоба пользователя: раньше её нельзя было
+    // включить/выключить вовсе. По умолчанию включена (то же поведение, что было безусловным раньше).
+    const zonesBackgroundEnabled = signal(true);
 
     async function saveWindowState() {
         await call('storage.settings.set', {
             namespace: MODULE_UI_NAMESPACE, key: WINDOW_KEY,
             value: {
                 visible: panelVisible.peek(), collapsed: panelCollapsed.peek(), position: panelPosition.peek(), size: panelSize.peek(),
-                retrievalOverlayEnabled: retrievalOverlayEnabled.peek(),
+                retrievalOverlayEnabled: retrievalOverlayEnabled.peek(), zonesBackgroundEnabled: zonesBackgroundEnabled.peek(),
                 colorMetricId: colorMetricId.peek(), sizeMode: sizeMode.peek(), glowMode: glowMode.peek(),
             },
         });
@@ -100,6 +110,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080,
         }));
         retrievalOverlayEnabled.set(Boolean(saved.retrievalOverlayEnabled));
+        zonesBackgroundEnabled.set(saved.zonesBackgroundEnabled === undefined ? true : Boolean(saved.zonesBackgroundEnabled));
         if (saved.colorMetricId) colorMetricId.set(saved.colorMetricId);
         if (saved.sizeMode) sizeMode.set(saved.sizeMode);
         if (saved.glowMode) glowMode.set(saved.glowMode);
@@ -487,6 +498,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // пересчитывать/перерисовывать саму строку на каждый 'pan'/'zoom' незачем — только на реальное изменение зон).
     let currentZones = [];
     let lastZonesSignature = null;
+    // Половина стороны CANVAS'а подложки — теперь больше, чем `zonesHalfExtent(currentZones)`: "плоскость графа"
+    // (`computePlaneOutline()`, plane-field.js) расширяет реальный край зон ("клякса/галактика", реальная жалоба
+    // пользователя на угловатую подложку). `updateBackgroundTransform()` использует ИМЕННО это значение, не
+    // пересчитывает зоны заново.
+    let currentPlaneHalf = 1;
     // Последняя посчитанная раскладка (Map(id → {x,y})) — снапбэк после неудачного драга (Этап 7.1: "зона та же —
     // нода плавно возвращается на СВОЮ позицию из раскладки") анимирует ИМЕННО эту позицию, не перечитывает граф.
     let lastPositions = new Map();
@@ -677,20 +693,113 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      */
     function updateBackgroundTransform() {
         if (!cy) return;
-        const svg = document.getElementById(ZONES_SVG_ID);
-        if (!svg) return;
-        const half = currentZones.length ? Math.max(...currentZones.map(zone => zone.rOuter)) : 1;
-        svg.style.transform = backgroundTransformCss(cy.pan(), cy.zoom(), half);
+        const canvas = document.getElementById(ZONES_CANVAS_ID);
+        if (!canvas) return;
+        canvas.style.transform = backgroundTransformCss(cy.pan(), cy.zoom(), currentPlaneHalf);
     }
 
-    /** Перерисовывает `<svg>` фона зон ТОЛЬКО когда зоны реально изменились (`zonesSignature()`) — план прямо просит не делать этого на каждый pan/zoom/refresh, раз `layoutGraph()` детерминирован и часто отдаёт БАЙТ-В-БАЙТ те же зоны. */
+    // Сетка, на которой честно считается поле (Этап "плоскость графа") — компромисс гладкости/скорости, растянута
+    // на видимый канвас через `drawImage()` с билинейным сглаживанием (мягкое смешение практически бесплатно, без
+    // ручного блюра). Подписи регионов рисуются ПОСЛЕ апскейла, полным разрешением — не размываются вместе с полем.
+    const FIELD_GRID = 96;
+    const EDGE_FEATHER_FRACTION = 0.12; // доля радиуса плоскости у самого края, где альфа плавно уходит в 0
+
+    /**
+     * Красит "плоскость графа" — MEMORY_GRAPH_UI_PLAN.md, реальная жалоба пользователя на прежнюю SVG-подложку
+     * (угловатые клинья, не всегда видна, нет переключателя) + прямой запрос: органичная клякса, раскрашенная по
+     * расстоянию до нод с "силой" плотных кластеров. Контур — `computePlaneOutline()` (plane-field.js), цвет каждой
+     * точки — `regionFieldAt()`+`dominantBlend()` (та же пара, что уже проверена unit-тестами: сумма полей нод
+     * региона = плотность, гарантированный минимум региона, мягкое смешение). Сама отрисовка (канвас/`ImageData`)
+     * здесь НЕ тестируется юнит-тестами — нужен живой DOM, тот же принцип, что у всего Cytoscape-слоя с Этапа 4.
+     */
+    function paintZonesCanvas(zones) {
+        const canvas = document.getElementById(ZONES_CANVAS_ID);
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!zonesBackgroundEnabled() || !zones.length) {
+            canvas.width = canvas.width; // штатный приём очистки canvas (сброс width сам сбрасывает содержимое)
+            currentPlaneHalf = 1;
+            return;
+        }
+        const { points } = computePlaneOutline(zones);
+        const half = points.length ? Math.max(...points.map(point => Math.hypot(point.x, point.y))) : 1;
+        currentPlaneHalf = half;
+        const size = Math.max(1, Math.ceil(half * 2));
+        canvas.width = size;
+        canvas.height = size;
+
+        // `nodePoints` — позиции берём из УЖЕ посчитанной раскладки (`lastPositions`, syncCytoscape()), не пересчитываем.
+        const nodePoints = [];
+        for (const node of nodes()) {
+            if (node.regionId == null) continue; // накопитель — не регион, полю красить нечего
+            const pos = lastPositions.get(node.id);
+            if (pos) nodePoints.push({ x: pos.x, y: pos.y, regionId: node.regionId });
+        }
+
+        const offscreen = document.createElement('canvas');
+        offscreen.width = FIELD_GRID;
+        offscreen.height = FIELD_GRID;
+        const offCtx = offscreen.getContext('2d');
+        const imageData = offCtx.createImageData(FIELD_GRID, FIELD_GRID);
+        const featherWidth = half * EDGE_FEATHER_FRACTION;
+        for (let gridY = 0; gridY < FIELD_GRID; gridY += 1) {
+            for (let gridX = 0; gridX < FIELD_GRID; gridX += 1) {
+                const x = ((gridX + 0.5) / FIELD_GRID) * size - half;
+                const y = ((gridY + 0.5) / FIELD_GRID) * size - half;
+                const distanceFromCenter = Math.hypot(x, y);
+                const planeRadius = planeRadiusAt(Math.atan2(y, x), zones);
+                // Мягкий край плоскости (не резкий обрез) — smoothstep на последних EDGE_FEATHER_FRACTION радиуса.
+                let edgeMask = 1;
+                if (distanceFromCenter > planeRadius) edgeMask = 0;
+                else if (distanceFromCenter > planeRadius - featherWidth) {
+                    const t = Math.max(0, Math.min(1, (planeRadius - distanceFromCenter) / featherWidth));
+                    edgeMask = t * t * (3 - 2 * t);
+                }
+                const color = dominantBlend(regionFieldAt(x, y, nodePoints), lastHueByRegionId);
+                const index = (gridY * FIELD_GRID + gridX) * 4;
+                imageData.data[index] = color.r;
+                imageData.data[index + 1] = color.g;
+                imageData.data[index + 2] = color.b;
+                imageData.data[index + 3] = Math.round(color.a * edgeMask * 255);
+            }
+        }
+        offCtx.putImageData(imageData, 0, 0);
+
+        ctx.clearRect(0, 0, size, size);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(offscreen, 0, 0, FIELD_GRID, FIELD_GRID, 0, 0, size, size);
+
+        ctx.font = '9px sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        for (const zone of zones) {
+            const angle = (zone.a0 + zone.a1) / 2;
+            const labelRadius = Math.max(0, zone.rOuter - 10);
+            const label = zone.label ?? (zone.regionId ?? 'Unplaced');
+            const countText = Number.isFinite(zone.capacity) ? `${zone.count}/${zone.capacity}` : `${zone.count}`;
+            ctx.fillText(`${label} · ${countText}`, half + Math.cos(angle) * labelRadius, half + Math.sin(angle) * labelRadius);
+        }
+    }
+
+    /**
+     * Перерисовывает подложку ТОЛЬКО когда зоны реально изменились ИЛИ переключатель поменялся (`zonesSignature()`
+     * + `zonesBackgroundEnabled()` в одной строке-сигнатуре) — план прямо просит не делать этого на каждый
+     * pan/zoom/refresh, раз `layoutGraph()` детерминирован и часто отдаёт БАЙТ-В-БАЙТ те же зоны.
+     *
+     * РЕАЛЬНЫЙ БАГ, найден по жалобе пользователя ("отображается не всегда"): `lastZonesSignature` раньше НИКОГДА
+     * не сбрасывался при уничтожении `cy` (`onClose`/`hide()`) — при закрытии окна весь поддерево (включая канвас
+     * подложки) уничтожался вместе с DOM, а при повторном открытии сигнатура зон часто СОВПАДАЛА с прошлой
+     * (граф не менялся) → эта функция молча пропускала перерисовку, подложка оставалась пустой до первого
+     * реального изменения графа. Исправлено — `ensureCytoscape()` сбрасывает `lastZonesSignature = null` перед
+     * первой отрисовкой при КАЖДОМ (пере)создании `cy`, гарантируя перерисовку на каждое открытие окна.
+     */
     function updateZonesBackground(zones) {
         currentZones = zones;
-        const signature = zonesSignature(zones);
+        const signature = `${zonesBackgroundEnabled()}|${zonesSignature(zones)}`;
         if (signature === lastZonesSignature) { updateBackgroundTransform(); return; }
         lastZonesSignature = signature;
-        const bg = document.getElementById(BG_ID);
-        if (bg) bg.innerHTML = renderZonesSvg(zones);
+        paintZonesCanvas(zones);
         updateBackgroundTransform();
     }
 
@@ -698,6 +807,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (cy) return cy;
         const container = document.getElementById(CANVAS_ID);
         if (!container) return null;
+        // Багфикс "подложка отображается не всегда" (см. updateZonesBackground()'s doc-comment) — сброс ЗДЕСЬ, а
+        // не только в конструкторе state'а, гарантирует перерисовку на КАЖДОЕ открытие окна независимо от того,
+        // изменился ли граф с прошлого закрытия.
+        lastZonesSignature = null;
         const cytoscape = await loadCytoscape();
         cy = cytoscape({
             container,
@@ -1145,6 +1258,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function mapModeSection() {
         return h('div', { class: 'stme-mg-mapmode' },
             Row(Field('Color by', Select(colorMetricId, COLOR_OPTIONS)), Field('Size by', Select(sizeMode, SIZE_OPTIONS)), Field('Glow by', Select(glowMode, GLOW_OPTIONS))),
+            Row(Toggle('Region background', zonesBackgroundEnabled)),
             Row(
                 Button('Health', () => applyMapModePreset('health')),
                 Button('Eviction risk', () => applyMapModePreset('risk')),
@@ -1358,7 +1472,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     // канвас Cytoscape поверх с прозрачным фоном, чтобы
                     // подложка была видна сквозь него.
                     h('div', { class: 'stme-mg-canvas-wrap', style: { position: 'relative', width: '480px', height: '480px', borderRadius: '8px', overflow: 'hidden' } },
-                        h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } }),
+                        h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } },
+                            h('canvas', { id: ZONES_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } })),
                         h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
                         hoverTooltip(),
                         moveToastBlock(),
@@ -1523,7 +1638,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // подписало бы этот эффект, но не так наглядно): маркер должен
         // появляться/двигаться/переименовываться СРАЗУ, без ожидания
         // следующего изменения самого графа.
-        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); colorMetricId(); sizeMode(); glowMode(); syncCytoscape(); });
+        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); colorMetricId(); sizeMode(); glowMode(); zonesBackgroundEnabled(); syncCytoscape(); });
         // Подсветка ретрива — отдельный эффект (не завязан на изменения самого графа): переключатель/история могут
         // поменяться без единого нового узла/региона, и наоборот — обычный `refresh()` не должен лишний раз дёргать
         // подсветку, если ни то ни другое не менялось (`syncCytoscape()` всё равно СНОВА применит её в конце, это

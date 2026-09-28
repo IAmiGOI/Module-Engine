@@ -18,7 +18,10 @@ export function nodeRadius({ degree = 0, protectedNode = false } = {}) {
 
 // --- 3.2 Минимальный зазор — растёт с размером -------------------------------
 
-export const GAP = { base: 4, perRadius: 0.5 };
+// Реальная жалоба пользователя (скриншот): ноды в регионе визуально слипаются/накладываются друг на друга —
+// зазор увеличен (было `{base:4, perRadius:0.5}`). Числа — стартовая точка для подстройки на глаз, не физическая
+// константа; `minCenterDistance()` ниже пересчитывает свой тест ИЗ этих чисел, менять тест не нужно.
+export const GAP = { base: 8, perRadius: 0.6 };
 
 /** Минимальное расстояние между центрами двух нод: сумма радиусов + зазор, растущий с БОЛЬШЕЙ из двух нод (крупная нода — крупнее и её "личное пространство"). */
 export function minCenterDistance(rA, rB) {
@@ -63,7 +66,12 @@ export function layoutRegion(members, { centerId = null, subCenterIds = [] } = {
     if (subCenters.length) {
         const centerR = center ? radiusById.get(center.id) : 0;
         const subR = Math.max(...subCenters.map(member => radiusById.get(member.id)));
-        const orbitRadius = minCenterDistance(centerR, subR); // "ближняя орбита" — ровно на минимально допустимом зазоре от центра
+        // РЕАЛЬНЫЙ БАГ (тот же класс, что уже поймала и исправила проверка спирали Фогеля ниже — округление позиции
+        // ПОСЛЕ вычисления может УМЕНЬШИТЬ уже проверенную дистанцию до ~0.71px по диагонали): центр сидит РОВНО в
+        // (0,0), не округляется, а позиция под-центра округляется до целого пикселя — при увеличении зазора (см.
+        // GAP выше, найдено по жалобе "ноды слипаются") этот скрытый недобор впервые превысил допуск теста. `+1` —
+        // запас, перекрывающий максимально возможную диагональную ошибку округления одной точки (√(0.5²+0.5²)≈0.71).
+        const orbitRadius = minCenterDistance(centerR, subR) + 1; // "ближняя орбита" — минимально допустимый зазор от центра, с запасом на округление
         subCenters.forEach((member, index) => {
             const angle = (2 * Math.PI * index) / subCenters.length;
             const pos = { x: Math.round(Math.cos(angle) * orbitRadius), y: Math.round(Math.sin(angle) * orbitRadius) };
