@@ -7,6 +7,7 @@ import { advanceClock, migrateTimestamps } from './clock.js';
 import { pickRegionBySimilarity } from './placement.js';
 import { updateEwmaStats, isStrongChangeEwma, ewmaStddev } from './gate.js';
 import { appendDecision } from './decision-log.js';
+import { buildExtractionPrompt, parseExtractionResponse } from './extraction-prompt.js';
 
 const PERSISTENCE_NAMESPACE = 'core.memoryGraph';
 const SETTINGS_KEY = 'settings';
@@ -1404,6 +1405,22 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     /**
+     * До `count` ближайших к `contextEmbedding` узлов по настоящему косинусу — MEMORY_GRAPH_FIX_PLAN.md, Этап 8
+     * (ROADMAP 5.107з, П2 плана): кандидаты на `"op":"update"` для `askSideCarForNode()`, чтобы SideCar видел, что
+     * уже записано рядом, и мог уточнить существующий факт вместо почти-дубля. Сравнивает с `node.embedding` —
+     * постоянным passage-эмбедингом самой ноды (не query контекста), тот же источник истины, что и у
+     * merge-detection/маяков (см. doc-comment у `checkAndPlace()`'s второго `embedding.compute`).
+     */
+    function findNearestNodes(contextEmbedding, count = 6) {
+        return Object.values(nodes)
+            .filter(node => node.embedding)
+            .map(node => ({ id: node.id, label: node.label, content: node.content, similarity: cosineSimilarity(contextEmbedding, node.embedding) }))
+            .sort((a, b) => b.similarity - a.similarity)
+            .slice(0, count)
+            .map(({ id, label, content }) => ({ id, label, content }));
+    }
+
+    /**
      * Векторные вероятности региона — косинус к центру региона (не к среднему
      * всех нод, MEMORY_GRAPH.md — против дрейфа центроида), softmax поверх
      * сходств. Регион без центра ещё — НЕЙТРАЛЬНОЕ сходство 0.5 (то же
@@ -1889,34 +1906,42 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     /**
-     * Ручное редактирование узла. Пересчитывает эмбединг ТОЛЬКО если
-     * `label`/`content` реально изменились — иначе он рассинхронизируется
-     * с текстом, ломая маяки/merge-detection (оба читают `embedding` как
-     * источник истины о содержимом узла).
+     * Общая логика правки узла — ИЗВЛЕЧЕНА из `updateNodeManually()` в Этапе 8 (ROADMAP 5.107з, П4 плана): та же
+     * правка нужна теперь и `checkAndPlace()` на факте `"op":"update"` от SideCar, а он уже ВНУТРИ своего
+     * `enqueueWrite()` — повторно оборачивать нельзя (тот же `writeTail` ждал бы сам себя). Пересчитывает эмбединг
+     * ТОЛЬКО если `label`/`content` реально изменились — иначе он рассинхронизируется с текстом, ломая
+     * маяки/merge-detection (оба читают `embedding` как источник истины о содержимом узла). НЕ персистит и не
+     * публикует событие сама — оба вызывающих делают это по-своему (один узел сразу vs пачкой в конце `checkAndPlace()`).
      */
-    async function updateNodeManually({ id, label, content, importance, protectedNode } = {}) {
+    async function applyNodeUpdate({ id, label, content, importance, protectedNode } = {}) {
+        const node = nodes[id];
+        if (!node) return { ok: false, error: `no such node: ${id}` };
+
+        const nextLabel = label === undefined ? node.label : (String(label).trim() || node.label);
+        const nextContent = content === undefined ? node.content : String(content).trim();
+        if (content !== undefined && !nextContent) return { ok: false, error: 'content cannot be empty.' };
+        const contentChanged = nextLabel !== node.label || nextContent !== node.content;
+
+        if (contentChanged) {
+            const embeddingResult = await callService('embedding.compute', { text: `${nextLabel}: ${nextContent}`, kind: 'passage' });
+            if (!embeddingResult.ok) return { ok: false, error: embeddingResult.error.message };
+            node.embedding = embeddingResult.value;
+        }
+        node.label = nextLabel;
+        node.content = nextContent;
+        if (importance !== undefined) node.importance = Number(importance) || 0;
+        if (protectedNode !== undefined) node.protectedNode = Boolean(protectedNode);
+        node.lastTouchedTurn = turnCounter;
+        return { ok: true };
+    }
+
+    /** Ручное редактирование узла (UI-редактор) — тонкая обёртка над `applyNodeUpdate()`: своя очередь, свой персист, своё событие. */
+    async function updateNodeManually(params = {}) {
         return enqueueWrite(async () => {
-            const node = nodes[id];
-            if (!node) return { ok: false, error: `no such node: ${id}` };
-
-            const nextLabel = label === undefined ? node.label : (String(label).trim() || node.label);
-            const nextContent = content === undefined ? node.content : String(content).trim();
-            if (content !== undefined && !nextContent) return { ok: false, error: 'content cannot be empty.' };
-            const contentChanged = nextLabel !== node.label || nextContent !== node.content;
-
-            if (contentChanged) {
-                const embeddingResult = await callService('embedding.compute', { text: `${nextLabel}: ${nextContent}`, kind: 'passage' });
-                if (!embeddingResult.ok) return { ok: false, error: embeddingResult.error.message };
-                node.embedding = embeddingResult.value;
-            }
-            node.label = nextLabel;
-            node.content = nextContent;
-            if (importance !== undefined) node.importance = Number(importance) || 0;
-            if (protectedNode !== undefined) node.protectedNode = Boolean(protectedNode);
-            node.lastTouchedTurn = turnCounter;
-
+            const result = await applyNodeUpdate(params);
+            if (!result.ok) return result;
             await persistNodes();
-            publishEvent('memoryGraph.nodeUpdated', { nodeId: id });
+            publishEvent('memoryGraph.nodeUpdated', { nodeId: params.id });
             return { ok: true };
         });
     }
@@ -2052,8 +2077,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
     /**
      * Тихий вызов SideCar — тот же контракт/приём, что `tracking.poll()`/
-     * BasicSummary. Отдаёт JSON `{label, content, importance}` для одной
-     * ноды, разбирается через уже существующую parse-model-json.js.
+     * BasicSummary. Отдаёт ДО 3 фактов (`create`/`update`) за раз — MEMORY_GRAPH_FIX_PLAN.md, Этап 8 (ROADMAP
+     * 5.107з, П7 плана): промпт/разбор ответа вынесены в `cores/memory-graph/extraction-prompt.js` (см. его
+     * doc-comment за тем, что именно изменилось и почему — почти-дубли из-за отсутствия "обновить существующий
+     * факт" вместо "создать новый").
      *
      * Реальная жалоба пользователя (сформулирована после уточняющего
      * вопроса — исходное "чистит слишком много" оказалось СИМПТОМОМ, не
@@ -2071,57 +2098,23 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * ловит НОВИЗНУ, не ЗНАЧИМОСТЬ — это математика, ей неоткуда знать
      * разницу).
      *
-     * Исправлено: (1) явное исключение краткосрочных/ситуативных
-     * договорённостей текстом промпта, явный критерий "будет иметь значение
-     * спустя десятки ходов"; (2) закреплённая шкала importance (не голое
-     * "0-10" без якорей) — заставляет модель реально РАЗЛИЧАТЬ, а не выдавать
-     * один и тот же средний балл всему подряд; (3) явный отказ
-     * `{"skip": true}` (тот же приём, что `{"distinct": true}` у
-     * `askSideCarForMerge`) — на СТРОГО ситуативный контекст модель теперь
-     * может честно сказать "здесь нечего запоминать" вместо того, чтобы
-     * изобретать узел из пустоты. `checkAndPlace()` уже трактует `null` как
-     * `sidecar-empty` (спокойный, не ошибочный статус) — правок вызывающего
-     * кода не требуется.
+     * Исправлено (Этап 1, ROADMAP 5.106): явное исключение краткосрочных/
+     * ситуативных договорённостей текстом промпта, закреплённая шкала
+     * importance, явный отказ (раньше `{"skip":true}`, теперь пустой
+     * `{"facts":[]}` — тот же смысл, другая обёртка, см. extraction-prompt.js).
      */
-    async function askSideCarForNode(contextText, { isFirstNode = false } = {}) {
-        // Подсказка для бутстрапа "нового мира" (решено с пользователем):
-        // ТОЛЬКО на самом первом узле пустого графа, и только подсказка —
-        // SideCar сам решает, сколько регионов реально завести и какие,
-        // секторы остаются свободными (не жёсткий список).
-        const bootstrapHint = isFirstNode
-            ? ' This is the very first memory in a fresh graph — consider whether the protagonist, another character, or a location is the most natural starting point, but decide freely.'
-            : '';
-        // Жалоба пользователя: качество извлечённых фактов "весьма грустное".
-        // Абстрактного определения "долгосрочно/ситуативно" мало — модель без
-        // калибровки регулярно даёт либо строгий отказ там, где не надо, либо
-        // содержимое, которое пересказывает СЦЕНУ, а не сам факт: местоимения
-        // без антецедента ("he"/"it"/"this place") и общие фразы вроде
-        // "something important happened", которые ничего не говорят читателю
-        // через 50 ходов, когда сама сцена уже забыта. Два добавления,
-        // тот же приём, что уже сработал для схемы инструмента Notebook
-        // (конкретные примеры + явное "зачем", не только формальное правило):
-        // (1) три отработанных примера на каждый исход (skip/средняя
-        // важность/высокая важность) калибруют саму границу лучше, чем один
-        // абзац определения; (2) прямое требование самодостаточной
-        // формулировки `content` — она читается ОТДЕЛЬНО от контекста, тем же
-        // способом, что и запись Lorebook, и обязана называть участников по
-        // имени, а не полагаться на то, что "он"/"это" было понятно в момент
-        // экстракции.
-        const prompt = `Recent story context:\n\n${contextText}\n\nDoes this contain a fact worth remembering LONG-TERM — something that will still matter dozens of turns from now (a lasting character trait, a place, an established relationship, a major event or revelation)? Do NOT extract a short-term or purely situational arrangement that resolves on its own within the next few messages (a plan to meet somewhere, a small trade, a scheduling detail, idle small talk) — those are plot mechanics, not memories.${bootstrapHint}\n\nExamples of the judgment call:\n- "The player agrees to meet the merchant at noon tomorrow." — resolves on its own within a few messages -> {"skip": true}\n- "Kira admits, quietly, that she is the last surviving heir to the Varekh throne." -> {"label": "Kira's heritage", "content": "Kira is the last surviving heir to the Varekh throne.", "importance": 9}\n- "Behind the waterfall the party finds a door that must lead into the old mine." -> {"label": "Hidden mine entrance", "content": "A hidden door behind the waterfall leads into the old mine.", "importance": 6}\n\nIf there is a genuine long-term fact, write "content" so it reads correctly on its OWN, weeks later, without the surrounding scene: name every person/place/thing explicitly instead of "he"/"she"/"it"/"this place", and state the concrete detail instead of a vague summary like "something important happened". Reply with ONLY a JSON object: {"label": short name, "content": the self-contained fact itself, "importance": a 0-10 score where 0-3 is minor/situational detail unlikely to matter again, 4-7 is a meaningful but secondary fact, and 8-10 permanently defines the character or world}. If nothing here rises to that bar, reply with ONLY: {"skip": true}.`;
+    async function askSideCarForNode(contextText, { isFirstNode = false, nearestNodes = [] } = {}) {
+        const prompt = buildExtractionPrompt({ contextText, nearestNodes, isFirstNode });
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
+        const { facts } = parseExtractionResponse(parsed, nearestNodes.map(node => node.id));
         // `lastSideCarOutcome` — Этап 6 (наблюдаемость), тот же приём "последнее действие", что у `capacityTracker`
-        // (П2 плана): различает ЧЕСТНЫЙ отказ модели ({"skip":true}) от малополезного/непарсимого ответа для
-        // журнала решений, не меняя сам возврат `null` в обоих случаях — вызывающий `checkAndPlace()` как раньше
-        // трактует оба одинаково статусом `sidecar-empty`.
-        if (!parsed || typeof parsed !== 'object' || parsed.skip) {
-            lastSideCarOutcome = parsed?.skip ? 'skip' : 'empty';
-            return null;
-        }
-        if (!parsed.label || !parsed.content) { lastSideCarOutcome = 'empty'; return null; }
-        lastSideCarOutcome = 'node';
-        return { label: String(parsed.label), content: String(parsed.content), importance: Number(parsed.importance) || 0 };
+        // (П2 плана): различает ЧЕСТНЫЙ пустой ответ (валидный JSON-объект, просто `facts:[]`/старый `skip:true`) от
+        // малополезного/непарсимого — оба всё равно дают `facts:[]` для самого `checkAndPlace()` (статус
+        // `sidecar-empty` в обоих случаях одинаковый, не меняется этим этапом), различие — только для журнала.
+        lastSideCarOutcome = facts.length ? 'node' : (parsed && typeof parsed === 'object' ? 'skip' : 'empty');
+        return facts;
     }
 
     /**
@@ -2293,9 +2286,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 return { status: 'no-change' };
             }
 
-            let proposal;
+            let facts;
             try {
-                proposal = await askSideCarForNode(contextText, { isFirstNode: Object.keys(nodes).length === 0 });
+                facts = await askSideCarForNode(contextText, { isFirstNode: Object.keys(nodes).length === 0, nearestNodes: findNearestNodes(contextEmbedding) });
             } catch (error) {
                 // Записываем, только если чат тот же — иначе это уже не про АКТИВНЫЙ чат (тот же принцип, что у
                 // остальных `stillSameChat()`-проверок Этапа 5); проброс наверх — БЕЗ ИЗМЕНЕНИЙ, `askSideCarForNode()`
@@ -2304,78 +2297,88 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 throw error;
             }
             if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // Этап 5 — чат сменился, пока ждали SideCar
-            // Часы последнего РЕАЛЬНОГО вызова — двигаются на любой исход (включая честный {skip:true} SideCar'а),
+            // Часы последнего РЕАЛЬНОГО вызова — двигаются на любой исход (включая честный пустой ответ SideCar'а),
             // не только на успешное создание ноды: "модель спросили" — это и есть то, что защищает страховка.
             lastExtractionClock = turnCounter;
             await persistClock();
-            if (!proposal) {
-                // `lastSideCarOutcome` различает честный `{"skip":true}` от непарсимого/неполного ответа — см.
+            if (!facts.length) {
+                // `lastSideCarOutcome` различает честный пустой ответ от непарсимого/неполного — см.
                 // doc-comment у `askSideCarForNode()`; `?? 'empty'` — чисто оборонительный край (не должен
-                // случаться на практике: функция всегда выставляет его перед любым `return null`).
+                // случаться на практике: функция всегда выставляет его перед пустым массивом).
                 await recordDecision({ clock: turnCounter, at: now(), gate: gateInfo, extractor: lastSideCarOutcome ?? 'empty' });
                 return { status: 'sidecar-empty' };
             }
 
-            // node.embedding — ЭТО ТОТ ЖЕ passage-эмбединг label+content, что
-            // считают createNodeManually()/createNodeFromCharacterCard()/
-            // bootstrapFromLorebook() (см. их вызовы `embedding.compute`
-            // ниже по файлу): findMergeCandidate()/scoreBeaconCandidate()/
-            // enforceBackboneConnectivity() читают `node.embedding` как
-            // источник истины о СОДЕРЖИМОМ узла (тот же принцип, что уже
-            // явно записан в doc-comment updateNodeManually()). `contextEmbedding`
-            // выше — kind:'query' сырого контекста, который его вызвал, и
-            // годится ТОЛЬКО для решения "в какой регион класть" (см. тест
-            // "a genuinely UNRELATED second node..." — эмбединг для РАЗМЕЩЕНИЯ
-            // намеренно берётся из аргумента checkAndPlace(), а не из ответа
-            // SideCar); использовать его же для постоянного node.embedding
-            // означало бы сравнивать будущие ноды по тексту сцены, которая
-            // навела на факт, а не по самому факту — и, для E5, query-vs-query
-            // вместо ожидаемого протоколом query-vs-passage/passage-vs-passage.
-            // Второй вызов дёшев: SideCar уже был единственным дорогим шагом
-            // на этом пути, эмбединг — локальный WASM-инференс той же уже
-            // загруженной модели.
-            const nodeEmbeddingResult = await callService('embedding.compute', { text: `${proposal.label}: ${proposal.content}`, kind: 'passage' });
-            if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // Этап 5 — чат сменился, пока ждали эмбединг ноды; placeNewNode() ниже мутирует nodes/regions/staging
-            if (!nodeEmbeddingResult.ok) return { status: 'skipped', error: nodeEmbeddingResult.error.message };
+            // MEMORY_GRAPH_FIX_PLAN.md, Этап 8 (ROADMAP 5.107з) — до 3 фактов за один check(), каждый независимо
+            // `create`/`update`. `contextEmbedding` (query СЦЕНЫ, не факта) по-прежнему используется ТОЛЬКО как
+            // сигнал РАЗМЕЩЕНИЯ для новых (`create`) узлов — та же причина, что и раньше (см. doc-comment у
+            // `placeNewNode()`'s `placementEmbedding`): сравнение с центрами регионов ожидает query-vs-passage,
+            // а собственный passage-эмбединг узла остаётся источником истины для будущих сравнений (слияние/маяки).
+            const results = [];
+            for (const fact of facts) {
+                if (fact.op === 'update') {
+                    // `applyNodeUpdate()` — та же логика, что у ручного редактирования (`updateNodeManually()`), без
+                    // повторного `enqueueWrite()` — мы уже внутри своего (П4 плана).
+                    const updateResult = await applyNodeUpdate({ id: fact.id, content: fact.content, importance: fact.importance });
+                    if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // чат сменился, пока ждали эмбединг обновляемого узла — мутация (если случилась) осталась в памяти, но персиста ниже не будет
+                    if (updateResult.ok) results.push({ status: 'updated', nodeId: fact.id, label: nodes[fact.id]?.label ?? fact.id });
+                    continue; // update не зеркалится в WI — та же граница, что у правки через UI-редактор (см. doc-comment ниже)
+                }
 
-            const gameTime = await readGameTime();
-            // Свежий трекер ПЕРЕД вызовом — Этап 6 (наблюдаемость): `capacityTracker` читают
-            // `detectMergeCandidate()`/`tryQueueReconsolidation()`/`enforceRegionCapacity()` изнутри `attachToRegion()`
-            // (см. doc-comment у самого трекера выше), но пишет в него только ЭТОТ вызов, не бутстрап/ручное создание/
-            // карточка персонажа — остаётся `null` у любого другого вызывающего `placeNewNode()`.
-            capacityTracker = { evicted: [], queuedMerge: false, queuedReconsolidation: false };
-            const result = placeNewNode({ ...proposal, embedding: nodeEmbeddingResult.value, gameTime }, { placementEmbedding: contextEmbedding });
-            const capacityInfo = capacityTracker;
-            capacityTracker = null; // не должен пережить этот вызов — иначе следующий ЧУЖОЙ attachToRegion() (сколь угодно позже) тихо дописался бы в уже "закрытую" запись
+                // node.embedding — ЭТО ТОТ ЖЕ passage-эмбединг label+content, что
+                // считают createNodeManually()/createNodeFromCharacterCard()/
+                // bootstrapFromLorebook() (см. их вызовы `embedding.compute`
+                // ниже по файлу): findMergeCandidate()/scoreBeaconCandidate()/
+                // enforceBackboneConnectivity() читают `node.embedding` как
+                // источник истины о СОДЕРЖИМОМ узла (тот же принцип, что уже
+                // явно записан в doc-comment updateNodeManually()).
+                const nodeEmbeddingResult = await callService('embedding.compute', { text: `${fact.label}: ${fact.content}`, kind: 'passage' });
+                if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // Этап 5 — чат сменился, пока ждали эмбединг ноды; placeNewNode() ниже мутирует nodes/regions/staging
+                if (!nodeEmbeddingResult.ok) return { status: 'skipped', error: nodeEmbeddingResult.error.message }; // тот же аварийный выход, что раньше был у единственного факта — остальные факты этого батча теряются, не половинчатый успех
 
-            // Зеркалим свежую органическую ноду в WI (решено с пользователем:
-            // "по идее вся инфраструктура есть" — `lorebook.createEntry()`
-            // уже полностью реализован, cores/lorebook/index.js). Область —
-            // ТОЛЬКО этот путь (решено явно уточняющими вопросами): ручное
-            // создание в UI-редакторе и импорт карточки персонажа НЕ
-            // зеркалятся — тот контент и так виден пользователю напрямую
-            // (форма создания, сама карточка). `disable: true` — решено
-            // явно: граф УЖЕ инжектирует этот факт через beacon+route+noise
-            // в `generation.beforeSend`; активная WI-запись рисковала бы
-            // задвоить тот же факт в промпте через нативную
-            // keyword-активацию ST поверх инъекции графа — запись только
-            // видимая/редактируемая, не второй живой канал ретрива. Первый
-            // проход — ТОЛЬКО создание при рождении ноды (решено явно):
-            // правка/слияние/реконсолидация/эвикшн/удаление в графе НЕ
-            // синхронизируются в WI дальше — меньше связности между Ядрами,
-            // можно расширить отдельным заходом, если понадобится. Отказ
-            // (нет активного Lorebook вообще, или сбой записи) НЕ блокирует
-            // и не откатывает саму ноду — WI-запись лишь зеркало, не
-            // источник истины для графа.
-            const node = nodes[result.nodeId];
-            // stillSameChat() — Этап 5: между эмбедингом ноды выше и этой точкой был ещё один await (`readGameTime()`);
-            // `lorebook.createEntry()` пишет в АКТИВНЫЙ Lorebook без явной привязки к чату — при смене чата ушло бы в
-            // Lorebook уже нового чата с содержимым старого.
-            if (node && stillSameChat(epoch)) {
-                const wiResult = await call('lorebook.createEntry', { patch: { comment: proposal.label, content: proposal.content, disable: true } });
-                if (wiResult.ok) { node.wiUid = wiResult.value.uid; node.wiBook = wiResult.value.book; }
+                const gameTime = await readGameTime();
+                // Свежий трекер ПЕРЕД вызовом — Этап 6 (наблюдаемость): `capacityTracker` читают
+                // `detectMergeCandidate()`/`tryQueueReconsolidation()`/`enforceRegionCapacity()` изнутри `attachToRegion()`
+                // (см. doc-comment у самого трекера выше), но пишет в него только ЭТОТ вызов, не бутстрап/ручное создание/
+                // карточка персонажа — остаётся `null` у любого другого вызывающего `placeNewNode()`.
+                capacityTracker = { evicted: [], queuedMerge: false, queuedReconsolidation: false };
+                const placed = placeNewNode({ label: fact.label, content: fact.content, embedding: nodeEmbeddingResult.value, importance: fact.importance, gameTime }, { placementEmbedding: contextEmbedding });
+                const capacityInfo = capacityTracker;
+                capacityTracker = null; // не должен пережить этот вызов — иначе следующий ЧУЖОЙ attachToRegion() (сколь угодно позже) тихо дописался бы в уже "закрытую" запись
+
+                // Зеркалим свежую органическую ноду в WI (решено с пользователем:
+                // "по идее вся инфраструктура есть" — `lorebook.createEntry()`
+                // уже полностью реализован, cores/lorebook/index.js). Область —
+                // ТОЛЬКО создание (решено явно уточняющими вопросами, Этап 8 не
+                // расширяет её на `update`): ручное создание в UI-редакторе,
+                // импорт карточки персонажа и теперь уточнение уже известного
+                // факта НЕ зеркалятся — тот контент и так виден пользователю
+                // напрямую (форма создания, сама карточка, панель графа) или
+                // уже был зеркалирован при СОЗДАНИИ этого узла. `disable: true` —
+                // решено явно: граф УЖЕ инжектирует этот факт через
+                // beacon+route+noise в `generation.beforeSend`; активная
+                // WI-запись рисковала бы задвоить тот же факт в промпте через
+                // нативную keyword-активацию ST поверх инъекции графа — запись
+                // только видимая/редактируемая, не второй живой канал ретрива.
+                // Отказ (нет активного Lorebook вообще, или сбой записи) НЕ
+                // блокирует и не откатывает саму ноду — WI-запись лишь
+                // зеркало, не источник истины для графа.
+                const node = nodes[placed.nodeId];
+                // stillSameChat() — Этап 5: между эмбедингом ноды выше и этой точкой был ещё один await (`readGameTime()`);
+                // `lorebook.createEntry()` пишет в АКТИВНЫЙ Lorebook без явной привязки к чату — при смене чата ушло бы в
+                // Lorebook уже нового чата с содержимым старого.
+                if (node && stillSameChat(epoch)) {
+                    const wiResult = await call('lorebook.createEntry', { patch: { comment: fact.label, content: fact.content, disable: true } });
+                    if (wiResult.ok) { node.wiUid = wiResult.value.uid; node.wiBook = wiResult.value.book; }
+                }
+                results.push({ ...placed, label: fact.label, capacity: capacityInfo });
             }
+            if (!results.length) return { status: 'sidecar-empty' }; // все факты были update'ами на уже пропавшие узлы — реально ничего не изменилось
 
+            // Журнал решений (Этап 6) — одна запись на ВЕСЬ check(), не на каждый факт (план просит запись именно
+            // "на каждый check"); представляет её ПЕРВЫМ настоящим созданием, если оно было, иначе первым update —
+            // тот же формат, что у Этапа 6 (единственный факт — самый частый случай — выглядит ИДЕНТИЧНО прежнему).
+            const primary = results.find(entry => entry.status !== 'updated') ?? results[0];
             // attachToRegion() (внутри placeNewNode) может завести запись в
             // mergeQueue/reconsolidationQueue (detectMergeCandidate/
             // tryQueueReconsolidation) — персистим ВСЕ пять хранилищ, не
@@ -2383,25 +2386,29 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // только до следующей перезагрузки (реальный баг, найден при
             // добавлении ручного создания ноды).
             // Дальше до конца функции — больше НЕТ await модели/эмбединга (только персист уже посчитанного
-            // результата и публикация события), поэтому по букве П6 плана здесь `stillSameChat()` не нужен.
-            // Осознанный остаточный пробел (Этап 5, не устранён специально): `placeNewNode()` выше уже
-            // мутировал `nodes`/`regions`/`staging` СИНХРОННО сразу после последней проверки — если чат
-            // сменился именно в интервале между вызовом `lorebook.createEntry()` и этой строкой, персист ниже
-            // всё равно запишет узел старого чата (просто без `wiUid`/`wiBook`). Не устраняется в этом этапе:
-            // сам `reloadForActiveChat()` идёт через тот же `enqueueWrite()`, то есть физически не может
-            // начать перезапись `nodes`/`regions` раньше, чем текущая задача дойдёт до этой точки и положит
-            // свои персисты в очередь — гонка на диске исключена, остаётся только "лишняя нода в новом графе
-            // после смены чата", что не хуже поведения ДО Этапа 5.
-            // Запись в журнал решений (Этап 6) — та же точка, тот же осознанный остаточный пробел, что у персиста
-            // ниже (см. комментарий выше): узел уже создан синхронно, поздний чат-свитч здесь не откатывается.
+            // результата и публикация событий), поэтому по букве П6 плана здесь `stillSameChat()` не нужен.
+            // Осознанный остаточный пробел (Этап 5, не устранён специально): мутации выше уже СИНХРОННО применены
+            // сразу после последней проверки каждого шага — если чат сменился именно в интервале между последним
+            // `lorebook.createEntry()`/`applyNodeUpdate()` и этой строкой, персист ниже всё равно запишет данные
+            // старого чата. Не устраняется в этом этапе: сам `reloadForActiveChat()` идёт через тот же
+            // `enqueueWrite()`, то есть физически не может начать перезапись `nodes`/`regions` раньше, чем текущая
+            // задача дойдёт до этой точки и положит свои персисты в очередь — гонка на диске исключена, остаётся
+            // только "лишние/устаревшие данные старого чата в новом графе" — не хуже поведения ДО Этапа 5.
             await recordDecision({
-                clock: turnCounter, at: now(), gate: gateInfo, extractor: 'node', node: { id: result.nodeId, label: proposal.label },
-                placement: { status: result.status, reason: result.reason, region: result.region, similarity: result.similarity, margin: result.margin },
-                capacity: capacityInfo,
+                clock: turnCounter, at: now(), gate: gateInfo, extractor: 'node', node: { id: primary.nodeId, label: primary.label },
+                placement: primary.status === 'updated' ? undefined : { status: primary.status, reason: primary.reason, region: primary.region, similarity: primary.similarity, margin: primary.margin },
+                capacity: primary.capacity ?? undefined,
             });
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
-            publishEvent('memoryGraph.nodeCreated', { nodeId: result.nodeId, status: result.status });
-            return result;
+            for (const entry of results) {
+                if (entry.status === 'updated') publishEvent('memoryGraph.nodeUpdated', { nodeId: entry.nodeId });
+                else publishEvent('memoryGraph.nodeCreated', { nodeId: entry.nodeId, status: entry.status });
+            }
+            // Один факт (подавляющее большинство ходов, включая КАЖДЫЙ сегодняшний тест до Этапа 8) — форма
+            // возврата БУКВАЛЬНО та же, что была до этого этапа (`{status, nodeId, ...}`, просто дополнительно
+            // несёт `label`/`capacity` — лишние поля никому не мешают). Несколько фактов — новая форма, никакой
+            // существующий вызывающий её сегодня не производит и не ожидает.
+            return results.length === 1 ? results[0] : { status: 'placed', results };
         });
     }
 

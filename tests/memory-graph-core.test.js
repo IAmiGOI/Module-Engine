@@ -25,6 +25,7 @@ import { advanceClock, migrateTimestamps } from '../cores/memory-graph/clock.js'
 import { pickRegionBySimilarity } from '../cores/memory-graph/placement.js';
 import { updateEwmaStats, ewmaStddev, isStrongChangeEwma, migrateWelford } from '../cores/memory-graph/gate.js';
 import { appendDecision, summarizeDecision } from '../cores/memory-graph/decision-log.js';
+import { buildExtractionPrompt, parseExtractionResponse } from '../cores/memory-graph/extraction-prompt.js';
 
 // --- Физика регионов --------------------------------------------------
 
@@ -1201,6 +1202,76 @@ test('summarizeDecision() reports capacity side-effects (eviction/merge/reconsol
         summarizeDecision(entry),
         '#62 · gate 0.50 > 0.30 · model: node "Overflowing Region" · placed 0:0 (similarity 0.81, margin 0.01) · evicted 1, queued merge',
     );
+});
+
+// --- Извлечение: несколько фактов, обновление существующих (MEMORY_GRAPH_FIX_PLAN.md, Этап 8, ROADMAP 5.107з) ---
+
+test('buildExtractionPrompt() lists nearby nodes as update candidates, by their exact id', () => {
+    const prompt = buildExtractionPrompt({
+        contextText: 'Kira reveals she is the last heir to the Varekh throne.',
+        nearestNodes: [{ id: 'node_7', label: "Kira's heritage", content: 'Kira is royalty.' }],
+    });
+    assert.match(prompt, /node_7: Kira's heritage — Kira is royalty\./, 'the listing must show the id exactly as given, ready to be echoed back in an update fact');
+    assert.match(prompt, /UPDATE/, 'the prompt must explicitly offer updating instead of only creating');
+});
+
+test('buildExtractionPrompt() omits the update-candidates listing entirely when there are no nearby nodes yet', () => {
+    const prompt = buildExtractionPrompt({ contextText: 'Something happens.', nearestNodes: [] });
+    assert.doesNotMatch(prompt, /UPDATE/, 'an empty graph has nothing to update — the listing section must not appear at all');
+});
+
+test('parseExtractionResponse() accepts a "create" fact in the new {facts:[...]} format', () => {
+    const { facts } = parseExtractionResponse({ facts: [{ op: 'create', label: 'Hidden Mine', content: 'A door behind the waterfall leads into the old mine.', importance: 6 }] }, []);
+    assert.deepEqual(facts, [{ op: 'create', label: 'Hidden Mine', content: 'A door behind the waterfall leads into the old mine.', importance: 6 }]);
+});
+
+test('parseExtractionResponse() accepts an "update" fact whose id is one of the given nearestNodeIds', () => {
+    const { facts } = parseExtractionResponse(
+        { facts: [{ op: 'update', id: 'node_3', content: 'Kira is the last surviving heir to the Varekh throne.', importance: 9 }] },
+        ['node_3', 'node_9'],
+    );
+    assert.deepEqual(facts, [{ op: 'update', id: 'node_3', content: 'Kira is the last surviving heir to the Varekh throne.', importance: 9 }]);
+});
+
+test('parseExtractionResponse() drops an "update" fact whose id is NOT among the ids it was actually offered — never invented, never a stale one', () => {
+    const { facts } = parseExtractionResponse(
+        { facts: [{ op: 'update', id: 'node_made_up', content: 'whatever', importance: 5 }] },
+        ['node_3'],
+    );
+    assert.deepEqual(facts, []);
+});
+
+test('parseExtractionResponse() caps at 3 facts even if the model returns more', () => {
+    const many = [1, 2, 3, 4, 5].map(n => ({ op: 'create', label: `Fact ${n}`, content: `content ${n}`, importance: 5 }));
+    const { facts } = parseExtractionResponse({ facts: many }, []);
+    assert.equal(facts.length, 3);
+    assert.deepEqual(facts.map(f => f.label), ['Fact 1', 'Fact 2', 'Fact 3']);
+});
+
+test('parseExtractionResponse() still accepts the OLD bare {label, content, importance} format (backward compatibility, П5 плана)', () => {
+    const { facts } = parseExtractionResponse({ label: 'Old Style', content: 'a fact from before Этап 8.', importance: 4 }, []);
+    assert.deepEqual(facts, [{ op: 'create', label: 'Old Style', content: 'a fact from before Этап 8.', importance: 4 }]);
+});
+
+test('parseExtractionResponse() still treats the OLD {skip:true} as an explicit empty result', () => {
+    assert.deepEqual(parseExtractionResponse({ skip: true }, []), { facts: [] });
+});
+
+test('parseExtractionResponse() returns no facts for malformed/non-object input, without throwing', () => {
+    assert.deepEqual(parseExtractionResponse(null, []), { facts: [] });
+    assert.deepEqual(parseExtractionResponse(undefined, []), { facts: [] });
+    assert.deepEqual(parseExtractionResponse('not an object', []), { facts: [] });
+});
+
+test('parseExtractionResponse() silently drops an unknown op and a create fact missing label/content, without dropping the REST of the batch', () => {
+    const { facts } = parseExtractionResponse({
+        facts: [
+            { op: 'delete', id: 'node_1' },
+            { op: 'create', label: '', content: 'missing a label' },
+            { op: 'create', label: 'Valid One', content: 'this one is fine.', importance: 5 },
+        ],
+    }, []);
+    assert.deepEqual(facts, [{ op: 'create', label: 'Valid One', content: 'this one is fine.', importance: 5 }]);
 });
 
 test('summarizeDecision() renders a staged (накопитель) placement without a region', () => {
