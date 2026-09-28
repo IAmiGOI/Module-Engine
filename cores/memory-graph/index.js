@@ -443,7 +443,9 @@ export function computeNodeWeight({ importance = 0, degree = 0, elapsed = 0, pro
 
 /**
  * `members` — узлы ТЕКУЩЕГО региона (после уже добавленного нового),
- * каждый `{id, importance, degree, protectedNode, createdTurn}`. Чистая
+ * каждый `{id, importance, degree, protectedNode, createdTurn, lastTouchedTurn}`.
+ * `lastTouchedTurn` (Этап 7) — если есть, возраст для decay считается от НЕГО, не от `createdTurn`: недавно
+ * прочитанная (попавшая в промпт) нода не должна стареть только потому, что давно создана. Чистая
  * функция — вес считает уже существующий `computeNodeWeight()`, здесь
  * только выбор минимума. При равенстве весов побеждает ПЕРВЫЙ по порядку
  * (в вызывающем коде — порядок `nodeIds`, то есть порядок вставки: при
@@ -461,7 +463,11 @@ export function pickEvictionCandidate(members, { settings = DEFAULT_SETTINGS, tu
         const weight = computeNodeWeight({
             importance: member.importance,
             degree: member.degree,
-            elapsed: Math.max(0, turnCounter - (member.createdTurn ?? turnCounter)),
+            // MEMORY_GRAPH_FIX_PLAN.md, Этап 7 (ROADMAP 5.107ж) — decay по факту ИСПОЛЬЗОВАНИЯ, не только создания:
+            // нода, недавно попавшая в промпт (маяк/маршрут/шум, см. `injectIntoPrompt()`), не должна стареть только
+            // потому, что давно СОЗДАНА, если её реально продолжают читать. `?? member.createdTurn` — старые ноды до
+            // этого этапа (без `lastTouchedTurn`) ведут себя как раньше, ничего не мигрирует задним числом.
+            elapsed: Math.max(0, turnCounter - (member.lastTouchedTurn ?? member.createdTurn ?? turnCounter)),
             protectedNode: member.protectedNode,
             settings,
         });
@@ -529,7 +535,7 @@ export function scoreBeaconCandidate(node, contextEmbedding, { weightFactor = DE
     const weight = computeNodeWeight({
         importance: node.importance,
         degree: node.degree,
-        elapsed: Math.max(0, turnCounter - (node.createdTurn ?? turnCounter)),
+        elapsed: Math.max(0, turnCounter - (node.lastTouchedTurn ?? node.createdTurn ?? turnCounter)), // Этап 7 — см. doc-comment у pickEvictionCandidate()
         protectedNode: node.protectedNode,
         settings,
     });
@@ -1382,7 +1388,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
     /** Число ходов, движущее decay — игровое время, если доступно, иначе фолбэк на число сообщений (решено с пользователем). Phase 1: `gameTime` хранится как снимок на ноде, а "прошедшее время" считается по `turnCounter` даже когда RP Time активен — настоящий парсинг разницы игровых дат в единый линейный счёт часов/дней остаётся вне Phase 1 (не решено, какой формат RP Time вернёт: пресеты разные — day-counter даёт число, full-date — нет единого "числа хода"). Задокументировано, не скрыто. */
     function elapsedTurnsFor(node) {
-        return Math.max(0, turnCounter - (node.createdTurn ?? turnCounter));
+        return Math.max(0, turnCounter - (node.lastTouchedTurn ?? node.createdTurn ?? turnCounter)); // Этап 7 — см. doc-comment у pickEvictionCandidate()
     }
 
     function regionEntry(sector, ring) {
@@ -1492,7 +1498,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 id: member.id,
                 weight: computeNodeWeight({
                     importance: member.importance, degree: member.degree,
-                    elapsed: Math.max(0, turnCounter - (member.createdTurn ?? turnCounter)),
+                    elapsed: Math.max(0, turnCounter - (member.lastTouchedTurn ?? member.createdTurn ?? turnCounter)), // Этап 7 — см. doc-comment у pickEvictionCandidate()
                     protectedNode: false, settings,
                 }),
             }))
@@ -3296,6 +3302,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             })) {
                 // Закреплённый блок побеждает — переиспользуем ЕГО ТЕКСТ как
                 // есть, не трогая маршрут/шум заново (см. doc-comment выше).
+                // Decay по факту использования (MEMORY_GRAPH_FIX_PLAN.md, Этап 7, ROADMAP 5.107ж) — sticky-блок
+                // ВСЁ РАВНО реально уходит модели каждый ход, его маяки не должны стареть только потому, что сам
+                // текст переиспользуется байт-в-байт (см. doc-comment у pickEvictionCandidate()). Только маяки, не
+                // весь набор маршрут+шум прошлого прохода — план явно ограничивает это `beaconIds` (текст не
+                // перепарсивается ради полного списка), то же поле, что уже хранится в `stickyRetrieval`.
+                for (const id of stickyRetrieval.beaconIds) { if (nodes[id]) nodes[id].lastTouchedTurn = turnCounter; }
+                await persistNodes();
                 chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: stickyRetrieval.text });
                 return true;
             }
@@ -3306,8 +3319,14 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const text = renderMemoryPrompt({ ...route, noise }, nodes);
             if (!text) return true;
 
+            // Decay по факту использования (Этап 7) — КАЖДЫЙ узел, реально попавший в готовый блок (маяки, маршрут,
+            // шум — тот же набор id, что renderMemoryPrompt() выше уже включил в текст), помечается прочитанным
+            // СЕЙЧАС же, одним проходом по уже посчитанным `routeNodeIds`/`noise`, без пересчёта. Сохраняется ОДНИМ
+            // вызовом вместе с `stickyRetrieval` ниже (план явно просит не заводить отдельное сохранение на каждую ноду).
+            for (const id of new Set([...routeNodeIds, ...noise.map(edge => edge.to)])) { if (nodes[id]) nodes[id].lastTouchedTurn = turnCounter; }
+
             stickyRetrieval = { beaconIds: freshBeaconIds, text };
-            await persistStickyRetrieval();
+            await Promise.all([persistNodes(), persistStickyRetrieval()]);
             chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: text });
             return true;
         });

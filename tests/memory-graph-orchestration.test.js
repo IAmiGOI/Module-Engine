@@ -1572,6 +1572,56 @@ test('checkAndPlace() logs a "node" decision with the created node\'s label and 
     assert.equal(latest.placement.reason, 'bootstrap-seed', 'sanity: first node ever, no anchors yet — see decideFirstPlacement()');
 });
 
+// --- Decay по факту ИСПОЛЬЗОВАНИЯ, не только создания (MEMORY_GRAPH_FIX_PLAN.md, Этап 7, ROADMAP 5.107ж) ---
+
+test('a node recently surfaced by injectIntoPrompt() survives eviction over an equally-old node that was never retrieved again — decay reads lastTouchedTurn, not just createdTurn', async () => {
+    const { graphCore, caller } = buildEngine();
+    // `reconsolidationMinCluster:4` — держит регион на ПРОСТОМ вытеснении (2-й "рубеж" плана), а не на очереди
+    // реконсолидации: у переполнения ниже будет ровно 3 незащищённых кандидата (< 4). `subCentersPerRegion:0` —
+    // без него 2-я/3-я обычная вставка авто-стала бы под-центром (protectedNode:true) и вообще не участвовала бы
+    // в вытеснении. `beaconCount:2` — Center (защищённый, вес Infinity, ВСЕГДА выигрывает у обычных нод независимо
+    // от контекста) неизбежно займёт один слот маяков сам; второй слот и решает, кто из NodeA/NodeB реально ближе
+    // по смыслу к контексту — с `beaconCount:1` маяком стал бы только Center, тест ничего бы не доказал.
+    await call(caller, 'memoryGraph.configure', { maxNodesPerRegion: 3, reconsolidationMinCluster: 4, subCentersPerRegion: 0, beaconCount: 2 });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    // Все три — на турне 0 (ручное создание не двигает часы, см. clock.js): Center становится защищённым центром
+    // региона автоматически (первая вставка), NodeA/NodeB — ОБЫЧНЫЕ узлы, одного возраста, тот же importance/degree
+    // — настоящая ничья по ВСЕМ полям, кроме будущего использования.
+    // `importance:5` на всех трёх обычных узлах — без него `computeNodeWeight()` умножает decay на 0
+    // (importanceWeight*0 + degreeWeight*log(1+0) = 0 при дефолтном importance:0 и degree:0) и ВЕС ЛЮБОГО узла
+    // равен нулю независимо от elapsed — decay попросту нечего модулировать, тай-брейк решал бы порядок вставки,
+    // а не реальный возраст, и тест ничего бы не проверял.
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Center', content: 'india papa romeo tango victor', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'NodeA', content: 'alpha bravo charlie delta echo', importance: 5, sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'NodeB', content: 'golf lima oscar quebec sierra yankee', importance: 5, sector: 0, ring: 0 });
+
+    // Часы вперёд БЕЗ побочных эффектов — пустой контекст сразу возвращает 'skipped', но `turnCounter` всё равно
+    // продвигается (advanceClock() зовётся ДО проверки на пустой текст, см. checkAndPlace()) — если бы createdTurn
+    // остался единственным источником возраста, NodeA/NodeB продолжили бы стареть абсолютно одинаково отсюда и
+    // дальше, тест ничего не доказывал бы.
+    await graphCore.checkAndPlace('', { chatLength: 50 });
+
+    // Реальный проход инъекции в промпт (не синтетическая мутация) — контекст в словах NodeA (тот же bucket
+    // fakeEmbed-хэша, что и её содержимое) делает её единственным маяком; NodeB — ортогонален, никак не участвует.
+    await graphCore.injectIntoPrompt({ chat: [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }] });
+
+    const beforeOverflow = graphCore.nodes();
+    assert.equal(beforeOverflow.find(n => n.label === 'NodeA').lastTouchedTurn, 50, 'sanity: injectIntoPrompt() actually touched NodeA');
+    assert.equal(beforeOverflow.find(n => n.label === 'NodeB').lastTouchedTurn, 0, 'sanity: NodeB was never surfaced — untouched since creation');
+
+    // 4-я вставка в регион (Center+A+B уже 3 = maxNodesPerRegion) переполняет его — ЭТО и вызывает вытеснение.
+    // NodeC — свежесозданный (elapsed 0, как и только что тронутая NodeA); NodeB — единственный, чей elapsed всё ещё
+    // отсчитывается от хода 0, то есть 50: под старой логикой (только createdTurn) NodeA имел бы РОВНО ТОТ ЖЕ
+    // elapsed 50, что и NodeB, — ничья решилась бы порядком вставки и вытеснила бы NodeA (более раннюю), хотя её
+    // только что реально использовали.
+    await call(caller, 'memoryGraph.nodes.create', { label: 'NodeC', content: 'india papa romeo tango victor extra', importance: 5, sector: 0, ring: 0 });
+
+    const labels = (await call(caller, 'memoryGraph.nodes')).value.map(n => n.label).sort();
+    assert.deepEqual(labels, ['Center', 'NodeA', 'NodeC'], 'NodeB (never retrieved again) must be the one evicted, not NodeA (recently surfaced) — decay must read lastTouchedTurn');
+});
+
 test('askSideCarForNode()\'s prompt gives the model an explicit escape hatch and an anchored importance scale — not an unconditional "always produce a fact"', async () => {
     const requestBodies = [];
     const fetchOverride = async (url, init) => {
