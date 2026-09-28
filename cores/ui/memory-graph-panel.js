@@ -698,11 +698,52 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         canvas.style.transform = backgroundTransformCss(cy.pan(), cy.zoom(), currentPlaneHalf);
     }
 
-    // Сетка, на которой честно считается поле (Этап "плоскость графа") — компромисс гладкости/скорости, растянута
-    // на видимый канвас через `drawImage()` с билинейным сглаживанием (мягкое смешение практически бесплатно, без
-    // ручного блюра). Подписи регионов рисуются ПОСЛЕ апскейла, полным разрешением — не размываются вместе с полем.
-    const FIELD_GRID = 96;
+    // Сетка, на которой честно считается поле (Этап "плоскость графа"), растянута на видимый канвас через
+    // `drawImage()` с билинейным сглаживанием. Подписи регионов рисуются ПОСЛЕ апскейла, полным разрешением.
+    //
+    // РЕАЛЬНАЯ ЖАЛОБА пользователя: "покраска сейчас пиксельная, а должна быть как при рисовании векторами" — при
+    // грубой сетке (96×96), растянутой на канвас в несколько сотен пикселей, были видны квадраты. Первая попытка
+    // фикса — блюр поверх апскейла — СПРАВЕДЛИВО отвергнута владельцем ("причём тут хардкод/блюр, считай поле по-
+    // настоящему"): блюр маскирует грубость сетки, а не убирает её, и портит настоящую резкость поля у самих нод.
+    // Исправление — сетка стала НАМНОГО плотнее (`FIELD_CELL_TARGET_PX` — целевой размер ячейки в ИТОГОВЫХ
+    // пикселях канваса, не фиксированное число ячеек независимо от размера), без единого пикселя блюра. Честный
+    // расчёт на такой плотности был бы O(ячеек × всех нод) — реально дорого на большом графе; вместо этого —
+    // пространственные "бакеты" (`buildNodeBuckets()`/`nearbyNodePoints()` ниже): для каждой ячейки в `regionFieldAt()`
+    // (plane-field.js, САМА математика не меняется и не приближена) передаются ТОЛЬКО ноды в радиусе
+    // `INFLUENCE_CUTOFF` — вклад ноды дальше него в само поле `1/(distance²+100)` уже на порядки меньше вклада
+    // близких нод (при 320px это ~1e-5 — пренебрежимо для того, какой регион побеждает в точке), отбрасывать его
+    // безопасно. Это ускорение ВЫЗОВА, не изменение формулы — `regionFieldAt()` как была чистой и протестированной,
+    // так и осталась.
+    const FIELD_CELL_TARGET_PX = 1.5;
+    const FIELD_GRID_MIN = 64;
+    const FIELD_GRID_MAX = 420;
+    const INFLUENCE_CUTOFF = 320; // px — см. doc-comment выше
     const EDGE_FEATHER_FRACTION = 0.12; // доля радиуса плоскости у самого края, где альфа плавно уходит в 0
+
+    /** Раскладывает ноды по квадратным "бакетам" стороны `cellSize` — `nearbyNodePoints()` ниже смотрит только в 3×3 бакета вокруг точки вместо перебора ВСЕХ нод графа на каждую ячейку сетки поля. */
+    function buildNodeBuckets(nodePoints, cellSize) {
+        const buckets = new Map();
+        for (const point of nodePoints) {
+            const key = `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}`;
+            if (!buckets.has(key)) buckets.set(key, []);
+            buckets.get(key).push(point);
+        }
+        return buckets;
+    }
+
+    /** Ноды из 3×3 соседних бакетов вокруг `(x,y)` — гарантированно покрывает ВСЁ в радиусе `cellSize` (стандартное свойство пространственного хеша при таком размере ячейки), т.е. весь `INFLUENCE_CUTOFF`. */
+    function nearbyNodePoints(buckets, cellSize, x, y) {
+        const bx = Math.floor(x / cellSize);
+        const by = Math.floor(y / cellSize);
+        const result = [];
+        for (let dx = -1; dx <= 1; dx += 1) {
+            for (let dy = -1; dy <= 1; dy += 1) {
+                const bucket = buckets.get(`${bx + dx}:${by + dy}`);
+                if (bucket) result.push(...bucket);
+            }
+        }
+        return result;
+    }
 
     /**
      * Красит "плоскость графа" — MEMORY_GRAPH_UI_PLAN.md, реальная жалоба пользователя на прежнюю SVG-подложку
@@ -736,16 +777,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             if (pos) nodePoints.push({ x: pos.x, y: pos.y, regionId: node.regionId });
         }
 
+        const fieldGrid = Math.max(FIELD_GRID_MIN, Math.min(FIELD_GRID_MAX, Math.ceil(size / FIELD_CELL_TARGET_PX)));
+        const buckets = buildNodeBuckets(nodePoints, INFLUENCE_CUTOFF);
         const offscreen = document.createElement('canvas');
-        offscreen.width = FIELD_GRID;
-        offscreen.height = FIELD_GRID;
+        offscreen.width = fieldGrid;
+        offscreen.height = fieldGrid;
         const offCtx = offscreen.getContext('2d');
-        const imageData = offCtx.createImageData(FIELD_GRID, FIELD_GRID);
+        const imageData = offCtx.createImageData(fieldGrid, fieldGrid);
         const featherWidth = half * EDGE_FEATHER_FRACTION;
-        for (let gridY = 0; gridY < FIELD_GRID; gridY += 1) {
-            for (let gridX = 0; gridX < FIELD_GRID; gridX += 1) {
-                const x = ((gridX + 0.5) / FIELD_GRID) * size - half;
-                const y = ((gridY + 0.5) / FIELD_GRID) * size - half;
+        for (let gridY = 0; gridY < fieldGrid; gridY += 1) {
+            for (let gridX = 0; gridX < fieldGrid; gridX += 1) {
+                const x = ((gridX + 0.5) / fieldGrid) * size - half;
+                const y = ((gridY + 0.5) / fieldGrid) * size - half;
                 const distanceFromCenter = Math.hypot(x, y);
                 const planeRadius = planeRadiusAt(Math.atan2(y, x), zones);
                 // Мягкий край плоскости (не резкий обрез) — smoothstep на последних EDGE_FEATHER_FRACTION радиуса.
@@ -755,8 +798,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     const t = Math.max(0, Math.min(1, (planeRadius - distanceFromCenter) / featherWidth));
                     edgeMask = t * t * (3 - 2 * t);
                 }
-                const color = dominantBlend(regionFieldAt(x, y, nodePoints), lastHueByRegionId);
-                const index = (gridY * FIELD_GRID + gridX) * 4;
+                const color = dominantBlend(regionFieldAt(x, y, nearbyNodePoints(buckets, INFLUENCE_CUTOFF, x, y)), lastHueByRegionId);
+                const index = (gridY * fieldGrid + gridX) * 4;
                 imageData.data[index] = color.r;
                 imageData.data[index + 1] = color.g;
                 imageData.data[index + 2] = color.b;
@@ -767,7 +810,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
 
         ctx.clearRect(0, 0, size, size);
         ctx.imageSmoothingEnabled = true;
-        ctx.drawImage(offscreen, 0, 0, FIELD_GRID, FIELD_GRID, 0, 0, size, size);
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(offscreen, 0, 0, fieldGrid, fieldGrid, 0, 0, size, size);
 
         ctx.font = '9px sans-serif';
         ctx.fillStyle = 'rgba(255,255,255,0.45)';
@@ -1296,10 +1340,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             const unprotected = allNodes.filter(node => !node.protectedNode);
             const avgWeight = unprotected.length ? unprotected.reduce((sum, node) => sum + (node.weight ?? 0), 0) / unprotected.length : 0;
             const regionList = regions();
-            const fullest = regionList.reduce((best, region) => {
-                const ratio = Number.isFinite(region.capacity) && region.capacity > 0 ? (region.count ?? 0) / region.capacity : 0;
+            // РЕАЛЬНЫЙ БАГ, найден по жалобе пользователя ("Fullest: ... — undefined/undefined"): сырой ответ
+            // `memoryGraph.regions` не несёт `count`/`capacity` вовсе (это поля ПОСЧИТАННЫХ зон, `layoutGraph()`,
+            // не хранимых данных региона) — берём их из `currentZones` (уже посчитаны `syncCytoscape()` для той же
+            // раскладки, тот же приём, что у `lastHueByRegionId` в `legendBlock()`), не из `regionList`.
+            const fullest = currentZones.filter(zone => zone.regionId != null).reduce((best, zone) => {
+                const ratio = Number.isFinite(zone.capacity) && zone.capacity > 0 ? (zone.count ?? 0) / zone.capacity : 0;
                 const bestRatio = best && Number.isFinite(best.capacity) && best.capacity > 0 ? (best.count ?? 0) / best.capacity : -1;
-                return ratio > bestRatio ? region : best;
+                return ratio > bestRatio ? zone : best;
             }, null);
             const riskMetric = findMetric('risk');
             const ctx = { regionsById: regionsById() };
@@ -1310,7 +1358,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 h('small', {}, `${allNodes.length} nodes (${protectedCount} protected, ${unplacedCount} unplaced) · ${edgeIds.size} edges · ${regionList.length} regions`),
                 h('small', {}, `Avg weight ${avgWeight.toFixed(2)} · ${atRisk} at eviction risk`),
                 fullest
-                    ? h('small', { class: 'stme-mg-stats-clickable', 'on:click': () => centerOnRegion(fullest.id) }, `Fullest: ${fullest.label ?? fullest.id} — ${fullest.count}/${fullest.capacity}`)
+                    ? h('small', { class: 'stme-mg-stats-clickable', 'on:click': () => centerOnRegion(fullest.regionId) }, `Fullest: ${fullest.label ?? fullest.regionId} — ${fullest.count}/${fullest.capacity}`)
                     : null,
                 h('small', {}, lastRetrievalCount == null ? 'No retrievals yet' : `Last retrieval: ${lastRetrievalCount} nodes`),
             );
