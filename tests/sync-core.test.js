@@ -282,6 +282,23 @@ test('a first-meeting conflict on chats (copy policy, unaffected by 5.106б) sti
     await stopAll(pair.a, pair.b);
 });
 
+test('a mass character deletion (simulating a temporary empty ST listing) is blocked and reported, not propagated to the other device (ROADMAP 5.106в)', async () => {
+    const aFiles = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`characters/c${i}.png`, `card${i}`]));
+    const pair = await createPair({ aFiles });
+    await connect(pair);
+    assert.equal(pair.b.paths().length, 30, 'first pass copied everything over normally');
+    // Simulate ST's /api/characters/all returning empty on A for one pass — indistinguishable from "the user deleted everything".
+    for (const path of Object.keys(aFiles)) pair.a.store.delete(path);
+    const before = finishedRuns(pair.a);
+    await pair.a.call('sync.run');
+    await waitFor(() => finishedRuns(pair.a) > before);
+    const status = await pair.a.call('sync.status');
+    assert.deepEqual(status.last.peers[0].needsConfirmation, ['characters']);
+    assert.equal(pair.b.paths().length, 30, 'B keeps every character — nothing was deleted from it');
+    assert.deepEqual(pair.b.log.filter(line => line.startsWith('remove:')), []);
+    await stopAll(pair.a, pair.b);
+});
+
 test('if the channel drops the devices reconnect by themselves after the pause and sync again', async () => {
     const pair = await createPair({ aFiles: { 'backgrounds/a.png': 'A' } });
     await connect(pair);

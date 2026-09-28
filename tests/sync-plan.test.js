@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeConflictPath, computeSyncPlan, isConflictCopy, resolveBaseHashes } from '../libraries/core/sync-plan.js';
+import { computeConflictPath, computeSyncPlan, detectMassDeletion, isConflictCopy, resolveBaseHashes } from '../libraries/core/sync-plan.js';
 import { computeGitBlobSha } from '../libraries/core/content-hash.js';
 
 const file = (hash, modified = 0, size = 10) => ({ hash, modified, size });
@@ -155,4 +155,60 @@ test('computeSyncPlan(): an old byte-hash base naturally stops matching once bot
     });
     assert.deepEqual(opsOf(plan), ['settle:characters/Alice.png']);
     assert.equal(plan.actions[0].hash, 'card1:same');
+});
+
+// --- Защита от массового удаления (ROADMAP 5.106в, Этап 4.4) ---
+
+const categoryOf = path => (path.startsWith('characters/') ? 'characters' : path.startsWith('chats/') ? 'chats' : null);
+/** `count` файлов `prefix0..N` — `entries` для local/remote (`{hash,...}`), `bases` — тот же набор как плоские хеши для `base`. */
+const filesOf = (prefix, count) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`${prefix}${index}.png`, file(`h${index}`)]));
+const basesOf = (prefix, count) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`${prefix}${index}.png`, `h${index}`]));
+const deletionPlan = (local, remote, base) => computeSyncPlan({ local, remote, base }).actions;
+
+test('detectMassDeletion(): a single stray deletion in a small category is never blocked', () => {
+    const base = { 'characters/0.png': 'h0', 'characters/1.png': 'h1' };
+    const local = { 'characters/1.png': file('h1') };   // 0.png genuinely removed locally
+    const remote = { 'characters/0.png': file('h0'), 'characters/1.png': file('h1') };
+    const actions = deletionPlan(local, remote, base);
+    assert.deepEqual(detectMassDeletion({ actions, local, remote, base, categoryOf }), new Set());
+});
+
+test('detectMassDeletion(): more than 20 files AND more than 30% of the category trips the guard', () => {
+    const base = basesOf('characters/', 30);   // 30 files existed
+    const remote = filesOf('characters/', 30); // remote still has all 30 — local lost 25 of them
+    const local = filesOf('characters/', 5);   // only 5 left locally -> 25 deleteRemote actions planned
+    const actions = deletionPlan(local, remote, base);
+    assert.equal(actions.filter(a => a.op === 'deleteRemote').length, 25);
+    assert.deepEqual(detectMassDeletion({ actions, local, remote, base, categoryOf }), new Set(['characters']));
+});
+
+test('detectMassDeletion(): more than 20 deletions but under 30% of a LARGE category is not blocked — ratio matters, not just the raw count', () => {
+    const base = basesOf('characters/', 200);
+    const remote = filesOf('characters/', 200);
+    const local = filesOf('characters/', 175);   // 25 deletions out of 200 (12.5%) — over the count floor, under the ratio
+    const actions = deletionPlan(local, remote, base);
+    assert.equal(actions.filter(a => a.op === 'deleteRemote').length, 25);
+    assert.deepEqual(detectMassDeletion({ actions, local, remote, base, categoryOf }), new Set());
+});
+
+test('detectMassDeletion(): a category emptied to zero on one side trips the guard even with few files — the classic "listing came back empty" symptom', () => {
+    const base = { 'characters/0.png': 'h0', 'characters/1.png': 'h1', 'characters/2.png': 'h2' };
+    const remote = { 'characters/0.png': file('h0'), 'characters/1.png': file('h1'), 'characters/2.png': file('h2') };
+    const local = {};   // the local listing came back completely empty
+    const actions = deletionPlan(local, remote, base);
+    assert.deepEqual(detectMassDeletion({ actions, local, remote, base, categoryOf }), new Set(['characters']));
+});
+
+test('detectMassDeletion(): a category that legitimately has zero files AND zero base history is not flagged — nothing to protect', () => {
+    const actions = deletionPlan({}, {}, {});
+    assert.deepEqual(detectMassDeletion({ actions, local: {}, remote: {}, base: {}, categoryOf }), new Set());
+});
+
+test('detectMassDeletion(): only the tripped category is reported — an untouched category never blocks another', () => {
+    // chats loses one of two files: neither over the 20/30% ratio nor emptied to zero — must not join the block.
+    const base = { ...basesOf('characters/', 30), 'chats/x.jsonl': 'hc1', 'chats/y.jsonl': 'hc2' };
+    const remote = { ...filesOf('characters/', 30), 'chats/x.jsonl': file('hc1'), 'chats/y.jsonl': file('hc2') };
+    const local = { ...filesOf('characters/', 5), 'chats/y.jsonl': file('hc2') };
+    const actions = deletionPlan(local, remote, base);
+    assert.deepEqual(detectMassDeletion({ actions, local, remote, base, categoryOf }), new Set(['characters']));
 });

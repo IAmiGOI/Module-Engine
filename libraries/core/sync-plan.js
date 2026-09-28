@@ -105,6 +105,54 @@ export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLa
     return { actions, counts };
 }
 
+const MASS_DELETE_MIN_COUNT = 20;
+const MASS_DELETE_RATIO = 0.3;
+
+/**
+ * Категории, которые план хочет удалить подозрительно массово (ROADMAP 5.106в, Этап 4.4 задания) — типичный симптом: временный
+ * пустой ответ листинга ST (`/api/characters/all` на секунду отдал `[]`) читается как «всё удалено», и без этой защиты синхронизация
+ * ПОВТОРИЛА бы это удаление на другом устройстве, хотя там ничего на самом деле не пропадало. Срабатывает на путь удаления
+ * (`deleteLocal`/`deleteRemote`), сгруппированный по категории (`categoryOf`, обычно `categoryOfPath` из `sync-config.js`):
+ *  - подряд **больше `MASS_DELETE_MIN_COUNT` файлов И больше `MASS_DELETE_RATIO` (30%)** от того, что СЕЙЧАС есть в категории на
+ *    стороне, откуда удаляем (до этого удаления) — единичная пропажа блокировкой не считается, даже если категория маленькая;
+ *  - **или** категория стала бы совсем ПУСТОЙ на этой стороне, а база для неё помнит хоть один файл — самый явный признак
+ *    «листинг вернул пусто», раз ни одного файла не осталось буквально ни одного, но раньше что-то точно было.
+ * Только ЧИСТОЕ решение — какие категории под подозрением; сам план не трогает (вызывающий, `sync-runner.js`, выбрасывает из
+ * исполнения удаления этих категорий и помечает проход `needsConfirmation`, ничего не удаляя молча).
+ * @param {object} input
+ * @param {Array<object>} input.actions — `plan.actions` из `computeSyncPlan`
+ * @param {Record<string,object>} input.local
+ * @param {Record<string,object>} input.remote
+ * @param {Record<string,string>} input.base
+ * @param {(path:string)=>string|null} input.categoryOf
+ * @returns {Set<string>} категории под подозрением
+ */
+export function detectMassDeletion({ actions = [], local = {}, remote = {}, base = {}, categoryOf }) {
+    const byCategory = new Map();
+    for (const action of actions) {
+        if (action.op !== SYNC_ACTIONS.deleteLocal && action.op !== SYNC_ACTIONS.deleteRemote) continue;
+        const category = categoryOf(action.path);
+        if (!category) continue;
+        if (!byCategory.has(category)) byCategory.set(category, { deleteLocal: [], deleteRemote: [] });
+        byCategory.get(category)[action.op].push(action.path);
+    }
+    const countIn = (entries, category) => Object.keys(entries).filter(path => categoryOf(path) === category).length;
+    const baseCountIn = category => Object.keys(base).filter(path => categoryOf(path) === category).length;
+    const suspicious = new Set();
+    for (const [category, { deleteLocal, deleteRemote }] of byCategory) {
+        const check = (deletions, sideEntries) => {
+            if (!deletions.length) return false;
+            const totalBefore = countIn(sideEntries, category);
+            const remainingAfter = totalBefore - deletions.length;
+            const ratioTripped = deletions.length > MASS_DELETE_MIN_COUNT && deletions.length > totalBefore * MASS_DELETE_RATIO;
+            const emptiedTripped = remainingAfter === 0 && baseCountIn(category) > 0;
+            return ratioTripped || emptiedTripped;
+        };
+        if (check(deleteLocal, local) || check(deleteRemote, remote)) suspicious.add(category);
+    }
+    return suspicious;
+}
+
 /** Хеши базы из записи «путь → {hash}» (то, что хранится на диске после прошлой синхронизации). */
 export function resolveBaseHashes(baseEntries = {}) {
     return Object.fromEntries(Object.entries(baseEntries).map(([path, value]) => [path, typeof value === 'string' ? value : value?.hash]).filter(([, hash]) => typeof hash === 'string'));
