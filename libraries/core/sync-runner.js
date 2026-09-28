@@ -30,6 +30,9 @@ export const isDeferredError = error => Boolean(error?.deferred) || String(error
 
 const TRANSFER_ORDER = { [SYNC_ACTIONS.settle]: 0, [SYNC_ACTIONS.pull]: 1, [SYNC_ACTIONS.push]: 1, [SYNC_ACTIONS.conflict]: 1, [SYNC_ACTIONS.deleteLocal]: 2, [SYNC_ACTIONS.deleteRemote]: 2 };
 
+const CHECKPOINT_EVERY = 50;
+const CHECKPOINT_INTERVAL_MS = 10000;
+
 export async function runSync({
     local,
     remote,
@@ -39,6 +42,10 @@ export async function runSync({
     conflictPolicy = () => 'copy',
     categoryOf = () => null,
     onProgress = () => {},
+    onCheckpoint = () => {},
+    checkpointEvery = CHECKPOINT_EVERY,
+    checkpointIntervalMs = CHECKPOINT_INTERVAL_MS,
+    now = () => Date.now(),
     isAborted = () => false,
     localManifest,
     remoteManifest,
@@ -58,8 +65,20 @@ export async function runSync({
     const deferred = [];   // изменения базы, которые вступают в силу только после удачного commit() у пакетной стороны
     const applyBase = changes => { for (const [path, hash] of Object.entries(changes)) { if (hash === null) delete nextBase[path]; else nextBase[path] = hash; } };
     const finishOne = (changes, remoteTouched) => (remote.batched && remoteTouched ? deferred.push(changes) : applyBase(changes));
-    /** Контрольная точка: записать накопленное у пакетной стороны и только после успеха считать это синхронизированным. */
-    const flushBatch = async () => { await remote.commit(); for (const changes of deferred.splice(0)) applyBase(changes); };
+    /** Контрольная точка ПАКЕТНОЙ стороны: записать накопленное у неё и только после успеха считать это синхронизированным. */
+    const flushBatch = async () => { await remote.commit(); for (const changes of deferred.splice(0)) applyBase(changes); await onCheckpoint({ ...nextBase }); };
+    // Контрольная точка ОБЫЧНОЙ базы (ROADMAP 5.106г, Этап 4.1): каждые `checkpointEvery` реальных действий или `checkpointIntervalMs`
+    // — раньше `base`/кэш писались только В КОНЦЕ прохода (`runAgainst`), и обрыв ровно посередине терял уже переданные файлы из
+    // виду: следующий проход начинал бы с пустой/старой базы и гонял то, что уже доехало, заново (в лучшем случае) или путал бы это
+    // с конфликтом (в худшем — см. doc-comment `sync-plan.js` про потерю привязки). Настройки — тест, из движка приходит реальное время.
+    let sinceCheckpoint = 0;
+    let lastCheckpointAt = now();
+    const maybeCheckpoint = async () => {
+        if (sinceCheckpoint < checkpointEvery && now() - lastCheckpointAt < checkpointIntervalMs) return;
+        sinceCheckpoint = 0;
+        lastCheckpointAt = now();
+        await onCheckpoint({ ...nextBase });
+    };
     const total = actions.filter(action => action.op !== SYNC_ACTIONS.settle).length;
     let done = 0;
     let aborted = false;
@@ -124,7 +143,7 @@ export async function runSync({
                 }
             }
         }
-        if (action.op !== SYNC_ACTIONS.settle) done += 1;
+        if (action.op !== SYNC_ACTIONS.settle) { done += 1; sinceCheckpoint += 1; await maybeCheckpoint(); }
     }
 
     let commitError = null;
