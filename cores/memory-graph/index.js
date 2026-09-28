@@ -1254,6 +1254,15 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     // {skip:true}) — MEMORY_GRAPH_FIX_PLAN.md, Этап 4 (ROADMAP 5.107г), страховка от того, что сам фильтр может
     // застояться на ложном "всё привычно" и не звать модель очень долго (П5). См. `checkAndPlace()`.
     let lastExtractionClock = 0;
+    // Защита от смены чата посреди ожидания модели/эмбединга — MEMORY_GRAPH_FIX_PLAN.md, Этап 5 (ROADMAP 5.107д,
+    // П6 плана). Реальный сценарий: `checkAndPlace()` ждёт секунды ответа модели; если за это время переключить
+    // чат, хранилище пишет в «ТЕКУЩИЙ» чат (не в тот, ради которого задача стартовала) — граф чата A мог бы
+    // записаться в `chatMemory` уже активного чата B. `enqueueWrite()` (см. ниже) упорядочивает НОВЫЕ задачи
+    // относительно друг друга, но не прерывает уже ЗАПУЩЕННУЮ — эпоха ловит именно этот случай: растёт СИНХРОННО
+    // на каждый `st.chatChanged`, каждая долгая задача запоминает эпоху при старте и сверяет её после КАЖДОГО
+    // своего `await` модели/эмбединга, до этого — прерывается.
+    let chatEpoch = 0;
+    const stillSameChat = epoch => epoch === chatEpoch;
 
     async function call(contract, params) {
         return request(host.own, contract, { params });
@@ -1778,6 +1787,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function createNodeFromCharacterCard() {
         return enqueueWrite(async () => {
+            // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): вызывается на смене персонажа/чата
+            // (см. подписку ниже), сама может ждать эмбединг секунды — тот же сценарий гонки, что у checkAndPlace().
+            const epoch = chatEpoch;
             const characterResult = await callService('stCharacter.current');
             if (!characterResult.ok || !characterResult.value) return { ok: false, error: 'No active character.' };
             const character = characterResult.value;
@@ -1787,6 +1799,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (!content) return { ok: false, error: 'Character card has no description/personality to import.' };
 
             const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
+            if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // чат сменился, пока ждали эмбединг — не мутируем уже ЧУЖОЙ (новый) граф
             if (!embeddingResult.ok) return { ok: false, error: embeddingResult.error.message };
             const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE });
             // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
@@ -2160,6 +2173,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function checkAndPlace(contextText, { chatLength } = {}) {
         return enqueueWrite(async () => {
+            // Эпоха запоминается ЗДЕСЬ, первой строкой ВНУТРИ задачи — не до `enqueueWrite()` (задача могла ждать
+            // своей очереди сколько угодно, "мутации до первого await допустимы" относится к синхронному началу
+            // САМОЙ задачи, когда она реально стартовала, не к моменту её постановки в очередь). MEMORY_GRAPH_FIX_PLAN.md,
+            // Этап 5 (ROADMAP 5.107д, П6 плана) — см. doc-comment у `chatEpoch` выше.
+            const epoch = chatEpoch;
             // `chatLength` — длина ЖИВОГО чата на момент вызова (обработчик `memoryGraph.check` передаёт
             // `params.chat.length`); без неё (ручной `memoryGraph.checkAndPlace({ text })`, см. регистрацию
             // контракта ниже) часы просто не двигаются — `advanceClock(x, undefined) === x` (MEMORY_GRAPH_FIX_PLAN.md,
@@ -2180,6 +2198,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (!contextText || !contextText.trim()) return { status: 'skipped' };
 
             const embeddingResult = await callService('embedding.compute', { text: contextText, kind: 'query' });
+            if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // Этап 5 — чат сменился, пока ждали эмбединг; ничего из этого больше не про АКТИВНЫЙ чат
             if (!embeddingResult.ok) return { status: 'skipped', error: embeddingResult.error.message };
             const contextEmbedding = embeddingResult.value; // ТОЛЬКО сигнал размещения — см. комментарий у passage-эмбединга ниже, почему это не то же самое, что node.embedding.
 
@@ -2216,6 +2235,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (!wasStrong && !forced) return { status: 'no-change' };
 
             const proposal = await askSideCarForNode(contextText, { isFirstNode: Object.keys(nodes).length === 0 });
+            if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // Этап 5 — чат сменился, пока ждали SideCar
             // Часы последнего РЕАЛЬНОГО вызова — двигаются на любой исход (включая честный {skip:true} SideCar'а),
             // не только на успешное создание ноды: "модель спросили" — это и есть то, что защищает страховка.
             lastExtractionClock = turnCounter;
@@ -2241,6 +2261,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // на этом пути, эмбединг — локальный WASM-инференс той же уже
             // загруженной модели.
             const nodeEmbeddingResult = await callService('embedding.compute', { text: `${proposal.label}: ${proposal.content}`, kind: 'passage' });
+            if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // Этап 5 — чат сменился, пока ждали эмбединг ноды; placeNewNode() ниже мутирует nodes/regions/staging
             if (!nodeEmbeddingResult.ok) return { status: 'skipped', error: nodeEmbeddingResult.error.message };
 
             const gameTime = await readGameTime();
@@ -2266,7 +2287,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // и не откатывает саму ноду — WI-запись лишь зеркало, не
             // источник истины для графа.
             const node = nodes[result.nodeId];
-            if (node) {
+            // stillSameChat() — Этап 5: между эмбедингом ноды выше и этой точкой был ещё один await (`readGameTime()`);
+            // `lorebook.createEntry()` пишет в АКТИВНЫЙ Lorebook без явной привязки к чату — при смене чата ушло бы в
+            // Lorebook уже нового чата с содержимым старого.
+            if (node && stillSameChat(epoch)) {
                 const wiResult = await call('lorebook.createEntry', { patch: { comment: proposal.label, content: proposal.content, disable: true } });
                 if (wiResult.ok) { node.wiUid = wiResult.value.uid; node.wiBook = wiResult.value.book; }
             }
@@ -2277,6 +2301,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // только nodes/regions/staging, иначе такая запись переживает
             // только до следующей перезагрузки (реальный баг, найден при
             // добавлении ручного создания ноды).
+            // Дальше до конца функции — больше НЕТ await модели/эмбединга (только персист уже посчитанного
+            // результата и публикация события), поэтому по букве П6 плана здесь `stillSameChat()` не нужен.
+            // Осознанный остаточный пробел (Этап 5, не устранён специально): `placeNewNode()` выше уже
+            // мутировал `nodes`/`regions`/`staging` СИНХРОННО сразу после последней проверки — если чат
+            // сменился именно в интервале между вызовом `lorebook.createEntry()` и этой строкой, персист ниже
+            // всё равно запишет узел старого чата (просто без `wiUid`/`wiBook`). Не устраняется в этом этапе:
+            // сам `reloadForActiveChat()` идёт через тот же `enqueueWrite()`, то есть физически не может
+            // начать перезапись `nodes`/`regions` раньше, чем текущая задача дойдёт до этой точки и положит
+            // свои персисты в очередь — гонка на диске исключена, остаётся только "лишняя нода в новом графе
+            // после смены чата", что не хуже поведения ДО Этапа 5.
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
             publishEvent('memoryGraph.nodeCreated', { nodeId: result.nodeId, status: result.status });
             return result;
@@ -2794,6 +2828,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function sweepStaging() {
         return enqueueWrite(async () => {
+            // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): сам цикл ниже синхронный (без await) до
+            // возможного `escalateToSideCar()`, гонка возможна только вокруг него — см. проверку после неё.
+            const epoch = chatEpoch;
             const entries = Object.values(staging);
             const batchReady = [];
             for (const entry of entries) {
@@ -2827,6 +2864,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 }
             }
             if (batchReady.length) await escalateToSideCar(batchReady);
+            if (!stillSameChat(epoch)) return; // чат сменился внутри escalateToSideCar() — её мутации уже про чужой (новый) граф, не персистим их сюда
             // См. комментарий в checkAndPlace() — тот же attachToRegion() (и
             // выше, и внутри escalateToSideCar()) может завести запись в
             // mergeQueue/reconsolidationQueue.
@@ -2842,6 +2880,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * попробовать снова на следующем `sweepStaging()`).
      */
     async function escalateToSideCar(entries) {
+        // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): эта функция сама по себе может ждать
+        // `model.generate` секунды (батч на полноценную LLM), внутри которых чат может смениться.
+        const epoch = chatEpoch;
         const batch = entries.map(entry => nodes[entry.nodeId]).filter(Boolean);
         for (const entry of entries) if (!nodes[entry.nodeId]) delete staging[entry.nodeId]; // нода пропала (эвикшен/слияние) между постановкой в батч и этим вызовом — запись устарела сама собой
         if (!batch.length) return;
@@ -2849,6 +2890,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const listing = batch.map((node, i) => `${i + 1}. ${node.label}: ${node.content}`).join('\n');
         const prompt = `These ${batch.length} facts could not be automatically placed in the memory graph:\n\n${listing}\n\nFor each, reply with its number and either a short category label it clearly belongs to, or "DISCARD" if it fits nowhere. Format: one line per item, "N: label" or "N: DISCARD".`;
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+        if (!stillSameChat(epoch)) return; // чат сменился, пока ждали модель — записи остаются в накопителе как есть, обработает уже НОВЫЙ граф своим прогоном
         // Сбой модели — записи ОСТАЮТСЯ в накопителе как есть (мы их не трогали выше) и попробуют на следующем
         // sweepStaging() — не удаляем (Этап 3, было наоборот: удаляло весь батч).
         if (!result.ok) return;
@@ -2865,6 +2907,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (!verdict || /^discard$/i.test(verdict)) { delete nodes[node.id]; delete staging[node.id]; continue; }
 
             const labelEmbeddingResult = await callService('embedding.compute', { text: verdict, kind: 'passage' });
+            if (!stillSameChat(epoch)) return; // чат сменился посреди батча — оставшиеся записи (ещё в staging) достаются НОВОМУ графу, не трогаем их из-под старого
             const anchors = collectAnchors();
             const pick = labelEmbeddingResult.ok && anchors.length
                 ? pickRegionBySimilarity(labelEmbeddingResult.value, anchors, { minSimilarity: settings.placementMinSimilarity, minMargin: settings.placementMinMargin })
@@ -2886,6 +2929,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function sweepMergeQueue() {
         return enqueueWrite(async () => {
+            // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): каждая пара ждёт свой SideCar-вызов и
+            // эмбединг по отдельности — чат может смениться между парами или внутри одной.
+            const epoch = chatEpoch;
             let changed = false;
             for (const [pairKey, entry] of Object.entries(mergeQueue)) {
                 if (turnCounter - entry.queuedTurn < settings.mergeQueueMaxTurns) continue;
@@ -2897,9 +2943,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (!nodeA || !nodeB) continue; // один уже пропал (эвикшен/другое слияние) — очередь устарела сама собой
 
                 const verdict = await askSideCarForMerge(nodeA, nodeB);
+                if (!stillSameChat(epoch)) return; // чат сменился — оставшиеся пары и уже сделанные здесь удаления из очереди не персистим, они про старый граф
                 if (!verdict || verdict.distinct) continue; // SideCar не подтвердил — оба узла остаются как были
 
                 const embeddingResult = await callService('embedding.compute', { text: `${verdict.label}: ${verdict.content}`, kind: 'passage' });
+                if (!stillSameChat(epoch)) return; // чат сменился, пока ждали эмбединг слитой ноды
                 if (!embeddingResult.ok) continue;
 
                 const mergedId = foldNodesInGraph([entry.nodeIdA, entry.nodeIdB], verdict, embeddingResult.value);
@@ -2917,6 +2965,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function sweepReconsolidationQueue() {
         return enqueueWrite(async () => {
+            // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): то же самое, что у sweepMergeQueue() — каждый
+            // кластер ждёт свой SideCar-вызов и эмбединг по отдельности.
+            const epoch = chatEpoch;
             let changed = false;
             for (const [groupKey, entry] of Object.entries(reconsolidationQueue)) {
                 if (turnCounter - entry.queuedTurn < settings.reconsolidationQueueMaxTurns) continue;
@@ -2927,9 +2978,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (nodesToFold.length !== entry.nodeIds.length) continue; // кто-то из кластера уже пропал — очередь устарела
 
                 const verdict = await askSideCarForReconsolidation(nodesToFold);
+                if (!stillSameChat(epoch)) return; // чат сменился — оставшиеся кластеры и уже сделанные здесь удаления из очереди не персистим, они про старый граф
                 if (!verdict) continue; // SideCar не осилил — узлы остаются как были, не повторяем попытку
 
                 const embeddingResult = await callService('embedding.compute', { text: `${verdict.label}: ${verdict.content}`, kind: 'passage' });
+                if (!stillSameChat(epoch)) return; // чат сменился, пока ждали эмбединг свёрнутой ноды
                 if (!embeddingResult.ok) continue;
 
                 const foldedId = foldNodesInGraph(entry.nodeIds, verdict, embeddingResult.value);
@@ -3135,12 +3188,17 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     async function injectIntoPrompt({ chat } = {}) {
         if (!Array.isArray(chat)) return true;
         return enqueueWrite(async () => {
+            // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана, пункт 4): ждём эмбединг сцены ниже; если чат
+            // сменился за это время, `stickyRetrieval`/`nodes` дальше — уже про НОВЫЙ чат, писать в них по
+            // результатам старого нельзя (в частности перед `persistStickyRetrieval()` ниже).
+            const epoch = chatEpoch;
             const candidates = Object.values(nodes).filter(node => node.regionId);
             if (!candidates.length) return true;
 
             const contextText = extractLatestText(chat);
             if (!contextText.trim()) return true;
             const embeddingResult = await callService('embedding.compute', { text: contextText, kind: 'query' });
+            if (!stillSameChat(epoch)) return true; // мягкая деградация — просто не трогаем chat/stickyRetrieval этим проходом
             if (!embeddingResult.ok) return true;
             const contextEmbedding = embeddingResult.value;
 
@@ -3194,6 +3252,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // `reloadForActiveChat()`'s doc-comment — реальная жалоба
         // пользователя, которую эта подписка чинит.
         unsubscribeChatChanged = host.events.subscribe('st.chatChanged', () => {
+            // ПЕРВОЙ строкой, синхронно (MEMORY_GRAPH_FIX_PLAN.md, Этап 5, ROADMAP 5.107д) — любая задача,
+            // запущенная ДО этого события, проверяет `stillSameChat(epoch)` после каждого своего `await` и
+            // обязана увидеть смену эпохи сразу, в том же тике, что и само событие, а не только после того, как
+            // `reloadForActiveChat()` дойдёт до своего первого await.
+            chatEpoch += 1;
             // Присвоено СИНХРОННО (не внутри reloadForActiveChat() самой) —
             // waitForBootstrap() должен увидеть НОВЫЙ промис сразу, в том
             // же тике, что и само событие, а не только после того, как
