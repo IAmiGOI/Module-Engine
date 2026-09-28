@@ -2442,6 +2442,114 @@ test('memoryGraph.nodes.move into an already-full region triggers the same capac
     assert.equal((await call(caller, 'memoryGraph.reconsolidationQueue')).value.length, 1, 'moving into a full region must trigger the SAME capacity enforcement as an organic insertion — a reconsolidation cluster must get queued, not silently ignored');
 });
 
+// --- Любой регион по regionId, метка региона, метрики нод, ретрив (MEMORY_GRAPH_UI_PLAN.md, Этап 2) ---
+
+test('memoryGraph.nodes.create/move accept a regionId — the only way to place a node into a SEMANTIC region, which has no sector/ring at all', async () => {
+    const entries = [{ uid: 0, comment: 'Center', content: 'a shared lore fact, entry zero.' }];
+    const { caller } = buildEngine({
+        lorebookEntries: entries,
+        fetchReplies: ['[{"region":"Locations","subCenterUids":[0]}]', '[{"region":"Locations","centerUid":0}]'],
+    });
+    await call(caller, 'memoryGraph.bootstrapFromLorebook');
+
+    const regions = (await call(caller, 'memoryGraph.regions')).value;
+    assert.ok(regions.find(r => r.id === 'Locations'), 'sanity: bootstrap actually created a SEMANTIC region keyed by its own name, not "sector:ring"');
+
+    const created = await call(caller, 'memoryGraph.nodes.create', { label: 'Second Place', content: 'another location entirely.', regionId: 'Locations' });
+    assert.ok(created.value.ok, `create must succeed: ${created.value.error}`);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === created.value.nodeId).regionId, 'Locations');
+
+    const elsewhere = await call(caller, 'memoryGraph.nodes.create', { label: 'Elsewhere', content: 'a dartboard-region node.', sector: 2, ring: 1 });
+    const moved = await call(caller, 'memoryGraph.nodes.move', { id: elsewhere.value.nodeId, regionId: 'Locations' });
+    assert.ok(moved.value.ok, `move must succeed: ${moved.value.error}`);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === elsewhere.value.nodeId).regionId, 'Locations');
+});
+
+test('memoryGraph.nodes.create/move reject an unknown regionId with a clear error, instead of silently falling back or crashing', async () => {
+    const { caller } = buildEngine();
+    const createResult = await call(caller, 'memoryGraph.nodes.create', { label: 'X', content: 'some content.', regionId: 'NoSuchRegion' });
+    assert.deepEqual(createResult.value, { ok: false, error: 'Unknown region "NoSuchRegion".' });
+
+    const real = await call(caller, 'memoryGraph.nodes.create', { label: 'Y', content: 'real content.', sector: 0, ring: 0 });
+    const moveResult = await call(caller, 'memoryGraph.nodes.move', { id: real.value.nodeId, regionId: 'NoSuchRegion' });
+    assert.deepEqual(moveResult.value, { ok: false, error: 'Unknown region "NoSuchRegion".' });
+});
+
+test('memoryGraph.nodes.move into the node\'s OWN current region is a no-op, reported explicitly as unchanged', async () => {
+    const { caller } = buildEngine();
+    const created = await call(caller, 'memoryGraph.nodes.create', { label: 'X', content: 'content.', sector: 2, ring: 1 });
+    const result = await call(caller, 'memoryGraph.nodes.move', { id: created.value.nodeId, sector: 2, ring: 1 });
+    assert.deepEqual(result.value, { ok: true, nodeId: created.value.nodeId, unchanged: true });
+});
+
+test('memoryGraph.regions carries each region\'s own key as `id` and its center node\'s label as `label`', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Anchor', content: 'the center of this region.', sector: 1, ring: 1 });
+    const region = (await call(caller, 'memoryGraph.regions')).value.find(r => r.id === '1:1');
+    assert.ok(region, 'sanity: the region\'s own storage key must survive into the response as `id`');
+    assert.equal(region.label, 'Anchor', 'label must be the CENTER node\'s label, not the bare key — that is the whole point of adding it');
+});
+
+test('injectIntoPrompt() publishes memoryGraph.retrieved and memoryGraph.lastRetrieval reflects it, growing retrievedCount/beaconCount on the nodes actually shown', async () => {
+    const { engine, graphCore, caller } = buildEngine();
+    await call(caller, 'memoryGraph.configure', { beaconCount: 1 });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Topic', content: 'alpha bravo charlie delta echo', importance: 5, sector: 0, ring: 0 });
+    const nodeId = (await call(caller, 'memoryGraph.nodes')).value[0].id;
+
+    const retrievedEvents = [];
+    engine.events.subscribe('memoryGraph.retrieved', payload => retrievedEvents.push(payload));
+
+    await graphCore.injectIntoPrompt({ chat: [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }] });
+
+    assert.equal(retrievedEvents.length, 1);
+    assert.deepEqual(retrievedEvents[0].beaconIds, [nodeId]);
+    assert.equal(retrievedEvents[0].sticky, false);
+    assert.equal(typeof retrievedEvents[0].at, 'number');
+
+    assert.deepEqual(graphCore.lastRetrieval(), retrievedEvents[0], 'memoryGraph.lastRetrieval must reflect the exact same retrieval that was just published');
+
+    const node = (await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === nodeId);
+    assert.equal(node.retrievedCount, 1);
+    assert.equal(node.beaconCount, 1, 'a BEACON gets its own extra counter, on top of the shared retrievedCount');
+    assert.ok(node.lastRetrievedAt, 'lastRetrievedAt must be set the moment a node is actually shown to the model');
+});
+
+test('memoryGraph.nodes carries weight/weightRank for ordinary nodes, and null/1 for protected ones', async () => {
+    const { caller } = buildEngine();
+    // subCentersPerRegion:0 — иначе 2-я/3-я вставка сама стала бы защищённым под-центром, не тем, что тест проверяет.
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Center', content: 'the anchor of this region.', importance: 5, sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Weak', content: 'a minor, unrelated detail.', importance: 1, sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Strong', content: 'a defining, unrelated fact.', importance: 9, sector: 0, ring: 0 });
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const center = nodes.find(n => n.label === 'Center');
+    const weak = nodes.find(n => n.label === 'Weak');
+    const strong = nodes.find(n => n.label === 'Strong');
+
+    assert.equal(center.weight, null, 'protected nodes carry no finite weight — JSON cannot serialize Infinity, and protectedNode:true already says everything needed');
+    assert.equal(center.weightRank, 1);
+    assert.ok(strong.weight > weak.weight, 'higher importance, same age/degree, must mean a higher weight — the same computeNodeWeight() eviction reads');
+    assert.equal(weak.weightRank, 0, 'the single weakest UNPROTECTED node ranks at the very bottom of the [0,1] scale');
+    assert.equal(strong.weightRank, 1, 'the single strongest UNPROTECTED node ranks at the very top of the [0,1] scale');
+});
+
+test('the retrieval history never grows past its 20-entry limit, however many times injectIntoPrompt() actually shows a node', async () => {
+    const { graphCore, caller } = buildEngine();
+    await call(caller, 'memoryGraph.configure', { beaconCount: 1 });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Topic', content: 'alpha bravo charlie delta echo', importance: 5, sector: 0, ring: 0 });
+
+    for (let i = 0; i < 25; i += 1) {
+        await graphCore.injectIntoPrompt({ chat: [{ name: 'User', is_user: true, mes: `alpha bravo charlie delta echo turn ${i}` }] });
+    }
+
+    assert.equal(graphCore.retrievals().length, 20);
+});
+
 test('memoryGraph.edges.create/delete are symmetric and keep degree consistent on both ends; repeat create does not duplicate', async () => {
     const { caller } = buildEngine();
     await call(caller, 'memoryGraph.nodes.create', { label: 'A', content: 'first node, no relation yet.', sector: 0, ring: 0 });

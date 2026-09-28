@@ -138,6 +138,20 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     // не порождают запись в журнале решений (он только про органический `check`, см. план).
     let capacityTracker = null;
     let lastSideCarOutcome = null; // 'skip' | 'empty' | 'node' — см. askSideCarForNode()
+    // История ретривов — MEMORY_GRAPH_UI_PLAN.md, Этап 2 (П3/П6 плана). ТОЛЬКО в памяти, не в `chatMemory` (план
+    // явно требует) — как и `stickyRetrieval`'s собственный ТЕКСТ, это производные данные последнего показа,
+    // не источник истины графа; обнуляется на `st.chatChanged` вместе с `chatEpoch` (см. подписку в load()).
+    // Новые записи — В НАЧАЛО (`memoryGraph.retrievals`/`memoryGraph.lastRetrieval` отдают историю уже готовым
+    // порядком, панели не нужно переворачивать самой). `lastRetrieval` — тот же самый объект, что `retrievalHistory[0]`,
+    // отдельная переменная только ради его doc-comment у `injectIntoPrompt()`'s sticky-ветки (нечего искать в массиве).
+    let lastRetrieval = null;
+    let retrievalHistory = [];
+    const RETRIEVAL_HISTORY_LIMIT = 20; // число из самого плана, не настройка пользователя (тот же принцип, что DECISION_LOG_LIMIT)
+    /** Добавляет запись в историю ретривов (новые в начало) и держит её не длиннее `RETRIEVAL_HISTORY_LIMIT`. */
+    function recordRetrieval(entry) {
+        lastRetrieval = entry;
+        retrievalHistory = [entry, ...retrievalHistory].slice(0, RETRIEVAL_HISTORY_LIMIT);
+    }
 
     async function call(contract, params) {
         return request(host.own, contract, { params });
@@ -247,6 +261,50 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     function regionEntry(sector, ring) {
         const key = regionKey(sector, ring);
         return regions[key] ?? { sector, ring, centerNodeId: null, subCenterIds: [], nodeIds: [], wordProfile: {} };
+    }
+
+    /**
+     * Регионы для ВНЕШНЕГО потребителя (контракт/панель) — MEMORY_GRAPH_UI_PLAN.md, Этап 2, П2: у `regions` объект
+     * (map "ключ региона" → значение), сам ключ ВНУТРИ значения не хранится нигде — панель не могла ни подписать
+     * регион, ни адресовать его по `id` обратно в `createNodeManually`/`moveNodeManually`. Добавляет `id` (сам ключ)
+     * и `label` (метка центральной ноды региона, иначе — сам ключ, для регионов без центра/семантических до
+     * назначения центра) ТОЛЬКО в ОТВЕТ — не трогает хранимые `regions[key]`.
+     */
+    function regionsForResponse() {
+        return Object.entries(regions).map(([id, region]) => ({ ...region, id, label: nodes[region.centerNodeId]?.label ?? id }));
+    }
+
+    /**
+     * Ноды для ВНЕШНЕГО потребителя (контракт/панель) — MEMORY_GRAPH_UI_PLAN.md, Этап 2, П4. Добавляет ТОЛЬКО в
+     * ОТВЕТ (не в хранимые данные, `weightRank`/`ageTurns`/`idleTurns` заново пересчитываются на каждый запрос):
+     * `weight` — тот же `computeNodeWeight()`, с тем же `elapsed`, что уже реально решает вытеснение
+     * (`pickEvictionCandidate()` → `elapsedTurnsFor()`) — у защищённых нод он `Infinity`, а JSON не умеет
+     * `Infinity`, поэтому наружу `null` (сама `protectedNode:true` уже есть на ноде, различать по ней);
+     * `weightRank` — МЕСТО ноды по весу среди НЕЗАЩИЩЁННЫХ нод всего графа (не одного региона), нормированное в
+     * [0,1] линейно по позиции в отсортированном списке (0 — самая слабая, 1 — самая сильная); у защищённых — `1`
+     * (те же ноды, что `pickEvictionCandidate()` никогда не вытеснит, "сильнее" любой обычной по определению);
+     * единственная незащищённая нода во всём графе — делить ранг не на что, `1` (та же "нет базы для сравнения",
+     * что у бутстрапа гейта, `isStrongChangeEwma()`). `ageTurns`/`idleTurns` — то же самое разделение "создана" vs
+     * "давно не использовалась", что уже разделяет Этап 7 `MEMORY_GRAPH_FIX_PLAN.md` (`elapsedTurnsFor()` уже
+     * читает `lastTouchedTurn ?? createdTurn` — это и есть `idleTurns`).
+     */
+    function nodesForResponse() {
+        const all = Object.values(nodes);
+        const unprotectedByWeight = all
+            .filter(node => !node.protectedNode)
+            .map(node => ({ id: node.id, weight: computeNodeWeight({ importance: node.importance, degree: node.degree, elapsed: elapsedTurnsFor(node), protectedNode: false, settings }) }))
+            .sort((a, b) => a.weight - b.weight);
+        const weightById = new Map(unprotectedByWeight.map(entry => [entry.id, entry.weight]));
+        const rankById = new Map(unprotectedByWeight.map((entry, index) => [
+            entry.id, unprotectedByWeight.length > 1 ? index / (unprotectedByWeight.length - 1) : 1,
+        ]));
+        return all.map(node => ({
+            ...node,
+            weight: node.protectedNode ? null : (weightById.get(node.id) ?? null),
+            weightRank: node.protectedNode ? 1 : (rankById.get(node.id) ?? 0),
+            ageTurns: Math.max(0, turnCounter - (node.createdTurn ?? turnCounter)),
+            idleTurns: elapsedTurnsFor(node),
+        }));
     }
 
     /** Анкеры для `pickRegionBySimilarity()` (placement.js, Этап 3) — только регионы, у которых УЖЕ есть центр с реальным эмбедингом; регион без центра не с чем сравнивать. */
@@ -724,9 +782,15 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * для органической ноды — создание в переполненный регион МОЖЕТ
      * вызвать вытеснение/реконсолидацию/объединение уже лежащих там узлов).
      */
-    async function createNodeManually({ label, content, importance = 0, sector, ring } = {}) {
+    async function createNodeManually({ label, content, importance = 0, sector, ring, regionId } = {}) {
         return enqueueWrite(async () => {
-            if (!Number.isInteger(sector) || sector < 0 || sector >= SECTORS || !Number.isInteger(ring) || ring < 0 || ring >= RINGS) {
+            // `regionId` (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П1) — берёт приоритет над sector/ring: единственный
+            // способ положить ноду руками в СЕМАНТИЧЕСКИЙ регион бутстрапа из Lorebook (у него нет "сектор:кольцо"
+            // вообще, см. Б2 плана). `sector`/`ring` в этом случае не проверяются вовсе — вызывающий выбрал один
+            // способ адресации региона, не оба сразу.
+            if (regionId != null) {
+                if (!regions[regionId]) return { ok: false, error: `Unknown region "${regionId}".` };
+            } else if (!Number.isInteger(sector) || sector < 0 || sector >= SECTORS || !Number.isInteger(ring) || ring < 0 || ring >= RINGS) {
                 return { ok: false, error: `sector must be an integer in [0,${SECTORS}), ring in [0,${RINGS}).` };
             }
             const cleanLabel = String(label ?? '').trim() || 'Untitled';
@@ -750,7 +814,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 gameTime: null,
             };
             nodes[node.id] = node;
-            attachToRegion(node, sector, ring);
+            // Слияние/переполнение при вставке — как обычно, это уже внутри attachToRegionByKey()/attachToRegion()
+            // (detectMergeCandidate()/enforceRegionCapacity()) независимо от того, каким путём выбран регион.
+            if (regionId != null) attachToRegionByKey(node, regionId);
+            else attachToRegion(node, sector, ring);
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
             publishEvent('memoryGraph.nodeCreated', { nodeId: node.id, status: 'placed', manual: true });
             return { ok: true, nodeId: node.id };
@@ -822,15 +889,27 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * вытеснение/реконсолидацию/объединение уже лежащих там узлов, не
      * только визуальный эффект.
      */
-    async function moveNodeManually({ id, sector, ring } = {}) {
+    async function moveNodeManually({ id, sector, ring, regionId } = {}) {
         return enqueueWrite(async () => {
             const node = nodes[id];
             if (!node) return { ok: false, error: `no such node: ${id}` };
-            if (!Number.isInteger(sector) || sector < 0 || sector >= SECTORS || !Number.isInteger(ring) || ring < 0 || ring >= RINGS) {
-                return { ok: false, error: `sector must be an integer in [0,${SECTORS}), ring in [0,${RINGS}).` };
+
+            // `regionId` (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П1) — тот же приоритет над sector/ring, что у
+            // createNodeManually(): единственный способ перетащить ноду руками в семантический регион.
+            let targetKey;
+            if (regionId != null) {
+                if (!regions[regionId]) return { ok: false, error: `Unknown region "${regionId}".` };
+                targetKey = regionId;
+            } else {
+                if (!Number.isInteger(sector) || sector < 0 || sector >= SECTORS || !Number.isInteger(ring) || ring < 0 || ring >= RINGS) {
+                    return { ok: false, error: `sector must be an integer in [0,${SECTORS}), ring in [0,${RINGS}).` };
+                }
+                targetKey = regionKey(sector, ring);
             }
-            const targetKey = regionKey(sector, ring);
-            if (node.regionId === targetKey) return { ok: true, nodeId: id }; // уже там — не пересчитываем зря
+            // Перенос в тот же регион — ничего не делать (Этап 2, П1 плана); `unchanged: true` — явный флаг для
+            // вызывающего (панель, Этап 7 того же плана: "перетащили внутри своего же региона — вернуть на место"),
+            // не просто тихий такой же `{ok:true}`, что и у настоящего переноса.
+            if (node.regionId === targetKey) return { ok: true, nodeId: id, unchanged: true };
 
             if (node.regionId && regions[node.regionId]) {
                 const oldRegion = regions[node.regionId];
@@ -841,8 +920,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     centerNodeId: oldRegion.centerNodeId === id ? null : oldRegion.centerNodeId,
                 };
             }
-            node.regionId = null; // attachToRegion() ожидает узел вне региона — та же форма, что у новой ноды
-            attachToRegion(node, sector, ring);
+            node.regionId = null; // attachToRegion()/attachToRegionByKey() ожидают узел вне региона — та же форма, что у новой ноды
+            if (regionId != null) attachToRegionByKey(node, targetKey);
+            else attachToRegion(node, sector, ring);
 
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
             publishEvent('memoryGraph.nodeMoved', { nodeId: id, regionId: targetKey });
@@ -2168,6 +2248,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // перепарсивается ради полного списка), то же поле, что уже хранится в `stickyRetrieval`.
                 for (const id of stickyRetrieval.beaconIds) { if (nodes[id]) nodes[id].lastTouchedTurn = turnCounter; }
                 await persistNodes();
+                // Публикация ретрива (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П3) — маршрута в памяти НЕТ (sticky
+                // переиспользует готовый ТЕКСТ прошлого прохода, не пересчитывает route/noise заново), поэтому
+                // переиздаём СОХРАНЁННЫЙ `lastRetrieval` с новым `at` и `sticky:true`, план явно просит именно так.
+                // Мягкая деградация, если истории ещё нет вовсе (свежий процесс: `stickyRetrieval` пришёл из
+                // хранилища и выиграл ДО первого свежего ретрива в этой сессии) — переиздавать нечего, пропускаем.
+                if (lastRetrieval) {
+                    const republished = { ...lastRetrieval, sticky: true, at: Date.now() };
+                    recordRetrieval(republished);
+                    publishEvent('memoryGraph.retrieved', republished);
+                }
                 chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: stickyRetrieval.text });
                 return true;
             }
@@ -2178,14 +2268,38 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const text = renderMemoryPrompt({ ...route, noise }, nodes);
             if (!text) return true;
 
-            // Decay по факту использования (Этап 7) — КАЖДЫЙ узел, реально попавший в готовый блок (маяки, маршрут,
-            // шум — тот же набор id, что renderMemoryPrompt() выше уже включил в текст), помечается прочитанным
-            // СЕЙЧАС же, одним проходом по уже посчитанным `routeNodeIds`/`noise`, без пересчёта. Сохраняется ОДНИМ
-            // вызовом вместе с `stickyRetrieval` ниже (план явно просит не заводить отдельное сохранение на каждую ноду).
-            for (const id of new Set([...routeNodeIds, ...noise.map(edge => edge.to)])) { if (nodes[id]) nodes[id].lastTouchedTurn = turnCounter; }
+            // Decay по факту использования (Этап 7) + счётчики ретрива (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П5) —
+            // КАЖДЫЙ узел, реально попавший в готовый блок (маяки, маршрут, шум — тот же набор id, что
+            // renderMemoryPrompt() выше уже включил в текст), помечается прочитанным СЕЙЧАС же, одним проходом по
+            // уже посчитанным `routeNodeIds`/`noise`, без пересчёта. `retrievedCount`/`lastRetrievedAt` — мягко
+            // добавляемые хранимые поля (у старых нод их нет, читаются как 0/null снаружи, см. `memoryGraph.nodes`);
+            // `beaconCount` — ТОЛЬКО у самих маяков, отдельным проходом по `freshBeaconIds` (не всему набору).
+            // Всё сохраняется ОДНИМ вызовом вместе с `stickyRetrieval` ниже — план прямо просит не заводить
+            // отдельное сохранение на каждую ноду.
+            const noiseIds = [...new Set(noise.map(edge => edge.to))];
+            for (const id of new Set([...routeNodeIds, ...noiseIds])) {
+                const node = nodes[id];
+                if (!node) continue;
+                node.lastTouchedTurn = turnCounter;
+                node.retrievedCount = (node.retrievedCount ?? 0) + 1;
+                node.lastRetrievedAt = Date.now();
+            }
+            for (const id of freshBeaconIds) { if (nodes[id]) nodes[id].beaconCount = (nodes[id].beaconCount ?? 0) + 1; }
 
             stickyRetrieval = { beaconIds: freshBeaconIds, text };
+            // Публикация ретрива (Этап 2, П3/П6) — тот же формат, что и в sticky-ветке выше, но с ПОСЧИТАННЫМИ
+            // маршрутом/шумом (не переизданием старого). `query` обрезан до 200 символов — план явно ограничивает,
+            // это подсказка для панели ("что искали"), не полный текст сцены.
+            recordRetrieval({
+                at: Date.now(), sticky: false,
+                beaconIds: freshBeaconIds,
+                segments: route.segments.map(({ from, to }) => ({ from, to })),
+                standaloneIds: route.standalone,
+                noiseIds,
+                query: contextText.slice(0, 200),
+            });
             await Promise.all([persistNodes(), persistStickyRetrieval()]);
+            publishEvent('memoryGraph.retrieved', lastRetrieval);
             chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: text });
             return true;
         });
@@ -2217,6 +2331,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // обязана увидеть смену эпохи сразу, в том же тике, что и само событие, а не только после того, как
             // `reloadForActiveChat()` дойдёт до своего первого await.
             chatEpoch += 1;
+            // История ретривов — ТОЛЬКО в памяти (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П3/П6), про СТАРЫЙ чат теряет
+            // смысл сразу же: обнуляем тем же синхронным шагом, что и `chatEpoch`, не дожидаясь reload.
+            lastRetrieval = null;
+            retrievalHistory = [];
             // Присвоено СИНХРОННО (не внутри reloadForActiveChat() самой) —
             // waitForBootstrap() должен увидеть НОВЫЙ промис сразу, в том
             // же тике, что и само событие, а не только после того, как
@@ -2246,8 +2364,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     const unregisters = [
         host.own.register('memoryGraph.settings', () => settings),
         host.own.register('memoryGraph.configure', params => configure(params ?? {})),
-        host.own.register('memoryGraph.nodes', () => Object.values(nodes)),
-        host.own.register('memoryGraph.regions', () => Object.values(regions)),
+        host.own.register('memoryGraph.nodes', () => nodesForResponse()),
+        host.own.register('memoryGraph.regions', () => regionsForResponse()),
         host.own.register('memoryGraph.mergeQueue', () => Object.values(mergeQueue)),
         host.own.register('memoryGraph.reconsolidationQueue', () => Object.values(reconsolidationQueue)),
         // Узлы, которые каскад НЕ смог уверенно разместить (см. placeNewNode()/
@@ -2259,6 +2377,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // Журнал решений (MEMORY_GRAPH_FIX_PLAN.md, Этап 6, ROADMAP 5.107е) — новейшие ПЕРВЫМИ (обратный порядок
         // вставки): панель/дебаг читают "что случилось только что", не "что случилось раньше всего".
         host.own.register('memoryGraph.decisionLog', () => [...decisionLog].reverse()),
+        // История ретривов (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П6) — уже в порядке "новейшие первыми"
+        // (`recordRetrieval()` вставляет в начало), панели отдаётся как есть.
+        host.own.register('memoryGraph.retrievals', () => retrievalHistory),
+        host.own.register('memoryGraph.lastRetrieval', () => lastRetrieval),
         host.own.register('memoryGraph.check', params => manualCheck(extractRecentText(params?.chat, { count: settings.extractionContextMessages, maxChars: settings.extractionContextChars }), params?.chat?.length)),
         // Ручное редактирование графа (UI-редактор) — CRUD нод/рёбер.
         host.own.register('memoryGraph.nodes.create', params => createNodeManually(params ?? {})),
@@ -2294,12 +2416,14 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // экспортирован и здесь для того же прямого доступа из тестов.
         bootstrapFromLorebook,
         settings: () => settings,
-        nodes: () => Object.values(nodes),
-        regions: () => Object.values(regions),
+        nodes: () => nodesForResponse(),
+        regions: () => regionsForResponse(),
         staging: () => Object.values(staging),
         mergeQueue: () => Object.values(mergeQueue),
         reconsolidationQueue: () => Object.values(reconsolidationQueue),
         decisionLog: () => [...decisionLog].reverse(), // Этап 6 — тот же порядок (новейшие первыми), что у контракта `memoryGraph.decisionLog`
+        retrievals: () => retrievalHistory, // MEMORY_GRAPH_UI_PLAN.md, Этап 2 — тот же порядок, что у контракта `memoryGraph.retrievals`
+        lastRetrieval: () => lastRetrieval,
         unregister: async () => {
             await call('pipeline.stages.remove', { pipelineId: PREPARE_PIPELINE, stageId: 'memory-graph:place' }).catch(() => {});
             await call('pipeline.stages.remove', { pipelineId: BEFORE_SEND_PIPELINE, stageId: INJECT_STAGE_ID }).catch(() => {});
