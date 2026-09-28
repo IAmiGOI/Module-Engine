@@ -36,6 +36,7 @@ export async function runSync({
     base = {},
     include,
     conflictLabel,
+    conflictPolicy = () => 'copy',
     onProgress = () => {},
     isAborted = () => false,
     localManifest,
@@ -46,7 +47,7 @@ export async function runSync({
     const actions = [...plan.actions].sort((a, b) => TRANSFER_ORDER[a.op] - TRANSFER_ORDER[b.op]);
     const nextBase = { ...base };
     const errors = [];
-    const counts = { pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, failed: 0, deferred: 0 };
+    const counts = { pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, quarantined: 0, failed: 0, deferred: 0 };
     const deferred = [];   // изменения базы, которые вступают в силу только после удачного commit() у пакетной стороны
     const applyBase = changes => { for (const [path, hash] of Object.entries(changes)) { if (hash === null) delete nextBase[path]; else nextBase[path] = hash; } };
     const finishOne = (changes, remoteTouched) => (remote.batched && remoteTouched ? deferred.push(changes) : applyBase(changes));
@@ -88,14 +89,17 @@ export async function runSync({
                     counts.deletedRemote += 1;
                     finishOne({ [action.path]: null }, true);
                     break;
-                case SYNC_ACTIONS.conflict:
-                    await resolveConflict(action, { local, remote, localEntries, remoteEntries });
+                case SYNC_ACTIONS.conflict: {
+                    const winnerHash = action.winner === 'local' ? action.localHash : action.remoteHash;
+                    const loserHash = action.winner === 'local' ? action.remoteHash : action.localHash;
+                    const outcome = await resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy });
                     counts.conflicts += 1;
-                    finishOne({
-                        [action.path]: action.winner === 'local' ? action.localHash : action.remoteHash,
-                        [action.conflictPath]: action.winner === 'local' ? action.remoteHash : action.localHash,
-                    }, true);
+                    if (outcome.quarantined) counts.quarantined += 1;
+                    // В карантине копии-файла нет вовсе — базе просто нечего запоминать про conflictPath, только про сам путь (обе
+                    // стороны сошлись на версии победителя).
+                    finishOne(outcome.quarantined ? { [action.path]: winnerHash } : { [action.path]: winnerHash, [action.conflictPath]: loserHash }, true);
                     break;
+                }
                 default:
                     break;
             }
@@ -134,17 +138,42 @@ export async function runSync({
     return { ok: !commitError && counts.failed === 0 && !aborted, aborted, stopped, counts, errors, base: nextBase, plan: plan.counts };
 }
 
-/** Обе версии сохраняются на обеих сторонах: проигравшая — под именем-копией, победившая — на прежнем месте. */
-async function resolveConflict(action, { local, remote, localEntries, remoteEntries }) {
+/** Победитель пишется в основной путь на обеих сторонах; что происходит с проигравшей версией, зависит от `outcome` ниже. */
+async function applyWinner(action, { local, remote, localEntries, remoteEntries }) {
+    if (action.winner === 'local') await remote.write(action.path, await local.read(action.path), { hash: action.localHash, key: localEntries[action.path]?.key, modified: localEntries[action.path]?.modified });
+    else await local.write(action.path, await remote.read(action.path), { hash: action.remoteHash, key: remoteEntries[action.path]?.key, modified: remoteEntries[action.path]?.modified });
+}
+
+/**
+ * Проигравшая версия при конфликте:
+ *  - **`copy`** (обычный конфликт, или первая встреча по категории без карантина) — сохраняется РЯДОМ на обеих сторонах, под
+ *    именем-копией: обе версии — заведомо чья-то работа, ничего не решаем за человека.
+ *  - **`quarantine`** (первая встреча, `CONFLICT_POLICY` категории — `sync-config.js`) — копия НЕ идёт в папку ST вовсе (не плодит
+ *    дубля с тем же именем в списке ST): только сторона, чья версия проиграла, кладёт её в СВОЙ карантин (`side.quarantine()`) —
+ *    другая сторона ничего не получает по сети, восстановление на будущее (панель — отдельная задача). Работает, только если у
+ *    проигравшей стороны вообще ЕСТЬ `quarantine()` — то есть это реальное устройство-пара; у GitHub/облака его нет (это не
+ *    интерактивная сторона, класть туда «на будущее востановить» некому), и тогда, даже если политика категории — `quarantine`,
+ *    поведение остаётся `copy` (см. doc-comment файла и `CONFLICT_POLICY`: «для пакетных сторон — copy, если проиграла удалённая»;
+ *    если проиграла ЛОКАЛЬНАЯ, `local` эту функцию имеет всегда, и карантин у себя не требует сети вовсе).
+ */
+async function resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy = () => 'copy' }) {
     const winnerIsLocal = action.winner === 'local';
-    const loserBlob = winnerIsLocal ? await remote.read(action.path) : await local.read(action.path);
+    const loserSide = winnerIsLocal ? remote : local;
     const loserEntry = winnerIsLocal ? remoteEntries[action.path] : localEntries[action.path];
-    const meta = { hash: winnerIsLocal ? action.remoteHash : action.localHash, modified: loserEntry?.modified };
+    const loserHash = winnerIsLocal ? action.remoteHash : action.localHash;
+    const wantsQuarantine = action.firstMeet && conflictPolicy(action.path) === 'quarantine' && typeof loserSide.quarantine === 'function';
+
+    if (wantsQuarantine) {
+        const loserBlob = await loserSide.read(action.path);
+        await loserSide.quarantine(action.path, loserBlob, { hash: loserHash, key: loserEntry?.key, modified: loserEntry?.modified, from: winnerIsLocal ? 'remote' : 'local' });
+        await applyWinner(action, { local, remote, localEntries, remoteEntries });
+        return { quarantined: true };
+    }
+
+    const loserBlob = await loserSide.read(action.path);
+    const meta = { hash: loserHash, modified: loserEntry?.modified };
     await local.write(action.conflictPath, loserBlob, meta);
     await remote.write(action.conflictPath, loserBlob, meta);
-    if (winnerIsLocal) {
-        await remote.write(action.path, await local.read(action.path), { hash: action.localHash, modified: localEntries[action.path]?.modified });
-    } else {
-        await local.write(action.path, await remote.read(action.path), { hash: action.remoteHash, modified: remoteEntries[action.path]?.modified });
-    }
+    await applyWinner(action, { local, remote, localEntries, remoteEntries });
+    return { quarantined: false };
 }

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { runSync } from '../libraries/core/sync-runner.js';
 import { computeGitBlobSha } from '../libraries/core/content-hash.js';
 
-/** Сторона на памяти: путь → { text, modified }. */
-function memorySide(initial = {}, { batched = false, failWrite = () => false } = {}) {
+/** Сторона на памяти: путь → { text, modified }. `withQuarantine` — только реальное устройство умеет карантин (GitHub/облако — нет, см. sync-runner.js's doc-comment `resolveConflict`). */
+function memorySide(initial = {}, { batched = false, failWrite = () => false, withQuarantine = false } = {}) {
     const files = new Map(Object.entries(initial).map(([path, value]) => [path, typeof value === 'string' ? { text: value, modified: 1 } : value]));
     const log = [];
     const side = {
@@ -13,18 +13,22 @@ function memorySide(initial = {}, { batched = false, failWrite = () => false } =
         batched,
         async manifest() {
             const out = {};
-            for (const [path, { text, modified }] of files) out[path] = { hash: await computeGitBlobSha(new TextEncoder().encode(text)), size: text.length, modified };
+            for (const [path, { text, modified, key }] of files) out[path] = { hash: await computeGitBlobSha(new TextEncoder().encode(text)), size: text.length, modified, ...(key ? { key } : {}) };
             return out;
         },
         async read(path) { log.push(`read:${path}`); return new Blob([files.get(path).text]); },
         async write(path, blob, meta) {
             if (failWrite(path)) throw new Error(`disk full for ${path}`);
             log.push(`write:${path}`);
-            files.set(path, { text: await blob.text(), modified: meta?.modified ?? 1 });
+            files.set(path, { text: await blob.text(), modified: meta?.modified ?? 1, key: meta?.key });
         },
         async remove(path) { log.push(`remove:${path}`); files.delete(path); },
     };
     if (batched) { side.commitCalls = 0; side.commit = async () => { side.commitCalls += 1; }; }
+    if (withQuarantine) {
+        side.quarantined = [];
+        side.quarantine = async (path, blob, meta) => { log.push(`quarantine:${path}`); side.quarantined.push({ path, text: await blob.text(), ...meta }); };
+    }
     return side;
 }
 
@@ -38,7 +42,7 @@ test('a first sync copies new files both ways and remembers them as the base', a
     assert.equal(result.ok, true);
     assert.equal(textOf(remote, 'backgrounds/a.png'), 'AAA');
     assert.equal(textOf(local, 'backgrounds/b.png'), 'BBB');
-    assert.deepEqual(result.counts, { pushed: 1, pulled: 1, deletedLocal: 0, deletedRemote: 0, conflicts: 0, failed: 0, deferred: 0 });
+    assert.deepEqual(result.counts, { pushed: 1, pulled: 1, deletedLocal: 0, deletedRemote: 0, conflicts: 0, quarantined: 0, failed: 0, deferred: 0 });
     assert.equal(result.base['backgrounds/a.png'], await hashOf('AAA'));
     assert.equal(result.base['backgrounds/b.png'], await hashOf('BBB'));
 });
@@ -49,7 +53,7 @@ test('running again right after does nothing — only changed files ever move', 
     const first = await runSync({ local, remote, base: {} });
     local.log.length = 0; remote.log.length = 0;
     const second = await runSync({ local, remote, base: first.base });
-    assert.deepEqual(second.counts, { pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, failed: 0, deferred: 0 });
+    assert.deepEqual(second.counts, { pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, quarantined: 0, failed: 0, deferred: 0 });
     assert.deepEqual([...local.log, ...remote.log], []);
     local.files.set('a', { text: 'one!', modified: 5 });
     const third = await runSync({ local, remote, base: second.base });
@@ -89,6 +93,60 @@ test('when the remote version wins, the local version is what survives as the co
     assert.equal(textOf(local, 'w.json'), 'new remote');
     assert.equal(textOf(local, 'w (conflict PC).json'), 'old local');
     assert.equal(textOf(remote, 'w (conflict PC).json'), 'old local');
+});
+
+// --- Карантин при первой встрече (ROADMAP 5.106б) ---
+
+test('a first-meet conflict on a quarantine-policy path (characters) does not create a copy file — the loser goes to its own side\'s quarantine instead', async () => {
+    const local = memorySide({ 'characters/Alice.png': { text: 'from phone', modified: 2000, key: 'card1:x' } }, { withQuarantine: true });
+    const remote = memorySide({ 'characters/Alice.png': { text: 'from pc', modified: 1000, key: 'card1:y' } }, { withQuarantine: true });
+    const result = await runSync({ local, remote, base: {}, conflictLabel: 'Phone', conflictPolicy: () => 'quarantine' });
+    assert.equal(result.counts.conflicts, 1);
+    assert.equal(result.counts.quarantined, 1);
+    assert.equal(textOf(local, 'characters/Alice.png'), 'from phone', 'the winner is in place on both sides');
+    assert.equal(textOf(remote, 'characters/Alice.png'), 'from phone');
+    assert.equal(local.files.has('characters/Alice (conflict Phone).png'), false, 'no copy file anywhere — that IS the fix for the duplicate-character bug');
+    assert.equal(remote.files.has('characters/Alice (conflict Phone).png'), false);
+    assert.deepEqual(remote.quarantined.map(entry => entry.text), ['from pc'], 'only the LOSING side quarantines its own version');
+    assert.deepEqual(local.quarantined, [], 'the winning side has nothing to quarantine');
+    assert.equal(result.base['characters/Alice.png'], await hashOf('from phone'));
+    assert.equal('characters/Alice (conflict Phone).png' in result.base, false, 'nothing to remember for a copy that was never written');
+});
+
+test('a quarantine-policy conflict that is NOT a first meeting (real history exists) still falls back to copy — quarantine only applies when the pair never agreed on this path before', async () => {
+    const local = memorySide({ 'characters/Alice.png': { text: 'edited on phone', modified: 2000 } }, { withQuarantine: true });
+    const remote = memorySide({ 'characters/Alice.png': { text: 'edited on pc', modified: 1000 } }, { withQuarantine: true });
+    const result = await runSync({ local, remote, base: { 'characters/Alice.png': await hashOf('original') }, conflictLabel: 'Phone', conflictPolicy: () => 'quarantine' });
+    assert.equal(result.counts.quarantined, 0);
+    assert.equal(textOf(remote, 'characters/Alice (conflict Phone).png'), 'edited on pc', 'ordinary conflict copy, as always — this pair DID agree on a prior version');
+    assert.deepEqual(local.quarantined, []);
+});
+
+test('a first-meet conflict whose category policy is "copy" (chats, the default) behaves exactly as before, even though the path never had a base', async () => {
+    const local = memorySide({ 'chats/A/log.jsonl': { text: 'from phone', modified: 2000 } }, { withQuarantine: true });
+    const remote = memorySide({ 'chats/A/log.jsonl': { text: 'from pc', modified: 1000 } }, { withQuarantine: true });
+    const result = await runSync({ local, remote, base: {}, conflictLabel: 'Phone', conflictPolicy: () => 'copy' });
+    assert.equal(result.counts.quarantined, 0);
+    assert.equal(textOf(remote, 'chats/A/log (conflict Phone).jsonl'), 'from pc');
+});
+
+test('quarantine policy is requested but the losing side (GitHub/cloud) cannot quarantine — falls back to copy so nothing is lost', async () => {
+    const local = memorySide({ 'characters/Alice.png': { text: 'from device', modified: 2000 } }, { withQuarantine: true });
+    const remote = memorySide({ 'characters/Alice.png': { text: 'from github', modified: 1000 } });   // no withQuarantine — batched sides never get one
+    const result = await runSync({ local, remote, base: {}, conflictLabel: 'PC', conflictPolicy: () => 'quarantine' });
+    assert.equal(result.counts.quarantined, 0, 'the loser (remote/GitHub) has no quarantine() — copy is the only safe fallback');
+    assert.equal(textOf(local, 'characters/Alice (conflict PC).png'), 'from github');
+    assert.deepEqual(local.quarantined, []);
+});
+
+test('quarantine policy with the LOCAL device as the loser against a batched side (GitHub) quarantines locally — no network round-trip needed', async () => {
+    const local = memorySide({ 'characters/Alice.png': { text: 'old on device', modified: 100 } }, { withQuarantine: true });
+    const remote = memorySide({ 'characters/Alice.png': { text: 'from github', modified: 900 } });
+    const result = await runSync({ local, remote, base: {}, conflictLabel: 'PC', conflictPolicy: () => 'quarantine' });
+    assert.equal(result.counts.quarantined, 1);
+    assert.equal(textOf(local, 'characters/Alice.png'), 'from github', 'the winner (GitHub\'s version) lands in place');
+    assert.equal(local.files.has('characters/Alice (conflict PC).png'), false);
+    assert.deepEqual(local.quarantined.map(entry => entry.text), ['old on device']);
 });
 
 test('one failing file does not stop the rest and stays out of the base so it is retried next time', async () => {

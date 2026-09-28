@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { categoryOfPath, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeCategories, sanitizeSyncConfig, SYNC_CATEGORY_IDS } from '../libraries/core/sync-config.js';
+import { categoryOfPath, conflictPolicyFor, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeCategories, sanitizeSyncConfig, SYNC_CATEGORY_IDS } from '../libraries/core/sync-config.js';
 import { registerStUserDataService } from '../services/st-user-data.js';
 import { createFakeBuses } from '../libraries/shared/fake-buses.js';
 
@@ -13,6 +13,16 @@ test('every kind of chat belongs to the one Chats category and unknown sections 
     assert.equal(categoryOfPath('characters/Alice.png'), 'characters');
     assert.equal(categoryOfPath('mystery/x'), null);
     assert.equal(categoryOfPath('noslash'), null);
+});
+
+test('conflictPolicyFor(): characters and personas quarantine a first-meeting conflict, everything else keeps the old copy behavior', () => {
+    assert.equal(conflictPolicyFor('characters/Alice.png'), 'quarantine');
+    assert.equal(conflictPolicyFor('personas/user.png'), 'quarantine');
+    assert.equal(conflictPolicyFor('chats/Alice/log.jsonl'), 'copy');
+    assert.equal(conflictPolicyFor('worlds/Lore.json'), 'copy');
+    assert.equal(conflictPolicyFor('backgrounds/a.png'), 'copy');
+    assert.equal(conflictPolicyFor('presets/openai/x.json'), 'copy');
+    assert.equal(conflictPolicyFor('mystery/x'), 'copy', 'an unknown section is never quarantined — copy is always the safe default');
 });
 
 test('the category filter lets through only enabled categories', () => {
