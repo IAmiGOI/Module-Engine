@@ -127,9 +127,11 @@ test('dominantBlend() blends two EQUALLY strong regions 50/50 — the average of
     assert.ok(Math.abs(result.b - (ab + bb) / 2) < 0.01);
 });
 
-test('dominantBlend() fades to near-zero alpha for a very weak (far-away) field', () => {
-    const result = dominantBlend(new Map([['a', 0.0001]]), new Map([['a', 0]]));
-    assert.ok(result.a < 0.01, 'a point far from every node must not meaningfully paint the plane');
+test('dominantBlend() returns FULL alpha for any non-empty field, no matter how weak — real bug found live: alpha used to fade with distance (saturating exponential of the raw field magnitude), leaving almost the whole "plane" unpainted except right around the nodes themselves; fading now belongs ONLY to the outline/edge mask in memory-graph-panel.js, not to this function', () => {
+    const weak = dominantBlend(new Map([['a', 0.0001]]), new Map([['a', 0]]));
+    const strong = dominantBlend(new Map([['a', 50]]), new Map([['a', 0]]));
+    assert.equal(weak.a, strong.a, 'alpha must not depend on the field\'s absolute magnitude at all');
+    assert.equal(weak.a, 1);
 });
 
 test('dominantBlend() narrows the color transition as sharpness increases, for the same unequal field strengths', () => {

@@ -128,12 +128,14 @@ test('layoutGraph() with 15 regions: zones do not overlap by angle, and every no
 });
 
 test('layoutGraph() keeps a node inside its own zone even when that zone is NARROW but the region\'s disk is large (stresses the tangent-circle anchorRadius formula, not just "anchor beyond the disk")', () => {
-    // 150 крошечных регионов "съедают" почти весь круг через floor minAngle — после перенормировки (которая
+    // 220 крошечных регионов "съедают" почти весь круг через floor minAngle — после перенормировки (которая
     // делит ВСЕ углы на один и тот же коэффициент) региону "big" достаётся угол в разы уже, чем его площадь
-    // "заслуживает" (halfAngle получается около 1-2°). Наивная anchorRadius = innerHole + R отодвигает диск
-    // региона "big" от центра ровно на его радиус — этого достаточно, только если halfAngle >= 90°, что здесь
-    // заведомо не так. Формула по касательной окружности (R / sin(halfAngle)) обязана отодвинуть диск в разы
-    // дальше, чтобы он весь остался внутри своего узкого углового клина.
+    // "заслуживает". Наивная anchorRadius = innerHole + R отодвигает диск региона "big" от центра ровно на его
+    // радиус — этого достаточно, только если halfAngle >= 90°, что здесь заведомо не так. Формула по касательной
+    // окружности (R / sin(halfAngle)) обязана отодвинуть диск в разы дальше, чтобы он весь остался внутри своего
+    // узкого углового клина. Число регионов подобрано под текущий `GAP` (layout.js) — при увеличении зазора диски
+    // регионов растут, и то же число тесных соседей даёт МЕНЕЕ узкий угол; если сработает sanity-проверка ниже —
+    // это сигнал пересчитать число, не ошибка формулы.
     const nodes = [];
     const regions = {};
     const key = 'big';
@@ -144,7 +146,7 @@ test('layoutGraph() keeps a node inside its own zone even when that zone is NARR
         memberIds.push(id);
     }
     regions[key] = { centerNodeId: memberIds[0], subCenterIds: [], nodeIds: memberIds, label: key };
-    for (let i = 0; i < 150; i += 1) {
+    for (let i = 0; i < 220; i += 1) {
         const smallKey = `tiny${i}`;
         const id = `tiny${i}n0`;
         nodes.push({ id, regionId: smallKey, degree: 0, protectedNode: true, createdAt: 1000 + i });
