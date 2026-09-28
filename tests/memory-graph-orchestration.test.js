@@ -1626,7 +1626,7 @@ test('askSideCarForNode()\'s prompt gives the model an explicit escape hatch and
     const requestBodies = [];
     const fetchOverride = async (url, init) => {
         requestBodies.push(JSON.parse(init.body));
-        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"skip": true}' } }] }) };
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"facts": []}' } }] }) };
     };
     const { graphCore } = buildEngine({ fetchOverride });
     await graphCore.load();
@@ -1635,7 +1635,9 @@ test('askSideCarForNode()\'s prompt gives the model an explicit escape hatch and
 
     assert.equal(requestBodies.length, 1);
     const prompt = requestBodies[0].messages.at(-1).content;
-    assert.match(prompt, /skip.*true/is, 'the model must be told it may decline entirely, not forced to invent a fact from thin context');
+    // Этап 8 (ROADMAP 5.107з) заменил явный `{"skip":true}` на пустой `{"facts":[]}` — та же возможность честно
+    // отказаться, другая обёртка (см. cores/memory-graph/extraction-prompt.js).
+    assert.match(prompt, /"facts"\s*:\s*\[\s*\]/is, 'the model must be told it may decline entirely, not forced to invent a fact from thin context');
     assert.match(prompt, /short-term|situational/i, 'the prompt must explicitly steer away from fleeting, plot-mechanic arrangements');
     assert.match(prompt, /0-3|4-7|8-10/, 'importance must have anchored bands, not a bare unexplained 0-10 range the model has no reason to actually spread across');
 });
@@ -1644,7 +1646,7 @@ test('askSideCarForNode()\'s prompt teaches SELF-CONTAINED phrasing with worked 
     const requestBodies = [];
     const fetchOverride = async (url, init) => {
         requestBodies.push(JSON.parse(init.body));
-        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"skip": true}' } }] }) };
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"facts": []}' } }] }) };
     };
     const { graphCore } = buildEngine({ fetchOverride });
     await graphCore.load();
@@ -1656,6 +1658,65 @@ test('askSideCarForNode()\'s prompt teaches SELF-CONTAINED phrasing with worked 
     assert.match(prompt, /"he"|"she"|"it"/i, 'the prompt must explicitly warn against dangling pronouns with no antecedent — content is read weeks later, out of context');
     assert.match(prompt, /on its own|without the surrounding scene|self-contained/i, 'the prompt must require content to stand on its own, not lean on the scene that produced it');
     assert.match(prompt, /vague|something important happened/i, 'the prompt must explicitly reject vague, non-specific summaries, not just require SOME fact');
+});
+
+// --- Извлечение: несколько фактов, обновление существующих (MEMORY_GRAPH_FIX_PLAN.md, Этап 8, ROADMAP 5.107з) ---
+
+function fakeModelReply(content) {
+    return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content } }] }) };
+}
+
+test('checkAndPlace()\'s "update" fact refines an EXISTING nearby node instead of creating a near-duplicate', async () => {
+    // Первый вызов создаёт узел; второй — уточняет его же по настоящему id, который узнаём только ПОСЛЕ первого
+    // прохода (makeId() генерирует его сам) — fetchOverride поэтому читает состояние теста, не статический ответ.
+    let existingId = null;
+    const fetchOverride = async () => fakeModelReply(existingId
+        ? `{"facts":[{"op":"update","id":"${existingId}","content":"Kira is the last surviving heir to the Varekh throne.","importance":9}]}`
+        : '{"facts":[{"op":"create","label":"Kira\'s heritage","content":"Kira is royalty.","importance":6}]}');
+    const { graphCore } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('Kira mentions she comes from a noble line.');
+    const before = graphCore.nodes();
+    assert.equal(before.length, 1, 'sanity: the first check created exactly one node');
+    existingId = before[0].id;
+
+    // Второй check — тот же узел теперь входит в findNearestNodes() (единственный узел в графе), SideCar его
+    // "видит" и явно просит "update" по его собственному id, а не изобретает новый почти-дубль.
+    const result = await graphCore.checkAndPlace('Kira reveals the true extent of her royal bloodline, a genuinely new detail.');
+    assert.equal(result.status, 'updated');
+    assert.equal(result.nodeId, existingId);
+
+    const after = graphCore.nodes();
+    assert.equal(after.length, 1, 'must have refined the SAME node — no second, near-duplicate node created');
+    assert.equal(after[0].content, 'Kira is the last surviving heir to the Varekh throne.');
+    assert.equal(after[0].importance, 9);
+});
+
+test('checkAndPlace() processes MULTIPLE facts from one SideCar reply — a create alongside an update to an existing node, in a single check()', async () => {
+    let seedId = null;
+    const fetchOverride = async () => fakeModelReply(seedId
+        ? `{"facts":[{"op":"update","id":"${seedId}","content":"alpha bravo charlie delta echo, now refined.","importance":7},{"op":"create","label":"New Fact","content":"golf lima oscar quebec sierra yankee","importance":6}]}`
+        : '{"facts":[{"op":"create","label":"Seed","content":"alpha bravo charlie delta echo","importance":5}]}');
+    const { graphCore } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('alpha bravo charlie delta echo');
+    seedId = graphCore.nodes()[0].id;
+
+    const result = await graphCore.checkAndPlace('golf lima oscar quebec sierra yankee — a genuinely unrelated new topic');
+    assert.equal(result.status, 'placed', 'more than one fact — the batch return shape, not a single {status,nodeId}');
+    assert.equal(result.results.length, 2);
+    const updated = result.results.find(entry => entry.status === 'updated');
+    const created = result.results.find(entry => entry.status !== 'updated');
+    assert.equal(updated.nodeId, seedId);
+    assert.ok(created.nodeId && created.nodeId !== seedId);
+
+    const nodes = graphCore.nodes();
+    assert.equal(nodes.length, 2, 'exactly one NEW node — the seed was refined in place, not duplicated');
+    assert.equal(nodes.find(n => n.id === seedId).content, 'alpha bravo charlie delta echo, now refined.');
 });
 
 test('checkAndPlace() with blank context text is skipped — nothing to embed', async () => {
