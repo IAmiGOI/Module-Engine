@@ -4,6 +4,7 @@ import { createFakeNetwork, createFakeClock, settle } from './helpers/fake-sync-
 import { createFakeDevice } from './helpers/fake-sync-device.js';
 import { createFakeGithub } from './helpers/fake-github.js';
 import { generateSecret } from '../libraries/core/sync-secrets.js';
+import { buildCardPng, fakeCard } from './helpers/fake-png.js';
 
 const A_ID = '0000000000000001';   // меньший id — ведущий
 const B_ID = '0000000000000002';
@@ -214,6 +215,36 @@ test('a file ST rewrites on import (the card gets a new create_date) does not bo
     await pair.a.call('sync.run');
     await waitFor(() => finishedRuns(pair.a) > before);
     assert.equal(pair.a.text('characters/Bob.png'), 'CARD-V2-EDITED-ON-PHONE', 'a real edit still travels');
+    await stopAll(pair.a, pair.b);
+});
+
+test('the SAME character created independently on both devices (empty base, first meeting) settles instead of creating a duplicate — the main bug from SYNC_IMPROVEMENT_PLAN.md', async () => {
+    // Real card-fingerprint.js semantics: only create_date/chat differ (exactly what ST itself rewrites on every PNG import), same
+    // image bytes and same description/personality otherwise — computeCardFingerprint() must see these as the same character.
+    const cardOnA = buildCardPng(fakeCard({ chat: 'Alice - 2026-01-01 @00h00m00s', create_date: '2026-01-01T00:00:00.000Z' }));
+    const cardOnB = buildCardPng(fakeCard({ chat: 'Alice - 2026-03-14 @09h22m10s', create_date: '2026-03-14T09:22:10.000Z' }));
+    assert.notEqual(Buffer.from(cardOnA).toString('base64'), Buffer.from(cardOnB).toString('base64'), 'sanity: the raw bytes actually differ');
+    const pair = await createPair({ aFiles: { 'characters/Alice.png': cardOnA }, bFiles: { 'characters/Alice.png': cardOnB } });
+    await connect(pair);
+    const status = await pair.a.call('sync.status');
+    assert.equal(status.last.peers[0].counts.conflicts, 0, 'no conflict — the plan settled on the key, not the raw bytes');
+    assert.equal(status.last.peers[0].counts.pushed, 0, 'no transfer either way — the whole point of key-comparison');
+    assert.equal(status.last.peers[0].counts.pulled, 0);
+    assert.deepEqual(pair.a.paths(), ['characters/Alice.png'], 'no "(conflict ...)" duplicate appeared');
+    assert.deepEqual(pair.b.paths(), ['characters/Alice.png']);
+    assert.deepEqual(pair.a.log.filter(line => line.startsWith('write:')), [], 'each device kept its own bytes — neither was overwritten');
+    assert.deepEqual(pair.b.log.filter(line => line.startsWith('write:')), []);
+    await stopAll(pair.a, pair.b);
+});
+
+test('two GENUINELY different characters that happen to share a path at first meeting still conflict — key-comparison only settles the SAME character', async () => {
+    const pair = await createPair({
+        aFiles: { 'characters/Alice.png': buildCardPng(fakeCard({ description: 'Alice from PC.' })) },
+        bFiles: { 'characters/Alice.png': buildCardPng(fakeCard({ description: 'A totally different card from Phone.' })) },
+    });
+    await connect(pair);
+    const status = await pair.a.call('sync.status');
+    assert.equal(status.last.peers[0].counts.conflicts, 1, 'different content under the same path is still a real conflict');
     await stopAll(pair.a, pair.b);
 });
 
