@@ -14,7 +14,7 @@ import {
     buildDropboxAuthUrl, computeCodeChallenge, createTokenManager, exchangeDropboxCode, generateCodeVerifier, pollGoogleDeviceFlow, startGoogleDeviceFlow,
 } from '../../libraries/core/sync-oauth.js';
 import { CLOUD_PROVIDER_LABELS, resolveCloudApp } from '../../libraries/core/sync-cloud-apps.js';
-import { buildIceServers, relayToIceServers, categoryOfPath, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeSyncConfig } from '../../libraries/core/sync-config.js';
+import { buildIceServers, relayToIceServers, categoryOfPath, conflictPolicyFor, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeSyncConfig } from '../../libraries/core/sync-config.js';
 
 /**
  * Ядро синхронизации — держит пользовательские файлы ST одинаковыми на нескольких устройствах: напрямую между устройствами
@@ -44,6 +44,10 @@ import { buildIceServers, relayToIceServers, categoryOfPath, createCategoryFilte
 
 const NAMESPACE = 'core.sync';
 const CONFIG_KEY = 'config';
+/** Карантин проигравшей версии при конфликте первой встречи (ROADMAP 5.106б) — `syncState`'s ключ-индекс + предел записей: без него
+ *  список рос бы вечно, если владелец никогда не открывает панель «Отложенные версии» (сама панель — отдельная задача). */
+const QUARANTINE_INDEX_KEY = 'quarantineIndex';
+const QUARANTINE_LIMIT = 200;
 const NETWORK_TIMEOUT_MS = 20000;
 const PRESENCE_INTERVAL_MS = 60000;
 const CONNECT_TIMEOUT_MS = 30000;
@@ -164,6 +168,21 @@ export function createSyncCore(host, {
         });
     }
 
+    /**
+     * Проигравшая версия при конфликте ПЕРВОЙ встречи по категориям из `CONFLICT_POLICY` (персонажи/персоны) — НЕ пишется в папку
+     * ST вовсе (не плодит дубля с тем же отображаемым именем в списке ST, см. `card-fingerprint.js` doc-comment): только кладётся
+     * СЮДА, в `syncState` этого устройства, под ключом `quarantine:<путь>:<время>`. Восстановление отдельным персонажем/заменой/
+     * удалением — панель «Отложенные версии», отдельная задача (контракты `sync.quarantine.*` пока не заведены). Индекс —
+     * простой список последних `QUARANTINE_LIMIT` записей (сама IndexedDB не даёт «перечислить ключи по префиксу» через этот
+     * Сервис, см. doc-comment `services/sync-state.js` — общий `key→value`, без листинга).
+     */
+    async function quarantineLocal(path, blob, meta) {
+        const stateKey = `quarantine:${path}:${now()}`;
+        await writeState(stateKey, { path, blob, hash: meta?.hash ?? null, key: meta?.key ?? null, from: meta?.from ?? 'remote', at: now() });
+        const index = [{ key: stateKey, path, at: now() }, ...((await readState(QUARANTINE_INDEX_KEY)) ?? [])].slice(0, QUARANTINE_LIMIT);
+        await writeState(QUARANTINE_INDEX_KEY, index);
+    }
+
     function createLocalSide(categories, onProgress) {
         let failed = new Set();
         return {
@@ -172,6 +191,7 @@ export function createSyncCore(host, {
             read: path => service('stUserData.read', { path }),
             write: writeLocal,
             remove: removeLocal,
+            quarantine: quarantineLocal,
         };
     }
 
@@ -203,6 +223,7 @@ export function createSyncCore(host, {
         const result = await runSync({
             local, remote, base, include, localManifest,
             conflictLabel: `${config.deviceName} ${stampLabel(now())}`,
+            conflictPolicy: conflictPolicyFor,
             onProgress: state => setProgress(target, { phase: 'syncing', ...state }),
             isAborted: () => abortRequested,
         });
@@ -578,6 +599,11 @@ export function createSyncCore(host, {
             async read(path) { const { body } = await rpc('read', { path }); return body ?? new Blob([]); },
             async write(path, blob, meta) { await rpc('write', { path, hash: meta?.hash, modified: meta?.modified, key: meta?.key }, blob); },
             async remove(path) { await rpc('remove', { path }); },
+            // Опционально: у старого ведомого этого метода нет — `session.enabled`/протокол это не проверяет, но `quarantine`
+            // и не нужен старому получателю знать вовсе (см. doc-comment `createLocalSide`/`resolveConflict`): если RPC откажет
+            // («unknown method»), исполнитель об этом узнает как об обычной ошибке резолвера, конфликт просто НЕ квалифицируется
+            // как проигранный — не наш случай сегодня (обе стороны всегда одной версии кода), задел на будущее.
+            async quarantine(path, blob, meta) { await rpc('quarantine', { path, hash: meta?.hash, modified: meta?.modified, key: meta?.key, from: meta?.from }, blob); },
         };
     }
 
@@ -594,6 +620,7 @@ export function createSyncCore(host, {
             async read({ path }) { return { body: await service('stUserData.read', { path }) }; },
             async write({ path, hash, modified, key }, { body }) { await writeLocal(path, body ?? new Blob([]), { hash, modified, key }); return { ok: true }; },
             async remove({ path }) { await removeLocal(path); return { ok: true }; },
+            async quarantine({ path, hash, modified, key, from }, { body }) { await quarantineLocal(path, body ?? new Blob([]), { hash, modified, key, from }); return { ok: true }; },
             async finish(_params, { body }) {
                 if (body) await writeState(`base:pair:${session.pairId}`, JSON.parse(await body.text()));
                 await flushCache();

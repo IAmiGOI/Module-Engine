@@ -248,6 +248,40 @@ test('two GENUINELY different characters that happen to share a path at first me
     await stopAll(pair.a, pair.b);
 });
 
+test('two genuinely different characters at first meeting: the loser goes to quarantine on its own device, not a duplicate in characters/ (ROADMAP 5.106б)', async () => {
+    const cardOnA = buildCardPng(fakeCard({ description: 'Alice from PC.' }), { imageLabel: 'PC-ART' });
+    const cardOnB = buildCardPng(fakeCard({ description: 'A totally different card from Phone.' }), { imageLabel: 'PHONE-ART' });
+    const pair = await createPair({ aFiles: { 'characters/Alice.png': cardOnA }, bFiles: { 'characters/Alice.png': cardOnB } });
+    await connect(pair);
+    const status = await pair.a.call('sync.status');
+    assert.equal(status.last.peers[0].counts.conflicts, 1);
+    assert.equal(status.last.peers[0].counts.quarantined, 1);
+    // A is the leader (lower id) with the earlier-created (lower) timestamp implicitly via file order — whichever loses, exactly
+    // one device keeps a "(conflict ...)" file and NEITHER does, because this path is `characters/` (quarantine policy).
+    assert.equal(pair.a.paths().some(path => path.includes('(conflict')), false, 'no conflict-copy file on A');
+    assert.equal(pair.b.paths().some(path => path.includes('(conflict')), false, 'no conflict-copy file on B');
+    assert.deepEqual(pair.a.paths(), ['characters/Alice.png']);
+    assert.deepEqual(pair.b.paths(), ['characters/Alice.png']);
+    // The loser's bytes survive SOMEWHERE — in the losing device's own quarantine, not lost outright.
+    const quarantineKeys = device => [...device.state.keys()].filter(key => key.startsWith('quarantine:'));
+    const loserQuarantineKeys = [...quarantineKeys(pair.a), ...quarantineKeys(pair.b)];
+    assert.equal(loserQuarantineKeys.length, 1, 'exactly one side quarantined its losing version');
+    await stopAll(pair.a, pair.b);
+});
+
+test('a first-meeting conflict on chats (copy policy, unaffected by 5.106б) still behaves exactly as before', async () => {
+    const pair = await createPair({
+        aFiles: { 'chats/Alice/log.jsonl': '{"a":"from phone"}' },
+        bFiles: { 'chats/Alice/log.jsonl': '{"a":"from pc"}' },
+    });
+    await connect(pair);
+    const status = await pair.a.call('sync.status');
+    assert.equal(status.last.peers[0].counts.conflicts, 1);
+    assert.equal(status.last.peers[0].counts.quarantined, 0, 'chats keep the old copy behavior — never quarantined');
+    assert.ok(pair.a.paths().some(path => path.includes('(conflict')), 'a conflict-copy chat file was created, as always');
+    await stopAll(pair.a, pair.b);
+});
+
 test('if the channel drops the devices reconnect by themselves after the pause and sync again', async () => {
     const pair = await createPair({ aFiles: { 'backgrounds/a.png': 'A' } });
     await connect(pair);

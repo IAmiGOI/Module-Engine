@@ -76,7 +76,7 @@ test('a sync pushes only the changed files as ONE commit, and a repeat sync make
 
     github.calls.length = 0;
     const second = await runSync({ local, remote: createGithubRemote({ http: github.http, settings }), base: first.base });
-    assert.deepEqual(second.counts, { pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, failed: 0, deferred: 0 });
+    assert.deepEqual(second.counts, { pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, quarantined: 0, failed: 0, deferred: 0 });
     assert.deepEqual(github.calls, ['GET /branches/main', 'GET /git/trees/tree1'.replace('tree1', github.calls[1].split('/').pop())], 'only the listing');
 
     local.files.set('chats/x.jsonl', 'line1\nline2');

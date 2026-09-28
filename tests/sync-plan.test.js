@@ -86,6 +86,13 @@ test('the same new path with different content on both sides (no base) is a conf
     assert.equal(plan.actions[0].op, 'conflict');
 });
 
+test('a conflict is flagged firstMeet when the base never had this path, and NOT flagged when a real shared history exists (ROADMAP 5.106б)', () => {
+    const firstMeet = computeSyncPlan({ local: { 'characters/Alice.png': file('x', 1) }, remote: { 'characters/Alice.png': file('y', 2) }, base: {} });
+    assert.equal(firstMeet.actions[0].firstMeet, true);
+    const realEdit = computeSyncPlan({ local: { 'characters/Alice.png': file('x2', 3) }, remote: { 'characters/Alice.png': file('y2', 4) }, base: { 'characters/Alice.png': 'original' } });
+    assert.equal(realEdit.actions[0].firstMeet, false);
+});
+
 test('include narrows the plan to the chosen categories', () => {
     const plan = computeSyncPlan({
         local: { 'backgrounds/a.png': file('1'), 'chats/x.jsonl': file('2') }, remote: {}, base: {},

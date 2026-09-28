@@ -42,6 +42,24 @@ export function intersectCategories(a = [], b = []) {
     return a.filter(id => other.has(id));
 }
 
+/**
+ * Что делать с проигравшей версией при конфликте ПЕРВОЙ встречи пары (`action.firstMeet`, см. `sync-plan.js`) — не при обычном
+ * конфликте (правки после общей истории, где обе версии — заведомо ценная работа человека и файл-копия остаётся, как раньше).
+ *  - `copy` — как всегда: копия-файл рядом (`... (conflict ...)`), видна в самой ST.
+ *  - `quarantine` — копия НЕ идёт в папку ST (не плодит персонажа-дубля с тем же именем в списке ST): она остаётся только в
+ *    `syncState` того устройства, чья версия проиграла (`cores/sync/index.js`'s `local.quarantine()`), с действием «восстановить
+ *    отдельным персонажем» на будущее (панель — отдельная задача, см. ROADMAP). Персонажи и персоны персон — то, что при первой
+ *    встрече чаще всего оказывается «тем же самым, только с других мелочей» (см. `card-fingerprint.js`), а не двумя реально разными
+ *    сущностями под одним именем.
+ * Путь без записи в этой таблице (чаты, миры, пресеты, фоны) — `copy`: там первая встреча обычно и есть две разные, обе ценные вещи.
+ */
+export const CONFLICT_POLICY = Object.freeze({ characters: 'quarantine', personas: 'quarantine' });
+
+/** Политика конфликта первой встречи для этого пути — `copy`, если категория не значится в `CONFLICT_POLICY` явно. */
+export function conflictPolicyFor(path) {
+    return CONFLICT_POLICY[categoryOfPath(path)] ?? 'copy';
+}
+
 /** Настройки старше версии 2 не знали про «presets»: включаем её один раз (список у них сохранён явный, и без этого новая категория была бы выключена). */
 function migrateCategories(categories, input) {
     if (Array.isArray(input.categories) && (Number(input.categoryVersion) || 1) < CATEGORY_VERSION && !categories.includes('presets')) return SYNC_CATEGORY_IDS.filter(id => id === 'presets' || categories.includes(id));

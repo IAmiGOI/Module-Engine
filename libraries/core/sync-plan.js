@@ -94,7 +94,10 @@ export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLa
         const rm = remote[path].modified ?? 0;
         // Равное время — выигрывает больший хеш: обе стороны, считая независимо, выберут одну и ту же версию.
         const winner = lm !== rm ? (lm > rm ? 'local' : 'remote') : (l > r ? 'local' : 'remote');
-        actions.push({ op: SYNC_ACTIONS.conflict, path, winner, conflictPath: computeConflictPath(path, conflictLabel), localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
+        // `firstMeet` — этот путь ни разу не синхронизировался (`b === null`), а не «изменили оба после общей истории»: разные вещи,
+        // случайно попавшие в одну ветку сравнения. Пара только что встретилась — попытка резолвера (`sync-runner.js`) увести проигравшую
+        // версию в карантин, а не плодить файл-копию в самой ST, применяется именно к этому случаю (см. `sync-config.js`'s `CONFLICT_POLICY`).
+        actions.push({ op: SYNC_ACTIONS.conflict, path, winner, firstMeet: b === null, conflictPath: computeConflictPath(path, conflictLabel), localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
     }
 
     const counts = { push: 0, pull: 0, deleteLocal: 0, deleteRemote: 0, conflict: 0, settle: 0 };
