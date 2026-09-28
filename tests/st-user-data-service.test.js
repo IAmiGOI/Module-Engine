@@ -257,6 +257,21 @@ test('an edited preset changes its stamp, and removing goes through the right de
     assert.equal(st.state.presetObjects.instruct.has('ChatML'), false);
 });
 
+test('one scan reads /api/characters/all ONCE for both characters and chats (ROADMAP 5.106з, Этап 5.3)', async () => {
+    const { call, st } = setup();
+    const allCallsCount = () => st.calls.filter(line => line === 'POST /api/characters/all').length;
+    await call('stUserData.list', { categories: ['characters', 'chats'] });
+    assert.equal(allCallsCount(), 1, 'characters and chats share the same character list within one scan');
+});
+
+test('a later, separate scan reads /api/characters/all again — the cache never survives past its own scan', async () => {
+    const { call, st } = setup();
+    const allCallsCount = () => st.calls.filter(line => line === 'POST /api/characters/all').length;
+    await call('stUserData.list', { categories: ['characters'] });
+    await call('stUserData.list', { categories: ['chats'] });
+    assert.equal(allCallsCount(), 2, 'a fresh scan always sees live data — the cache is not time-based like the preset catalog');
+});
+
 test('one scan reads the preset catalog ONCE for all three sections, and MovingUI layouts never take part', async () => {
     const { call, st } = setup();
     const listing = await call('stUserData.list', { categories: ['presets'] });
