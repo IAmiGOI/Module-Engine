@@ -72,6 +72,23 @@ export function graphStylesheet() {
         // между рядовыми нодами. `backbone` — булево поле, которое `edgeElements()` в панели считает по обоим
         // концам ребра (Ядро само это не помечает — регионы и рёбра для него разные сущности).
         { selector: 'edge[?backbone]', style: { 'line-opacity': 0.6, width: 1 } },
+        // Подсветка ретрива — MEMORY_GRAPH_UI_PLAN.md, Этап 5 (пункт 4 запроса, ПЕРЕКЛЮЧАТЕЛЬ, не таймер). Классы
+        // считает чистая `retrievalClasses()` (retrieval-overlay.js), панель только вешает/снимает их на элементы —
+        // сам стиль, как и везде выше, ничего не знает ПРО ЧТО именно подсвечивает.
+        { selector: 'node.beacon', style: { 'underlay-opacity': 0.6, 'underlay-padding': 'mapData(size, 8, 34, 12, 22)', 'border-color': '#7aa2ff', 'border-width': 2, label: 'data(label)' } },
+        { selector: 'node.route-node', style: { 'underlay-opacity': 0.4 } },
+        { selector: 'node.noise', style: { 'border-width': 1, 'border-color': 'rgba(255,255,255,0.4)', 'underlay-opacity': 0.3 } },
+        // `.dimmed` идёт ПОСЛЕДНИМ — должен побеждать `opacity` независимо от того, какие ещё классы/селекторы
+        // выше уже что-то задали этому же элементу (у Cytoscape при равной специфичности побеждает ПОРЯДОК в
+        // массиве, не порядок классов на самом элементе).
+        { selector: '.dimmed', style: { opacity: 0.25 } },
+        {
+            selector: 'edge.route',
+            style: {
+                width: 2.2, 'line-color': '#7aa2ff', 'line-opacity': 0.95, 'line-style': 'dashed',
+                'line-dash-pattern': [6, 3], // сам бегущий пунктир (смещение `line-dash-offset`) двигает `retrieval-overlay.js`'s rAF-цикл в панели
+            },
+        },
         // Маркер места будущего узла в режиме создания — пунктир, не сплошная заливка, чтобы не путать с настоящим
         // узлом; не кликабелен и не перетаскиваем (`grabbable`/`selectable: false` при добавлении в панели).
         {

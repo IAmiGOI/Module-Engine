@@ -32,6 +32,7 @@ export {
 import { layoutGraph, nodeRadius } from './memory-graph/layout.js';
 import { diffElements } from './memory-graph/elements-diff.js';
 import { renderZonesSvg, zonesSignature, ZONES_SVG_ID } from './memory-graph/zones-svg.js';
+import { retrievalClasses, routeChainLabels } from './memory-graph/retrieval-overlay.js';
 
 /**
  * Визуальный редактор графа памяти — решено с пользователем явно:
@@ -71,11 +72,17 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const panelCollapsed = signal(false);
     const panelPosition = signal({});
     const panelSize = signal({});
+    // Подсветка ретрива — ПЕРЕКЛЮЧАТЕЛЬ (MEMORY_GRAPH_UI_PLAN.md, Этап 5, пункт 4 запроса владельца: "не таймер"),
+    // по умолчанию выключен, состояние сохраняется вместе с остальным состоянием окна.
+    const retrievalOverlayEnabled = signal(false);
 
     async function saveWindowState() {
         await call('storage.settings.set', {
             namespace: MODULE_UI_NAMESPACE, key: WINDOW_KEY,
-            value: { visible: panelVisible.peek(), collapsed: panelCollapsed.peek(), position: panelPosition.peek(), size: panelSize.peek() },
+            value: {
+                visible: panelVisible.peek(), collapsed: panelCollapsed.peek(), position: panelPosition.peek(), size: panelSize.peek(),
+                retrievalOverlayEnabled: retrievalOverlayEnabled.peek(),
+            },
         });
     }
 
@@ -89,6 +96,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             width: saved.size?.width ?? 720, height: saved.size?.height ?? 560,
             viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080,
         }));
+        retrievalOverlayEnabled.set(Boolean(saved.retrievalOverlayEnabled));
     }
 
     // --- Состояние графа, зеркалируемое из контрактов -------------------
@@ -100,12 +108,47 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // Журнал решений (MEMORY_GRAPH_FIX_PLAN.md, Этап 6, ROADMAP 5.107е) — уже отсортирован Ядром новейшими первыми
     // (`memoryGraph.decisionLog`), панели остаётся только отрезать хвост под показ (см. whyBlock() ниже).
     const decisionLog = signal([]);
+    // История ретривов (MEMORY_GRAPH_UI_PLAN.md, Этап 5.3) — Ядро уже держит кольцевой буфер из 20 (Этап 2,
+    // `memoryGraph.retrievals`, новые первыми). `retrievalHistoryIndex` — `null` значит "Live" (следовать за самым
+    // новым, `retrievalHistory()[0]`), иначе индекс конкретной, выбранной пользователем точки истории.
+    const retrievalHistory = signal([]);
+    const retrievalHistoryIndex = signal(null);
     const busy = signal(false);
     const statusText = signal('');
 
+    /** Ретрив, который сейчас должен быть показан — либо самый свежий (Live), либо выбранная в истории точка. */
+    function currentRetrieval() {
+        const history = retrievalHistory();
+        if (!history.length) return null;
+        const index = retrievalHistoryIndex();
+        return history[index == null ? 0 : Math.min(index, history.length - 1)] ?? null;
+    }
+
+    /** Выбор точки истории — план прямо требует: "выбор точки включает переключатель автоматически". */
+    function selectRetrievalHistory(index) {
+        retrievalHistoryIndex.set(index);
+        retrievalOverlayEnabled.set(true);
+        saveWindowState();
+    }
+
+    /** ◀ — на одну точку СТАРШЕ (больший индекс, `retrievalHistory` — новые первыми); ▶ — на одну точку СВЕЖЕЕ, до возврата в Live (`null`) на самой новой. */
+    function stepRetrievalHistory(direction) {
+        const history = retrievalHistory();
+        if (!history.length) return;
+        const current = retrievalHistoryIndex() ?? 0;
+        const next = current + direction;
+        if (next < 0) { retrievalHistoryIndex.set(null); saveWindowState(); return; }
+        selectRetrievalHistory(Math.min(history.length - 1, next));
+    }
+
+    function goLiveRetrieval() {
+        retrievalHistoryIndex.set(null);
+        saveWindowState();
+    }
+
     async function refresh() {
-        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult, decisionLogResult] = await Promise.all([
-            call('memoryGraph.nodes'), call('memoryGraph.regions'), call('memoryGraph.mergeQueue'), call('memoryGraph.reconsolidationQueue'), call('memoryGraph.staging'), call('memoryGraph.decisionLog'),
+        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult, decisionLogResult, retrievalsResult] = await Promise.all([
+            call('memoryGraph.nodes'), call('memoryGraph.regions'), call('memoryGraph.mergeQueue'), call('memoryGraph.reconsolidationQueue'), call('memoryGraph.staging'), call('memoryGraph.decisionLog'), call('memoryGraph.retrievals'),
         ]);
         if (nodesResult.ok) nodes.set(nodesResult.value);
         if (regionsResult.ok) regions.set(regionsResult.value);
@@ -113,6 +156,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (reconResult.ok) reconsolidationQueue.set(reconResult.value);
         if (stagingResult.ok) staging.set(stagingResult.value);
         if (decisionLogResult.ok) decisionLog.set(decisionLogResult.value);
+        if (retrievalsResult.ok) retrievalHistory.set(retrievalsResult.value);
     }
 
     // --- Прогресс бутстрапа (реальная жалоба пользователя: "невозможно в
@@ -630,6 +674,52 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             if (item.position) ele.position(item.position);
         }
         updateZonesBackground(zones);
+        applyRetrievalOverlay();
+    }
+
+    // --- Подсветка ретрива (Этап 5) ---------------------------------------
+
+    const OVERLAY_CLASSES = ['beacon', 'route-node', 'noise', 'route', 'dimmed'];
+
+    /** Классы подсветки — на ВСЕ элементы канваса, включая маркер создания (у него класс никогда не находится, снимается тем же циклом). Выключен или ретрив ещё не выбран — просто снимает все классы обратно. */
+    function applyRetrievalOverlay() {
+        if (!cy) return;
+        const retrieval = retrievalOverlayEnabled() ? currentRetrieval() : null;
+        const allNodeIds = cy.nodes().map(ele => ele.id());
+        const allEdges = cy.edges().map(ele => ({ id: ele.id(), source: ele.source().id(), target: ele.target().id() }));
+        const classes = retrievalClasses(retrieval, allNodeIds, allEdges);
+        cy.elements().forEach(ele => {
+            const wanted = classes.get(ele.id());
+            for (const cls of OVERLAY_CLASSES) {
+                if (cls === wanted) ele.addClass(cls); else ele.removeClass(cls);
+            }
+        });
+    }
+
+    /**
+     * Бегущий пунктир по рёбрам маршрута (Этап 5.4) — `requestAnimationFrame`, ≤30 кадров/с (план прямо задаёт
+     * потолок), останавливается сам (не планирует следующий кадр), как только подсветка выключена, окно скрыто или
+     * `prefers-reduced-motion: reduce` — тогда виден только СТАТИЧНЫЙ пунктир из самого стиля (`line-dash-pattern`
+     * в graphStylesheet(), смещение не движется).
+     */
+    let routeAnimationFrame = null;
+    let lastRouteAnimationTime = 0;
+    function reducedMotionRequested() {
+        return typeof globalThis.matchMedia === 'function' && globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    }
+    function stepRouteAnimation(timestamp) {
+        routeAnimationFrame = null;
+        if (!cy || !retrievalOverlayEnabled() || !panelVisible() || reducedMotionRequested()) return;
+        if (timestamp - lastRouteAnimationTime >= 1000 / 30) {
+            lastRouteAnimationTime = timestamp;
+            const routeEdges = cy.edges('.route');
+            if (routeEdges.nonempty()) routeEdges.style('line-dash-offset', (routeEdges[0].numericStyle('line-dash-offset') || 0) - 1);
+        }
+        routeAnimationFrame = requestAnimationFrame(stepRouteAnimation);
+    }
+    function ensureRouteAnimation() {
+        if (routeAnimationFrame || !cy || !retrievalOverlayEnabled() || !panelVisible() || reducedMotionRequested()) return;
+        routeAnimationFrame = requestAnimationFrame(stepRouteAnimation);
     }
 
     // --- Компактные зоны боковой панели ------------------------------------------------------------------
@@ -667,6 +757,76 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         return Row(
             LabeledSlider('Nodes per retrieval', retrievalTargetNodes, { min: 10, max: 50, step: 1 }),
             LabeledSlider('Balance', stabilityIndex, { min: 0, max: RETRIEVAL_STABILITY_OPTIONS.length - 1, step: 1, format: value => RETRIEVAL_STABILITY_OPTIONS[value]?.label ?? '' }),
+        );
+    }
+
+    /** "12s ago"/"4m ago"/"3h ago" — не точная метка времени, план сам так просит (Этап 5.5). */
+    function timeAgo(at) {
+        if (!at) return '';
+        const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+        if (seconds < 60) return `${seconds}s ago`;
+        const minutes = Math.round(seconds / 60);
+        if (minutes < 60) return `${minutes}m ago`;
+        return `${Math.round(minutes / 60)}h ago`;
+    }
+
+    /** Клик по маяку в списке (Этап 5.5) — центрирует канвас на нём и выделяет; не открывает форму редактирования (та — по клику НА САМОМ канвасе, отдельное действие). */
+    function selectBeaconOnCanvas(id) {
+        if (!cy) return;
+        const ele = cy.getElementById(id);
+        if (ele.empty()) return;
+        cy.elements().unselect();
+        ele.select();
+        cy.animate({ center: { eles: ele }, zoom: Math.max(cy.zoom(), 1) }, { duration: 300 });
+    }
+
+    /** Полоса истории — точки по времени (новые справа), ◀/▶ и "Live" (Этап 5.3, приём как у "повтора" на карте EVE). */
+    function retrievalHistoryStrip() {
+        return computed(() => {
+            const history = retrievalHistory();
+            if (!history.length) return null;
+            const index = retrievalHistoryIndex();
+            const activeIndex = index == null ? 0 : Math.min(index, history.length - 1);
+            return h('div', { class: 'stme-mg-retrieval-strip' },
+                Button('◀', () => stepRetrievalHistory(1), { disabled: activeIndex >= history.length - 1 }),
+                h('div', { class: 'stme-mg-retrieval-dots' }, [...history].reverse().map((entry, reversedIndex) => {
+                    const realIndex = history.length - 1 - reversedIndex;
+                    return h('span', {
+                        class: `stme-mg-retrieval-dot${realIndex === activeIndex ? ' stme-mg-retrieval-dot-active' : ''}`,
+                        title: new Date(entry.at).toLocaleTimeString(),
+                        'on:click': () => selectRetrievalHistory(realIndex),
+                    });
+                })),
+                Button('▶', () => stepRetrievalHistory(-1), { disabled: index == null }),
+                Button('Live', goLiveRetrieval, { disabled: index == null }),
+            );
+        });
+    }
+
+    /** Секция "Retrieval" (Этап 5.5) — детали ВЫБРАННОГО (историей или Live) ретрива: время, sticky, маяки, цепочка маршрута, шум, запрос. */
+    function retrievalSection() {
+        return h('div', { class: 'stme-mg-retrieval-section' },
+            Row(Toggle('Retrieval overlay', retrievalOverlayEnabled), retrievalHistoryStrip()),
+            computed(() => {
+                const retrieval = currentRetrieval();
+                if (!retrieval) return h('small', { class: 'stme-module-hint' }, 'No retrieval recorded yet this chat.');
+                const labelById = new Map(nodes().map(node => [node.id, node.label]));
+                const chain = routeChainLabels(retrieval.segments, labelById);
+                const beaconIds = retrieval.beaconIds ?? [];
+                const noiseCount = (retrieval.noiseIds ?? []).length;
+                return h('div', { class: 'stme-mg-retrieval-detail' },
+                    Row(
+                        h('span', {}, timeAgo(retrieval.at)),
+                        retrieval.sticky ? Badge('reused', { tone: 'muted' }) : null,
+                    ),
+                    beaconIds.length
+                        ? h('div', { class: 'stme-mg-retrieval-beacons' }, beaconIds.map(id => Button(labelById.get(id) ?? id, () => selectBeaconOnCanvas(id))))
+                        : null,
+                    chain.length > 1 ? h('div', { class: 'stme-mg-retrieval-chain' }, chain.join(' → ')) : null,
+                    noiseCount ? h('small', { class: 'stme-module-hint' }, `+${noiseCount} noise`) : null,
+                    retrieval.query ? h('small', { class: 'stme-module-hint' }, `Query: ${retrieval.query}`) : null,
+                );
+            }),
         );
     }
 
@@ -780,6 +940,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     generationRow(),
                     progressRow(),
                     retrievalRow(),
+                    retrievalSection(),
                     computed(() => (statusText() ? h('div', { class: 'stme-memory-graph-status' }, statusText()) : null)),
                     nodeForm(),
                     footerRow(),
@@ -818,7 +979,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 'memoryGraph.edgeCreated', 'memoryGraph.edgeDeleted', 'memoryGraph.reset',
                 // Сменили чат: Ядро загрузило граф нового чата — перерисовываем (и сбрасываем выбранную ноду прежнего графа).
                 'memoryGraph.loaded',
-            ].map(event => host.events.subscribe(event, () => { if (event === 'memoryGraph.loaded') closeForm(); refresh(); })),
+                // Новый ретрив (Этап 5) — `refresh()` заново подтягивает `memoryGraph.retrievals`; пока пользователь
+                // "Live" (`retrievalHistoryIndex === null`), `currentRetrieval()` сам подхватит самую свежую запись
+                // без отдельной логики здесь.
+                'memoryGraph.retrieved',
+            ].map(event => host.events.subscribe(event, () => {
+                if (event === 'memoryGraph.loaded') { closeForm(); retrievalHistoryIndex.set(null); }
+                refresh();
+            })),
             // Бутстрап-прогресс — та же тройка событий, тем же смыслом, что
             // уже подписан cores/ui/engine-panel.js: `started` подтверждает,
             // что работа реально НАЧАЛАСЬ (может идти десятки секунд/минуты
@@ -903,6 +1071,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // появляться/двигаться/переименовываться СРАЗУ, без ожидания
         // следующего изменения самого графа.
         effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); syncCytoscape(); });
+        // Подсветка ретрива — отдельный эффект (не завязан на изменения самого графа): переключатель/история могут
+        // поменяться без единого нового узла/региона, и наоборот — обычный `refresh()` не должен лишний раз дёргать
+        // подсветку, если ни то ни другое не менялось (`syncCytoscape()` всё равно СНОВА применит её в конце, это
+        // просто идемпотентно, не баг — но именно ЭТОТ эффект — источник обновления, когда меняются только они).
+        effect(() => { retrievalOverlayEnabled(); retrievalHistoryIndex(); retrievalHistory(); panelVisible(); applyRetrievalOverlay(); ensureRouteAnimation(); });
     }
 
     function show() {

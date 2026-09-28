@@ -83,3 +83,14 @@
     background: radial-gradient(circle at center, #22262f 0%, #14161b 70%, #0d0f13 100%);
 }
 
+/* Секция "Retrieval" (MEMORY_GRAPH_UI_PLAN.md, Этап 5.5) — полоса истории, список маяков, цепочка маршрута. */
+.stme-mg-retrieval-strip { display: flex; align-items: center; gap: 4px; flex: 1; }
+.stme-mg-retrieval-dots { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.stme-mg-retrieval-dot {
+    width: 7px; height: 7px; border-radius: 50%; cursor: pointer;
+    background: color-mix(in srgb, var(--stme-accent, #4c6fff) 35%, transparent);
+}
+.stme-mg-retrieval-dot-active { background: var(--stme-accent, #4c6fff); }
+.stme-mg-retrieval-beacons { display: flex; flex-wrap: wrap; gap: 4px; }
+.stme-mg-retrieval-chain { font-size: 12px; opacity: .85; }
+
