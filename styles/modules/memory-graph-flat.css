@@ -9,3 +9,6 @@
 .stme-mg-node .stme-row > .stme-field { flex: 1 1 0; }
 .stme-mg-flat .stme-memory-graph-status { margin: 0; }
 .stme-mg-flat > .stme-module-hint { flex: none; }
+/* Секция «Why» (MEMORY_GRAPH_FIX_PLAN.md, Этап 6) — компактный, прокручиваемый список последних решений. */
+.stme-mg-decision-log { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; font-size: 11px; font-family: monospace; }
+.stme-mg-decision-row { opacity: .85; white-space: pre-wrap; }

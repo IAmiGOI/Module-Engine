@@ -7,6 +7,7 @@ import {
     FloatingPanel, Card, Section, Button, TextInput, TextArea, NumberInput, Toggle,
     Details, Row, Field, EmptyState, Badge, Slider, Select, ProgressBar, HoldButton,
 } from '../../libraries/shared/widgets.js';
+import { summarizeDecision } from '../memory-graph/decision-log.js';
 
 /**
  * Визуальный редактор графа памяти — решено с пользователем явно:
@@ -371,18 +372,22 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const mergeQueue = signal([]);
     const reconsolidationQueue = signal([]);
     const staging = signal([]);
+    // Журнал решений (MEMORY_GRAPH_FIX_PLAN.md, Этап 6, ROADMAP 5.107е) — уже отсортирован Ядром новейшими первыми
+    // (`memoryGraph.decisionLog`), панели остаётся только отрезать хвост под показ (см. whyBlock() ниже).
+    const decisionLog = signal([]);
     const busy = signal(false);
     const statusText = signal('');
 
     async function refresh() {
-        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult] = await Promise.all([
-            call('memoryGraph.nodes'), call('memoryGraph.regions'), call('memoryGraph.mergeQueue'), call('memoryGraph.reconsolidationQueue'), call('memoryGraph.staging'),
+        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult, decisionLogResult] = await Promise.all([
+            call('memoryGraph.nodes'), call('memoryGraph.regions'), call('memoryGraph.mergeQueue'), call('memoryGraph.reconsolidationQueue'), call('memoryGraph.staging'), call('memoryGraph.decisionLog'),
         ]);
         if (nodesResult.ok) nodes.set(nodesResult.value);
         if (regionsResult.ok) regions.set(regionsResult.value);
         if (mergeResult.ok) mergeQueue.set(mergeResult.value);
         if (reconResult.ok) reconsolidationQueue.set(reconResult.value);
         if (stagingResult.ok) staging.set(stagingResult.value);
+        if (decisionLogResult.ok) decisionLog.set(decisionLogResult.value);
     }
 
     // --- Прогресс бутстрапа (реальная жалоба пользователя: "невозможно в
@@ -945,6 +950,23 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         );
     }
 
+    /**
+     * Секция «Why» (MEMORY_GRAPH_FIX_PLAN.md, Этап 6, ROADMAP 5.107е) — без неё калибровать пороги гейта
+     * (`thresholdK`/`gateWindow`) и размещения (`placementMinSimilarity`/`placementMinMargin`) можно было только
+     * вслепую: ни разработчик, ни пользователь не видел, ПОЧЕМУ конкретный ход не дал ноды. Последние 20 записей —
+     * тот же журнал, что и в `decisionLog` сигнале выше, отрезанный под показ; `summarizeDecision()` (decision-log.js)
+     * делает саму строку.
+     */
+    function whyBlock() {
+        return Details('Why (recent decisions)',
+            h('p', { class: 'stme-memory-graph-hint' },
+                'What the gate and the model decided on each recent check — newest first. Use this to see whether a fact you expected actually got captured, and why not if it didn\'t.'),
+            computed(() => (decisionLog().length
+                ? h('div', { class: 'stme-mg-decision-log' }, decisionLog().slice(0, 20).map(entry => h('div', { class: 'stme-mg-decision-row' }, summarizeDecision(entry))))
+                : h('small', { class: 'stme-module-hint' }, 'No checks recorded yet.'))),
+        );
+    }
+
     function nodeForm() {
         return computed(() => {
             if (!selectedNode()) return h('small', { class: 'stme-module-hint' }, 'Click a node on the graph to edit it.');
@@ -1006,6 +1028,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     nodeForm(),
                     footerRow(),
                     debugBlock(),
+                    whyBlock(),
                 ),
             ),
         ) : null)));

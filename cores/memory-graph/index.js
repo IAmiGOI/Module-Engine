@@ -5,7 +5,8 @@ import { estimateTokens, packEntriesIntoChunks } from '../../libraries/core/entr
 import { extractRecentText } from './context-text.js';
 import { advanceClock, migrateTimestamps } from './clock.js';
 import { pickRegionBySimilarity } from './placement.js';
-import { updateEwmaStats, isStrongChangeEwma } from './gate.js';
+import { updateEwmaStats, isStrongChangeEwma, ewmaStddev } from './gate.js';
+import { appendDecision } from './decision-log.js';
 
 const PERSISTENCE_NAMESPACE = 'core.memoryGraph';
 const SETTINGS_KEY = 'settings';
@@ -18,6 +19,8 @@ const STATS_KEY = 'distanceStats';
 const STICKY_KEY = 'stickyRetrieval';
 const NOVELTY_STATS_KEY = 'noveltyStats';
 const CLOCK_KEY = 'clock'; // MEMORY_GRAPH_FIX_PLAN.md, Этап 2 (ROADMAP 5.107б) — { value, version: 1 }; см. doc-comment у `turnCounter`.
+const DECISION_LOG_KEY = 'decisionLog'; // MEMORY_GRAPH_FIX_PLAN.md, Этап 6 (ROADMAP 5.107е) — массив записей decision-log.js, старые молча вытесняются
+const DECISION_LOG_LIMIT = 100; // фиксированное число из самого плана, не настройка пользователя (см. decision-log.js)
 const PREPARE_PIPELINE = 'generation.prepare';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const CHECK_CONTRACT = 'memoryGraph.check';
@@ -1263,6 +1266,19 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     // своего `await` модели/эмбединга, до этого — прерывается.
     let chatEpoch = 0;
     const stillSameChat = epoch => epoch === chatEpoch;
+    // Журнал решений — MEMORY_GRAPH_FIX_PLAN.md, Этап 6 (ROADMAP 5.107е). Одна запись на КАЖДЫЙ `checkAndPlace()`,
+    // независимо от исхода (гейт молчал / модель отказалась / нода создана) — см. decision-log.js за форматом и
+    // самой панелью (секция «Why») за тем, как это читается человеком. Новейшие записи — в конце массива (тот же
+    // порядок вставки, что у остальных списков этого Ядра); наружу (`memoryGraph.decisionLog`) отдаются в обратном.
+    let decisionLog = [];
+    // «Последнее действие» вместо изменения сигнатур `detectMergeCandidate()`/`tryQueueReconsolidation()`/
+    // `enforceRegionCapacity()`/`askSideCarForNode()` (П2 Этапа 6 плана: "передай наружу через возвращаемое
+    // значение или через переменную «последнее действие», не меняя их логику") — читается ТОЛЬКО `checkAndPlace()`,
+    // и только когда сама завела свежий объект перед вызовом `placeNewNode()`/`askSideCarForNode()`; для любого
+    // ДРУГОГО пути создания ноды (бутстрап, ручное создание, карточка персонажа) трекер остаётся `null` — эти пути
+    // не порождают запись в журнале решений (он только про органический `check`, см. план).
+    let capacityTracker = null;
+    let lastSideCarOutcome = null; // 'skip' | 'empty' | 'node' — см. askSideCarForNode()
 
     async function call(contract, params) {
         return request(host.own, contract, { params });
@@ -1296,7 +1312,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     async function loadState() {
-        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult, noveltyResult, clockResult] = await Promise.all([
+        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult, noveltyResult, clockResult, decisionLogResult] = await Promise.all([
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: REGIONS_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STAGING_KEY, fallback: {} }),
@@ -1306,6 +1322,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, fallback: null }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NOVELTY_STATS_KEY, fallback: null }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: CLOCK_KEY, fallback: null }),
+            call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: DECISION_LOG_KEY, fallback: [] }),
         ]);
         nodes = nodesResult.ok ? nodesResult.value ?? {} : {};
         regions = regionsResult.ok ? regionsResult.value ?? {} : {};
@@ -1315,6 +1332,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         distanceStats = statsResult.ok ? statsResult.value : null;
         stickyRetrieval = stickyResult.ok ? stickyResult.value : null;
         noveltyStats = noveltyResult.ok ? noveltyResult.value : null;
+        decisionLog = decisionLogResult.ok ? decisionLogResult.value ?? [] : [];
         const clock = clockResult.ok ? clockResult.value : null;
         if (clock && typeof clock.value === 'number') {
             turnCounter = clock.value;
@@ -1338,6 +1356,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: NOVELTY_STATS_KEY, value: noveltyStats });
     }
     async function persistStickyRetrieval() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, value: stickyRetrieval }); }
+    async function persistDecisionLog() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: DECISION_LOG_KEY, value: decisionLog }); }
+    /** Добавляет запись в журнал решений (кольцевой буфер, decision-log.js) и сразу сохраняет — MEMORY_GRAPH_FIX_PLAN.md, Этап 6, П3: "сохранять вместе со статистикой", здесь — вместе с самим решением, на каждый из его нескольких возможных исходов внутри `checkAndPlace()` (не только один общий момент, что и у `persistStats()`/`persistClock()` — у решения несколько разных точек возврата, не одна). */
+    async function recordDecision(entry) {
+        decisionLog = appendDecision(decisionLog, entry, DECISION_LOG_LIMIT);
+        await persistDecisionLog();
+    }
     // Сам факт присутствия ключа в хранилище — маркер "часы существуют, миграция (если требовалась) уже
     // произошла" (см. `needsClockMigration` выше) — `version` на будущее, если формат когда-нибудь поменяется.
     async function persistClock() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: CLOCK_KEY, value: { value: turnCounter, version: 1, lastExtractionClock } }); }
@@ -1478,6 +1502,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
         const groupKey = [...weakest].sort().join('|');
         reconsolidationQueue[groupKey] = { nodeIds: weakest, regionId: key, queuedTurn: turnCounter };
+        if (capacityTracker) capacityTracker.queuedReconsolidation = true; // Этап 6 (наблюдаемость) — см. doc-comment у `capacityTracker`
         return true;
     }
 
@@ -1499,6 +1524,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const victimId = pickEvictionCandidate(members, { settings, turnCounter });
         if (!victimId) return; // регион целиком из защищённых узлов — вытеснять нечего, задокументированный крайний случай
         removeNodeFromGraph(victimId);
+        if (capacityTracker) capacityTracker.evicted.push(victimId); // Этап 6 (наблюдаемость) — см. doc-comment у `capacityTracker`
         publishEvent('memoryGraph.nodeEvicted', { nodeId: victimId, regionId: key, reason: 'capacity' });
     }
 
@@ -1527,6 +1553,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const pairKey = [node.id, matchId].sort().join('|');
         if (mergeQueue[pairKey]) return; // уже в очереди — не дублируем запись
         mergeQueue[pairKey] = { nodeIdA: node.id, nodeIdB: matchId, queuedTurn: turnCounter, regionId: key };
+        if (capacityTracker) capacityTracker.queuedMerge = true; // Этап 6 (наблюдаемость) — см. doc-comment у `capacityTracker`
     }
 
     /** Объединяет рёбра N сливаемых узлов в рёбра ОДНОГО: ребро на любого из партнёров по слиянию отбрасывается (иначе стало бы петлёй на себя), дубликаты по (to,type) схлопываются. Общая для объединения дублей (N=2) и реконсолидации (N=3+). */
@@ -2006,10 +2033,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             distanceStats = null;
             noveltyStats = null;
             stickyRetrieval = null;
+            decisionLog = []; // Этап 6 — тоже часть состояния графа, тот же принцип "очищает ВСЁ", что и у остального выше
             await Promise.all([
                 persistNodes(), persistRegions(), persistStaging(),
                 persistMergeQueue(), persistReconsolidationQueue(),
-                persistStats(), persistStickyRetrieval(),
+                persistStats(), persistStickyRetrieval(), persistDecisionLog(),
             ]);
             publishEvent('memoryGraph.reset', {});
             return { ok: true };
@@ -2077,8 +2105,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
-        if (!parsed || typeof parsed !== 'object' || parsed.skip) return null;
-        if (!parsed.label || !parsed.content) return null;
+        // `lastSideCarOutcome` — Этап 6 (наблюдаемость), тот же приём "последнее действие", что у `capacityTracker`
+        // (П2 плана): различает ЧЕСТНЫЙ отказ модели ({"skip":true}) от малополезного/непарсимого ответа для
+        // журнала решений, не меняя сам возврат `null` в обоих случаях — вызывающий `checkAndPlace()` как раньше
+        // трактует оба одинаково статусом `sidecar-empty`.
+        if (!parsed || typeof parsed !== 'object' || parsed.skip) {
+            lastSideCarOutcome = parsed?.skip ? 'skip' : 'empty';
+            return null;
+        }
+        if (!parsed.label || !parsed.content) { lastSideCarOutcome = 'empty'; return null; }
+        lastSideCarOutcome = 'node';
         return { label: String(parsed.label), content: String(parsed.content), importance: Number(parsed.importance) || 0 };
     }
 
@@ -2162,7 +2198,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (decision.placementConfidence === 'low') node.placementConfidence = 'low';
             attachToRegion(node, decision.region.sector, decision.region.ring);
         } else staging[node.id] = { nodeId: node.id, attemptCount: 1, firstAttemptTurn: createdTurn };
-        return { status: decision.status, nodeId: node.id };
+        // Весь `decision` (не только `status`) — Этап 6 (наблюдаемость, ROADMAP 5.107е): журналу решений
+        // `checkAndPlace()` нужны `reason`/`region`/`similarity`/`margin`, которые каскад уже посчитал внутри
+        // `decision`, но раньше терялись здесь же, не покидая эту функцию. Оба сегодняшних вызывающих
+        // (checkAndPlace(), createNodeFromCharacterCard()) читали только `.status`/`.nodeId` — лишние поля им не мешают.
+        return { ...decision, nodeId: node.id };
     }
 
     /**
@@ -2219,6 +2259,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const topicChanged = isStrongChangeEwma(topicDistance, distanceStats, settings.thresholdK);
             const factIsNew = isStrongChangeEwma(noveltyDistance, noveltyStats, settings.thresholdK);
             const wasStrong = topicChanged || factIsNew;
+            // Пороги для журнала решений (MEMORY_GRAPH_FIX_PLAN.md, Этап 6, ROADMAP 5.107е) — тем же способом, что
+            // внутри самой `isStrongChangeEwma()`, и по статистике ДО ЭТОГО наблюдения (с чем реально сравнивалось
+            // только что посчитанное расстояние, не с чем оно станет сравниваться в следующий раз, см. `updateEwmaStats`
+            // ниже). `0` — базовой линии ещё нет (граф только что стартовал) — `isStrongChangeEwma()` сама в этом
+            // случае бутстрапится на `true` независимо от чисел, см. её doc-comment.
+            const topicThreshold = distanceStats ? distanceStats.mean + settings.thresholdK * ewmaStddev(distanceStats) : 0;
+            const noveltyThreshold = noveltyStats ? noveltyStats.mean + settings.thresholdK * ewmaStddev(noveltyStats) : 0;
             // "Не с чем сравнивать" (пустой граф) — фиктивное расстояние 1, в
             // базовую линию его класть нельзя: единственный такой выброс
             // раздувает среднее/σ и гейт надолго перестаёт срабатывать.
@@ -2232,15 +2279,36 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // на 100%); если он молчит слишком много СООБЩЕНИЙ подряд без единого реального вызова модели —
             // спрашиваем её принудительно, а не ждём вечно точного совпадения с гейтом.
             const forced = !wasStrong && settings.forcedExtractionEvery > 0 && turnCounter - lastExtractionClock >= settings.forcedExtractionEvery;
-            if (!wasStrong && !forced) return { status: 'no-change' };
+            // Журнал решений (Этап 6) — общая для всех исходов "шапка" записи, дополняется ниже по мере того, как
+            // становится известно больше (позвана ли модель, что она ответила, куда легла нода).
+            const gateInfo = { topicDistance, topicThreshold, noveltyDistance, noveltyThreshold, fired: wasStrong, forced };
+            if (!wasStrong && !forced) {
+                await recordDecision({ clock: turnCounter, at: now(), gate: gateInfo, extractor: 'not-called' });
+                return { status: 'no-change' };
+            }
 
-            const proposal = await askSideCarForNode(contextText, { isFirstNode: Object.keys(nodes).length === 0 });
+            let proposal;
+            try {
+                proposal = await askSideCarForNode(contextText, { isFirstNode: Object.keys(nodes).length === 0 });
+            } catch (error) {
+                // Записываем, только если чат тот же — иначе это уже не про АКТИВНЫЙ чат (тот же принцип, что у
+                // остальных `stillSameChat()`-проверок Этапа 5); проброс наверх — БЕЗ ИЗМЕНЕНИЙ, `askSideCarForNode()`
+                // как и раньше выбрасывает на сбой модели, эта запись — чистое наблюдение сбоку, не меняет исход.
+                if (stillSameChat(epoch)) await recordDecision({ clock: turnCounter, at: now(), gate: gateInfo, extractor: 'error', error: error.message });
+                throw error;
+            }
             if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // Этап 5 — чат сменился, пока ждали SideCar
             // Часы последнего РЕАЛЬНОГО вызова — двигаются на любой исход (включая честный {skip:true} SideCar'а),
             // не только на успешное создание ноды: "модель спросили" — это и есть то, что защищает страховка.
             lastExtractionClock = turnCounter;
             await persistClock();
-            if (!proposal) return { status: 'sidecar-empty' };
+            if (!proposal) {
+                // `lastSideCarOutcome` различает честный `{"skip":true}` от непарсимого/неполного ответа — см.
+                // doc-comment у `askSideCarForNode()`; `?? 'empty'` — чисто оборонительный край (не должен
+                // случаться на практике: функция всегда выставляет его перед любым `return null`).
+                await recordDecision({ clock: turnCounter, at: now(), gate: gateInfo, extractor: lastSideCarOutcome ?? 'empty' });
+                return { status: 'sidecar-empty' };
+            }
 
             // node.embedding — ЭТО ТОТ ЖЕ passage-эмбединг label+content, что
             // считают createNodeManually()/createNodeFromCharacterCard()/
@@ -2265,7 +2333,14 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (!nodeEmbeddingResult.ok) return { status: 'skipped', error: nodeEmbeddingResult.error.message };
 
             const gameTime = await readGameTime();
+            // Свежий трекер ПЕРЕД вызовом — Этап 6 (наблюдаемость): `capacityTracker` читают
+            // `detectMergeCandidate()`/`tryQueueReconsolidation()`/`enforceRegionCapacity()` изнутри `attachToRegion()`
+            // (см. doc-comment у самого трекера выше), но пишет в него только ЭТОТ вызов, не бутстрап/ручное создание/
+            // карточка персонажа — остаётся `null` у любого другого вызывающего `placeNewNode()`.
+            capacityTracker = { evicted: [], queuedMerge: false, queuedReconsolidation: false };
             const result = placeNewNode({ ...proposal, embedding: nodeEmbeddingResult.value, gameTime }, { placementEmbedding: contextEmbedding });
+            const capacityInfo = capacityTracker;
+            capacityTracker = null; // не должен пережить этот вызов — иначе следующий ЧУЖОЙ attachToRegion() (сколь угодно позже) тихо дописался бы в уже "закрытую" запись
 
             // Зеркалим свежую органическую ноду в WI (решено с пользователем:
             // "по идее вся инфраструктура есть" — `lorebook.createEntry()`
@@ -2311,6 +2386,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // начать перезапись `nodes`/`regions` раньше, чем текущая задача дойдёт до этой точки и положит
             // свои персисты в очередь — гонка на диске исключена, остаётся только "лишняя нода в новом графе
             // после смены чата", что не хуже поведения ДО Этапа 5.
+            // Запись в журнал решений (Этап 6) — та же точка, тот же осознанный остаточный пробел, что у персиста
+            // ниже (см. комментарий выше): узел уже создан синхронно, поздний чат-свитч здесь не откатывается.
+            await recordDecision({
+                clock: turnCounter, at: now(), gate: gateInfo, extractor: 'node', node: { id: result.nodeId, label: proposal.label },
+                placement: { status: result.status, reason: result.reason, region: result.region, similarity: result.similarity, margin: result.margin },
+                capacity: capacityInfo,
+            });
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
             publishEvent('memoryGraph.nodeCreated', { nodeId: result.nodeId, status: result.status });
             return result;
@@ -3296,6 +3378,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // "узел вообще не создался". Тот же принцип, что у mergeQueue/
         // reconsolidationQueue выше — сырой снимок очереди.
         host.own.register('memoryGraph.staging', () => Object.values(staging)),
+        // Журнал решений (MEMORY_GRAPH_FIX_PLAN.md, Этап 6, ROADMAP 5.107е) — новейшие ПЕРВЫМИ (обратный порядок
+        // вставки): панель/дебаг читают "что случилось только что", не "что случилось раньше всего".
+        host.own.register('memoryGraph.decisionLog', () => [...decisionLog].reverse()),
         host.own.register('memoryGraph.check', params => manualCheck(extractRecentText(params?.chat, { count: settings.extractionContextMessages, maxChars: settings.extractionContextChars }), params?.chat?.length)),
         // Ручное редактирование графа (UI-редактор) — CRUD нод/рёбер.
         host.own.register('memoryGraph.nodes.create', params => createNodeManually(params ?? {})),
@@ -3336,6 +3421,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         staging: () => Object.values(staging),
         mergeQueue: () => Object.values(mergeQueue),
         reconsolidationQueue: () => Object.values(reconsolidationQueue),
+        decisionLog: () => [...decisionLog].reverse(), // Этап 6 — тот же порядок (новейшие первыми), что у контракта `memoryGraph.decisionLog`
         unregister: async () => {
             await call('pipeline.stages.remove', { pipelineId: PREPARE_PIPELINE, stageId: 'memory-graph:place' }).catch(() => {});
             await call('pipeline.stages.remove', { pipelineId: BEFORE_SEND_PIPELINE, stageId: INJECT_STAGE_ID }).catch(() => {});

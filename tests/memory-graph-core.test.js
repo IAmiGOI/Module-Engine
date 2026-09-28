@@ -24,6 +24,7 @@ import { extractRecentText } from '../cores/memory-graph/context-text.js';
 import { advanceClock, migrateTimestamps } from '../cores/memory-graph/clock.js';
 import { pickRegionBySimilarity } from '../cores/memory-graph/placement.js';
 import { updateEwmaStats, ewmaStddev, isStrongChangeEwma, migrateWelford } from '../cores/memory-graph/gate.js';
+import { appendDecision, summarizeDecision } from '../cores/memory-graph/decision-log.js';
 
 // --- Физика регионов --------------------------------------------------
 
@@ -1120,4 +1121,95 @@ test('migrateTimestamps() leaves every other field on nodes untouched — only t
     const migrated = migrateTimestamps(input, 10);
     assert.equal(migrated.nodes.a.label, 'A');
     assert.equal(migrated.nodes.a.importance, 7);
+});
+
+// --- Журнал решений (MEMORY_GRAPH_FIX_PLAN.md, Этап 6, ROADMAP 5.107е) ----
+
+test('appendDecision() adds the entry at the end without mutating the input array', () => {
+    const log = [{ clock: 1 }];
+    const next = appendDecision(log, { clock: 2 });
+    assert.deepEqual(next, [{ clock: 1 }, { clock: 2 }]);
+    assert.deepEqual(log, [{ clock: 1 }], 'the original array must be untouched');
+});
+
+test('appendDecision() never grows the buffer past `limit` — the OLDEST entries are dropped first, the newest is always kept', () => {
+    let log = [];
+    for (let clock = 1; clock <= 5; clock += 1) log = appendDecision(log, { clock }, 3);
+    assert.deepEqual(log.map(entry => entry.clock), [3, 4, 5], 'only the 3 most recent entries survive, oldest-to-newest order preserved');
+});
+
+test('summarizeDecision() matches the plan\'s own worked example for a captured node — clock, gate margin, model outcome, and placement all on one line', () => {
+    const entry = {
+        clock: 142,
+        gate: { topicDistance: 0.31, topicThreshold: 0.27, noveltyDistance: 0.05, noveltyThreshold: 0.2, fired: true, forced: false },
+        extractor: 'node',
+        node: { id: 'node_x', label: "Kira's heritage" },
+        placement: { status: 'placed', reason: 'similarity', region: { sector: 3, ring: 1 }, similarity: 0.86, margin: 0.04 },
+    };
+    assert.equal(summarizeDecision(entry), '#142 · gate 0.31 > 0.27 · model: node "Kira\'s heritage" · placed 3:1 (similarity 0.86, margin 0.04)');
+});
+
+test('summarizeDecision() matches the plan\'s own worked example for a quiet gate — no model call at all', () => {
+    const entry = {
+        clock: 143,
+        gate: { topicDistance: 0.12, topicThreshold: 0.27, noveltyDistance: 0.03, noveltyThreshold: 0.2, fired: false, forced: false },
+        extractor: 'not-called',
+    };
+    assert.equal(summarizeDecision(entry), '#143 · gate 0.12 ≤ 0.27 · model not called');
+});
+
+test('summarizeDecision() shows the NOVELTY pair, not the topic pair, when novelty is what actually fired the gate', () => {
+    const entry = {
+        clock: 50,
+        // Тема сама по себе НЕ изменилась (0.10 ≤ 0.20) — сработал именно сигнал новизны (0.40 > 0.15); показ
+        // topic-пары здесь выглядел бы необъяснимым "gate 0.10 ≤ 0.20" рядом с реально созданной нодой.
+        gate: { topicDistance: 0.1, topicThreshold: 0.2, noveltyDistance: 0.4, noveltyThreshold: 0.15, fired: true, forced: false },
+        extractor: 'skip',
+    };
+    assert.equal(summarizeDecision(entry), '#50 · gate 0.40 > 0.15 · model: skip');
+});
+
+test('summarizeDecision() marks a forced (safety-net) extraction even though the gate itself stayed quiet', () => {
+    const entry = {
+        clock: 60,
+        gate: { topicDistance: 0.1, topicThreshold: 0.3, noveltyDistance: 0.05, noveltyThreshold: 0.25, fired: false, forced: true },
+        extractor: 'empty',
+    };
+    assert.equal(summarizeDecision(entry), '#60 · gate 0.10 ≤ 0.30 (forced) · model: empty reply');
+});
+
+test('summarizeDecision() reports a model error with its message, not a silently missing outcome', () => {
+    const entry = {
+        clock: 61,
+        gate: { topicDistance: 0.5, topicThreshold: 0.3, noveltyDistance: 0.1, noveltyThreshold: 0.25, fired: true, forced: false },
+        extractor: 'error',
+        error: 'all workers failed',
+    };
+    assert.equal(summarizeDecision(entry), '#61 · gate 0.50 > 0.30 · model: error (all workers failed)');
+});
+
+test('summarizeDecision() reports capacity side-effects (eviction/merge/reconsolidation queued) triggered by the new node', () => {
+    const entry = {
+        clock: 62,
+        gate: { topicDistance: 0.5, topicThreshold: 0.3, noveltyDistance: 0.1, noveltyThreshold: 0.25, fired: true, forced: false },
+        extractor: 'node',
+        node: { id: 'node_y', label: 'Overflowing Region' },
+        placement: { status: 'placed', reason: 'nearest', region: { sector: 0, ring: 0 }, similarity: 0.81, margin: 0.01 },
+        capacity: { evicted: ['node_old'], queuedMerge: true, queuedReconsolidation: false },
+    };
+    assert.equal(
+        summarizeDecision(entry),
+        '#62 · gate 0.50 > 0.30 · model: node "Overflowing Region" · placed 0:0 (similarity 0.81, margin 0.01) · evicted 1, queued merge',
+    );
+});
+
+test('summarizeDecision() renders a staged (накопитель) placement without a region', () => {
+    const entry = {
+        clock: 63,
+        gate: { topicDistance: 0.5, topicThreshold: 0.3, noveltyDistance: 0.1, noveltyThreshold: 0.25, fired: true, forced: false },
+        extractor: 'node',
+        node: { id: 'node_z', label: 'No Embedding Yet' },
+        placement: { status: 'staged', reason: 'no-embedding' },
+    };
+    assert.equal(summarizeDecision(entry), '#63 · gate 0.50 > 0.30 · model: node "No Embedding Yet" · staged');
 });
