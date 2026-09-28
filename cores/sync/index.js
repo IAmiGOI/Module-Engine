@@ -62,7 +62,9 @@ const unwrap = result => {
     return result.value;
 };
 const two = value => String(value).padStart(2, '0');
-const stampLabel = time => { const d = new Date(time); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}`; };
+// Секунды (ROADMAP 5.106е, Этап 4.5) — без них два конфликта одного файла в пределах одной минуты вычисляли бы одно и то же имя
+// копии; `disambiguateConflictPath` (sync-plan.js) закрывает и оставшееся окно совпадений численным суффиксом.
+const stampLabel = time => { const d = new Date(time); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())}`; };
 const randomHex = random => Array.from(random.getRandomValues(new Uint8Array(6)), byte => byte.toString(16).padStart(2, '0')).join('');
 
 export function createSyncCore(host, {
@@ -150,10 +152,20 @@ export function createSyncCore(host, {
 
     async function writeLocal(path, blob, meta) {
         return exclusive(async () => {
+            // Проверка целостности (ROADMAP 5.106е, Этап 4.3) — покрывает ОБА направления сразу, одним местом: сюда стекаются и
+            // `pull` ведущего (получает байты от `remote.read()`), и `write`-обработчик ведомого (получает байты по проводу от
+            // push'а ведущего) — оба зовут именно `writeLocal`. Сверяем ВСЕГДА настоящий байтовый хеш (`meta.hash`), НИКОГДА
+            // `meta.key` — тот сознательно игнорирует часть байт (см. `card-fingerprint.js`), сверять по нему целостность передачи
+            // бессмысленно. Несовпадение — не фатальная ошибка: файл просто не пишется, попадает в `errors`/`failed` этого прохода
+            // и не закрепляется в базе — следующий проход попробует заново, как отказ любого другого файла.
+            if (meta?.hash) {
+                const actual = await computeGitBlobSha(blob);
+                if (actual !== meta.hash) throw new Error(`writeLocal: integrity check failed for "${path}" — expected hash ${meta.hash}, got ${actual}. The file was not written; it will be retried on the next pass.`);
+            }
             const cache = await loadCache();
             const { stamp } = await service('stUserData.write', { path, blob });
-            // `meta.key` — отпечаток ИСТОЧНИКА (см. sync-plan.js): доверять ему безопасно, в отличие от чужого байтового хеша
-            // (Этап 4.3 проверяет ЕГО отдельно) — отпечаток намеренно игнорирует ровно то, что ST меняет при записи.
+            // `meta.key` — отпечаток ИСТОЧНИКА (см. sync-plan.js): доверять ему безопасно, в отличие от байтового хеша ПОСЛЕ записи
+            // (ST могла его изменить своим импортом — см. `card-fingerprint.js`), отпечаток намеренно игнорирует ровно это.
             if (stamp != null && meta?.hash) cache[path] = { stamp, hash: meta.hash, ...(meta.key ? { key: meta.key } : {}) }; else delete cache[path];
             touchedPaths.add(path);
         });
@@ -668,10 +680,26 @@ export function createSyncCore(host, {
             target: `device:${pair.name}`, baseKey: `pair:${pair.id}`, remote, categories: config.categories,
             isEnabled: () => createCategoryFilter(intersectCategories(config.categories, session.enabled)),
         });
+        // Порядок подтверждения (ROADMAP 5.106д): файлы уже разъехались на обе стороны — `runAgainst` записал СВОЮ базу независимо
+        // от этого вызова, само `finish` лишь сообщает ведомому итоговую базу для его следующего прохода. Раньше ошибка `finish`
+        // тихо глоталась (`.catch(() => {})`), а `pair.lastSync` всё равно двигался — обрыв связи РОВНО на этом шаге выглядел бы
+        // как «недавно синхронизировано», хотя ведомый мог остаться на устаревшей базе. Теперь `lastSync` двигается только при
+        // успехе; неудача — не хуже обрыва канала (`onSessionClosed`), тот же `problems`, видимый в `sync.status`.
+        // Порядок подтверждения (ROADMAP 5.106д): файлы уже разъехались на обе стороны — `runAgainst` записал СВОЮ базу независимо
+        // от этого вызова, само `finish` лишь сообщает ведомому итоговую базу для его следующего прохода. Раньше ошибка `finish`
+        // тихо глоталась (`.catch(() => {})`), а `pair.lastSync` всё равно двигался — обрыв связи РОВНО на этом шаге выглядел бы
+        // как «недавно синхронизировано», хотя ведомый мог остаться на устаревшей базе. Теперь `lastSync` двигается только при
+        // успехе; неудача — не хуже обрыва канала (`onSessionClosed`), тот же `problems`, видимый в `sync.status`.
         if (!result.aborted) {
-            await session.endpoint.call('finish', {}, { body: new Blob([JSON.stringify(result.base)]) }).catch(() => {});
-            pair.lastSync = now();
-            await saveConfig();
+            try {
+                await session.endpoint.call('finish', {}, { body: new Blob([JSON.stringify(result.base)]) });
+                problems.delete(session.pairId);
+                pair.lastSync = now();
+                await saveConfig();
+            } catch (error) {
+                problems.set(session.pairId, `The pass finished, but confirming it with ${pair.name} failed (${error?.message ?? error}). Files already synced on both sides — this will be retried on the next pass.`);
+                notify();
+            }
         }
         return { outcome: 'done', pair: pair.name, ...summarize(result) };
     }
