@@ -4,6 +4,7 @@ import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { estimateTokens, packEntriesIntoChunks } from '../../libraries/core/entry-chunker.js';
 import { extractRecentText } from './context-text.js';
 import { advanceClock, migrateTimestamps } from './clock.js';
+import { pickRegionBySimilarity } from './placement.js';
 
 const PERSISTENCE_NAMESPACE = 'core.memoryGraph';
 const SETTINGS_KEY = 'settings';
@@ -58,6 +59,14 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // промпт извлечения содержимое на порядки больше самой сцены.
     extractionContextMessages: 4,
     extractionContextChars: 3000,
+    // Пороги размещения по сходству (`cores/memory-graph/placement.js`) — MEMORY_GRAPH_FIX_PLAN.md, Этап 3
+    // (ROADMAP 5.107в). СТАРТОВЫЕ числа, не откалиброванные по реальным данным — план явно требует уточнить их
+    // позже по журналу решений (Этап 6, пока не реализован); `minSimilarity` — по нижней границе живых чисел E5
+    // из самого разбора бага (0.85–0.95 у ВСЕХ регионов разом, не только у похожего), `minMargin` — сознательно
+    // маленький: с E5 отрыв между реально разными темами редко бывает большим, лучше ошибиться в сторону "похоже
+    // не значит уверенно" (даёт reason:'nearest' вместо 'similarity'), чем никогда не набирать нужный запас.
+    placementMinSimilarity: 0.8,
+    placementMinMargin: 0.02,
     // Каскад накопителя — числа согласованы с пользователем дословно. `stagingRetryTurns`/`stagingMaxTurns`
     // УДВОЕНЫ относительно исходных значений (MEMORY_GRAPH_FIX_PLAN.md, Этап 2, ROADMAP 5.107б): единица "хода"
     // раньше была ГЕНЕРАЦИЕЙ (`turnCounter += 1` на каждый `checkAndPlace()`), теперь — СООБЩЕНИЕМ (длина чата,
@@ -266,6 +275,8 @@ export function clampGraphSettings(values = {}) {
         keywordWeight: clampInt(values.keywordWeight * 10, 0, 100, DEFAULT_SETTINGS.keywordWeight * 10) / 10,
         extractionContextMessages: clampInt(values.extractionContextMessages, 1, 20, DEFAULT_SETTINGS.extractionContextMessages),
         extractionContextChars: clampInt(values.extractionContextChars, 500, 12000, DEFAULT_SETTINGS.extractionContextChars),
+        placementMinSimilarity: clampInt(values.placementMinSimilarity * 100, 0, 100, DEFAULT_SETTINGS.placementMinSimilarity * 100) / 100,
+        placementMinMargin: clampInt(values.placementMinMargin * 100, 0, 50, DEFAULT_SETTINGS.placementMinMargin * 100) / 100,
         stagingRetryTurns: clampInt(values.stagingRetryTurns, 1, 200, DEFAULT_SETTINGS.stagingRetryTurns),
         stagingBatchSize: clampInt(values.stagingBatchSize, 1, 50, DEFAULT_SETTINGS.stagingBatchSize),
         stagingMaxTurns: clampInt(values.stagingMaxTurns, 1, 500, DEFAULT_SETTINGS.stagingMaxTurns),
@@ -713,12 +724,18 @@ export function renderMemoryPrompt(route, nodesById) {
 }
 
 // --- Каскад размещения ноды --------------------------------------------
-// MEMORY_GRAPH.md, полностью специфицировано с пользователем:
-// маяки (Phase 2, здесь всегда []) → связь по имени → регион по логитам
-// (побеждает, если явный отрыв) → накопитель (invisible) → ретрай +5 ходов
-// → батч (5 нод ИЛИ +20 ходов) → SideCar → отброс при неудаче.
+// MEMORY_GRAPH_FIX_PLAN.md, Этап 3 (ROADMAP 5.107в) — переписан порядок:
+// маяки (Phase 2, здесь всегда []) → связь по имени → сходство к центру
+// региона (уверенно — сразу туда; неуверенно, но центры есть — всё равно
+// туда, лучший, помечен низкой уверенностью) → пустой граф — сеять 0:0 →
+// накопитель остаётся ТОЛЬКО для ноды без эмбединга вовсе (см. её
+// doc-comment ниже). Старый каскад "логиты по всем 15 регионам → накопитель
+// при слабом отрыве" (`pickConfidentRegion`/`computeRegionLogits`) отправлял
+// в накопитель почти КАЖДУЮ ноду — у реальных эмбедингов (E5) сходство ко
+// ВСЕМ регионам разом близко (~0.85–0.95), полуторакратный отрыв почти
+// никогда не набирался (П2 плана, живые числа из его разбора).
 
-/** Явный ли отрыв у победителя логит-распределения — иначе результат "неуверенно", кандидат в накопитель. Порог отрыва — фиксированная, простая эвристика (не эмпирический параметр, как остальные): "заметно больше второго места". */
+/** Явный ли отрыв у победителя логит-распределения — оставлена для decideStagingStep()'s настоящего крайнего случая (нода без эмбединга, см. sweepStaging()) и своих тестов; из decideFirstPlacement() больше не зовётся. */
 export function pickConfidentRegion(regionProbs, regionCoords, { marginRatio = 1.5 } = {}) {
     if (!regionProbs.length) return null;
     const indexed = regionProbs.map((p, i) => ({ p, coord: regionCoords[i] })).sort((a, b) => b.p - a.p);
@@ -728,30 +745,29 @@ export function pickConfidentRegion(regionProbs, regionCoords, { marginRatio = 1
 }
 
 /**
- * Один шаг каскада для НОВОЙ ноды. Чистая функция — вся математика уже
- * посчитана снаружи (логиты региона, найден ли тёзка по имени), здесь
- * только решение "куда её девать".
+ * Один шаг каскада для НОВОЙ ноды. Чистая функция — вся математика уже посчитана снаружи (найден ли тёзка по
+ * имени, готовы ли анкеры центров), здесь только решение "куда её девать".
  *
- * `beaconRegion` — Phase 2 (маяки), в Phase 1 всегда `null`, шаг
- * пропускается — сигнатура уже готова, чтобы не переделывать функцию
- * позже.
+ * `beaconRegion` — Phase 2 (маяки), в Phase 1 всегда `null`, шаг пропускается — сигнатура уже готова, чтобы не
+ * переделывать функцию позже. `anchors` — регионы С ЦЕНТРОМ (`pickRegionBySimilarity()`'s формат, placement.js);
+ * пустой массив — граф без единого центра, буквально НОЛЬ информации (не "слабый сигнал", который стоит защитить
+ * от порчи центроида накопителем) — сразу сеять регион 0:0, тот же "временный дом", что уже используется у
+ * `escalateToSideCar()`. `embedding` отсутствует ВООБЩЕ (не должно случаться ни у одного сегодняшнего вызывающего
+ * `placeNewNode()` — все они получают эмбединг ДО вызова и падают раньше при его отсутствии, задел на будущее) —
+ * единственный оставшийся случай `staged`: без вектора нечего сравнивать вовсе, здесь бессилен даже "лучший из
+ * плохих".
  */
-/**
- * `isEmptyGraph` — ни у одного региона ЕЩЁ нет центра (`centerNodeId`).
- * Тогда `regionProbs` не "слабый сигнал" (который стоит защитить от порчи
- * центроида накопителем), а буквально НОЛЬ информации — у каждого региона
- * одинаковая априорная вероятность, отрыва не будет никогда. Не гонять
- * такую ноду через накопитель/эскалацию ради результата, к которому
- * `escalateToSideCar()` и так в итоге приходит по умолчанию — сразу
- * сеять регион 0:0, тот же "временный дом", что уже используется там.
- */
-export function decideFirstPlacement({ beaconRegion = null, nameMatchRegion = null, regionProbs, regionCoords, isEmptyGraph = false }) {
+export function decideFirstPlacement({ beaconRegion = null, nameMatchRegion = null, embedding = null, anchors = [], settings = DEFAULT_SETTINGS }) {
     if (beaconRegion) return { status: 'placed', region: beaconRegion, reason: 'beacon' };
     if (nameMatchRegion) return { status: 'placed', region: nameMatchRegion, reason: 'name-match' };
-    const confident = pickConfidentRegion(regionProbs, regionCoords);
-    if (confident) return { status: 'placed', region: confident, reason: 'region-logit' };
-    if (isEmptyGraph) return { status: 'placed', region: { sector: 0, ring: 0 }, reason: 'bootstrap-seed' };
-    return { status: 'staged', reason: 'no-confident-region' };
+    if (!embedding) return { status: 'staged', reason: 'no-embedding' };
+    if (!anchors.length) return { status: 'placed', region: { sector: 0, ring: 0 }, reason: 'bootstrap-seed' };
+    const pick = pickRegionBySimilarity(embedding, anchors, { minSimilarity: settings.placementMinSimilarity, minMargin: settings.placementMinMargin });
+    if (pick.confident) return { status: 'placed', region: pick.region, reason: 'similarity', similarity: pick.similarity, margin: pick.margin };
+    // Неуверенно, но центры ЕСТЬ — всё равно размещаем в лучший по сходству (П2 плана: накопитель почти никогда не
+    // должен быть первой реакцией на "не идеально уверен"), просто помечаем ноду как малоуверенную — видно
+    // снаружи (панель/журнал решений Этапа 6), не скрыто молча внутри решения.
+    return { status: 'placed', region: pick.region, reason: 'nearest', similarity: pick.similarity, margin: pick.margin, placementConfidence: 'low' };
 }
 
 /**
@@ -1321,6 +1337,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         return regions[key] ?? { sector, ring, centerNodeId: null, subCenterIds: [], nodeIds: [], wordProfile: {} };
     }
 
+    /** Анкеры для `pickRegionBySimilarity()` (placement.js, Этап 3) — только регионы, у которых УЖЕ есть центр с реальным эмбедингом; регион без центра не с чем сравнивать. */
+    function collectAnchors() {
+        return Object.values(regions)
+            .filter(region => region.centerNodeId && nodes[region.centerNodeId]?.embedding)
+            .map(region => ({ sector: region.sector, ring: region.ring, embedding: nodes[region.centerNodeId].embedding }));
+    }
+
     /**
      * Векторные вероятности региона — косинус к центру региона (не к среднему
      * всех нод, MEMORY_GRAPH.md — против дрейфа центроида), softmax поверх
@@ -1745,8 +1768,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
             const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
             if (!embeddingResult.ok) return { ok: false, error: embeddingResult.error.message };
-            const { coords, probs: vectorProbs } = vectorProbsForAllRegions(embeddingResult.value);
-            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE }, { coords, vectorProbs });
+            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE });
             // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
             // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
@@ -2075,14 +2097,19 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     /**
-     * Общий хвост каскада — от готового эмбединга+координат региона до
-     * "размещена/в накопителе" + персист. Один и тот же путь для НОВОЙ ноды
-     * что от SideCar (`checkAndPlace`), что от импорта Lorebook
-     * (`bootstrapFromLorebook`) — это буквально одна и та же задача
-     * ("куда положить кусок текста с его эмбедингом"), разница только в
-     * ИСТОЧНИКЕ текста, не в математике размещения.
+     * Общий хвост каскада — от готового эмбединга ноды до "размещена/в накопителе" + персист. Один и тот же путь
+     * для НОВОЙ ноды и от SideCar (`checkAndPlace`), и от карточки персонажа (`createNodeFromCharacterCard`) — это
+     * буквально одна и та же задача ("куда положить кусок текста с его эмбедингом"), разница только в ИСТОЧНИКЕ
+     * текста, не в математике размещения.
+     *
+     * `placementEmbedding` (по умолчанию — сам `embedding` ноды) — MEMORY_GRAPH_FIX_PLAN.md, Этап 3: сигнал ДЛЯ
+     * РЕШЕНИЯ "в какой регион" может ОТЛИЧАТЬСя от постоянного эмбединга самой ноды — `checkAndPlace()` явно
+     * передаёт сюда эмбединг СЦЕНЫ (query), а не факта (passage), по той же причине, что уже описана в её
+     * doc-comment у второго вызова `embedding.compute`: сравнение "что навело на мысль" с центрами регионов (тоже
+     * passage) — это query-vs-passage, ожидаемое протоколом E5 сопоставление, тогда как самой ноде для БУДУЩИХ
+     * сравнений (слияние/маяки/бэкбон) нужен passage-эмбединг её же содержимого, не сцены-триггера.
      */
-    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter }, { coords, vectorProbs }) {
+    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter }, { placementEmbedding = embedding } = {}) {
         const node = {
             id: makeId('node', now, random),
             label, content, embedding, importance,
@@ -2095,14 +2122,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             edges: [],
             gameTime,
         };
-        const keywordCounts = keywordCountsForAllRegions(coords, content);
-        const regionProbs = computeRegionLogits(vectorProbs, keywordCounts, settings.keywordWeight);
-        const isEmptyGraph = !Object.values(regions).some(region => region.centerNodeId);
-        const decision = decideFirstPlacement({ nameMatchRegion: findNameMatchRegion(content), regionProbs, regionCoords: coords, isEmptyGraph });
+        const decision = decideFirstPlacement({ nameMatchRegion: findNameMatchRegion(content), embedding: placementEmbedding, anchors: collectAnchors(), settings });
 
         nodes[node.id] = node;
-        if (decision.status === 'placed') attachToRegion(node, decision.region.sector, decision.region.ring);
-        else staging[node.id] = { nodeId: node.id, attemptCount: 1, firstAttemptTurn: createdTurn };
+        if (decision.status === 'placed') {
+            if (decision.placementConfidence === 'low') node.placementConfidence = 'low';
+            attachToRegion(node, decision.region.sector, decision.region.ring);
+        } else staging[node.id] = { nodeId: node.id, attemptCount: 1, firstAttemptTurn: createdTurn };
         return { status: decision.status, nodeId: node.id };
     }
 
@@ -2137,7 +2163,6 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (!embeddingResult.ok) return { status: 'skipped', error: embeddingResult.error.message };
             const contextEmbedding = embeddingResult.value; // ТОЛЬКО сигнал размещения — см. комментарий у passage-эмбединга ниже, почему это не то же самое, что node.embedding.
 
-            const { coords, probs: vectorProbs } = vectorProbsForAllRegions(contextEmbedding);
             // Два независимых сигнала, оба адаптивные (Уэлфорд), достаточно ЛЮБОГО:
             // 1) смена ТЕМЫ — расстояние до ближайшего центра региона;
             // 2) НОВЫЙ ФАКТ внутри знакомой темы — расстояние до ближайшей НОДЫ
@@ -2185,7 +2210,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (!nodeEmbeddingResult.ok) return { status: 'skipped', error: nodeEmbeddingResult.error.message };
 
             const gameTime = await readGameTime();
-            const result = placeNewNode({ ...proposal, embedding: nodeEmbeddingResult.value, gameTime }, { coords, vectorProbs });
+            const result = placeNewNode({ ...proposal, embedding: nodeEmbeddingResult.value, gameTime }, { placementEmbedding: contextEmbedding });
 
             // Зеркалим свежую органическую ноду в WI (решено с пользователем:
             // "по идее вся инфраструктура есть" — `lorebook.createEntry()`
@@ -2722,7 +2747,17 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         });
     }
 
-    /** Прогон накопителя — ретраи/эскалация по расписанию (MEMORY_GRAPH.md, числа согласованы с пользователем). Зовётся из того же прохода `generation.prepare`, что и `checkAndPlace`, но независимо от того, была ли эта генерация "сильным изменением". */
+    /**
+     * Прогон накопителя (MEMORY_GRAPH_FIX_PLAN.md, Этап 3 — ROADMAP 5.107в). Сначала — МИГРАЦИЯ: под новым
+     * `decideFirstPlacement()` нода с реальным эмбедингом больше никогда не попадает в `staging` вовсе (см. её
+     * doc-comment) — единственная причина видеть здесь запись с эмбедингом это ЗАПИСЬ ИЗ СТАРОЙ ВЕРСИИ графа (до
+     * этого обновления), которую оставили висеть логит-доли из 15 регионов. Пробуем разместить её тем же правилом,
+     * что и новую ноду — confident или nearest, лишь бы центр вообще был. Старое расписание ретрай/батч/таймаут/
+     * эскалация (`decideStagingStep`) остаётся ТОЛЬКО для настоящего крайнего случая — ноды без эмбединга вовсе
+     * (сегодня ни один вызывающий `placeNewNode()` до такого не доводит, задел на будущее). Зовётся из того же
+     * прохода `generation.prepare`, что и `checkAndPlace`, но независимо от того, была ли эта генерация "сильным
+     * изменением".
+     */
     async function sweepStaging() {
         return enqueueWrite(async () => {
             const entries = Object.values(staging);
@@ -2730,6 +2765,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             for (const entry of entries) {
                 const node = nodes[entry.nodeId];
                 if (!node) { delete staging[entry.nodeId]; continue; }
+
+                const migrated = decideFirstPlacement({ nameMatchRegion: findNameMatchRegion(node.content), embedding: node.embedding, anchors: collectAnchors(), settings });
+                if (migrated.status === 'placed') {
+                    if (migrated.placementConfidence === 'low') node.placementConfidence = 'low';
+                    attachToRegion(node, migrated.region.sector, migrated.region.ring);
+                    delete staging[entry.nodeId];
+                    continue;
+                }
+
+                // Настоящее "эмбединга нет вовсе" — старое расписание, без изменений.
                 const { coords, probs: vectorProbs } = vectorProbsForAllRegions(node.embedding);
                 const keywordCounts = keywordCountsForAllRegions(coords, node.content);
                 const regionProbs = computeRegionLogits(vectorProbs, keywordCounts, settings.keywordWeight);
@@ -2742,8 +2787,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 } else if (step.status === 'retry-now') {
                     staging[entry.nodeId] = { ...entry, attemptCount: 2, lastAttemptTurn: turnCounter };
                 } else if (step.status === 'escalate') {
-                    batchReady.push(node);
-                    delete staging[entry.nodeId];
+                    // НЕ удаляем из staging здесь — escalateToSideCar() сама решает её судьбу (Этап 3: ошибка
+                    // модели не должна тихо терять ноду, запись обязана пережить неудавшуюся попытку как есть).
+                    batchReady.push(entry);
                 }
             }
             if (batchReady.length) await escalateToSideCar(batchReady);
@@ -2754,23 +2800,44 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         });
     }
 
-    /** "Совсем потеряшки" — батч на суждение полноценной LLM разом. Не разместила — нода отбрасывается (решено с пользователем: не портить регион натянутым размещением, не хранить вечно). */
-    async function escalateToSideCar(batch) {
+    /**
+     * "Совсем потеряшки" — батч на суждение полноценной LLM разом (MEMORY_GRAPH.md; MEMORY_GRAPH_FIX_PLAN.md,
+     * Этап 3). `entries` — ЗАПИСИ накопителя, не голые ноды: при сбое модели их нужно оставить КАК БЫЛИ (раньше
+     * ошибка `model.generate` тихо УДАЛЯЛА весь батч целиком, хотя запись к этому моменту уже была убрана из
+     * `staging` вызывающим — временный сбой сети/модели не повод терять факт навсегда, он должен просто
+     * попробовать снова на следующем `sweepStaging()`).
+     */
+    async function escalateToSideCar(entries) {
+        const batch = entries.map(entry => nodes[entry.nodeId]).filter(Boolean);
+        for (const entry of entries) if (!nodes[entry.nodeId]) delete staging[entry.nodeId]; // нода пропала (эвикшен/слияние) между постановкой в батч и этим вызовом — запись устарела сама собой
+        if (!batch.length) return;
+
         const listing = batch.map((node, i) => `${i + 1}. ${node.label}: ${node.content}`).join('\n');
         const prompt = `These ${batch.length} facts could not be automatically placed in the memory graph:\n\n${listing}\n\nFor each, reply with its number and either a short category label it clearly belongs to, or "DISCARD" if it fits nowhere. Format: one line per item, "N: label" or "N: DISCARD".`;
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
-        if (!result.ok) { for (const node of batch) delete nodes[node.id]; return; }
-        // Phase 1: разбор ответа — по строкам "N: ..."; "DISCARD" (без учёта
-        // регистра) отбрасывает ноду, всё остальное становится её label, и
-        // нода уходит в регион 0:0 как временный дом (полноценное сопоставление
-        // ответа SideCar обратно в сетку регионов — уточнить в Phase 2, это
-        // самый грубый край Phase 1, отмечен явно, не скрыт).
+        // Сбой модели — записи ОСТАЮТСЯ в накопителе как есть (мы их не трогали выше) и попробуют на следующем
+        // sweepStaging() — не удаляем (Этап 3, было наоборот: удаляло весь батч).
+        if (!result.ok) return;
+
+        // Phase 1: разбор ответа — по строкам "N: ...". "DISCARD" (без учёта регистра) — осознанное решение
+        // модели, нода удаляется. Иначе метка сопоставляется с РЕАЛЬНЫМ регионом по сходству (Этап 3: раньше всё
+        // безусловно сваливалось в регион 0:0) — эмбединг метки против центров, тот же `pickRegionBySimilarity`,
+        // что и у обычного размещения; центров вообще нет или эмбединг не посчитался — тот же временный дом 0:0,
+        // что и раньше (полноценный маппинг остаётся самым грубым краем Phase 1, отмечен явно, не скрыт).
         const lines = String(result.value ?? '').split('\n');
         for (const node of batch) {
             const line = lines.find(item => item.trim().startsWith(`${batch.indexOf(node) + 1}:`));
             const verdict = line?.split(':').slice(1).join(':').trim();
-            if (!verdict || /^discard$/i.test(verdict)) { delete nodes[node.id]; continue; }
-            attachToRegion(node, 0, 0);
+            if (!verdict || /^discard$/i.test(verdict)) { delete nodes[node.id]; delete staging[node.id]; continue; }
+
+            const labelEmbeddingResult = await callService('embedding.compute', { text: verdict, kind: 'passage' });
+            const anchors = collectAnchors();
+            const pick = labelEmbeddingResult.ok && anchors.length
+                ? pickRegionBySimilarity(labelEmbeddingResult.value, anchors, { minSimilarity: settings.placementMinSimilarity, minMargin: settings.placementMinMargin })
+                : null;
+            const region = pick?.region ?? { sector: 0, ring: 0 };
+            attachToRegion(node, region.sector, region.ring);
+            delete staging[node.id];
         }
     }
 
