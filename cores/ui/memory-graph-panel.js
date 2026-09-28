@@ -1077,12 +1077,13 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     }
 
     /** "Moved to <label> · Undo" (Этап 7.1) — живёт поверх канваса, не сайдбара: ближе к месту, где реально произошёл драг. */
+    /** Тот же баг и то же исправление, что у `hoverTooltip()` (см. её doc-comment) — стабильный `<div>`, видимость через `display`, не структурное появление/исчезновение соседа канваса. */
     function moveToastBlock() {
-        return computed(() => {
+        return h('div', { class: 'stme-mg-toast', style: computed(() => ({ display: moveToast() ? 'flex' : 'none' })) }, computed(() => {
             const toast = moveToast();
             if (!toast) return null;
-            return h('div', { class: 'stme-mg-toast' }, h('span', {}, `Moved to ${toast.label}`), Button('Undo', undoMove));
-        });
+            return [h('span', {}, `Moved to ${toast.label}`), Button('Undo', undoMove)];
+        }));
     }
 
     /** Кнопка "Connect" + тип ребра + панель выделенного ребра "type · Delete" (Этап 7.3/7.4). */
@@ -1203,11 +1204,40 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     }
 
     /** Подсказка при наведении (Этап 6.4) — карточка у курсора со ВСЕМИ метриками сразу, не форма редактирования (та — по клику). Позиционируется АБСОЛЮТНО внутри canvas-wrap (см. tree()). */
+    /**
+     * РЕАЛЬНЫЙ БАГ, найден по жалобе пользователя ("граф зависает при наведении на ноду, без клика; ST и остальная
+     * панель работают") — раньше эта функция возвращала `computed(() => id&&pos ? h('div',...) : null)`, вставленный
+     * НАПРЯМУЮ соседом `#stme-memory-graph-canvas` (тот же родитель — `canvas-wrap`, см. `tree()`). У diff.js
+     * появление/исчезновение ребёнка (null → элемент → null) — это `insert`/`remove` СТРУКТУРНОГО членства
+     * родителя, а не точечный `setProps` на самом тултипе; как только появлялся ХОТЬ ОДИН такой ребёнок,
+     * `mountChildren()` эмитил `reorder` для ВСЕГО canvas-wrap (см. её doc-comment: "insert/remove/reorder... never
+     * a cascade... for items that only moved" — но САМ факт insert уже требует reorder). `createFinalUiPc()`
+     * применяет `reorder` вызовом `dom.append` (=`appendChild`) для КАЖДОГО ребёнка родителя ПОДРЯД, а
+     * `appendChild` на уже существующем узле ПЕРЕМЕЩАЕТ его (detach+reattach) — то есть КАЖДОЕ наведение на ноду
+     * заново переставляло сам `#stme-memory-graph-canvas` (контейнер, которым владеет Cytoscape, рисующий внутри
+     * него собственные `<canvas>`-слои) через очередь Гейт-проверенных асинхронных DOM-вызовов
+     * (`createFinalUiPc()`'s `queue`). При обычном движении мыши по графу (много mouseover/mouseout подряд) эта
+     * очередь росла быстрее, чем успевала разгребаться, — визуально ИМЕННО канвас "зависал" (не успевал
+     * перерисовываться), а остальной UI/ST, не задетый этим reorder'ом, продолжал работать как обычно — ровно то,
+     * что описал пользователь.
+     *
+     * Исправление — тултип теперь ВСЕГДА один и тот же, СТАБИЛЬНЫЙ `<div>` (никогда не `null`, значит никогда не
+     * входит/выходит из структурного членства canvas-wrap, никакого `reorder` соседей больше не эмитится);
+     * видимость — через `display` В `style`, что даёт только точечный `setProps` НА САМОМ ЭТОМ узле. Содержимое
+     * (label/метрики) — отдельный `computed()` ВНУТРИ этого же, уже стабильного div'а: его собственные insert/
+     * remove/reorder трогают только ЕГО СОБСТВЕННЫХ детей, не канвас.
+     */
     function hoverTooltip() {
-        return computed(() => {
+        return h('div', {
+            class: 'stme-mg-tooltip',
+            style: computed(() => {
+                const pos = hoveredScreenPos();
+                if (!hoveredNodeId() || !pos) return { display: 'none' };
+                return { display: 'block', left: `${pos.x + 12}px`, top: `${pos.y + 12}px` };
+            }),
+        }, computed(() => {
             const id = hoveredNodeId();
-            const pos = hoveredScreenPos();
-            if (!id || !pos) return null;
+            if (!id) return null;
             const node = nodes().find(item => item.id === id);
             if (!node) return null;
             const region = regions().find(item => item.id === node.regionId);
@@ -1219,13 +1249,13 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 `Idle ${node.idleTurns ?? 0}`,
                 `Retrieved ${node.retrievedCount ?? 0}×`,
             ].join(' · ');
-            return h('div', { class: 'stme-mg-tooltip', style: { left: `${pos.x + 12}px`, top: `${pos.y + 12}px` } },
+            return [
                 h('strong', {}, node.label),
                 h('div', {}, region ? region.label : (node.regionId == null ? 'Unplaced' : node.regionId)),
                 h('div', {}, line),
                 Row(node.protectedNode ? Badge('Protected', { tone: 'muted' }) : null, node.regionId == null ? Badge('Unplaced', { tone: 'muted' }) : null),
-            );
-        });
+            ];
+        }));
     }
 
     /** Низ панели — две кнопки: обновить картинку графа и удалить граф целиком (удержанием). */
