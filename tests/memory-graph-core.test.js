@@ -22,6 +22,7 @@ import {
 } from '../cores/memory-graph/index.js';
 import { extractRecentText } from '../cores/memory-graph/context-text.js';
 import { advanceClock, migrateTimestamps } from '../cores/memory-graph/clock.js';
+import { pickRegionBySimilarity } from '../cores/memory-graph/placement.js';
 
 // --- Физика регионов --------------------------------------------------
 
@@ -147,43 +148,86 @@ test('computeNodeWeight() rewards higher degree (more connections) and higher im
     assert.ok(moreImportant > base);
 });
 
+// --- Размещение по сходству (MEMORY_GRAPH_FIX_PLAN.md, Этап 3) -----------
+
+test('pickRegionBySimilarity() is confident when the best match is similar enough AND clearly ahead of the runner-up', () => {
+    const anchors = [{ sector: 0, ring: 0, embedding: [1, 0] }, { sector: 1, ring: 1, embedding: [0, 1] }];
+    const result = pickRegionBySimilarity([0.99, 0.01], anchors, { minSimilarity: 0.8, minMargin: 0.02 });
+    assert.equal(result.confident, true);
+    assert.deepEqual(result.region, { sector: 0, ring: 0 });
+});
+
+test('pickRegionBySimilarity() is NOT confident when the two best regions are too close together, even though the best is similar enough on its own', () => {
+    const anchors = [{ sector: 0, ring: 0, embedding: [1, 0] }, { sector: 1, ring: 1, embedding: [0.999, 0.001] }]; // почти то же направление, что и первый
+    const result = pickRegionBySimilarity([1, 0], anchors, { minSimilarity: 0.8, minMargin: 0.02 });
+    assert.equal(result.confident, false);
+    assert.deepEqual(result.region, { sector: 0, ring: 0 }, 'a region is still returned — the caller decides what to do with a non-confident pick, not this function');
+});
+
+test('pickRegionBySimilarity() is NOT confident when even the single best match is too dissimilar, regardless of competition', () => {
+    const anchors = [{ sector: 0, ring: 0, embedding: [1, 0] }];
+    const result = pickRegionBySimilarity([0, 1], anchors, { minSimilarity: 0.8, minMargin: 0.02 }); // ортогонально -> сходство 0
+    assert.equal(result.confident, false);
+    assert.deepEqual(result.region, { sector: 0, ring: 0 });
+});
+
+test('pickRegionBySimilarity() is confident with a SINGLE anchor whenever that anchor alone clears minSimilarity — nothing to lose margin against', () => {
+    const anchors = [{ sector: 0, ring: 0, embedding: [1, 0] }];
+    const result = pickRegionBySimilarity([1, 0], anchors, { minSimilarity: 0.8, minMargin: 0.02 });
+    assert.equal(result.confident, true);
+});
+
+test('pickRegionBySimilarity() returns null when there are no anchors at all (no region has a center yet)', () => {
+    assert.equal(pickRegionBySimilarity([1, 0], []), null);
+});
+
 // --- Каскад размещения ---------------------------------------------------
 
 test('decideFirstPlacement() prioritizes a beacon match over everything else (Phase 2 hook, exercised here directly)', () => {
-    const result = decideFirstPlacement({ beaconRegion: { sector: 1, ring: 1 }, nameMatchRegion: { sector: 3, ring: 0 }, regionProbs: [0.9, 0.1], regionCoords: [{ sector: 0, ring: 0 }, { sector: 1, ring: 1 }] });
+    const result = decideFirstPlacement({ beaconRegion: { sector: 1, ring: 1 }, nameMatchRegion: { sector: 3, ring: 0 }, embedding: [1, 0], anchors: [] });
     assert.deepEqual(result, { status: 'placed', region: { sector: 1, ring: 1 }, reason: 'beacon' });
 });
 
 test('decideFirstPlacement() falls to name-match when there is no beacon', () => {
-    const result = decideFirstPlacement({ nameMatchRegion: { sector: 3, ring: 0 }, regionProbs: [0.9, 0.1], regionCoords: [{ sector: 0, ring: 0 }, { sector: 1, ring: 1 }] });
+    const result = decideFirstPlacement({ nameMatchRegion: { sector: 3, ring: 0 }, embedding: [1, 0], anchors: [] });
     assert.deepEqual(result, { status: 'placed', region: { sector: 3, ring: 0 }, reason: 'name-match' });
 });
 
-test('decideFirstPlacement() falls to a confident region-logit winner when there is no beacon or name-match', () => {
-    const coords = [{ sector: 0, ring: 0 }, { sector: 1, ring: 1 }];
-    const result = decideFirstPlacement({ regionProbs: [0.9, 0.1], regionCoords: coords });
-    assert.deepEqual(result, { status: 'placed', region: coords[0], reason: 'region-logit' });
+test('decideFirstPlacement() places a confidently similar node straight into its region by real cosine similarity (MEMORY_GRAPH_FIX_PLAN.md, Этап 3 — not region-logit softmax shares anymore)', () => {
+    const anchors = [{ sector: 0, ring: 0, embedding: [1, 0] }, { sector: 1, ring: 1, embedding: [0, 1] }];
+    const result = decideFirstPlacement({ embedding: [0.99, 0.01], anchors });
+    assert.equal(result.status, 'placed');
+    assert.equal(result.reason, 'similarity');
+    assert.deepEqual(result.region, { sector: 0, ring: 0 });
 });
 
-test('decideFirstPlacement() stages the node when no signal is confident — this is the fix for the "corrupt the centroid with a weak guess" risk raised earlier in design', () => {
-    const coords = [{ sector: 0, ring: 0 }, { sector: 1, ring: 1 }];
-    const result = decideFirstPlacement({ regionProbs: [0.55, 0.45], regionCoords: coords });
-    assert.equal(result.status, 'staged');
+test('decideFirstPlacement() still PLACES a node with a weak/unconfident match — into the NEAREST region, flagged low-confidence — it no longer stages away just because the match was not confident (this was the actual bug: real embeddings sit close to EVERY region at once, so almost nothing was ever confident, and almost every new node fell into накопитель)', () => {
+    // Второй анкер почти идентичен первому — реальной уверенности (заметного отрыва) не будет ни при какой похожести.
+    const anchors = [{ sector: 0, ring: 0, embedding: [1, 0] }, { sector: 1, ring: 1, embedding: [0.99, 0.01] }];
+    const result = decideFirstPlacement({ embedding: [1, 0], anchors });
+    assert.equal(result.status, 'placed');
+    assert.equal(result.reason, 'nearest');
+    assert.equal(result.placementConfidence, 'low');
+    assert.deepEqual(result.region, { sector: 0, ring: 0 });
 });
 
-test('decideFirstPlacement() seeds region 0:0 for a completely EMPTY graph even with a tied/uniform region distribution — a tie with zero region centers is not a "weak guess" worth protecting the centroid from, it is zero information, found live via a scenario test where every fresh graph got stuck staging its very first node forever', () => {
-    const coords = [{ sector: 0, ring: 0 }, { sector: 1, ring: 1 }];
-    const result = decideFirstPlacement({ regionProbs: [0.5, 0.5], regionCoords: coords, isEmptyGraph: true });
+test('decideFirstPlacement() seeds region 0:0 for a completely EMPTY graph (no centers at all yet) — zero information, not a weak guess worth protecting the centroid from, found live via a scenario test where every fresh graph got stuck staging its very first node forever', () => {
+    const result = decideFirstPlacement({ embedding: [1, 0], anchors: [] });
     assert.deepEqual(result, { status: 'placed', region: { sector: 0, ring: 0 }, reason: 'bootstrap-seed' });
 });
 
-test('decideFirstPlacement() does NOT apply the empty-graph seed once a confident region-logit winner exists, or when name-match/beacon already resolved it', () => {
-    const coords = [{ sector: 0, ring: 0 }, { sector: 1, ring: 1 }];
-    const confident = decideFirstPlacement({ regionProbs: [0.9, 0.1], regionCoords: coords, isEmptyGraph: true });
-    assert.equal(confident.reason, 'region-logit', 'a real winner must still win, isEmptyGraph is only a LAST resort');
-
-    const named = decideFirstPlacement({ nameMatchRegion: { sector: 1, ring: 1 }, regionProbs: [0.5, 0.5], regionCoords: coords, isEmptyGraph: true });
+test('decideFirstPlacement() does NOT apply the empty-graph seed once name-match/beacon already resolved it, even with zero anchors', () => {
+    const named = decideFirstPlacement({ nameMatchRegion: { sector: 1, ring: 1 }, embedding: [1, 0], anchors: [] });
     assert.equal(named.reason, 'name-match');
+
+    const beaconed = decideFirstPlacement({ beaconRegion: { sector: 2, ring: 2 }, embedding: [1, 0], anchors: [] });
+    assert.equal(beaconed.reason, 'beacon');
+});
+
+test('decideFirstPlacement() stages a node ONLY when it has no embedding at all — the sole remaining reason a node ever goes to staging (MEMORY_GRAPH_FIX_PLAN.md, Этап 3)', () => {
+    const anchors = [{ sector: 0, ring: 0, embedding: [1, 0] }];
+    const result = decideFirstPlacement({ embedding: null, anchors });
+    assert.equal(result.status, 'staged');
 });
 
 test('decideStagingStep() keeps a first-attempt node WAITING before its scheduled retry turn — no re-check before then', () => {

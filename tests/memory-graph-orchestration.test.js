@@ -681,12 +681,16 @@ test('checkAndPlace(): a context that is NEW relative to every node still fires 
     // Второй сигнал гейта — расстояние до ближайшей НОДЫ, а не центра региона.
     // Слова подобраны под fakeEmbed (4 измерения): alpha/bravo/... -> dim 1,
     // golf/lima/... -> dim 2, papa/romeo/... -> dim 3. Единственный ЦЕНТР
-    // региона — "Alpha" (dim 1); "Golf" (dim 2) — стейджится, центром не
-    // становится, но он ЕСТЬ среди нод. Прогрев идёт контекстом "Golf":
-    // расстояние до центра стабильно 1 (тема гейтом уже "привычна"),
-    // расстояние до ближайшей ноды 0. Новый контекст (dim 3) — до центра
-    // по-прежнему 1 (тематический гейт молчит), но до ЛЮБОЙ ноды тоже 1 —
-    // выше базовой линии 0: только второй сигнал может это заметить.
+    // региона — "Alpha" (dim 1); "Golf" (dim 2) под Этапом 3 (ROADMAP 5.107в)
+    // размещается СРАЗУ же (reason:'nearest', низкая уверенность — центров
+    // больше нет, кроме региона Alpha, накопитель больше не первая реакция
+    // на "не уверен") как ОБЫЧНЫЙ узел ТОГО ЖЕ региона, центром не
+    // становится — Alpha остаётся единственным ЦЕНТРОМ, это всё, что нужно
+    // фикстуре. Прогрев идёт контекстом "Golf": расстояние до центра
+    // стабильно 1 (тема гейтом уже "привычна"), расстояние до ближайшей
+    // ноды 0. Новый контекст (dim 3) — до центра по-прежнему 1 (тематический
+    // гейт молчит), но до ЛЮБОЙ ноды тоже 1 — выше базовой линии 0: только
+    // второй сигнал может это заметить.
     const { graphCore } = buildEngine({
         fetchReplies: [
             '{"label":"Alpha","content":"alpha bravo charlie delta","importance":5}',
@@ -699,7 +703,8 @@ test('checkAndPlace(): a context that is NEW relative to every node still fires 
     await graphCore.checkAndPlace('alpha bravo charlie delta');
     await graphCore.checkAndPlace('golf lima oscar quebec');
     const golf = graphCore.nodes().find(n => n.label === 'Golf');
-    assert.equal(golf.regionId, null, 'fixture precondition: Golf is staged, so Alpha stays the ONLY region center');
+    assert.equal(golf.regionId, '0:0', 'fixture precondition: Golf lands in Alpha\'s region (nearest, low confidence) — Alpha stays the ONLY region center either way');
+    assert.equal(golf.placementConfidence, 'low', 'sanity: Golf really was an unconfident "nearest" placement, not a genuine similarity match');
 
     const statuses = [];
     for (let i = 0; i < 6; i += 1) statuses.push((await graphCore.checkAndPlace('Golf: golf lima oscar quebec')).status);
@@ -709,23 +714,19 @@ test('checkAndPlace(): a context that is NEW relative to every node still fires 
     assert.notEqual(newFact.status, 'no-change', 'far from EVERY node fires even though the topic-center distance is unchanged from baseline');
 });
 
-test('checkAndPlace(): a genuinely UNRELATED second node can seed its OWN dartboard region instead of being forced into the first — a region with no center yet must be a NEUTRAL candidate, not a permanently-losing one', async () => {
-    // Перенесено с бутстрапа на checkAndPlace() — LLM-driven семантический
-    // бутстрап (MEMORY_GRAPH.md) больше не ходит через дартборд-каскад
-    // (vectorProbsForAllRegions/decideFirstPlacement) вообще, только
-    // checkAndPlace() (органический рост) всё ещё на нём — решено с
-    // пользователем явно. Регрессия, которую этот тест доказывает, теперь
-    // актуальна только здесь.
-    //
-    // Слова подобраны так, чтобы fakeEmbed() дал ЧИСТЫЕ ортогональные векторы
-    // (ни одного общего слова, каждый набор целиком хэшируется в своё
-    // измерение из 4) — реальный, а не притянутый пример "совсем другой
-    // темы": cosineSimilarity=0, сдвинутый сходство ровно 0.5, СТОЛЬКО ЖЕ,
-    // сколько нейтральная базовая линия у любого пустого региона после
-    // фикса. Это прямой тест на self-reinforcing баг: до фикса пустой
-    // регион имел сходство 0 (хуже любого совпадения, а не "неизвестно"),
-    // поэтому единственный уже занятый регион побеждал АБСОЛЮТНО ВСЕГДА —
-    // ни одна вторая тема никогда не получала свой регион.
+test('checkAndPlace(): a genuinely UNRELATED second topic still lands somewhere (nearest, low-confidence) instead of being lost to the накопитель — MEMORY_GRAPH_FIX_PLAN.md, Этап 3 deliberately retired the old "seed a fresh empty region" behavior', async () => {
+    // ИСТОРИЯ (см. git-блейм и ROADMAP 5.107в для контекста): этот тест раньше доказывал, что совсем другая тема
+    // получает СВОЙ регион, а не тянется в первый занятый — было актуально, пока размещение шло softmax'ом по ВСЕМ
+    // 15 регионам разом (`computeRegionLogits`/`vectorProbsForAllRegions`), и там был реальный self-reinforcing баг:
+    // пустой регион получал сходство 0 (хуже любого совпадения), поэтому единственный уже занятый регион побеждал
+    // абсолютно всегда. Этап 3 убрал этот механизм целиком — решение теперь идёт СРАВНЕНИЕМ С ЦЕНТРАМИ
+    // (`pickRegionBySimilarity`), и "пустой регион" в этой формуле просто не участвует как кандидат вообще (нечего
+    // сравнивать). Новый каскад (`decideFirstPlacement`'s doc-comment) НАРОЧНО не заводит новый регион под вторую
+    // тему сам по себе — центры уже есть → нода уходит в ЛУЧШИЙ по сходству регион, даже если сходство никакое,
+    // помеченная `placementConfidence:'low'` — это осознанный компромисс плана (П2: накопитель почти никогда не
+    // должен быть первой реакцией на "не идеально уверен"), не регрессия. Открытие ВТОРОГО реального региона при
+    // органическом росте — не покрыто ни одним механизмом Phase 1 (семантические регионы заводит ТОЛЬКО бутстрап
+    // из Lorebook, LLM-driven, которого этот тест сознательно не касается).
     const { graphCore } = buildEngine({
         fetchReplies: [
             '{"label":"Topic Alpha","content":"alpha bravo charlie delta echo hotel juliet mike","importance":5}',
@@ -737,11 +738,6 @@ test('checkAndPlace(): a genuinely UNRELATED second node can seed its OWN dartbo
 
     // Первые ДВА вызова гарантированно "сильное изменение" (нет базовой
     // линии distanceStats, count<2) — isStrongChange() всегда true.
-    // ВАЖНО: эмбединг для РАЗМЕЩЕНИЯ считается из АРГУМЕНТА checkAndPlace()
-    // (контекст, не content ответа модели) — те же ортогональные слова
-    // нужны ЗДЕСЬ, не в fetchReplies выше (реальная ловушка при переносе
-    // теста: с обычным текстом контекста оба вызова считали ПОХОЖИЙ
-    // эмбединг, и регрессия просто не воспроизводилась).
     await graphCore.checkAndPlace('alpha bravo charlie delta echo hotel juliet mike');
     await graphCore.checkAndPlace('golf lima oscar quebec sierra yankee');
 
@@ -749,19 +745,18 @@ test('checkAndPlace(): a genuinely UNRELATED second node can seed its OWN dartbo
     const first = nodes.find(n => n.label === 'Topic Alpha');
     const second = nodes.find(n => n.label === 'Topic Beta');
     assert.equal(first.regionId, '0:0', 'first node still seeds the bootstrap region 0:0, unchanged');
-    assert.notEqual(second.regionId, '0:0', 'an unrelated second topic must NOT be dragged into the first region just because it is the only one with a center yet');
+    assert.equal(second.regionId, '0:0', 'a genuinely unrelated second topic still gets PLACED — into the only region that exists — rather than lost to staging');
+    assert.equal(second.placementConfidence, 'low', 'the placement is honestly flagged as a weak match, not silently treated as confident');
 });
 
-test('a node that lands in a genuine tie (no confident region, graph no longer empty) is exposed via memoryGraph.staging — not silently invisible ("каскад не проходит" reported live)', async () => {
-    // Тот же фикстур, что и "ВАЖНО" тест выше: с ПОЛНОСТЬЮ ортогональными
-    // словами и пустым словарём региона у второй темы, логит-формула даёт
-    // РОВНО одинаковую вероятность у всех 15 регионов (region 0:0's центр
-    // ортогонален новому эмбедингу ровно так же, как и 14 пустых регионов) —
-    // pickConfidentRegion() честно отказывается ("best >= second*1.5" не
-    // выполняется при точном равенстве), а isEmptyGraph уже false (у 0:0
-    // есть центр) — единственный оставшийся исход decideFirstPlacement()
-    // это 'staged'. Раньше эта нода была видна ТОЛЬКО как node.regionId===null
-    // внутри Ядра — никакой контракт её не отдавал.
+test('a former "genuine tie" case no longer gets stuck in the накопитель at all — MEMORY_GRAPH_FIX_PLAN.md, Этап 3 (this exact fixture used to stage the node before Этап 3 — see ROADMAP 5.107в for the history)', async () => {
+    // Раньше (softmax по всем 15 регионам) этот фикстур давал РОВНО одинаковую вероятность region 0:0 и любого из
+    // 14 пустых регионов — честная ничья, `pickConfidentRegion()` отказывался, единственный исход был `staged`, и
+    // `memoryGraph.staging` был единственным способом вообще УВИДЕТЬ такую ноду (раньше это было видно только как
+    // `node.regionId===null` внутри Ядра). Этап 3 убрал softmax по всем 15 регионам целиком — сравнение теперь
+    // ТОЛЬКО с центрами (`pickRegionBySimilarity`), пустые регионы больше не участвуют как кандидаты вообще, и
+    // "ничьей" тут просто неоткуда взяться: единственный центр (Topic Alpha) побеждает по умолчанию как ЛУЧШИЙ (пусть
+    // и не уверенный) — нода размещается, не зависает.
     const { graphCore, caller } = buildEngine({
         fetchReplies: [
             '{"label":"Topic Alpha","content":"alpha bravo charlie delta echo hotel juliet mike","importance":5}',
@@ -775,11 +770,11 @@ test('a node that lands in a genuine tie (no confident region, graph no longer e
     await graphCore.checkAndPlace('golf lima oscar quebec sierra yankee');
 
     const second = graphCore.nodes().find(n => n.label === 'Topic Beta');
-    assert.equal(second.regionId, null, 'a genuine tie across all 15 regions must not force an arbitrary placement');
+    assert.notEqual(second.regionId, null, 'the tied node is PLACED now, not staged away — накопитель почти никогда не должен быть первой реакцией на "не уверен" (П2 плана)');
+    assert.equal(second.placementConfidence, 'low', 'placed, but honestly flagged as an unconfident match');
 
     const staging = (await call(caller, 'memoryGraph.staging')).value;
-    assert.equal(staging.length, 1, 'the tied node must show up in the accumulator contract, not just vanish from view');
-    assert.equal(staging[0].nodeId, second.id);
+    assert.deepEqual(staging, [], 'the accumulator stays empty — nothing gets stuck for this case anymore');
 });
 
 test('a region past capacity (23) queues its weakest CLUSTER for reconsolidation instead of evicting immediately — reconsolidation is preferred, it preserves more information than outright deletion', async () => {
@@ -1637,29 +1632,33 @@ test('a node written by an OLD version of the graph (no clock yet, stale created
     assert.ok(finalNodes.some(n => n.label === 'Charlie'), 'Charlie (just created) must survive');
 });
 
-test('a node stuck in the накопитель is not abandoned across a reload — it is retried once the chat has grown past its due turn', async () => {
-    const { graphCore, engine, caller } = buildEngine({
-        fetchReplies: [
-            '{"label":"Topic Alpha","content":"alpha bravo charlie delta echo hotel juliet mike","importance":5}', // уверенно размещается, сеет регион 0:0
-            '{"label":"Topic Beta","content":"golf lima oscar quebec sierra yankee","importance":5}', // настоящая ничья по всем 15 регионам -> в накопитель
-            '1: Beta Category', // ПОЗДНИЙ ответ escalateToSideCar() — после reload, когда истечёт полный срок накопителя
-        ],
+test('a node stuck in the накопитель (no embedding at all — the ONLY remaining reason under Этап 3, see decideFirstPlacement()\'s doc-comment) survives a reload and is retried on schedule, not abandoned', async () => {
+    // ИСТОРИЯ (ROADMAP 5.107в): раньше эта фикстура (Alpha/Beta, честная ничья по 15 регионам) сама заводила
+    // застрявшую ноду. Этап 3 убрал softmax по 15 регионам — такая ничья теперь просто размещается (nearest, см.
+    // соседний тест выше), в накопитель больше не попадает. Единственный оставшийся путь в `staging` — нода без
+    // эмбединга вовсе, который сегодня не воспроизводится ни одним вызывающим `placeNewNode()`; подкладываем его
+    // НАПРЯМУЮ в хранилище — ровно то, что видел бы граф, если бы `embedding.compute` для какой-то ноды когда-то
+    // не сработал, а её всё равно завели. `clock` тоже подложен явно (уже "мигрированный" вид) — тест про
+    // расписание ретраев/эскалации, не про миграцию (её отдельно проверяет тест Этапа 2).
+    const { engine, graphCore, caller } = buildEngine({
+        fetchReplies: ['1: Orphan Category'], // ПОЗДНИЙ ответ escalateToSideCar() — после reload, когда истечёт полный срок накопителя
     });
     await graphCore.load();
     await graphCore.waitForBootstrap();
 
-    await graphCore.checkAndPlace('alpha bravo charlie delta echo hotel juliet mike', { chatLength: 5 });
-    await graphCore.checkAndPlace('golf lima oscar quebec sierra yankee', { chatLength: 6 }); // тот же фикстур ничьей, что и в тесте memoryGraph.staging выше
-
-    const staged = graphCore.staging();
-    assert.equal(staged.length, 1, 'sanity: Topic Beta landed in the accumulator, exactly like the sibling test above');
-    assert.equal(staged[0].firstAttemptTurn, 6);
+    const orphan = {
+        id: 'node_orphan', label: 'Orphan', content: 'a fact whose embedding failed to compute.', importance: 5, degree: 0,
+        createdAt: 0, createdTurn: 6, lastTouchedTurn: 6, protectedNode: false, regionId: null, edges: [], gameTime: null,
+    };
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'nodes', value: { [orphan.id]: orphan } });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'staging', value: { [orphan.id]: { nodeId: orphan.id, attemptCount: 1, firstAttemptTurn: 6 } } });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'clock', value: { value: 6, version: 1 } });
 
     // "Перезагрузка" — новый экземпляр поверх ТОГО ЖЕ хранилища.
     const reloaded = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.reloaded', 'cores', { tier: 'official' }));
     await reloaded.load();
     await reloaded.waitForBootstrap();
-    assert.equal(reloaded.staging().length, 1, 'the staged entry must have survived the reload');
+    assert.equal(reloaded.staging().length, 1, 'sanity: the embedding-less node really did survive the reload as a staged entry');
 
     // Чат растёт ДО срока ретрая (firstAttemptTurn 6 + stagingRetryTurns) — sweep не должен ничего трогать: часы
     // корректно продолжились с 6, а не сбросились в 0 (иначе dueAt был бы недостижим ещё очень долго).
@@ -1678,7 +1677,86 @@ test('a node stuck in the накопитель is not abandoned across a reload 
     await reloaded.sweepStaging();
 
     assert.equal(reloaded.staging().length, 0, 'the entry must be gone from the accumulator — processed, not stuck forever');
-    assert.ok(reloaded.nodes().some(n => n.label === 'Topic Beta'), 'escalation must have actually placed the node somewhere, not silently dropped it');
+    assert.ok(reloaded.nodes().some(n => n.label === 'Orphan'), 'escalation must have actually placed the node somewhere, not silently dropped it');
+});
+
+test('two nodes with similar (but not byte-identical) meaning both land in a region immediately — never staged (MEMORY_GRAPH_FIX_PLAN.md, Этап 3)', async () => {
+    const { graphCore, caller } = buildEngine({
+        fetchReplies: [
+            '{"label":"Marcus Bio","content":"alpha bravo charlie delta echo","importance":5}',
+            '{"label":"Marcus Update","content":"alpha bravo charlie delta foxtrot","importance":5}', // похоже, но не то же самое — один "чужой" корень вместо одного из пяти
+        ],
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('alpha bravo charlie delta echo');
+    await graphCore.checkAndPlace('alpha bravo charlie delta foxtrot');
+
+    const nodes = graphCore.nodes();
+    assert.equal(nodes.length, 2, 'sanity: both facts were actually extracted');
+    assert.ok(nodes.every(n => n.regionId != null), 'both nodes must be placed into a real region — neither one staged');
+    const second = nodes.find(n => n.label === 'Marcus Update');
+    assert.notEqual(second.placementConfidence, 'low', 'sanity: 4 of 5 shared words is similar enough for a genuinely CONFIDENT match, not merely "nearest"');
+    assert.deepEqual((await call(caller, 'memoryGraph.staging')).value, []);
+});
+
+test('escalateToSideCar(): a model failure leaves the batch\'s nodes in the накопитель — they are retried later, never silently deleted (MEMORY_GRAPH_FIX_PLAN.md, Этап 3 — before this fix, a failed model.generate() call deleted the ENTIRE batch outright)', async () => {
+    const fetchOverride = async () => ({ status: 500, ok: false, headers: { entries: () => [] }, text: async () => 'Internal Server Error' });
+    const { engine, graphCore, caller } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    // Нода без эмбединга (единственный сегодняшний путь в накопитель под Этапом 3) — attemptCount:2 и старый
+    // firstAttemptTurn, чтобы decideStagingStep() сразу решил "escalate" на первом же sweep.
+    const orphan = {
+        id: 'node_orphan', label: 'Orphan', content: 'a fact whose embedding failed to compute.', importance: 5, degree: 0,
+        createdAt: 0, createdTurn: 0, lastTouchedTurn: 0, protectedNode: false, regionId: null, edges: [], gameTime: null,
+    };
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'nodes', value: { [orphan.id]: orphan } });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'staging', value: { [orphan.id]: { nodeId: orphan.id, attemptCount: 2, firstAttemptTurn: 0 } } });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'clock', value: { value: DEFAULT_SETTINGS.stagingRetryTurns + DEFAULT_SETTINGS.stagingMaxTurns, version: 1 } });
+
+    const reloaded = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.reloaded', 'cores', { tier: 'official' }));
+    await reloaded.load();
+    await reloaded.waitForBootstrap();
+
+    await reloaded.sweepStaging();
+
+    assert.ok(reloaded.nodes().some(n => n.id === orphan.id), 'the node must still exist — a model failure is not a reason to lose a fact forever');
+    assert.equal(reloaded.staging().length, 1, 'and it must still be sitting in the накопитель, ready to try again on the next sweep');
+});
+
+test('escalateToSideCar(): a model verdict label is matched to the REAL region by similarity, not dumped into 0:0 unconditionally (MEMORY_GRAPH_FIX_PLAN.md, Этап 3)', async () => {
+    const { engine, graphCore, caller } = buildEngine({
+        fetchReplies: ['1: golf lima oscar quebec sierra'], // ПОЗДНИЙ ответ escalateToSideCar() — похож на регион Beta (1:1), не на Alpha (0:0)
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    // Два региона С ЦЕНТРАМИ, заведённые вручную — органический каскад всегда сажает самый первый узел в 0:0 и
+    // дальше тянет туда же всё остальное (единственный анкер), для теста нужен явный ВТОРОЙ центр.
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Alpha', content: 'alpha bravo charlie delta echo', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Beta', content: 'golf lima oscar quebec sierra', sector: 1, ring: 1 });
+
+    // Нода без эмбединга — сразу в escalate (attemptCount:2, полный срок уже истёк).
+    const orphan = {
+        id: 'node_orphan', label: 'Orphan', content: 'needs a home', importance: 5, degree: 0,
+        createdAt: 0, createdTurn: 0, lastTouchedTurn: 0, protectedNode: false, regionId: null, edges: [], gameTime: null,
+    };
+    const nodesResult = await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'nodes', fallback: {} });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'nodes', value: { ...nodesResult.value, [orphan.id]: orphan } });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'staging', value: { [orphan.id]: { nodeId: orphan.id, attemptCount: 2, firstAttemptTurn: 0 } } });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'clock', value: { value: DEFAULT_SETTINGS.stagingRetryTurns + DEFAULT_SETTINGS.stagingMaxTurns, version: 1 } });
+
+    const reloaded = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.reloaded2', 'cores', { tier: 'official' }));
+    await reloaded.load();
+    await reloaded.waitForBootstrap();
+
+    await reloaded.sweepStaging();
+
+    const placed = reloaded.nodes().find(n => n.id === orphan.id);
+    assert.equal(placed?.regionId, '1:1', 'the verdict label reads like Beta\'s topic, not Alpha\'s — it must land by similarity, not by an unconditional 0:0 default');
 });
 
 // --- Real Lorebook Core integration (not the synchronous fake above) -----
