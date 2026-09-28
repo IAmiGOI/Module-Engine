@@ -11,18 +11,27 @@ import { summarizeDecision } from '../memory-graph/decision-log.js';
 // MEMORY_GRAPH_UI_PLAN.md, Этап 1 — геометрия и стили Cytoscape вынесены в отдельные файлы БЕЗ ИЗМЕНЕНИЯ
 // ПОВЕДЕНИЯ (см. их doc-comment); реэкспортированы ниже (после констант окна) — существующие импорты (тестов, в
 // частности) продолжают работать без правки.
-import {
-    BG_SVG_ID, MAX_RADIUS, packOffsetInRegion, regionLayoutPosition, pixelToRegion, regionWedgePath,
-    renderRegionBackgroundSvg, backgroundTransformCss, SEMANTIC_MIN_ANCHOR_DISTANCE, SEMANTIC_MIN_POINT_DISTANCE,
-    SEMANTIC_MAX_ANCHOR_DISTANCE, SEMANTIC_REGION_GAP, semanticAnchorRadius, fallbackSemanticPosition,
-    STAGING_ANCHOR_DISTANCE, stagedNodePosition,
-} from './memory-graph/legacy-geometry.js';
-import { graphStylesheet, PREVIEW_ID } from './memory-graph/stylesheet.js';
+// Из всего набора legacy-geometry.js локально ЕЩЁ используются только эти три (создание превью-маркера и
+// интерпретация клика/драга, см. doc-comment ниже) — остальные имена реэкспортируются (следующий блок) ради
+// тестов (`tests/memory-graph-panel.test.js` берёт их из ЭТОГО файла, не из legacy-geometry.js напрямую), но
+// собственный код панели их больше не зовёт: `export {…} from '…'` не требует отдельного локального `import`.
+import { regionLayoutPosition, pixelToRegion, backgroundTransformCss } from './memory-graph/legacy-geometry.js';
+import { graphStylesheet, weightColor, PREVIEW_ID } from './memory-graph/stylesheet.js';
 export {
     MAX_RADIUS, packOffsetInRegion, regionLayoutPosition, pixelToRegion, regionWedgePath, renderRegionBackgroundSvg,
     SEMANTIC_MAX_ANCHOR_DISTANCE, SEMANTIC_REGION_GAP, semanticAnchorRadius, fallbackSemanticPosition,
     STAGING_ANCHOR_DISTANCE, stagedNodePosition, backgroundTransformCss,
 } from './memory-graph/legacy-geometry.js';
+// MEMORY_GRAPH_UI_PLAN.md, Этап 4 — раскладка/фон/синхронизация переключены на зоны (layout.js/zones-svg.js) и
+// диффинг (elements-diff.js) вместо дартборда (legacy-geometry.js, реэкспорт выше остаётся — план запрещает
+// удалять код с тестами) и полной пересборки `cy.elements().remove()`. `pixelToRegion()`/`regionLayoutPosition()`/
+// `fallbackSemanticPosition()`/`stagedNodePosition()` из реэкспорта выше по-прежнему используются ниже, но ТОЛЬКО
+// для интерпретации клика/драга (Б3-геометрия, привязанная к дартборду) — Этап 7 того же плана заменит их на
+// `zoneAt()` (layout.js); до тех пор клик/драг по канвасу решают регион по СТАРОЙ дартборд-сетке, а сам фон и
+// позиции нод уже рисуются по НОВЫМ зонам — известное временное расхождение, см. ROADMAP 5.108г.
+import { layoutGraph, nodeRadius } from './memory-graph/layout.js';
+import { diffElements } from './memory-graph/elements-diff.js';
+import { renderZonesSvg, zonesSignature, ZONES_SVG_ID } from './memory-graph/zones-svg.js';
 
 /**
  * Визуальный редактор графа памяти — решено с пользователем явно:
@@ -38,12 +47,12 @@ export {
  * `cores/memory-graph`.
  *
  * Канвас — Cytoscape.js (готовая CDN-библиотека, решено явно — не свой
- * force-движок с нуля). Позиция узла на экране = `sector`/`ring` РЕГИОНА
- * (не свободные x/y — решено с пользователем: "перетаскивание = смена
- * региона по-настоящему"), layout `preset` — координаты вычисляет сам
- * `regionLayoutPosition()`, не автоматический force-layout поверх (иначе
- * узлы визуально уедут из своей ячейки дартса и перестанут отражать
- * реальный регион).
+ * force-движок с нуля). Позиция узла на экране = его РЕГИОН (не свободные
+ * x/y — решено с пользователем: "перетаскивание = смена региона
+ * по-настоящему"), layout `preset` — координаты вычисляет `layoutGraph()`
+ * (MEMORY_GRAPH_UI_PLAN.md, Этап 3/4: зоны-кольца регионов, не сетка
+ * дартборда), не автоматический force-layout поверх (иначе узлы визуально
+ * уедут из своей зоны и перестанут отражать реальный регион).
  */
 
 const MODULE_UI_NAMESPACE = 'core.ui.memoryGraph';
@@ -405,94 +414,135 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
 
     // --- Cytoscape: инициализация + синхронизация elements --------------
     let cy = null;
+    // Нода, которую СЕЙЧАС держит мышь (`grab`…`free`) — MEMORY_GRAPH_UI_PLAN.md, Этап 4.1: её ПОЗИЦИЮ диффинг
+    // ниже трогать не должен (см. diffElements()'s doc-comment), иначе свежепосчитанная раскладка того же региона
+    // могла бы "выдернуть" ноду из-под пальца на середине драга.
+    let draggingId = null;
+    // Последние посчитанные зоны — нужны `updateBackgroundTransform()` отдельно от `renderZonesSvg()` (тот же
+    // набор зон определяет и СТРОКУ SVG, и половину его стороны для смещения в `backgroundTransformCss()`, но
+    // пересчитывать/перерисовывать саму строку на каждый 'pan'/'zoom' незачем — только на реальное изменение зон).
+    let currentZones = [];
+    let lastZonesSignature = null;
 
-    function edgeElements() {
+    /** Регионы — плоский объект по `id` (`layoutGraph()`'s формат), а не массив, что отдаёт `memoryGraph.regions`. */
+    function regionsById() {
+        const map = {};
+        for (const region of regions()) map[region.id] = region;
+        return map;
+    }
+
+    /**
+     * Единая раскладка — MEMORY_GRAPH_UI_PLAN.md, Этап 3/4: зоны-кольца регионов вместо дартборда (`layoutGraph()`,
+     * layout.js), а не три разные ветки (`stagedNodePosition`/`regionLayoutPosition`/`fallbackSemanticPosition`),
+     * что рисовали РАЗНУЮ геометрию для числовых/семантических/накопительных регионов, никогда не совпадавшую с
+     * фоном (Б1 плана). Ноды графа уже несут `regionId`/`degree`/`protectedNode`/`createdAt`/`weightRank` — Ядро
+     * отдаёт их напрямую (`nodesForResponse()`, Этап 2), `layoutGraph()` требует ровно эти поля.
+     */
+    function computeGraphLayout() {
+        return layoutGraph(nodes(), regionsById());
+    }
+
+    /** `Map(id → { group, data, position? })` для ВСЕХ элементов, что ДОЛЖНЫ быть на канвасе прямо сейчас — вход для `diffElements()`. `positions`/`radii` — уже посчитанная `layoutGraph()` (вызывающий, `syncCytoscape()`, считает её ОДИН раз и на элементы, и на зоны фона). */
+    function buildNextElements({ positions, radii }) {
+        const byId = new Map(nodes().map(node => [node.id, node]));
+        const map = new Map();
+        for (const node of nodes()) {
+            const size = 2 * (radii.get(node.id) ?? nodeRadius(node));
+            // `glow` — сегодня простая константа (0.22 обычным, 0.35 защищённым — те же числа, что план даёт для
+            // 4.2), но ЧЕРЕЗ data(), не хардкод в стиле: Этап 6 (metrics.js, несколько режимов "glow by") заменит
+            // это на посчитанное метрикой значение, не трогая graphStylesheet() вообще ("не зашивать метрики в
+            // стили — только data(color|size|glow)").
+            map.set(node.id, {
+                group: 'nodes',
+                data: {
+                    id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode),
+                    importance: node.importance ?? 0, size, color: weightColor(node.protectedNode ? 1 : (node.weightRank ?? 0)),
+                    glow: node.protectedNode ? 0.35 : 0.22,
+                },
+                position: positions.get(node.id) ?? { x: 0, y: 0 },
+            });
+        }
         const seen = new Set();
-        const elements = [];
         for (const node of nodes()) {
             for (const edge of node.edges ?? []) {
                 const key = [node.id, edge.to].sort().join('|') + ':' + edge.type;
                 if (seen.has(key)) continue; // рёбра двусторонние в данных — одна визуальная линия на пару
                 seen.add(key);
-                elements.push({ data: { id: `edge:${key}`, source: node.id, target: edge.to, type: edge.type } });
+                const other = byId.get(edge.to);
+                const backbone = Boolean(node.protectedNode && other?.protectedNode);
+                map.set(`edge:${key}`, { group: 'edges', data: { id: `edge:${key}`, source: node.id, target: edge.to, type: edge.type, backbone } });
             }
         }
-        return elements;
+        if (isCreating() && previewPosition()) {
+            map.set(PREVIEW_ID, { group: 'nodes', data: { id: PREVIEW_ID, label: formLabel() || 'New node' }, position: previewPosition() });
+        }
+        return map;
     }
 
-    function nodeElements() {
-        const perRegion = new Map();
-        for (const node of nodes()) {
-            const key = node.regionId ?? 'staged';
-            if (!perRegion.has(key)) perRegion.set(key, []);
-            perRegion.get(key).push(node);
-        }
-        // Отсортировано — тот же список семантических регионов даёт тот же
-        // угол при каждой перерисовке (иначе порядок Map's insertion, который
-        // зависит от порядка ПРИХОДА нод, мог бы тасовать углы регионов
-        // между собой на каждый refresh()).
-        const semanticRegionIds = [...perRegion.keys()].filter(key => key !== 'staged' && !/^\d+:\d+$/.test(key)).sort();
-        const elements = [];
-        for (const [regionId, members] of perRegion) {
-            members.forEach((node, index) => {
-                const position = regionId === 'staged'
-                    ? stagedNodePosition(index)
-                    : (/^\d+:\d+$/.test(regionId)
-                        ? regionLayoutPosition(...regionId.split(':').map(Number), { indexInRegion: index })
-                        : fallbackSemanticPosition(regionId, index, semanticRegionIds));
-                elements.push({
-                    data: { id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode), importance: node.importance ?? 0 },
-                    position,
-                });
-            });
-        }
-        return elements;
+    /** `Map(id → { group, data, position? })` из живого `cy` — то, что РЕАЛЬНО сейчас на канвасе (см. `diffElements()`'s doc-comment за тем, зачем нужны обе стороны). */
+    function currentElements() {
+        const map = new Map();
+        if (!cy) return map;
+        cy.elements().forEach(ele => {
+            map.set(ele.id(), { group: ele.isNode() ? 'nodes' : 'edges', data: ele.data(), position: ele.isNode() ? ele.position() : undefined });
+        });
+        return map;
     }
 
     /**
-     * Держит подложку регионов синхронной с ЖИВЫМ pan/zoom Cytoscape —
-     * решено с пользователем: подложка считалась под один фиксированный
-     * масштаб и "физически уезжала" при любом драге/скролле канваса.
-     * Тот же расчёт экран=pan+модель*zoom, что использует сам Cytoscape.
+     * Держит подложку зон синхронной с ЖИВЫМ pan/zoom Cytoscape — решено с
+     * пользователем: подложка считалась под один фиксированный масштаб и
+     * "физически уезжала" при любом драге/скролле канваса. Тот же расчёт
+     * экран=pan+модель*zoom, что использует сам Cytoscape; `currentZones`'s
+     * максимальный `rOuter` — та же половина стороны, что `renderZonesSvg()`
+     * посчитала для самой строки SVG (см. `updateZonesBackground()`).
      */
     function updateBackgroundTransform() {
         if (!cy) return;
-        const svg = document.getElementById(BG_SVG_ID);
+        const svg = document.getElementById(ZONES_SVG_ID);
         if (!svg) return;
-        svg.style.transform = backgroundTransformCss(cy.pan(), cy.zoom());
+        const half = currentZones.length ? Math.max(...currentZones.map(zone => zone.rOuter)) : 1;
+        svg.style.transform = backgroundTransformCss(cy.pan(), cy.zoom(), half);
+    }
+
+    /** Перерисовывает `<svg>` фона зон ТОЛЬКО когда зоны реально изменились (`zonesSignature()`) — план прямо просит не делать этого на каждый pan/zoom/refresh, раз `layoutGraph()` детерминирован и часто отдаёт БАЙТ-В-БАЙТ те же зоны. */
+    function updateZonesBackground(zones) {
+        currentZones = zones;
+        const signature = zonesSignature(zones);
+        if (signature === lastZonesSignature) { updateBackgroundTransform(); return; }
+        lastZonesSignature = signature;
+        const bg = document.getElementById(BG_ID);
+        if (bg) bg.innerHTML = renderZonesSvg(zones);
+        updateBackgroundTransform();
     }
 
     async function ensureCytoscape() {
         if (cy) return cy;
         const container = document.getElementById(CANVAS_ID);
         if (!container) return null;
-        // Фон региона — статичный SVG под канвасом, В МОДЕЛЬНЫХ единицах
-        // (см. renderRegionBackgroundSvg()'s doc-comment) — рисуется ОДИН
-        // раз здесь, не в syncCytoscape(): регионы (сектора/кольца) сами по
-        // себе не меняются, перерисовывать разметку при каждом изменении
-        // графа незачем, а её ЭКРАННОЕ положение держит
-        // `updateBackgroundTransform()` через 'pan'/'zoom' ниже.
-        const bg = document.getElementById(BG_ID);
-        if (bg) bg.innerHTML = renderRegionBackgroundSvg();
         const cytoscape = await loadCytoscape();
         cy = cytoscape({
             container,
-            elements: [...nodeElements(), ...edgeElements()],
+            elements: [], // первое заполнение идёт через syncCytoscape() ниже — тот же путь diffElements(), что и любое последующее обновление, не отдельная ветка "начального" списка.
             layout: { name: 'preset' },
-            // MEMORY_GRAPH_UI_PLAN.md, Этап 1 — сам массив стилей вынесен в graphStylesheet() (stylesheet.js) БЕЗ
-            // ИЗМЕНЕНИЯ ПОВЕДЕНИЯ, см. его doc-comment.
             style: graphStylesheet(),
             wheelSensitivity: 0.2,
+            // Качество отрисовки (ориентир — карта EVE Online, план 4.2): чёткость важнее скорости на наших
+            // размерах (сотни нод, не десятки тысяч). `pixelRatio: 'auto'` — резкость на HiDPI-экранах.
+            pixelRatio: 'auto', textureOnViewport: false, motionBlur: false, hideEdgesOnViewport: false,
         });
-        // Начальный кадр (auto-fit ещё не выставил pan/zoom за пределами
-        // конструктора) + КАЖДОЕ последующее изменение — драг/скролл
-        // канваса живьём шлёт эти события, syncCytoscape()'s `.layout(...).run()`
-        // тоже (fit пересчитывает масштаб под новый набор нод).
-        // Начальный вид — ВЕСЬ дартборд по центру канваса: модельные координаты центрированы на (0, 0), а у Cytoscape по умолчанию pan = (0, 0)
-        // и zoom = 1, то есть (0, 0) лежал в ЛЕВОМ ВЕРХНЕМ углу холста и была видна только правая нижняя четверть графа.
+        syncCytoscape(); // первая раскладка + фон зон — тем же кодом, что и обычное обновление
+        // Начальный вид — ВЕСЬ круг зон по центру канваса: модельные
+        // координаты центрированы на (0, 0), а у Cytoscape по умолчанию
+        // pan = (0, 0) и zoom = 1, то есть (0, 0) лежал бы в ЛЕВОМ ВЕРХНЕМ
+        // углу холста. Половина стороны — реальный внешний край зон
+        // (`currentZones`, только что посчитан `syncCytoscape()` выше), не
+        // фиксированный MAX_RADIUS: раскладка теперь переменного размера
+        // (регионы — данные, не сетка 5×3).
         const width = container.clientWidth || 480;
         const height = container.clientHeight || 480;
-        cy.viewport({ zoom: Math.min(width, height) / (2 * MAX_RADIUS), pan: { x: width / 2, y: height / 2 } });
+        const halfExtent = currentZones.length ? Math.max(...currentZones.map(zone => zone.rOuter)) : 200;
+        cy.viewport({ zoom: Math.min(width, height) / (2 * halfExtent), pan: { x: width / 2, y: height / 2 } });
         cy.on('pan zoom', updateBackgroundTransform);
         updateBackgroundTransform();
         cy.on('tap', 'node', event => {
@@ -500,7 +550,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             openEditForm(nodes().find(node => node.id === event.target.id()));
         });
         // Имя показывается ТОЛЬКО под курсором (решено с пользователем —
-        // при 61 ноде подписи разом занимали весь холст).
+        // при 61 ноде подписи разом занимали весь холст) — данные крупные/
+        // защищённые ноды теперь ВСЕГДА подписаны через graphStylesheet(),
+        // класс `.hovered` покрывает только ОСТАЛЬНЫЕ, мелкие ноды.
         cy.on('mouseover', 'node', event => event.target.addClass('hovered'));
         cy.on('mouseout', 'node', event => event.target.removeClass('hovered'));
         // Клик по ребру удаляет его СРАЗУ, без `confirm()` — тот же принцип,
@@ -514,6 +566,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // (кнопка "+ Node" уже нажата), уточняет sector/ring по месту клика
         // (`event.position` — координаты модели, ТЕ ЖЕ, что раскладка узлов,
         // preset-layout не масштабирует их); иначе просто закрывает форму.
+        // ВРЕМЕННО всё ещё дартборд-геометрия (`pixelToRegion`) — Этап 7
+        // плана заменит на `zoneAt()` (layout.js), см. doc-comment у
+        // импортов вверху файла и ROADMAP 5.108г.
         cy.on('tap', event => {
             if (event.target !== cy) return;
             if (isCreating()) {
@@ -525,6 +580,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 previewPosition.set({ x: event.position.x, y: event.position.y });
             } else closeForm();
         });
+        // `draggingId` — только на время самого драга (Этап 4.1: диффинг не
+        // должен переставлять ноду, которую пользователь ещё держит).
+        cy.on('grab', 'node', event => { draggingId = event.target.id(); });
+        cy.on('free', 'node', event => { draggingId = null; });
         cy.on('dragfree', 'node', event => {
             const node = nodes().find(item => item.id === event.target.id());
             const pos = event.target.position();
@@ -540,24 +599,37 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         return cy;
     }
 
+    /**
+     * Синхронизация БЕЗ полной пересборки (Б3 плана, Этап 4.1) — раньше `cy.elements().remove()` + добавление
+     * всего заново на КАЖДОЕ изменение графа сбрасывало выделение и обрывало перетаскивание (нода "прыгала"
+     * обратно при любом чужом `refresh()`). Теперь — чистый `diffElements()` (elements-diff.js) между тем, что
+     * РЕАЛЬНО на канвасе (`currentElements()`), и тем, что должно быть (`buildNextElements()`); `add`/`remove`
+     * применяются через `cy.add()`/`.remove()`, `update` — точечно через `.data()`/`.position()` на конкретном
+     * элементе, не общий `.layout(...).run()`. Pan/zoom/выделение не трогаются вообще — их вообще не задевает ни
+     * один из этих трёх вызовов.
+     */
     function syncCytoscape() {
         if (!cy) return;
-        cy.elements().remove();
-        const elements = [...nodeElements(), ...edgeElements()];
-        if (isCreating() && previewPosition()) {
-            elements.push({
-                data: { id: PREVIEW_ID, label: formLabel() || 'New node' },
-                position: previewPosition(),
-                grabbable: false, selectable: false,
-            });
+        const { positions, radii, zones } = computeGraphLayout();
+        const next = buildNextElements({ positions, radii });
+        const { add, remove, update } = diffElements(currentElements(), next, { excludeId: draggingId });
+        for (const id of remove) {
+            const ele = cy.getElementById(id);
+            if (ele.nonempty()) cy.remove(ele);
         }
-        cy.add(elements);
-        // `fit: false` — зум/пан колесом мыши (если пользователь успел
-        // покрутить) не должен сбрасываться на каждое изменение графа.
-        // Подложка регионов остаётся синхронной в любом случае — её
-        // экранное положение не хардкодится, а пересчитывается от ЖИВОГО
-        // `cy.pan()`/`cy.zoom()` через 'pan'/'zoom' в ensureCytoscape().
-        cy.layout({ name: 'preset', fit: false }).run();
+        if (add.length) {
+            cy.add(add.map(item => ({
+                group: item.group, data: item.data, position: item.position,
+                grabbable: item.id !== PREVIEW_ID, selectable: item.id !== PREVIEW_ID,
+            })));
+        }
+        for (const item of update) {
+            const ele = cy.getElementById(item.id);
+            if (ele.empty()) continue;
+            if (item.data) ele.data(item.data);
+            if (item.position) ele.position(item.position);
+        }
+        updateZonesBackground(zones);
     }
 
     // --- Компактные зоны боковой панели ------------------------------------------------------------------
@@ -697,7 +769,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     // рисуется напрямую в DOM, см. ensureCytoscape()) и сам
                     // канвас Cytoscape поверх с прозрачным фоном, чтобы
                     // подложка была видна сквозь него.
-                    h('div', { style: { position: 'relative', width: '480px', height: '480px', background: '#1a1a1a', borderRadius: '8px', overflow: 'hidden' } },
+                    h('div', { class: 'stme-mg-canvas-wrap', style: { position: 'relative', width: '480px', height: '480px', borderRadius: '8px', overflow: 'hidden' } },
                         h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } }),
                         h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
                     ),
