@@ -76,6 +76,19 @@ test('closing the endpoint rejects every call still waiting', async () => {
     await assert.rejects(lonely.call('y', {}), /closed/);
 });
 
+test('sending a large multi-chunk body refreshes the idle timer on every chunk sent, not just once at the start (ROADMAP 5.106е, Этап 4.6)', async () => {
+    let armed = 0;
+    const endpoint = createRpcEndpoint({
+        chunkBytes: 100, send: () => {}, drain: async () => {},
+        setTimer: () => { armed += 1; return armed; }, clearTimer: () => {},
+    });
+    endpoint.call('put', {}, { body: new Uint8Array(1000) }).catch(() => {});   // 10 chunks — never resolves (no responder), just watch the sending phase
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // 1 arm right before sending starts, one per chunk sent (10), 1 more right after the whole body finished sending.
+    assert.equal(armed, 12, 'a slow-but-steady large upload refreshes the idle timer as it goes, not only before/after the whole send');
+    endpoint.close();
+});
+
 test('the sender waits for the channel to drain between frames', async () => {
     let buffered = 0;
     let peak = 0;

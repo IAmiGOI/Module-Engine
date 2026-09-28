@@ -299,6 +299,51 @@ test('a mass character deletion (simulating a temporary empty ST listing) is blo
     await stopAll(pair.a, pair.b);
 });
 
+test('when confirming the finished pass with the other device fails, lastSync is not advanced and a problem is shown — files are already synced, only the handshake is not (ROADMAP 5.106д)', async () => {
+    const pair = await createPair({ aFiles: { 'backgrounds/a.png': 'A' } });
+    await connect(pair);
+    // Drop the channel the instant the leader reports 100% progress — the transfer itself is done, but the trailing `finish` RPC
+    // (telling B the final base) has not gone out yet, so it fails exactly like a connection that dies right after the files land.
+    // `events` is a plain array the fake device pushes directly to (its `publish` override bypasses the real event bus), so
+    // catching this synchronously means intercepting the push itself.
+    const originalPush = pair.a.events.push.bind(pair.a.events);
+    let dropped = false;
+    pair.a.events.push = entry => {
+        // The very last per-file progress tick from inside runSync's own loop ({op: null, done === total}) — fires before
+        // runAgainst's trailing writeState/flushCache/refreshStInterface and before runPeer calls `finish`, unlike the run()-level
+        // `sync.progress` reset to null, which only happens once the WHOLE pass (finish included) is already done.
+        const progress = entry[1]?.progress;
+        if (!dropped && entry[0] === 'sync.progress' && progress?.phase === 'syncing' && progress.op === null) { dropped = true; pair.network.dropAll('dropped right after transfer'); }
+        return originalPush(entry);
+    };
+    pair.a.put('backgrounds/b.png', 'B');
+    const before = finishedRuns(pair.a);
+    await pair.a.call('sync.run');
+    await waitFor(() => finishedRuns(pair.a) > before);
+    pair.a.events.push = originalPush;
+    assert.equal(pair.b.text('backgrounds/b.png'), 'B', 'the file itself DID arrive — only the finish handshake failed');
+    const status = await pair.a.call('sync.status');
+    const connection = status.connections.find(item => item.name === 'Phone');
+    assert.ok(connection.problem, 'a problem is shown, same channel as a connection failure');
+    assert.match(connection.problem, /finish|confirm/i);
+    await stopAll(pair.a, pair.b);
+});
+
+test('a file whose claimed hash does not match its real bytes is refused on write, not silently corrupted (ROADMAP 5.106е, Этап 4.3)', async () => {
+    const pair = await createPair({ aFiles: { 'characters/x.png': 'REAL BYTES' } });
+    // Poison A's hash cache BEFORE either core starts (its in-memory cache is loaded lazily on first use and then held for the
+    // session — poisoning stored state afterwards would be invisible to an already-running core). A wrong hash under the file's
+    // real, current stamp makes scanLocal trust it without rehashing — indistinguishable, from the receiving side, from bytes that
+    // got corrupted somewhere on the wire.
+    pair.a.state.set('cache', { 'characters/x.png': { stamp: 'v1', hash: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' } });
+    await connect(pair);
+    const status = await pair.a.call('sync.status');
+    assert.equal(status.last.peers[0].counts.failed, 1, 'the mismatch is a per-file failure, not silently accepted');
+    assert.equal(pair.b.text('characters/x.png'), undefined, 'B never wrote the bad bytes at all');
+    assert.ok(status.last.peers[0].errors.some(line => /integrity/i.test(line)), 'the error is legible, not a generic failure');
+    await stopAll(pair.a, pair.b);
+});
+
 test('if the channel drops the devices reconnect by themselves after the pause and sync again', async () => {
     const pair = await createPair({ aFiles: { 'backgrounds/a.png': 'A' } });
     await connect(pair);

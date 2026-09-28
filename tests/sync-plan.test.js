@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeConflictPath, computeSyncPlan, detectMassDeletion, isConflictCopy, resolveBaseHashes } from '../libraries/core/sync-plan.js';
+import { computeConflictPath, computeSyncPlan, detectMassDeletion, disambiguateConflictPath, isConflictCopy, resolveBaseHashes } from '../libraries/core/sync-plan.js';
 import { computeGitBlobSha } from '../libraries/core/content-hash.js';
 
 const file = (hash, modified = 0, size = 10) => ({ hash, modified, size });
@@ -106,6 +106,44 @@ test('conflict copies are recognized so they never conflict again', () => {
     assert.equal(isConflictCopy('chats/A/log.jsonl'), false);
     assert.equal(computeConflictPath('noext', 'X'), 'noext (conflict X)');
     assert.equal(computeConflictPath('.hidden', 'X'), '.hidden (conflict X)');
+});
+
+// --- Уникальность копии конфликта (ROADMAP 5.106е, Этап 4.5) ---
+
+test('disambiguateConflictPath(): a free candidate is returned as-is', () => {
+    assert.equal(disambiguateConflictPath('a (conflict X).png', new Set()), 'a (conflict X).png');
+});
+
+test('disambiguateConflictPath(): a taken candidate gets " 2", then " 3", … before the extension, first free one wins', () => {
+    const taken = new Set(['a (conflict X).png']);
+    assert.equal(disambiguateConflictPath('a (conflict X).png', taken), 'a (conflict X) 2.png');
+    taken.add('a (conflict X) 2.png');
+    assert.equal(disambiguateConflictPath('a (conflict X).png', taken), 'a (conflict X) 3.png');
+});
+
+test('disambiguateConflictPath(): works without an extension too', () => {
+    assert.equal(disambiguateConflictPath('noext (conflict X)', new Set(['noext (conflict X)'])), 'noext (conflict X) 2');
+});
+
+test('isConflictCopy(): a numbered disambiguated copy is still recognized as a conflict copy — it must never conflict again either', () => {
+    assert.equal(isConflictCopy('chats/A/log (conflict Phone 2026-09-19 14-05-30) 2.jsonl'), true);
+    assert.equal(isConflictCopy('chats/A/log (conflict X) 2'), true);
+});
+
+test('computeSyncPlan(): two conflicts on the same path within the same minute (only seconds differ) get DIFFERENT copy names — the exact bug this stage fixes', () => {
+    // Simulate the label already colliding (e.g. two passes seconds apart landed on the same rounded label) by pre-existing the
+    // first copy's path on both sides, as a real second pass would see it.
+    const conflictPath = computeConflictPath('chats/A/log.jsonl', 'Phone 2026-09-19 14-05-30');
+    const plan = computeSyncPlan({
+        local: { 'chats/A/log.jsonl': file('mine', 2000), [conflictPath]: file('already-there') },
+        remote: { 'chats/A/log.jsonl': file('theirs', 1000), [conflictPath]: file('already-there') },
+        base: { 'chats/A/log.jsonl': 'old', [conflictPath]: 'already-there' },
+        conflictLabel: 'Phone 2026-09-19 14-05-30',
+    });
+    const conflict = plan.actions.find(action => action.path === 'chats/A/log.jsonl');
+    assert.equal(conflict.op, 'conflict');
+    assert.notEqual(conflict.conflictPath, conflictPath, 'the second copy must not overwrite the first one\'s name');
+    assert.equal(conflict.conflictPath, conflictPath.replace('.jsonl', ' 2.jsonl'));
 });
 
 test('base entries can be stored as plain hashes or as objects with a hash', () => {

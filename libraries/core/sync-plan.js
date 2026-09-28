@@ -44,9 +44,31 @@ export function computeConflictPath(path, label) {
     return `${dir}${stem} (conflict ${safeLabel})${ext}`;
 }
 
-/** Файл-копия конфликта не должен снова конфликтовать «по кругу»: копии пропускаются при повторном разборе. */
+/** Файл-копия конфликта не должен снова конфликтовать «по кругу»: копии пропускаются при повторном разборе. `( 2)`/`( 3)` — суффикс
+ *  уникальности из `disambiguateConflictPath` ниже — тоже считается копией. */
 export function isConflictCopy(path) {
-    return /\(conflict [^)]*\)(\.[^/.]*)?$/.test(String(path));
+    return /\(conflict [^)]*\)( \d+)?(\.[^/.]*)?$/.test(String(path));
+}
+
+/**
+ * Уникальность имени копии (ROADMAP 5.106е, Этап 4.5): `computeConflictPath` до этой правки был точен до МИНУТЫ (метка приходит из
+ * `stampLabel` в `cores/sync/index.js`) — два конфликта одного и того же пути в пределах одной минуты (быстрые повторные проходы
+ * при частых правках на обеих сторонах) вычисляли ОДНО И ТО ЖЕ имя копии и вторая копия молча переписывала первую, теряя её
+ * содержимое. Секунды в самой метке сокращают окно почти до нуля, но не гарантируют его — эта функция закрывает случай окончательно:
+ * если готовый кандидат уже существует (передан набор занятых путей — типично `local`/`remote` этого прохода), перед расширением
+ * добавляется ` 2`, ` 3`, … до первого свободного.
+ * @param {string} candidate — уже собранный `computeConflictPath(...)`
+ * @param {Set<string>} taken — пути, которые нельзя занять повторно
+ */
+export function disambiguateConflictPath(candidate, taken) {
+    if (!taken.has(candidate)) return candidate;
+    const slash = candidate.lastIndexOf('/');
+    const dot = candidate.lastIndexOf('.');
+    const [stem, ext] = dot > slash ? [candidate.slice(0, dot), candidate.slice(dot)] : [candidate, ''];
+    for (let n = 2; ; n += 1) {
+        const numbered = `${stem} ${n}${ext}`;
+        if (!taken.has(numbered)) return numbered;
+    }
 }
 
 /**
@@ -69,6 +91,10 @@ function comparable(localEntry, remoteEntry) {
 export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLabel = 'conflict', include = () => true } = {}) {
     const paths = new Set([...Object.keys(local), ...Object.keys(remote), ...Object.keys(base)]);
     const actions = [];
+    // Занятые пути для уникальности копии конфликта (Этап 4.5) — то, что реально есть хоть у одной стороны сейчас; конфликты,
+    // сгенерированные РАНЕЕ в этом же проходе, тоже не могут повториться (разный путь-источник → разное имя копии по построению),
+    // так что достаточно посчитать один раз.
+    const takenPaths = new Set([...Object.keys(local), ...Object.keys(remote)]);
 
     for (const path of [...paths].sort()) {
         if (!include(path, { local: local[path], remote: remote[path] })) continue;
@@ -97,7 +123,9 @@ export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLa
         // `firstMeet` — этот путь ни разу не синхронизировался (`b === null`), а не «изменили оба после общей истории»: разные вещи,
         // случайно попавшие в одну ветку сравнения. Пара только что встретилась — попытка резолвера (`sync-runner.js`) увести проигравшую
         // версию в карантин, а не плодить файл-копию в самой ST, применяется именно к этому случаю (см. `sync-config.js`'s `CONFLICT_POLICY`).
-        actions.push({ op: SYNC_ACTIONS.conflict, path, winner, firstMeet: b === null, conflictPath: computeConflictPath(path, conflictLabel), localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
+        const conflictPath = disambiguateConflictPath(computeConflictPath(path, conflictLabel), takenPaths);
+        takenPaths.add(conflictPath);   // тот же путь дважды в одном проходе исключён (пути в цикле не повторяются), но чужой конфликт мог занять это же имя первым
+        actions.push({ op: SYNC_ACTIONS.conflict, path, winner, firstMeet: b === null, conflictPath, localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
     }
 
     const counts = { push: 0, pull: 0, deleteLocal: 0, deleteRemote: 0, conflict: 0, settle: 0 };
