@@ -164,16 +164,35 @@ export function registerStUserDataService(bus, {
     const chatInfoStamp = info => `${info.file_size}|${info.chat_items}|${info.last_mes}`;
     const chatModified = info => Date.parse(info.last_mes) || Number(info.last_mes) || 0;
 
+    // `chats.list()` раньше листало `/api/characters/chats` для КАЖДОГО персонажа на КАЖДОМ проходе, даже когда у него ничего не
+    // изменилось (ROADMAP 5.106и, Этап 5.5). `/api/characters/all` уже несёт `chat_size`/`date_last_chat` — по коду ST 1.18
+    // (`calculateChatSize`) это сумма размеров и максимум времени изменения файлов папки чатов, так что любая правка, добавление
+    // или удаление чата в папке меняет хотя бы одно из них. Кэш — ПО ПАПКЕ, а не по скану (в отличие от `characterList`/`catalog`
+    // выше: тем, наоборот, важно не пережить свой скан) — пока штамп папки у персонажа не изменился, её список чатов не перечитывается
+    // ни на этом проходе, ни на следующих. Собственная запись/удаление чата дополнительно сбрасывает кэш своей папки — не полагаемся
+    // на то, что ST успеет пересчитать `chat_size` к МОМЕНТУ обращения (см. `write`/`remove` ниже).
+    const chatFolderCache = new Map();   // folder -> { stamp, entries }
+    const folderStampOf = character => `${character.chat_size ?? 0}|${character.date_last_chat ?? 0}`;
+    const forgetChatFolder = folder => { chatFolderCache.delete(folder); };
+
     const chats = {
         id: 'chats', category: 'chats',
         async list() {
             const list = await loadCharacterList();
-            const folders = list.map(character => character.avatar).filter(name => typeof name === 'string' && name.endsWith('.png'));
-            const perCharacter = await mapLimit(folders, concurrency, async avatar => {
-                const infos = await postForJson('/api/characters/chats', { avatar_url: avatar });
-                const folder = stripExt(avatar, '.png');
-                return (Array.isArray(infos) ? infos : []).filter(info => info?.file_name).map(info => ({ path: `chats/${folder}/${info.file_name}`, stamp: chatInfoStamp(info), size: 0, modified: chatModified(info) }));
+            const characters = list.filter(character => typeof character.avatar === 'string' && character.avatar.endsWith('.png'));
+            const currentFolders = new Set();
+            const perCharacter = await mapLimit(characters, concurrency, async character => {
+                const folder = stripExt(character.avatar, '.png');
+                currentFolders.add(folder);
+                const stamp = folderStampOf(character);
+                const cached = chatFolderCache.get(folder);
+                if (cached && cached.stamp === stamp) return cached.entries;
+                const infos = await postForJson('/api/characters/chats', { avatar_url: character.avatar });
+                const entries = (Array.isArray(infos) ? infos : []).filter(info => info?.file_name).map(info => ({ path: `chats/${folder}/${info.file_name}`, stamp: chatInfoStamp(info), size: 0, modified: chatModified(info) }));
+                chatFolderCache.set(folder, { stamp, entries });
+                return entries;
             });
+            for (const folder of chatFolderCache.keys()) if (!currentFolders.has(folder)) chatFolderCache.delete(folder);   // персонаж удалён — не хранить его папку вечно
             return perCharacter.flat();
         },
         async read(name) {
@@ -188,12 +207,14 @@ export function registerStUserDataService(bus, {
             if (isOpenChat({ folder, file: base })) throw new DeferredWriteError(`chat "${name}" is open right now — it will be updated on the next sync`);
             await postJson('/api/chats/get', { ch_name: folder, file_name: '', avatar_url: `${folder}.png` });   // создаёт папку персонажа, если её ещё нет
             await postJson('/api/chats/save', { ch_name: folder, file_name: base, avatar_url: `${folder}.png`, chat: await parseJsonl(blob), force: true });
+            forgetChatFolder(folder);
             return this.statOne(name);
         },
         async remove(name) {
             const [folder, file] = splitChatName(name);
             if (isOpenChat({ folder, file: stripExt(file, '.jsonl') })) throw new DeferredWriteError(`chat "${name}" is open right now`);
             await postJson('/api/chats/delete', { chatfile: file, avatar_url: `${folder}.png` });
+            forgetChatFolder(folder);
         },
         async statOne(name) {
             const [folder, file] = splitChatName(name);
