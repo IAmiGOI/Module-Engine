@@ -691,7 +691,7 @@ test('checkAndPlace(): a context that is NEW relative to every node still fires 
     // ноды 0. Новый контекст (dim 3) — до центра по-прежнему 1 (тематический
     // гейт молчит), но до ЛЮБОЙ ноды тоже 1 — выше базовой линии 0: только
     // второй сигнал может это заметить.
-    const { graphCore } = buildEngine({
+    const { graphCore, caller } = buildEngine({
         fetchReplies: [
             '{"label":"Alpha","content":"alpha bravo charlie delta","importance":5}',
             '{"label":"Golf","content":"golf lima oscar quebec","importance":5}', // последний ответ повторяется — прогрев не заводит посторонних нод
@@ -699,6 +699,11 @@ test('checkAndPlace(): a context that is NEW relative to every node still fires 
     });
     await graphCore.load();
     await graphCore.waitForBootstrap();
+    // EWMA (MEMORY_GRAPH_FIX_PLAN.md, Этап 4) сходится к базовой линии НАМНОГО медленнее, чем старый Уэлфорд
+    // (фиксированная скорость забывания вместо истинного бегущего среднего 1/N) — узкое окно нужно здесь ТОЛЬКО
+    // затем, чтобы 6 прогревочных вызовов ниже гарантированно settle'ились в разумный тестовый бюджет; дефолтное
+    // окно (30) — для настоящей игровой сессии с сотнями ходов, не для короткой фикстуры.
+    await call(caller, 'memoryGraph.configure', { gateWindow: 5 });
 
     await graphCore.checkAndPlace('alpha bravo charlie delta');
     await graphCore.checkAndPlace('golf lima oscar quebec');
@@ -712,6 +717,37 @@ test('checkAndPlace(): a context that is NEW relative to every node still fires 
 
     const newFact = await graphCore.checkAndPlace('papa romeo tango victor');
     assert.notEqual(newFact.status, 'no-change', 'far from EVERY node fires even though the topic-center distance is unchanged from baseline');
+});
+
+test('checkAndPlace(): the forced-extraction safety net calls the model even while the gate stays genuinely silent, once enough messages pass without a single real check (MEMORY_GRAPH_FIX_PLAN.md, Этап 4)', async () => {
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        const reply = requestBodies.length === 1 ? '{"label":"Anchor","content":"alpha bravo charlie delta","importance":5}' : '{"skip": true}';
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: reply } }] }) };
+    };
+    const { graphCore, caller } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    // Узкое окно — то же самое, что и в соседнем тесте выше: нужно settle'иться в разумный тестовый бюджет ходов, не про сам гейт.
+    await call(caller, 'memoryGraph.configure', { forcedExtractionEvery: 10, gateWindow: 5 });
+
+    // Тот же самый текст на каждом ходу — после пары вызовов (пока гейт ещё "бутстрапится", count<3) он settle'ится
+    // в полную тишину: расстояние до уже известной темы — стабильный, крошечный ноль.
+    let chatLength = 0;
+    for (let i = 0; i < 4; i += 1) { chatLength += 1; await graphCore.checkAndPlace('alpha bravo charlie delta', { chatLength }); }
+    const afterWarmup = requestBodies.length;
+    assert.ok(afterWarmup >= 1, 'sanity: at least the bootstrap call(s) happened for real');
+
+    // Гейт молчит по-настоящему (та же самая, уже привычная тема) — НИКАКИХ новых вызовов, чат ещё не дорос до срока.
+    chatLength += 1;
+    await graphCore.checkAndPlace('alpha bravo charlie delta', { chatLength });
+    assert.equal(requestBodies.length, afterWarmup, 'the gate genuinely stayed silent — no forced call yet, threshold not reached');
+
+    // +forcedExtractionEvery(10) сообщений без единого реального вызова с этого момента — страховка обязана сработать.
+    chatLength += 10;
+    await graphCore.checkAndPlace('alpha bravo charlie delta', { chatLength });
+    assert.equal(requestBodies.length, afterWarmup + 1, 'forced extraction fired exactly once the threshold was reached, even though the gate itself never fired');
 });
 
 test('checkAndPlace(): a genuinely UNRELATED second topic still lands somewhere (nearest, low-confidence) instead of being lost to the накопитель — MEMORY_GRAPH_FIX_PLAN.md, Этап 3 deliberately retired the old "seed a fresh empty region" behavior', async () => {

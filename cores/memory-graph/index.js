@@ -5,6 +5,7 @@ import { estimateTokens, packEntriesIntoChunks } from '../../libraries/core/entr
 import { extractRecentText } from './context-text.js';
 import { advanceClock, migrateTimestamps } from './clock.js';
 import { pickRegionBySimilarity } from './placement.js';
+import { updateEwmaStats, isStrongChangeEwma } from './gate.js';
 
 const PERSISTENCE_NAMESPACE = 'core.memoryGraph';
 const SETTINGS_KEY = 'settings';
@@ -67,6 +68,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // не значит уверенно" (даёт reason:'nearest' вместо 'similarity'), чем никогда не набирать нужный запас.
     placementMinSimilarity: 0.8,
     placementMinMargin: 0.02,
+    // Окно забывания фильтра «сильного изменения» (`cores/memory-graph/gate.js`) — MEMORY_GRAPH_FIX_PLAN.md, Этап 4
+    // (ROADMAP 5.107г). Старый Уэлфорд копил среднее/σ за ВСЮ историю без забывания — типичные расстояния падают
+    // по мере роста графа, а порог держался на старых больших значениях, гейт постепенно замолкал (П5). EWMA с
+    // окном ~30 наблюдений забывает выбросы геометрически, не тянет их вечно.
+    gateWindow: 30,
+    // Страховочное извлечение — сколько СООБЩЕНИЙ (см. clock.js, Этап 2) подряд без единого вызова модели
+    // допустимо, прежде чем спросить её принудительно, даже если фильтр молчит (гейт тоже может застояться на
+    // ложном "всё привычно" — вторая, независимая от EWMA страховка). `0` — выключено; иначе — не меньше 2.
+    forcedExtractionEvery: 12,
     // Каскад накопителя — числа согласованы с пользователем дословно. `stagingRetryTurns`/`stagingMaxTurns`
     // УДВОЕНЫ относительно исходных значений (MEMORY_GRAPH_FIX_PLAN.md, Этап 2, ROADMAP 5.107б): единица "хода"
     // раньше была ГЕНЕРАЦИЕЙ (`turnCounter += 1` на каждый `checkAndPlace()`), теперь — СООБЩЕНИЕМ (длина чата,
@@ -277,6 +287,10 @@ export function clampGraphSettings(values = {}) {
         extractionContextChars: clampInt(values.extractionContextChars, 500, 12000, DEFAULT_SETTINGS.extractionContextChars),
         placementMinSimilarity: clampInt(values.placementMinSimilarity * 100, 0, 100, DEFAULT_SETTINGS.placementMinSimilarity * 100) / 100,
         placementMinMargin: clampInt(values.placementMinMargin * 100, 0, 50, DEFAULT_SETTINGS.placementMinMargin * 100) / 100,
+        gateWindow: clampInt(values.gateWindow, 5, 500, DEFAULT_SETTINGS.gateWindow),
+        // `0` — осознанно допустимое значение ("выключить страховку", тот же приём, что у `stallMs` ниже) —
+        // clampInt(..., 2, ...) сам по себе пропустил бы её мимо диапазона, поэтому 0 проверяется явно раньше.
+        forcedExtractionEvery: values.forcedExtractionEvery === 0 ? 0 : clampInt(values.forcedExtractionEvery, 2, 200, DEFAULT_SETTINGS.forcedExtractionEvery),
         stagingRetryTurns: clampInt(values.stagingRetryTurns, 1, 200, DEFAULT_SETTINGS.stagingRetryTurns),
         stagingBatchSize: clampInt(values.stagingBatchSize, 1, 50, DEFAULT_SETTINGS.stagingBatchSize),
         stagingMaxTurns: clampInt(values.stagingMaxTurns, 1, 500, DEFAULT_SETTINGS.stagingMaxTurns),
@@ -1236,6 +1250,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     // бессмысленны рядом с новыми, основанными на длине чата часами. Разовая миграция происходит при первом же
     // `checkAndPlace()` (там впервые может быть известна длина чата) — см. её тело.
     let needsClockMigration = false;
+    // Часы на момент ПОСЛЕДНЕГО реального вызова модели на извлечение (любой исход — SideCar мог и промолчать
+    // {skip:true}) — MEMORY_GRAPH_FIX_PLAN.md, Этап 4 (ROADMAP 5.107г), страховка от того, что сам фильтр может
+    // застояться на ложном "всё привычно" и не звать модель очень долго (П5). См. `checkAndPlace()`.
+    let lastExtractionClock = 0;
 
     async function call(contract, params) {
         return request(host.own, contract, { params });
@@ -1291,10 +1309,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const clock = clockResult.ok ? clockResult.value : null;
         if (clock && typeof clock.value === 'number') {
             turnCounter = clock.value;
+            lastExtractionClock = typeof clock.lastExtractionClock === 'number' ? clock.lastExtractionClock : 0;
         } else {
             // Часов ещё нет — либо граф совсем свежий (мигрировать нечего), либо это данные ДО появления часов
             // (старый счётчик-в-памяти) — у него есть ноды, но их временные отметки бессмысленны рядом с новыми.
             turnCounter = 0;
+            lastExtractionClock = 0;
             needsClockMigration = Object.keys(nodes).length > 0;
         }
     }
@@ -1311,7 +1331,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     async function persistStickyRetrieval() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, value: stickyRetrieval }); }
     // Сам факт присутствия ключа в хранилище — маркер "часы существуют, миграция (если требовалась) уже
     // произошла" (см. `needsClockMigration` выше) — `version` на будущее, если формат когда-нибудь поменяется.
-    async function persistClock() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: CLOCK_KEY, value: { value: turnCounter, version: 1 } }); }
+    async function persistClock() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: CLOCK_KEY, value: { value: turnCounter, version: 1, lastExtractionClock } }); }
 
     /**
      * Внутриигровые дата/время (обязательное поле ноды, по прямому запросу
@@ -2168,24 +2188,38 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // 2) НОВЫЙ ФАКТ внутри знакомой темы — расстояние до ближайшей НОДЫ
             //    (центры регионов этого не видят: факт про уже известную
             //    тему близок к её центру и раньше пропускался как no-change).
-            // Оба считаются по настоящему косинусу, не по долям softmax.
+            // Оба считаются по настоящему косинусу, не по долям softmax. Статистика — EWMA с забыванием
+            // (`gate.js`, MEMORY_GRAPH_FIX_PLAN.md, Этап 4), не Уэлфорд за всю историю: типичные расстояния падают
+            // по мере роста графа, а старый Уэлфорд держал порог на старых больших значениях сколь угодно долго —
+            // гейт постепенно замолкал (П5). `updateDistanceStats`/`isStrongChange` НЕ удалены (свои тесты) —
+            // просто больше не зовутся отсюда.
             const centerEmbeddings = Object.values(regions).map(region => nodes[region.centerNodeId]?.embedding).filter(Boolean);
             const nodeEmbeddings = Object.values(nodes).map(node => node.embedding).filter(Boolean);
             const topicDistance = nearestEmbeddingDistance(contextEmbedding, centerEmbeddings);
             const noveltyDistance = nearestEmbeddingDistance(contextEmbedding, nodeEmbeddings);
-            const topicChanged = isStrongChange(topicDistance, distanceStats, settings.thresholdK);
-            const factIsNew = isStrongChange(noveltyDistance, noveltyStats, settings.thresholdK);
+            const topicChanged = isStrongChangeEwma(topicDistance, distanceStats, settings.thresholdK);
+            const factIsNew = isStrongChangeEwma(noveltyDistance, noveltyStats, settings.thresholdK);
             const wasStrong = topicChanged || factIsNew;
             // "Не с чем сравнивать" (пустой граф) — фиктивное расстояние 1, в
             // базовую линию его класть нельзя: единственный такой выброс
             // раздувает среднее/σ и гейт надолго перестаёт срабатывать.
-            if (centerEmbeddings.length) distanceStats = updateDistanceStats(distanceStats, topicDistance);
-            if (nodeEmbeddings.length) noveltyStats = updateDistanceStats(noveltyStats, noveltyDistance);
+            if (centerEmbeddings.length) distanceStats = updateEwmaStats(distanceStats, topicDistance, { window: settings.gateWindow });
+            if (nodeEmbeddings.length) noveltyStats = updateEwmaStats(noveltyStats, noveltyDistance, { window: settings.gateWindow });
             await persistStats();
             await persistClock(); // тот же момент, что и persistStats() (MEMORY_GRAPH_FIX_PLAN.md, Этап 2) — не на КАЖДОЙ строке функции, но на каждом дошедшем сюда проходе
-            if (!wasStrong) return { status: 'no-change' };
+
+            // Страховочное извлечение (MEMORY_GRAPH_FIX_PLAN.md, Этап 4) — сам фильтр тоже может застояться на
+            // ложном "всё привычно" очень надолго (П5: та же болезнь, от которой лечит EWMA выше, но не гарантия
+            // на 100%); если он молчит слишком много СООБЩЕНИЙ подряд без единого реального вызова модели —
+            // спрашиваем её принудительно, а не ждём вечно точного совпадения с гейтом.
+            const forced = !wasStrong && settings.forcedExtractionEvery > 0 && turnCounter - lastExtractionClock >= settings.forcedExtractionEvery;
+            if (!wasStrong && !forced) return { status: 'no-change' };
 
             const proposal = await askSideCarForNode(contextText, { isFirstNode: Object.keys(nodes).length === 0 });
+            // Часы последнего РЕАЛЬНОГО вызова — двигаются на любой исход (включая честный {skip:true} SideCar'а),
+            // не только на успешное создание ноды: "модель спросили" — это и есть то, что защищает страховка.
+            lastExtractionClock = turnCounter;
+            await persistClock();
             if (!proposal) return { status: 'sidecar-empty' };
 
             // node.embedding — ЭТО ТОТ ЖЕ passage-эмбединг label+content, что
