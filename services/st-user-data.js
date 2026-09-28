@@ -133,11 +133,21 @@ export function registerStUserDataService(bus, {
         deleteFile: name => postJson('/api/avatars/delete', { avatar: name }),
     });
 
+    // `characters.listNames()` и `chats.list()` (ниже) обе на самом деле хотят один и тот же список — раньше каждая звала
+    // `/api/characters/all` заново (ROADMAP 5.106з, Этап 5.3: «два раза читает то же самое за один скан»). Кэш — на длительность
+    // ОДНОГО скана, тем же приёмом, что уже есть у `loadCatalog`/`forgetCatalog` ниже (сбрасывается там же, в `list()`).
+    let characterList = null;
+    async function loadCharacterList() {
+        if (!characterList) characterList = await postForJson('/api/characters/all', {});
+        return Array.isArray(characterList) ? characterList : [];
+    }
+    const forgetCharacterList = () => { characterList = null; };
+
     const characters = staticFileProvider({
         id: 'characters', category: 'characters', urlBase: '/characters',
         async listNames() {
-            const list = await postForJson('/api/characters/all', {});
-            return (Array.isArray(list) ? list : []).map(character => character.avatar).filter(name => typeof name === 'string' && name.endsWith('.png'));
+            const list = await loadCharacterList();
+            return list.map(character => character.avatar).filter(name => typeof name === 'string' && name.endsWith('.png'));
         },
         uploadFile: (name, blob) => upload('/api/characters/import', new FileCtor([blob], name, { type: 'image/png' }), { file_type: 'png', preserved_name: stripExt(name, '.png') }),
         deleteFile: name => postJson('/api/characters/delete', { avatar_url: name, delete_chats: false }),
@@ -157,8 +167,8 @@ export function registerStUserDataService(bus, {
     const chats = {
         id: 'chats', category: 'chats',
         async list() {
-            const list = await postForJson('/api/characters/all', {});
-            const folders = (Array.isArray(list) ? list : []).map(character => character.avatar).filter(name => typeof name === 'string' && name.endsWith('.png'));
+            const list = await loadCharacterList();
+            const folders = list.map(character => character.avatar).filter(name => typeof name === 'string' && name.endsWith('.png'));
             const perCharacter = await mapLimit(folders, concurrency, async avatar => {
                 const infos = await postForJson('/api/characters/chats', { avatar_url: avatar });
                 const folder = stripExt(avatar, '.png');
@@ -357,6 +367,7 @@ export function registerStUserDataService(bus, {
 
     async function list({ categories } = {}) {
         forgetCatalog();   // каждое сканирование начинается с ЖИВЫХ данных ST
+        forgetCharacterList();
         const results = [];
         for (const provider of wanted(categories)) results.push(...await provider.list());
         return results;
