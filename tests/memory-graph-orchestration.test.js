@@ -1493,6 +1493,35 @@ test('checkAndPlace() with blank context text is skipped — nothing to embed', 
     assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, []);
 });
 
+// --- Контекст извлечения из настоящего чата (MEMORY_GRAPH_FIX_PLAN.md, Этап 1) ---
+// `graphCore.checkAndPlace(text)` above bypasses the `memoryGraph.check` contract
+// entirely — every test that calls it directly is blind to a bug living in the
+// handler itself. `extractLatestText()` (now replaced by `extractRecentText()`)
+// only ever ran inside that handler, so it had NO coverage anywhere in this file
+// until now: the tests below go through the real contract with a real `chat`.
+
+test('memoryGraph.check feeds the model\'s OWN reply into extraction, not just the player\'s last line — the actual bug this plan fixes', async () => {
+    const requestBodies = [];
+    const fetchOverride = async (url, init) => {
+        requestBodies.push(JSON.parse(init.body));
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"skip": true}' } }] }) };
+    };
+    const { graphCore, caller } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const chat = [
+        { name: 'User', is_user: true, mes: 'Where are we?' },
+        { name: 'Narrator', mes: 'The tower is cursed.' },
+        { name: 'User', is_user: true, mes: 'I step back.' },
+    ];
+    await call(caller, 'memoryGraph.check', { chat });
+
+    assert.equal(requestBodies.length, 1, 'an empty graph always fires the gate on its first check');
+    const prompt = requestBodies[0].messages.at(-1).content;
+    assert.match(prompt, /The tower is cursed/, 'the model\'s own reply — where facts actually appear on generation.prepare — must reach the extraction prompt, not just the new player message');
+});
+
 // --- Real Lorebook Core integration (not the synchronous fake above) -----
 // Found live in the browser harness: `harness/engine-wiring.js` used to run
 // `lorebookCore.scan()` and `memoryGraphCore.load()` in the SAME
