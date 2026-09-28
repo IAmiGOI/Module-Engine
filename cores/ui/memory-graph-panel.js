@@ -29,8 +29,9 @@ export {
 // для интерпретации клика/драга (Б3-геометрия, привязанная к дартборду) — Этап 7 того же плана заменит их на
 // `zoneAt()` (layout.js); до тех пор клик/драг по канвасу решают регион по СТАРОЙ дартборд-сетке, а сам фон и
 // позиции нод уже рисуются по НОВЫМ зонам — известное временное расхождение, см. ROADMAP 5.108г.
-import { layoutGraph, nodeRadius } from './memory-graph/layout.js';
+import { layoutGraph, nodeRadius, zoneAt } from './memory-graph/layout.js';
 import { diffElements } from './memory-graph/elements-diff.js';
+import { dropDecision, connectModeStep, edgeTypesInGraph } from './memory-graph/interactions.js';
 import { renderZonesSvg, zonesSignature, ZONES_SVG_ID } from './memory-graph/zones-svg.js';
 import { retrievalClasses, routeChainLabels } from './memory-graph/retrieval-overlay.js';
 import { METRICS, findMetric, metricColor, metricDomain } from './memory-graph/metrics.js';
@@ -277,21 +278,23 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         }
     }
 
-    async function moveNode(id, sector, ring) {
+    /** MEMORY_GRAPH_UI_PLAN.md, Этап 7.1 — перенос ТОЛЬКО через `regionId` (`zoneAt()` вместо дартборда, см. `dragfree` в `ensureCytoscape()`); `sector`/`ring` этому вызывающему сегодня не нужны вовсе (Этап 7.2, создание нод по клику, по-прежнему на старой дартборд-геометрии — см. ROADMAP 5.108з, известный, задокументированный, отдельно вынесенный остаток). */
+    async function moveNode(id, regionId) {
         busy.set(true);
         try {
-            const result = await call('memoryGraph.nodes.move', { id, sector, ring });
+            const result = await call('memoryGraph.nodes.move', { id, regionId });
             statusText.set(result.ok ? '' : `Move failed: ${result.error?.message}`);
             await refresh();
+            return result;
         } finally {
             busy.set(false);
         }
     }
 
-    async function createEdge(fromId, toId) {
+    async function createEdge(fromId, toId, type = 'related') {
         busy.set(true);
         try {
-            await call('memoryGraph.edges.create', { fromId, toId, type: 'mentions' });
+            await call('memoryGraph.edges.create', { fromId, toId, type });
             await refresh();
         } finally {
             busy.set(false);
@@ -306,6 +309,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         } finally {
             busy.set(false);
         }
+    }
+
+    /** "Ребро между уже соединёнными нодами того же типа — не создавать" (план 7.3). */
+    function alreadyConnected(fromId, toId, type) {
+        const fromNode = nodes().find(node => node.id === fromId);
+        return Boolean(fromNode?.edges?.some(edge => edge.to === toId && edge.type === type));
+    }
+
+    /** Создание ребра С ПРОВЕРКОЙ дубликата — общий путь для Shift-drag и режима "Connect" (Этап 7.3). */
+    function createEdgeChecked(fromId, toId, type) {
+        if (alreadyConnected(fromId, toId, type)) { statusText.set('Already connected.'); return; }
+        createEdge(fromId, toId, type);
     }
 
     // --- "Вызов любой функции вручную" (решено с пользователем) ---------
@@ -472,6 +487,51 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // пересчитывать/перерисовывать саму строку на каждый 'pan'/'zoom' незачем — только на реальное изменение зон).
     let currentZones = [];
     let lastZonesSignature = null;
+    // Последняя посчитанная раскладка (Map(id → {x,y})) — снапбэк после неудачного драга (Этап 7.1: "зона та же —
+    // нода плавно возвращается на СВОЮ позицию из раскладки") анимирует ИМЕННО эту позицию, не перечитывает граф.
+    let lastPositions = new Map();
+
+    // --- Перетаскивание/соединение (Этап 7) --------------------------------
+
+    // "Moved to <label> · Undo" (Этап 7.1) — исчезает сама через 5с.
+    const moveToast = signal(null); // { nodeId, label, previousRegionId } | null
+    let moveToastTimer = null;
+    function showMoveToast(nodeId, label, previousRegionId) {
+        clearTimeout(moveToastTimer);
+        moveToast.set({ nodeId, label, previousRegionId });
+        moveToastTimer = setTimeout(() => moveToast.set(null), 5000);
+    }
+    function undoMove() {
+        const toast = moveToast.peek();
+        if (!toast) return;
+        clearTimeout(moveToastTimer);
+        moveToast.set(null);
+        moveNode(toast.nodeId, toast.previousRegionId);
+    }
+
+    // Режим "Connect" (Этап 7.3) — кнопка-переключатель, состояние решений — чистый `connectModeStep()` (interactions.js).
+    const connectMode = signal(false);
+    const connectState = signal({ selectedId: null });
+    const currentEdgeType = signal('related');
+    function toggleConnectMode() {
+        connectMode.set(!connectMode.peek());
+        connectState.set({ selectedId: null });
+    }
+
+    // Выбранное ребро (Этап 7.4 — Б5: клик ВЫДЕЛЯЕТ, не удаляет сразу) — маленькая панель "type · Delete" в сайдбаре.
+    const selectedEdge = signal(null); // { id, source, target, type } | null
+
+    /** Подсветка зоны под курсором во время драга (Этап 7.1) — прямая правка DOM у уже нарисованного `<path>` (`zones-svg.js`'s `data-region-id`), не полная пересборка SVG на каждый кадр драга. */
+    let highlightedZonePath = null;
+    function setZoneHighlight(regionId) {
+        if (highlightedZonePath) { highlightedZonePath.classList.remove('stme-mg-zone-highlight'); highlightedZonePath = null; }
+        if (regionId === undefined) return;
+        const svg = document.getElementById(ZONES_SVG_ID);
+        if (!svg) return;
+        const attr = regionId == null ? '' : String(regionId);
+        const path = svg.querySelector(`path[data-region-id="${CSS.escape(attr)}"]`);
+        if (path) { path.classList.add('stme-mg-zone-highlight'); highlightedZonePath = path; }
+    }
 
     // --- Режимы карты (Этап 6.2) — три независимых канала, тот же принцип, что у звёздной карты EVE Online:
     // ОДНА карта, но выбор решает, что показывают цвет/размер/свечение. Persisted с окном (см. save/loadWindowState).
@@ -665,6 +725,16 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         updateBackgroundTransform();
         cy.on('tap', 'node', event => {
             if (event.target.id() === PREVIEW_ID) return; // не настоящий узел — нечего редактировать
+            // Режим "Connect" (Этап 7.3) перехватывает клик по ноде ЦЕЛИКОМ — открывать форму редактирования
+            // ОДНОВРЕМЕННО с выбором пары для ребра было бы путаницей; выйти из режима явно — кнопка/Esc.
+            if (connectMode()) {
+                const { next, create } = connectModeStep(connectState.peek(), event.target.id());
+                connectState.set(next);
+                cy.nodes().removeClass('connect-selected');
+                if (next.selectedId) cy.getElementById(next.selectedId).addClass('connect-selected');
+                if (create) createEdgeChecked(create[0], create[1], currentEdgeType());
+                return;
+            }
             openEditForm(nodes().find(node => node.id === event.target.id()));
         });
         // Имя показывается ТОЛЬКО под курсором (решено с пользователем —
@@ -678,12 +748,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             hoveredScreenPos.set({ x: event.renderedPosition.x, y: event.renderedPosition.y });
         });
         cy.on('mouseout', 'node', event => { event.target.removeClass('hovered'); hoveredNodeId.set(null); });
-        // Клик по ребру удаляет его СРАЗУ, без `confirm()` — тот же принцип,
-        // что у Delete-кнопки узла и Remove у Lorebook в этом же движке:
-        // нигде больше в проекте нет блокирующего нативного диалога.
+        // Клик по ребру ВЫДЕЛЯЕТ его (Этап 7.4, Б5 плана: раньше удалял СРАЗУ — случайные удаления, реальная
+        // жалоба). Панель "type · Delete" — в сайдбаре (`edgeSelectionPanel()`); само удаление — только кнопкой
+        // или клавишей Delete/Backspace (`handleGlobalKeydown()` ниже), не одним кликом.
         cy.on('tap', 'edge', event => {
             const data = event.target.data();
-            deleteEdge(data.source, data.target, data.type);
+            cy.elements().unselect();
+            event.target.select();
+            selectedEdge.set({ id: data.id, source: data.source, target: data.target, type: data.type });
         });
         // Клик по ПУСТОМУ месту канваса — если сейчас режим создания
         // (кнопка "+ Node" уже нажата), уточняет sector/ring по месту клика
@@ -694,29 +766,65 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // импортов вверху файла и ROADMAP 5.108г.
         cy.on('tap', event => {
             if (event.target !== cy) return;
+            selectedEdge.set(null);
+            // Создание по клику — ВРЕМЕННО всё ещё дартборд-геометрия (`pixelToRegion`), не `zoneAt()` — Этап 7.2
+            // (кнопка "+ Node"/форма создания в сайдбаре) не построен ЭТИМ проходом плана, решено с пользователем
+            // явно (см. ROADMAP 5.108з): `isCreating()` сегодня недостижим ни из одного места UI, ветка ниже —
+            // мёртвый код, оставлен нетронутым (план запрещает удалять код на будущее без явной причины), а не
+            // "почти рабочая" фича.
             if (isCreating()) {
                 creatingAt.set(pixelToRegion(event.position.x, event.position.y, {}));
-                // Маркер садится РОВНО на клик (не на центр региона) — самая
-                // прямая обратная связь. Куда реально ляжет узел (центр
-                // региона) видно текстом рядом с формой, маркер здесь — про
-                // "я тебя услышал", не про финальную позицию.
                 previewPosition.set({ x: event.position.x, y: event.position.y });
             } else closeForm();
         });
         // `draggingId` — только на время самого драга (Этап 4.1: диффинг не
         // должен переставлять ноду, которую пользователь ещё держит).
         cy.on('grab', 'node', event => { draggingId = event.target.id(); });
-        cy.on('free', 'node', event => { draggingId = null; });
+        // Подсветка зоны под курсором во время драга (Этап 7.1).
+        cy.on('drag', 'node', event => {
+            const pos = event.target.position();
+            setZoneHighlight(zoneAt(pos.x, pos.y, currentZones)?.regionId);
+        });
+        cy.on('free', 'node', event => { draggingId = null; setZoneHighlight(undefined); });
+        /**
+         * Отпустили ноду (Этап 7.1) — решает ЧИСТАЯ `dropDecision()` (interactions.js) по зоне ПОД КУРСОРОМ
+         * (`zoneAt()`, layout.js), не дартборд-математика. `'snap-back'` — та же зона, накопитель или пусто
+         * (владелец: "перетащили в СВОЙ регион — возвращается на место"; накопитель НАРОЧНО не даёт ручной переезд
+         * — см. `dropDecision()`'s doc-comment) — плавная анимация НАЗАД на позицию из уже посчитанной раскладки
+         * (`lastPositions`), а не рефреш графа (граф и не менялся). Настоящий переезд — `moveNode(id, regionId)`
+         * (Этап 2 API), с плашкой "Moved to <label> · Undo" (Undo — `undoMove()`).
+         */
         cy.on('dragfree', 'node', event => {
             const node = nodes().find(item => item.id === event.target.id());
+            if (!node) return;
             const pos = event.target.position();
-            const target = pixelToRegion(pos.x, pos.y, {});
-            if (!node || node.regionId === `${target.sector}:${target.ring}`) return;
-            moveNode(node.id, target.sector, target.ring);
+            const zone = zoneAt(pos.x, pos.y, currentZones);
+            const decision = dropDecision(node.regionId, zone);
+            if (decision === 'snap-back') {
+                const layoutPos = lastPositions.get(node.id);
+                if (layoutPos) event.target.animate({ position: layoutPos }, { duration: 200 });
+                return;
+            }
+            const previousRegionId = node.regionId;
+            const targetRegionId = decision.move;
+            moveNode(node.id, targetRegionId).then(result => {
+                if (result?.ok) showMoveToast(node.id, regions().find(region => region.id === targetRegionId)?.label ?? targetRegionId, previousRegionId);
+            });
+        });
+        // Shift + перетаскивание от ноды рисует ребро (Этап 7.3) — обычное перетаскивание ноды отключается на
+        // время соединения (`ungrabify()`/`grabify()` после), иначе один и тот же жест двусмысленен.
+        cy.on('tapstart', 'node', event => {
+            if (!event.originalEvent?.shiftKey || !host.__edgehandles) return;
+            event.target.ungrabify();
+            host.__edgehandles.start(event.target);
         });
         if (typeof cytoscape.use === 'function' && cy.edgehandles) {
             const eh = cy.edgehandles({});
-            cy.on('ehcomplete', (event, sourceNode, targetNode) => createEdge(sourceNode.id(), targetNode.id()));
+            cy.on('ehcomplete', (event, sourceNode, targetNode) => {
+                sourceNode.grabify();
+                createEdgeChecked(sourceNode.id(), targetNode.id(), currentEdgeType());
+            });
+            cy.on('ehcancel', (event, sourceNode) => sourceNode.grabify());
             host.__edgehandles = eh; // держим ссылку — иначе GC может собрать раньше времени в некоторых движках
         }
         return cy;
@@ -734,6 +842,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function syncCytoscape() {
         if (!cy) return;
         const { positions, radii, zones } = computeGraphLayout();
+        lastPositions = positions;
         const next = buildNextElements({ positions, radii, zones });
         const { add, remove, update } = diffElements(currentElements(), next, { excludeId: draggingId });
         for (const id of remove) {
@@ -962,6 +1071,31 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     chain.length > 1 ? h('div', { class: 'stme-mg-retrieval-chain' }, chain.join(' → ')) : null,
                     noiseCount ? h('small', { class: 'stme-module-hint' }, `+${noiseCount} noise`) : null,
                     retrieval.query ? h('small', { class: 'stme-module-hint' }, `Query: ${retrieval.query}`) : null,
+                );
+            }),
+        );
+    }
+
+    /** "Moved to <label> · Undo" (Этап 7.1) — живёт поверх канваса, не сайдбара: ближе к месту, где реально произошёл драг. */
+    function moveToastBlock() {
+        return computed(() => {
+            const toast = moveToast();
+            if (!toast) return null;
+            return h('div', { class: 'stme-mg-toast' }, h('span', {}, `Moved to ${toast.label}`), Button('Undo', undoMove));
+        });
+    }
+
+    /** Кнопка "Connect" + тип ребра + панель выделенного ребра "type · Delete" (Этап 7.3/7.4). */
+    function connectAndEdgeRow() {
+        return Row(
+            Button(computed(() => (connectMode() ? 'Connecting… (Esc to stop)' : 'Connect')), toggleConnectMode, { variant: connectMode() ? 'danger' : 'default' }),
+            Field('Edge type', Select(currentEdgeType, () => edgeTypesInGraph(nodes()).map(type => ({ value: type, label: type })))),
+            computed(() => {
+                const edge = selectedEdge();
+                if (!edge) return null;
+                return Row(
+                    h('span', { class: 'stme-module-hint' }, `Selected edge: ${edge.type}`),
+                    Button('Delete', () => { selectedEdge.set(null); deleteEdge(edge.source, edge.target, edge.type); }, { variant: 'danger' }),
                 );
             }),
         );
@@ -1197,6 +1331,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                         h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } }),
                         h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
                         hoverTooltip(),
+                        moveToastBlock(),
                     ),
                     h('p', { class: 'stme-memory-graph-hint', style: { width: '480px', boxSizing: 'border-box' } },
                         'Click a node to edit it. Drag a node onto a different dartboard cell to move it into that region. Drag from a node\'s edge handle to another node to connect them.'),
@@ -1205,6 +1340,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     generationRow(),
                     progressRow(),
                     retrievalRow(),
+                    connectAndEdgeRow(),
                     mapModeSection(),
                     searchAndFiltersRow(),
                     statsSection(),
@@ -1240,7 +1376,26 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         const finalUi = mount(tree());
         await finalUi.settled?.();
         await refresh();
+        // Delete/Backspace удаляет ВЫДЕЛЕННОЕ ребро (Этап 7.4); Esc выходит из режима "Connect" (Этап 7.3) — оба
+        // глобальные на `document`, а не на канвасе: клавиатурный фокус при клике по Cytoscape-канвасу не переходит
+        // на него автоматически (это `<canvas>`, не фокусируемый элемент по умолчанию). Пропускает нажатия, пока
+        // фокус в текстовом поле (правка label/content ноды и т.п. — Backspace там не должен трогать граф).
+        function handleGlobalKeydown(event) {
+            const tag = document.activeElement?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            if ((event.key === 'Delete' || event.key === 'Backspace') && selectedEdge()) {
+                const edge = selectedEdge();
+                selectedEdge.set(null);
+                deleteEdge(edge.source, edge.target, edge.type);
+            } else if (event.key === 'Escape' && connectMode()) {
+                connectMode.set(false);
+                connectState.set({ selectedId: null });
+                if (cy) cy.nodes().removeClass('connect-selected');
+            }
+        }
+        document.addEventListener('keydown', handleGlobalKeydown);
         refreshUnsubscribers = [
+            () => document.removeEventListener('keydown', handleGlobalKeydown),
             ...[
                 'memoryGraph.nodeCreated', 'memoryGraph.nodeUpdated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeMoved',
                 'memoryGraph.nodeEvicted', 'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
