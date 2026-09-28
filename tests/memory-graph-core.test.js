@@ -21,6 +21,7 @@ import {
     assignBootstrapUids, entryTitle,
 } from '../cores/memory-graph/index.js';
 import { extractRecentText } from '../cores/memory-graph/context-text.js';
+import { advanceClock, migrateTimestamps } from '../cores/memory-graph/clock.js';
 
 // --- Физика регионов --------------------------------------------------
 
@@ -185,17 +186,19 @@ test('decideFirstPlacement() does NOT apply the empty-graph seed once a confiden
     assert.equal(named.reason, 'name-match');
 });
 
-test('decideStagingStep() keeps a first-attempt node WAITING before its scheduled retry turn — no re-check before turn 5', () => {
+test('decideStagingStep() keeps a first-attempt node WAITING before its scheduled retry turn — no re-check before then', () => {
     const entry = { attemptCount: 1, firstAttemptTurn: 10 };
     const coords = [{ sector: 0, ring: 0 }, { sector: 1, ring: 1 }];
-    const result = decideStagingStep({ entry, regionProbs: [0.55, 0.45], regionCoords: coords, settings: DEFAULT_SETTINGS, currentTurn: 12, poolSize: 1 });
+    const dueAt = entry.firstAttemptTurn + DEFAULT_SETTINGS.stagingRetryTurns;
+    const result = decideStagingStep({ entry, regionProbs: [0.55, 0.45], regionCoords: coords, settings: DEFAULT_SETTINGS, currentTurn: dueAt - 1, poolSize: 1 });
     assert.equal(result.status, 'waiting');
 });
 
-test('decideStagingStep() signals retry-now once the scheduled +5-turn retry point is reached', () => {
+test('decideStagingStep() signals retry-now once the scheduled retry point is reached', () => {
     const entry = { attemptCount: 1, firstAttemptTurn: 10 };
     const coords = [{ sector: 0, ring: 0 }, { sector: 1, ring: 1 }];
-    const result = decideStagingStep({ entry, regionProbs: [0.55, 0.45], regionCoords: coords, settings: DEFAULT_SETTINGS, currentTurn: 15, poolSize: 1 });
+    const dueAt = entry.firstAttemptTurn + DEFAULT_SETTINGS.stagingRetryTurns;
+    const result = decideStagingStep({ entry, regionProbs: [0.55, 0.45], regionCoords: coords, settings: DEFAULT_SETTINGS, currentTurn: dueAt, poolSize: 1 });
     assert.equal(result.status, 'retry-now');
 });
 
@@ -976,4 +979,54 @@ test('extractRecentText() returns an empty string for an empty or missing chat',
 test('entryTitle() appends the book only when the entry carries one (several active lorebooks)', () => {
     assert.equal(entryTitle({ label: 'Alpha' }), 'Alpha');
     assert.equal(entryTitle({ label: 'Alpha', book: 'World A' }), 'Alpha [World A]');
+});
+
+// --- Часы графа памяти (MEMORY_GRAPH_FIX_PLAN.md, Этап 2) ---------------------
+
+test('advanceClock() tracks the chat length as it grows', () => {
+    assert.equal(advanceClock(0, 5), 5);
+    assert.equal(advanceClock(5, 9), 9);
+});
+
+test('advanceClock() never goes backward when messages are deleted and the chat gets shorter — it floors at the previous value', () => {
+    assert.equal(advanceClock(9, 4), 9, 'chat shrank from 9 to 4 messages — the clock must not un-age everything that already happened');
+});
+
+test('advanceClock() with no chat length at all (a manual, chat-less call) leaves the clock exactly where it was', () => {
+    assert.equal(advanceClock(7, undefined), 7);
+    assert.equal(advanceClock(0, undefined), 0);
+});
+
+test('migrateTimestamps() moves every old-regime timestamp to `now`, across nodes, staging, and both queues', () => {
+    const input = {
+        nodes: { a: { id: 'a', label: 'A', createdTurn: 3, lastTouchedTurn: 4 }, b: { id: 'b', label: 'B', createdTurn: 1, lastTouchedTurn: 1 } },
+        staging: { a: { nodeId: 'a', attemptCount: 1, firstAttemptTurn: 2 }, b: { nodeId: 'b', attemptCount: 2, firstAttemptTurn: 1, lastAttemptTurn: 6 } },
+        mergeQueue: { 'a|b': { nodeIdA: 'a', nodeIdB: 'b', queuedTurn: 2 } },
+        reconsolidationQueue: { g: { nodeIds: ['a', 'b'], queuedTurn: 5 } },
+    };
+    const migrated = migrateTimestamps(input, 42);
+
+    assert.equal(migrated.nodes.a.createdTurn, 42);
+    assert.equal(migrated.nodes.a.lastTouchedTurn, 42);
+    assert.equal(migrated.nodes.b.createdTurn, 42);
+    assert.equal(migrated.nodes.b.lastTouchedTurn, 42);
+    assert.equal(migrated.staging.a.firstAttemptTurn, 42);
+    assert.equal('lastAttemptTurn' in migrated.staging.a, false, 'a field that never existed on the entry must not be invented');
+    assert.equal(migrated.staging.b.firstAttemptTurn, 42);
+    assert.equal(migrated.staging.b.lastAttemptTurn, 42);
+    assert.equal(migrated.mergeQueue['a|b'].queuedTurn, 42);
+    assert.equal(migrated.reconsolidationQueue.g.queuedTurn, 42);
+});
+
+test('migrateTimestamps() returns NEW objects at every level — it never mutates its input', () => {
+    const input = { nodes: { a: { id: 'a', createdTurn: 1, lastTouchedTurn: 1 } }, staging: {}, mergeQueue: {}, reconsolidationQueue: {} };
+    migrateTimestamps(input, 99);
+    assert.equal(input.nodes.a.createdTurn, 1, 'the original node object must be untouched');
+});
+
+test('migrateTimestamps() leaves every other field on nodes untouched — only the timestamps move', () => {
+    const input = { nodes: { a: { id: 'a', label: 'A', importance: 7, createdTurn: 1, lastTouchedTurn: 1 } }, staging: {}, mergeQueue: {}, reconsolidationQueue: {} };
+    const migrated = migrateTimestamps(input, 10);
+    assert.equal(migrated.nodes.a.label, 'A');
+    assert.equal(migrated.nodes.a.importance, 7);
 });
