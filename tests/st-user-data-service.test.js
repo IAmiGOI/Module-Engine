@@ -27,6 +27,15 @@ function createFakeSt() {
     const json = data => ({ ok: true, status: 200, json: async () => data, blob: async () => new Blob([JSON.stringify(data)]), headers: new Headers() });
     const stampOf = text => ({ etag: `W/"${text.length}-1"`, 'content-length': String(text.length), 'last-modified': 'Sat, 19 Sep 2026 10:00:00 GMT' });
     const staticDirs = { '/characters/': state.characters, '/backgrounds/': state.backgrounds, '/User Avatars/': state.personas };
+    // `chat_size`/`date_last_chat` — как настоящий ST считает их в `calculateChatSize`: сумма размеров и максимум времени
+    // изменения файлов папки чатов. Нужны в фейке, чтобы проверить кэш папки чатов (ROADMAP 5.106и, Этап 5.5) без похода в саму ST.
+    const chatFolderStat = folder => {
+        const dir = state.chats.get(folder);
+        if (!dir || dir.size === 0) return { chat_size: 0, date_last_chat: 0 };
+        let chatSize = 0; let dateLastChat = 0;
+        for (const chat of dir.values()) { chatSize += JSON.stringify(chat).length; dateLastChat = Math.max(dateLastChat, Date.parse(chat.at(-1)?.send_date) || 0); }
+        return { chat_size: chatSize, date_last_chat: dateLastChat };
+    };
 
     async function fetchFake(url, { method = 'GET', body } = {}) {
         calls.push(`${method} ${url}`);
@@ -39,7 +48,7 @@ function createFakeSt() {
         }
         const data = body instanceof FormData ? Object.fromEntries(body.entries()) : (body ? JSON.parse(body) : {});
         switch (url) {
-            case '/api/characters/all': return json([...state.characters.keys()].map(avatar => ({ avatar, name: avatar })));
+            case '/api/characters/all': return json([...state.characters.keys()].map(avatar => ({ avatar, name: avatar, ...chatFolderStat(avatar.replace('.png', '')) })));
             case '/api/characters/chats': {
                 const folder = data.avatar_url.replace('.png', '');
                 const dir = state.chats.get(folder);
@@ -270,6 +279,36 @@ test('a later, separate scan reads /api/characters/all again — the cache never
     await call('stUserData.list', { categories: ['characters'] });
     await call('stUserData.list', { categories: ['chats'] });
     assert.equal(allCallsCount(), 2, 'a fresh scan always sees live data — the cache is not time-based like the preset catalog');
+});
+
+test('an unchanged chat folder is not re-listed on the next scan (ROADMAP 5.106и, Этап 5.5)', async () => {
+    const { call, st } = setup();
+    const chatsCallsCount = () => st.calls.filter(line => line === 'POST /api/characters/chats').length;
+    await call('stUserData.list', { categories: ['chats'] });
+    assert.equal(chatsCallsCount(), 2, 'first scan lists both characters\' chat folders (Alice, Bob)');
+    await call('stUserData.list', { categories: ['chats'] });
+    assert.equal(chatsCallsCount(), 2, 'a second scan with nothing changed reuses both folders from the cache — this survives ACROSS scans, unlike characterList/catalog');
+});
+
+test('writing a new chat only re-lists that character\'s folder on the next scan, not an untouched one', async () => {
+    const { call, st } = setup();
+    const chatsCallsCount = () => st.calls.filter(line => line === 'POST /api/characters/chats').length;
+    await call('stUserData.list', { categories: ['chats'] });   // тёплый кэш для Alice и Bob
+    assert.equal(chatsCallsCount(), 2);
+    await call('stUserData.write', { path: 'chats/Alice/New chat.jsonl', blob: new Blob([`{"chat_metadata":{}}\n{"name":"Alice","mes":"hey"}`]) });
+    const beforeNextScan = chatsCallsCount();   // `write` сам уже дёргал /api/characters/chats через свой statOne — считаем именно СЛЕДУЮЩИЙ скан
+    await call('stUserData.list', { categories: ['chats'] });
+    assert.equal(chatsCallsCount() - beforeNextScan, 1, 'only Alice\'s folder (its chat_size changed) is re-listed — Bob\'s untouched folder still comes from the cache');
+});
+
+test('removing a chat also causes its folder to be re-listed on the next scan, not an untouched one', async () => {
+    const { call, st } = setup();
+    const chatsCallsCount = () => st.calls.filter(line => line === 'POST /api/characters/chats').length;
+    await call('stUserData.list', { categories: ['chats'] });   // тёплый кэш для Alice и Bob
+    assert.equal(chatsCallsCount(), 2);
+    await call('stUserData.remove', { path: 'chats/Alice/Chat one.jsonl' });
+    await call('stUserData.list', { categories: ['chats'] });
+    assert.equal(chatsCallsCount(), 3, 'only Alice\'s folder is re-listed after the removal — Bob\'s still comes from the cache');
 });
 
 test('one scan reads the preset catalog ONCE for all three sections, and MovingUI layouts never take part', async () => {
