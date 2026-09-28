@@ -1510,6 +1510,68 @@ test('checkAndPlace() creates NO node when SideCar judges the context purely sho
     assert.deepEqual((await call(caller, 'memoryGraph.nodes')).value, []);
 });
 
+// --- Журнал решений (MEMORY_GRAPH_FIX_PLAN.md, Этап 6, ROADMAP 5.107е) — одна запись на КАЖДЫЙ исход `checkAndPlace()` ---
+
+test('checkAndPlace() logs a "not-called" decision when the gate stays quiet — no model call, no node, but still an entry explaining why', async () => {
+    const { graphCore } = buildEngine({ fetchReply: '{"label":"Alpha","content":"alpha bravo charlie delta","importance":5}' });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    // Тот же прогрев базовой линии (4 вызова), что и у соседнего теста гейта выше ("after a familiar baseline...").
+    const familiar = 'Alpha: alpha bravo charlie delta';
+    for (let i = 0; i < 4; i += 1) await graphCore.checkAndPlace(familiar);
+    await graphCore.checkAndPlace(familiar);
+
+    const [latest] = graphCore.decisionLog();
+    assert.equal(latest.extractor, 'not-called');
+    assert.equal(latest.gate.fired, false);
+    assert.equal(latest.node, undefined, 'no node was created — there must be nothing to report under it');
+});
+
+test('checkAndPlace() logs a "skip" decision (not "empty") when SideCar explicitly declines — distinguishable in the journal from a malformed/empty reply', async () => {
+    const { graphCore } = buildEngine({ fetchReply: '{"skip": true}' });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('The player agrees to meet the merchant at noon tomorrow.');
+
+    const [latest] = graphCore.decisionLog();
+    assert.equal(latest.extractor, 'skip');
+    assert.equal(latest.gate.fired, true, 'sanity: an empty graph always fires on its first check — that is why the model was even asked');
+});
+
+test('checkAndPlace() logs an "error" decision with the model\'s own error message when model.generate() fails outright, and still rethrows exactly as before', async () => {
+    const fetchOverride = async () => ({ status: 500, ok: false, headers: { entries: () => [] }, text: async () => 'Internal Server Error' });
+    const { graphCore } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await assert.rejects(
+        () => graphCore.checkAndPlace('a genuinely new topic worth remembering'),
+        undefined,
+        'the existing throw-on-model-failure behavior (askSideCarForNode()) must stay unchanged — the log entry is purely observational, added alongside it, not instead of it',
+    );
+
+    const [latest] = graphCore.decisionLog();
+    assert.equal(latest.extractor, 'error');
+    assert.match(latest.error, /HTTP 500/);
+});
+
+test('checkAndPlace() logs a "node" decision with the created node\'s label and its actual placement (region, reason)', async () => {
+    const { graphCore } = buildEngine({ fetchReply: '{"label":"Test Fact","content":"Something notable happened.","importance":5}' });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const result = await graphCore.checkAndPlace('a genuinely new topic worth remembering');
+    assert.equal(result.status, 'placed', 'sanity: an empty graph always bootstrap-seeds its very first node');
+
+    const [latest] = graphCore.decisionLog();
+    assert.equal(latest.extractor, 'node');
+    assert.equal(latest.node.label, 'Test Fact');
+    assert.equal(latest.placement.status, 'placed');
+    assert.equal(latest.placement.reason, 'bootstrap-seed', 'sanity: first node ever, no anchors yet — see decideFirstPlacement()');
+});
+
 test('askSideCarForNode()\'s prompt gives the model an explicit escape hatch and an anchored importance scale — not an unconditional "always produce a fact"', async () => {
     const requestBodies = [];
     const fetchOverride = async (url, init) => {
