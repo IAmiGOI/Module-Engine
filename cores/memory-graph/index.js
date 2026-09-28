@@ -3,6 +3,7 @@ import { cosineSimilarity } from '../../libraries/core/embedding.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { estimateTokens, packEntriesIntoChunks } from '../../libraries/core/entry-chunker.js';
 import { extractRecentText } from './context-text.js';
+import { advanceClock, migrateTimestamps } from './clock.js';
 
 const PERSISTENCE_NAMESPACE = 'core.memoryGraph';
 const SETTINGS_KEY = 'settings';
@@ -14,6 +15,7 @@ const RECONSOLIDATION_QUEUE_KEY = 'reconsolidationQueue';
 const STATS_KEY = 'distanceStats';
 const STICKY_KEY = 'stickyRetrieval';
 const NOVELTY_STATS_KEY = 'noveltyStats';
+const CLOCK_KEY = 'clock'; // MEMORY_GRAPH_FIX_PLAN.md, Этап 2 (ROADMAP 5.107б) — { value, version: 1 }; см. doc-comment у `turnCounter`.
 const PREPARE_PIPELINE = 'generation.prepare';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const CHECK_CONTRACT = 'memoryGraph.check';
@@ -56,10 +58,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // промпт извлечения содержимое на порядки больше самой сцены.
     extractionContextMessages: 4,
     extractionContextChars: 3000,
-    // Каскад накопителя — числа согласованы с пользователем дословно.
-    stagingRetryTurns: 5,
+    // Каскад накопителя — числа согласованы с пользователем дословно. `stagingRetryTurns`/`stagingMaxTurns`
+    // УДВОЕНЫ относительно исходных значений (MEMORY_GRAPH_FIX_PLAN.md, Этап 2, ROADMAP 5.107б): единица "хода"
+    // раньше была ГЕНЕРАЦИЕЙ (`turnCounter += 1` на каждый `checkAndPlace()`), теперь — СООБЩЕНИЕМ (длина чата,
+    // см. clock.js) — одна генерация это обычно 2 сообщения (реплика игрока + ответ модели), так что то же
+    // реальное время теперь считается вдвое большим числом "ходов". `stagingBatchSize` — число НОД, не ходов,
+    // единицы не касаются, не трогаем.
+    stagingRetryTurns: 10,
     stagingBatchSize: 5,
-    stagingMaxTurns: 20,
+    stagingMaxTurns: 40,
     subCentersPerRegion: 2,
     // Ёмкость региона ЦЕЛИКОМ (центр + под-центры + обычные узлы, всё вместе
     // — `region.nodeIds.length`, центр уже часть этого массива). Решено с
@@ -101,8 +108,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Своя очередь, СВОИ числа — пользователь явно отклонил переиспользование
     // stagingBatchSize/stagingMaxTurns у накопителя. Чисто по времени, без
     // гонки "батч ИЛИ таймаут" — просто выдержать N ходов с момента
-    // постановки в очередь, потом решить.
-    mergeQueueMaxTurns: 8,
+    // постановки в очередь, потом решить. Удвоено вместе с остальными
+    // "ходовыми" числами (см. комментарий у stagingRetryTurns выше).
+    mergeQueueMaxTurns: 16,
     // Реконсолидация мелких записей (третий, последний механизм переполнения,
     // решено с пользователем): ПЕРЕД вытеснением при переполнении сначала
     // пробуем сжать кластер СЛАБЕЙШИХ незащищённых узлов региона в один,
@@ -112,7 +120,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // размер самого кластера — тот же принцип, что `stagingBatchSize` у
     // накопителя.
     reconsolidationMinCluster: 3,
-    reconsolidationQueueMaxTurns: 8,
+    // Удвоено вместе с остальными "ходовыми" числами (см. комментарий у stagingRetryTurns выше).
+    reconsolidationQueueMaxTurns: 16,
     // Тот же класс бага, что у бутстрапа (см. `bootstrapMaxTokens` ниже) —
     // без явного maxTokens `askSideCarForReconsolidation()` падал на
     // движковый дефолт 1000 (жалоба пользователя). Один компрессированный
@@ -122,8 +131,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Веса decay-формулы. "Время" и "недавность" из MEMORY_GRAPH.md
     // сведены в ОДНУ экспоненциальную кривую по прошедшему времени
     // (gameTime с фолбэком на число сообщений) — это была одна и та же ось,
-    // описанная дважды при брейнсторме, не два независимых сигнала.
-    decayHalfLifeTurns: 20,
+    // описанная дважды при брейнсторме, не два независимых сигнала. Удвоено
+    // вместе с остальными "ходовыми" числами (см. комментарий у
+    // stagingRetryTurns выше) — было 20 ГЕНЕРАЦИЙ, теперь 40 СООБЩЕНИЙ, то
+    // же самое реальное время.
+    decayHalfLifeTurns: 40,
     importanceWeight: 1,
     degreeWeight: 1,
     // Phase 2 — маяки+маршрут (MEMORY_GRAPH.md, решено с пользователем).
@@ -1196,7 +1208,18 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let distanceStats = null;
     let noveltyStats = null; // Уэлфорд по расстоянию до ближайшей НОДЫ (не центра региона) — см. checkAndPlace()
     let stickyRetrieval = null; // {beaconIds, text} | null — sticky balance, см. injectIntoPrompt()
+    // "Ход" — MEMORY_GRAPH_FIX_PLAN.md, Этап 2 (ROADMAP 5.107б): раньше буквально счётчик в памяти страницы
+    // (`turnCounter += 1` на каждый `checkAndPlace()`), обнулявшийся на КАЖДОЙ перезагрузке — decay уже
+    // существующих нод и сроки накопителя/очередей после этого считались от неверной точки отсчёта. Теперь —
+    // длина чата (`advanceClock()`, clock.js): переживает перезагрузку сама (хранится вместе с чатом в ST), не
+    // двигается от реролла/свайпа. Имя переменной и её единицы измерения (условный "ход") оставлены прежними
+    // ради минимума правок по всему файлу — присваивает ей значение теперь ТОЛЬКО `checkAndPlace()`.
     let turnCounter = 0;
+    // `true`, когда `loadState()` увидел ноды, записанные ДО появления `CLOCK_KEY` (старая версия, счётчик был в
+    // памяти) — их `createdTurn`/`lastTouchedTurn`/`queuedTurn`/`firstAttemptTurn` в единицах СТАРОГО счётчика,
+    // бессмысленны рядом с новыми, основанными на длине чата часами. Разовая миграция происходит при первом же
+    // `checkAndPlace()` (там впервые может быть известна длина чата) — см. её тело.
+    let needsClockMigration = false;
 
     async function call(contract, params) {
         return request(host.own, contract, { params });
@@ -1230,7 +1253,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     async function loadState() {
-        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult, noveltyResult] = await Promise.all([
+        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult, noveltyResult, clockResult] = await Promise.all([
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: REGIONS_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STAGING_KEY, fallback: {} }),
@@ -1239,6 +1262,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STATS_KEY, fallback: null }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, fallback: null }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NOVELTY_STATS_KEY, fallback: null }),
+            call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: CLOCK_KEY, fallback: null }),
         ]);
         nodes = nodesResult.ok ? nodesResult.value ?? {} : {};
         regions = regionsResult.ok ? regionsResult.value ?? {} : {};
@@ -1248,6 +1272,15 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         distanceStats = statsResult.ok ? statsResult.value : null;
         stickyRetrieval = stickyResult.ok ? stickyResult.value : null;
         noveltyStats = noveltyResult.ok ? noveltyResult.value : null;
+        const clock = clockResult.ok ? clockResult.value : null;
+        if (clock && typeof clock.value === 'number') {
+            turnCounter = clock.value;
+        } else {
+            // Часов ещё нет — либо граф совсем свежий (мигрировать нечего), либо это данные ДО появления часов
+            // (старый счётчик-в-памяти) — у него есть ноды, но их временные отметки бессмысленны рядом с новыми.
+            turnCounter = 0;
+            needsClockMigration = Object.keys(nodes).length > 0;
+        }
     }
 
     async function persistNodes() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, value: nodes }); }
@@ -1260,6 +1293,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: NOVELTY_STATS_KEY, value: noveltyStats });
     }
     async function persistStickyRetrieval() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STICKY_KEY, value: stickyRetrieval }); }
+    // Сам факт присутствия ключа в хранилище — маркер "часы существуют, миграция (если требовалась) уже
+    // произошла" (см. `needsClockMigration` выше) — `version` на будущее, если формат когда-нибудь поменяется.
+    async function persistClock() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: CLOCK_KEY, value: { value: turnCounter, version: 1 } }); }
 
     /**
      * Внутриигровые дата/время (обязательное поле ноды, по прямому запросу
@@ -2076,9 +2112,25 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * превышен — зовёт SideCar и проводит новую ноду через каскад
      * размещения. Математика решает, звать ли модель вообще — MEMORY_GRAPH.md.
      */
-    async function checkAndPlace(contextText) {
+    async function checkAndPlace(contextText, { chatLength } = {}) {
         return enqueueWrite(async () => {
-            turnCounter += 1;
+            // `chatLength` — длина ЖИВОГО чата на момент вызова (обработчик `memoryGraph.check` передаёт
+            // `params.chat.length`); без неё (ручной `memoryGraph.checkAndPlace({ text })`, см. регистрацию
+            // контракта ниже) часы просто не двигаются — `advanceClock(x, undefined) === x` (MEMORY_GRAPH_FIX_PLAN.md,
+            // Этап 2, ROADMAP 5.107б).
+            turnCounter = advanceClock(turnCounter, chatLength);
+            if (needsClockMigration) {
+                // Разовая миграция данных из старого режима (счётчик-в-памяти) — см. doc-comment у
+                // `needsClockMigration`/`loadState()` выше. Флаг гасится СРАЗУ, а не после успешной записи:
+                // повторный прогон переписал бы уже верно смигрированные отметки поверх настоящего прошедшего
+                // времени, стерев разницу в возрасте между старыми нодами и всем, что появилось после первой
+                // миграции. `persistClock()` — ЗДЕСЬ, не в общей точке с `persistStats()` ниже: сам факт наличия
+                // `CLOCK_KEY` в хранилище — это и есть маркер "миграция сделана", он обязан долететь до диска
+                // даже если этот конкретный вызов ниже вернётся с `'skipped'` (пустой текст).
+                needsClockMigration = false;
+                ({ nodes, staging, mergeQueue, reconsolidationQueue } = migrateTimestamps({ nodes, staging, mergeQueue, reconsolidationQueue }, turnCounter));
+                await Promise.all([persistNodes(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue(), persistClock()]);
+            }
             if (!contextText || !contextText.trim()) return { status: 'skipped' };
 
             const embeddingResult = await callService('embedding.compute', { text: contextText, kind: 'query' });
@@ -2105,6 +2157,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (centerEmbeddings.length) distanceStats = updateDistanceStats(distanceStats, topicDistance);
             if (nodeEmbeddings.length) noveltyStats = updateDistanceStats(noveltyStats, noveltyDistance);
             await persistStats();
+            await persistClock(); // тот же момент, что и persistStats() (MEMORY_GRAPH_FIX_PLAN.md, Этап 2) — не на КАЖДОЙ строке функции, но на каждом дошедшем сюда проходе
             if (!wasStrong) return { status: 'no-change' };
 
             const proposal = await askSideCarForNode(contextText, { isFirstNode: Object.keys(nodes).length === 0 });
@@ -3057,9 +3110,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         });
     }
 
-    /** Публичный ручной прогон — тот же принцип, что `summary.check`: то же самое, что движок делает сам на каждой генерации, просто по требованию (например для UI/тестов). */
-    async function manualCheck(contextText) {
-        const placement = await checkAndPlace(contextText);
+    /** Публичный ручной прогон — тот же принцип, что `summary.check`: то же самое, что движок делает сам на каждой генерации, просто по требованию (например для UI/тестов). `chatLength` — см. `checkAndPlace()`. */
+    async function manualCheck(contextText, chatLength) {
+        const placement = await checkAndPlace(contextText, { chatLength });
         await sweepStaging();
         await sweepMergeQueue();
         await sweepReconsolidationQueue();
@@ -3079,7 +3132,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // "узел вообще не создался". Тот же принцип, что у mergeQueue/
         // reconsolidationQueue выше — сырой снимок очереди.
         host.own.register('memoryGraph.staging', () => Object.values(staging)),
-        host.own.register('memoryGraph.check', params => manualCheck(extractRecentText(params?.chat, { count: settings.extractionContextMessages, maxChars: settings.extractionContextChars }))),
+        host.own.register('memoryGraph.check', params => manualCheck(extractRecentText(params?.chat, { count: settings.extractionContextMessages, maxChars: settings.extractionContextChars }), params?.chat?.length)),
         // Ручное редактирование графа (UI-редактор) — CRUD нод/рёбер.
         host.own.register('memoryGraph.nodes.create', params => createNodeManually(params ?? {})),
         host.own.register('memoryGraph.nodes.createFromCharacterCard', () => createNodeFromCharacterCard()),

@@ -8,7 +8,7 @@ import { createInternalEngineModelsCore } from '../cores/models/internal-engine.
 import { createSettingsCore } from '../cores/settings/index.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
-import { createMemoryGraphCore, BOOTSTRAP_SYSTEM_PROMPT } from '../cores/memory-graph/index.js';
+import { createMemoryGraphCore, BOOTSTRAP_SYSTEM_PROMPT, DEFAULT_SETTINGS } from '../cores/memory-graph/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
 
 /**
@@ -146,6 +146,10 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
             'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
+            // Прямой доступ к хранилищу — только для тестов Этапа 2 (MEMORY_GRAPH_FIX_PLAN.md), которым нужно
+            // подложить данные "старого формата" (нода с большим createdTurn, без CLOCK_KEY), не воспроизводимые
+            // никаким обычным вызовом контракта Ядра.
+            'storage.chatMemory.get', 'storage.chatMemory.set',
         ],
     });
 
@@ -827,7 +831,10 @@ test('sweeping a matured reconsolidation queue folds the weak cluster into ONE d
     await graphCore.bootstrapFromLorebook();
     assert.equal(graphCore.nodes().length, 24);
 
-    for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   '); // advance turnCounter past reconsolidationQueueMaxTurns without touching SideCar
+    // Часы — теперь длина чата (MEMORY_GRAPH_FIX_PLAN.md, Этап 2), не счётчик генераций — один вызов с нужным
+    // `chatLength` сразу ставит turnCounter туда, куда нужно, без цикла и без похода к SideCar/эмбедингу (пустой
+    // текст сам по себе останавливает checkAndPlace() до этого).
+    await graphCore.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.reconsolidationQueueMaxTurns + 1 });
     await graphCore.sweepReconsolidationQueue();
 
     const nodes = graphCore.nodes();
@@ -855,7 +862,7 @@ test('askSideCarForReconsolidation() sends an explicit maxTokens override, not t
 
     await graphCore.load();
     await graphCore.bootstrapFromLorebook();
-    for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
+    await graphCore.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.reconsolidationQueueMaxTurns + 1 });
     await graphCore.sweepReconsolidationQueue();
 
     assert.equal(requestBodies.length, 5, 'sanity: bootstrap Проход 1/2/3/4 + the reconsolidation call itself must all have fired');
@@ -1096,10 +1103,9 @@ test('a near-duplicate pair detected on insertion is queued for SideCar merge, N
     assert.equal(graphCore.nodes().length, 2, 'both near-duplicate entries exist independently right after bootstrap');
     assert.equal(graphCore.mergeQueue().length, 1, 'the near-duplicate pair must be QUEUED, not merged immediately (decided with the user explicitly)');
 
-    // Advance turnCounter past mergeQueueMaxTurns (8) with blank context —
-    // checkAndPlace() increments turnCounter unconditionally even when it
-    // returns 'skipped', so this never touches SideCar or embeddings.
-    for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
+    // Часы — длина чата (MEMORY_GRAPH_FIX_PLAN.md, Этап 2), не счётчик генераций — один вызов с явным `chatLength`
+    // сразу ставит turnCounter туда, куда нужно; пустой текст не даёт дойти до SideCar/эмбединга.
+    await graphCore.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.mergeQueueMaxTurns + 1 });
     await graphCore.sweepMergeQueue();
 
     const nodes = graphCore.nodes();
@@ -1134,14 +1140,14 @@ test('a merge candidate queued as a side effect of bootstrapFromLorebook() is pe
     assert.equal(reloadedGraphCore.mergeQueue().length, 1, 'the queued merge candidate must have been persisted by bootstrapFromLorebook() itself, not lost until the next sweep');
 });
 
-test('sweepMergeQueue() does NOT touch a queued pair before mergeQueueMaxTurns (8) have actually elapsed — it is a real timer, not immediate on next sweep', async () => {
+test('sweepMergeQueue() does NOT touch a queued pair before mergeQueueMaxTurns have actually elapsed — it is a real timer, not immediate on next sweep', async () => {
     const entries = [
         { uid: 0, comment: 'Tavern Door', content: 'The old tavern door creaks in the evening light.' },
         { uid: 1, comment: 'Tavern Door Again', content: 'The old tavern door creaks loudly in the evening light.' },
     ];
     const { graphCore } = buildEngine({
         lorebookEntries: entries,
-        // Ход не созревает до mergeQueueMaxTurns (8) в этом тесте вообще —
+        // Ход не созревает до mergeQueueMaxTurns в этом тесте вообще —
         // askSideCarForMerge() не зовётся ни разу, 4-й ответ ниже не
         // расходуется, оставлен для симметрии с соседними тестами.
         fetchReplies: [
@@ -1156,13 +1162,14 @@ test('sweepMergeQueue() does NOT touch a queued pair before mergeQueueMaxTurns (
     await graphCore.bootstrapFromLorebook();
     assert.equal(graphCore.mergeQueue().length, 1);
 
-    // Sweep immediately, and again after only 3 of the required 8 turns —
-    // neither must resolve the pair yet.
+    // Sweep immediately, and again one turn short of maturity — neither must
+    // resolve the pair yet. Часы — длина чата (Этап 2), не счётчик
+    // генераций: `chatLength` прыгает turnCounter напрямую, без цикла.
     await graphCore.sweepMergeQueue();
     assert.equal(graphCore.nodes().length, 2, 'sweeping right away must not merge — the pair has not aged at all yet');
-    for (let i = 0; i < 3; i += 1) await graphCore.checkAndPlace('   ');
+    await graphCore.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.mergeQueueMaxTurns - 1 });
     await graphCore.sweepMergeQueue();
-    assert.equal(graphCore.nodes().length, 2, 'only 3 of the required 8 turns have passed — still too early');
+    assert.equal(graphCore.nodes().length, 2, 'one turn short of mergeQueueMaxTurns — still too early');
     assert.equal(graphCore.mergeQueue().length, 1, 'the entry must still be sitting in the queue, untouched');
 });
 
@@ -1199,7 +1206,7 @@ test('merging redirects a THIRD node\'s edge to the survivor instead of dropping
     assert.equal(witnessBefore.degree, 1, 'Witness must have gotten a real "mentions" edge to Alpha at insertion time');
     assert.equal(graphCore.mergeQueue().length, 1, 'Alpha and Alpha Two must be queued as a near-duplicate pair');
 
-    for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
+    await graphCore.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.mergeQueueMaxTurns + 1 });
     await graphCore.sweepMergeQueue();
 
     const nodes = graphCore.nodes();
@@ -1225,7 +1232,7 @@ test('sweepMergeQueue() leaves both nodes untouched when SideCar judges them gen
     await graphCore.bootstrapFromLorebook();
     assert.equal(graphCore.mergeQueue().length, 1);
 
-    for (let i = 0; i < 8; i += 1) await graphCore.checkAndPlace('   ');
+    await graphCore.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.mergeQueueMaxTurns + 1 });
     await graphCore.sweepMergeQueue();
 
     assert.equal(graphCore.nodes().length, 2, 'SideCar declined the merge — both original nodes must survive untouched');
@@ -1520,6 +1527,158 @@ test('memoryGraph.check feeds the model\'s OWN reply into extraction, not just t
     assert.equal(requestBodies.length, 1, 'an empty graph always fires the gate on its first check');
     const prompt = requestBodies[0].messages.at(-1).content;
     assert.match(prompt, /The tower is cursed/, 'the model\'s own reply — where facts actually appear on generation.prepare — must reach the extraction prompt, not just the new player message');
+});
+
+// --- Часы (MEMORY_GRAPH_FIX_PLAN.md, Этап 2) — переживают перезагрузку -----
+// `graphCore.checkAndPlace(text, { chatLength })` (не через `memoryGraph.check`-контракт) — тот же метод, что уже
+// используют тесты накопителя/очередей выше, ровно затем и добавленный в сигнатуру (см. index.js).
+
+test('the clock never rolls backward across a reload, even if messages were deleted and the chat got SHORTER', async () => {
+    const { engine, graphCore } = buildEngine({
+        fetchReplies: [
+            '{"label":"Alpha","content":"alpha bravo charlie delta echo","importance":5}',
+            '{"label":"Foxtrot","content":"foxtrot golf hotel india juliet","importance":5}',
+        ],
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    // Alpha создаётся на длине чата 100 — часы персистятся на 100 (persistClock() зовётся тем же местом, что и
+    // persistStats(), при любом непустом успешно проэмбеденном тексте).
+    await graphCore.checkAndPlace('alpha bravo charlie delta echo', { chatLength: 100 });
+
+    // "Перезагрузка страницы" — новый экземпляр Ядра поверх ТОГО ЖЕ хранилища (namespace фиксирован, не привязан к caller id).
+    const reloaded = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.reloaded', 'cores', { tier: 'official' }));
+    await reloaded.load();
+    await reloaded.waitForBootstrap();
+
+    // Часть сообщений удалена — чат теперь короче (40), чем был на пике (100). Часы обязаны остаться на 100
+    // (`advanceClock` — максимум из сохранённого и текущей длины), не откатиться на 40: Foxtrot ниже должен
+    // получить createdTurn=100, а не 40.
+    await reloaded.checkAndPlace('foxtrot golf hotel india juliet', { chatLength: 40 });
+
+    const foxtrot = reloaded.nodes().find(n => n.label === 'Foxtrot');
+    assert.ok(foxtrot, 'sanity: the second, genuinely different topic must have been placed as a real node');
+    assert.equal(foxtrot.createdTurn, 100, 'the clock must floor at the persisted peak (100), not roll back to the shrunk chat length (40)');
+});
+
+test('a node written by an OLD version of the graph (no clock yet, stale createdTurn) is migrated on first check — it ages properly instead of staying frozen forever', async () => {
+    // Три набора слов, каждый ЦЕЛИКОМ в своей отдельной корзине fakeEmbed() (проверено отдельным скриптом по той же
+    // хэш-функции: bucket0="foxtrot kilo november uniform xray", bucket2="golf lima oscar quebec sierra",
+    // bucket3="india papa romeo tango victor" — ни одного общего слова) — это ТЕКСТ ХОДА (аргумент checkAndPlace(),
+    // гейт «сильного изменения» сравнивает именно его). `thresholdK` ниже дефолта (0.5, не 1.5): в этом игрушечном
+    // 4-мерном эмбединге расстояние ограничено [0,1] сверху, и после ВТОРОГО реального перехода темы дефолтный
+    // k=1.5 уже не пропускает даже максимально далёкую (ортогональную) тему — тест не о самом гейте, ему просто
+    // нужно уверенно долетать до третьего реального вызова SideCar.
+    // Содержимое ЖЕ СОЗДАВАЕМОЙ ноды (`proposal.content` — то, что реально приходит от SideCar) НАРОЧНО упоминает
+    // "Filler" по имени: `findNameMatchRegion()` кладёт ноду в регион уже известного тёзки — единственный надёжный
+    // способ гарантировать, что Bravo/Charlie попадут в ТОТ ЖЕ регион, что и Filler/Alpha (по чистому сходству
+    // векторов они бы ничем не отличались от 14 ПУСТЫХ регионов — тема нарочно ортогональна для гейта выше).
+    const { engine, graphCore, caller } = buildEngine({
+        fetchReplies: [
+            '{"skip": true}', // мигрирующий вызов ниже — никакой ноды создавать не должен
+            '{"label":"Bravo","content":"Filler introduces a new golf story.","importance":5}',
+            '{"label":"Charlie","content":"Filler introduces yet another india story.","importance":5}',
+        ],
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    // reconsolidationMinCluster:4 — ВЫШЕ числа реально доступных ("обычных") кандидатов (Alpha/Bravo/Charlie — 3),
+    // иначе enforceRegionCapacity() сначала попробует СЖАТЬ их в очередь реконсолидации (своя, более ранняя ветка
+    // переполнения), а тест — про ПРОСТОЕ вытеснение слабейшего (pickEvictionCandidate), не про сжатие.
+    await call(caller, 'memoryGraph.configure', { maxNodesPerRegion: 3, subCentersPerRegion: 0, thresholdK: 0.5, reconsolidationMinCluster: 4 });
+
+    // "Filler" — первый узел региона, автоматически становится его защищённым центром (Alpha/Bravo/Charlie ниже
+    // остаются ОБЫЧНЫМИ, вытесняемыми узлами благодаря subCentersPerRegion:0).
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Filler', content: 'foxtrot kilo november uniform xray', importance: 5, sector: 0, ring: 0 });
+    const filler = graphCore.nodes().find(n => n.label === 'Filler');
+    const region = graphCore.regions().find(r => r.centerNodeId === filler.id);
+    const regionKeyStr = `${region.sector}:${region.ring}`;
+
+    // Подкладываем "Alpha" НАПРЯМУЮ в хранилище — ровно то, что видит `loadState()` от ГРАФА СТАРОЙ версии: узел
+    // есть, `createdTurn` — огромное число из старого счётчика-в-памяти, `CLOCK_KEY` не существует вовсе.
+    const nodesResult = await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'nodes', fallback: {} });
+    const alpha = {
+        id: 'node_alpha_old', label: 'Alpha', content: 'a fact written by the pre-clock version of the graph.',
+        embedding: filler.embedding, importance: 5, degree: 0, createdAt: 0, createdTurn: 9999, lastTouchedTurn: 9999,
+        protectedNode: false, regionId: regionKeyStr, edges: [], gameTime: null,
+    };
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'nodes', value: { ...nodesResult.value, [alpha.id]: alpha } });
+    const regionsResult = await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'regions', fallback: {} });
+    await call(caller, 'storage.chatMemory.set', {
+        namespace: 'core.memoryGraph', key: 'regions',
+        value: { ...regionsResult.value, [regionKeyStr]: { ...regionsResult.value[regionKeyStr], nodeIds: [...regionsResult.value[regionKeyStr].nodeIds, alpha.id] } },
+    });
+
+    // "Перезагрузка" — новый экземпляр читает данные СТАРОГО формата: ноды есть, часов нет -> needsClockMigration.
+    const reloaded = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.reloaded', 'cores', { tier: 'official' }));
+    await reloaded.load();
+    await reloaded.waitForBootstrap();
+
+    // Первый check после "обновления" — та же тема, что уже "знает" граф (bucket0, как Filler) — расстояние
+    // близко к нулю, задаёт низкую базовую линию для Welford, гейт молчит (skip); только мигрирует createdTurn.
+    await reloaded.checkAndPlace('foxtrot kilo november uniform xray', { chatLength: 20 });
+    assert.equal(reloaded.nodes().find(n => n.id === alpha.id)?.createdTurn, 20, 'the stale createdTurn (9999, meaningless old-counter units) must have been migrated to the real current clock');
+
+    // Bravo — создан по-настоящему НА turn 60 (обычный, недавний узел).
+    await reloaded.checkAndPlace('golf lima oscar quebec sierra', { chatLength: 60 });
+    assert.equal(reloaded.nodes().length, 3, 'sanity: Filler + migrated Alpha + Bravo, region still at its 3-node cap');
+
+    // Charlie переполняет регион на turn 100 — Alpha (мигрированная, реально старейшая: elapsed 100-20=80) должна
+    // вытесниться, а не Bravo (elapsed 100-60=40) — БЕЗ миграции Alpha осталась бы "из будущего"
+    // (createdTurn 9999 > turnCounter) и выглядела бы моложе Bravo, вытесняя ЕГО вместо себя (ровно баг из плана).
+    await reloaded.checkAndPlace('india papa romeo tango victor', { chatLength: 100 });
+
+    const finalNodes = reloaded.nodes();
+    assert.equal(finalNodes.length, 3, 'the region stayed at its 3-node cap — one of the three ordinary candidates was evicted');
+    assert.ok(finalNodes.some(n => n.label === 'Filler'), 'the protected center always survives');
+    assert.ok(!finalNodes.some(n => n.id === alpha.id), 'Alpha — genuinely the oldest once properly migrated — must be the one evicted');
+    assert.ok(finalNodes.some(n => n.label === 'Bravo'), 'Bravo (younger than Alpha) must survive');
+    assert.ok(finalNodes.some(n => n.label === 'Charlie'), 'Charlie (just created) must survive');
+});
+
+test('a node stuck in the накопитель is not abandoned across a reload — it is retried once the chat has grown past its due turn', async () => {
+    const { graphCore, engine, caller } = buildEngine({
+        fetchReplies: [
+            '{"label":"Topic Alpha","content":"alpha bravo charlie delta echo hotel juliet mike","importance":5}', // уверенно размещается, сеет регион 0:0
+            '{"label":"Topic Beta","content":"golf lima oscar quebec sierra yankee","importance":5}', // настоящая ничья по всем 15 регионам -> в накопитель
+            '1: Beta Category', // ПОЗДНИЙ ответ escalateToSideCar() — после reload, когда истечёт полный срок накопителя
+        ],
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    await graphCore.checkAndPlace('alpha bravo charlie delta echo hotel juliet mike', { chatLength: 5 });
+    await graphCore.checkAndPlace('golf lima oscar quebec sierra yankee', { chatLength: 6 }); // тот же фикстур ничьей, что и в тесте memoryGraph.staging выше
+
+    const staged = graphCore.staging();
+    assert.equal(staged.length, 1, 'sanity: Topic Beta landed in the accumulator, exactly like the sibling test above');
+    assert.equal(staged[0].firstAttemptTurn, 6);
+
+    // "Перезагрузка" — новый экземпляр поверх ТОГО ЖЕ хранилища.
+    const reloaded = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.reloaded', 'cores', { tier: 'official' }));
+    await reloaded.load();
+    await reloaded.waitForBootstrap();
+    assert.equal(reloaded.staging().length, 1, 'the staged entry must have survived the reload');
+
+    // Чат растёт ДО срока ретрая (firstAttemptTurn 6 + stagingRetryTurns) — sweep не должен ничего трогать: часы
+    // корректно продолжились с 6, а не сбросились в 0 (иначе dueAt был бы недостижим ещё очень долго).
+    await reloaded.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.stagingRetryTurns + 5 });
+    await reloaded.sweepStaging();
+    assert.equal(reloaded.staging()[0].attemptCount, 1, 'one turn before the scheduled retry — must not have retried yet');
+
+    // Чат растёт ДО срока ретрая — первый ретрай отмечается (тема по-прежнему ничья, снова в накопитель).
+    await reloaded.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.stagingRetryTurns + 7 });
+    await reloaded.sweepStaging();
+    assert.equal(reloaded.staging().length, 1, 'still tied — must still be in the accumulator, now on its second attempt');
+    assert.equal(reloaded.staging()[0].attemptCount, 2);
+
+    // Чат растёт до полного срока накопителя (firstAttemptTurn + stagingRetryTurns + stagingMaxTurns) — эскалация.
+    await reloaded.checkAndPlace('   ', { chatLength: 6 + DEFAULT_SETTINGS.stagingRetryTurns + DEFAULT_SETTINGS.stagingMaxTurns });
+    await reloaded.sweepStaging();
+
+    assert.equal(reloaded.staging().length, 0, 'the entry must be gone from the accumulator — processed, not stuck forever');
+    assert.ok(reloaded.nodes().some(n => n.label === 'Topic Beta'), 'escalation must have actually placed the node somewhere, not silently dropped it');
 });
 
 // --- Real Lorebook Core integration (not the synchronous fake above) -----
