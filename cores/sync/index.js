@@ -224,18 +224,23 @@ export function createSyncCore(host, {
             local, remote, base, include, localManifest,
             conflictLabel: `${config.deviceName} ${stampLabel(now())}`,
             conflictPolicy: conflictPolicyFor,
+            categoryOf: categoryOfPath,
             onProgress: state => setProgress(target, { phase: 'syncing', ...state }),
             isAborted: () => abortRequested,
         });
         await writeState(`base:${baseKey}`, result.base);
         await flushCache();
         await refreshStInterface();
+        if (result.needsConfirmation) log.warn?.(`[ST Module Engine (Beta)] Sync: mass deletion blocked against ${target}, nothing deleted —`, result.needsConfirmation.join(', '));
         return result;
     }
 
     const summarize = result => ({
         ok: result.ok, aborted: result.aborted, stopped: result.stopped ?? null, counts: result.counts,
         errors: result.errors.slice(0, 5).map(error => (error.path === '*' ? error.message : `${error.path}: ${error.message}`)),
+        // Категории, где удаление подозрительно массовое — ничего не удалено, но и не скрыто (панель для подтверждения — отдельная
+        // задача, ROADMAP 5.106в); видно уже сейчас через `sync.status`, даже без неё.
+        needsConfirmation: result.needsConfirmation ?? null,
     });
 
     // ── GitHub ──────────────────────────────────────────────────────────────────────────────────────────────────────

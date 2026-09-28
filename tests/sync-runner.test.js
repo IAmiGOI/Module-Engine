@@ -149,6 +149,42 @@ test('quarantine policy with the LOCAL device as the loser against a batched sid
     assert.deepEqual(local.quarantined.map(entry => entry.text), ['old on device']);
 });
 
+// --- Защита от массового удаления (ROADMAP 5.106в) ---
+
+const categoryOf = path => (path.startsWith('characters/') ? 'characters' : null);
+
+async function massDeletionSetup() {
+    const localFiles = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`characters/${i}.png`, `c${i}`]));
+    const remoteFiles = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`characters/${i}.png`, `c${i}`]));
+    const base = Object.fromEntries(await Promise.all(Object.entries(remoteFiles).map(async ([path, text]) => [path, await hashOf(text)])));
+    return { local: memorySide(localFiles), remote: memorySide(remoteFiles), base };
+}
+
+test('runSync(): a mass deletion in a guarded category is skipped entirely and reported as needsConfirmation, instead of executed', async () => {
+    const { local, remote, base } = await massDeletionSetup();
+    const result = await runSync({ local, remote, base, categoryOf });
+    assert.deepEqual(result.needsConfirmation, ['characters']);
+    assert.equal(result.counts.deletedRemote, 0, 'nothing was actually deleted');
+    assert.equal(remote.files.size, 30, 'the 25 "missing" files are untouched on the other side');
+    assert.deepEqual(remote.log.filter(line => line.startsWith('remove:')), []);
+});
+
+test('runSync(): without a categoryOf function the guard is inert — deletions run exactly as before (default behavior unchanged)', async () => {
+    const { local, remote, base } = await massDeletionSetup();
+    const result = await runSync({ local, remote, base });
+    assert.equal(result.needsConfirmation, null);
+    assert.equal(result.counts.deletedRemote, 25);
+});
+
+test('runSync(): a small, ordinary deletion never trips needsConfirmation', async () => {
+    const local = memorySide({ 'characters/a.png': 'A' });
+    const remote = memorySide({ 'characters/a.png': 'A', 'characters/b.png': 'B' });
+    const base = { 'characters/a.png': await hashOf('A'), 'characters/b.png': await hashOf('B') };
+    const result = await runSync({ local, remote, base, categoryOf });
+    assert.equal(result.needsConfirmation, null);
+    assert.equal(result.counts.deletedRemote, 1);
+});
+
 test('one failing file does not stop the rest and stays out of the base so it is retried next time', async () => {
     const local = memorySide({});
     const remote = memorySide({ 'good.png': 'ok', 'bad.png': 'nope' });

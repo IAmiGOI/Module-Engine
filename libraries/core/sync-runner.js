@@ -1,4 +1,4 @@
-import { computeSyncPlan, SYNC_ACTIONS } from './sync-plan.js';
+import { computeSyncPlan, detectMassDeletion, SYNC_ACTIONS } from './sync-plan.js';
 import { isFatalError } from './sync-errors.js';
 
 /**
@@ -37,6 +37,7 @@ export async function runSync({
     include,
     conflictLabel,
     conflictPolicy = () => 'copy',
+    categoryOf = () => null,
     onProgress = () => {},
     isAborted = () => false,
     localManifest,
@@ -44,7 +45,13 @@ export async function runSync({
 } = {}) {
     const [localEntries, remoteEntries] = await Promise.all([localManifest ?? local.manifest(), remoteManifest ?? remote.manifest()]);
     const plan = computeSyncPlan({ local: localEntries, remote: remoteEntries, base, conflictLabel, include });
-    const actions = [...plan.actions].sort((a, b) => TRANSFER_ORDER[a.op] - TRANSFER_ORDER[b.op]);
+    // Защита от массового удаления (ROADMAP 5.106в): категория под подозрением (`detectMassDeletion` — sync-plan.js) не удаляется
+    // молча ни на одном проходе — её deleteLocal/deleteRemote просто не входят в исполнение, путь остаётся как есть до подтверждения
+    // человеком (панель — отдельная задача); если следующий скан снова покажет файлы (временная пустота листинга ST) — удалять
+    // будет уже нечего, план сам сойдёт на нет.
+    const blockedCategories = detectMassDeletion({ actions: plan.actions, local: localEntries, remote: remoteEntries, base, categoryOf });
+    const isBlockedDeletion = action => (action.op === SYNC_ACTIONS.deleteLocal || action.op === SYNC_ACTIONS.deleteRemote) && blockedCategories.has(categoryOf(action.path));
+    const actions = plan.actions.filter(action => !isBlockedDeletion(action)).sort((a, b) => TRANSFER_ORDER[a.op] - TRANSFER_ORDER[b.op]);
     const nextBase = { ...base };
     const errors = [];
     const counts = { pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, quarantined: 0, failed: 0, deferred: 0 };
@@ -135,7 +142,10 @@ export async function runSync({
         }
     }
     onProgress({ done: total, total, path: null, op: null });
-    return { ok: !commitError && counts.failed === 0 && !aborted, aborted, stopped, counts, errors, base: nextBase, plan: plan.counts };
+    return {
+        ok: !commitError && counts.failed === 0 && !aborted, aborted, stopped, counts, errors, base: nextBase, plan: plan.counts,
+        needsConfirmation: blockedCategories.size ? [...blockedCategories] : null,
+    };
 }
 
 /** Победитель пишется в основной путь на обеих сторонах; что происходит с проигравшей версией, зависит от `outcome` ниже. */
