@@ -23,6 +23,7 @@ import {
 import { extractRecentText } from '../cores/memory-graph/context-text.js';
 import { advanceClock, migrateTimestamps } from '../cores/memory-graph/clock.js';
 import { pickRegionBySimilarity } from '../cores/memory-graph/placement.js';
+import { updateEwmaStats, ewmaStddev, isStrongChangeEwma, migrateWelford } from '../cores/memory-graph/gate.js';
 
 // --- Физика регионов --------------------------------------------------
 
@@ -124,6 +125,52 @@ test('isStrongChange() adapts to the graph\'s own distance distribution — the 
     const probeDistance = 0.20;
     assert.equal(isStrongChange(probeDistance, tight, 1.5), true, 'a 0.20 distance is way outside a tight [0.09-0.11] distribution');
     assert.equal(isStrongChange(probeDistance, wide, 1.5), false, 'the same 0.20 distance is unremarkable inside a wide, noisy distribution');
+});
+
+// --- Фильтр с забыванием (MEMORY_GRAPH_FIX_PLAN.md, Этап 4) -------------
+
+test('migrateWelford() converts the old Уэлфорд format {count,mean,m2} using the unbiased (n-1) variance, and 0 variance for a single observation (nothing to divide by)', () => {
+    assert.deepEqual(migrateWelford({ count: 1, mean: 5, m2: 0 }), { count: 1, mean: 5, variance: 0 });
+    assert.deepEqual(migrateWelford({ count: 3, mean: 2, m2: 6 }), { count: 3, mean: 2, variance: 3 });
+});
+
+test('updateEwmaStats() transparently accepts an old Уэлфорд-format stats object and converts it on first use — no separate migration step needed, unlike the clock (Этап 2)', () => {
+    const welford = { count: 4, mean: 1, m2: 3 };
+    const migrated = migrateWelford(welford);
+    const viaUpdate = updateEwmaStats(welford, 1, { window: 30 }); // подать РОВНО среднее — mean не сдвигается, изолирует сам факт перевода формата
+    assert.ok(Math.abs(viaUpdate.mean - migrated.mean) < 1e-9);
+    const alpha = 2 / 31;
+    assert.ok(Math.abs(viaUpdate.variance - (1 - alpha) * migrated.variance) < 1e-9, 'dispersion after one EWMA-шаг от смигрированной базы (diff=0, значение уже там же, где среднее)');
+});
+
+test('isStrongChangeEwma() treats the first THREE observations (no baseline yet) as ALWAYS strong — one more than Уэлфорд-based isStrongChange(), since EWMA needs at least one real step off its own seed value before variance means anything', () => {
+    assert.equal(isStrongChangeEwma(0.01, null, 1.5), true);
+    const one = updateEwmaStats(null, 0.5);
+    assert.equal(isStrongChangeEwma(0.01, one, 1.5), true);
+    const two = updateEwmaStats(one, 0.5);
+    assert.equal(isStrongChangeEwma(0.01, two, 1.5), true);
+});
+
+test('isStrongChangeEwma() adapts to the graph\'s own distance distribution — same idea as the old Уэлфорд-based gate, just with a forgetting window', () => {
+    let tight = null;
+    for (const v of [0.10, 0.11, 0.09, 0.10, 0.11]) tight = updateEwmaStats(tight, v, { window: 5 });
+    let wide = null;
+    for (const v of [0.05, 0.30, 0.15, 0.40, 0.10]) wide = updateEwmaStats(wide, v, { window: 5 });
+
+    const probeDistance = 0.20;
+    assert.equal(isStrongChangeEwma(probeDistance, tight, 1.5), true, 'a 0.20 distance is way outside a tight [0.09-0.11] distribution');
+    assert.equal(isStrongChangeEwma(probeDistance, wide, 1.5), false, 'the same 0.20 distance is unremarkable inside a wide, noisy distribution');
+});
+
+test('updateEwmaStats() forgets old large distances — after enough small ones, the threshold ends up LOWER than it was after just a few large ones (MEMORY_GRAPH_FIX_PLAN.md, Этап 4 — this is the actual fix for the gate going silent as the graph grows and typical distances shrink)', () => {
+    let stats = null;
+    for (let i = 0; i < 5; i += 1) stats = updateEwmaStats(stats, 0.8, { window: 30 });
+    const thresholdAfterFewLarge = stats.mean + 1.5 * ewmaStddev(stats);
+
+    for (let i = 0; i < 100; i += 1) stats = updateEwmaStats(stats, 0.05, { window: 30 });
+    const thresholdAfterManySmall = stats.mean + 1.5 * ewmaStddev(stats);
+
+    assert.ok(thresholdAfterManySmall < thresholdAfterFewLarge, `the threshold must drop once the graph's typical distances shrink: ${thresholdAfterManySmall} should be < ${thresholdAfterFewLarge}`);
 });
 
 // --- Decay -------------------------------------------------------------
