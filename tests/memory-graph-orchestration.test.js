@@ -1344,6 +1344,32 @@ test('st.chatChanged makes the graph re-read the (possibly DIFFERENT) active cha
     assert.equal(nodes[0].id, 'node_existing', 'must have picked up the OTHER chat\'s real persisted graph on chatChanged, not stayed stuck on stale in-memory state from before the switch');
 });
 
+// --- Защита от смены чата посреди ожидания модели/эмбединга (MEMORY_GRAPH_FIX_PLAN.md, Этап 5) ---
+// `embeddingGate` — управляемо задержанный `embedding.compute()` (см. buildEngine()'s doc-comment): единственный
+// способ надёжно поймать чат ровно ПОСЕРЕДИНЕ ожидания модели/эмбединга, не полагаясь на реальное время.
+
+test('checkAndPlace() aborts with chat-changed and creates NOTHING in the new chat\'s graph if the chat switches while it is still waiting on the model/embedding', async () => {
+    // `onEmbeddingCall` fires SYNCHRONOUSLY right as checkAndPlace() requests its very FIRST embedding
+    // (contextEmbedding, kind:'query') — by this point `const epoch = chatEpoch` (first line of the enqueued
+    // task, see index.js) has ALREADY run, so triggering the switch exactly here reproduces the real
+    // "SideCar/эмбединг ещё отвечает, а игрок уже сменил чат" race, not just a same-tick coincidence.
+    const { engine, graphCore, context } = buildEngine({
+        onEmbeddingCall: () => {
+            context.chatMetadata = { stme_memory: {} }; // a brand-new, empty chat
+            engine.events.emit('st.chatChanged', 'a-different-chat'); // bumps chatEpoch synchronously — see the subscription's own doc-comment
+        },
+    });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    assert.deepEqual(graphCore.nodes(), [], 'sanity: nothing to bootstrap from, graph starts empty');
+
+    const result = await graphCore.checkAndPlace('a genuinely new topic worth remembering forever');
+    assert.equal(result.status, 'chat-changed', 'must report the abort explicitly, not silently return no-change/skipped/placed');
+
+    await graphCore.waitForBootstrap(); // covers the reload triggered by chatChanged above — loadStateEnqueued() is queued BEHIND checkAndPlace() on the same writeTail, so it only reads storage after checkAndPlace() has fully backed off
+    assert.deepEqual(graphCore.nodes(), [], 'the NEW chat\'s graph must have zero nodes from the OLD chat\'s aborted extraction — nothing must leak across the switch');
+});
+
 // SKIPPED: both automatic triggers this test races against each other
 // (load()'s own kickoff, st.chatChanged's reload) are temporarily disabled
 // — see `bootstrapIfEmpty()`'s doc-comment. The underlying protections it
