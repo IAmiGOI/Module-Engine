@@ -16,7 +16,7 @@ import { summarizeDecision } from '../memory-graph/decision-log.js';
 // тестов (`tests/memory-graph-panel.test.js` берёт их из ЭТОГО файла, не из legacy-geometry.js напрямую), но
 // собственный код панели их больше не зовёт: `export {…} from '…'` не требует отдельного локального `import`.
 import { regionLayoutPosition, pixelToRegion, backgroundTransformCss } from './memory-graph/legacy-geometry.js';
-import { graphStylesheet, weightColor, PREVIEW_ID } from './memory-graph/stylesheet.js';
+import { graphStylesheet, PREVIEW_ID } from './memory-graph/stylesheet.js';
 export {
     MAX_RADIUS, packOffsetInRegion, regionLayoutPosition, pixelToRegion, regionWedgePath, renderRegionBackgroundSvg,
     SEMANTIC_MAX_ANCHOR_DISTANCE, SEMANTIC_REGION_GAP, semanticAnchorRadius, fallbackSemanticPosition,
@@ -33,6 +33,7 @@ import { layoutGraph, nodeRadius } from './memory-graph/layout.js';
 import { diffElements } from './memory-graph/elements-diff.js';
 import { renderZonesSvg, zonesSignature, ZONES_SVG_ID } from './memory-graph/zones-svg.js';
 import { retrievalClasses, routeChainLabels } from './memory-graph/retrieval-overlay.js';
+import { METRICS, findMetric, metricColor, metricDomain } from './memory-graph/metrics.js';
 
 /**
  * Визуальный редактор графа памяти — решено с пользователем явно:
@@ -82,6 +83,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             value: {
                 visible: panelVisible.peek(), collapsed: panelCollapsed.peek(), position: panelPosition.peek(), size: panelSize.peek(),
                 retrievalOverlayEnabled: retrievalOverlayEnabled.peek(),
+                colorMetricId: colorMetricId.peek(), sizeMode: sizeMode.peek(), glowMode: glowMode.peek(),
             },
         });
     }
@@ -97,6 +99,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080,
         }));
         retrievalOverlayEnabled.set(Boolean(saved.retrievalOverlayEnabled));
+        if (saved.colorMetricId) colorMetricId.set(saved.colorMetricId);
+        if (saved.sizeMode) sizeMode.set(saved.sizeMode);
+        if (saved.glowMode) glowMode.set(saved.glowMode);
     }
 
     // --- Состояние графа, зеркалируемое из контрактов -------------------
@@ -468,11 +473,43 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     let currentZones = [];
     let lastZonesSignature = null;
 
+    // --- Режимы карты (Этап 6.2) — три независимых канала, тот же принцип, что у звёздной карты EVE Online:
+    // ОДНА карта, но выбор решает, что показывают цвет/размер/свечение. Persisted с окном (см. save/loadWindowState).
+    const colorMetricId = signal('weight');
+    const sizeMode = signal('connections'); // 'connections' | 'importance' | 'retrieved' | 'uniform'
+    const glowMode = signal('weight'); // 'none' | 'weight' | 'retrieved' | 'risk'
+    const MAP_MODE_PRESETS = {
+        health: { color: 'weight', size: 'connections', glow: 'weight' },
+        risk: { color: 'risk', size: 'connections', glow: 'risk' },
+        usage: { color: 'retrieved', size: 'retrieved', glow: 'retrieved' },
+        structure: { color: 'region', size: 'connections', glow: 'none' },
+        timeline: { color: 'age', size: 'uniform', glow: 'none' },
+    };
+    function applyMapModePreset(name) {
+        const preset = MAP_MODE_PRESETS[name];
+        if (!preset) return;
+        colorMetricId.set(preset.color);
+        sizeMode.set(preset.size);
+        glowMode.set(preset.glow);
+        saveWindowState();
+    }
+
     /** Регионы — плоский объект по `id` (`layoutGraph()`'s формат), а не массив, что отдаёт `memoryGraph.regions`. */
     function regionsById() {
         const map = {};
         for (const region of regions()) map[region.id] = region;
         return map;
+    }
+
+    /** "Size by" (Этап 6.2) — какую величину подставить ВМЕСТО `degree` в `nodeRadius()` (layout.js's формула сама не знает, ПОЧЕМУ число такое — только само число). */
+    function sizeDrivingValue(node) {
+        switch (sizeMode()) {
+            case 'importance': return node.importance ?? 0;
+            case 'retrieved': return node.retrievedCount ?? 0;
+            case 'uniform': return 0; // все узлы — базовый радиус (протект-бонус и обводка всё равно отличают роль)
+            case 'connections':
+            default: return node.degree ?? 0;
+        }
     }
 
     /**
@@ -481,27 +518,64 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      * что рисовали РАЗНУЮ геометрию для числовых/семантических/накопительных регионов, никогда не совпадавшую с
      * фоном (Б1 плана). Ноды графа уже несут `regionId`/`degree`/`protectedNode`/`createdAt`/`weightRank` — Ядро
      * отдаёт их напрямую (`nodesForResponse()`, Этап 2), `layoutGraph()` требует ровно эти поля.
+     *
+     * "Size by" (Этап 6.2, "раскладка всегда считается по выбранному размеру — зазоры остаются верными в любом
+     * режиме") — `layoutRegion()`/`nodeRadius()` (layout.js) читают ТОЛЬКО `member.degree`, ни о каких режимах не
+     * знают; вместо правки layout.js подменяем `degree` каждой ноды на выбранную величину ЗАРАНЕЕ, здесь — та же
+     * математика радиуса/зазора применяется к ЛЮБОЙ неотрицательной величине одинаково корректно.
      */
     function computeGraphLayout() {
-        return layoutGraph(nodes(), regionsById());
+        const layoutNodes = sizeMode() === 'connections' ? nodes() : nodes().map(node => ({ ...node, degree: sizeDrivingValue(node) }));
+        return layoutGraph(layoutNodes, regionsById());
     }
 
+    /** "Glow by" (Этап 6.2) — 0..1, протектным нодам всегда добавлена надбавка (та же визуальная гарантия "роль виднее", что была в Этапе 4, независимо от режима). */
+    function glowValue(node, ctx, retrievedDomain) {
+        const bump = node.protectedNode ? 0.25 : 0;
+        switch (glowMode()) {
+            case 'none': return Math.min(0.9, 0.12 + bump);
+            case 'retrieved': {
+                const { min, max } = retrievedDomain;
+                const t = max > min ? ((node.retrievedCount ?? 0) - min) / (max - min) : 0;
+                return Math.min(0.9, 0.12 + 0.5 * t + bump);
+            }
+            case 'risk': return Math.min(0.9, 0.12 + 0.5 * findMetric('risk').value(node, ctx) + bump);
+            case 'weight':
+            default: return Math.min(0.9, 0.12 + 0.5 * (node.protectedNode ? 1 : (node.weightRank ?? 0)) + bump);
+        }
+    }
+
+    /** Ноды по id — переиспользуется рёбрами, фильтрами/поиском, тултипом. */
+    function nodesById() {
+        return new Map(nodes().map(node => [node.id, node]));
+    }
+
+    // Последние hue по региону (из `zones`, посчитанных `buildNextElements()`) — легенде (Этап 6.3) нужен ТОТ ЖЕ
+    // контекст, что и цвету нод, но легенда рисуется отдельным `computed()`, не внутри самого диффинга.
+    let lastHueByRegionId = new Map();
+
     /** `Map(id → { group, data, position? })` для ВСЕХ элементов, что ДОЛЖНЫ быть на канвасе прямо сейчас — вход для `diffElements()`. `positions`/`radii` — уже посчитанная `layoutGraph()` (вызывающий, `syncCytoscape()`, считает её ОДИН раз и на элементы, и на зоны фона). */
-    function buildNextElements({ positions, radii }) {
-        const byId = new Map(nodes().map(node => [node.id, node]));
+    function buildNextElements({ positions, radii, zones }) {
+        const byId = nodesById();
+        const colorMetric = findMetric(colorMetricId());
+        const hueByRegionId = new Map(zones.map(zone => [zone.regionId, zone.hue]));
+        lastHueByRegionId = hueByRegionId;
+        const ctx = { regionsById: regionsById(), hueByRegionId };
+        const colorDomain = metricDomain(colorMetric, nodes(), ctx);
+        const retrievedDomain = metricDomain(findMetric('retrieved'), nodes(), ctx);
         const map = new Map();
         for (const node of nodes()) {
             const size = 2 * (radii.get(node.id) ?? nodeRadius(node));
-            // `glow` — сегодня простая константа (0.22 обычным, 0.35 защищённым — те же числа, что план даёт для
-            // 4.2), но ЧЕРЕЗ data(), не хардкод в стиле: Этап 6 (metrics.js, несколько режимов "glow by") заменит
-            // это на посчитанное метрикой значение, не трогая graphStylesheet() вообще ("не зашивать метрики в
-            // стили — только data(color|size|glow)").
             map.set(node.id, {
                 group: 'nodes',
                 data: {
                     id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode),
-                    importance: node.importance ?? 0, size, color: weightColor(node.protectedNode ? 1 : (node.weightRank ?? 0)),
-                    glow: node.protectedNode ? 0.35 : 0.22,
+                    importance: node.importance ?? 0, size,
+                    // `colorMetric.value()` уже само знает, что делать с `protectedNode` для метрик, которым это
+                    // важно (`weight`/`risk` — см. metrics.js); остальные метрики (region/source/age/…) красят
+                    // защищённую ноду ТАК ЖЕ, как обычную — белая обводка (graphStylesheet()) и так отличает роль.
+                    color: metricColor(colorMetric, colorMetric.value(node, ctx), colorDomain),
+                    glow: glowValue(node, ctx, retrievedDomain),
                 },
                 position: positions.get(node.id) ?? { x: 0, y: 0 },
             });
@@ -597,8 +671,13 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // при 61 ноде подписи разом занимали весь холст) — данные крупные/
         // защищённые ноды теперь ВСЕГДА подписаны через graphStylesheet(),
         // класс `.hovered` покрывает только ОСТАЛЬНЫЕ, мелкие ноды.
-        cy.on('mouseover', 'node', event => event.target.addClass('hovered'));
-        cy.on('mouseout', 'node', event => event.target.removeClass('hovered'));
+        cy.on('mouseover', 'node', event => {
+            event.target.addClass('hovered');
+            if (event.target.id() === PREVIEW_ID) return;
+            hoveredNodeId.set(event.target.id());
+            hoveredScreenPos.set({ x: event.renderedPosition.x, y: event.renderedPosition.y });
+        });
+        cy.on('mouseout', 'node', event => { event.target.removeClass('hovered'); hoveredNodeId.set(null); });
         // Клик по ребру удаляет его СРАЗУ, без `confirm()` — тот же принцип,
         // что у Delete-кнопки узла и Remove у Lorebook в этом же движке:
         // нигде больше в проекте нет блокирующего нативного диалога.
@@ -655,7 +734,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function syncCytoscape() {
         if (!cy) return;
         const { positions, radii, zones } = computeGraphLayout();
-        const next = buildNextElements({ positions, radii });
+        const next = buildNextElements({ positions, radii, zones });
         const { add, remove, update } = diffElements(currentElements(), next, { excludeId: draggingId });
         for (const id of remove) {
             const ele = cy.getElementById(id);
@@ -675,6 +754,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         }
         updateZonesBackground(zones);
         applyRetrievalOverlay();
+        applySearchFilters();
     }
 
     // --- Подсветка ретрива (Этап 5) ---------------------------------------
@@ -720,6 +800,63 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function ensureRouteAnimation() {
         if (routeAnimationFrame || !cy || !retrievalOverlayEnabled() || !panelVisible() || reducedMotionRequested()) return;
         routeAnimationFrame = requestAnimationFrame(stepRouteAnimation);
+    }
+
+    // --- Поиск и фильтры (Этап 6.5) -----------------------------------------
+
+    const searchQuery = signal('');
+    const searchMatchIndex = signal(0);
+    const showProtected = signal(true);
+    const showOrdinary = signal(true);
+    const showUnplaced = signal(true);
+    const showEdges = signal(true);
+    const minWeightThreshold = signal(0);
+
+    /** `.filtered` (display:none, план 6.5) и `.match` (подсветка поиска) — НЕ пересчитывает раскладку (позиции остаются из `layoutGraph()`, план прямо просит "карта не прыгает"). */
+    function applySearchFilters() {
+        if (!cy) return;
+        const query = searchQuery().trim().toLowerCase();
+        const threshold = minWeightThreshold();
+        const byId = nodesById();
+        cy.nodes().forEach(ele => {
+            if (ele.id() === PREVIEW_ID) return;
+            const node = byId.get(ele.id());
+            if (!node) return;
+            const rank = node.protectedNode ? 1 : (node.weightRank ?? 0);
+            const hidden = (node.protectedNode && !showProtected())
+                || (!node.protectedNode && node.regionId != null && !showOrdinary())
+                || (node.regionId == null && !showUnplaced())
+                || rank < threshold;
+            ele.toggleClass('filtered', hidden);
+            ele.toggleClass('match', Boolean(query) && ((node.label ?? '').toLowerCase().includes(query) || (node.content ?? '').toLowerCase().includes(query)));
+        });
+        cy.edges().forEach(ele => ele.toggleClass('filtered', !showEdges()));
+    }
+
+    /** Enter в поле поиска — первое совпадение центрируется и выделяется, повторный Enter — следующее по кругу (план 6.5). */
+    function centerOnNextSearchMatch() {
+        if (!cy || !searchQuery().trim()) return;
+        const matches = cy.nodes('.match');
+        if (!matches.nonempty()) return;
+        const index = searchMatchIndex() % matches.length;
+        const ele = matches[index];
+        cy.elements().unselect();
+        ele.select();
+        cy.animate({ center: { eles: ele }, zoom: Math.max(cy.zoom(), 1) }, { duration: 300 });
+        searchMatchIndex.set(index + 1);
+    }
+
+    // --- Подсказка при наведении (Этап 6.4) ---------------------------------
+
+    const hoveredNodeId = signal(null);
+    const hoveredScreenPos = signal(null);
+
+    // --- Центрирование на регионе (клик по "Fullest region" в статистике, Этап 6.6) ---
+    function centerOnRegion(regionId) {
+        if (!cy) return;
+        const zone = currentZones.find(z => z.regionId === regionId);
+        if (!zone) return;
+        cy.animate({ pan: { x: cy.width() / 2 - zone.anchor.x * cy.zoom(), y: cy.height() / 2 - zone.anchor.y * cy.zoom() } }, { duration: 300 });
     }
 
     // --- Компактные зоны боковой панели ------------------------------------------------------------------
@@ -830,6 +967,133 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         );
     }
 
+    // --- Режимы карты + легенда (Этап 6.2/6.3) ------------------------------
+
+    const SIZE_OPTIONS = [
+        { value: 'connections', label: 'Connections' }, { value: 'importance', label: 'Importance' },
+        { value: 'retrieved', label: 'Retrieved' }, { value: 'uniform', label: 'Uniform' },
+    ];
+    const GLOW_OPTIONS = [
+        { value: 'none', label: 'None' }, { value: 'weight', label: 'Weight' },
+        { value: 'retrieved', label: 'Retrieved' }, { value: 'risk', label: 'Risk' },
+    ];
+    const COLOR_OPTIONS = METRICS.map(metric => ({ value: metric.id, label: metric.label }));
+
+    /** Легенда (Этап 6.3) — угол холста, HTML поверх (не Cytoscape): название метрики, градиент/категории, строки про размер/свечение. Обновляется сама на смену режима/данных (`computed()`). */
+    function legendBlock() {
+        return computed(() => {
+            const metric = findMetric(colorMetricId());
+            const ctx = { regionsById: regionsById(), hueByRegionId: lastHueByRegionId };
+            const domain = metricDomain(metric, nodes(), ctx);
+            const scaleBlock = metric.scale === 'categorical'
+                ? h('div', { class: 'stme-mg-legend-categories' }, (domain.length ? domain : [null]).map(value => h('span', { class: 'stme-mg-legend-chip' },
+                    h('span', { class: 'stme-mg-legend-dot', style: { background: metricColor(metric, value) } }),
+                    metric.format(value) || String(value ?? 'n/a'),
+                )))
+                : h('div', { class: 'stme-mg-legend-gradient' },
+                    h('span', {}, metric.format(metric.scale === 'rank' ? 0 : domain.min)),
+                    h('div', {
+                        class: 'stme-mg-legend-bar',
+                        style: { background: `linear-gradient(to right, ${[0, 0.25, 0.5, 0.75, 1].map(t => metricColor(metric, metric.scale === 'rank' ? t : domain.min + t * (domain.max - domain.min), domain)).join(',')})` },
+                    }),
+                    h('span', {}, metric.format(metric.scale === 'rank' ? 1 : domain.max)),
+                );
+            return h('div', { class: 'stme-mg-legend' },
+                h('strong', {}, metric.label), scaleBlock,
+                h('small', { class: 'stme-module-hint' }, `Size: ${sizeMode()}`),
+                h('small', { class: 'stme-module-hint' }, `Glow: ${glowMode()}`),
+            );
+        });
+    }
+
+    /** "Map mode" (Этап 6.2) — три выпадающих списка + пять быстрых пресетов кнопками (тот же приём, что вкладки режимов карты в EVE). */
+    function mapModeSection() {
+        return h('div', { class: 'stme-mg-mapmode' },
+            Row(Field('Color by', Select(colorMetricId, COLOR_OPTIONS)), Field('Size by', Select(sizeMode, SIZE_OPTIONS)), Field('Glow by', Select(glowMode, GLOW_OPTIONS))),
+            Row(
+                Button('Health', () => applyMapModePreset('health')),
+                Button('Eviction risk', () => applyMapModePreset('risk')),
+                Button('Usage', () => applyMapModePreset('usage')),
+                Button('Structure', () => applyMapModePreset('structure')),
+                Button('Timeline', () => applyMapModePreset('timeline')),
+            ),
+            legendBlock(),
+        );
+    }
+
+    // --- Поиск + фильтры (сайдбар, Этап 6.5) --------------------------------
+
+    function searchAndFiltersRow() {
+        return h('div', { class: 'stme-mg-filters' },
+            h('input', {
+                class: 'text_pole', type: 'text', placeholder: 'Search label or content…', value: searchQuery,
+                'on:input': event => { searchQuery.set(event.target.value); searchMatchIndex.set(0); },
+                'on:keydown': event => { if (event.key === 'Enter') centerOnNextSearchMatch(); },
+            }),
+            Row(Toggle('Protected', showProtected), Toggle('Ordinary', showOrdinary), Toggle('Unplaced', showUnplaced), Toggle('Edges', showEdges)),
+            LabeledSlider('Min weight', minWeightThreshold, { min: 0, max: 1, step: 0.05, format: value => value.toFixed(2) }),
+        );
+    }
+
+    // --- Сводка (Этап 6.6) ---------------------------------------------------
+
+    function statsSection() {
+        return computed(() => {
+            const allNodes = nodes();
+            const protectedCount = allNodes.filter(node => node.protectedNode).length;
+            const unplacedCount = allNodes.filter(node => node.regionId == null).length;
+            const edgeIds = new Set();
+            for (const node of allNodes) for (const edge of node.edges ?? []) edgeIds.add([node.id, edge.to].sort().join('|') + ':' + edge.type);
+            const unprotected = allNodes.filter(node => !node.protectedNode);
+            const avgWeight = unprotected.length ? unprotected.reduce((sum, node) => sum + (node.weight ?? 0), 0) / unprotected.length : 0;
+            const regionList = regions();
+            const fullest = regionList.reduce((best, region) => {
+                const ratio = Number.isFinite(region.capacity) && region.capacity > 0 ? (region.count ?? 0) / region.capacity : 0;
+                const bestRatio = best && Number.isFinite(best.capacity) && best.capacity > 0 ? (best.count ?? 0) / best.capacity : -1;
+                return ratio > bestRatio ? region : best;
+            }, null);
+            const riskMetric = findMetric('risk');
+            const ctx = { regionsById: regionsById() };
+            const atRisk = allNodes.filter(node => riskMetric.value(node, ctx) > 0).length;
+            const lastRetrieval = retrievalHistory()[0];
+            const lastRetrievalCount = lastRetrieval ? (lastRetrieval.beaconIds?.length ?? 0) + (lastRetrieval.noiseIds?.length ?? 0) : null;
+            return h('div', { class: 'stme-mg-stats' },
+                h('small', {}, `${allNodes.length} nodes (${protectedCount} protected, ${unplacedCount} unplaced) · ${edgeIds.size} edges · ${regionList.length} regions`),
+                h('small', {}, `Avg weight ${avgWeight.toFixed(2)} · ${atRisk} at eviction risk`),
+                fullest
+                    ? h('small', { class: 'stme-mg-stats-clickable', 'on:click': () => centerOnRegion(fullest.id) }, `Fullest: ${fullest.label ?? fullest.id} — ${fullest.count}/${fullest.capacity}`)
+                    : null,
+                h('small', {}, lastRetrievalCount == null ? 'No retrievals yet' : `Last retrieval: ${lastRetrievalCount} nodes`),
+            );
+        });
+    }
+
+    /** Подсказка при наведении (Этап 6.4) — карточка у курсора со ВСЕМИ метриками сразу, не форма редактирования (та — по клику). Позиционируется АБСОЛЮТНО внутри canvas-wrap (см. tree()). */
+    function hoverTooltip() {
+        return computed(() => {
+            const id = hoveredNodeId();
+            const pos = hoveredScreenPos();
+            if (!id || !pos) return null;
+            const node = nodes().find(item => item.id === id);
+            if (!node) return null;
+            const region = regions().find(item => item.id === node.regionId);
+            const line = [
+                `Weight ${node.weight != null ? node.weight.toFixed(2) : '—'}`,
+                `Importance ${node.importance ?? 0}`,
+                `Connections ${node.degree ?? 0}`,
+                `Age ${node.ageTurns ?? 0}`,
+                `Idle ${node.idleTurns ?? 0}`,
+                `Retrieved ${node.retrievedCount ?? 0}×`,
+            ].join(' · ');
+            return h('div', { class: 'stme-mg-tooltip', style: { left: `${pos.x + 12}px`, top: `${pos.y + 12}px` } },
+                h('strong', {}, node.label),
+                h('div', {}, region ? region.label : (node.regionId == null ? 'Unplaced' : node.regionId)),
+                h('div', {}, line),
+                Row(node.protectedNode ? Badge('Protected', { tone: 'muted' }) : null, node.regionId == null ? Badge('Unplaced', { tone: 'muted' }) : null),
+            );
+        });
+    }
+
     /** Низ панели — две кнопки: обновить картинку графа и удалить граф целиком (удержанием). */
     function footerRow() {
         return Row(
@@ -932,6 +1196,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     h('div', { class: 'stme-mg-canvas-wrap', style: { position: 'relative', width: '480px', height: '480px', borderRadius: '8px', overflow: 'hidden' } },
                         h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } }),
                         h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
+                        hoverTooltip(),
                     ),
                     h('p', { class: 'stme-memory-graph-hint', style: { width: '480px', boxSizing: 'border-box' } },
                         'Click a node to edit it. Drag a node onto a different dartboard cell to move it into that region. Drag from a node\'s edge handle to another node to connect them.'),
@@ -940,6 +1205,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     generationRow(),
                     progressRow(),
                     retrievalRow(),
+                    mapModeSection(),
+                    searchAndFiltersRow(),
+                    statsSection(),
                     retrievalSection(),
                     computed(() => (statusText() ? h('div', { class: 'stme-memory-graph-status' }, statusText()) : null)),
                     nodeForm(),
@@ -1070,12 +1338,13 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // подписало бы этот эффект, но не так наглядно): маркер должен
         // появляться/двигаться/переименовываться СРАЗУ, без ожидания
         // следующего изменения самого графа.
-        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); syncCytoscape(); });
+        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); colorMetricId(); sizeMode(); glowMode(); syncCytoscape(); });
         // Подсветка ретрива — отдельный эффект (не завязан на изменения самого графа): переключатель/история могут
         // поменяться без единого нового узла/региона, и наоборот — обычный `refresh()` не должен лишний раз дёргать
         // подсветку, если ни то ни другое не менялось (`syncCytoscape()` всё равно СНОВА применит её в конце, это
         // просто идемпотентно, не баг — но именно ЭТОТ эффект — источник обновления, когда меняются только они).
         effect(() => { retrievalOverlayEnabled(); retrievalHistoryIndex(); retrievalHistory(); panelVisible(); applyRetrievalOverlay(); ensureRouteAnimation(); });
+        effect(() => { searchQuery(); showProtected(); showOrdinary(); showUnplaced(); showEdges(); minWeightThreshold(); applySearchFilters(); });
     }
 
     function show() {

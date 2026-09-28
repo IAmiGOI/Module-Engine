@@ -605,6 +605,7 @@ test('bootstrapFromLorebook() imports every lorebook entry as a graph node — a
     assert.equal(nodes.value.length, 3, 'all three lorebook entries must become graph nodes');
     assert.ok(nodes.value.every(node => node.embedding && node.embedding.length === 4), 'every imported node must carry a real embedding');
     assert.deepEqual(nodes.value.map(n => n.label).sort(), ['Giadian Empire', 'Revolution Festival', 'The Continent']);
+    assert.ok(nodes.value.every(node => node.source === 'lorebook'), 'MEMORY_GRAPH_UI_PLAN.md Этап 6.1: every bootstrap-imported node must carry source "lorebook"');
 });
 
 test('bootstrapFromLorebook() gives a curated ("constant": true) entry a higher auto-importance than an ordinary one — read straight from the WI entry, no SideCar call (решено с пользователем: "читаем из LB поля")', async () => {
@@ -2330,6 +2331,29 @@ test('memoryGraph.nodes.createFromCharacterCard fails cleanly when the card has 
     const result = await call(caller, 'memoryGraph.nodes.createFromCharacterCard');
     assert.equal(result.value.ok, false);
     assert.equal((await call(caller, 'memoryGraph.nodes')).value.length, 0);
+});
+
+// --- "source" на ноде (MEMORY_GRAPH_UI_PLAN.md, Этап 6.1 — метрика происхождения ноды в окне) --------------
+
+test('memoryGraph.nodes marks a node created from the character card with source "card"', async () => {
+    const { caller } = buildEngine({ character: { name: 'Aria', description: 'A healer.', personality: 'Calm.' } });
+    await call(caller, 'memoryGraph.nodes.createFromCharacterCard');
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes[0].source, 'card');
+});
+
+test('memoryGraph.nodes marks a manually-created node with source "manual"', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'A', content: 'a manually typed fact.', sector: 0, ring: 0 });
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes[0].source, 'manual');
+});
+
+test('memoryGraph.nodes marks a node created via checkAndPlace (SideCar, organic chat growth) with source "chat"', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'the player enters a dark cave.' });
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes[0].source, 'chat');
 });
 
 test('memoryGraph.nodes.update recomputes the embedding ONLY when label/content actually changed', async () => {
