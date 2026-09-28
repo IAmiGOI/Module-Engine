@@ -89,6 +89,11 @@ export function graphStylesheet() {
                 'line-dash-pattern': [6, 3], // сам бегущий пунктир (смещение `line-dash-offset`) двигает `retrieval-overlay.js`'s rAF-цикл в панели
             },
         },
+        // Фильтры/поиск (Этап 6.5) — `.filtered` СКРЫВАЕТ элемент (`display:none`), раскладку не пересчитывает
+        // (позиции остаются из `layoutGraph()` — план прямо просит "карта не прыгает"); `.match` подсвечивает
+        // совпадение поиска жёлтой обводкой, не спорит ни с одним из цветов метрик выше.
+        { selector: '.filtered', style: { display: 'none' } },
+        { selector: 'node.match', style: { 'border-color': '#ffd76a', 'border-width': 2.5 } },
         // Маркер места будущего узла в режиме создания — пунктир, не сплошная заливка, чтобы не путать с настоящим
         // узлом; не кликабелен и не перетаскиваем (`grabbable`/`selectable: false` при добавлении в панели).
         {

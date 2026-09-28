@@ -304,6 +304,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             weightRank: node.protectedNode ? 1 : (rankById.get(node.id) ?? 0),
             ageTurns: Math.max(0, turnCounter - (node.createdTurn ?? turnCounter)),
             idleTurns: elapsedTurnsFor(node),
+            // Этап 6.1 плана ("source" метрика) — ноды, заведённые ДО этого поля, читаются как 'unknown', не `undefined`.
+            source: node.source ?? 'unknown',
         }));
     }
 
@@ -761,7 +763,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
             if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // чат сменился, пока ждали эмбединг — не мутируем уже ЧУЖОЙ (новый) граф
             if (!embeddingResult.ok) return { ok: false, error: embeddingResult.error.message };
-            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE });
+            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE }, { source: 'card' });
             // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
             // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
@@ -812,6 +814,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 regionId: null,
                 edges: [],
                 gameTime: null,
+                source: 'manual', // Этап 6.1 плана — единственный путь создания ноды, что НЕ идёт через placeNewNode()
             };
             nodes[node.id] = node;
             // Слияние/переполнение при вставке — как обычно, это уже внутри attachToRegionByKey()/attachToRegion()
@@ -1109,7 +1112,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * passage) — это query-vs-passage, ожидаемое протоколом E5 сопоставление, тогда как самой ноде для БУДУЩИХ
      * сравнений (слияние/маяки/бэкбон) нужен passage-эмбединг её же содержимого, не сцены-триггера.
      */
-    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter }, { placementEmbedding = embedding } = {}) {
+    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter }, { placementEmbedding = embedding, source = 'chat' } = {}) {
         const node = {
             id: makeId('node', now, random),
             label, content, embedding, importance,
@@ -1121,6 +1124,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             regionId: null,
             edges: [],
             gameTime,
+            // `source` — MEMORY_GRAPH_UI_PLAN.md, Этап 6.1 (метрика "source" в окне): откуда взялся кусок текста.
+            // По умолчанию 'chat' — единственный вызывающий, что не передаёт свой (`checkAndPlace()`), это и есть
+            // органическая нода из живого чата; `createNodeFromCharacterCard()` передаёт 'card' явно.
+            source,
         };
         const decision = decideFirstPlacement({ nameMatchRegion: findNameMatchRegion(content), embedding: placementEmbedding, anchors: collectAnchors(), settings });
 
@@ -1623,6 +1630,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                         importance: importanceFromLorebookEntry(entry.raw),
                         degree: 0, createdAt: now(), createdTurn: 0, lastTouchedTurn: turnCounter,
                         protectedNode: false, regionId: null, edges: [], gameTime: null,
+                        source: 'lorebook', // Этап 6.1 плана
                     };
                 }
 

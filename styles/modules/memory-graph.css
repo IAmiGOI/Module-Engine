@@ -94,3 +94,23 @@
 .stme-mg-retrieval-beacons { display: flex; flex-wrap: wrap; gap: 4px; }
 .stme-mg-retrieval-chain { font-size: 12px; opacity: .85; }
 
+/* Режимы карты + легенда (Этап 6.2/6.3). */
+.stme-mg-legend { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+.stme-mg-legend-gradient { display: flex; align-items: center; gap: 6px; }
+.stme-mg-legend-bar { flex: 1; height: 8px; border-radius: 4px; }
+.stme-mg-legend-categories { display: flex; flex-wrap: wrap; gap: 6px; }
+.stme-mg-legend-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; }
+.stme-mg-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+/* Поиск + фильтры (Этап 6.5) и сводка (Этап 6.6). */
+.stme-mg-filters { display: flex; flex-direction: column; gap: 4px; }
+.stme-mg-stats { display: flex; flex-direction: column; gap: 2px; opacity: .85; }
+.stme-mg-stats-clickable { cursor: pointer; text-decoration: underline dotted; }
+
+/* Подсказка при наведении (Этап 6.4) — карточка у курсора поверх канваса. */
+.stme-mg-tooltip {
+    position: absolute; z-index: 5; pointer-events: none;
+    background: rgba(10, 12, 18, 0.92); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;
+    padding: 6px 8px; font-size: 11px; line-height: 1.4; max-width: 220px; color: #eef2ff;
+}
+
