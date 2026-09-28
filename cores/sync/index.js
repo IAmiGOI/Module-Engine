@@ -220,12 +220,23 @@ export function createSyncCore(host, {
         const localManifest = await local.manifest();
         const skip = local.failedPaths();
         const include = (path, entries) => isEnabled()(path) && !skip.has(path) && (extraInclude?.(path, entries) ?? true);
+        // Контрольная точка (ROADMAP 5.106г): проход, оборванный ровно посередине (закрыли вкладку, разрядился телефон), раньше терял
+        // из виду уже переданные файлы — база/кэш писались только здесь, в самом конце. Теперь runSync сам зовёт это по расписанию
+        // (каждые ~50 действий или ~10с — см. sync-runner.js), а не только один раз после return. `remote.checkpoint` — опционально:
+        // есть только у реального устройства-пары (`createPeerRemote`), GitHub/облако обходятся своим checkpointEvery+commit().
+        const onCheckpoint = async nextBase => {
+            await writeState(`base:${baseKey}`, nextBase);
+            await flushCache();
+            if (remote.checkpoint) await remote.checkpoint(nextBase).catch(() => {});   // не критично — при неудаче ведомый просто останется на прежней базе до самого finish()
+        };
         const result = await runSync({
             local, remote, base, include, localManifest,
             conflictLabel: `${config.deviceName} ${stampLabel(now())}`,
             conflictPolicy: conflictPolicyFor,
             categoryOf: categoryOfPath,
             onProgress: state => setProgress(target, { phase: 'syncing', ...state }),
+            onCheckpoint,
+            now,
             isAborted: () => abortRequested,
         });
         await writeState(`base:${baseKey}`, result.base);
@@ -609,6 +620,9 @@ export function createSyncCore(host, {
             // («unknown method»), исполнитель об этом узнает как об обычной ошибке резолвера, конфликт просто НЕ квалифицируется
             // как проигранный — не наш случай сегодня (обе стороны всегда одной версии кода), задел на будущее.
             async quarantine(path, blob, meta) { await rpc('quarantine', { path, hash: meta?.hash, modified: meta?.modified, key: meta?.key, from: meta?.from }, blob); },
+            /** Контрольная точка (ROADMAP 5.106г) — присылает ведомому частичную базу СЕЙЧАС, а не только в конце (`finish`): если
+             *  ведущий оборвётся после этого, ведомый уже знает, что доехало, и следующий проход не гоняет это заново. */
+            async checkpoint(nextBase) { await rpc('checkpoint', {}, new Blob([JSON.stringify(nextBase)])); },
         };
     }
 
@@ -626,6 +640,11 @@ export function createSyncCore(host, {
             async write({ path, hash, modified, key }, { body }) { await writeLocal(path, body ?? new Blob([]), { hash, modified, key }); return { ok: true }; },
             async remove({ path }) { await removeLocal(path); return { ok: true }; },
             async quarantine({ path, hash, modified, key, from }, { body }) { await quarantineLocal(path, body ?? new Blob([]), { hash, modified, key, from }); return { ok: true }; },
+            async checkpoint(_params, { body }) {
+                if (body) await writeState(`base:pair:${session.pairId}`, JSON.parse(await body.text()));
+                await flushCache();
+                return { ok: true };
+            },
             async finish(_params, { body }) {
                 if (body) await writeState(`base:pair:${session.pairId}`, JSON.parse(await body.text()));
                 await flushCache();

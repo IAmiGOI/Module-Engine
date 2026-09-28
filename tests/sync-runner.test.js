@@ -149,6 +149,59 @@ test('quarantine policy with the LOCAL device as the loser against a batched sid
     assert.deepEqual(local.quarantined.map(entry => entry.text), ['old on device']);
 });
 
+// --- Контрольные точки (ROADMAP 5.106г, Этап 4.1) ---
+
+test('runSync(): onCheckpoint fires every N actions (not settle-only passes), carrying the base accumulated SO FAR — not just at the very end', async () => {
+    const files = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`a${i}`, `v${i}`]));
+    const local = memorySide(files);
+    const remote = memorySide({});
+    const checkpoints = [];
+    await runSync({ local, remote, base: {}, checkpointEvery: 3, onCheckpoint: nextBase => checkpoints.push(Object.keys(nextBase).length) });
+    // 7 pushes, checkpoint every 3 actions -> after the 3rd and 6th action (the 7th is covered by the final write in runAgainst, not runSync itself).
+    assert.deepEqual(checkpoints, [3, 6]);
+});
+
+test('runSync(): onCheckpoint also fires on elapsed time, even with fewer than checkpointEvery actions — a slow transfer is not left uncheckpointed', async () => {
+    const local = memorySide({ a: '1', b: '2', c: '3' });
+    const remote = memorySide({});
+    let clock = 0;
+    const now = () => { clock += 300; return clock; };   // every check "spends" 300ms — simulates a slow transfer, not an instant one
+    const checkpoints = [];
+    await runSync({ local, remote, base: {}, checkpointEvery: 1000, checkpointIntervalMs: 250, now, onCheckpoint: nextBase => checkpoints.push({ ...nextBase }) });
+    // checkpointEvery=1000 never trips on its own (only 3 actions) — every checkpoint here must come from the 250ms interval.
+    assert.equal(checkpoints.length, 3, 'the interval alone triggered a checkpoint after every single action');
+});
+
+test('runSync(): with a large interval and a high checkpointEvery, a short pass never checkpoints mid-run at all', async () => {
+    const local = memorySide({ a: '1', b: '2' });
+    const remote = memorySide({});
+    const checkpoints = [];
+    await runSync({ local, remote, base: {}, checkpointEvery: 1000, checkpointIntervalMs: 60000, onCheckpoint: nextBase => checkpoints.push({ ...nextBase }) });
+    assert.deepEqual(checkpoints, [], 'neither threshold was crossed — a short pass does not need a mid-run checkpoint');
+});
+
+test('runSync(): a checkpoint from a batched side fires after a mid-pass commit succeeds, carrying only what that commit actually persisted', async () => {
+    const local = memorySide({ a: '1', b: '2', c: '3' });
+    const remote = memorySide({}, { batched: true });
+    remote.checkpointEvery = 2;
+    const checkpoints = [];
+    const result = await runSync({ local, remote, base: {}, onCheckpoint: nextBase => checkpoints.push({ ...nextBase }) });
+    assert.equal(result.ok, true);
+    assert.equal(remote.commitCalls, 2, 'one partial commit at 2 changes, one final commit for the leftover 1');
+    // The trailing final commit (outside the main loop) is covered by runAgainst's own unconditional persist of result.base
+    // afterwards, so only the MID-pass partial commit needs its own checkpoint call here.
+    assert.equal(checkpoints.length, 1);
+    assert.deepEqual(Object.keys(checkpoints[0]).sort(), ['a', 'b']);
+});
+
+test('runSync(): with the default onCheckpoint, nothing extra happens — behavior is unchanged for existing callers', async () => {
+    const local = memorySide({ a: '1' });
+    const remote = memorySide({});
+    const result = await runSync({ local, remote, base: {} });
+    assert.equal(result.ok, true);
+    assert.equal(textOf(remote, 'a'), '1');
+});
+
 // --- Защита от массового удаления (ROADMAP 5.106в) ---
 
 const categoryOf = path => (path.startsWith('characters/') ? 'characters' : null);
