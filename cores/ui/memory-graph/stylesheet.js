@@ -94,6 +94,8 @@ export function graphStylesheet() {
         // совпадение поиска жёлтой обводкой, не спорит ни с одним из цветов метрик выше.
         { selector: '.filtered', style: { display: 'none' } },
         { selector: 'node.match', style: { 'border-color': '#ffd76a', 'border-width': 2.5 } },
+        // Режим "Connect" (Этап 7.3) — первая выбранная нода подсвечена, пока ждём вторую.
+        { selector: 'node.connect-selected', style: { 'border-color': '#7aa2ff', 'border-width': 3 } },
         // Маркер места будущего узла в режиме создания — пунктир, не сплошная заливка, чтобы не путать с настоящим
         // узлом; не кликабелен и не перетаскиваем (`grabbable`/`selectable: false` при добавлении в панели).
         {

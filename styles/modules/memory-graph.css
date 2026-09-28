@@ -114,3 +114,13 @@
     padding: 6px 8px; font-size: 11px; line-height: 1.4; max-width: 220px; color: #eef2ff;
 }
 
+/* Подсветка зоны под курсором во время драга (Этап 7.1) — прямая правка атрибута уже нарисованного <path> (zones-svg.js), не пересборка SVG на каждый кадр. */
+.stme-mg-zone-highlight { stroke: rgba(255,255,255,0.8) !important; stroke-width: 1.5 !important; }
+
+/* "Moved to <label> · Undo" (Этап 7.1). */
+.stme-mg-toast {
+    position: absolute; bottom: 8px; left: 8px; right: 8px; z-index: 6;
+    background: rgba(10, 12, 18, 0.92); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;
+    padding: 6px 10px; font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #eef2ff;
+}
+
