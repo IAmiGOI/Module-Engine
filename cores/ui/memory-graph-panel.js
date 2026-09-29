@@ -8,6 +8,9 @@ import {
     Details, Row, Field, EmptyState, Badge, Slider, Select, ProgressBar, HoldButton,
     EdgeDrawer, IconButton,
 } from '../../libraries/shared/widgets.js';
+import { createLibraryTab } from './memory-graph-library.js';
+import { buildThumbnailSvg } from './memory-graph/thumbnail.js';
+import { normalizeTab } from './memory-graph/library-view.js';
 import { summarizeDecision } from '../memory-graph/decision-log.js';
 // MEMORY_GRAPH_UI_PLAN.md, Этап 1 — геометрия и стили Cytoscape вынесены в отдельные файлы БЕЗ ИЗМЕНЕНИЯ
 // ПОВЕДЕНИЯ (см. их doc-comment); реэкспортированы ниже (после констант окна) — существующие импорты (тестов, в
@@ -104,6 +107,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const leftDrawerOpen = signal(false);
     const rightDrawerOpen = signal(false);
 
+    /** Миниатюра текущего графа для библиотеки: раскладка окна → SVG ≤ 8 КБ (`memory-graph/thumbnail.js`). */
+    function currentThumbnail() {
+        if (!nodes().length) return null;
+        const { positions, zones } = computeGraphLayout();
+        return buildThumbnailSvg({ zones, positions, nodes: nodes() });
+    }
+    // Вкладки Graph | Library над канвасом (этап 9 плана типов); активная вкладка запоминается вместе с состоянием окна.
+    const library = createLibraryTab({
+        call, getThumbnail: currentThumbnail, afterChange: () => refresh(), setStatus: text => statusText.set(text),
+        onTabChange: tab => { saveWindowState(); if (tab === 'graph') requestAnimationFrame(() => cy?.resize()); }, // канвас был скрыт — размер пересчитывается hasLibraryId: () => Boolean(graphMode().meta?.libraryId),
+    });
+
     async function saveWindowState() {
         await call('storage.settings.set', {
             namespace: MODULE_UI_NAMESPACE, key: WINDOW_KEY,
@@ -111,7 +126,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 visible: panelVisible.peek(), collapsed: panelCollapsed.peek(), position: panelPosition.peek(), size: panelSize.peek(),
                 retrievalOverlayEnabled: retrievalOverlayEnabled.peek(), zonesBackgroundEnabled: zonesBackgroundEnabled.peek(),
                 colorMetricId: colorMetricId.peek(), sizeMode: sizeMode.peek(), glowMode: glowMode.peek(),
-                leftDrawerOpen: leftDrawerOpen.peek(), rightDrawerOpen: rightDrawerOpen.peek(),
+                leftDrawerOpen: leftDrawerOpen.peek(), rightDrawerOpen: rightDrawerOpen.peek(), activeTab: library.activeTab.peek(),
             },
         });
     }
@@ -133,6 +148,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (saved.glowMode) glowMode.set(saved.glowMode);
         leftDrawerOpen.set(Boolean(saved.leftDrawerOpen));
         rightDrawerOpen.set(Boolean(saved.rightDrawerOpen));
+        library.activeTab.set(normalizeTab(saved.activeTab));
+        if (library.activeTab.peek() === 'library') library.refresh();
     }
 
     // --- Состояние графа, зеркалируемое из контрактов -------------------
@@ -421,7 +438,13 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      * отказ на уровне самого КОНТРАКТА (Гейт/сеть); что случилось ВНУТРИ
      * успешно завершившегося прогона — целиком за событием ниже.
      */
-    function runBootstrap({ includeCard = false } = {}) {
+    async function runBootstrap({ includeCard = false } = {}) {
+        // Граф из этого же лорбука уже есть в библиотеке — предложить открыть его вместо дорогой генерации (этап 9 плана типов).
+        const saved = await call('memoryGraph.library.findByLorebook');
+        if (saved.ok && saved.value && globalThis.confirm?.(`Found a saved graph built from this lorebook: ${saved.value.name}. Open it instead of generating?`)) {
+            await library.open(saved.value);
+            return;
+        }
         call('memoryGraph.bootstrapFromLorebook', { includeCard }).then(result => {
             if (!result.ok) statusText.set(`Generation failed: ${result.error?.message}`);
         });
@@ -1922,7 +1945,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             // того, открыта ли какая-то из трёх выезжающих панелей — потому что причина вообще не в них.
             // `flex:'1', minHeight:'0'` — тот же приём, что уже держит сам `.stme-floating-panel-body` (см. его
             // CSS) — `minHeight:0` обязателен, иначе flex-item по умолчанию не сжимается ниже своего контента.
-            h('div', { class: 'stme-memory-graph-body', style: { display: 'flex', flex: '1', minHeight: '0' } },
+            library.tabStrip(),
+            library.view(),
+            h('div', { class: 'stme-memory-graph-body', style: computed(() => ({ display: library.activeTab() === 'graph' ? 'flex' : 'none', flex: '1', minHeight: '0' })) },
                 // position:relative — сам якорь для оверлеев/панелей ниже (тултип, тост, угловая кнопка, три
                 // EdgeDrawer). ТРИ слоя фона внутри, снизу вверх: подложка региона, свечение нод (оба — canvas, см.
                 // ensureCytoscape()/paintGlowCanvas()), сам канвас Cytoscape поверх с прозрачным фоном, чтобы оба
@@ -2084,6 +2109,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 statusText.set(payload?.success
                     ? `Bootstrap complete — ${payload?.nodeCount ?? nodes().length} nodes.`
                     : `Bootstrap stopped: ${payload?.reason ?? 'nothing to import — Lorebook is empty, unreadable, or already imported'}.`);
+                // Построенный граф дорог — предложить сразу сохранить его в библиотеку.
+                if (payload?.success && globalThis.confirm?.('Graph built. Save it to the library so you can open it in any chat?')) library.saveCurrent();
             }),
         ];
         return finalUi;

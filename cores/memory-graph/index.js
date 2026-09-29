@@ -5,6 +5,7 @@ import { createCoreOps } from './structured/core-ops.js';
 import { createTimelineOps } from './structured/timeline-ops.js';
 import { createExtractionOps } from './structured/extraction-ops.js';
 import { createModeOps } from './structured/mode-ops.js';
+import { createLibraryOps } from './structured/library-ops.js';
 import { createReclassifyOps } from './structured/reclassify-ops.js';
 import { addDirectedEdge } from './edges.js';
 import { checkEdge, normalizeKind, kindOf, isCore, isEvent } from './kinds.js';
@@ -2608,6 +2609,17 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         persistNodes: () => persistNodes(), persistRegions: () => persistRegions(), persistGraphMeta: () => persistGraphMeta(),
         applyGraphMeta: raw => applyGraphMeta(raw), collectAnchors: () => collectAnchors(), edgeAllowed: (a, b) => edgeAllowed(a, b),
         placeNewNode: (...args) => placeNewNode(...args), foldNodesInGraph: (...args) => foldNodesInGraph(...args),
+        get bootstrapActive() { return bootstrapActive; },
+        graphState: () => ({ nodes, regions, staging, mergeQueue, reconsolidationQueue, distanceStats, noveltyStats }),
+        // Подмена всего графа открытым из библиотеки; всё, что относилось к прежнему графу этого чата, сбрасывается.
+        replaceGraph: graph => {
+            ({ nodes, regions, staging, mergeQueue, reconsolidationQueue, distanceStats, noveltyStats } = graph);
+            stickyRetrieval = null;
+            decisionLog = [];
+            lastRetrieval = null;
+            retrievalHistory = [];
+        },
+        persistAll: () => Promise.all([persistEverything(), persistStats(), persistStickyRetrieval(), persistDecisionLog(), persistGraphMeta()]),
     };
     const coreOps = createCoreOps(structuredCtx);
     const timelineOps = createTimelineOps(structuredCtx);
@@ -2617,6 +2629,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     const { knownSubjectNames, regionDescriptorOf, resolveFactSubjects, linkStructuredNode } = extractionOps;
     const { setModeForEmptyGraph, convertToStructured } = createModeOps(structuredCtx);
     const { reclassify } = createReclassifyOps(structuredCtx);
+    const library = createLibraryOps(structuredCtx);
 
     const unregisters = [
         host.own.register('memoryGraph.settings', () => settings),
@@ -2658,6 +2671,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.sweepStaging', () => sweepStaging()),
         host.own.register('memoryGraph.nodes.pin', params => pinNode(params ?? {})),
         host.own.register('memoryGraph.reclassify', () => reclassify()),
+        host.own.register('memoryGraph.library.list', () => library.list()),
+        host.own.register('memoryGraph.library.save', params => library.save(params ?? {})),
+        host.own.register('memoryGraph.library.saveBack', params => library.saveBack(params ?? {})),
+        host.own.register('memoryGraph.library.open', params => library.open(params ?? {})),
+        host.own.register('memoryGraph.library.rename', params => library.rename(params ?? {})),
+        host.own.register('memoryGraph.library.duplicate', params => library.duplicate(params ?? {})),
+        host.own.register('memoryGraph.library.delete', params => library.remove(params ?? {})),
+        host.own.register('memoryGraph.library.export', params => library.exportRecord(params ?? {})),
+        host.own.register('memoryGraph.library.import', params => library.importRecord(params ?? {})),
+        host.own.register('memoryGraph.library.findByLorebook', () => library.findByLorebook()),
         host.own.register('memoryGraph.sweepCores', () => sweepCores()),
         host.own.register('memoryGraph.sweepTimeline', () => sweepTimeline()),
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),

@@ -23,6 +23,7 @@ import { registerStHomeService } from '../services/st-home.js';
 import { registerEmbeddingService } from '../services/embedding.js';
 import { registerAudioStoreService } from '../services/audio-store.js';
 import { registerImageStoreService } from '../services/image-store.js';
+import { registerGraphLibraryService } from '../services/graph-library.js';
 import { registerAudioPlaybackService } from '../services/audio-playback.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
 import { registerFileService } from '../services/file.js';
@@ -514,6 +515,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerEmbeddingService(engine.buses.services);
     registerAudioStoreService(engine.buses.services);
     registerImageStoreService(engine.buses.services);
+    registerGraphLibraryService(engine.buses.services);
     registerAudioPlaybackService(engine.buses.services);
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
