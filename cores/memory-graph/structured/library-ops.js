@@ -87,6 +87,9 @@ export function createLibraryOps(ctx) {
             }
             ctx.replaceGraph(restoreGraph(record, ctx.turnCounter));
             ctx.applyGraphMeta({ mode: record.mode, createdAt: ctx.now(), libraryId: record.id, bootstrapCoreCount: Object.values(ctx.nodes).filter(node => node.core || node.protectedNode).length });
+            // Открытый граф знакомится с героем ЭТОГО чата: нода карточки дополняется или создаётся сразу, со связями (иначе она появилась бы
+            // позже отдельной заглушкой). Нет карточки/описания — молча пропускается.
+            if (ctx.features.kinds) await ctx.applyCharacterCard({ epoch });
             await ctx.persistAll();
             ctx.publishEvent('memoryGraph.loaded', { libraryId: record.id, mode: record.mode });
             const fingerprint = record.source?.lorebookFingerprint;

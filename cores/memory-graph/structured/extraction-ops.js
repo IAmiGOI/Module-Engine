@@ -2,6 +2,7 @@ import { kindOf, isEvent } from '../kinds.js';
 import { addDirectedEdge } from '../edges.js';
 import { resolveSubject, addAliases } from '../subjects.js';
 
+const sameName = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const SUBJECT_CREATE_AFTER = 2; // заглушка сущности — со второй встречи неразрешённого имени (этап 3 плана типов)
 
 /**
@@ -37,9 +38,18 @@ export function createExtractionOps(ctx) {
             if (ownerId) addAliases(nodes[ownerId], list);
         }
         const subjectIds = [];
+        let heroName; // имя героя карточки — запрашивается лениво и один раз на факт
         for (const name of fact.subjects ?? []) {
             let id = resolveSubject(name, ctx.nodes);
             const isSelf = kindOf(fact) !== 'fact' && String(name).trim().toLowerCase() === fact.label.trim().toLowerCase();
+            // Главный герой (карточка персонажа), которого в графе ещё нет: вместо пустой заглушки создаётся настоящая нода
+            // карточки — со связями и Core, без второй ноды под тем же именем (граф, собранный вне чата, карточки не знал).
+            if (!id && !isSelf && heroName === undefined) heroName = await ctx.characterName();
+            if (!id && !isSelf && heroName && sameName(name, heroName)) {
+                const card = await ctx.applyCharacterCard({ epoch });
+                if (!ctx.stillSameChat(epoch) || card.status === 'chat-changed') return null;
+                if (card.ok) id = card.nodeId;
+            }
             if (!id && !isSelf) {
                 const key = name.trim().toLowerCase();
                 const seen = (pendingSubjects.get(key) ?? 0) + 1;
