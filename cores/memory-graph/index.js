@@ -2,6 +2,7 @@ import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
 import { buildThematicSkeletonPrompt, buildThematicSkeletonPartPrompt, buildThematicSkeletonReducePrompt, normalizeThematicRegions } from './bootstrap-thematic.js';
 import { shouldSeedRegion, regionKeyForLabel, bestCenterSimilarity } from './region-birth.js';
+import { rankCoreCandidates } from './core-candidates.js';
 import { coreCap, planRegionRole } from './core-tier.js';
 import { addDirectedEdge } from './edges.js';
 import { pickEventsToFold } from './timeline-compact.js';
@@ -122,6 +123,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let turnCounter = 0;
     const SUBJECT_CREATE_AFTER = 2; // заглушка сущности — со второй встречи неразрешённого имени (этап 3 плана типов)
     const pendingSubjects = new Map(); // имя (нижний регистр) → сколько раз встречалось; в памяти, после перезагрузки счёт заново
+    let lastCoreSweepTurn = -Infinity;
     let lastTimelineFoldTurn = -Infinity; // ход последней попытки свернуть события (не сохраняется — после перезагрузки первая попытка сразу)
     // `true`, когда `loadState()` увидел ноды, записанные ДО появления `CLOCK_KEY` (старая версия, счётчик был в
     // памяти) — их `createdTurn`/`lastTouchedTurn`/`queuedTurn`/`firstAttemptTurn` в единицах СТАРОГО счётчика,
@@ -276,6 +278,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // Часов ещё нет — либо граф совсем свежий (мигрировать нечего), либо это данные ДО появления часов
             // (старый счётчик-в-памяти) — у него есть ноды, но их временные отметки бессмысленны рядом с новыми.
             turnCounter = 0;
+            lastCoreSweepTurn = -Infinity;
             lastTimelineFoldTurn = -Infinity;
             pendingSubjects.clear();
             lastExtractionClock = 0;
@@ -1137,6 +1140,45 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         });
     }
 
+    /**
+     * structured: повысить кандидатов в Core (core-candidates.js) до потолка. Синхронно, вызывается ИЗНУТРИ уже идущей записи
+     * (после размещения в `checkAndPlace`, из `sweepCores`). Возвращает `[{ id, label, reasons }]` повышенных.
+     */
+    function runCoreSweep() {
+        if (!features.core) return [];
+        const coreIds = new Set(Object.values(nodes).filter(isCore).map(node => node.id));
+        const promoted = [];
+        for (const candidate of rankCoreCandidates(nodes, coreIds)) {
+            const result = promoteToCore(candidate.id);
+            if (!result.ok) { if (result.reason === 'core cap reached') break; continue; }
+            nodes[candidate.id].corePromotedBy = candidate.reasons;
+            promoted.push({ id: candidate.id, label: nodes[candidate.id].label, reasons: candidate.reasons });
+            publishEvent('memoryGraph.coreCreated', { nodeId: candidate.id, reasons: candidate.reasons });
+        }
+        return promoted;
+    }
+
+    /** Периодический прогон повышения (не чаще `coreSweepEveryTurns` ходов) — со своей записью на диск. */
+    async function sweepCores() {
+        if (!features.core) return { promoted: [] };
+        return enqueueWrite(async () => {
+            if (turnCounter - lastCoreSweepTurn < settings.coreSweepEveryTurns) return { promoted: [] };
+            lastCoreSweepTurn = turnCounter;
+            const promoted = runCoreSweep();
+            if (promoted.length) await Promise.all([persistNodes(), persistRegions()]);
+            return { promoted };
+        });
+    }
+
+    /** Текст сообщения «сюжетный каркас» (до 8 Core по важности, затем связям) или `null`, если настройка выключена / Core нет. */
+    function plotCoreMessage() {
+        if (!features.core || !settings.plotSkeletonInPrompt) return null;
+        const labels = Object.values(nodes).filter(isCore)
+            .sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0) || (b.degree ?? 0) - (a.degree ?? 0))
+            .slice(0, 8).map(node => node.label);
+        return labels.length ? `Plot core: ${labels.join(', ')}` : null;
+    }
+
     /** Ручное закрепление ноды как Core (кнопка «Make core»): потолок не действует. */
     async function pinNode({ id } = {}) {
         return enqueueWrite(async () => {
@@ -1606,6 +1648,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (subjectLinks) {
                     const created = nodes[placed.nodeId];
                     if (fact.time) created.timeText = fact.time;
+                    if (fact.coreProposed) created.coreProposed = true; // предложение модели; само Core не делает — решает coreScore
                     const edgeCount = linkStructuredNode(created, subjectLinks, sameBatchEvent);
                     if (kindOf(created) === 'event' && !sameBatchEvent) sameBatchEvent = created;
                     structuredInfo = { kind: kindOf(created), subjects: subjectLinks.subjectIds.map(id => nodes[id]?.label).filter(Boolean), edges: edgeCount };
@@ -1664,8 +1707,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // `enqueueWrite()`, то есть физически не может начать перезапись `nodes`/`regions` раньше, чем текущая
             // задача дойдёт до этой точки и положит свои персисты в очередь — гонка на диске исключена, остаётся
             // только "лишние/устаревшие данные старого чата в новом графе" — не хуже поведения ДО Этапа 5.
+            const promotedCores = runCoreSweep(); // проверка после каждого размещения (этап 6 плана типов)
             await recordDecision({
-                clock: turnCounter, at: now(), gate: gateInfo, extractor: 'node', node: { id: primary.nodeId, label: primary.label },
+                clock: turnCounter, at: now(), gate: gateInfo, extractor: 'node', node: { id: primary.nodeId, label: primary.label }, promotedCores: promotedCores.length ? promotedCores : undefined,
                 structured: primary.structured ?? undefined,
                 placement: primary.status === 'updated' ? undefined : { status: primary.status, reason: primary.reason, region: primary.region, similarity: primary.similarity, margin: primary.margin },
                 capacity: primary.capacity ?? undefined,
@@ -2666,6 +2710,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     recordRetrieval(republished);
                     publishEvent('memoryGraph.retrieved', republished);
                 }
+                const plotSticky = plotCoreMessage();
+                if (plotSticky) chat.unshift({ is_user: false, is_system: true, name: 'Plot core', mes: plotSticky });
                 chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: stickyRetrieval.text });
                 return true;
             }
@@ -2712,6 +2758,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             });
             await Promise.all([persistNodes(), persistStickyRetrieval()]);
             publishEvent('memoryGraph.retrieved', lastRetrieval);
+            const plotFresh = plotCoreMessage();
+            if (plotFresh) chat.unshift({ is_user: false, is_system: true, name: 'Plot core', mes: plotFresh });
             chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: text });
             return true;
         });
@@ -2772,6 +2820,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         await sweepMergeQueue();
         await sweepReconsolidationQueue();
         await sweepTimeline();
+        await sweepCores();
         return placement;
     }
 
@@ -2814,6 +2863,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.checkAndPlace', params => checkAndPlace(String(params?.text ?? ''))),
         host.own.register('memoryGraph.sweepStaging', () => sweepStaging()),
         host.own.register('memoryGraph.nodes.pin', params => pinNode(params ?? {})),
+        host.own.register('memoryGraph.sweepCores', () => sweepCores()),
         host.own.register('memoryGraph.sweepTimeline', () => sweepTimeline()),
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),
         host.own.register('memoryGraph.sweepReconsolidationQueue', () => sweepReconsolidationQueue()),

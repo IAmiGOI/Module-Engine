@@ -18,7 +18,7 @@ import { cosineSimilarity } from '../../libraries/core/embedding.js';
 
 export const BEACON_TUNING = Object.freeze({
     weightBonus: 0.3,      // максимум бонуса за вес (ранг веса среди кандидатов 0..1 × это число), в единицах σ сходства
-    protectedBonus: 0.2,   // центрам/под-центрам — небольшой постоянный бонус вместо прежней бесконечности
+    coreBonus: 0.2,        // Core (центры/под-центры/закреплённые) — небольшой постоянный бонус вместо прежней бесконечности
     nameBonus: 1.5,        // имя ноды встречено в последних сообщениях
     minScore: 0.5,         // маяк — только нода с итоговым счётом выше (≈ на полсигмы релевантнее среднего кандидата)
     duplicateCosine: 0.97, // два маяка настолько похожи — второй не берётся
@@ -59,7 +59,7 @@ export function selectBeacons(candidates, contextEmbedding, { count = 5, queryTe
     const scored = pool.map((node, index) => {
         const named = labelMentioned(node.label, queryText);
         const relevance = small ? sims[index] : (sims[index] - mean) / std;
-        const score = relevance + tuning.weightBonus * rank[index] + (node.protectedNode ? tuning.protectedBonus : 0) + (named ? tuning.nameBonus : 0);
+        const score = relevance + tuning.weightBonus * rank[index] + (node.protectedNode ? tuning.coreBonus : 0) + (named ? tuning.nameBonus : 0);
         return { node, id: node.id, score, similarity: sims[index], reason: named ? 'name' : 'meaning' };
     }).sort((a, b) => b.score - a.score);
 

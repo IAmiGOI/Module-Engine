@@ -130,6 +130,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // structured: сворачивание старых событий в сводку (timeline-compact.js) — оставить свежих, сколько сворачивать за раз, как часто (в ходах).
     // structured: потолок автоповышения до Core — доля от числа нод, но не меньше `coreMinCap` (core-tier.js); ручное закрепление потолок обходит.
     maxRegions: 24, // потолок числа регионов: и для тематического бутстрапа, и для рождения регионов вокруг Core (окно раскладки выдерживает ~30)
+    coreSweepEveryTurns: 10, // как часто (в ходах) искать кандидатов в Core помимо проверки после каждого размещения
+    plotSkeletonInPrompt: false, // отдельное сообщение «Plot core: …» с метками главных Core (не входит в закреплённый блок ретрива)
     coreMaxShare: 0.08,
     coreMinCap: 5,
     timelineKeepRecent: 12,
@@ -306,6 +308,8 @@ export function clampGraphSettings(values = {}) {
         mergeSimilarityThreshold: clampInt(values.mergeSimilarityThreshold * 100, 0, 100, DEFAULT_SETTINGS.mergeSimilarityThreshold * 100) / 100,
         mergeQueueMaxTurns: clampInt(values.mergeQueueMaxTurns, 1, 200, DEFAULT_SETTINGS.mergeQueueMaxTurns),
         maxRegions: clampInt(values.maxRegions, 1, 60, DEFAULT_SETTINGS.maxRegions),
+        coreSweepEveryTurns: clampInt(values.coreSweepEveryTurns, 1, 500, DEFAULT_SETTINGS.coreSweepEveryTurns),
+        plotSkeletonInPrompt: values.plotSkeletonInPrompt === true,
         coreMaxShare: clampInt(values.coreMaxShare * 100, 0, 100, DEFAULT_SETTINGS.coreMaxShare * 100) / 100,
         coreMinCap: clampInt(values.coreMinCap, 0, 200, DEFAULT_SETTINGS.coreMinCap),
         timelineKeepRecent: clampInt(values.timelineKeepRecent, 2, 200, DEFAULT_SETTINGS.timelineKeepRecent),
