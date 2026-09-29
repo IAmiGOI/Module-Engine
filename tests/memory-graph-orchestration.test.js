@@ -146,7 +146,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
-            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
+            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
             // Прямой доступ к хранилищу — только для тестов Этапа 2 (MEMORY_GRAPH_FIX_PLAN.md), которым нужно
             // подложить данные "старого формата" (нода с большим createdTurn, без CLOCK_KEY), не воспроизводимые
             // никаким обычным вызовом контракта Ядра.
@@ -3082,4 +3082,61 @@ test('a legacy graph ignores kind and core on manual creation and gets no new fi
 
     assert.equal(node.kind, undefined);
     assert.equal(node.core, undefined);
+});
+
+test('an edge with an event end is stored with a direction at both ends, and deleting the node cleans both records', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Hero', content: 'a wandering knight of the north.', sector: 0, ring: 0, kind: 'entity' });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Duel', content: 'the knight won a duel at the gate.', sector: 0, ring: 0, kind: 'event' });
+    let nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const hero = nodes.find(n => n.label === 'Hero');
+    const duel = nodes.find(n => n.label === 'Duel');
+
+    await call(caller, 'memoryGraph.edges.create', { fromId: hero.id, toId: duel.id });
+
+    nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.deepEqual(nodes.find(n => n.label === 'Hero').edges.find(e => e.to === duel.id), { to: duel.id, type: 'participates', dir: 'out' });
+    assert.deepEqual(nodes.find(n => n.label === 'Duel').edges.find(e => e.to === hero.id), { to: hero.id, type: 'participates', dir: 'in' });
+    await call(caller, 'memoryGraph.nodes.delete', { id: duel.id });
+    const heroAfter = (await call(caller, 'memoryGraph.nodes')).value.find(n => n.label === 'Hero');
+    assert.equal(heroAfter.edges.some(e => e.to === duel.id), false);
+});
+
+test('events do not count toward region capacity and are never evicted', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.configure', { maxNodesPerRegion: 5 });
+    for (let i = 0; i < 6; i += 1) await call(caller, 'memoryGraph.nodes.create', { label: `Event ${i}`, content: `event number ${i} in a very different tale about ${'x'.repeat(i + 1)}.`, sector: 0, ring: 0, kind: 'event' });
+
+    const events = (await call(caller, 'memoryGraph.nodes')).value.filter(n => n.kind === 'event');
+
+    assert.equal(events.length, 6);
+});
+
+test('sweeping the timeline folds the oldest events into one summary and keeps the chain and the recent ones', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.configure', { timelineKeepRecent: 2, timelineFoldBatch: 3, timelineFoldEveryTurns: 1 });
+    for (let i = 0; i < 5; i += 1) await call(caller, 'memoryGraph.nodes.create', { label: `Step ${i}`, content: `step ${i} of the journey, unique word${i}.`, sector: 0, ring: 0, kind: 'event' });
+    let nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const step = label => nodes.find(n => n.label === label);
+    for (let i = 0; i < 4; i += 1) await call(caller, 'memoryGraph.edges.create', { fromId: step(`Step ${i}`).id, toId: step(`Step ${i + 1}`).id });
+
+    const result = (await call(caller, 'memoryGraph.sweepTimeline')).value;
+
+    assert.equal(result.folded, 3);
+    nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const events = nodes.filter(n => n.kind === 'event');
+    assert.equal(events.length, 3, 'three folded into one, two recent stay');
+    const summary = events.find(n => n.id === result.mergedId);
+    assert.ok(summary.edges.some(e => e.type === 'next' && e.dir === 'out'), 'the chain continues from the summary');
+});
+
+test('a core event is never folded', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.configure', { timelineKeepRecent: 2, timelineFoldBatch: 3, timelineFoldEveryTurns: 1 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Coup', content: 'the king fell in the night.', sector: 0, ring: 0, kind: 'event', core: true });
+    for (let i = 0; i < 5; i += 1) await call(caller, 'memoryGraph.nodes.create', { label: `Step ${i}`, content: `step ${i} of the journey, unique word${i}.`, sector: 0, ring: 0, kind: 'event' });
+
+    await call(caller, 'memoryGraph.sweepTimeline');
+
+    assert.ok((await call(caller, 'memoryGraph.nodes')).value.some(n => n.label === 'Coup'));
 });

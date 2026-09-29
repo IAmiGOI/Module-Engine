@@ -127,6 +127,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // размер самого кластера — тот же принцип, что `stagingBatchSize` у
     // накопителя.
     reconsolidationMinCluster: 3,
+    // structured: сворачивание старых событий в сводку (timeline-compact.js) — оставить свежих, сколько сворачивать за раз, как часто (в ходах).
+    timelineKeepRecent: 12,
+    timelineFoldBatch: 6,
+    timelineFoldEveryTurns: 20,
     // Удвоено вместе с остальными "ходовыми" числами (см. комментарий у stagingRetryTurns выше).
     reconsolidationQueueMaxTurns: 16,
     // Тот же класс бага, что у бутстрапа (см. `bootstrapMaxTokens` ниже) —
@@ -297,6 +301,9 @@ export function clampGraphSettings(values = {}) {
         mergeWordOverlapThreshold: clampInt(values.mergeWordOverlapThreshold * 100, 0, 100, DEFAULT_SETTINGS.mergeWordOverlapThreshold * 100) / 100,
         mergeSimilarityThreshold: clampInt(values.mergeSimilarityThreshold * 100, 0, 100, DEFAULT_SETTINGS.mergeSimilarityThreshold * 100) / 100,
         mergeQueueMaxTurns: clampInt(values.mergeQueueMaxTurns, 1, 200, DEFAULT_SETTINGS.mergeQueueMaxTurns),
+        timelineKeepRecent: clampInt(values.timelineKeepRecent, 2, 200, DEFAULT_SETTINGS.timelineKeepRecent),
+        timelineFoldBatch: clampInt(values.timelineFoldBatch, 2, 30, DEFAULT_SETTINGS.timelineFoldBatch),
+        timelineFoldEveryTurns: clampInt(values.timelineFoldEveryTurns, 1, 500, DEFAULT_SETTINGS.timelineFoldEveryTurns),
         reconsolidationMinCluster: clampInt(values.reconsolidationMinCluster, 2, 20, DEFAULT_SETTINGS.reconsolidationMinCluster),
         reconsolidationQueueMaxTurns: clampInt(values.reconsolidationQueueMaxTurns, 1, 200, DEFAULT_SETTINGS.reconsolidationQueueMaxTurns),
         reconsolidationMaxTokens: clampInt(values.reconsolidationMaxTokens, 100, 100000, DEFAULT_SETTINGS.reconsolidationMaxTokens),
