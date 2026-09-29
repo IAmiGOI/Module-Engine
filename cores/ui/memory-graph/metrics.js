@@ -34,6 +34,13 @@ const RGB = {
     darkBlue: [0x1b, 0x3a, 0x6b], lightBlue: [0x7e, 0xc8, 0xf5],
     lightGray: [0xd8, 0xdc, 0xe4], darkGray: [0x3a, 0x3e, 0x47],
 };
+import { hslToRgb } from './plane-field.js';
+
+/** Оттенок 0-360 → `#rrggbb` (насыщенность и яркость те же, что были у прежней hsl-строки: 65% / 55%). */
+function hueToHex(hue) {
+    return `#${hslToRgb(hue, 65, 55).map(toHex).join('')}`;
+}
+
 const GRAY_HEX = `#${RGB.gray.map(toHex).join('')}`;
 
 /** Заполненность региона ноды — та же величина, что и подпись зоны "12/23" (Этап 4.3), нужна метрике `risk`. */
@@ -120,7 +127,9 @@ export const METRICS = [
     {
         id: 'region', label: 'Region', description: 'Colors each node by its own region\'s zone hue — see region boundaries by node color alone.',
         value: hueForRegion,
-        scale: 'categorical', palette: hue => (hue == null ? GRAY_HEX : `hsl(${hue}, 65%, 55%)`),
+        // Только hex: `line-gradient-stop-colors` Cytoscape — список цветов через пробел, а `hsl(0, 65%, 55%)` сам содержит пробелы и запятые и
+        // разбирается неверно ("style property is invalid" → исключение при применении стиля → ноды не рисуются, ROADMAP 5.123).
+        scale: 'categorical', palette: hue => (hue == null ? GRAY_HEX : hueToHex(hue)),
         format: () => '',
     },
     {

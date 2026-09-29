@@ -137,3 +137,12 @@ test('averageHue() of two opposite hues (180° apart) is symmetric either way ro
     const b = averageHue(180, 0);
     assert.ok(Math.abs(a - b) < 0.001 || Math.abs(Math.abs(a - b) - 360) < 0.001);
 });
+
+test('the region metric gives plain #rrggbb colors, so a two-color edge gradient splits into exactly two stops (an hsl() string broke Cytoscape and hid every node)', () => {
+    const first = region.palette(0);
+    const second = region.palette(200);
+    assert.match(first, /^#[0-9a-f]{6}$/);
+    assert.match(second, /^#[0-9a-f]{6}$/);
+    assert.equal(`${first} ${second}`.split(' ').length, 2);
+    assert.notEqual(first, second);
+});
