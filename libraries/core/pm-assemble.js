@@ -1,0 +1,123 @@
+import { blockById } from './pm-preset-format.js';
+
+/**
+ * Чистая сборка промпта из пресета PM (PROMPT_MANAGER_PLAN.md, этап 2). Без ввода-вывода:
+ * всё, что даёт ST и наши Ядра, приходит готовым в `context`.
+ *
+ * context:
+ *   markers — { charDescription, charPersonality, scenario, personaDescription,
+ *               worldInfoBefore, worldInfoAfter, dialogueExamples (строка или массив сообщений) }
+ *   history — сообщения чата по возрастанию времени: { role, content, … } (вставки модулей уже внутри)
+ *   substitute(text) — подстановка макросов (по умолчанию как есть)
+ *
+ * Возвращает { messages, report }. report — по строке на каждый блок: что вошло и почему нет
+ * (для превью «что уходит модели»). Правила сверены с реальным запросом ST 1.18 (раздел 11):
+ * каждый блок — отдельное сообщение, пустое содержимое не отправляется, вставка на глубину
+ * `depth` встаёт перед последними `depth` сообщениями истории (0 — после последнего), вставки
+ * одной глубины идут по возрастанию `order`, пустая группа-обёртка не отправляет свои теги.
+ */
+const MARKER_TEXT = {
+    charDescription: ctx => ctx.markers.charDescription,
+    charPersonality: (ctx, t) => wrapWith(t.personality, '{{personality}}', ctx.markers.charPersonality),
+    scenario: (ctx, t) => wrapWith(t.scenario, '{{scenario}}', ctx.markers.scenario),
+    personaDescription: ctx => ctx.markers.personaDescription,
+    worldInfoBefore: (ctx, t) => wrapWith(t.wi, '{0}', ctx.markers.worldInfoBefore),
+    worldInfoAfter: (ctx, t) => wrapWith(t.wi, '{0}', ctx.markers.worldInfoAfter),
+};
+
+function wrapWith(template, placeholder, value) {
+    if (!value || !String(value).trim()) return '';
+    if (!template) return String(value);
+    return template.split(placeholder).join(String(value));
+}
+
+const isBlank = text => typeof text !== 'string' || text.trim() === '';
+
+function pushMessage(target, message, blockId, report, name) {
+    target.push({ ...message, _block: blockId });
+    report.push({ blockId, name, included: true, role: message.role, chars: message.content.length });
+}
+
+function markerMessages(block, ctx, templates, substitute) {
+    if (block.id === 'dialogueExamples') {
+        const examples = ctx.markers.dialogueExamples;
+        if (Array.isArray(examples)) return examples.filter(m => !isBlank(m.content)).map(m => ({ ...m, content: substitute(m.content) }));
+        if (isBlank(examples)) return [];
+        return [{ role: 'system', content: substitute(examples) }];
+    }
+    const text = MARKER_TEXT[block.id]?.(ctx, templates);
+    return isBlank(text) ? [] : [{ role: 'system', content: substitute(text) }];
+}
+
+/** Вставки на глубину распределяются по истории; возвращает новый массив сообщений. */
+function spliceDepth(history, injections) {
+    const byDepth = new Map();
+    for (const item of injections) {
+        const list = byDepth.get(item.depth) ?? [];
+        list.push(item);
+        byDepth.set(item.depth, list);
+    }
+    const out = [];
+    for (let i = 0; i <= history.length; i++) {
+        const depth = history.length - i; // сколько сообщений истории останется после этой точки
+        const here = (byDepth.get(depth) ?? []).sort((a, b) => a.order - b.order);
+        for (const item of here) out.push(item.message);
+        if (i < history.length) out.push(history[i]);
+    }
+    // Глубина больше длины истории — в самое начало истории.
+    const start = [...byDepth.entries()].filter(([depth]) => depth > history.length).sort((a, b) => b[0] - a[0]);
+    const lead = start.flatMap(([, list]) => list.sort((a, b) => a.order - b.order).map(item => item.message));
+    return [...lead, ...out];
+}
+
+export function assemblePrompt(preset, context) {
+    const ctx = { markers: {}, history: [], ...context };
+    const substitute = ctx.substitute ?? (text => text);
+    const report = [];
+    const injections = [];
+
+    const emit = (nodes, sink) => {
+        for (const node of nodes) {
+            if (node.type === 'group') {
+                if (!node.enabled) { report.push({ blockId: node.id, name: node.name, included: false, reason: 'disabled' }); continue; }
+                const inner = [];
+                emit(node.children, inner);
+                if (!inner.length && node.skipWhenEmpty) { report.push({ blockId: node.id, name: node.name, included: false, reason: 'empty group' }); continue; }
+                const open = blockById(preset, node.wrap.open), close = blockById(preset, node.wrap.close);
+                if (open) pushMessage(sink, { role: open.role ?? 'system', content: substitute(open.content ?? '') }, open.id, report, open.name);
+                sink.push(...inner);
+                if (close) pushMessage(sink, { role: close.role ?? 'system', content: substitute(close.content ?? '') }, close.id, report, close.name);
+                continue;
+            }
+            const block = blockById(preset, node.block);
+            if (!block) { report.push({ blockId: node.block, included: false, reason: 'unknown block' }); continue; }
+            if (!node.enabled) { report.push({ blockId: block.id, name: block.name, included: false, reason: 'disabled' }); continue; }
+            if (block.id === 'chatHistory') { sink.push({ _historySlot: true }); continue; }
+            if (block.marker) {
+                const messages = markerMessages(block, ctx, preset.templates, substitute);
+                if (!messages.length) report.push({ blockId: block.id, name: block.name, included: false, reason: 'empty' });
+                for (const message of messages) pushMessage(sink, message, block.id, report, block.name);
+                continue;
+            }
+            const content = substitute(block.content ?? '');
+            if (isBlank(content)) { report.push({ blockId: block.id, name: block.name, included: false, reason: 'empty' }); continue; }
+            const message = { role: block.role ?? 'system', content };
+            if (block.position === 'depth') {
+                injections.push({ depth: block.depth ?? 4, order: block.order ?? 100, message: { ...message, _block: block.id } });
+                report.push({ blockId: block.id, name: block.name, included: true, role: message.role, chars: content.length, depth: block.depth ?? 4 });
+            } else pushMessage(sink, message, block.id, report, block.name);
+        }
+    };
+
+    const flat = [];
+    emit(preset.tree, flat);
+    const history = ctx.history.map(m => ({ ...m }));
+    const newChat = !isBlank(preset.templates.newChat) && history.length
+        ? [{ role: 'system', content: substitute(preset.templates.newChat), _block: 'newChat' }] : [];
+    const withInjections = spliceDepth(history, injections);
+    const slotIndex = flat.findIndex(m => m._historySlot);
+    const messages = slotIndex < 0
+        ? [...flat, ...withInjections]
+        : [...flat.slice(0, slotIndex), ...newChat, ...withInjections, ...flat.slice(slotIndex + 1)];
+    return { messages: messages.map(({ _block, ...rest }) => (_block ? { ...rest, _block } : rest)), report, hasHistorySlot: slotIndex >= 0 };
+}
