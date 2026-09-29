@@ -209,6 +209,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     async function configure(next) {
+        await loadSettings(); // сохранённое — источник истины: настройка до `load()` не должна затирать записанное значениями по умолчанию
         settings = clampGraphSettings({ ...settings, ...next });
         await call('storage.settings.set', { namespace: PERSISTENCE_NAMESPACE, key: SETTINGS_KEY, value: settings });
         return settings;

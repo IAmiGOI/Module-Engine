@@ -79,3 +79,12 @@ test('folding picks the oldest events beyond the recent ones, skips core, and ne
     events[0].core = true;
     assert.deepEqual(pickEventsToFold(events, { keepRecent: 2, foldBatch: 6 }).map(n => n.id), ['e2', 'e3']);
 });
+
+import { DEFAULT_SETTINGS, clampGraphSettings } from '../cores/memory-graph/math.js';
+
+test('new graphs are structured by default, an unknown mode value falls back to that default, and a saved legacy choice is kept', () => {
+    assert.equal(DEFAULT_SETTINGS.defaultGraphMode, 'structured');
+    assert.equal(clampGraphSettings({}).defaultGraphMode, 'structured');
+    assert.equal(clampGraphSettings({ defaultGraphMode: 'nonsense' }).defaultGraphMode, 'structured');
+    assert.equal(clampGraphSettings({ defaultGraphMode: 'legacy' }).defaultGraphMode, 'legacy');
+});

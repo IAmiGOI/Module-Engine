@@ -10,6 +10,7 @@ import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createMemoryGraphCore, BOOTSTRAP_SYSTEM_PROMPT, DEFAULT_SETTINGS } from '../cores/memory-graph/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
+import { writeNamespacedValue } from '../libraries/core/namespaced-store.js';
 import { registerGraphLibraryService } from '../services/graph-library.js';
 
 /**
@@ -68,7 +69,11 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
     // fetchReplies всегда отвечает 200 OK, этого недостаточно для теста
     // "один сбой Прохода 3 не блокирует остальные регионы").
     registerHttpService(engine.buses.network, { fetch: fetchOverride ?? (fetchReplies ? fakeFetchSequence(fetchReplies) : fakeFetchReplying(fetchReply)) });
-    const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
+    // Настройки графа заранее закреплены на legacy: большинство тестов файла проверяет прежнее (legacy) поведение, а режим по
+    // умолчанию для НОВЫХ графов теперь structured. Тесты structured выбирают его явно (`defaultGraphMode: 'structured'`).
+    const seededSettings = {};
+    writeNamespacedValue(seededSettings, 'core.memoryGraph', 'settings', { defaultGraphMode: 'legacy' });
+    const settingsContext = { extensionSettings: { stme_settings: seededSettings }, saveSettingsDebounced: () => {} };
     registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
     registerChatMetadataService(engine.buses.services, { getContext: () => context });
 
