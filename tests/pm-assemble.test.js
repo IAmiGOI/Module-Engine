@@ -75,3 +75,42 @@ test('world info and personality go through their templates and the new chat lin
     const { messages } = assemblePrompt(preset, { markers: { worldInfoBefore: 'lore', charPersonality: 'kind' }, history: [] });
     assert.deepEqual(messages.map(m => m.content), ['[WI]\nlore', "{{char}}'s personality: kind"]);
 });
+
+test('a module contribution is placed where the user put its node, in order or at a depth', () => {
+    const preset = stToPreset({ prompts: [{ identifier: 'h', marker: true }], prompt_order: [{ character_id: 1, order: [{ identifier: 'h', enabled: true }] }] });
+    preset.tree.unshift({ type: 'inject', contribution: 'graph', enabled: true });
+    preset.tree.push({ type: 'inject', contribution: 'notes', enabled: true, placement: { mode: 'depth', depth: 1 } });
+    const contributions = { graph: { role: 'assistant', content: 'MEMORY' }, notes: { role: 'system', content: 'NOTES' } };
+    const { messages } = assemblePrompt(preset, { history: [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }], contributions });
+    assert.deepEqual(messages.map(m => m.content), ['MEMORY', 'a', 'NOTES', 'b']);
+});
+
+test('a contribution that is empty or missing sends nothing and a disabled node is skipped', () => {
+    const preset = stToPreset({ prompts: [], prompt_order: [] });
+    preset.tree.push({ type: 'inject', contribution: 'a', enabled: true }, { type: 'inject', contribution: 'b', enabled: false });
+    const { messages, report } = assemblePrompt(preset, { contributions: { a: { content: '  ' }, b: { content: 'x' } } });
+    assert.equal(messages.length, 0);
+    assert.deepEqual(report.map(r => r.reason), ['empty', 'disabled']);
+});
+
+test('a node whose condition is false is skipped and reported', () => {
+    const preset = stToPreset({ prompts: [{ identifier: 'a', role: 'system', content: 'ONLY WHEN DRAGON' }], prompt_order: [{ character_id: 1, order: [{ identifier: 'a', enabled: true }] }] });
+    preset.tree[0].condition = { type: 'keyword', words: ['dragon'], scan: 2 };
+    const off = assemblePrompt(preset, { facts: { messages: [{ role: 'user', text: 'hello' }] } });
+    const on = assemblePrompt(preset, { facts: { messages: [{ role: 'user', text: 'a Dragon!' }] } });
+    assert.equal(off.messages.length, 0);
+    assert.equal(off.report[0].reason, 'condition');
+    assert.equal(on.messages.length, 1);
+});
+
+test('a choice group sends only the selected option and exposes it as a variable', () => {
+    const preset = stToPreset({ prompts: [{ identifier: 'p', role: 'system', content: 'PAST' }, { identifier: 'n', role: 'system', content: 'NOW' }], prompt_order: [] });
+    preset.tree = [{
+        type: 'choice', id: 'tense', name: 'Tense', enabled: true, variable: 'tense', selected: 'now',
+        options: [{ id: 'past', value: 'past tense', children: [{ type: 'item', block: 'p', enabled: true }] }, { id: 'now', value: 'present tense', children: [{ type: 'item', block: 'n', enabled: true }] }],
+    }];
+    const vars = {};
+    const { messages } = assemblePrompt(preset, { setVariable: (name, value) => { vars[name] = value; } });
+    assert.deepEqual(messages.map(m => m.content), ['NOW']);
+    assert.deepEqual(vars, { tense: 'present tense' });
+});
