@@ -64,3 +64,33 @@ test('the structured prompt lists known names and main characters and explains t
 test('a partial word match never lands on a fact, only on an entity or object', () => {
     assert.equal(resolveSubject('Marcus', { f: { id: 'f', label: 'Marcus is a smith', kind: 'fact' } }), null);
 });
+
+import { buildThematicSkeletonPrompt, buildThematicSkeletonReducePrompt, normalizeThematicRegions } from '../cores/memory-graph/bootstrap-thematic.js';
+import { buildRegionEdgesPrompt, parseRegionEdgesResponse, parseRegionKindsResponse } from '../cores/memory-graph/bootstrap-prompts.js';
+
+test('the thematic skeleton prompt asks for themes, not for kinds of things, and states the region target', () => {
+    const prompt = buildThematicSkeletonPrompt([{ uid: 0, label: 'A', comment: 'A', content: 'text' }], 6, 24);
+    assert.match(prompt, /about 6 regions \(at most 24\)/);
+    assert.match(prompt, /THEME/);
+    assert.doesNotMatch(prompt, /Use ONLY these regions/);
+});
+
+test('the thematic reduce prompt asks to merge the same theme proposed under different names', () => {
+    const prompt = buildThematicSkeletonReducePrompt([{ region: 'Port', candidates: [{ uid: 1, note: 'harbor' }] }], 5, 24);
+    assert.match(prompt, /SAME theme under different names/);
+});
+
+test('thematic region names are trimmed to 60 characters, deduplicated ignoring case, and capped', () => {
+    const regions = [{ name: 'Port' }, { name: 'port' }, { name: 'x'.repeat(80) }, { name: 'Third' }];
+    const result = normalizeThematicRegions(regions, 3);
+    assert.deepEqual(result.map(r => r.name.length), [4, 60, 5]);
+});
+
+test('the extended edges reply gives edges and kinds, the old array still gives edges, and unknown ids and kinds are ignored', () => {
+    const nodes = [{ id: 'a' }, { id: 'b' }];
+    const reply = { edges: [{ from: 'a', to: 'b' }], kinds: { a: { kind: 'object', subtype: 'place' }, b: { kind: 'weird' }, z: { kind: 'entity' } } };
+    assert.equal(parseRegionEdgesResponse(reply, nodes).length, 1);
+    assert.equal(parseRegionEdgesResponse([{ from: 'a', to: 'b' }], nodes).length, 1);
+    assert.deepEqual(parseRegionKindsResponse(reply, nodes), { a: { kind: 'object', subtype: 'place' } });
+    assert.match(buildRegionEdgesPrompt([{ id: 'a', label: 'A', content: 'c' }], { withKinds: true }), /"kinds"/);
+});

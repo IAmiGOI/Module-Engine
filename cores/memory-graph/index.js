@@ -1,5 +1,7 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
+import { buildThematicSkeletonPrompt, buildThematicSkeletonPartPrompt, buildThematicSkeletonReducePrompt, normalizeThematicRegions } from './bootstrap-thematic.js';
+import { coreCap, planRegionRole } from './core-tier.js';
 import { addDirectedEdge } from './edges.js';
 import { pickEventsToFold } from './timeline-compact.js';
 import { checkEdge, normalizeKind, kindOf, isCore, isEvent } from './kinds.js';
@@ -35,7 +37,7 @@ import {
     CHUNK_CANDIDATES_SKELETON, CHUNK_CANDIDATES_CENTERS,
     buildSkeletonPartPrompt, buildCentersPartPrompt, parseCandidatesResponse,
     mergeCandidateGroups, trimCandidatesToBudget, buildSkeletonReducePrompt, buildCentersReducePrompt,
-    pickNearestRegion, buildRegionEdgesPrompt, parseRegionEdgesResponse,
+    pickNearestRegion, buildRegionEdgesPrompt, parseRegionEdgesResponse, parseRegionKindsResponse,
     buildOrphanConnectionsPrompt, parseOrphanConnectionsResponse,
 } from './bootstrap-prompts.js';
 export {
@@ -54,7 +56,7 @@ export {
     CHUNK_CANDIDATES_SKELETON, CHUNK_CANDIDATES_CENTERS,
     buildSkeletonPartPrompt, buildCentersPartPrompt, parseCandidatesResponse,
     mergeCandidateGroups, trimCandidatesToBudget, buildSkeletonReducePrompt, buildCentersReducePrompt,
-    pickNearestRegion, buildRegionEdgesPrompt, parseRegionEdgesResponse,
+    pickNearestRegion, buildRegionEdgesPrompt, parseRegionEdgesResponse, parseRegionKindsResponse,
     buildOrphanConnectionsPrompt, parseOrphanConnectionsResponse,
 } from './bootstrap-prompts.js';
 
@@ -706,7 +708,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         const isFirst = forceRole === 'ordinary' ? false : !region.centerNodeId;
         const isSubCenter = forceRole
             ? forceRole === 'subCenter'
-            : (!isFirst && region.subCenterIds.length < settings.subCentersPerRegion);
+            // structured: под-центры авто-детекцией по порядку прибытия больше не назначаются — роль достаётся только Core (`promoteToCore`, бутстрап через forceRole).
+            : (!features.core && !isFirst && region.subCenterIds.length < settings.subCentersPerRegion);
         regions[key] = {
             ...region,
             centerNodeId: region.centerNodeId ?? node.id,
@@ -862,7 +865,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
             if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // чат сменился, пока ждали эмбединг — не мутируем уже ЧУЖОЙ (новый) граф
             if (!embeddingResult.ok) return { ok: false, error: embeddingResult.error.message };
-            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE }, { source: 'card' });
+            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE, kind: 'entity' }, { source: 'card' });
+            if (features.core && nodes[result.nodeId]) promoteToCore(result.nodeId, { manual: true }); // главный герой — Core (этап 4 плана типов)
             // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
             // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
@@ -939,6 +943,37 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * маяки/merge-detection (оба читают `embedding` как источник истины о содержимом узла). НЕ персистит и не
      * публикует событие сама — оба вызывающих делают это по-своему (один узел сразу vs пачкой в конце `checkAndPlace()`).
      */
+    /**
+     * structured: повысить ноду до Core (этап 4 плана). Ручное закрепление (`manual`) потолок не проверяет, автоповышение — да.
+     * Нода с регионом получает роль: под-центр, либо меняется ролью с центром, если важнее (старый центр остаётся под-центром при
+     * наличии места). Событие без региона — просто Core. Возвращает `{ ok, role?, reason? }`.
+     */
+    function promoteToCore(nodeId, { manual = false } = {}) {
+        const node = nodes[nodeId];
+        if (!node) return { ok: false, reason: 'no such node' };
+        if (!features.core) return { ok: false, reason: 'core needs a structured graph' };
+        if (!isCore(node)) {
+            const coreCount = Object.values(nodes).filter(isCore).length;
+            const cap = coreCap(Object.keys(nodes).length, { coreMaxShare: settings.coreMaxShare, coreMinCap: settings.coreMinCap, bootstrapCoreCount: graphMeta.bootstrapCoreCount ?? 0 });
+            if (!manual && coreCount >= cap) return { ok: false, reason: 'core cap reached' };
+        }
+        node.core = true;
+        node.protectedNode = true;
+        const key = node.regionId;
+        const region = key ? regions[key] : null;
+        const plan = planRegionRole(node, region, nodes, { subCentersPerRegion: settings.subCentersPerRegion });
+        if (plan.role === 'center') {
+            const oldCenterId = region.centerNodeId;
+            const room = region.subCenterIds.length < settings.subCentersPerRegion;
+            regions[key] = {
+                ...region,
+                centerNodeId: node.id,
+                subCenterIds: [...region.subCenterIds.filter(id => id !== node.id), ...(plan.demoteCenter && oldCenterId && room ? [oldCenterId] : [])],
+            };
+        } else if (plan.role === 'subCenter') regions[key] = { ...region, subCenterIds: [...region.subCenterIds, node.id] };
+        return { ok: true, role: plan.role };
+    }
+
     async function applyNodeUpdate({ id, label, content, importance, protectedNode, kind, subtype, core } = {}) {
         const node = nodes[id];
         if (!node) return { ok: false, error: `no such node: ${id}` };
@@ -967,7 +1002,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // `core: true` — ручное закрепление (роль под-центра в регионе назначит этап 4).
             if (kind !== undefined) Object.assign(node, normalizeKind(kind, subtype ?? node.subtype));
             else if (subtype !== undefined && kindOf(node) === 'object') Object.assign(node, normalizeKind('object', subtype));
-            if (core === true) node.core = true;
+            if (core === true) promoteToCore(node.id, { manual: true });
             if (protectedNode !== undefined && !isCore(node)) node.protectedNode = Boolean(protectedNode);
             if (isCore(node)) node.protectedNode = true;
         } else if (protectedNode !== undefined) node.protectedNode = Boolean(protectedNode);
@@ -1080,6 +1115,17 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         });
     }
 
+    /** Ручное закрепление ноды как Core (кнопка «Make core»): потолок не действует. */
+    async function pinNode({ id } = {}) {
+        return enqueueWrite(async () => {
+            const result = promoteToCore(id, { manual: true });
+            if (!result.ok) return { ok: false, error: result.reason };
+            await Promise.all([persistNodes(), persistRegions()]);
+            publishEvent('memoryGraph.nodeUpdated', { nodeId: id });
+            return { ok: true, role: result.role };
+        });
+    }
+
     /** Ручное удаление ребра — снимает обе стороны, degree--. */
     async function deleteEdgeManually({ fromId, toId, type } = {}) {
         return enqueueWrite(async () => {
@@ -1145,7 +1191,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             });
             if (!backup.ok) return { ok: false, error: `Could not back up the graph first: ${backup.error?.message ?? 'unknown error'}` };
             nodes = migrateNodesToStructured(nodes);
-            applyGraphMeta({ ...graphMeta, mode: 'structured', convertedFrom: 'legacy' });
+            applyGraphMeta({ ...graphMeta, mode: 'structured', convertedFrom: 'legacy', bootstrapCoreCount: Object.values(nodes).filter(isCore).length });
             await Promise.all([persistNodes(), persistGraphMeta()]);
             publishEvent('memoryGraph.modeChanged', { mode: 'structured', convertedFrom: 'legacy' });
             return { ok: true, mode: 'structured', converted: Object.keys(nodes).length };
@@ -1774,15 +1820,24 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 const chunks = packEntriesIntoChunks(rawEntries, settings.bootstrapChunkTokens);
                 if (chunks.length > 1) totalSteps += chunks.length * 2; // прикидка: по вызову на чанк в каждом из двух проходов
 
+                // structured: пустой список базовых регионов (и не тронутое пользователем значение по умолчанию) — тематический режим:
+                // регионы предлагает модель по темам лора (bootstrap-thematic.js). Явно заданные имена — прежний промпт.
+                const legacyDefault = DEFAULT_SETTINGS.baseRegionNames;
+                const untouched = settings.baseRegionNames.length === legacyDefault.length && settings.baseRegionNames.every((name, i) => name === legacyDefault[i]);
+                const thematic = features.thematicBootstrap && (!settings.baseRegionNames.length || untouched);
+                const baseNames = thematic ? [] : settings.baseRegionNames;
+                const targetRegions = Math.min(settings.maxRegions, Math.max(1, Math.ceil(rawEntries.length / settings.entriesPerRegionCenter)));
+
                 async function runSinglePasses() {
                     // 2. Проход 1 — базовый скелет (Locations/Main Characters/
                     // Factions или свои варианты) + 2 под-центра на каждый.
                     const promptEntries = fitEntriesToTokenBudget(rawEntries, settings.bootstrapMaxContextTokens);
-                    const skeletonPrompt = buildRegionSkeletonPrompt(promptEntries, settings.baseRegionNames);
+                    const skeletonPrompt = thematic ? buildThematicSkeletonPrompt(promptEntries, targetRegions, settings.maxRegions) : buildRegionSkeletonPrompt(promptEntries, baseNames);
                     const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                     tick('skeleton', `laying out regions from ${rawEntries.length} entries`);
                     if (!skeletonResult.ok) { failureReason = `Проход 1 (skeleton) call failed: ${skeletonResult.error?.message}`; return null; }
-                    const skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
+                    let skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
+                    if (thematic) skeletonRegions = normalizeThematicRegions(skeletonRegions, settings.maxRegions);
                     if (!skeletonRegions.length) {
                         // Звонок УДАЛСЯ (skeletonResult.ok), но разбор дал пустой
                         // список — модель ответила не тем JSON'ом, который ждёт
@@ -1820,7 +1875,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     // Проход 1 — map (параллельно, очередь воркеров сама сериализует при одном воркере).
                     let doneSkeletonParts = 0;
                     const skeletonParts = await Promise.all(chunks.map(async (partEntries, index) => {
-                        const outcome = await generateJson(buildSkeletonPartPrompt({ partEntries, allEntries: rawEntries, partNumber: index + 1, partCount: chunks.length, baseRegionNames: settings.baseRegionNames }));
+                        const outcome = await generateJson(thematic
+                            ? buildThematicSkeletonPartPrompt({ partEntries, allEntries: rawEntries, partNumber: index + 1, partCount: chunks.length, targetRegions })
+                            : buildSkeletonPartPrompt({ partEntries, allEntries: rawEntries, partNumber: index + 1, partCount: chunks.length, baseRegionNames: baseNames }));
                         doneSkeletonParts += 1;
                         tick('skeleton', `scanning lore, part ${doneSkeletonParts}/${chunks.length}`);
                         return outcome;
@@ -1828,18 +1885,19 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     const failedSkeleton = skeletonParts.find(part => !part.ok);
                     if (failedSkeleton) { failureReason = `Проход 1 (skeleton) part call failed: ${failedSkeleton.error}`; return null; }
                     const skeletonGroups = mergeCandidateGroups(
-                        skeletonParts.map(part => parseCandidatesResponse(part.parsed, validUids, { allowedRegionNames: settings.baseRegionNames, maxPerRegion: CHUNK_CANDIDATES_SKELETON })),
-                        entryByUid, settings.baseRegionNames,
+                        skeletonParts.map(part => parseCandidatesResponse(part.parsed, validUids, { allowedRegionNames: thematic ? null : baseNames, maxPerRegion: CHUNK_CANDIDATES_SKELETON })),
+                        entryByUid, baseNames,
                     );
                     if (!skeletonGroups.length) { failureReason = 'Проход 1 (skeleton) parts produced zero usable candidates'; return null; }
 
                     // Проход 1 — reduce.
                     const skeletonReduce = trimCandidatesToBudget(skeletonGroups, settings.bootstrapChunkTokens);
                     if (skeletonReduce.trimmed) console.warn(`[memoryGraph] bootstrap: skeleton reduce trimmed ${skeletonReduce.trimmed} lowest-ranked candidate(s) to fit ${settings.bootstrapChunkTokens} tokens.`);
-                    const skeletonOutcome = await generateJson(buildSkeletonReducePrompt(skeletonReduce.groups, settings.baseRegionNames));
+                    const skeletonOutcome = await generateJson(thematic ? buildThematicSkeletonReducePrompt(skeletonReduce.groups, targetRegions, settings.maxRegions) : buildSkeletonReducePrompt(skeletonReduce.groups, baseNames));
                     tick('skeleton', 'choosing region representatives');
                     if (!skeletonOutcome.ok) { failureReason = `Проход 1 (skeleton) reduce failed: ${skeletonOutcome.error}`; return null; }
-                    const skeletonRegions = parseRegionSkeletonResponse(skeletonOutcome.parsed, rawEntries);
+                    let skeletonRegions = parseRegionSkeletonResponse(skeletonOutcome.parsed, rawEntries);
+                    if (thematic) skeletonRegions = normalizeThematicRegions(skeletonRegions, settings.maxRegions);
                     if (!skeletonRegions.length) { failureReason = 'Проход 1 (skeleton) reduce parsed to zero usable regions'; console.warn(`[memoryGraph] bootstrap: ${failureReason}. Raw reply:`, skeletonOutcome.parsed); return null; }
 
                     // Проход 2 — map.
@@ -1889,7 +1947,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (!finalRegionPlans.length) { failureReason = 'no region ended up with both a valid skeleton entry AND a valid center assignment — Проход 1/2 disagreed entirely'; return false; }
 
                 function buildNodeFromEmbedding(entry, embedding) {
-                    return {
+                    const node = {
                         id: makeId('node', now, random),
                         label: entry.label, content: entry.content, embedding,
                         importance: importanceFromLorebookEntry(entry.raw),
@@ -1897,6 +1955,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                         protectedNode: false, regionId: null, edges: [], gameTime: null,
                         source: 'lorebook', // Этап 6.1 плана
                     };
+                    if (features.kinds) {
+                        // structured: ключевые слова записи — псевдонимы ноды (по ним потом разрешаются субъекты); `constant` — сигнал для Core (этап 6).
+                        const keys = Array.isArray(entry.raw?.key) ? entry.raw.key : [];
+                        addAliases(node, keys.map(key => String(key ?? '').trim()));
+                        if (entry.raw?.constant === true) node.constant = true;
+                    }
+                    return node;
                 }
 
                 function placeInRegion(node, regionName, forceRole) {
@@ -2010,12 +2075,19 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                         return;
                     }
                     const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
-                    const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })));
+                    const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })), { withKinds: features.kinds });
                     const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                     linkDone += 1;
                     tick('linking', `linking regions (${linkDone}/${finalRegionPlans.length}) — "${region.name}"`);
                     if (!edgesResult.ok) return;
-                    const proposedEdges = parseRegionEdgesResponse(parseModelJson(edgesResult.value), regionNodes.map(node => ({ id: node.id })));
+                    const edgesParsed = parseModelJson(edgesResult.value);
+                    if (features.kinds) {
+                        // structured: вид (сущность/объект) уточняется тем же вызовом; до рёбер — правило рёбер смотрит на виды.
+                        for (const [id, value] of Object.entries(parseRegionKindsResponse(edgesParsed, regionNodes.map(node => ({ id: node.id }))))) {
+                            if (nodes[id]) Object.assign(nodes[id], normalizeKind(value.kind, value.subtype));
+                        }
+                    }
+                    const proposedEdges = parseRegionEdgesResponse(edgesParsed, regionNodes.map(node => ({ id: node.id })));
                     for (const edge of proposedEdges) {
                         const from = nodes[edge.from];
                         const to = nodes[edge.to];
@@ -2100,6 +2172,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // настоящее сохранение ПРЯМО СЕЙЧАС, до публикации события
                 // успеха — к моменту, когда пользователь видит 100%/успех,
                 // данные уже реально на диске, не только в памяти вкладки.
+                if (features.core) { applyGraphMeta({ ...graphMeta, bootstrapCoreCount: Object.values(nodes).filter(isCore).length }); await persistGraphMeta(); }
                 await call('storage.chatMemory.flush');
                 publishEvent('memoryGraph.bootstrapped', { source: 'lorebook', nodeCount: Object.keys(nodes).length });
                 succeeded = true;
@@ -2718,6 +2791,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // обёртки над уже существующими оркестрационными операциями.
         host.own.register('memoryGraph.checkAndPlace', params => checkAndPlace(String(params?.text ?? ''))),
         host.own.register('memoryGraph.sweepStaging', () => sweepStaging()),
+        host.own.register('memoryGraph.nodes.pin', params => pinNode(params ?? {})),
         host.own.register('memoryGraph.sweepTimeline', () => sweepTimeline()),
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),
         host.own.register('memoryGraph.sweepReconsolidationQueue', () => sweepReconsolidationQueue()),
