@@ -2891,3 +2891,50 @@ test('a retrieval that could not run leaves its reason for the graph window inst
     assert.equal(status.lastSkip.reason, 'no-placed-nodes');
     assert.equal(status.lastRetrievalAt, null);
 });
+
+// --- Новая нода после бутстрапа из лорбука попадает в НАСТОЯЩИЙ регион, а не в регион-призрак ---
+
+test('an organic node whose text names a character of a semantic region joins that region, not a phantom "NaN:undefined" one', async () => {
+    const entries = [
+        { uid: 0, comment: 'Marcus', content: 'Marcus runs the old tavern near the market square.' },
+        { uid: 1, comment: 'Elena', content: 'Elena often visits Marcus to trade rare herbs.' },
+        { uid: 2, comment: 'Ruins', content: 'Elena explores Ruins searching for lost artifacts.' },
+    ];
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: entries,
+        fetchReplies: ['[{"region":"Story","subCenterUids":[1]}]', '[{"region":"Story","centerUid":0}]', '[]',
+            '{"label":"Marcus tavern","content":"Marcus pours drinks in his tavern near the market.","importance":5}'],
+    });
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'Marcus pours a drink in the tavern near the market.' });
+
+    const regions = (await call(caller, 'memoryGraph.regions')).value.map(region => region.id);
+    const created = (await call(caller, 'memoryGraph.nodes')).value.find(node => node.label === 'Marcus tavern');
+    assert.deepEqual(regions, ['Story'], 'no phantom region appears');
+    assert.equal(created.regionId, 'Story');
+});
+
+test('an organic node with no name match is placed by similarity into an existing semantic region, not a phantom "undefined:undefined" one', async () => {
+    const entries = [
+        { uid: 0, comment: 'Harbor', content: 'The harbor smells of salt and tar.' },
+        { uid: 1, comment: 'Docks', content: 'Ships unload crates at the docks every dawn.' },
+    ];
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: entries,
+        fetchReplies: ['[{"region":"Story","subCenterUids":[1]}]', '[{"region":"Story","centerUid":0}]', '[]',
+            '{"label":"Lighthouse keeper","content":"An old keeper lights the lantern above the rocks each night.","importance":5}'],
+    });
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'The lighthouse keeper climbs the stairs at dusk.' });
+
+    const regions = (await call(caller, 'memoryGraph.regions')).value.map(region => region.id);
+    const created = (await call(caller, 'memoryGraph.nodes')).value.find(node => node.label === 'Lighthouse keeper');
+    assert.deepEqual(regions, ['Story']);
+    assert.equal(created.regionId, 'Story');
+});

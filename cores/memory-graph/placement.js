@@ -18,7 +18,7 @@ import { cosineSimilarity } from '../../libraries/core/embedding.js';
 export function pickRegionBySimilarity(embedding, anchors, { minSimilarity = 0.8, minMargin = 0.02 } = {}) {
     if (!anchors.length) return null;
     const scored = anchors
-        .map(anchor => ({ region: { sector: anchor.sector, ring: anchor.ring }, similarity: cosineSimilarity(embedding, anchor.embedding) }))
+        .map(anchor => ({ region: { ...(anchor.regionId !== undefined ? { regionId: anchor.regionId } : {}), sector: anchor.sector, ring: anchor.ring }, similarity: cosineSimilarity(embedding, anchor.embedding) }))
         .sort((a, b) => b.similarity - a.similarity);
     const [best, second] = scored;
     // Второго места нет (единственный анкер) — сравнивать не с чем, отрыв заведомо максимальный: решает только

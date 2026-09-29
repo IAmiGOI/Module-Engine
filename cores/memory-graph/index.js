@@ -323,11 +323,26 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         }));
     }
 
+    /**
+     * Ключ региона в `regions`. Регионы бутстрапа из лорбука — СЕМАНТИЧЕСКИЕ ("Story"), у них нет `sector`/`ring`, а прежний код
+     * описывал регион только парой `{sector, ring}` и собирал ключ `${sector}:${ring}` — для такого региона это "undefined:undefined"
+     * или "NaN:undefined": новая органическая нода попадала не в свой регион, а в НОВЫЙ пустой регион-призрак (ROADMAP 5.110).
+     */
+    function regionKeyOf(region) {
+        return Object.keys(regions).find(key => regions[key] === region) ?? regionKey(region.sector, region.ring);
+    }
+
+    /** Прикрепляет ноду к региону по описанию решения размещения: по ключу (любой регион) либо по `{sector, ring}` (регион-«дартс»). */
+    function attachToRegionDescriptor(node, region) {
+        if (region.regionId && regions[region.regionId]) attachToRegionByKey(node, region.regionId);
+        else attachToRegion(node, region.sector, region.ring);
+    }
+
     /** Анкеры для `pickRegionBySimilarity()` (placement.js, Этап 3) — только регионы, у которых УЖЕ есть центр с реальным эмбедингом; регион без центра не с чем сравнивать. */
     function collectAnchors() {
         return Object.values(regions)
             .filter(region => region.centerNodeId && nodes[region.centerNodeId]?.embedding)
-            .map(region => ({ sector: region.sector, ring: region.ring, embedding: nodes[region.centerNodeId].embedding }));
+            .map(region => ({ regionId: regionKeyOf(region), sector: region.sector, ring: region.ring, embedding: nodes[region.centerNodeId].embedding }));
     }
 
     /**
@@ -390,7 +405,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     function findNameMatchRegion(text) {
         for (const name of extractCharacterNames(text)) {
             const owner = Object.values(nodes).find(node => node.label === name && node.regionId);
-            if (owner) { const [sector, ring] = owner.regionId.split(':').map(Number); return { sector, ring }; }
+            if (owner) {
+                const [sector, ring] = owner.regionId.split(':').map(Number);
+                return { regionId: owner.regionId, sector, ring }; // sector/ring — только у регионов-«дартса»; у семантических ключ и есть регион
+            }
         }
         return null;
     }
@@ -1148,7 +1166,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         nodes[node.id] = node;
         if (decision.status === 'placed') {
             if (decision.placementConfidence === 'low') node.placementConfidence = 'low';
-            attachToRegion(node, decision.region.sector, decision.region.ring);
+            attachToRegionDescriptor(node, decision.region);
         } else staging[node.id] = { nodeId: node.id, attemptCount: 1, firstAttemptTurn: createdTurn };
         // Весь `decision` (не только `status`) — Этап 6 (наблюдаемость, ROADMAP 5.107е): журналу решений
         // `checkAndPlace()` нужны `reason`/`region`/`similarity`/`margin`, которые каскад уже посчитал внутри
@@ -1889,7 +1907,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 const migrated = decideFirstPlacement({ nameMatchRegion: findNameMatchRegion(node.content), embedding: node.embedding, anchors: collectAnchors(), settings });
                 if (migrated.status === 'placed') {
                     if (migrated.placementConfidence === 'low') node.placementConfidence = 'low';
-                    attachToRegion(node, migrated.region.sector, migrated.region.ring);
+                    attachToRegionDescriptor(node, migrated.region);
                     delete staging[entry.nodeId];
                     continue;
                 }
@@ -1961,8 +1979,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const pick = labelEmbeddingResult.ok && anchors.length
                 ? pickRegionBySimilarity(labelEmbeddingResult.value, anchors, { minSimilarity: settings.placementMinSimilarity, minMargin: settings.placementMinMargin })
                 : null;
-            const region = pick?.region ?? { sector: 0, ring: 0 };
-            attachToRegion(node, region.sector, region.ring);
+            attachToRegionDescriptor(node, pick?.region ?? { sector: 0, ring: 0 });
             delete staging[node.id];
         }
     }
