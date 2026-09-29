@@ -43,7 +43,9 @@ import { dropDecision, connectModeStep, edgeTypesInGraph } from './memory-graph/
 // в рендер-пути).
 import { computePlaneOutline, planeRadiusAt, regionFieldAt, dominantBlend } from './memory-graph/plane-field.js';
 import { retrievalClasses, routeChainLabels } from './memory-graph/retrieval-overlay.js';
-import { METRICS, findMetric, metricColor, metricDomain, glowValue, averageHue } from './memory-graph/metrics.js';
+import { METRICS, STRUCTURED_METRICS, findMetric, metricColor, metricDomain, glowValue, averageHue } from './memory-graph/metrics.js';
+import { timelineOf } from '../memory-graph/edges.js';
+import { nodeKindData, directedEdgeEnds, hiddenByKind, isOrbitEvent, placeEventsNearAnchors, KIND_LABEL } from './memory-graph/kinds-view.js';
 
 /**
  * Визуальный редактор графа памяти — решено с пользователем явно:
@@ -150,6 +152,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const retrievalStatus = signal(null);
     // Режим графа (MEMORY_GRAPH_TYPES_PLAN.md, этап 0): { mode, features, meta } — Ядро, `memoryGraph.mode`.
     const graphMode = signal({ mode: 'legacy', features: {}, meta: {} });
+    /** Граф structured — только для него окно рисует виды, стрелки, Core и фильтры по видам (legacy — как раньше). */
+    const isStructured = () => Boolean(graphMode().features?.kinds);
     const retrievalHistoryIndex = signal(null);
     const busy = signal(false);
     const statusText = signal('');
@@ -243,6 +247,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const formContent = signal('');
     const formImportance = signal(0);
     const formProtected = signal(false);
+    const formKind = signal('fact'); // structured: вид ноды в форме
+    const formSubtype = signal('');
     const debugText = signal('');
 
     function selectedNode() {
@@ -256,6 +262,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         formContent.set(node.content);
         formImportance.set(node.importance ?? 0);
         formProtected.set(Boolean(node.protectedNode));
+        formKind.set(node.kind ?? 'fact');
+        formSubtype.set(node.subtype ?? '');
     }
 
     function openCreateForm({ sector, ring }) {
@@ -270,6 +278,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         formContent.set('');
         formImportance.set(0);
         formProtected.set(false);
+        formKind.set('fact');
+        formSubtype.set('');
     }
 
     function closeForm() {
@@ -286,16 +296,32 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 const at = creatingAt() ?? { sector: 0, ring: 0 };
                 const result = await call('memoryGraph.nodes.create', {
                     label: formLabel(), content: formContent(), importance: formImportance() ?? 0, sector: at.sector, ring: at.ring,
+                    ...(isStructured() ? { kind: formKind(), subtype: formSubtype() || undefined } : {}),
                 });
                 statusText.set(result.ok ? 'Node created.' : `Failed: ${result.error?.message}`);
             } else if (selectedNodeId()) {
                 const result = await call('memoryGraph.nodes.update', {
                     id: selectedNodeId(), label: formLabel(), content: formContent(), importance: formImportance() ?? 0, protectedNode: formProtected(),
+                    ...(isStructured() ? { kind: formKind(), subtype: formSubtype() || undefined } : {}),
                 });
+                if (result.ok && result.value?.ok === false) { statusText.set(`Failed: ${result.value.error}`); await refresh(); return; }
                 statusText.set(result.ok ? 'Node updated.' : `Failed: ${result.error?.message}`);
             }
             await refresh();
             closeForm();
+        } finally {
+            busy.set(false);
+        }
+    }
+
+    /** structured: «Make core» — ручное закрепление ноды как Core (потолок не действует). */
+    async function pinSelected() {
+        if (!selectedNodeId()) return;
+        busy.set(true);
+        try {
+            const result = await call('memoryGraph.nodes.pin', { id: selectedNodeId() });
+            statusText.set(result.ok && result.value?.ok ? 'Node is core now.' : `Failed: ${result.value?.error ?? result.error?.message}`);
+            await refresh();
         } finally {
             busy.set(false);
         }
@@ -329,7 +355,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function createEdge(fromId, toId, type = 'related') {
         busy.set(true);
         try {
-            await call('memoryGraph.edges.create', { fromId, toId, type });
+            const result = await call('memoryGraph.edges.create', { fromId, toId, type });
+            // structured: правило рёбер (событие → лор запрещено) отвечает причиной — показываем её, а не молча ничего не делаем
+            if (result.ok && result.value?.ok === false) statusText.set(`Link refused: ${result.value.error}`);
             await refresh();
         } finally {
             busy.set(false);
@@ -587,6 +615,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         usage: { color: 'retrieved', size: 'retrieved', glow: 'retrieved' },
         structure: { color: 'region', size: 'connections', glow: 'none' },
         timeline: { color: 'age', size: 'uniform', glow: 'none' },
+        plot: { color: 'core', size: 'connections', glow: 'core' }, // structured: каркас сюжета — Core яркие, остальное приглушено
     };
     function applyMapModePreset(name) {
         const preset = MAP_MODE_PRESETS[name];
@@ -628,8 +657,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      * математика радиуса/зазора применяется к ЛЮБОЙ неотрицательной величине одинаково корректно.
      */
     function computeGraphLayout() {
-        const layoutNodes = sizeMode() === 'connections' ? nodes() : nodes().map(node => ({ ...node, degree: sizeDrivingValue(node) }));
-        return layoutGraph(layoutNodes, regionsById());
+        const all = sizeMode() === 'connections' ? nodes() : nodes().map(node => ({ ...node, degree: sizeDrivingValue(node) }));
+        if (!isStructured()) return layoutGraph(all, regionsById());
+        // structured: события с якорем — не в зонах, а по орбите вокруг якорной ноды (kinds-view.js); остальное — как обычно.
+        const byId = Object.fromEntries(all.map(node => [node.id, node]));
+        const orbit = all.filter(node => isOrbitEvent(node, byId));
+        const layout = layoutGraph(all.filter(node => !isOrbitEvent(node, byId)), regionsById());
+        const placed = placeEventsNearAnchors(orbit, byId, layout.positions, layout.radii);
+        for (const event of orbit) {
+            layout.positions.set(event.id, placed.get(event.id) ?? { x: 0, y: 0 });
+            layout.radii.set(event.id, nodeRadius(event));
+        }
+        return layout;
     }
 
     /** "Glow by" (Этап 6.2) — 0..1, протектным нодам всегда добавлена надбавка (та же визуальная гарантия "роль виднее", что была в Этапе 4, независимо от режима). */
@@ -659,6 +698,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 data: {
                     id: node.id, label: node.label, degree: node.degree ?? 0, protectedNode: Boolean(node.protectedNode),
                     importance: node.importance ?? 0, size,
+                    ...(isStructured() ? nodeKindData(node) : {}),
                     // `colorMetric.value()` уже само знает, что делать с `protectedNode` для метрик, которым это
                     // важно (`weight`/`risk` — см. metrics.js); остальные метрики (region/source/age/…) красят
                     // защищённую ноду ТАК ЖЕ, как обычную — белая обводка (graphStylesheet()) и так отличает роль.
@@ -692,7 +732,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         const seen = new Set();
         for (const node of nodes()) {
             for (const edge of node.edges ?? []) {
-                const key = [node.id, edge.to].sort().join('|') + ':' + edge.type;
+                const ends = isStructured() ? directedEdgeEnds(node, edge) : null;
+                if (ends?.skip) continue; // вторая запись направленного ребра — рисуется по записи `out`
+                const key = ends ? `${node.id}>${edge.to}:${edge.type}` : [node.id, edge.to].sort().join('|') + ':' + edge.type;
                 if (seen.has(key)) continue; // рёбра двусторонние в данных — одна визуальная линия на пару
                 seen.add(key);
                 const other = byId.get(edge.to);
@@ -702,6 +744,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     group: 'edges',
                     data: {
                         id: `edge:${key}`, source: node.id, target: edge.to, type: edge.type, backbone,
+                        ...(ends ? { directed: true, chain: ends.chain } : {}),
                         lineColor: regionStyle?.lineColor ?? DEFAULT_EDGE_COLOR,
                         lineFill: regionStyle?.lineFill ?? 'solid',
                         lineGradientColors: regionStyle?.lineGradientColors ?? '',
@@ -1314,6 +1357,12 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const showOrdinary = signal(true);
     const showUnplaced = signal(true);
     const showEdges = signal(true);
+    // structured: флажки по видам и «только Core» (kinds-view.js `hiddenByKind`)
+    const showEntities = signal(true);
+    const showObjects = signal(true);
+    const showFacts = signal(true);
+    const showEvents = signal(true);
+    const coreOnly = signal(false);
     const minWeightThreshold = signal(0);
 
     /** `.filtered` (display:none, план 6.5) и `.match` (подсветка поиска) — НЕ пересчитывает раскладку (позиции остаются из `layoutGraph()`, план прямо просит "карта не прыгает"). */
@@ -1330,7 +1379,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             const hidden = (node.protectedNode && !showProtected())
                 || (!node.protectedNode && node.regionId != null && !showOrdinary())
                 || (node.regionId == null && !showUnplaced())
-                || rank < threshold;
+                || rank < threshold
+                || (isStructured() && hiddenByKind(node, { entity: showEntities(), object: showObjects(), fact: showFacts(), event: showEvents(), coreOnly: coreOnly() }));
             ele.toggleClass('filtered', hidden);
             ele.toggleClass('match', Boolean(query) && ((node.label ?? '').toLowerCase().includes(query) || (node.content ?? '').toLowerCase().includes(query)));
         });
@@ -1392,6 +1442,18 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             await refresh();
         } finally { busy.set(false); }
     }
+    /** structured: «Reclassify» — по требованию уточняет виды нод (один вызов модели на регион); в бутстрап не входит. */
+    async function reclassifyGraph() {
+        busy.set(true);
+        try {
+            const result = await call('memoryGraph.reclassify');
+            statusText.set(result.ok && result.value?.ok ? `Reclassified ${result.value.changed} node(s).` : `Failed: ${result.value?.error ?? result.error?.message}`);
+            await refresh();
+        } finally {
+            busy.set(false);
+        }
+    }
+
     function modeRow() {
         return computed(() => {
             const { mode } = graphMode();
@@ -1400,7 +1462,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 Badge(mode === 'structured' ? 'Structured' : 'Legacy', { tone: mode === 'structured' ? 'ok' : 'muted' }),
                 empty
                     ? Button(mode === 'structured' ? 'Use legacy for this graph' : 'Use structured for this graph', () => chooseMode(mode === 'structured' ? 'legacy' : 'structured'))
-                    : (mode === 'legacy' ? Button('Upgrade to structured', upgradeGraph, { disabled: busy }) : null),
+                    : (mode === 'legacy' ? Button('Upgrade to structured', upgradeGraph, { disabled: busy }) : Button('Reclassify', reclassifyGraph, { disabled: busy })),
             );
         });
     }
@@ -1573,7 +1635,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         { value: 'none', label: 'None' }, { value: 'weight', label: 'Weight' },
         { value: 'retrieved', label: 'Retrieved' }, { value: 'risk', label: 'Risk' },
     ];
-    const COLOR_OPTIONS = METRICS.map(metric => ({ value: metric.id, label: metric.label }));
+    const colorOptions = () => [...METRICS, ...(isStructured() ? STRUCTURED_METRICS : [])].map(metric => ({ value: metric.id, label: metric.label }));
 
     /** Легенда (Этап 6.3) — угол холста, HTML поверх (не Cytoscape): название метрики, градиент/категории, строки про размер/свечение. Обновляется сама на смену режима/данных (`computed()`). */
     function legendBlock() {
@@ -1605,7 +1667,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     /** "Map mode" (Этап 6.2) — три выпадающих списка + пять быстрых пресетов кнопками (тот же приём, что вкладки режимов карты в EVE). */
     function mapModeSection() {
         return h('div', { class: 'stme-mg-mapmode' },
-            Row(Field('Color by', Select(colorMetricId, COLOR_OPTIONS)), Field('Size by', Select(sizeMode, SIZE_OPTIONS)), Field('Glow by', Select(glowMode, GLOW_OPTIONS))),
+            computed(() => Row(Field('Color by', Select(colorMetricId, colorOptions())), Field('Size by', Select(sizeMode, SIZE_OPTIONS)), Field('Glow by', Select(glowMode, isStructured() ? [...GLOW_OPTIONS, { value: 'core', label: 'Core' }] : GLOW_OPTIONS)))),
             Row(Toggle('Region background', zonesBackgroundEnabled)),
             Row(
                 Button('Health', () => applyMapModePreset('health')),
@@ -1613,6 +1675,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 Button('Usage', () => applyMapModePreset('usage')),
                 Button('Structure', () => applyMapModePreset('structure')),
                 Button('Timeline', () => applyMapModePreset('timeline')),
+                computed(() => (isStructured() ? Button('Plot', () => applyMapModePreset('plot')) : null)),
             ),
             legendBlock(),
         );
@@ -1628,6 +1691,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 'on:keydown': event => { if (event.key === 'Enter') centerOnNextSearchMatch(); },
             }),
             Row(Toggle('Protected', showProtected), Toggle('Ordinary', showOrdinary), Toggle('Unplaced', showUnplaced), Toggle('Edges', showEdges)),
+            computed(() => (isStructured() ? Row(Toggle('Entities', showEntities), Toggle('Objects', showObjects), Toggle('Facts', showFacts), Toggle('Events', showEvents), Toggle('Core only', coreOnly)) : null)),
             LabeledSlider('Min weight', minWeightThreshold, { min: 0, max: 1, step: 0.05, format: value => value.toFixed(2) }),
         );
     }
@@ -1777,12 +1841,29 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         );
     }
 
+    /** structured: вид/подвид, «Make core» (только не-Core) и события ноды — таймлайн связанных событий (`timelineOf`). */
+    function structuredNodeFields() {
+        const node = selectedNode();
+        if (!node) return null;
+        const byId = Object.fromEntries(nodes().map(item => [item.id, item]));
+        const events = node.kind === 'event' ? [] : timelineOf(byId, node.id);
+        return h('div', { class: 'stme-mg-structured' },
+            Row(
+                Field('Kind', Select(formKind, Object.entries(KIND_LABEL).map(([value, label]) => ({ value, label })))),
+                computed(() => (formKind() === 'object' ? Field('Type', Select(formSubtype, [{ value: '', label: '—' }, { value: 'item', label: 'Item' }, { value: 'place', label: 'Place' }, { value: 'group', label: 'Group' }])) : null)),
+                node.core ? Badge('Core', { tone: 'ok' }) : Button('Make core', pinSelected, { disabled: busy }),
+            ),
+            events.length ? Details(`Events (${events.length})`, h('div', { class: 'stme-mg-events' }, events.map(event => h('div', { class: 'stme-mg-decision-row' }, `${event.label}${event.timeText ? ` — ${event.timeText}` : ''}`)))) : null,
+        );
+    }
+
     function nodeForm() {
         return computed(() => {
             if (!selectedNode()) return h('small', { class: 'stme-module-hint' }, 'Click a node on the graph to edit it.');
             return h('div', { class: 'stme-mg-node' },
                 Row(Field('Label', TextInput(formLabel)), Field('Importance', NumberInput(formImportance, { min: 0, max: 10, step: 1 }))),
                 Field('Content', TextArea(formContent, { rows: 3 })),
+                computed(() => (isStructured() ? structuredNodeFields() : null)),
                 Row(
                     Toggle('Protected', formProtected),
                     Button('Save', submitForm, { disabled: busy() }),
@@ -2047,13 +2128,13 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // подписало бы этот эффект, но не так наглядно): маркер должен
         // появляться/двигаться/переименовываться СРАЗУ, без ожидания
         // следующего изменения самого графа.
-        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); colorMetricId(); sizeMode(); glowMode(); zonesBackgroundEnabled(); syncCytoscape(); });
+        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); colorMetricId(); sizeMode(); glowMode(); graphMode(); zonesBackgroundEnabled(); syncCytoscape(); });
         // Подсветка ретрива — отдельный эффект (не завязан на изменения самого графа): переключатель/история могут
         // поменяться без единого нового узла/региона, и наоборот — обычный `refresh()` не должен лишний раз дёргать
         // подсветку, если ни то ни другое не менялось (`syncCytoscape()` всё равно СНОВА применит её в конце, это
         // просто идемпотентно, не баг — но именно ЭТОТ эффект — источник обновления, когда меняются только они).
         effect(() => { retrievalOverlayEnabled(); retrievalHistoryIndex(); retrievalHistory(); panelVisible(); applyRetrievalOverlay(); ensureRouteAnimation(); });
-        effect(() => { searchQuery(); showProtected(); showOrdinary(); showUnplaced(); showEdges(); minWeightThreshold(); applySearchFilters(); });
+        effect(() => { searchQuery(); showProtected(); showOrdinary(); showUnplaced(); showEdges(); minWeightThreshold(); graphMode(); showEntities(); showObjects(); showFacts(); showEvents(); coreOnly(); applySearchFilters(); });
     }
 
     function show() {

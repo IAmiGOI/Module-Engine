@@ -146,7 +146,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move', 'memoryGraph.nodes.pin',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
-            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepCores', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
+            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepCores', 'memoryGraph.reclassify', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
             // Прямой доступ к хранилищу — только для тестов Этапа 2 (MEMORY_GRAPH_FIX_PLAN.md), которым нужно
             // подложить данные "старого формата" (нода с большим createdTurn, без CLOCK_KEY), не воспроизводимые
             // никаким обычным вызовом контракта Ядра.
@@ -3424,4 +3424,35 @@ test('a legacy graph never gets a Recent events section', async () => {
     await graphCore.injectIntoPrompt({ chat });
 
     assert.equal(chat.find(m => m.name === 'Memory').mes.includes('Recent events'), false);
+});
+
+test('reclassify asks the model per region, sets entity and object kinds from the reply, and leaves the rest as facts', async () => {
+    // Ответ строится из id, которые модель видит в самом промпте: «Kira» — сущность, «Old tower» — объект-место.
+    const fetchOverride = async (url, options) => {
+        const prompt = String(options?.body ?? '');
+        const idOf = label => (prompt.match(new RegExp(`(node_[a-z0-9_]+)\\. ${label}:`)) ?? [])[1];
+        const kinds = {};
+        if (idOf('Kira')) kinds[idOf('Kira')] = { kind: 'entity' };
+        if (idOf('Old tower')) kinds[idOf('Old tower')] = { kind: 'object', subtype: 'place' };
+        return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: JSON.stringify({ kinds }) } }] }) };
+    };
+    const { caller } = buildEngine({ fetchOverride });
+    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+    await call(caller, 'memoryGraph.reset');
+    for (const [label, content] of [['Kira', 'a young noblewoman.'], ['Old tower', 'a ruined watchtower by the road.'], ['Trade law', 'merchants pay a toll at the gate.']]) {
+        await call(caller, 'memoryGraph.nodes.create', { label, content, sector: 0, ring: 0 });
+    }
+
+    const result = (await call(caller, 'memoryGraph.reclassify')).value;
+
+    assert.equal(result.ok, true);
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes.find(n => n.label === 'Kira').kind, 'entity');
+    assert.deepEqual([nodes.find(n => n.label === 'Old tower').kind, nodes.find(n => n.label === 'Old tower').subtype], ['object', 'place']);
+    assert.equal(nodes.find(n => n.label === 'Trade law').kind, 'fact');
+});
+
+test('reclassify is refused for a legacy graph', async () => {
+    const { caller } = buildEngine();
+    assert.equal((await call(caller, 'memoryGraph.reclassify')).value.ok, false);
 });

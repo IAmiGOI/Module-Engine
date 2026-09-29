@@ -5,6 +5,7 @@ import { createCoreOps } from './structured/core-ops.js';
 import { createTimelineOps } from './structured/timeline-ops.js';
 import { createExtractionOps } from './structured/extraction-ops.js';
 import { createModeOps } from './structured/mode-ops.js';
+import { createReclassifyOps } from './structured/reclassify-ops.js';
 import { addDirectedEdge } from './edges.js';
 import { checkEdge, normalizeKind, kindOf, isCore, isEvent } from './kinds.js';
 import { featuresFor, normalizeGraphMeta, normalizeMode } from './modes.js';
@@ -2615,6 +2616,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     const { sweepTimeline } = timelineOps;
     const { knownSubjectNames, regionDescriptorOf, resolveFactSubjects, linkStructuredNode } = extractionOps;
     const { setModeForEmptyGraph, convertToStructured } = createModeOps(structuredCtx);
+    const { reclassify } = createReclassifyOps(structuredCtx);
 
     const unregisters = [
         host.own.register('memoryGraph.settings', () => settings),
@@ -2655,6 +2657,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.checkAndPlace', params => checkAndPlace(String(params?.text ?? ''))),
         host.own.register('memoryGraph.sweepStaging', () => sweepStaging()),
         host.own.register('memoryGraph.nodes.pin', params => pinNode(params ?? {})),
+        host.own.register('memoryGraph.reclassify', () => reclassify()),
         host.own.register('memoryGraph.sweepCores', () => sweepCores()),
         host.own.register('memoryGraph.sweepTimeline', () => sweepTimeline()),
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),

@@ -11,6 +11,8 @@
  */
 
 /** Идентификатор маркера места будущей ноды в режиме создания (см. `ensureCytoscape()`/`syncCytoscape()`) — стиль ссылается на него через CSS-селектор `#id`. */
+import { structuredStyleRules } from './kinds-view.js';
+
 export const PREVIEW_ID = '__memory_graph_preview__';
 
 const WEIGHT_COLOR_STOPS = [
@@ -100,6 +102,8 @@ export function graphStylesheet() {
         // между рядовыми нодами. `backbone` — булево поле, которое `edgeElements()` в панели считает по обоим
         // концам ребра (Ядро само это не помечает — регионы и рёбра для него разные сущности).
         { selector: 'edge[?backbone]', style: { 'line-opacity': 0.6, width: 1 } },
+        // structured (kinds-view.js): форма по виду, обводка Core, стрелки событий — по данным, у legacy-элементов не срабатывают.
+        ...structuredStyleRules(),
         // Подсветка ретрива — MEMORY_GRAPH_UI_PLAN.md, Этап 5 (пункт 4 запроса, ПЕРЕКЛЮЧАТЕЛЬ, не таймер). Классы
         // считает чистая `retrievalClasses()` (retrieval-overlay.js), панель только вешает/снимает их на элементы —
         // сам стиль, как и везде выше, ничего не знает ПРО ЧТО именно подсвечивает.
