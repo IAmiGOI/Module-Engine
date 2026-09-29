@@ -187,6 +187,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // меняется охотно; `sticky` — высокий запас, блок держится, пока
     // сцена/тема разговора не изменится реально ощутимо.
     retrievalStability: 'balanced',
+    // Закреплённый блок живёт не дольше стольких ходов подряд, даже если сцена почти не менялась (beacons.js).
+    retrievalMaxStickyTurns: 12,
     // LLM-driven семантические регионы бутстрапа (решено с пользователем,
     // MEMORY_GRAPH.md — "80% нод без связи" на старом дартборд-бутстрапе):
     // `baseRegionNames` — ЕДИНСТВЕННЫЙ источник регионов для Прохода 1
@@ -303,6 +305,7 @@ export function clampGraphSettings(values = {}) {
         retrievalTargetNodes: clampInt(values.retrievalTargetNodes, 1, 200, DEFAULT_SETTINGS.retrievalTargetNodes),
         noiseFanoutPerNode: clampInt(values.noiseFanoutPerNode, 1, 20, DEFAULT_SETTINGS.noiseFanoutPerNode),
         retrievalStability: RETRIEVAL_STABILITY_LEVELS.includes(values.retrievalStability) ? values.retrievalStability : DEFAULT_SETTINGS.retrievalStability,
+        retrievalMaxStickyTurns: clampInt(values.retrievalMaxStickyTurns, 1, 500, DEFAULT_SETTINGS.retrievalMaxStickyTurns),
         baseRegionNames: Array.isArray(values.baseRegionNames) && values.baseRegionNames.length
             ? values.baseRegionNames.map(name => String(name).trim()).filter(Boolean)
             : DEFAULT_SETTINGS.baseRegionNames,
@@ -720,9 +723,18 @@ export function renderMemoryPrompt(route, nodesById) {
 
     const lines = ['Long-term memory — relevant connections:'];
     if (route.segments.length) {
-        const chain = [nodesById[route.segments[0].from]?.label ?? route.segments[0].from];
-        for (const step of route.segments) chain.push(`-[${step.type}]-> ${nodesById[step.to]?.label ?? step.to}`);
-        lines.push(chain.join(' '));
+        // Маршрут бывает деревом (buildBeaconTree): новый путь начинается строкой с той ноды, от которой он отходит.
+        let chain = null;
+        let previousTo = null;
+        for (const step of route.segments) {
+            if (!chain || step.from !== previousTo) {
+                if (chain) lines.push(chain.join(' '));
+                chain = [nodesById[step.from]?.label ?? step.from];
+            }
+            chain.push(`-[${step.type}]-> ${nodesById[step.to]?.label ?? step.to}`);
+            previousTo = step.to;
+        }
+        if (chain) lines.push(chain.join(' '));
     }
     for (const edge of noise) {
         lines.push(`${nodesById[edge.from]?.label ?? edge.from} -[${edge.type}]-> ${nodesById[edge.to]?.label ?? edge.to} (noise)`);

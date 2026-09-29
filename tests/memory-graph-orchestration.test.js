@@ -141,7 +141,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
         tier: 'community',
         allowedContracts: [
             'memoryGraph.settings', 'memoryGraph.configure', 'memoryGraph.nodes', 'memoryGraph.regions', 'memoryGraph.check',
-            'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging',
+            'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging', 'memoryGraph.retrievalStatus',
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
@@ -2175,7 +2175,9 @@ test('a node TWO edges off the beacon route, reachable only through a first-hop 
     // otherwise, same trap as the test above); retrievalTargetNodes:10 and
     // the default fanout leave plenty of room for expansion to actually
     // reach two hops deep, past whatever the route itself already covers.
-    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 2, retrievalTargetNodes: 10 });
+    // Один маяк — Marcus (его имя прямо в запросе, beacons.js): тест про МНОГОШАГОВЫЙ шум, не про выбор маяков; правило «защищённые
+    // всегда маяки», на которое опиралось beaconCount:2 (Marcus+Elena), убрано (ROADMAP 5.109).
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 1, retrievalTargetNodes: 10 });
     await graphCore.load();
     await graphCore.bootstrapFromLorebook();
 
@@ -2877,4 +2879,15 @@ test('memoryGraph.bootstrapAbort stops a running build: it ends without success,
     assert.equal(await build, false);
     assert.equal(finished.at(-1).success, false);
     assert.match(finished.at(-1).reason, /stopped by user/);
+});
+
+test('a retrieval that could not run leaves its reason for the graph window instead of silently doing nothing', async () => {
+    const { graphCore, pipelineCore, caller } = buildEngine({ lorebookEntries: [] });
+    await graphCore.load();
+
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: [{ mes: 'Where is Marcus?' }] } });
+
+    const { value: status } = await call(caller, 'memoryGraph.retrievalStatus');
+    assert.equal(status.lastSkip.reason, 'no-placed-nodes');
+    assert.equal(status.lastRetrievalAt, null);
 });

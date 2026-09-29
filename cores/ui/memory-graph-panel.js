@@ -140,6 +140,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // `memoryGraph.retrievals`, новые первыми). `retrievalHistoryIndex` — `null` значит "Live" (следовать за самым
     // новым, `retrievalHistory()[0]`), иначе индекс конкретной, выбранной пользователем точки истории.
     const retrievalHistory = signal([]);
+    // Почему последний ретрив не состоялся (Ядро, `memoryGraph.retrievalStatus`, ROADMAP 5.109б) — иначе «ретрива не было» не отличить от поломки кнопки.
+    const retrievalStatus = signal(null);
     const retrievalHistoryIndex = signal(null);
     const busy = signal(false);
     const statusText = signal('');
@@ -175,9 +177,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     }
 
     async function refresh() {
-        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult, decisionLogResult, retrievalsResult] = await Promise.all([
+        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult, decisionLogResult, retrievalsResult, statusResult] = await Promise.all([
             call('memoryGraph.nodes'), call('memoryGraph.regions'), call('memoryGraph.mergeQueue'), call('memoryGraph.reconsolidationQueue'), call('memoryGraph.staging'), call('memoryGraph.decisionLog'), call('memoryGraph.retrievals'),
+            call('memoryGraph.retrievalStatus'),
         ]);
+        if (statusResult.ok) retrievalStatus.set(statusResult.value ?? null);
         if (nodesResult.ok) nodes.set(nodesResult.value);
         if (regionsResult.ok) regions.set(regionsResult.value);
         if (mergeResult.ok) mergeQueue.set(mergeResult.value);
@@ -1154,6 +1158,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function applyRetrievalOverlay() {
         if (!cy) return;
         const retrieval = retrievalOverlayEnabled() ? currentRetrieval() : null;
+        // Шаги маршрута по неявной связи «входит в регион» (Ядро, buildBeaconTree — ROADMAP 5.109а) — не рёбра графа: для них
+        // временные рёбра только на время подсветки, иначе линия пути рвалась бы на каждом переходе к центру региона.
+        cy.edges('.virtual-route').remove();
+        for (const segment of retrieval?.segments ?? []) {
+            if (!cy.getElementById(segment.from).nonempty() || !cy.getElementById(segment.to).nonempty()) continue;
+            const linked = cy.getElementById(segment.from).edgesWith(cy.getElementById(segment.to)).nonempty();
+            if (!linked) cy.add({ group: 'edges', data: { id: `vroute:${segment.from}|${segment.to}`, source: segment.from, target: segment.to, type: 'in-region' }, classes: 'virtual-route' });
+        }
         const allNodeIds = cy.nodes().map(ele => ele.id());
         const allEdges = cy.edges().map(ele => ({ id: ele.id(), source: ele.source().id(), target: ele.target().id() }));
         const classes = retrievalClasses(retrieval, allNodeIds, allEdges);
@@ -1343,8 +1355,30 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     }
 
     /** Секция "Retrieval" (Этап 5.5) — детали ВЫБРАННОГО (историей или Live) ретрива: время, sticky, маяки, цепочка маршрута, шум, запрос. Переключатель overlay переехал в canvasCornerTools() — угол канваса, не сюда (реворк UI, ROADMAP.md 5.108м). */
+    const SKIP_REASONS = Object.freeze({
+        'no-placed-nodes': 'no node is placed in a region yet',
+        'empty-query': 'the last messages have no text',
+        'chat-changed': 'the chat changed during the search',
+        'embedding-failed': 'the embedding model did not answer',
+        'no-embeddings': 'the nodes have no usable embeddings',
+        'no-beacons': 'nothing in the graph matched the scene',
+        error: 'an error',
+    });
+
+    function retrievalSkipLine() {
+        return computed(() => {
+            const skip = retrievalStatus()?.lastSkip;
+            const lastAt = retrievalStatus()?.lastRetrievalAt ?? 0;
+            if (!skip || skip.at < lastAt) return null;
+            const reason = SKIP_REASONS[skip.reason] ?? skip.reason;
+            return h('div', { class: 'stme-mg-retrieval-skip' }, h('small', { class: 'stme-module-hint' },
+                `Last search ${timeAgo(skip.at)}: skipped — ${reason}${skip.detail ? ` (${skip.detail})` : ''}.`));
+        });
+    }
+
     function retrievalSection() {
         return h('div', { class: 'stme-mg-retrieval-section' },
+            retrievalSkipLine(),
             retrievalHistoryStrip(),
             computed(() => {
                 const retrieval = currentRetrieval();
@@ -1361,7 +1395,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     beaconIds.length
                         ? h('div', { class: 'stme-mg-retrieval-beacons' }, beaconIds.map(id => Button(labelById.get(id) ?? id, () => selectBeaconOnCanvas(id))))
                         : null,
-                    chain.length > 1 ? h('div', { class: 'stme-mg-retrieval-chain' }, chain.join(' → ')) : null,
+                    chain.length > 1 ? h('div', { class: 'stme-mg-retrieval-chain' }, chain.join(' → ').replaceAll(' → · → ', '  ·  ')) : null,
                     noiseCount ? h('small', { class: 'stme-module-hint' }, `+${noiseCount} noise`) : null,
                     retrieval.query ? h('small', { class: 'stme-module-hint' }, `Query: ${retrieval.query}`) : null,
                 );
@@ -1790,6 +1824,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 // "Live" (`retrievalHistoryIndex === null`), `currentRetrieval()` сам подхватит самую свежую запись
                 // без отдельной логики здесь.
                 'memoryGraph.retrieved',
+                'memoryGraph.retrievalSkipped',
             ].map(event => host.events.subscribe(event, () => {
                 if (event === 'memoryGraph.loaded') { closeForm(); retrievalHistoryIndex.set(null); }
                 refresh();
