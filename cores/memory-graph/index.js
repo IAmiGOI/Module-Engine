@@ -1,5 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
+import { selectBeacons, shouldRefreshSticky, recentQueryText, buildBeaconTree } from './beacons.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { packEntriesIntoChunks } from '../../libraries/core/entry-chunker.js';
 import { extractRecentText } from './context-text.js';
@@ -148,6 +149,19 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let retrievalHistory = [];
     const RETRIEVAL_HISTORY_LIMIT = 20; // число из самого плана, не настройка пользователя (тот же принцип, что DECISION_LOG_LIMIT)
     /** Добавляет запись в историю ретривов (новые в начало) и держит её не длиннее `RETRIEVAL_HISTORY_LIMIT`. */
+    /**
+     * Почему последний ретрив НЕ состоялся (ROADMAP 5.109б). Раньше каждый ранний выход `injectIntoPrompt` был молчаливым `return` —
+     * снаружи «ретрив не дошёл» было неотличимо от «кнопка Pathway сломана» (реальный случай владельца). Теперь причина хранится,
+     * публикуется `memoryGraph.retrievalSkipped` и видна в окне графа; `memoryGraph.retrievalStatus` отдаёт её вместе с временем
+     * последнего удачного ретрива.
+     */
+    let lastRetrievalSkip = null;
+    function skipRetrieval(reason, detail = '') {
+        lastRetrievalSkip = { at: Date.now(), reason, detail: String(detail ?? '').slice(0, 300) };
+        publishEvent('memoryGraph.retrievalSkipped', lastRetrievalSkip);
+        return true;
+    }
+
     function recordRetrieval(entry) {
         lastRetrieval = entry;
         retrievalHistory = [entry, ...retrievalHistory].slice(0, RETRIEVAL_HISTORY_LIMIT);
@@ -2228,24 +2242,33 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // результатам старого нельзя (в частности перед `persistStickyRetrieval()` ниже).
             const epoch = chatEpoch;
             const candidates = Object.values(nodes).filter(node => node.regionId);
-            if (!candidates.length) return true;
+            if (!candidates.length) {
+                const total = Object.keys(nodes).length;
+                return skipRetrieval('no-placed-nodes', total ? `${total} node(s), none placed in a region (all unplaced)` : 'the graph is empty');
+            }
 
-            const contextText = extractLatestText(chat);
-            if (!contextText.trim()) return true;
+            // Запрос — последние несколько сообщений, не одна реплика (beacons.js, ROADMAP 5.109).
+            const contextText = recentQueryText(chat, 3) || extractLatestText(chat);
+            if (!contextText.trim()) return skipRetrieval('empty-query', 'no message text to search with');
             const embeddingResult = await callService('embedding.compute', { text: contextText, kind: 'query' });
-            if (!stillSameChat(epoch)) return true; // мягкая деградация — просто не трогаем chat/stickyRetrieval этим проходом
-            if (!embeddingResult.ok) return true;
+            if (!stillSameChat(epoch)) return skipRetrieval('chat-changed'); // мягкая деградация — просто не трогаем chat/stickyRetrieval этим проходом
+            if (!embeddingResult.ok) return skipRetrieval('embedding-failed', embeddingResult.error?.message);
             const contextEmbedding = embeddingResult.value;
+            if (!Array.isArray(contextEmbedding) || !contextEmbedding.length) return skipRetrieval('embedding-failed', 'the embedding service returned no vector');
+            const withEmbedding = candidates.filter(node => Array.isArray(node.embedding) && node.embedding.length === contextEmbedding.length).length;
+            if (!withEmbedding) return skipRetrieval('no-embeddings', `${candidates.length} placed node(s), none has an embedding of the same size (${contextEmbedding.length})`);
 
-            const freshBeaconIds = pickBeacons(candidates, contextEmbedding, {
-                count: settings.beaconCount, weightFactor: settings.beaconWeightFactor, settings, turnCounter,
-            });
-            if (!freshBeaconIds.length) return true;
+            // Маяки второй версии (beacons.js, ROADMAP 5.109): смысл первым, вес и защищённость — ограниченные бонусы, имя из сцены —
+            // сильный бонус. Прежний pickBeacons() давал защищённым нодам бесконечный счёт — маяками всегда были первые центры бутстрапа.
+            const freshBeaconIds = selectBeacons(candidates, contextEmbedding, {
+                count: settings.beaconCount, queryText: contextText,
+                weightOf: node => computeNodeWeight({ importance: node.importance, degree: node.degree, elapsed: elapsedTurnsFor(node), protectedNode: false, settings }),
+            }).map(beacon => beacon.id);
+            if (!freshBeaconIds.length) return skipRetrieval('no-beacons', `no node stood out among ${withEmbedding} candidate(s)`);
 
-            const stickyScore = stickyRetrieval ? scoreBeaconSet(stickyRetrieval.beaconIds, nodes, contextEmbedding) : null;
-
-            if (stickyRetrieval && !shouldReplaceStickySet({
-                stickyScore, freshScore: scoreBeaconSet(freshBeaconIds, nodes, contextEmbedding), stability: settings.retrievalStability,
+            if (!shouldRefreshSticky({
+                sticky: stickyRetrieval, freshIds: freshBeaconIds, nodesById: nodes, contextEmbedding,
+                stability: settings.retrievalStability, turn: turnCounter, maxAgeTurns: settings.retrievalMaxStickyTurns,
             })) {
                 // Закреплённый блок побеждает — переиспользуем ЕГО ТЕКСТ как
                 // есть, не трогая маршрут/шум заново (см. doc-comment выше).
@@ -2270,7 +2293,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 return true;
             }
 
-            const route = buildBeaconRoute(nodes, freshBeaconIds, { maxHops: settings.routeMaxHops });
+            // Дерево с неявной связью «входит в регион» (beacons.js, ROADMAP 5.109а) — цепочка по порядку рвалась на нодах без рёбер.
+            const route = buildBeaconTree(nodes, freshBeaconIds, {
+                maxHops: settings.routeMaxHops,
+                centerOf: id => { const regionId = nodes[id]?.regionId; return regionId ? regions[regionId]?.centerNodeId ?? null : null; },
+            });
             const routeNodeIds = [...new Set([...route.segments.flatMap(step => [step.from, step.to]), ...route.standalone])];
             const noise = expandNoiseNodes(nodes, routeNodeIds, { targetTotal: settings.retrievalTargetNodes, fanoutPerNode: settings.noiseFanoutPerNode, random });
             const text = renderMemoryPrompt({ ...route, noise }, nodes);
@@ -2294,7 +2321,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             }
             for (const id of freshBeaconIds) { if (nodes[id]) nodes[id].beaconCount = (nodes[id].beaconCount ?? 0) + 1; }
 
-            stickyRetrieval = { beaconIds: freshBeaconIds, text };
+            stickyRetrieval = { beaconIds: freshBeaconIds, text, turn: turnCounter };
             // Публикация ретрива (Этап 2, П3/П6) — тот же формат, что и в sticky-ветке выше, но с ПОСЧИТАННЫМИ
             // маршрутом/шумом (не переизданием старого). `query` обрезан до 200 символов — план явно ограничивает,
             // это подсказка для панели ("что искали"), не полный текст сцены.
@@ -2322,7 +2349,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             pipelineId: PREPARE_PIPELINE,
             stage: { id: 'memory-graph:place', contract: CHECK_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' },
         });
-        host.own.register(INJECT_CONTRACT, params => injectIntoPrompt(params));
+        // Исключение внутри ретрива тоже видно в окне (ROADMAP 5.109б), а не только как «ретрива не было».
+        host.own.register(INJECT_CONTRACT, params => injectIntoPrompt(params).catch(error => skipRetrieval('error', error?.message ?? String(error))));
         await call('pipeline.stages.add', {
             pipelineId: BEFORE_SEND_PIPELINE,
             stage: { id: INJECT_STAGE_ID, contract: INJECT_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' },
@@ -2388,6 +2416,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // История ретривов (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П6) — уже в порядке "новейшие первыми"
         // (`recordRetrieval()` вставляет в начало), панели отдаётся как есть.
         host.own.register('memoryGraph.retrievals', () => retrievalHistory),
+        host.own.register('memoryGraph.retrievalStatus', () => ({ lastRetrievalAt: lastRetrieval?.at ?? null, lastSkip: lastRetrievalSkip })),
         host.own.register('memoryGraph.lastRetrieval', () => lastRetrieval),
         host.own.register('memoryGraph.check', params => manualCheck(extractRecentText(params?.chat, { count: settings.extractionContextMessages, maxChars: settings.extractionContextChars }), params?.chat?.length)),
         // Ручное редактирование графа (UI-редактор) — CRUD нод/рёбер.
