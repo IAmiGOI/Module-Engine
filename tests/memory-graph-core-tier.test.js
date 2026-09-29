@@ -25,3 +25,26 @@ test('a promoted node more important than the center replaces it and the old cen
     const nodes = { c: { id: 'c', importance: 6 }, n: { id: 'n', importance: 9 } };
     assert.deepEqual(planRegionRole(nodes.n, { centerNodeId: 'c', subCenterIds: [] }, nodes), { role: 'center', demoteCenter: true });
 });
+
+import { shouldSeedRegion, regionKeyForLabel } from '../cores/memory-graph/region-birth.js';
+
+const center = embedding => ({ embedding });
+const fiveCenters = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [0, 1, 1]].map(center);
+
+test('a candidate unlike every center seeds a region when it is clearly below the graph typical similarity', () => {
+    assert.equal(shouldSeedRegion([-1, -1, -1], fiveCenters, [0.95, 0.9, 0.97, 0.92, 0.94]), true);
+});
+
+test('a candidate as close to a center as the typical node does not seed a region', () => {
+    assert.equal(shouldSeedRegion([1, 0.1, 0], fiveCenters, [0.95, 0.9, 0.97, 0.92, 0.94]), false);
+});
+
+test('fewer than four centers never seed a region, and neither does a graph with no spread to compare against', () => {
+    assert.equal(shouldSeedRegion([-1, -1, -1], fiveCenters.slice(0, 3), [0.9, 0.95, 0.92, 0.93]), false);
+    assert.equal(shouldSeedRegion([-1, -1, -1], fiveCenters, [0.9, 0.9, 0.9, 0.9]), false);
+});
+
+test('a region key is a slug of the label and takes a numeric suffix on collision', () => {
+    assert.equal(regionKeyForLabel('The Varekh Succession!', []), 'region:the-varekh-succession');
+    assert.equal(regionKeyForLabel('Kira', ['region:kira', 'region:kira-2']), 'region:kira-3');
+});
