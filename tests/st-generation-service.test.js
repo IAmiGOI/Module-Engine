@@ -212,7 +212,7 @@ test('stGeneration.direct sends to ST\'s own backend with its current connection
 
     const result = await request(bus, 'stGeneration.direct', { params: { prompt: 'ping', maxTokens: 4 } });
 
-    assert.deepEqual(result, { ok: true, value: { ok: true, status: 200, text: 'real backend reply' } });
+    assert.deepEqual(result, { ok: true, value: { ok: true, status: 200, text: 'real backend reply', reasoning: '' } });
     assert.equal(hookCalls, 0, 'a background worker call is not a chat generation and must not run generation.payload');
     assert.equal(sent[0].url, '/api/backends/chat-completions/generate');
     assert.equal(JSON.parse(sent[0].body).model, 'some/model');
