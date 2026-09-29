@@ -2175,7 +2175,9 @@ test('a node TWO edges off the beacon route, reachable only through a first-hop 
     // otherwise, same trap as the test above); retrievalTargetNodes:10 and
     // the default fanout leave plenty of room for expansion to actually
     // reach two hops deep, past whatever the route itself already covers.
-    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 2, retrievalTargetNodes: 10 });
+    // Один маяк — Marcus (его имя прямо в запросе, beacons.js): тест про МНОГОШАГОВЫЙ шум, не про выбор маяков; правило «защищённые
+    // всегда маяки», на которое опиралось beaconCount:2 (Marcus+Elena), убрано (ROADMAP 5.109).
+    await call(caller, 'memoryGraph.configure', { subCentersPerRegion: 0, beaconCount: 1, retrievalTargetNodes: 10 });
     await graphCore.load();
     await graphCore.bootstrapFromLorebook();
 
