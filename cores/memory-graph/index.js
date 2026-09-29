@@ -1,6 +1,8 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
-import { checkEdge, normalizeKind, kindOf, isCore } from './kinds.js';
+import { addDirectedEdge } from './edges.js';
+import { pickEventsToFold } from './timeline-compact.js';
+import { checkEdge, normalizeKind, kindOf, isCore, isEvent } from './kinds.js';
 import { featuresFor, normalizeGraphMeta, normalizeMode, migrateNodesToStructured } from './modes.js';
 import { selectBeacons, shouldRefreshSticky, recentQueryText, buildBeaconTree } from './beacons.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
@@ -114,6 +116,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let graphMeta = normalizeGraphMeta(null);
     let features = featuresFor('legacy');
     let turnCounter = 0;
+    let lastTimelineFoldTurn = -Infinity; // ход последней попытки свернуть события (не сохраняется — после перезагрузки первая попытка сразу)
     // `true`, когда `loadState()` увидел ноды, записанные ДО появления `CLOCK_KEY` (старая версия, счётчик был в
     // памяти) — их `createdTurn`/`lastTouchedTurn`/`queuedTurn`/`firstAttemptTurn` в единицах СТАРОГО счётчика,
     // бессмысленны рядом с новыми, основанными на длине чата часами. Разовая миграция происходит при первом же
@@ -267,6 +270,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // Часов ещё нет — либо граф совсем свежий (мигрировать нечего), либо это данные ДО появления часов
             // (старый счётчик-в-памяти) — у него есть ноды, но их временные отметки бессмысленны рядом с новыми.
             turnCounter = 0;
+            lastTimelineFoldTurn = -Infinity;
             lastExtractionClock = 0;
             needsClockMigration = Object.keys(nodes).length > 0;
         }
@@ -529,8 +533,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     function enforceRegionCapacity(key) {
         const region = regions[key];
-        if (!region || region.nodeIds.length <= settings.maxNodesPerRegion) return;
-        const members = region.nodeIds.map(id => nodes[id]).filter(Boolean);
+        if (!region) return;
+        // structured: события в ёмкость региона не считаются и не вытесняются (их бережёт сворачивание, timeline-compact.js).
+        const members = region.nodeIds.map(id => nodes[id]).filter(node => node && !(features.timeline && isEvent(node)));
+        if (members.length <= settings.maxNodesPerRegion) return;
         if (tryQueueReconsolidation(key, members)) return;
         const victimId = pickEvictionCandidate(members, { settings, turnCounter });
         if (!victimId) return; // регион целиком из защищённых узлов — вытеснять нечего, задокументированный крайний случай
@@ -1049,19 +1055,23 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (!from || !to) return { ok: false, error: 'both fromId and toId must be real nodes.' };
             if (fromId === toId) return { ok: false, error: 'a node cannot have an edge to itself.' };
             const edgeType = String(type ?? '').trim() || 'mentions';
-            if ((from.edges ?? []).some(edge => edge.to === toId && edge.type === edgeType)) return { ok: true };
+            if (!features.directedEvents && (from.edges ?? []).some(edge => edge.to === toId && edge.type === edgeType)) return { ok: true };
             if (!edgeAllowed(from, to)) {
                 const verdict = [checkEdge(from, to), checkEdge(to, from)].find(check => !check.ok);
                 return { ok: false, error: verdict.reason };
             }
 
-            from.edges = [...(from.edges ?? []), { to: toId, type: edgeType }];
-            to.edges = [...(to.edges ?? []), { to: fromId, type: edgeType }];
-            from.degree = (from.degree ?? 0) + 1;
-            to.degree = (to.degree ?? 0) + 1;
+            let writtenType = edgeType;
+            if (features.directedEvents) writtenType = addDirectedEdge(from, to, edgeType).type; // structured: с событием — направленно, тип по видам концов
+            else {
+                from.edges = [...(from.edges ?? []), { to: toId, type: edgeType }];
+                to.edges = [...(to.edges ?? []), { to: fromId, type: edgeType }];
+                from.degree = (from.degree ?? 0) + 1;
+                to.degree = (to.degree ?? 0) + 1;
+            }
 
             await persistNodes();
-            publishEvent('memoryGraph.edgeCreated', { fromId, toId, type: edgeType });
+            publishEvent('memoryGraph.edgeCreated', { fromId, toId, type: writtenType });
             return { ok: true };
         });
     }
@@ -2116,6 +2126,36 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * накопителя) — объединение двух конкретных текстов не сжимается в
      * общую классификацию так же естественно, как короткие ярлыки потеряшек.
      */
+    /**
+     * structured: сворачивает самые старые события в одно событие-сводку (не чаще раза в `timelineFoldEveryTurns` ходов).
+     * Слияние делает `foldNodesInGraph`: связи `participates` объединяются, цепочка `next` замыкается через сводку.
+     * Устойчиво к сбою модели: не удалось — события остаются как были, попытка повторится через тот же интервал.
+     */
+    async function sweepTimeline() {
+        if (!features.timeline) return { folded: 0 };
+        return enqueueWrite(async () => {
+            if (turnCounter - lastTimelineFoldTurn < settings.timelineFoldEveryTurns) return { folded: 0 };
+            lastTimelineFoldTurn = turnCounter;
+            const batch = pickEventsToFold(Object.values(nodes), { keepRecent: settings.timelineKeepRecent, foldBatch: settings.timelineFoldBatch });
+            if (!batch.length) return { folded: 0 };
+            const epoch = chatEpoch;
+            const listing = batch.map((node, i) => `${i + 1}. ${node.label}: ${node.content}`).join('\n');
+            const prompt = `These ${batch.length} older events of a story happened in this order:\n\n${listing}\n\nRetell them as ONE shorter event that keeps who did what and how it turned out. Reply with ONLY a JSON object: {"label": short name, "content": the retelling, "importance": 0-10}.`;
+            const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.reconsolidationMaxTokens, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+            if (!stillSameChat(epoch) || !result.ok) return { folded: 0 };
+            const parsed = parseModelJson(result.value);
+            if (!parsed?.label || !parsed?.content) return { folded: 0 };
+            const embeddingResult = await callService('embedding.compute', { text: `${parsed.label}: ${parsed.content}`, kind: 'passage' });
+            if (!stillSameChat(epoch) || !embeddingResult.ok) return { folded: 0 };
+            const verdict = { label: String(parsed.label), content: String(parsed.content), importance: Number(parsed.importance) || 0 };
+            const mergedId = foldNodesInGraph(batch.map(node => node.id), verdict, embeddingResult.value);
+            if (!mergedId) return { folded: 0 };
+            await Promise.all([persistNodes(), persistRegions()]);
+            publishEvent('memoryGraph.nodesMerged', { mergedId, from: batch.map(node => node.id) });
+            return { folded: batch.length, mergedId };
+        });
+    }
+
     async function sweepMergeQueue() {
         return enqueueWrite(async () => {
             // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): каждая пара ждёт свой SideCar-вызов и
@@ -2534,6 +2574,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         await sweepStaging();
         await sweepMergeQueue();
         await sweepReconsolidationQueue();
+        await sweepTimeline();
         return placement;
     }
 
@@ -2575,6 +2616,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // обёртки над уже существующими оркестрационными операциями.
         host.own.register('memoryGraph.checkAndPlace', params => checkAndPlace(String(params?.text ?? ''))),
         host.own.register('memoryGraph.sweepStaging', () => sweepStaging()),
+        host.own.register('memoryGraph.sweepTimeline', () => sweepTimeline()),
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),
         host.own.register('memoryGraph.sweepReconsolidationQueue', () => sweepReconsolidationQueue()),
         host.own.register('memoryGraph.sweepBackbone', () => sweepBackbone()),
