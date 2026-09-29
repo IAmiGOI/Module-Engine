@@ -70,6 +70,7 @@ const WINDOW_KEY = 'window';
 const CANVAS_ID = 'stme-memory-graph-canvas';
 const BG_ID = 'stme-memory-graph-region-bg';
 const ZONES_CANVAS_ID = 'stme-memory-graph-zones-canvas';
+const GLOW_CANVAS_ID = 'stme-memory-graph-glow-canvas';
 
 export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function call(contract, params) {
@@ -513,6 +514,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // пользователя на угловатую подложку). `updateBackgroundTransform()` использует ИМЕННО это значение, не
     // пересчитывает зоны заново.
     let currentPlaneHalf = 1;
+    // То же самое, но для канваса свечения нод (`paintGlowCanvas()`) — СВОЯ половина стороны, НЕ `currentPlaneHalf`:
+    // та обнуляется до `1` (вырожденное значение), когда `zonesBackgroundEnabled()` выключен (см. `paintZonesCanvas()`),
+    // а свечение нод — отдельная, независимая от этого тумблера штука, ей нельзя ломаться заодно.
+    let currentGlowHalf = 1;
     // Последняя посчитанная раскладка (Map(id → {x,y})) — снапбэк после неудачного драга (Этап 7.1: "зона та же —
     // нода плавно возвращается на СВОЮ позицию из раскладки") анимирует ИМЕННО эту позицию, не перечитывает граф.
     let lastPositions = new Map();
@@ -689,8 +694,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     function updateBackgroundTransform() {
         if (!cy) return;
         const canvas = document.getElementById(ZONES_CANVAS_ID);
-        if (!canvas) return;
-        canvas.style.transform = backgroundTransformCss(cy.pan(), cy.zoom(), currentPlaneHalf);
+        if (canvas) canvas.style.transform = backgroundTransformCss(cy.pan(), cy.zoom(), currentPlaneHalf);
+        const glowCanvas = document.getElementById(GLOW_CANVAS_ID);
+        if (glowCanvas) glowCanvas.style.transform = backgroundTransformCss(cy.pan(), cy.zoom(), currentGlowHalf);
     }
 
     // Сетка, на которой честно считается поле (Этап "плоскость графа"), растянута на видимый канвас через
@@ -819,6 +825,84 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             const countText = Number.isFinite(zone.capacity) ? `${zone.count}/${zone.capacity}` : `${zone.count}`;
             ctx.fillText(`${label} · ${countText}`, half + Math.cos(angle) * labelRadius, half + Math.sin(angle) * labelRadius);
         }
+    }
+
+    // --- Свечение нод — НАСТОЯЩИЙ мягкий свет, не заливка сплошным цветом ------
+    //
+    // РЕАЛЬНАЯ ЖАЛОБА владельца (после первой правки ширины/яркости): "СВЕЧЕНИЕ ВСЕ ЕЩЕ УЖАСНОЕ. ПОЧЕМУ ОНО КРУГОМ,
+    // А НЕ СВЕТОМ?" — и он прав: Cytoscape's `underlay-*` (см. doc-comment у `graphStylesheet()`) — заливка ОДНИМ
+    // сплошным цветом на всю площадь `padding`, с РОВНОЙ непрозрачностью до самого края — раздвинуть/приглушить её
+    // можно, но она остаётся кругом с чётко видимой (хоть и не резкой геометрически) границей, а не светом,
+    // угасающим от центра. Честный способ получить НАСТОЯЩИЙ свет — не Cytoscape-стиль вовсе, а свой канвас с
+    // РЕАЛЬНЫМ радиальным градиентом (`createRadialGradient()`) под слоем самих нод: яркий центр, плавно (не
+    // ступенчато — это НЕПРЕРЫВНАЯ функция расстояния, которую сам же браузер и растеризует) гаснущий в ноль к
+    // краю. `underlay-opacity` в `graphStylesheet()` для базового свечения выключена (0) — Cytoscape's underlay
+    // остаётся донором цвета/формы ТОЛЬКО для классов подсветки ретрива (`.beacon`/`.route-node`/`.noise` — они
+    // свою `underlay-opacity` всё равно переопределяют сами, независимо от этой правки), не для повседневного
+    // свечения по режиму карты.
+    //
+    // Рисуется ПОСЛЕ подложки регионов, ПЕРЕД самим канвасом Cytoscape (тот же порядок слоёв в DOM, `tree()`) —
+    // свет виден сквозь прозрачный фон Cytoscape, а сами круги/подписи нод остаются чёткими поверх него.
+    const GLOW_RADIUS_SCALE = 3.2; // во сколько раз шире собственного радиуса ноды её ореол света
+    const GLOW_MIN_RADIUS = 18; // px модели — пол для совсем мелких нод, чтобы свет не схлопывался в точку
+
+    // Разбор ЛЮБОЙ CSS-строки цвета (в `data(color)` встречаются ОБЕ формы — hex от `metricColor()`/`weightColor()`
+    // и `hsl(...)` от категориальной метрики `region`, см. metrics.js) в [r,g,b] — не парсер регулярками под каждый
+    // формат (плодит баги на редких случаях), а честный вопрос самому браузеру: красим 1×1 канвас в этот цвет и
+    // читаем реальные байты назад. Кэш — цветов на графе конечное небольшое число, разбирать один и тот же дважды незачем.
+    const colorToRgbCache = new Map();
+    let colorProbeCtx = null;
+    function cssColorToRgb(color) {
+        if (colorToRgbCache.has(color)) return colorToRgbCache.get(color);
+        if (!colorProbeCtx) colorProbeCtx = document.createElement('canvas').getContext('2d');
+        colorProbeCtx.clearRect(0, 0, 1, 1);
+        colorProbeCtx.fillStyle = color;
+        colorProbeCtx.fillRect(0, 0, 1, 1);
+        const [r, g, b] = colorProbeCtx.getImageData(0, 0, 1, 1).data;
+        const rgb = [r, g, b];
+        colorToRgbCache.set(color, rgb);
+        return rgb;
+    }
+
+    /** `nodeElements` — значения из `next` (`buildNextElements()`, `syncCytoscape()`) с `group === 'nodes'`; каждый уже несёт готовые `position`/`data.color`/`data.glow`/`data.size` — считать заново здесь нечего. */
+    function paintGlowCanvas(nodeElements) {
+        const canvas = document.getElementById(GLOW_CANVAS_ID);
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const glowing = nodeElements.filter(item => item.group === 'nodes' && (item.data.glow ?? 0) > 0);
+        if (!glowing.length) {
+            canvas.width = canvas.width; // тот же штатный приём очистки, что у paintZonesCanvas()
+            currentGlowHalf = 1;
+            return;
+        }
+        // Половина стороны — НЕЗАВИСИМО от `currentPlaneHalf` (см. её doc-comment) — реальный охват самих ореолов,
+        // не контура плоскости регионов (тумблер фона регионов не должен уметь сломать свечение нод).
+        const half = Math.max(1, ...glowing.map(item => {
+            const glowRadius = Math.max(GLOW_MIN_RADIUS, ((item.data.size ?? 0) / 2) * GLOW_RADIUS_SCALE);
+            return Math.hypot(item.position.x, item.position.y) + glowRadius;
+        }));
+        currentGlowHalf = half;
+        const size = Math.max(1, Math.ceil(half * 2));
+        canvas.width = size;
+        canvas.height = size;
+        // Аддитивное смешение ('lighter') — соседние ноды одного кластера СКЛАДЫВАЮТ свою яркость там, где их
+        // ореолы перекрываются, та же логика "плотность = сила", что уже красит поле регионов (plane-field.js), а
+        // не режут друг друга ровными краями двух наложенных кругов.
+        ctx.globalCompositeOperation = 'lighter';
+        for (const { position, data } of glowing) {
+            const px = half + position.x;
+            const py = half + position.y;
+            const glowRadius = Math.max(GLOW_MIN_RADIUS, ((data.size ?? 0) / 2) * GLOW_RADIUS_SCALE);
+            const [r, g, b] = cssColorToRgb(data.color);
+            const gradient = ctx.createRadialGradient(px, py, 0, px, py, glowRadius);
+            gradient.addColorStop(0, `rgba(${r},${g},${b},${data.glow})`);
+            gradient.addColorStop(1, `rgba(${r},${g},${b},0)`);
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(px, py, glowRadius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalCompositeOperation = 'source-over';
     }
 
     /**
@@ -1014,6 +1098,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             if (item.position) ele.position(item.position);
         }
         updateZonesBackground(zones);
+        paintGlowCanvas([...next.values()]);
+        updateBackgroundTransform(); // новая половина стороны свечения (см. paintGlowCanvas()) — применить её трансформ сразу, не ждать следующего pan/zoom
         applyRetrievalOverlay();
         applySearchFilters();
     }
@@ -1532,14 +1618,28 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 // задокументированное поведение библиотеки) — без `cy.resize()` тут канвас остался бы растянут/
                 // обрезан по СТАРЫМ размерам после перетаскивания угла окна.
                 onResize: next => { panelSize.set(next); saveWindowState(); if (cy) cy.resize(); },
+                // МИНИМАЛЬНЫЙ размер окна — НА САМОМ ОКНЕ (FloatingPanel'а гарантирует ЭТИ пропсы ВСЕГДА, даже до
+                // первого resize), а не костылём minWidth/minHeight на теле ниже, как было раньше по ошибке — та
+                // версия ничего не гарантировала и стала прямой причиной реального бага (см. следующий комментарий).
+                minWidth: 560, minHeight: 480,
             },
-            h('div', { class: 'stme-memory-graph-body', style: { display: 'flex', minWidth: '560px', minHeight: '480px' } },
+            // РЕАЛЬНЫЙ БАГ, найден по жалобе владельца ("внизу пустая область, даже когда вкладка закрыта") —
+            // `.stme-floating-panel-body` (floating-window.css) — flex-колонка, ЕЁ единственный ребёнок (это тело)
+            // без `flex:1` не растягивается на её реальную высоту, а садится на СВОЙ собственный minHeight и
+            // остаётся наверху — если окно (`panelSize`, унаследован из прошлой, более высокой версии этого же
+            // окна) выше этого minHeight, вся разница оставалась пустым тёмным полем СНИЗУ ВСЕГДА, независимо от
+            // того, открыта ли какая-то из трёх выезжающих панелей — потому что причина вообще не в них.
+            // `flex:'1', minHeight:'0'` — тот же приём, что уже держит сам `.stme-floating-panel-body` (см. его
+            // CSS) — `minHeight:0` обязателен, иначе flex-item по умолчанию не сжимается ниже своего контента.
+            h('div', { class: 'stme-memory-graph-body', style: { display: 'flex', flex: '1', minHeight: '0' } },
                 // position:relative — сам якорь для оверлеев/панелей ниже (тултип, тост, угловая кнопка, три
-                // EdgeDrawer). ДВА слоя фона внутри: подложка региона (canvas, см. ensureCytoscape()) и сам канвас
-                // Cytoscape поверх с прозрачным фоном, чтобы подложка была видна сквозь него.
+                // EdgeDrawer). ТРИ слоя фона внутри, снизу вверх: подложка региона, свечение нод (оба — canvas, см.
+                // ensureCytoscape()/paintGlowCanvas()), сам канвас Cytoscape поверх с прозрачным фоном, чтобы оба
+                // слоя ниже были видны сквозь него.
                 h('div', { class: 'stme-mg-canvas-wrap', style: { position: 'relative', flex: '1', borderRadius: '8px', overflow: 'hidden' } },
                     h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } },
-                        h('canvas', { id: ZONES_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } })),
+                        h('canvas', { id: ZONES_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } }),
+                        h('canvas', { id: GLOW_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } })),
                     h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
                     hoverTooltip(),
                     moveToastBlock(),
