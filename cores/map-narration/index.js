@@ -1,4 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
+import { deliverToPrompt } from '../../libraries/shared/prompt-contribution.js';
 import { computeInsertIndex } from '../../libraries/shared/chat-injection.js';
 import { findMostRecentLocationMention } from '../../libraries/core/location-mention.js';
 
@@ -77,7 +78,10 @@ export function createMapNarrationCore(host) {
 
         const nodesById = Object.fromEntries(nodes.map(node => [node.id, node]));
         const message = formatRouteMessage(routeResult.value.routes[0], nodesById);
-        chat.splice(computeInsertIndex(chat.length, INJECTION_DEPTH), 0, { is_user: false, is_system: true, name: 'World Map', mes: message });
+        await deliverToPrompt({
+            call, contribution: { id: 'map-route', name: 'World Map route', role: 'system', content: message, defaultPlacement: { mode: 'depth', depth: INJECTION_DEPTH, order: 100 } },
+            legacy: () => chat.splice(computeInsertIndex(chat.length, INJECTION_DEPTH), 0, { is_user: false, is_system: true, name: 'World Map', mes: message }),
+        });
         return true;
     }
 

@@ -9,6 +9,7 @@ import {
     stTool,
 } from '../../libraries/shared/module-kit.js';
 import { computeInsertIndex } from '../../libraries/shared/chat-injection.js';
+import { deliverToPrompt } from '../../libraries/shared/prompt-contribution.js';
 import { numberSetting } from '../../libraries/core/guide-settings.js';
 export { computeInsertIndex }; // back-compat for existing importers/tests, per drop-classify.js's own precedent
 
@@ -317,8 +318,11 @@ export function createNotebookSubmodule(host) {
     async function injectIntoPrompt({ chat } = {}) {
         const list = notes.peek();
         if (!Array.isArray(chat) || !list.length) return true;
-        const insertAt = computeInsertIndex(chat.length, injectionDepth.peek());
-        chat.splice(insertAt, 0, { is_user: false, is_system: true, name: 'Notebook', mes: buildNotebookPrompt(list) });
+        const text = buildNotebookPrompt(list);
+        await deliverToPrompt({
+            call, contribution: { id: 'notebook', name: 'Notebook', role: 'system', content: text, defaultPlacement: { mode: 'depth', depth: injectionDepth.peek(), order: 100 } },
+            legacy: () => chat.splice(computeInsertIndex(chat.length, injectionDepth.peek()), 0, { is_user: false, is_system: true, name: 'Notebook', mes: text }),
+        });
         return true;
     }
 

@@ -22,6 +22,7 @@ import { appendDecision } from './decision-log.js';
 import { buildExtractionPrompt, buildStructuredExtractionPrompt, parseExtractionResponse } from './extraction-prompt.js';
 import { buildTimelineSection } from './timeline-prompt.js';
 import { addAliases } from './subjects.js';
+import { deliverToPrompt } from '../../libraries/shared/prompt-contribution.js';
 // MEMORY_GRAPH_FIX_PLAN.md, Этап 9 (необязательный, ROADMAP 5.107и) — чистые функции, раньше жившие прямо здесь,
 // наверху файла, перенесены в math.js/bootstrap-prompts.js БЕЗ ИЗМЕНЕНИЯ ПОВЕДЕНИЯ (см. их собственный doc-comment
 // за тем, что именно куда легло и почему); импортированы здесь как обычно (нужны самому Ядру ниже) и заново
@@ -194,6 +195,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     // достаёт лишь Шину ядер. Раздельная функция — чтобы не перепутать снова.
     async function callService(contract, params) {
         return request(host.services, contract, { params });
+    }
+
+    /**
+     * Вставка памяти и «ядра сюжета» в промпт: через Prompt Manager (вклады, место выбирает пользователь), а если PM не
+     * берёт сборку на себя — прежней вставкой в `chat`. Порядок прежней вставки сохранён: сначала сюжет, потом память (она выше).
+     */
+    async function deliverMemory(chat, plotText, memoryText) {
+        const legacy = (name, mes) => () => chat.unshift({ is_user: false, is_system: true, name, mes });
+        await deliverToPrompt({ call, contribution: { id: 'memory-graph-plot', name: 'Plot core', role: 'assistant', content: plotText ?? '', defaultPlacement: 'before-history' }, legacy: plotText ? legacy('Plot core', plotText) : undefined });
+        await deliverToPrompt({ call, contribution: { id: 'memory-graph', name: 'Memory graph', role: 'assistant', content: memoryText ?? '', defaultPlacement: 'before-history' }, legacy: memoryText ? legacy('Memory', memoryText) : undefined });
     }
 
     let writeTail = Promise.resolve();
@@ -2481,9 +2492,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     recordRetrieval(republished);
                     publishEvent('memoryGraph.retrieved', republished);
                 }
-                const plotSticky = plotCoreMessage();
-                if (plotSticky) chat.unshift({ is_user: false, is_system: true, name: 'Plot core', mes: plotSticky });
-                chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: stickyRetrieval.text });
+                await deliverMemory(chat, plotCoreMessage(), stickyRetrieval.text);
                 return true;
             }
 
@@ -2536,9 +2545,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             });
             await Promise.all([persistNodes(), persistStickyRetrieval()]);
             publishEvent('memoryGraph.retrieved', lastRetrieval);
-            const plotFresh = plotCoreMessage();
-            if (plotFresh) chat.unshift({ is_user: false, is_system: true, name: 'Plot core', mes: plotFresh });
-            chat.unshift({ is_user: false, is_system: true, name: 'Memory', mes: text });
+            await deliverMemory(chat, plotCoreMessage(), text);
             return true;
         });
     }

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createEngine } from '../libraries/shared/engine.js';
+import { request } from '../libraries/shared/request.js';
 import { registerStEventsService } from '../services/st-events.js';
 import { registerStGenerationService } from '../services/st-generation.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
@@ -66,7 +67,12 @@ async function build({ mainApi = 'openai', groupId = null } = {}) {
         await target.fetch('/api/backends/chat-completions/generate', { method: 'POST', body: JSON.stringify(payload) });
         return backendCalls.at(-1);
     };
-    return { pm, send, warnings, chat, context, backendCalls };
+    /** Поддельный модуль-вкладчик: объявляет вклад на этапе beforeSend, как настоящий. */
+    const contribute = async contribution => {
+        lore.own.register('test.contribute', () => { pm.contributions.set(contribution); return true; });
+        await request(lore.own, 'pipeline.stages.add', { params: { pipelineId: 'generation.beforeSend', stage: { id: 'test:contribute', contract: 'test.contribute', onExhausted: 'flag' } } });
+    };
+    return { pm, send, warnings, chat, context, backendCalls, contribute };
 }
 
 test('the first run turns every ST preset into an internal copy and activates the one selected in ST', async () => {
@@ -110,9 +116,9 @@ test('group chats and Text Completion are passed through and the user is warned 
 });
 
 test('a module contribution appears in the request at its default place and the node is saved into the preset', async () => {
-    const { pm, send } = await build();
+    const { pm, send, contribute } = await build();
     await pm.autoPrepare();
-    pm.contributions.set({ id: 'graph', name: 'Memory graph', role: 'assistant', content: 'MEMORY GRAPH TEXT', defaultPlacement: 'before-history' });
+    await contribute({ id: 'graph', name: 'Memory graph', role: 'assistant', content: 'MEMORY GRAPH TEXT', defaultPlacement: 'before-history' });
     const body = await send();
     const contents = body.messages.map(m => m.content);
     assert.equal(contents.indexOf('MEMORY GRAPH TEXT'), contents.indexOf('<char instructions>') + 2, 'in the history start: after the depth-injected char instructions, before the greeting');
