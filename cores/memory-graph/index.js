@@ -1,6 +1,7 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
 import { buildThematicSkeletonPrompt, buildThematicSkeletonPartPrompt, buildThematicSkeletonReducePrompt, normalizeThematicRegions } from './bootstrap-thematic.js';
+import { shouldSeedRegion, regionKeyForLabel, bestCenterSimilarity } from './region-birth.js';
 import { coreCap, planRegionRole } from './core-tier.js';
 import { addDirectedEdge } from './edges.js';
 import { pickEventsToFold } from './timeline-compact.js';
@@ -948,6 +949,23 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * Нода с регионом получает роль: под-центр, либо меняется ролью с центром, если важнее (старый центр остаётся под-центром при
      * наличии места). Событие без региона — просто Core. Возвращает `{ ok, role?, reason? }`.
      */
+    /** Рождение региона вокруг Core: `regionKey` нового региона или `null`. Потолок `maxRegions` и порог «не похож ни на один центр» — region-birth.js. */
+    function seedRegionFor(node) {
+        if (!features.regionBirth || !node.embedding || Object.keys(regions).length >= settings.maxRegions) return null;
+        const own = node.regionId ? regions[node.regionId] : null;
+        if (own && (own.centerNodeId === node.id || own.subCenterIds.includes(node.id))) return null; // уже центр/под-центр — регион у неё есть
+        const anchors = collectAnchors().filter(anchor => anchor.regionId !== node.regionId || regions[anchor.regionId]?.centerNodeId !== node.id);
+        const reference = Object.values(nodes).filter(other => other.id !== node.id && !isCore(other) && other.embedding).map(other => bestCenterSimilarity(other.embedding, anchors)).filter(value => value !== null);
+        if (!shouldSeedRegion(node.embedding, anchors, reference)) return null;
+        // Из прежнего региона нода уходит (она была там обычной): вычёркиваем её оттуда, как это делает удаление ноды.
+        if (own) regions[node.regionId] = { ...own, nodeIds: own.nodeIds.filter(id => id !== node.id) };
+        const key = regionKeyForLabel(node.label, Object.keys(regions));
+        regions[key] = { name: node.label, centerNodeId: node.id, subCenterIds: [], nodeIds: [node.id], wordProfile: {} };
+        node.regionId = key;
+        publishEvent('memoryGraph.regionCreated', { regionId: key, centerNodeId: node.id });
+        return key;
+    }
+
     function promoteToCore(nodeId, { manual = false } = {}) {
         const node = nodes[nodeId];
         if (!node) return { ok: false, reason: 'no such node' };
@@ -957,8 +975,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const cap = coreCap(Object.keys(nodes).length, { coreMaxShare: settings.coreMaxShare, coreMinCap: settings.coreMinCap, bootstrapCoreCount: graphMeta.bootstrapCoreCount ?? 0 });
             if (!manual && coreCount >= cap) return { ok: false, reason: 'core cap reached' };
         }
+        // Далёкий от всех центров Core засевает НОВЫЙ регион и становится его центром (этап 5); иначе — роль в своём регионе.
+        // Считаем ДО того, как нода станет Core: её собственные сходства не должны попасть в образец «типичного» графа.
+        const seeded = seedRegionFor(node);
         node.core = true;
         node.protectedNode = true;
+        if (seeded) return { ok: true, role: 'center', seeded: seeded };
         const key = node.regionId;
         const region = key ? regions[key] : null;
         const plan = planRegionRole(node, region, nodes, { subCentersPerRegion: settings.subCentersPerRegion });

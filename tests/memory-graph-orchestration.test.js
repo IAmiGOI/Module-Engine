@@ -3260,3 +3260,70 @@ test('a structured bootstrap with no base region names builds thematic regions, 
     assert.equal(marcus.core, true);
     assert.deepEqual(marcus.aliases, ['the tavern keeper', 'Marc']);
 });
+
+/** Граф из 5 тематических регионов с готовыми эмбедингами: центры — Core, у каждого по два близких обычных узла; плюс два кандидата — «далёкий» и «близкий». */
+async function birthGraph(extraSettings = {}) {
+    const built = buildEngine();
+    const basis = (k, common = 0.5, noise = 0) => Array.from({ length: 8 }, (_, i) => (i === k ? 1 : common) + (i === (k + 1) % 5 ? noise : 0));
+    const nodes = {};
+    const regions = {};
+    const make = (id, label, embedding, extra = {}) => ({
+        id, label, content: `${label} content.`, embedding, importance: 5, degree: 0, createdAt: 0, createdTurn: 0, lastTouchedTurn: 0,
+        protectedNode: false, regionId: null, edges: [], gameTime: null, kind: 'fact', core: false, ...extra,
+    });
+    for (let k = 0; k < 5; k += 1) {
+        const key = `Theme ${k}`;
+        nodes[`c${k}`] = make(`c${k}`, `Center ${k}`, basis(k), { core: true, protectedNode: true, regionId: key });
+        const ids = [`c${k}`];
+        for (let j = 0; j < 2; j += 1) {
+            const id = `n${k}_${j}`;
+            nodes[id] = make(id, `Node ${k}-${j}`, basis(k, 0.5, 0.05 * (j + 1) * (k + 1)), { regionId: key });
+            ids.push(id);
+        }
+        regions[key] = { name: key, centerNodeId: `c${k}`, subCenterIds: [], nodeIds: ids, wordProfile: {} };
+    }
+    nodes.far = make('far', 'Far Away', [0, 0, 0, 0, 0, 0, 0, 1], { regionId: 'Theme 0' });
+    nodes.near = make('near', 'Near Home', basis(2, 0.5, 0.03), { regionId: 'Theme 2' });
+    regions['Theme 0'].nodeIds.push('far');
+    regions['Theme 2'].nodeIds.push('near');
+    const set = (key, value) => call(built.caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key, value });
+    await set('nodes', nodes);
+    await set('regions', regions);
+    await set('graphMeta', { mode: 'structured', version: 1, createdAt: 0 });
+    await built.graphCore.load();
+    await built.graphCore.waitForBootstrap();
+    if (Object.keys(extraSettings).length) await call(built.caller, 'memoryGraph.configure', extraSettings);
+    return built;
+}
+
+test('a core far from every center seeds a new region and becomes its center', async () => {
+    const { caller } = await birthGraph();
+
+    const result = (await call(caller, 'memoryGraph.nodes.pin', { id: 'far' })).value;
+
+    assert.equal(result.ok, true);
+    const region = (await call(caller, 'memoryGraph.regions')).value.find(r => r.centerNodeId === 'far');
+    assert.ok(region, 'a region centered on the pinned node exists');
+    assert.match(region.id, /^region:far-away/);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === 'far').regionId, region.id);
+    assert.equal((await call(caller, 'memoryGraph.regions')).value.find(r => r.id === 'Theme 0').nodeIds.includes('far'), false);
+});
+
+test('a core close to an existing center joins that region instead of seeding a new one', async () => {
+    const { caller } = await birthGraph();
+    const before = (await call(caller, 'memoryGraph.regions')).value.length;
+
+    await call(caller, 'memoryGraph.nodes.pin', { id: 'near' });
+
+    assert.equal((await call(caller, 'memoryGraph.regions')).value.length, before);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === 'near').regionId, 'Theme 2');
+});
+
+test('no new region is seeded once the region cap is reached', async () => {
+    const { caller } = await birthGraph({ maxRegions: 5 });
+
+    await call(caller, 'memoryGraph.nodes.pin', { id: 'far' });
+
+    assert.equal((await call(caller, 'memoryGraph.regions')).value.length, 5);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === 'far').regionId, 'Theme 0');
+});
