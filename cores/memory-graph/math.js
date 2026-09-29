@@ -788,8 +788,9 @@ export function pickConfidentRegion(regionProbs, regionCoords, { marginRatio = 1
  * единственный оставшийся случай `staged`: без вектора нечего сравнивать вовсе, здесь бессилен даже "лучший из
  * плохих".
  */
-export function decideFirstPlacement({ beaconRegion = null, nameMatchRegion = null, embedding = null, anchors = [], settings = DEFAULT_SETTINGS }) {
+export function decideFirstPlacement({ beaconRegion = null, subjectRegion = null, nameMatchRegion = null, embedding = null, anchors = [], settings = DEFAULT_SETTINGS }) {
     if (beaconRegion) return { status: 'placed', region: beaconRegion, reason: 'beacon' };
+    if (subjectRegion) return { status: 'placed', region: subjectRegion, reason: 'subject' }; // structured: регион главного субъекта из ответа модели
     if (nameMatchRegion) return { status: 'placed', region: nameMatchRegion, reason: 'name-match' };
     if (!embedding) return { status: 'staged', reason: 'no-embedding' };
     if (!anchors.length) return { status: 'placed', region: { sector: 0, ring: 0 }, reason: 'bootstrap-seed' };

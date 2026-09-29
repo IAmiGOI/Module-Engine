@@ -25,7 +25,7 @@ export function appendDecision(log, entry, limit = 100) {
  * сработало ничего) — topic-пара, как основной/первый сигнал в `entry.gate`.
  */
 export function summarizeDecision(entry) {
-    const { clock, gate, extractor, error, node, placement, capacity } = entry;
+    const { clock, gate, extractor, error, node, placement, capacity, structured } = entry;
 
     const topicFired = gate.topicDistance > gate.topicThreshold;
     const noveltyFired = gate.noveltyDistance > gate.noveltyThreshold;
@@ -42,7 +42,7 @@ export function summarizeDecision(entry) {
     else if (extractor === 'error') line += ` · model: error (${error})`;
     else if (extractor === 'node') line += ` · model: node "${node.label}"`;
 
-    if (placement) {
+    if (placement?.region || placement?.status === 'staged') {
         if (placement.status === 'staged') {
             line += ' · staged';
         } else {
@@ -58,6 +58,15 @@ export function summarizeDecision(entry) {
         if (capacity.evicted.length) bits.push(`evicted ${capacity.evicted.length}`);
         if (capacity.queuedMerge) bits.push('queued merge');
         if (capacity.queuedReconsolidation) bits.push('queued reconsolidation');
+        line += ` · ${bits.join(', ')}`;
+    }
+
+    // structured: вид ноды, разрешённые субъекты и число созданных рёбер (этап 3 плана типов)
+    if (structured) {
+        const bits = [structured.kind];
+        if (structured.subjects?.length) bits.push(`about ${structured.subjects.join(', ')}`);
+        if (structured.edges) bits.push(`${structured.edges} link${structured.edges === 1 ? '' : 's'}`);
+        if (structured.skipped) bits.push(`skipped: ${structured.skipped}`);
         line += ` · ${bits.join(', ')}`;
     }
 

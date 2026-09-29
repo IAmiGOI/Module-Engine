@@ -3140,3 +3140,51 @@ test('a core event is never folded', async () => {
 
     assert.ok((await call(caller, 'memoryGraph.nodes')).value.some(n => n.label === 'Coup'));
 });
+
+async function structuredWithKira(reply) {
+    const built = buildEngine({ fetchReply: reply });
+    await call(built.caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+    await call(built.caller, 'memoryGraph.reset');
+    await call(built.caller, 'memoryGraph.nodes.create', { label: 'Kira', content: 'a young noblewoman traveling in disguise.', sector: 3, ring: 0, kind: 'entity' });
+    return built;
+}
+
+test('a structured extraction creates an event without a region, links its subject to it, and the established fact points at the event', async () => {
+    const reply = JSON.stringify({ facts: [
+        { op: 'create', kind: 'event', label: 'Kira reveals her heritage', content: 'Kira admitted she is the heir.', importance: 8, subjects: ['Kira'] },
+        { op: 'create', kind: 'fact', label: 'Kira is the heir', content: 'Kira is the last heir to the Varekh throne.', importance: 9, subjects: ['Kira'] },
+    ] });
+    const { caller } = await structuredWithKira(reply);
+
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'Kira admits, quietly, that she is the last heir.' });
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const kira = nodes.find(n => n.label === 'Kira');
+    const event = nodes.find(n => n.kind === 'event');
+    const fact = nodes.find(n => n.label === 'Kira is the heir');
+    assert.equal(event.regionId ?? null, null);
+    assert.ok(kira.edges.some(e => e.to === event.id && e.type === 'participates' && e.dir === 'out'));
+    assert.ok(fact.edges.some(e => e.to === event.id && e.type === 'participates'));
+    assert.equal(fact.regionId, kira.regionId, 'the fact lands in the region of its main subject');
+});
+
+test('an event with no resolvable subject is not created', async () => {
+    const reply = JSON.stringify({ facts: [{ op: 'create', kind: 'event', label: 'Something happened', content: 'A stranger left the room.', importance: 5, subjects: ['Nobody Known'] }] });
+    const { caller } = await structuredWithKira(reply);
+
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'A stranger left the room.' });
+
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.some(n => n.kind === 'event'), false);
+});
+
+test('an unknown subject becomes an entity only from its second appearance', async () => {
+    const reply = JSON.stringify({ facts: [{ op: 'create', kind: 'fact', label: 'Marcus is a smith', content: 'Marcus works as a smith in the market town.', importance: 5, subjects: ['Marcus'] }] });
+    const { caller } = await structuredWithKira(reply);
+    await call(caller, 'memoryGraph.configure', { forcedExtractionEvery: 1 }); // гейт не должен мешать: считаем только встречи имени
+
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'Marcus hammers iron all morning.' });
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.some(n => n.label === 'Marcus' && n.kind === 'entity'), false);
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'Marcus hammers iron all afternoon, and late into the evening.' });
+
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.some(n => n.label === 'Marcus' && n.kind === 'entity'), true);
+});

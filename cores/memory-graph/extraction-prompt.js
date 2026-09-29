@@ -38,7 +38,7 @@ Write every "content" so it reads correctly on its OWN, weeks later, without the
  * какая версия SideCar ответила. Невалидные записи (неизвестный `op`, отсутствующие обязательные поля, `id`
  * обновления не из `nearestNodeIds`) молча пропускаются — не роняют весь ответ целиком. Максимум 3 факта (П3 плана).
  */
-export function parseExtractionResponse(parsed, nearestNodeIds = []) {
+export function parseExtractionResponse(parsed, nearestNodeIds = [], { structured = false } = {}) {
     if (!parsed || typeof parsed !== 'object') return { facts: [] };
     if (parsed.skip) return { facts: [] };
     if (!Array.isArray(parsed.facts)) {
@@ -51,11 +51,11 @@ export function parseExtractionResponse(parsed, nearestNodeIds = []) {
     const knownIds = new Set(nearestNodeIds);
     const facts = [];
     for (const raw of parsed.facts) {
-        if (facts.length >= 3) break; // П3 плана — максимум 3 факта за один check()
+        if (facts.length >= (structured ? 4 : 3)) break; // П3 плана — максимум 3 факта за один check() (structured: 4 — событие и установленный им факт идут парой)
         if (!raw || typeof raw !== 'object') continue;
         if (raw.op === 'create') {
             if (!raw.label || !raw.content) continue;
-            facts.push({ op: 'create', label: String(raw.label), content: String(raw.content), importance: Number(raw.importance) || 0 });
+            facts.push({ op: 'create', label: String(raw.label), content: String(raw.content), importance: Number(raw.importance) || 0, ...(structured ? parseStructuredFields(raw) : {}) });
         } else if (raw.op === 'update') {
             if (!raw.id || !knownIds.has(raw.id) || !raw.content) continue; // неизвестный/чужой id — игнорируется (П4 плана)
             facts.push({ op: 'update', id: String(raw.id), content: String(raw.content), importance: Number(raw.importance) || 0 });
@@ -63,4 +63,55 @@ export function parseExtractionResponse(parsed, nearestNodeIds = []) {
         // любой другой `op` — молча пропускается, не считается ни валидным, ни ошибкой всего ответа
     }
     return { facts };
+}
+
+const cleanNames = value => (Array.isArray(value) ? value : []).map(item => String(item ?? '').trim()).filter(Boolean).slice(0, 8);
+
+/**
+ * Новые поля structured-ответа (все необязательные; битое поле даёт пустое значение, а не падение). `core` модель лишь
+ * ПРЕДЛАГАЕТ — решает граф (этап 6). Неизвестный `kind` — `fact`.
+ */
+export function parseStructuredFields(raw) {
+    const kinds = ['entity', 'object', 'fact', 'event'];
+    const related = (Array.isArray(raw.related) ? raw.related : [])
+        .map(item => ({ name: String(item?.name ?? '').trim(), relation: String(item?.relation ?? '').trim() }))
+        .filter(item => item.name).slice(0, 6);
+    const aliases = {};
+    if (raw.aliases && typeof raw.aliases === 'object' && !Array.isArray(raw.aliases)) {
+        for (const [name, list] of Object.entries(raw.aliases)) {
+            const names = cleanNames(list);
+            if (name.trim() && names.length) aliases[name.trim()] = names;
+        }
+    }
+    return {
+        kind: kinds.includes(raw.kind) ? raw.kind : 'fact',
+        subtype: ['item', 'place', 'group'].includes(raw.subtype) ? raw.subtype : null,
+        coreProposed: raw.core === true,
+        subjects: cleanNames(raw.subjects),
+        related,
+        time: typeof raw.time === 'string' && raw.time.trim() ? raw.time.trim() : null,
+        aliases,
+    };
+}
+
+/**
+ * Промпт structured-режима: вид ноды, субъекты, связи, время, псевдонимы. Списки известных имён и главных героев не дают модели
+ * плодить «Кира» / «принцесса Кира» / «Kira» отдельными нодами. Legacy-промпт не тронут (`buildExtractionPrompt`).
+ */
+export function buildStructuredExtractionPrompt({ contextText, nearestNodes = [], knownNames = [], mainCharacters = [], isFirstNode = false } = {}) {
+    const nearest = nearestNodes.length ? `\n\nExisting nearby memories you may UPDATE instead of duplicating (use their id EXACTLY as given):\n${nearestNodes.map(node => `${node.id}: ${node.label} — ${node.content}`).join('\n')}` : '';
+    const names = knownNames.length ? `\n\nKnown characters and objects in memory (use these names EXACTLY; invent a new name only if none fits): ${knownNames.join('; ')}` : '';
+    const heroes = mainCharacters.length ? `\nMain characters of this chat: ${mainCharacters.join('; ')}` : '';
+    const first = isFirstNode ? ' This is the very first memory of a fresh graph.' : '';
+    return `Recent story context:\n\n${contextText}\n\nExtract what is worth remembering LONG-TERM (dozens of turns from now); skip short-term plot mechanics and idle talk.${first}${names}${heroes}${nearest}
+
+Give every memory a "kind":
+- "fact": something true that stays true (a trait, a rule of the world, an established relationship).
+- "event": something that HAPPENED at a specific moment ("admitted", "left", "was killed") — a point on the timeline.
+- "entity": a living being taking part in the story; "object": a thing, place or group (set "subtype": "item" | "place" | "group").
+Also give "subjects" (names of who or what it is about; the main one first, names from the list above), optional "related" [{"name", "relation"}] for other participants, "time" (only if the text states when), and "aliases" {"Name": ["other way it is called"]} if the text shows another name for someone.
+An event and the facts it established are SEPARATE memories: "Kira admits she is the heir" gives the event "Kira reveals her heritage" AND the fact "Kira is the heir to the Varekh throne".
+
+Write every "content" so it reads on its OWN weeks later: full names instead of "he"/"she"/"it", concrete details. Importance 0-10 (0-3 minor, 4-7 meaningful, 8-10 defines the character or world).
+Reply with ONLY JSON: {"facts": [ {"op": "create", "kind": ..., "subtype": ..., "label": short name, "content": ..., "importance": ..., "subjects": [...], "related": [...], "time": ..., "aliases": {...}} or {"op": "update", "id": exact id from the list, "content": ..., "importance": ...} ]} with UP TO 4 entries, or {"facts": []} if nothing qualifies.`;
 }

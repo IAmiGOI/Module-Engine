@@ -12,7 +12,8 @@ import { advanceClock, migrateTimestamps } from './clock.js';
 import { pickRegionBySimilarity } from './placement.js';
 import { updateEwmaStats, isStrongChangeEwma, ewmaStddev } from './gate.js';
 import { appendDecision } from './decision-log.js';
-import { buildExtractionPrompt, parseExtractionResponse } from './extraction-prompt.js';
+import { buildExtractionPrompt, buildStructuredExtractionPrompt, parseExtractionResponse } from './extraction-prompt.js';
+import { resolveSubject, addAliases } from './subjects.js';
 // MEMORY_GRAPH_FIX_PLAN.md, Этап 9 (необязательный, ROADMAP 5.107и) — чистые функции, раньше жившие прямо здесь,
 // наверху файла, перенесены в math.js/bootstrap-prompts.js БЕЗ ИЗМЕНЕНИЯ ПОВЕДЕНИЯ (см. их собственный doc-comment
 // за тем, что именно куда легло и почему); импортированы здесь как обычно (нужны самому Ядру ниже) и заново
@@ -116,6 +117,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let graphMeta = normalizeGraphMeta(null);
     let features = featuresFor('legacy');
     let turnCounter = 0;
+    const SUBJECT_CREATE_AFTER = 2; // заглушка сущности — со второй встречи неразрешённого имени (этап 3 плана типов)
+    const pendingSubjects = new Map(); // имя (нижний регистр) → сколько раз встречалось; в памяти, после перезагрузки счёт заново
     let lastTimelineFoldTurn = -Infinity; // ход последней попытки свернуть события (не сохраняется — после перезагрузки первая попытка сразу)
     // `true`, когда `loadState()` увидел ноды, записанные ДО появления `CLOCK_KEY` (старая версия, счётчик был в
     // памяти) — их `createdTurn`/`lastTouchedTurn`/`queuedTurn`/`firstAttemptTurn` в единицах СТАРОГО счётчика,
@@ -271,6 +274,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // (старый счётчик-в-памяти) — у него есть ноды, но их временные отметки бессмысленны рядом с новыми.
             turnCounter = 0;
             lastTimelineFoldTurn = -Infinity;
+            pendingSubjects.clear();
             lastExtractionClock = 0;
             needsClockMigration = Object.keys(nodes).length > 0;
         }
@@ -1201,11 +1205,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * `{"facts":[]}` — тот же смысл, другая обёртка, см. extraction-prompt.js).
      */
     async function askSideCarForNode(contextText, { isFirstNode = false, nearestNodes = [] } = {}) {
-        const prompt = buildExtractionPrompt({ contextText, nearestNodes, isFirstNode });
+        let prompt;
+        if (features.structuredExtraction) {
+            const characterResult = await callService('stCharacter.current');
+            const mainCharacters = characterResult.ok && characterResult.value?.name ? [String(characterResult.value.name)] : [];
+            prompt = buildStructuredExtractionPrompt({ contextText, nearestNodes, knownNames: knownSubjectNames(), mainCharacters, isFirstNode });
+        } else prompt = buildExtractionPrompt({ contextText, nearestNodes, isFirstNode });
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
-        const { facts } = parseExtractionResponse(parsed, nearestNodes.map(node => node.id));
+        const { facts } = parseExtractionResponse(parsed, nearestNodes.map(node => node.id), { structured: features.structuredExtraction });
         // `lastSideCarOutcome` — Этап 6 (наблюдаемость), тот же приём "последнее действие", что у `capacityTracker`
         // (П2 плана): различает ЧЕСТНЫЙ пустой ответ (валидный JSON-объект, просто `facts:[]`/старый `skip:true`) от
         // малополезного/непарсимого — оба всё равно дают `facts:[]` для самого `checkAndPlace()` (статус
@@ -1274,7 +1283,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * passage) — это query-vs-passage, ожидаемое протоколом E5 сопоставление, тогда как самой ноде для БУДУЩИХ
      * сравнений (слияние/маяки/бэкбон) нужен passage-эмбединг её же содержимого, не сцены-триггера.
      */
-    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter, kind, subtype }, { placementEmbedding = embedding, source = 'chat' } = {}) {
+    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter, kind, subtype }, { placementEmbedding = embedding, source = 'chat', subjectRegion = null } = {}) {
         const node = {
             id: makeId('node', now, random),
             label, content, embedding, importance,
@@ -1292,7 +1301,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             source,
         };
         if (features.kinds) Object.assign(node, normalizeKind(kind, subtype), { core: false }); // structured: вид от извлечения (по умолчанию факт)
-        const decision = decideFirstPlacement({ nameMatchRegion: findNameMatchRegion(content), embedding: placementEmbedding, anchors: collectAnchors(), settings });
+        if (features.timeline && node.kind === 'event') {
+            // structured: событие живёт без региона (не в ёмкости региона, не в накопителе) и показывается у якорной ноды — этап 3 плана типов.
+            nodes[node.id] = node;
+            return { status: 'placed', reason: 'event', region: null, nodeId: node.id };
+        }
+        const decision = decideFirstPlacement({ subjectRegion, nameMatchRegion: findNameMatchRegion(content), embedding: placementEmbedding, anchors: collectAnchors(), settings });
 
         nodes[node.id] = node;
         if (decision.status === 'placed') {
@@ -1304,6 +1318,70 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // `decision`, но раньше терялись здесь же, не покидая эту функцию. Оба сегодняшних вызывающих
         // (checkAndPlace(), createNodeFromCharacterCard()) читали только `.status`/`.nodeId` — лишние поля им не мешают.
         return { ...decision, nodeId: node.id };
+    }
+
+    /** Метки сущностей/объектов для промпта structured-извлечения: до 60, недавно тронутые и важные — первыми. */
+    function knownSubjectNames() {
+        return Object.values(nodes)
+            .filter(node => node.label && ['entity', 'object'].includes(kindOf(node)))
+            .sort((a, b) => (b.lastTouchedTurn ?? 0) - (a.lastTouchedTurn ?? 0) || (b.importance ?? 0) - (a.importance ?? 0))
+            .slice(0, 60).map(node => node.label);
+    }
+
+    /** Дескриптор региона ноды для `decideFirstPlacement` (приоритет «регион главного субъекта»); `null`, если у ноды региона нет. */
+    function regionDescriptorOf(node) {
+        const region = node?.regionId ? regions[node.regionId] : null;
+        return region ? { regionId: node.regionId, sector: region.sector, ring: region.ring } : null;
+    }
+
+    /**
+     * structured: подготовка факта до размещения — псевдонимы из ответа; субъекты → ноды; неразрешённый субъект получает
+     * ноду-заглушку сущности только со ВТОРОЙ встречи (`pendingSubjects`), чтобы не плодить ноды под случайных статистов.
+     * Возвращает `{ subjectIds, relatedIds }` (id существующих нод) или `null`, если чат сменился по ходу.
+     */
+    async function resolveFactSubjects(fact, { epoch, contextEmbedding }) {
+        for (const [name, list] of Object.entries(fact.aliases ?? {})) {
+            const ownerId = resolveSubject(name, nodes);
+            if (ownerId) addAliases(nodes[ownerId], list);
+        }
+        const subjectIds = [];
+        for (const name of fact.subjects ?? []) {
+            let id = resolveSubject(name, nodes);
+            const isSelf = kindOf(fact) !== 'fact' && String(name).trim().toLowerCase() === fact.label.trim().toLowerCase();
+            if (!id && !isSelf) {
+                const key = name.trim().toLowerCase();
+                const seen = (pendingSubjects.get(key) ?? 0) + 1;
+                pendingSubjects.set(key, seen);
+                if (seen >= SUBJECT_CREATE_AFTER) {
+                    const content = `${name} appears in the story.`;
+                    const embeddingResult = await callService('embedding.compute', { text: `${name}: ${content}`, kind: 'passage' });
+                    if (!stillSameChat(epoch)) return null;
+                    if (embeddingResult.ok) {
+                        id = placeNewNode({ label: name, content, embedding: embeddingResult.value, importance: 3, kind: 'entity' }, { placementEmbedding: contextEmbedding }).nodeId;
+                        pendingSubjects.delete(key);
+                    }
+                }
+            }
+            if (id && !subjectIds.includes(id)) subjectIds.push(id);
+        }
+        const relatedIds = (fact.related ?? []).map(item => ({ id: resolveSubject(item.name, nodes), relation: item.relation })).filter(item => item.id);
+        return { subjectIds, relatedIds };
+    }
+
+    /** structured: рёбра новой ноды к субъектам и связанным (проверка правила рёбер внутри); возвращает число созданных. Потолок связей здесь не применяется — у героя их закономерно много. */
+    function linkStructuredNode(node, { subjectIds, relatedIds }, sameBatchEvent) {
+        const targets = [...subjectIds.map(id => ({ id, relation: 'related' })), ...relatedIds.map(item => ({ id: item.id, relation: item.relation || 'related' }))];
+        if (sameBatchEvent && !isEvent(node)) targets.push({ id: sameBatchEvent.id, relation: 'participates' }); // факт указывает на установившее его событие
+        let created = 0;
+        for (const { id, relation } of targets) {
+            const other = nodes[id];
+            if (!other || other.id === node.id) continue;
+            // Событие — конец, в который входят: субъект → событие; факт → событие; иначе от новой ноды к цели.
+            const [from, to] = isEvent(node) ? [other, node] : [node, other];
+            if (!edgeAllowed(from, to)) continue;
+            if (addDirectedEdge(from, to, relation).created) created += 1;
+        }
+        return created;
     }
 
     /**
@@ -1417,6 +1495,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // `placeNewNode()`'s `placementEmbedding`): сравнение с центрами регионов ожидает query-vs-passage,
             // а собственный passage-эмбединг узла остаётся источником истины для будущих сравнений (слияние/маяки).
             const results = [];
+            let sameBatchEvent = null; // событие этого же ответа: созданные после него факты указывают на него
             for (const fact of facts) {
                 if (fact.op === 'update') {
                     // `applyNodeUpdate()` — та же логика, что у ручного редактирования (`updateNodeManually()`), без
@@ -1439,12 +1518,30 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (!nodeEmbeddingResult.ok) return { status: 'skipped', error: nodeEmbeddingResult.error.message }; // тот же аварийный выход, что раньше был у единственного факта — остальные факты этого батча теряются, не половинчатый успех
 
                 const gameTime = await readGameTime();
+                let structuredInfo = null;
+                let subjectLinks = null;
+                if (features.structuredExtraction) {
+                    subjectLinks = await resolveFactSubjects(fact, { epoch, contextEmbedding });
+                    if (!subjectLinks) return { status: 'chat-changed' };
+                    if (fact.kind === 'event' && !subjectLinks.subjectIds.length && !subjectLinks.relatedIds.length) {
+                        structuredInfo = { kind: 'event', skipped: 'event-without-anchor' }; // событию не к чему «отрастать» — не создаём
+                        results.push({ status: 'skipped', nodeId: null, label: fact.label, structured: structuredInfo });
+                        continue;
+                    }
+                }
                 // Свежий трекер ПЕРЕД вызовом — Этап 6 (наблюдаемость): `capacityTracker` читают
                 // `detectMergeCandidate()`/`tryQueueReconsolidation()`/`enforceRegionCapacity()` изнутри `attachToRegion()`
                 // (см. doc-comment у самого трекера выше), но пишет в него только ЭТОТ вызов, не бутстрап/ручное создание/
                 // карточка персонажа — остаётся `null` у любого другого вызывающего `placeNewNode()`.
                 capacityTracker = { evicted: [], queuedMerge: false, queuedReconsolidation: false };
-                const placed = placeNewNode({ label: fact.label, content: fact.content, embedding: nodeEmbeddingResult.value, importance: fact.importance, gameTime }, { placementEmbedding: contextEmbedding });
+                const placed = placeNewNode({ label: fact.label, content: fact.content, embedding: nodeEmbeddingResult.value, importance: fact.importance, gameTime, kind: fact.kind, subtype: fact.subtype }, { placementEmbedding: contextEmbedding, subjectRegion: regionDescriptorOf(nodes[subjectLinks?.subjectIds[0]]) });
+                if (subjectLinks) {
+                    const created = nodes[placed.nodeId];
+                    if (fact.time) created.timeText = fact.time;
+                    const edgeCount = linkStructuredNode(created, subjectLinks, sameBatchEvent);
+                    if (kindOf(created) === 'event' && !sameBatchEvent) sameBatchEvent = created;
+                    structuredInfo = { kind: kindOf(created), subjects: subjectLinks.subjectIds.map(id => nodes[id]?.label).filter(Boolean), edges: edgeCount };
+                }
                 const capacityInfo = capacityTracker;
                 capacityTracker = null; // не должен пережить этот вызов — иначе следующий ЧУЖОЙ attachToRegion() (сколь угодно позже) тихо дописался бы в уже "закрытую" запись
 
@@ -1473,14 +1570,17 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     const wiResult = await call('lorebook.createEntry', { patch: { comment: fact.label, content: fact.content, disable: true } });
                     if (wiResult.ok) { node.wiUid = wiResult.value.uid; node.wiBook = wiResult.value.book; }
                 }
-                results.push({ ...placed, label: fact.label, capacity: capacityInfo });
+                results.push({ ...placed, label: fact.label, capacity: capacityInfo, structured: structuredInfo });
             }
-            if (!results.length) return { status: 'sidecar-empty' }; // все факты были update'ами на уже пропавшие узлы — реально ничего не изменилось
+            if (!results.length || results.every(entry => entry.status === 'skipped')) {
+                if (results.length) await recordDecision({ clock: turnCounter, at: now(), gate: gateInfo, extractor: 'node', node: { id: null, label: results[0].label }, structured: results[0].structured });
+                return { status: 'sidecar-empty' };
+            } // все факты были update'ами на уже пропавшие узлы — реально ничего не изменилось
 
             // Журнал решений (Этап 6) — одна запись на ВЕСЬ check(), не на каждый факт (план просит запись именно
             // "на каждый check"); представляет её ПЕРВЫМ настоящим созданием, если оно было, иначе первым update —
             // тот же формат, что у Этапа 6 (единственный факт — самый частый случай — выглядит ИДЕНТИЧНО прежнему).
-            const primary = results.find(entry => entry.status !== 'updated') ?? results[0];
+            const primary = results.find(entry => entry.status !== 'updated' && entry.status !== 'skipped') ?? results[0];
             // attachToRegion() (внутри placeNewNode) может завести запись в
             // mergeQueue/reconsolidationQueue (detectMergeCandidate/
             // tryQueueReconsolidation) — персистим ВСЕ пять хранилищ, не
@@ -1498,11 +1598,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // только "лишние/устаревшие данные старого чата в новом графе" — не хуже поведения ДО Этапа 5.
             await recordDecision({
                 clock: turnCounter, at: now(), gate: gateInfo, extractor: 'node', node: { id: primary.nodeId, label: primary.label },
+                structured: primary.structured ?? undefined,
                 placement: primary.status === 'updated' ? undefined : { status: primary.status, reason: primary.reason, region: primary.region, similarity: primary.similarity, margin: primary.margin },
                 capacity: primary.capacity ?? undefined,
             });
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
             for (const entry of results) {
+                if (entry.status === 'skipped') continue;
                 if (entry.status === 'updated') publishEvent('memoryGraph.nodeUpdated', { nodeId: entry.nodeId });
                 else publishEvent('memoryGraph.nodeCreated', { nodeId: entry.nodeId, status: entry.status });
             }
