@@ -33,3 +33,9 @@
 .stme-pm-toolbar .menu_button { padding: 3px 10px; }
 .stme-pm-side { position: sticky; top: 0; }
 .stme-pm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; }
+.stme-pm-condition { display: flex; flex-direction: column; gap: 6px; }
+.stme-pm-rulegroup { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-left: 3px solid var(--stme-accent); background: var(--stme-level-1); border-radius: var(--stme-radius-sm); }
+.stme-pm-rule { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: var(--stme-level-2); border-radius: var(--stme-radius-sm); }
+.stme-pm-rule-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.stme-pm-rule-field { display: flex; flex-direction: column; gap: 2px; font-size: .85em; }
+.stme-pm-rule-sentence { font-size: .85em; opacity: .8; font-style: italic; }

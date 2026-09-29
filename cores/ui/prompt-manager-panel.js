@@ -7,6 +7,7 @@ import { createOrderTab } from './prompt-manager/order-tab.js';
 import { createPreviewTab } from './prompt-manager/preview-tab.js';
 import { createLogTab } from './prompt-manager/log-tab.js';
 import { createSettingsTab } from './prompt-manager/settings-tab.js';
+import { createCotTab } from './prompt-manager/cot-tab.js';
 
 /**
  * Окно Prompt Manager (PROMPT_MANAGER_PLAN.md, «Интерфейс»): порядок промптов, предпросмотр «что уйдёт модели»,
@@ -16,7 +17,7 @@ import { createSettingsTab } from './prompt-manager/settings-tab.js';
  */
 const MODULE_UI_NAMESPACE = 'core.ui.promptManager';
 const WINDOW_KEY = 'window';
-const TABS = [['order', 'Order'], ['preview', 'Preview'], ['log', 'Log & cache'], ['settings', 'Settings']];
+const TABS = [['order', 'Order'], ['preview', 'Preview'], ['log', 'Log & cache'], ['cot', 'CoT'], ['settings', 'Settings']];
 const DEFAULT_SIZE = { width: 980, height: 680 };
 
 /** Выбор файла: скрытый `<input type=file>`, кликаем из обработчика кнопки (без пользовательского клика диалог не откроется). */
@@ -158,6 +159,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
         order: createOrderTab({ state, actions }),
         preview: createPreviewTab({ call }),
         log: createLogTab({ call }),
+    cot: createCotTab({ state, actions, call }),
         settings: createSettingsTab({ state, actions, call }),
     };
     const tabViews = Object.fromEntries(Object.entries(tabs).map(([key, value]) => [key, value.tree()]));
@@ -184,7 +186,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
             drag: createDragHandlers(position, { onDrop: dropped => { position.set(clampToViewport(dropped, { ...size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })); saveWindowState(); } }),
             onResize: next => { size.set(next); saveWindowState(); },
         },
-        h('div', { class: 'stme-pm-tabs' }, TABS.map(([key, title]) => Button(title, () => { tab.set(key); if (key === 'log') tabs.log.refresh(); if (key === 'settings') tabs.settings.loadVersions(); }, { variant: 'default' })),
+        h('div', { class: 'stme-pm-tabs' }, TABS.map(([key, title]) => Button(title, () => { tab.set(key); if (key === 'log') tabs.log.refresh(); if (key === 'cot') tabs.cot.refresh(); if (key === 'settings') tabs.settings.loadVersions(); }, { variant: 'default' })),
             computed(() => (status() ? Badge(status()) : null))),
         h('div', { class: 'stme-pm-body' }, TABS.map(([key]) => h('div', { class: 'stme-pm-tabpage', style: computed(() => ({ display: tab() === key ? 'block' : 'none' })) }, tabViews[key]))),
         ) : null)));
@@ -201,6 +203,12 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     function hide() { visible.set(false); saveWindowState(); }
 
     host.events.subscribe('promptManager.openRequested', () => show());
+    /** Малый вид Guided CoT: строка «thinking: step 2 of 4» уведомлением; расширенный вид — в окне на вкладке CoT. */
+    host.events.subscribe('promptManager.cotProgress', payload => {
+        if (payload?.phase === 'start') request(host.own, 'ui.notify', { params: { key: 'pm-cot', tone: 'muted', text: `Thinking: step ${payload.index + 1} of ${payload.total}${payload.display === 'extended' && payload.name ? ` — ${payload.name}` : ''}` } });
+    });
+    host.events.subscribe('promptManager.cotFailed', payload => request(host.own, 'ui.notify', { params: { tone: 'error', text: payload?.message ?? 'Guided CoT failed.' } }));
+    host.events.subscribe('promptManager.unsupported', payload => request(host.own, 'ui.notify', { params: { tone: 'error', text: payload?.reason ?? 'Prompt Manager is off.' } }));
 
     return { tree, open, show, hide, refresh, state, actions, isVisible: () => visible.peek(), stop() {} };
 }

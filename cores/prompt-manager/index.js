@@ -1,6 +1,8 @@
 import { request } from '../../libraries/shared/request.js';
 import { buildRequest } from '../../libraries/core/pm-run.js';
 import { compareRequests, analyzeStability } from '../../libraries/core/pm-cache.js';
+import { assemblePrompt } from '../../libraries/core/pm-assemble.js';
+import { shouldRunCot, runCot, buildCotInjection, cotRecord, normalizeCot, CotStepError } from '../../libraries/core/pm-cot.js';
 import { createPresetStore } from './presets.js';
 import { createContributionRegistry, placeContribution, resetContribution } from './contributions.js';
 
@@ -26,6 +28,9 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
     const log = [];
     const globals = new Map();
     let warnedUnsupported = null;
+    let pendingCot = null; // запись CoT текущей генерации: сохраняется в метаданные чата, когда готово сообщение
+    let manualCot = false;
+    let lastCotSteps = null; // шаги последнего CoT — для режима «только финал» при перегенерации
 
     const own = async (contract, params) => {
         const result = await request(host.own, contract, { params });
@@ -143,15 +148,73 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
             const assembled = await assemble(fresh.chat, { commit: true });
             if (assembled.skipped) return payload;
             const { result, record } = assembled;
+            const cotSteps = await runGuidedCot(record.preset, result, fresh.type);
+            if (cotSteps) result.messages.push(buildCotInjection(cotSteps, { injectAs: normalizeCot(record.preset.cot).injectAs }));
             const body = settings.applyParams ? result.body : {};
             pushLog({ at: now(), presetId: record.id, presetName: record.name, messages: result.messages, withMarkers: result.withMarkers, tokens: result.tokens.total, budget: result.budget, dropped: result.dropped, report: result.report, macros: result.macros, lore: result.lore, overBudget: result.overBudget });
             contributions.clear();
             publish('promptManager.assembled', { tokens: result.tokens.total, dropped: result.dropped.length });
             return { ...payload, ...body, messages: result.messages };
         } catch (error) {
+            if (error instanceof CotStepError) { publish('promptManager.cotFailed', { message: error.message, step: error.stepIndex + 1 }); throw error; } // второй сбой шага — генерацию не отправляем
             publish('promptManager.failed', { message: error?.message ?? String(error) });
             return payload; // осечка PM не должна ломать генерацию
         }
+    }
+
+    /** Промпты шагов: каждый шаг раздела CoT собирается теми же макросами и условиями и уходит одним сообщением USER. */
+    function stepPrompts(preset, env) {
+        const cot = normalizeCot(preset.cot);
+        return cot.steps.map((node, index) => {
+            const built = assemblePrompt({ ...preset, tree: [node] }, { markers: {}, history: [], ...env });
+            const text = built.messages.map(message => message.content).join('\n\n').trim();
+            return { id: node.id ?? node.block ?? `step${index + 1}`, name: node.name ?? preset.blocks.find(block => block.id === node.block)?.name ?? `Step ${index + 1}`, prompt: text };
+        }).filter(step => step.prompt);
+    }
+
+    /** Один запрос шага: основное подключение ST или выбранный воркер моделей (`model.generate`). */
+    async function sendStep(messages, { maxTokens, workerId }) {
+        if (workerId) {
+            const answer = await request(host.own, 'model.generate', { params: { workerId, messages, maxTokens, stream: false } });
+            if (!answer.ok) throw new Error(answer.error.message);
+            return { text: String(answer.value ?? ''), reasoning: '' };
+        }
+        const answer = await request(host.services, 'stGeneration.direct', { params: { messages, maxTokens } });
+        if (!answer.ok) throw new Error(answer.error.message);
+        if (!answer.value?.ok) throw new Error(answer.value?.error ?? 'the model did not answer');
+        return { text: answer.value.text, reasoning: answer.value.reasoning ?? '' };
+    }
+
+    /** Guided CoT (раздел 7 плана): шаги идут отдельными запросами ДО основного; null — CoT в этой генерации не нужен. */
+    async function runGuidedCot(preset, result, type) {
+        const manual = manualCot;
+        manualCot = false;
+        if (!shouldRunCot(preset.cot, result.stepEnv.facts, { manual })) return null;
+        const steps = stepPrompts(preset, result.stepEnv);
+        if (!steps.length) return null;
+        const cot = normalizeCot(preset.cot);
+        // «Только финал» при перегенерации/свайпе: прошлые шаги берём как есть, заново идёт лишь основной ответ.
+        if (cot.regen === 'final' && (type === 'regenerate' || type === 'swipe') && lastCotSteps) return lastCotSteps;
+        const done = await runCot({
+            baseMessages: result.messages, steps, cot, sendStep,
+            onProgress: progress => publish('promptManager.cotProgress', { ...progress, display: cot.display }),
+        });
+        pendingCot = cotRecord(done, { at: now() });
+        lastCotSteps = done;
+        publish('promptManager.cotDone', { steps: done.length });
+        return done;
+    }
+
+    /** Готово сообщение — запись CoT уходит в память чата под номером этого сообщения (живёт с чатом, в историю не попадает). */
+    async function persistCot() {
+        if (!pendingCot) return;
+        const record = pendingCot;
+        pendingCot = null;
+        const chat = await service('stPromptData.chat', {});
+        const index = (chat?.length ?? 0) - 1;
+        if (index < 0) return;
+        const all = (await own('storage.chatMemory.get', { namespace: NAMESPACE, key: 'cot', fallback: {} })) ?? {};
+        await request(host.own, 'storage.chatMemory.set', { params: { namespace: NAMESPACE, key: 'cot', value: { ...all, [index]: record } } });
     }
 
     /** Берёт ли PM сборку на себя прямо сейчас: включён, есть активный пресет, режим поддерживается. Вкладчики решают по этому, что делать. */
@@ -163,12 +226,13 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
 
     async function registerStages() {
         host.own.register('promptManager.takesOver', () => takesOver());
+        host.events.subscribe('generation.completed', () => { persistCot().catch(() => {}); });
         host.own.register('promptManager.reset', () => { contributions.clear(); return true; });
         await request(host.own, 'pipeline.stages.add', { params: { pipelineId: 'generation.prepare', stage: { id: 'prompt-manager:reset', contract: 'promptManager.reset', onExhausted: 'flag' } } });
-        host.own.register(CAPTURE_CONTRACT, params => { captured = { chat: params?.chat ?? [], at: now() }; return true; });
+        host.own.register(CAPTURE_CONTRACT, params => { captured = { chat: params?.chat ?? [], type: params?.type ?? 'normal', at: now() }; return true; });
         host.own.register(REWRITE_CONTRACT, params => rewrite(params ?? {}));
-        await request(host.own, 'pipeline.stages.add', { params: { pipelineId: BEFORE_SEND_PIPELINE, stage: { id: 'prompt-manager:capture', contract: CAPTURE_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' } } });
-        await request(host.own, 'pipeline.stages.add', { params: { pipelineId: PAYLOAD_PIPELINE, stage: { id: 'prompt-manager:rewrite', contract: REWRITE_CONTRACT, params: { payload: { $from: '$value' } }, onExhausted: 'flag' } } });
+        await request(host.own, 'pipeline.stages.add', { params: { pipelineId: BEFORE_SEND_PIPELINE, stage: { id: 'prompt-manager:capture', contract: CAPTURE_CONTRACT, params: { chat: { $from: '$input.chat' }, type: { $from: '$input.type' } }, onExhausted: 'flag' } } });
+        await request(host.own, 'pipeline.stages.add', { params: { pipelineId: PAYLOAD_PIPELINE, stage: { id: 'prompt-manager:rewrite', contract: REWRITE_CONTRACT, params: { payload: { $from: '$value' } }, onExhausted: 'abort' } } });
     }
 
     /** Понятное имя источника сообщения для таблиц: имя блока пресета, вклад модуля, лорбук или история. */
@@ -213,6 +277,8 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
             await store.save(record, { label: 'reset contribution position' });
             return true;
         }),
+        host.own.register('promptManager.runCotNext', () => { manualCot = true; return true; }),
+        host.own.register('promptManager.cotRecords', async () => (await own('storage.chatMemory.get', { namespace: NAMESPACE, key: 'cot', fallback: {} })) ?? {}),
         host.own.register('promptManager.log', () => log.map(({ withMarkers, messages, ...rest }) => rest)),
         host.own.register('promptManager.stability', () => analyzeStability(log.map(item => item.withMarkers))),
         host.own.register('promptManager.preview', () => preview()),

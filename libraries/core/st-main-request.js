@@ -39,7 +39,7 @@ export function describeMainConnection(context) {
 }
 
 function toMessages({ messages, prompt, systemPrompt }) {
-    if (Array.isArray(messages) && messages.length) return messages.map(message => ({ role: message.role, content: String(message.content ?? '') }));
+    if (Array.isArray(messages) && messages.length) return messages.map(message => ({ role: message.role, content: String(message.content ?? ''), ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}) }));
     return [
         ...(systemPrompt ? [{ role: 'system', content: String(systemPrompt) }] : []),
         { role: 'user', content: String(prompt ?? '') },
@@ -84,6 +84,15 @@ function joinParts(parts) {
 }
 
 /** Текст ответа из любой формы, которую отдаёт сервер ST (OpenAI-подобная, Claude, Gemini, text completion разных бэкендов). */
+/** Ризонинг ответа (`reasoning_content`, `reasoning` или блоки `thinking`) — пустая строка, если провайдер его не отдал. */
+export function extractMainConnectionReasoning(json) {
+    const message = json?.choices?.[0]?.message ?? {};
+    const direct = message.reasoning_content ?? message.reasoning;
+    if (typeof direct === 'string') return direct;
+    const blocks = Array.isArray(json?.content) ? json.content : [];
+    return blocks.filter(block => block?.type === 'thinking').map(block => block.thinking ?? '').join('\n');
+}
+
 export function extractMainConnectionText(json) {
     if (!json || typeof json !== 'object') return '';
     const choice = json.choices?.[0];
