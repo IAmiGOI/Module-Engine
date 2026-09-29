@@ -41,7 +41,7 @@ import { dropDecision, connectModeStep, edgeTypesInGraph } from './memory-graph/
 import { zonesSignature } from './memory-graph/zones-svg.js';
 import { computePlaneOutline, planeRadiusAt, regionFieldAt, dominantBlend } from './memory-graph/plane-field.js';
 import { retrievalClasses, routeChainLabels } from './memory-graph/retrieval-overlay.js';
-import { METRICS, findMetric, metricColor, metricDomain, glowValue } from './memory-graph/metrics.js';
+import { METRICS, findMetric, metricColor, metricDomain, glowValue, averageHue } from './memory-graph/metrics.js';
 
 /**
  * Визуальный редактор графа памяти — решено с пользователем явно:
@@ -71,6 +71,10 @@ const CANVAS_ID = 'stme-memory-graph-canvas';
 const BG_ID = 'stme-memory-graph-region-bg';
 const ZONES_CANVAS_ID = 'stme-memory-graph-zones-canvas';
 const GLOW_CANVAS_ID = 'stme-memory-graph-glow-canvas';
+// Цвет ребра ВНЕ режима "Color by region" (или когда у ОБОИХ концов нет региона) — то же значение, что раньше было
+// прямо вписано в graphStylesheet()'s 'line-color', теперь ребро всегда несёт цвет в data (см. buildNextElements()),
+// стиль просто применяет 'data(lineColor)' — тот же принцип "стиль не решает сам", что и у размера/цвета нод.
+const DEFAULT_EDGE_COLOR = '#9fb4ff';
 
 export function createMemoryGraphPanelCore(host, { mount } = {}) {
     async function call(contract, params) {
@@ -660,6 +664,27 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 position: positions.get(node.id) ?? { x: 0, y: 0 },
             });
         }
+        // Цвет ребра региона (прямой запрос владельца, плюс уточнение: "с градиентом если это меж-региональные?") —
+        // ТОЛЬКО когда узлы красятся по метрике `region`, иначе ребро остаётся стандартным (`graphStylesheet()`'s
+        // дефолт `'line-fill': 'solid'`/`DEFAULT_EDGE_COLOR`). Оба конца в ОДНОМ регионе (или один конец без
+        // региона — накопитель) — сплошной цвет региона. РАЗНЫЕ регионы — настоящий `line-gradient` Cytoscape
+        // (`line-fill: 'linear-gradient'`), от цвета РЕГИОНА-ИСТОЧНИКА к цвету РЕГИОНА-ЦЕЛИ вдоль самого ребра, не
+        // усреднённый цвет — честная граница видна прямо на линии связи, а не смазывается в один тон.
+        const regionMetric = findMetric('region');
+        const showRegionEdgeColor = colorMetricId() === 'region';
+        function regionEdgeStyle(sourceRegionId, targetRegionId) {
+            const sourceHue = sourceRegionId == null ? null : hueByRegionId.get(sourceRegionId) ?? null;
+            const targetHue = targetRegionId == null ? null : hueByRegionId.get(targetRegionId) ?? null;
+            if (sourceHue == null && targetHue == null) return null;
+            if (sourceHue == null || targetHue == null || sourceRegionId === targetRegionId) {
+                return { lineColor: regionMetric.palette(sourceHue ?? targetHue), lineFill: 'solid' };
+            }
+            return {
+                lineColor: regionMetric.palette(averageHue(sourceHue, targetHue)), // запасной сплошной цвет — на случай, если line-gradient не подхватится (старый Cytoscape и т.п.)
+                lineFill: 'linear-gradient',
+                lineGradientColors: `${regionMetric.palette(sourceHue)} ${regionMetric.palette(targetHue)}`,
+            };
+        }
         const seen = new Set();
         for (const node of nodes()) {
             for (const edge of node.edges ?? []) {
@@ -668,7 +693,16 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 seen.add(key);
                 const other = byId.get(edge.to);
                 const backbone = Boolean(node.protectedNode && other?.protectedNode);
-                map.set(`edge:${key}`, { group: 'edges', data: { id: `edge:${key}`, source: node.id, target: edge.to, type: edge.type, backbone } });
+                const regionStyle = showRegionEdgeColor ? regionEdgeStyle(node.regionId, other?.regionId) : null;
+                map.set(`edge:${key}`, {
+                    group: 'edges',
+                    data: {
+                        id: `edge:${key}`, source: node.id, target: edge.to, type: edge.type, backbone,
+                        lineColor: regionStyle?.lineColor ?? DEFAULT_EDGE_COLOR,
+                        lineFill: regionStyle?.lineFill ?? 'solid',
+                        lineGradientColors: regionStyle?.lineGradientColors ?? '',
+                    },
+                });
             }
         }
         if (isCreating() && previewPosition()) {
@@ -907,20 +941,37 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         return rgb;
     }
 
-    /** `nodeElements` — значения из `next` (`buildNextElements()`, `syncCytoscape()`) с `group === 'nodes'`; каждый уже несёт готовые `position`/`data.color`/`data.glow`/`data.size` — считать заново здесь нечего. */
-    function paintGlowCanvas(nodeElements) {
+    // Свечение рёбер (прямой запрос владельца) — маленький радиус, быстрый спад, но с запасом, чтобы не обрывалось
+    // резко. `ctx.shadowBlur` — единственный примитив Canvas2D, который САМ даёт именно такую форму (гауссоподобное
+    // размытие: основная энергия у самой линии, тонкий, но ненулевой хвост дальше) — то же самое, что у нод
+    // потребовало ручных стопов градиента, здесь получаем бесплатно от браузера, без лишней сложности на маленький
+    // эффект. `EDGE_GLOW_BLUR` — тот самый "маленький радиус"; `EDGE_GLOW_ALPHA` — "слегка", не ярко.
+    const EDGE_GLOW_BLUR = 14;
+    const EDGE_GLOW_ALPHA = 0.35;
+
+    /**
+     * `elements` — ВСЕ значения из `next` (`buildNextElements()`, `syncCytoscape()`), и ноды, и рёбра — каждый уже
+     * несёт готовые `position`/`data.*`, считать заново здесь нечего. Ноды красятся отдельным радиальным градиентом
+     * (см. doc-comment `glowGradientStops()`), рёбра — тонкой линией с `shadowBlur`; оба слоя используют одно и то
+     * же `'lighten'`-смешение (см. её doc-comment у прежней версии этой функции) — ни один из эффектов не может
+     * насытиться в сплошное пятно, сколько бы нод/рёбер ни перекрылось в одной точке.
+     */
+    function paintGlowCanvas(elements) {
         const canvas = document.getElementById(GLOW_CANVAS_ID);
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
-        const glowing = nodeElements.filter(item => item.group === 'nodes' && (item.data.glow ?? 0) > 0);
-        if (!glowing.length) {
+        const glowingNodes = elements.filter(item => item.group === 'nodes' && (item.data.glow ?? 0) > 0);
+        const edges = elements.filter(item => item.group === 'edges');
+        if (!glowingNodes.length && !edges.length) {
             canvas.width = canvas.width; // тот же штатный приём очистки, что у paintZonesCanvas()
             currentGlowHalf = 1;
             return;
         }
+        const positionById = new Map(elements.filter(item => item.group === 'nodes').map(item => [item.data.id, item.position]));
         // Половина стороны — НЕЗАВИСИМО от `currentPlaneHalf` (см. её doc-comment) — реальный охват самих ореолов,
-        // не контура плоскости регионов (тумблер фона регионов не должен уметь сломать свечение нод).
-        const half = Math.max(1, ...glowing.map(item => Math.hypot(item.position.x, item.position.y) + glowRadiusFor(item.data.size)));
+        // не контура плоскости регионов (тумблер фона регионов не должен уметь сломать свечение нод/рёбер). Рёбра
+        // сами по себе не расширяют охват — обе их точки уже ноды, уже учтённые ниже.
+        const half = Math.max(1, ...glowingNodes.map(item => Math.hypot(item.position.x, item.position.y) + glowRadiusFor(item.data.size)));
         currentGlowHalf = half;
         const size = Math.max(1, Math.ceil(half * 2));
         canvas.width = size;
@@ -936,7 +987,23 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // виден самый яркий из них), но никогда не превышают пик ни одного отдельного свечения — насыщение
         // структурно невозможно.
         ctx.globalCompositeOperation = 'lighten';
-        for (const { position, data } of glowing) {
+        for (const edge of edges) {
+            const from = positionById.get(edge.data.source);
+            const to = positionById.get(edge.data.target);
+            if (!from || !to) continue;
+            const [r, g, b] = cssColorToRgb(edge.data.lineColor ?? DEFAULT_EDGE_COLOR);
+            ctx.save();
+            ctx.shadowColor = `rgba(${r},${g},${b},${EDGE_GLOW_ALPHA})`;
+            ctx.shadowBlur = EDGE_GLOW_BLUR;
+            ctx.strokeStyle = `rgba(${r},${g},${b},${EDGE_GLOW_ALPHA})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(half + from.x, half + from.y);
+            ctx.lineTo(half + to.x, half + to.y);
+            ctx.stroke();
+            ctx.restore();
+        }
+        for (const { position, data } of glowingNodes) {
             const px = half + position.x;
             const py = half + position.y;
             const glowRadius = glowRadiusFor(data.size);

@@ -75,9 +75,18 @@ export function graphStylesheet() {
         // Защищённые — та же заливка по весу (у них `weightRank` всегда 1, см. Ядро), только БЕЛАЯ ОБВОДКА и
         // усиленное свечение отличают роль — не отдельный цвет (иначе он спорил бы со шкалой веса/метрики).
         { selector: 'node[?protectedNode]', style: { 'border-width': 1.5, 'border-color': '#fff' } },
+        // `line-color`/`line-fill`/`line-gradient-stop-colors` — из данных, не хардкод (прямой запрос владельца:
+        // ребро красится в цвет региона, который оно соединяет, когда узлы красятся по метрике `region`; уточнение
+        // "с градиентом если это меж-региональные?" — да, настоящий `line-gradient` Cytoscape для рёбер между
+        // разными регионами, не усреднённый цвет; считает `buildNextElements()`/`regionEdgeStyle()` в
+        // memory-graph-panel.js). ВНЕ этого режима — `'solid'`/`DEFAULT_EDGE_COLOR`, тот же цвет, что раньше был
+        // здесь константой — стиль как и везде НЕ решает сам, только применяет.
         {
             selector: 'edge',
-            style: { width: 0.6, 'line-color': '#9fb4ff', 'line-opacity': 0.35, 'curve-style': 'bezier' },
+            style: {
+                width: 0.6, 'line-color': 'data(lineColor)', 'line-opacity': 0.35, 'curve-style': 'bezier',
+                'line-fill': 'data(lineFill)', 'line-gradient-stop-colors': 'data(lineGradientColors)',
+            },
         },
         // Бэкбон — ребро между двумя защищёнными (центры/под-центры регионов) — заметнее обычных "mentions"-рёбер
         // между рядовыми нодами. `backbone` — булево поле, которое `edgeElements()` в панели считает по обоим

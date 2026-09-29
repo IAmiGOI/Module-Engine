@@ -50,6 +50,21 @@ function hueForRegion(node, ctx) {
     return byId instanceof Map ? (byId.get(node.regionId) ?? null) : (byId[node.regionId] ?? null);
 }
 
+/**
+ * Среднее двух оттенков (0-360, круговое, а не арифметическое) — прямой запрос владельца: рёбра красятся в цвет
+ * региона, который они соединяют. Ребро между ДВУМЯ РАЗНЫМИ регионами берёт середину МЕНЬШЕЙ дуги между их
+ * оттенками (не арифметическое среднее — оно ошибается ровно там, где важнее всего: среднее 350° и 10° должно быть
+ * 0° (они рядом на цветовом круге), а `(350+10)/2=180` дало бы противоположный, совершенно случайный цвет).
+ */
+export function averageHue(hueA, hueB) {
+    const radA = (hueA * Math.PI) / 180;
+    const radB = (hueB * Math.PI) / 180;
+    const x = (Math.cos(radA) + Math.cos(radB)) / 2;
+    const y = (Math.sin(radA) + Math.sin(radB)) / 2;
+    const hue = (Math.atan2(y, x) * 180) / Math.PI;
+    return hue < 0 ? hue + 360 : hue;
+}
+
 const SOURCE_COLORS = { chat: '#4c6fff', lorebook: '#2ecc71', card: '#f1c40f', manual: '#e874e0', unknown: GRAY_HEX };
 
 /**
