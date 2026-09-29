@@ -75,18 +75,26 @@ export function graphStylesheet() {
         // Защищённые — та же заливка по весу (у них `weightRank` всегда 1, см. Ядро), только БЕЛАЯ ОБВОДКА и
         // усиленное свечение отличают роль — не отдельный цвет (иначе он спорил бы со шкалой веса/метрики).
         { selector: 'node[?protectedNode]', style: { 'border-width': 1.5, 'border-color': '#fff' } },
-        // `line-color`/`line-fill`/`line-gradient-stop-colors` — из данных, не хардкод (прямой запрос владельца:
-        // ребро красится в цвет региона, который оно соединяет, когда узлы красятся по метрике `region`; уточнение
-        // "с градиентом если это меж-региональные?" — да, настоящий `line-gradient` Cytoscape для рёбер между
-        // разными регионами, не усреднённый цвет; считает `buildNextElements()`/`regionEdgeStyle()` в
-        // memory-graph-panel.js). ВНЕ этого режима — `'solid'`/`DEFAULT_EDGE_COLOR`, тот же цвет, что раньше был
-        // здесь константой — стиль как и везде НЕ решает сам, только применяет.
+        // `line-color` — из данных, не хардкод (прямой запрос владельца: ребро красится в цвет региона, который оно
+        // соединяет, когда узлы красятся по метрике `region`; считает `buildNextElements()`/`regionEdgeStyle()` в
+        // memory-graph-panel.js). ВНЕ этого режима — `DEFAULT_EDGE_COLOR`, тот же цвет, что раньше был здесь
+        // константой — стиль как и везде НЕ решает сам, только применяет.
         {
             selector: 'edge',
-            style: {
-                width: 0.6, 'line-color': 'data(lineColor)', 'line-opacity': 0.35, 'curve-style': 'bezier',
-                'line-fill': 'data(lineFill)', 'line-gradient-stop-colors': 'data(lineGradientColors)',
-            },
+            style: { width: 0.6, 'line-color': 'data(lineColor)', 'line-opacity': 0.35, 'curve-style': 'bezier' },
+        },
+        // РЕАЛЬНЫЙ БАГ, найден живьём (владелец: "ноды сами теперь не показываются... двигать карту мышкой больше
+        // не могу") — `line-gradient-stop-colors`/`line-fill` были ЧАСТЬЮ БАЗОВОГО правила `edge` выше, со значением
+        // `data(lineGradientColors)`, которое у ОБЫЧНЫХ (не меж-региональных) рёбер — ПУСТАЯ строка (`buildNextElements()`
+        // ставит её так по умолчанию). Cytoscape не может провалидировать пустую строку как список цветов градиента
+        // — похоже, это ломает компиляцию ВСЕЙ таблицы стилей разом (не только этого правила), отсюда и пропавшие
+        // ноды, и сломанное панорамирование. Исправлено — свойства градиента вынесены в ОТДЕЛЬНЫЙ селектор,
+        // применяются ТОЛЬКО к рёбрам, у которых `lineFill` РОВНО `'linear-gradient'` (Cytoscape data-селектор
+        // `[field = "value"]`) — `lineGradientColors` у таких рёбер ВСЕГДА непустая (гарантия `regionEdgeStyle()`),
+        // обычные рёбра эту пару свойств вообще не видят.
+        {
+            selector: 'edge[lineFill = "linear-gradient"]',
+            style: { 'line-fill': 'linear-gradient', 'line-gradient-stop-colors': 'data(lineGradientColors)' },
         },
         // Бэкбон — ребро между двумя защищёнными (центры/под-центры регионов) — заметнее обычных "mentions"-рёбер
         // между рядовыми нодами. `backbone` — булево поле, которое `edgeElements()` в панели считает по обоим
