@@ -723,9 +723,18 @@ export function renderMemoryPrompt(route, nodesById) {
 
     const lines = ['Long-term memory — relevant connections:'];
     if (route.segments.length) {
-        const chain = [nodesById[route.segments[0].from]?.label ?? route.segments[0].from];
-        for (const step of route.segments) chain.push(`-[${step.type}]-> ${nodesById[step.to]?.label ?? step.to}`);
-        lines.push(chain.join(' '));
+        // Маршрут бывает деревом (buildBeaconTree): новый путь начинается строкой с той ноды, от которой он отходит.
+        let chain = null;
+        let previousTo = null;
+        for (const step of route.segments) {
+            if (!chain || step.from !== previousTo) {
+                if (chain) lines.push(chain.join(' '));
+                chain = [nodesById[step.from]?.label ?? step.from];
+            }
+            chain.push(`-[${step.type}]-> ${nodesById[step.to]?.label ?? step.to}`);
+            previousTo = step.to;
+        }
+        if (chain) lines.push(chain.join(' '));
     }
     for (const edge of noise) {
         lines.push(`${nodesById[edge.from]?.label ?? edge.from} -[${edge.type}]-> ${nodesById[edge.to]?.label ?? edge.to} (noise)`);

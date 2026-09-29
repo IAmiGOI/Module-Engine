@@ -53,6 +53,13 @@ export function retrievalClasses(retrieval, allNodeIds, allEdges) {
  */
 export function routeChainLabels(segments, labelById) {
     if (!segments?.length) return [];
-    const ids = [segments[0].from, ...segments.map(segment => segment.to)];
-    return ids.map(id => labelById.get(id) ?? id);
+    // Маршрут — дерево (Ядро, buildBeaconTree): новая ветка, если шаг не продолжает предыдущий, — отделяется «·».
+    const out = [];
+    let previousTo = null;
+    for (const segment of segments) {
+        if (segment.from !== previousTo) { if (out.length) out.push('·'); out.push(labelById.get(segment.from) ?? segment.from); }
+        out.push(labelById.get(segment.to) ?? segment.to);
+        previousTo = segment.to;
+    }
+    return out;
 }

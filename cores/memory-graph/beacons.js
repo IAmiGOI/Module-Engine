@@ -109,3 +109,70 @@ export function recentQueryText(chat, count = 3) {
     return chat.filter(message => message && !message.is_system).slice(-count)
         .map(message => String(message.mes ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
 }
+
+/**
+ * Маршрут между маяками — ДЕРЕВО, а не цепочка по порядку счёта (ROADMAP 5.109а). Пока маяками всегда были центры регионов
+ * (связанные бэкбоном), цепочка 1→2→3 всегда складывалась в сплошной путь; теперь маяки — обычные ноды, у многих нет рёбер вовсе,
+ * и цепочка рвалась: вместо пути — несколько разрозненных точек. Два исправления:
+ * - **неявная связь «входит в регион»** (`in-region`): любая нода может пройти к центру своего региона (и обратно), даже без
+ *   явного ребра — принадлежность региону и есть смысловая связь, по ней факт и относится к теме;
+ * - **дерево по Приму**: к уже соединённой части по очереди присоединяется ближайший (в шагах) ещё не соединённый маяк —
+ *   от ЛЮБОЙ уже вошедшей ноды, включая промежуточные. Недостижимый за `maxHops` маяк — `standalone`, как раньше.
+ * `centerOf(id)` → id центра региона ноды (или `null`). Возвращает `{ segments, standalone }` — тот же вид, что у старого
+ * `buildBeaconRoute`; сегменты идут путями подряд (каждый путь — от уже соединённой ноды к новому маяку).
+ */
+export function buildBeaconTree(nodesById, beaconIds, { maxHops = 6, centerOf = () => null } = {}) {
+    const ids = [...new Set(beaconIds)].filter(id => nodesById[id]);
+    if (ids.length < 2) return { segments: [], standalone: ids };
+    const neighbours = id => {
+        const out = (nodesById[id]?.edges ?? []).filter(edge => nodesById[edge.to]).map(edge => ({ to: edge.to, type: edge.type }));
+        const center = centerOf(id);
+        if (center && center !== id && nodesById[center] && !out.some(edge => edge.to === center)) out.push({ to: center, type: 'in-region' });
+        return out;
+    };
+    // Обратные неявные связи центр → его ноды: считаются по требованию из всех нод (их немного, граф — сотни нод).
+    const members = new Map();
+    for (const id of Object.keys(nodesById)) {
+        const center = centerOf(id);
+        if (center && center !== id) { if (!members.has(center)) members.set(center, []); members.get(center).push(id); }
+    }
+    const allNeighbours = id => {
+        const out = neighbours(id);
+        for (const member of members.get(id) ?? []) if (!out.some(edge => edge.to === member)) out.push({ to: member, type: 'in-region' });
+        return out;
+    };
+
+    const connected = new Set([ids[0]]);
+    const remaining = new Set(ids.slice(1));
+    const segments = [];
+    while (remaining.size) {
+        // BFS сразу от всей соединённой части — ближайший ещё не соединённый маяк.
+        const previous = new Map();
+        let frontier = [...connected];
+        const seen = new Set(connected);
+        let found = null;
+        for (let hop = 0; hop < maxHops && frontier.length && !found; hop += 1) {
+            const next = [];
+            for (const id of frontier) {
+                for (const edge of allNeighbours(id)) {
+                    if (seen.has(edge.to)) continue;
+                    seen.add(edge.to);
+                    previous.set(edge.to, { from: id, type: edge.type });
+                    if (remaining.has(edge.to)) { found = edge.to; break; }
+                    next.push(edge.to);
+                }
+                if (found) break;
+            }
+            frontier = next;
+        }
+        if (!found) break;
+        const path = [];
+        for (let at = found; previous.has(at); at = previous.get(at).from) {
+            path.unshift({ from: previous.get(at).from, to: at, type: previous.get(at).type });
+            if (connected.has(previous.get(at).from)) break;
+        }
+        for (const step of path) { connected.add(step.to); remaining.delete(step.to); }
+        segments.push(...path);
+    }
+    return { segments, standalone: [...remaining] };
+}
