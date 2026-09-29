@@ -79,3 +79,13 @@ export function chooseRegionLabels(items, { margin = 6 } = {}) {
     }
     return chosen;
 }
+
+/**
+ * Подпись центра региона совпадает с названием региона (центр и даёт ему имя) — пока название региона видно, такая подпись ноды
+ * лишняя (владелец: «названия дублируются, оставь только большое»). Когда название гаснет при приближении, подпись ноды возвращается.
+ */
+export function duplicatesVisibleRegionName(nodeLabel, regionNames, regionOpacity) {
+    if (regionOpacity <= 0.05) return false;
+    const wanted = String(nodeLabel ?? '').trim().toLowerCase();
+    return Boolean(wanted) && regionNames.has(wanted);
+}
