@@ -72,3 +72,25 @@ test('graphStylesheet() gives backbone edges (both endpoints protected) a heavie
     assert.ok(backboneRule.style.width > edgeRule.style.width);
     assert.ok(backboneRule.style['line-opacity'] > edgeRule.style['line-opacity']);
 });
+
+// РЕАЛЬНЫЙ БАГ, найден живьём (владелец: "ноды сами теперь не показываются... двигать карту мышкой больше не
+// могу") — подтверждено на настоящем Cytoscape 3.30.2: базовое правило `edge` с БЕЗУСЛОВНЫМ
+// `'line-gradient-stop-colors': 'data(lineGradientColors)'` бросает исключение ПРЯМО В КОНСТРУКТОРЕ `cytoscape(...)`,
+// как только хоть у одного ребра это поле — пустая строка (обычный, не меж-региональный случай, ровно то, что
+// `buildNextElements()` ставит по умолчанию) — Cytoscape не может провалидировать '' как список цветов градиента.
+// Этот тест не поднимает настоящий Cytoscape (не может, здесь нет DOM/canvas), но ловит именно ЭТУ ошибку
+// конфигурации статически: `line-gradient-stop-colors` не должно быть в правиле с селектором РОВНО `'edge'`
+// (безусловным, применяется КО ВСЕМ рёбрам) — только в правиле с более узким, ОТФИЛЬТРОВАННЫМ селектором.
+test('graphStylesheet() never puts line-gradient-stop-colors on the UNCONDITIONAL "edge" selector — real Cytoscape throws in its constructor as soon as any edge has an empty lineGradientColors (the ordinary, non-cross-region case)', () => {
+    const rules = graphStylesheet();
+    const unconditionalEdgeRule = rules.find(rule => rule.selector === 'edge');
+    assert.equal(unconditionalEdgeRule.style['line-gradient-stop-colors'], undefined, 'line-gradient-stop-colors must live on a filtered selector, not the bare "edge" rule that applies to every edge including ones with an empty gradient string');
+});
+
+test('graphStylesheet() applies line-gradient-stop-colors only to edges explicitly marked lineFill === "linear-gradient" — a narrower selector than the bare "edge" rule', () => {
+    const rules = graphStylesheet();
+    const gradientRule = rules.find(rule => rule.style['line-gradient-stop-colors'] !== undefined);
+    assert.ok(gradientRule, 'some rule must still set line-gradient-stop-colors for real cross-region edges');
+    assert.notEqual(gradientRule.selector, 'edge', 'must not be the unconditional selector');
+    assert.match(gradientRule.selector, /lineFill/, 'selector must filter on lineFill so only real gradient edges get this property');
+});
