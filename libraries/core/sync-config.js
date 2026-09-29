@@ -7,12 +7,12 @@ import { DEFAULT_GITHUB_MAX_FILE_BYTES, sanitizeGithubSettings } from './sync-gi
  * (`groupChats/…`). Несколько разделов могут принадлежать одной категории (все виды чатов — одна галочка).
  */
 
-export const SYNC_CATEGORY_IDS = Object.freeze(['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas', 'graphs']);
+export const SYNC_CATEGORY_IDS = Object.freeze(['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas', 'graphs', 'pmPresets']);
 
 /** Версия набора категорий: у настроек, сохранённых до появления «presets», новая категория включается один раз сама. */
-const CATEGORY_VERSION = 3;
+const CATEGORY_VERSION = 4;
 /** В какой версии набора появилась категория (у первых пяти — с самого начала): при обновлении она включается ОДИН раз. */
-const CATEGORY_ADDED_IN = Object.freeze({ presets: 2, graphs: 3 });
+const CATEGORY_ADDED_IN = Object.freeze({ presets: 2, graphs: 3, pmPresets: 4 });
 
 const SECTION_TO_CATEGORY = Object.freeze({
     characters: 'characters',
@@ -26,6 +26,7 @@ const SECTION_TO_CATEGORY = Object.freeze({
     backgrounds: 'backgrounds',
     personas: 'personas',
     stmeGraphs: 'graphs', // библиотека графов памяти (сервис graphLibrary), не файлы ST
+    stmePmPresets: 'pmPresets', // пресеты Prompt Manager (сервис pmPresets), не файлы ST
 });
 
 export function categoryOfPath(path) {

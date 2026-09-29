@@ -111,15 +111,18 @@ test('the page-load switch defaults to on, can be turned off, and is shown to th
 
 test('settings saved before "presets" existed get the new category switched on once, without touching what the user turned off', () => {
     const old = sanitizeSyncConfig({ categories: ['characters', 'chats', 'worlds', 'backgrounds', 'personas'] }, options);
-    assert.deepEqual(old.categories, ['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas', 'graphs']);
+    assert.deepEqual(old.categories, ['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas', 'graphs', 'pmPresets']);
     const someOff = sanitizeSyncConfig({ categories: ['chats', 'backgrounds'] }, options);
-    assert.deepEqual(someOff.categories, ['chats', 'presets', 'backgrounds', 'graphs'], 'chats and backgrounds stay, characters stay off');
-    assert.equal(old.categoryVersion, 3);
+    assert.deepEqual(someOff.categories, ['chats', 'presets', 'backgrounds', 'graphs', 'pmPresets'], 'chats and backgrounds stay, characters stay off');
+    assert.equal(old.categoryVersion, 4);
     const version2 = sanitizeSyncConfig({ categoryVersion: 2, categories: ['chats'] }, options);
-    assert.deepEqual(version2.categories, ['chats', 'graphs'], 'settings from before the graph library get only that category switched on');
-    const later = sanitizeSyncConfig({ categoryVersion: 3, categories: ['chats'] }, options);
+    assert.deepEqual(version2.categories, ['chats', 'graphs', 'pmPresets'], 'settings from before the graph library get only the categories added since switched on');
+    const version3 = sanitizeSyncConfig({ categoryVersion: 3, categories: ['chats'] }, options);
+    assert.deepEqual(version3.categories, ['chats', 'pmPresets'], 'settings from before the Prompt Manager presets get only that category');
+    const later = sanitizeSyncConfig({ categoryVersion: 4, categories: ['chats'] }, options);
     assert.deepEqual(later.categories, ['chats'], 'a user who later turns presets or graphs off is respected');
     assert.equal(categoryOfPath('stmeGraphs/x.json'), 'graphs');
+    assert.equal(categoryOfPath('stmePmPresets/x.json'), 'pmPresets');
     assert.equal(categoryOfPath('themes/x.json'), 'presets');
     assert.equal(categoryOfPath('quickReplies/x.json'), 'presets');
     assert.equal(categoryOfPath('presets/openai/x.json'), 'presets');

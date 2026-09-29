@@ -24,6 +24,9 @@ import { registerEmbeddingService } from '../services/embedding.js';
 import { registerAudioStoreService } from '../services/audio-store.js';
 import { registerImageStoreService } from '../services/image-store.js';
 import { registerGraphLibraryService } from '../services/graph-library.js';
+import { registerPmPresetsService } from '../services/pm-presets.js';
+import { registerStPromptDataService } from '../services/st-prompt-data.js';
+import { createPromptManagerCore } from '../cores/prompt-manager/index.js';
 import { registerAudioPlaybackService } from '../services/audio-playback.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
 import { registerFileService } from '../services/file.js';
@@ -51,7 +54,7 @@ import { createDiffusionCore } from '../cores/models/diffusion.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createChatHistoryCore } from '../cores/chat-history/index.js';
 import { createSettingsCore } from '../cores/settings/index.js';
-import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource, createGraphLibraryBackupSource } from '../cores/backup/index.js';
+import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource, createGraphLibraryBackupSource, createPmPresetsBackupSource } from '../cores/backup/index.js';
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createMacrosCore } from '../cores/macros/index.js';
 import { createSpeakerCore } from '../cores/speaker/index.js';
@@ -516,6 +519,8 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerAudioStoreService(engine.buses.services);
     registerImageStoreService(engine.buses.services);
     registerGraphLibraryService(engine.buses.services);
+    registerPmPresetsService(engine.buses.services);
+    registerStPromptDataService(engine.buses.services, { getContext });
     registerAudioPlaybackService(engine.buses.services);
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
@@ -556,6 +561,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     backupCore.registerSource('chatMemory', createChatMetadataBackupSource(backupHost));
     backupCore.registerSource('settings', createExtensionSettingsBackupSource(backupHost));
     backupCore.registerSource('graphLibrary', createGraphLibraryBackupSource(backupHost)); // сохранённые графы памяти — и в бэкап, и в пресет
+    backupCore.registerSource('pmPresets', createPmPresetsBackupSource(backupHost)); // пресеты Prompt Manager
 
     // Ядро событий строится раньше всех, кто публикует события: они получают
     // его `publish` при сборке, чтобы защиты и реестр видели ВСЮ поверхность,
@@ -588,6 +594,10 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     const generationCore = createGenerationCore(engine.registerCaller('core.generation', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.generation' }),
         pipelines: pipelineCore,
+    });
+    // Prompt Manager (PROMPT_MANAGER_PLAN.md): своя сборка промпта на `generation.payload`; без активного пресета ничего не меняет.
+    const promptManagerCore = createPromptManagerCore(engine.registerCaller('core.promptManager', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.promptManager' }),
     });
     // ST's own drawers (API Connections, World Info, Preset…) close on any click that isn't on them; a click in the engine's own UI
     // (the panel, the guide's chat) counts as "elsewhere" too — see services/st-drawer-guard.js. Always on, no user-facing toggle.
@@ -851,7 +861,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // silently leaving a real, non-empty Lorebook's graph bootstrap empty
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
-    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), summaryCore.load()]);
+    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), summaryCore.load(), promptManagerCore.load()]);
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
     // отдельно" — при большом Lorebook эмбединг каждой записи по
@@ -923,5 +933,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
+    return { engine, promptManagerCore, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
 }
