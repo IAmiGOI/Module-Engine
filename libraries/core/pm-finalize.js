@@ -1,0 +1,37 @@
+/**
+ * Завершающая обработка собранных сообщений и параметры в тело запроса (Chat Completion).
+ * Чистые функции. Служебные поля (`_block`, `_hid`) снимаются последним шагом — провайдер их не должен видеть.
+ */
+/** Параметры пресета → поля тела запроса ST (только заданные в пресете; имена — как у эндпоинта generate). */
+const PARAM_TO_BODY = {
+    temperature: 'temperature', top_p: 'top_p', top_k: 'top_k', top_a: 'top_a', min_p: 'min_p',
+    frequency_penalty: 'frequency_penalty', presence_penalty: 'presence_penalty', repetition_penalty: 'repetition_penalty',
+    openai_max_tokens: 'max_tokens', stream_openai: 'stream', seed: 'seed', n: 'n',
+    reasoning_effort: 'reasoning_effort', verbosity: 'verbosity',
+};
+
+export function paramsToBody(params) {
+    const body = {};
+    for (const [key, target] of Object.entries(PARAM_TO_BODY)) if (params?.[key] !== undefined && params[key] !== null) body[target] = params[key];
+    return body;
+}
+
+/** `squash_system_messages`: подряд идущие system-сообщения без служебных полей склеиваются в одно. */
+export function squashSystem(messages) {
+    const out = [];
+    for (const message of messages) {
+        const last = out.at(-1);
+        if (last && last.role === 'system' && message.role === 'system' && typeof last.content === 'string' && typeof message.content === 'string') {
+            out[out.length - 1] = { ...last, content: `${last.content}\n${message.content}` };
+        } else out.push({ ...message });
+    }
+    return out;
+}
+
+export function finalizeMessages(messages, { params = {}, substitute = text => text } = {}) {
+    let out = messages;
+    if (params.squash_system_messages) out = squashSystem(out);
+    const prefill = substitute(params.assistant_prefill ?? '');
+    if (typeof prefill === 'string' && prefill.trim()) out = [...out, { role: 'assistant', content: prefill }];
+    return out.map(({ _block, _hid, ...rest }) => rest);
+}

@@ -10,6 +10,7 @@ import { evaluateCondition } from './pm-conditions.js';
  *               worldInfoBefore, worldInfoAfter, dialogueExamples (строка или массив сообщений) }
  *   history — сообщения чата по возрастанию времени: { role, content, … } (вставки модулей уже внутри)
  *   substitute(text) — подстановка макросов (по умолчанию как есть)
+ *   injections — готовые вставки на глубину [{ depth, order, role, content, block }] (например, записи лорбука позиции «на глубину»)
  *   contributions — вклады модулей { id: { role, content } } для узлов `inject` (контракт chat-inject)
  *   facts — данные для условий узлов (pm-conditions.js); setVariable(name, value) — для узлов `choice`
  *
@@ -46,7 +47,8 @@ function markerMessages(block, ctx, templates, substitute) {
         const examples = ctx.markers.dialogueExamples;
         if (Array.isArray(examples)) return examples.filter(m => !isBlank(m.content)).map(m => ({ ...m, content: substitute(m.content) }));
         if (isBlank(examples)) return [];
-        return [{ role: 'system', content: substitute(examples) }];
+        const lead = isBlank(templates.newExampleChat) ? [] : [{ role: 'system', content: substitute(templates.newExampleChat) }];
+        return [...lead, { role: 'system', content: substitute(examples) }];
     }
     const text = MARKER_TEXT[block.id]?.(ctx, templates);
     return isBlank(text) ? [] : [{ role: 'system', content: substitute(text) }];
@@ -77,7 +79,8 @@ export function assemblePrompt(preset, context) {
     const ctx = { markers: {}, history: [], ...context };
     const substitute = ctx.substitute ?? (text => text);
     const report = [];
-    const injections = [];
+    const injections = (ctx.injections ?? []).filter(item => !isBlank(item.content))
+        .map(item => ({ depth: item.depth ?? 4, order: item.order ?? 100, message: { role: item.role ?? 'system', content: substitute(item.content), _block: item.block ?? 'injection' } }));
 
     const emit = (nodes, sink) => {
         for (const node of nodes) {
