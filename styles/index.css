@@ -27,6 +27,7 @@
 @import url('./modules/scene-painter.css');
 @import url('./modules/memory-graph.css');
 @import url('./windows/picture-window.css');
+@import url('./windows/prompt-manager-window.css');
 @import url('./screens/guide.css');
 @import url('./chat-viewport/overlay.css');
 @import url('./chat-viewport/mirror-row.css');

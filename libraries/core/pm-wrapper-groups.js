@@ -47,7 +47,10 @@ export function glueWrapperGroups(items, blocks) {
     return out;
 }
 
-/** Дерево → плоский порядок `{identifier, enabled}` для prompt_order ST. */
+/**
+ * Дерево → плоский порядок `{identifier, enabled}` для prompt_order ST. Узлы, у которых нет аналога в ST
+ * (вклады модулей `inject`, заметки `note`), в файл ST не попадают; выбор «одного из» уходит выбранной веткой.
+ */
 export function flattenTree(nodes) {
     const out = [];
     for (const node of nodes) {
@@ -55,7 +58,10 @@ export function flattenTree(nodes) {
             out.push({ identifier: node.wrap.open, enabled: node.enabled });
             out.push(...flattenTree(node.children));
             out.push({ identifier: node.wrap.close, enabled: node.enabled });
-        } else out.push({ identifier: node.block, enabled: node.enabled });
+        } else if (node.type === 'choice') {
+            const option = node.options?.find(o => o.id === node.selected) ?? node.options?.[0];
+            if (node.enabled && option) out.push(...flattenTree(option.children ?? []));
+        } else if (node.type === 'item') out.push({ identifier: node.block, enabled: node.enabled });
     }
     return out;
 }

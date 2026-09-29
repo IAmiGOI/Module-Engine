@@ -26,6 +26,8 @@ import { registerImageStoreService } from '../services/image-store.js';
 import { registerGraphLibraryService } from '../services/graph-library.js';
 import { registerPmPresetsService } from '../services/pm-presets.js';
 import { registerStPromptDataService } from '../services/st-prompt-data.js';
+import { registerStPmUiService } from '../services/st-pm-ui.js';
+import { createPromptManagerPanelCore } from '../cores/ui/prompt-manager-panel.js';
 import { createPromptManagerCore } from '../cores/prompt-manager/index.js';
 import { registerAudioPlaybackService } from '../services/audio-playback.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
@@ -521,6 +523,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerGraphLibraryService(engine.buses.services);
     registerPmPresetsService(engine.buses.services);
     registerStPromptDataService(engine.buses.services, { getContext });
+    registerStPmUiService(engine.buses.services);
     registerAudioPlaybackService(engine.buses.services);
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
@@ -677,6 +680,12 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     const memoryGraphPanel = createMemoryGraphPanelCore(
         engine.registerCaller('core.ui.memoryGraph', 'cores', { tier: 'official' }),
         { mount: node => uiEngine.mount('memoryGraph', node) },
+    );
+
+    // Окно Prompt Manager: открывается кнопкой ST «Prompt Manager» (событие promptManager.openRequested от Ядра PM).
+    const promptManagerPanel = createPromptManagerPanelCore(
+        engine.registerCaller('core.ui.promptManager', 'cores', { tier: 'official' }),
+        { mount: node => uiEngine.mount('promptManager', node) },
     );
 
     // Плавающее окно «Картинка» — та же форма официального UI-Ядра, что у
@@ -917,6 +926,8 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // Окно «Картинка» — тот же порядок, что у графа выше: open() (дерево +
     // loadWindowState), append корня в body после settled(), активации (CSS-
     // инициализации) у окна нет — содержимого пока нет.
+    const promptManagerPanelUi = await promptManagerPanel.open();
+    document.body.append(promptManagerPanelUi.getRoot());
     const picturePanelUi = await picturePanel.open();
     document.body.append(picturePanelUi.getRoot());
     await guide.load();
@@ -933,5 +944,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, promptManagerCore, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
+    return { engine, promptManagerCore, promptManagerPanel, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
 }
