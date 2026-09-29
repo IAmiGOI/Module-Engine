@@ -10,7 +10,13 @@
 
 // --- Контур плоскости ("клякса/галактика") ----------------------------------
 
-const OUTLINE_SAMPLES = 96;
+// 96 → 360 (реворк границ зон, см. smoothZoneRadiusAt() ниже): переходы теперь узкие и честные (держат rOuter
+// своей зоны, не проседают), а не размазаны на всю дистанцию от биссектрисы до биссектрисы — при таком более
+// крутом (но геометрически ПРАВИЛЬНОМ) перепаде 96 точек уже недостаточно тонко, чтобы соседние САМПЛЫ контура не
+// скакали (реальный `planeRadiusAt()` в отрисовке считается на каждый пиксель сетки поля, эта константа влияет
+// только на абстрактный многоугольник контура ниже — используется лишь для оценки половины стороны канваса, не на
+// сам пиксельный рендер, так что делать её точнее не стоит ничего в реальной производительности).
+const OUTLINE_SAMPLES = 360;
 const OUTLINE_EXPANSION = 1.2; // во сколько раз шире реального внешнего края зон — подстройка на глаз
 // Гармоники контура — ФИКСИРОВАННЫЕ (не случайные) частоты/фазы, чтобы форма была детерминирована и воспроизводима
 // для одного и того же графа между перерисовками. Сумма амплитуд (0.06+0.04+0.025=0.125) меньше, чем
@@ -27,6 +33,14 @@ function normalizeAngle(angle) {
     return ((angle % twoPi) + twoPi) % twoPi;
 }
 
+/** Расстояние по углу ОТ `a` К `b`, идя в сторону РОСТА угла (всегда `>= 0`, до `2π`) — с учётом шва 0/2π. */
+function angleForwardDistance(a, b) {
+    const twoPi = 2 * Math.PI;
+    let d = (b - a) % twoPi;
+    if (d < 0) d += twoPi;
+    return d;
+}
+
 /** Множитель "ряби" контура — колеблется вокруг 1, детерминирован по углу. */
 function wobbleFactor(angle) {
     let factor = 1;
@@ -34,34 +48,66 @@ function wobbleFactor(angle) {
     return factor;
 }
 
+// РЕАЛЬНАЯ ЖАЛОБА владельца (скриншоты живого графа с очень разными по размеру регионами): "впадины без зон
+// какого-то хрена очень глубоко идут" + "часть нод вообще вне цвета региона, в пустоте". Причина — старая версия
+// `smoothZoneRadiusAt()` брала ОДНУ точку на зону (её биссектрису) и вела плавный переход через ВЕСЬ угловой
+// промежуток от биссектрисы до биссектрисы СОСЕДА: широкий регион рядом с узким начинал "проседать" к чужому,
+// меньшему радиусу задолго до своей РЕАЛЬНОЙ границы — вплоть до собственных нод у края своей же дуги, если они
+// были ближе к границе, чем к своей биссектрисе. Новая версия держит ПОЛНЫЙ `rOuter` каждой зоны по ВСЕЙ её
+// угловой дуге `[a0,a1]` — сглаживание только в УЗКОМ окне у самой границы с соседом, шириной не больше
+// `BOUNDARY_TRANSITION_MAX` С КАЖДОЙ стороны (и не больше половины более узкой из двух смежных дуг — крошечный
+// регион не отдаёт под переход больше половины себя).
+const BOUNDARY_TRANSITION_MAX = Math.PI / 12; // 15° — ширина сглаживания с каждой стороны границы
+
 /**
- * СГЛАЖЕННЫЙ (не ступенчатый) внешний радиус зон в направлении `angle` — косинусная интерполяция между двумя
- * соседними по кругу зонами (их биссектрисы), а не резкий скачок на границе зоны. `zoneSamples` — `[{angle,radius}]`,
- * отсортированные по углу, одна точка на зону.
+ * СГЛАЖЕННЫЙ (не ступенчатый) внешний радиус зон в направлении `angle`. `zoneSpans` — `[{a0,a1,radius}]`,
+ * отсортированные по `a0`, ПОКРЫВАЮЩИЕ полный круг СТЫКОВАННО (`a1` одной равен `a0` следующей — гарантия
+ * `layoutGraph()`, зоны никогда не оставляют угловых дыр).
  */
-function smoothZoneRadiusAt(angle, zoneSamples) {
-    if (zoneSamples.length === 1) return zoneSamples[0].radius;
-    let upperIndex = zoneSamples.findIndex(sample => sample.angle >= angle);
-    if (upperIndex === -1) upperIndex = 0; // угол больше всех точек — сосед справа "заворачивает" на первую
-    const lowerIndex = (upperIndex - 1 + zoneSamples.length) % zoneSamples.length;
-    const lower = zoneSamples[lowerIndex];
-    const upper = zoneSamples[upperIndex];
-    let span = upper.angle - lower.angle;
-    if (span <= 0) span += 2 * Math.PI; // переход через "шов" 0/2π
-    let offset = angle - lower.angle;
-    if (offset < 0) offset += 2 * Math.PI;
-    const t = span > 0 ? offset / span : 0;
-    const eased = (1 - Math.cos(t * Math.PI)) / 2; // 0..1, плавный разгон/торможение на стыке (не линейно)
-    return lower.radius + (upper.radius - lower.radius) * eased;
+function smoothZoneRadiusAt(angle, zoneSpans) {
+    if (zoneSpans.length === 1) return zoneSpans[0].radius;
+    const n = zoneSpans.length;
+    let index = zoneSpans.findIndex(zone => angleForwardDistance(zone.a0, angle) < angleForwardDistance(zone.a0, zone.a1));
+    if (index === -1) index = n - 1; // угол совпал с a1 последней зоны (граница шва) — округление плавающей точки
+    const zone = zoneSpans[index];
+    const prev = zoneSpans[(index - 1 + n) % n];
+    const next = zoneSpans[(index + 1) % n];
+    const ownSpan = angleForwardDistance(zone.a0, zone.a1);
+    const prevSpan = angleForwardDistance(prev.a0, prev.a1);
+    const nextSpan = angleForwardDistance(next.a0, next.a1);
+    const distFromStart = angleForwardDistance(zone.a0, angle); // 0 у собственной a0, растёт вглубь зоны
+    const distFromEnd = ownSpan - distFromStart; // 0 у собственной a1
+    const marginStart = Math.min(BOUNDARY_TRANSITION_MAX, ownSpan / 2, prevSpan / 2);
+    const marginEnd = Math.min(BOUNDARY_TRANSITION_MAX, ownSpan / 2, nextSpan / 2);
+    // На САМОЙ границе — МАКСИМУМ радиусов двух соседей, НЕ среднее (первая версия этого фикса усредняла — упало на
+    // регресс-тесте с широким регионом у узкого соседа: среднее двух далёких по размеру радиусов может оказаться
+    // МЕНЬШЕ, чем rOuter самого широкого, реинкарнируя ровно тот же баг в узком окне у границы). С максимумом: у
+    // БОЛЬШЕЙ из двух зон `boundaryValue === zone.radius` — переход вырождается в константу, она НИКОГДА не
+    // проседает у своей границы. У МЕНЬШЕЙ зоны `boundaryValue` равен радиусу БОЛЬШОГО соседа — она плавно
+    // "дотягивается" вверх к нему как раз у стыка, не наоборот. Непрерывность на самой границе гарантирована — обе
+    // стороны считают тот же `max(prev.radius, zone.radius)` для одной и той же пары.
+    if (marginStart > 0 && distFromStart < marginStart) {
+        const t = distFromStart / marginStart;
+        const eased = (1 - Math.cos(t * Math.PI)) / 2;
+        const boundaryValue = Math.max(prev.radius, zone.radius);
+        return boundaryValue + (zone.radius - boundaryValue) * eased;
+    }
+    if (marginEnd > 0 && distFromEnd < marginEnd) {
+        const t = distFromEnd / marginEnd;
+        const eased = (1 - Math.cos(t * Math.PI)) / 2;
+        const boundaryValue = Math.max(zone.radius, next.radius);
+        return boundaryValue + (zone.radius - boundaryValue) * eased;
+    }
+    return zone.radius;
 }
 
 /** Радиус плоскости в направлении `angle` — сглаженный край зон, расширенный и деформированный рябью. Публичная, чтобы её же могла звать отрисовка canvas (маска края) без пересчёта зон заново. */
 export function planeRadiusAt(angle, zones, { expansion = OUTLINE_EXPANSION } = {}) {
     if (!zones.length) return 0;
-    const zoneSamples = zones
-        .map(zone => ({ angle: normalizeAngle((zone.a0 + zone.a1) / 2), radius: zone.rOuter }))
-        .sort((a, b) => a.angle - b.angle);
-    return smoothZoneRadiusAt(normalizeAngle(angle), zoneSamples) * expansion * wobbleFactor(normalizeAngle(angle));
+    const zoneSpans = zones
+        .map(zone => ({ a0: normalizeAngle(zone.a0), a1: normalizeAngle(zone.a1), radius: zone.rOuter }))
+        .sort((a, b) => a.a0 - b.a0);
+    return smoothZoneRadiusAt(normalizeAngle(angle), zoneSpans) * expansion * wobbleFactor(normalizeAngle(angle));
 }
 
 /** Замкнутый многоугольник контура плоскости — `samples` точек по кругу. Пустые зоны → пустой контур (рисовать нечего, тот же принцип, что у `renderZonesSvg()`). */
@@ -126,7 +172,13 @@ const DEFAULT_SHARPNESS = 3;
 // наоборот: граница (веса регионов в точке сопоставимы) — ярко, как сейчас выглядит фон; заливка (один регион
 // явно доминирует в точке) — сильно прозрачнее и тусклее. См. `dominantBlend()`.
 const BORDER_ALPHA = 1;
-const FILL_ALPHA = 0.18;
+// РЕАЛЬНАЯ ЖАЛОБА владельца (свой же PNG-рендер той же математики, см. render-zones-png.mjs в диагностике) —
+// `0.18` на тёмном фоне канваса (styles/modules/memory-graph.css) оказался НАСТОЛЬКО тусклым, что заливка
+// регионов визуально читалась как пустота — именно это владелец описал как "впадины без зон" и "ноды вне цвета
+// региона, в пустоте": нода сидит в честно закрашенной (но еле видимой) области, а на глаз кажется, что там нет
+// ничего. Поднят почти втрое — заливка остаётся заметно тусклее границы (`BORDER_ALPHA=1`), но уже не сливается с
+// чёрным фоном.
+const FILL_ALPHA = 0.45;
 
 /** HSL (h: 0-360, s/l: 0-100) → RGB (0-255) — стандартная формула, нужна для записи реальных байт в ImageData канваса (в отличие от `hsl(...)` CSS-строки, которой обходится `metrics.js`'s `region`-метрика для стилей Cytoscape). Экспортирована — тестам нужен эталонный цвет для проверки смешения. */
 export function hslToRgb(h, s, l) {

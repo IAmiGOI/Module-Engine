@@ -47,6 +47,24 @@ test('planeRadiusAt() never dips below a single zone\'s own rOuter at ANY angle 
     assert.ok(worst > zones[0].rOuter, `worst-case plane radius across a dense sweep (${worst.toFixed(2)}) must still exceed rOuter (${zones[0].rOuter})`);
 });
 
+test('planeRadiusAt() stays outside a WIDE zone\'s own rOuter across its ENTIRE angular span, not just at its bisector — real bug found live: the owner\'s screenshots showed deep concave "dips" cutting into a wide region and actual nodes ending up outside the painted color. The old version interpolated the FULL bisector-to-bisector distance to a neighbor, so a wide zone next to a much narrower one sagged toward the neighbor\'s smaller radius well before reaching its own real edge — exactly where nodes near that edge (not at the bisector) would sit', () => {
+    // Широкий регион (270°) рядом с узким (90°) — старая версия начинала "проседать" от биссектрисы широкого
+    // региона сразу к среднему с узким на протяжении ВСЕЙ дистанции между биссектрисами (180°), новая — только в
+    // узком окне у самой границы (см. BOUNDARY_TRANSITION_MAX).
+    const zones = buildZones([
+        { a0: -3 * Math.PI / 4, a1: 3 * Math.PI / 4, rOuter: 400 }, // широкий регион, 270°
+        { a0: 3 * Math.PI / 4, a1: 5 * Math.PI / 4, rOuter: 80 }, // узкий регион, 90°
+    ]);
+    const wide = zones[0];
+    let worstRatio = Infinity;
+    for (let i = 0; i <= 40; i += 1) {
+        const angle = wide.a0 + ((wide.a1 - wide.a0) * i) / 40;
+        const radius = planeRadiusAt(angle, zones);
+        worstRatio = Math.min(worstRatio, radius / wide.rOuter);
+    }
+    assert.ok(worstRatio > 1, `plane radius must stay outside the WIDE zone's own rOuter across its whole span, not just its bisector (worst ratio ${worstRatio.toFixed(3)})`);
+});
+
 test('computePlaneOutline() is smooth — no sharp jump in radius between adjacent sampled points, even across a big size difference between neighboring zones', () => {
     const zones = buildZones([
         { a0: -Math.PI, a1: -Math.PI / 3, rOuter: 50 },
@@ -140,13 +158,22 @@ test('dominantBlend() paints the BORDER between two equally strong regions at fu
     const border = dominantBlend(new Map([['a', 5], ['b', 5]]), new Map([['a', 0], ['b', 240]]));
     const fill = dominantBlend(new Map([['a', 5], ['b', 0.0001]]), new Map([['a', 0], ['b', 240]]));
     assert.equal(border.a, 1, 'an even tie between two regions is the definition of a border — must render at full alpha');
-    assert.ok(fill.a < 0.3, `deep inside one region's own territory the fill must be noticeably dimmer than the border (got ${fill.a})`);
+    assert.ok(fill.a < 0.6, `deep inside one region's own territory the fill must be noticeably dimmer than the border (got ${fill.a})`);
     assert.ok(border.a > fill.a);
 });
 
 test('dominantBlend() treats a single region with no competitor in the field as pure fill (dim), not as a border — there is no neighbor to form a seam with', () => {
     const result = dominantBlend(new Map([['a', 10]]), new Map([['a', 0]]));
-    assert.ok(result.a < 0.3, `a lone region with no neighbor in reach must render as dim fill (got ${result.a})`);
+    assert.ok(result.a < 0.6, `a lone region with no neighbor in reach must render as dim fill (got ${result.a})`);
+});
+
+// РЕАЛЬНАЯ ЖАЛОБА владельца (собственный офлайн-рендер той же математики в PNG): 0.18 (первая версия FILL_ALPHA)
+// на тёмном фоне канваса читался как настоящая ПУСТОТА — "впадины без зон" и "ноды вне цвета региона" оказались не
+// геометрическим багом, а тем, что честно закрашенная область была практически неотличима от фона глазом. Нижняя
+// граница здесь — регрессионная защита ИМЕННО от повторного "слишком тускло", не просто "тусклее границы" выше.
+test('dominantBlend() keeps the FILL visibly non-zero — 0.18 (an earlier real value) read as true emptiness against the dark canvas background, this must not regress back down that far', () => {
+    const fill = dominantBlend(new Map([['a', 10]]), new Map([['a', 0]]));
+    assert.ok(fill.a > 0.35, `fill alpha must stay clearly above the old too-dim value (got ${fill.a})`);
 });
 
 test('dominantBlend() narrows the color transition as sharpness increases, for the same unequal field strengths', () => {
