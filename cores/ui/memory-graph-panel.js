@@ -843,8 +843,37 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     //
     // Рисуется ПОСЛЕ подложки регионов, ПЕРЕД самим канвасом Cytoscape (тот же порядок слоёв в DOM, `tree()`) —
     // свет виден сквозь прозрачный фон Cytoscape, а сами круги/подписи нод остаются чёткими поверх него.
-    const GLOW_RADIUS_SCALE = 3.2; // во сколько раз шире собственного радиуса ноды её ореол света
-    const GLOW_MIN_RADIUS = 18; // px модели — пол для совсем мелких нод, чтобы свет не схлопывался в точку
+    // РЕАЛЬНАЯ ЖАЛОБА владельца (после первого прохода с `createRadialGradient()`): "И чем текущий свет отличается
+    // от круга? Он должен быть раз в 10 больше, даже если он затухает сразу." — он прав: сам по себе градиент уже
+    // не даёт жёсткого края, но при СТАРОМ радиусе (3.2 × радиус ноды, было унаследовано от прежнего
+    // `underlay-padding`) он всё ещё читался как "чуть смягчённый кружок" — свет должен РЕАЛЬНО дотягиваться далеко
+    // за пределы самой ноды, а не заканчиваться почти у её же края. Радиус увеличен на порядок; чтобы при таком
+    // огромном охвате картинка не превратилась в сплошную засветку — угасание НЕ линейное (было 2 стопа, 100%→0%
+    // по всей длине радиуса — на большом радиусе это тоже читалось бы как "просто широкий круг"), а быстрое у
+    // самого центра (см. стопы градиента ниже, `glowGradientStops()`) — ровно то, о чём просил владелец: "даже
+    // если он затухает сразу", лишь бы ОХВАТ был большим.
+    const GLOW_RADIUS_SCALE = 32; // ×10 от прежнего 3.2
+    const GLOW_MIN_RADIUS = 180; // ×10 от прежнего 18 — px модели, пол для совсем мелких нод
+
+    /** Радиус ореола света для ноды диаметром `size` — общая формула для расчёта охвата канваса И для самой отрисовки, чтобы они не могли разойтись. */
+    function glowRadiusFor(size) {
+        return Math.max(GLOW_MIN_RADIUS, ((size ?? 0) / 2) * GLOW_RADIUS_SCALE);
+    }
+
+    /**
+     * Стопы радиального градиента — НЕ линейное угасание 100%→0% по всей длине (при таком большом радиусе линейный
+     * скат сам выглядел бы как "просто широкий круг с мягким краем", не как свет). Яркое ядро у самой ноды, затем
+     * быстрый спад к почти-нулю на небольшой доле радиуса, и длинный, едва заметный хвост до самого края — ближе к
+     * тому, как реально гаснет точечный источник света, чем к любой линейной интерполяции.
+     */
+    function glowGradientStops(peakAlpha) {
+        return [
+            [0, peakAlpha],
+            [0.08, peakAlpha * 0.45],
+            [0.22, peakAlpha * 0.15],
+            [1, 0],
+        ];
+    }
 
     // Разбор ЛЮБОЙ CSS-строки цвета (в `data(color)` встречаются ОБЕ формы — hex от `metricColor()`/`weightColor()`
     // и `hsl(...)` от категориальной метрики `region`, см. metrics.js) в [r,g,b] — не парсер регулярками под каждый
@@ -877,10 +906,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         }
         // Половина стороны — НЕЗАВИСИМО от `currentPlaneHalf` (см. её doc-comment) — реальный охват самих ореолов,
         // не контура плоскости регионов (тумблер фона регионов не должен уметь сломать свечение нод).
-        const half = Math.max(1, ...glowing.map(item => {
-            const glowRadius = Math.max(GLOW_MIN_RADIUS, ((item.data.size ?? 0) / 2) * GLOW_RADIUS_SCALE);
-            return Math.hypot(item.position.x, item.position.y) + glowRadius;
-        }));
+        const half = Math.max(1, ...glowing.map(item => Math.hypot(item.position.x, item.position.y) + glowRadiusFor(item.data.size)));
         currentGlowHalf = half;
         const size = Math.max(1, Math.ceil(half * 2));
         canvas.width = size;
@@ -892,11 +918,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         for (const { position, data } of glowing) {
             const px = half + position.x;
             const py = half + position.y;
-            const glowRadius = Math.max(GLOW_MIN_RADIUS, ((data.size ?? 0) / 2) * GLOW_RADIUS_SCALE);
+            const glowRadius = glowRadiusFor(data.size);
             const [r, g, b] = cssColorToRgb(data.color);
             const gradient = ctx.createRadialGradient(px, py, 0, px, py, glowRadius);
-            gradient.addColorStop(0, `rgba(${r},${g},${b},${data.glow})`);
-            gradient.addColorStop(1, `rgba(${r},${g},${b},0)`);
+            for (const [offset, alpha] of glowGradientStops(data.glow)) gradient.addColorStop(offset, `rgba(${r},${g},${b},${alpha})`);
             ctx.fillStyle = gradient;
             ctx.beginPath();
             ctx.arc(px, py, glowRadius, 0, Math.PI * 2);
