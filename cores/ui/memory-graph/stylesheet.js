@@ -15,8 +15,11 @@ import { structuredStyleRules } from './kinds-view.js';
 
 export const PREVIEW_ID = '__memory_graph_preview__';
 
-/** Шрифт подписей нод: системный гротеск вместо шрифта Cytoscape по умолчанию, чуть плотнее и без тяжёлой обводки. */
-export const LABEL_FONT = Object.freeze({ 'font-family': '"Noto Sans", "Segoe UI", system-ui, -apple-system, sans-serif', 'font-size': 10, 'font-weight': 500 });
+/**
+ * Единый шрифт подписей карты — тот же, что у названий регионов (`.stme-mg-region-label` в styles/modules/memory-graph.css):
+ * гротеск, полужирный, заглавными. Разрядка (`letter-spacing`) у названий регионов есть только в CSS — Cytoscape её не умеет.
+ */
+export const LABEL_FONT = Object.freeze({ 'font-family': '"Noto Sans", "Segoe UI", system-ui, -apple-system, sans-serif', 'font-size': 9, 'font-weight': 600, 'text-transform': 'uppercase' });
 
 const WEIGHT_COLOR_STOPS = [
     [0xe7, 0x4c, 0x3c], // 0.0 — красный (самый слабый узел по весу — первый кандидат на вытеснение)
