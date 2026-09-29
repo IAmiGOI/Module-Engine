@@ -3658,3 +3658,60 @@ test('the first mention of the hero in the chat creates the real card node, not 
     const fact = nodes.find(n => n.label === 'Kira flees north');
     assert.ok(fact.edges.some(edge => edge.to === heroes[0].id), 'the fact is linked to the hero');
 });
+
+async function structuredWorld(character = KIRA) {
+    const built = buildEngine({ character });
+    await call(built.caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+    await call(built.caller, 'memoryGraph.reset');
+    for (const [label, sector] of [['Harbor', 0], ['Legion', 1], ['Throne', 2], ['Market', 3], ['Ruins', 4]]) {
+        await call(built.caller, 'memoryGraph.nodes.create', { label, content: `${label} is an important part of the old world, nothing about anyone in particular.`, sector, ring: 0 });
+    }
+    return built;
+}
+
+test('the hero card is a central hub: a core entity with high importance linked to the centers of the closest regions even when no node mentions the hero', async () => {
+    const { caller } = await structuredWorld();
+
+    await call(caller, 'memoryGraph.nodes.createFromCharacterCard');
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const card = nodes.find(n => n.label === 'Kira');
+    assert.deepEqual([card.kind, card.core, card.protectedNode], ['entity', true, true]);
+    assert.ok(card.importance >= 9);
+    const centerIds = (await call(caller, 'memoryGraph.regions')).value.map(region => region.centerNodeId).filter(id => id !== card.id);
+    const linkedCenters = card.edges.filter(edge => centerIds.includes(edge.to));
+    assert.ok(linkedCenters.length >= 3 && linkedCenters.length <= 6, `linked to ${linkedCenters.length} region centers`);
+});
+
+test('entering a chat adds the hero card to a graph that lacks it, once, as a linked core node', async () => {
+    const { engine, graphCore, caller } = await structuredWorld();
+    await graphCore.load(); // подписка на смену чата регистрируется при загрузке Ядра
+    await graphCore.waitForBootstrap();
+    const before = (await call(caller, 'memoryGraph.nodes')).value.some(n => n.label === 'Kira');
+    assert.equal(before, true, 'loading the core into a chat already adds the hero once');
+
+    engine.events.emit('st.chatChanged', 'the-chat');
+    await graphCore.waitForBootstrap();
+    engine.events.emit('st.chatChanged', 'the-chat-again');
+    await graphCore.waitForBootstrap();
+
+    const heroes = (await call(caller, 'memoryGraph.nodes')).value.filter(n => n.label === 'Kira');
+    assert.equal(heroes.length, 1, 'added once, not on every chat switch');
+    assert.deepEqual([heroes[0].core, heroes[0].source], [true, 'card']);
+    assert.ok(heroes[0].edges.length >= 3);
+});
+
+test('a chat with no character, or a legacy graph, gets no hero card on entering', async () => {
+    const noCharacter = await structuredWorld(null);
+    await noCharacter.graphCore.load();
+    noCharacter.engine.events.emit('st.chatChanged', 'x');
+    await noCharacter.graphCore.waitForBootstrap();
+    assert.equal((await call(noCharacter.caller, 'memoryGraph.nodes')).value.length, 5);
+
+    const legacy = buildEngine({ character: KIRA });
+    await call(legacy.caller, 'memoryGraph.nodes.create', { label: 'Old', content: 'a plain legacy node.', sector: 0, ring: 0 });
+    await legacy.graphCore.load();
+    legacy.engine.events.emit('st.chatChanged', 'y');
+    await legacy.graphCore.waitForBootstrap();
+    assert.equal((await call(legacy.caller, 'memoryGraph.nodes')).value.length, 1);
+});

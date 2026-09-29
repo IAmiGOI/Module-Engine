@@ -2376,8 +2376,25 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         });
     }
 
+    /**
+     * structured: у непустого графа должна быть нода героя ЭТОГО чата — Core и хаб (связана с центрами ближайших регионов). Граф,
+     * собранный вне чата или открытый из библиотеки, карточки не знает — она добавляется при заходе в чат, а не появляется потом
+     * отдельной заглушкой. Один раз (есть карточка — ничего не делает); нет персонажа/описания — молча пропускается.
+     */
+    async function ensureHeroCard() {
+        return enqueueWrite(async () => {
+            if (!features.kinds || !Object.keys(nodes).length || await cardOps.hasHeroCard()) return;
+            const epoch = chatEpoch;
+            const result = await cardOps.applyCharacterCard({ epoch });
+            if (!result.ok || !stillSameChat(epoch)) return;
+            await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
+            publishEvent('memoryGraph.nodeCreated', { nodeId: result.nodeId, status: result.status, source: 'characterCard' });
+        });
+    }
+
     async function reloadForActiveChat() {
         await loadStateEnqueued();
+        await ensureHeroCard().catch(error => console.warn('[memoryGraph] hero card failed:', error));
         // Граф другого чата загружен — панель графа перечитывает его сама (событие для неё; на `st.chatChanged` она бы опередила загрузку).
         publishEvent('memoryGraph.loaded', { nodeCount: Object.keys(nodes).length });
         await bootstrapIfEmpty().catch(error => {
@@ -2569,9 +2586,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // см. `waitForBootstrap()`'s doc-comment). Ошибка ловится и
         // логируется явно, не проглатывается молча и не улетает
         // необработанным отказом промиса.
-        bootstrapPromise = bootstrapIfEmpty().catch(error => {
-            console.warn('[memoryGraph] background bootstrap failed:', error);
-        });
+        bootstrapPromise = ensureHeroCard().catch(error => console.warn('[memoryGraph] hero card failed:', error))
+            .then(() => bootstrapIfEmpty()).catch(error => {
+                console.warn('[memoryGraph] background bootstrap failed:', error);
+            });
     }
 
     /** Публичный ручной прогон — тот же принцип, что `summary.check`: то же самое, что движок делает сам на каждой генерации, просто по требованию (например для UI/тестов). `chatLength` — см. `checkAndPlace()`. */
@@ -2598,7 +2616,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         persistNodes: () => persistNodes(), persistRegions: () => persistRegions(), persistGraphMeta: () => persistGraphMeta(),
         applyGraphMeta: raw => applyGraphMeta(raw), collectAnchors: () => collectAnchors(), edgeAllowed: (a, b) => edgeAllowed(a, b),
         mainCharacterImportance: MAIN_CHARACTER_IMPORTANCE, promoteToCore: (...args) => promoteToCore(...args),
-        applyCharacterCard: options => cardOps.applyCharacterCard(options), characterName: () => cardOps.characterName(),
+        hasHeroCard: () => cardOps.hasHeroCard(), applyCharacterCard: options => cardOps.applyCharacterCard(options), characterName: () => cardOps.characterName(),
         placeNewNode: (...args) => placeNewNode(...args), foldNodesInGraph: (...args) => foldNodesInGraph(...args),
         get bootstrapActive() { return bootstrapActive; },
         graphState: () => ({ nodes, regions, staging, mergeQueue, reconsolidationQueue, distanceStats, noveltyStats }),
