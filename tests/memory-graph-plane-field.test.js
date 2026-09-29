@@ -127,11 +127,26 @@ test('dominantBlend() blends two EQUALLY strong regions 50/50 — the average of
     assert.ok(Math.abs(result.b - (ab + bb) / 2) < 0.01);
 });
 
-test('dominantBlend() returns FULL alpha for any non-empty field, no matter how weak — real bug found live: alpha used to fade with distance (saturating exponential of the raw field magnitude), leaving almost the whole "plane" unpainted except right around the nodes themselves; fading now belongs ONLY to the outline/edge mask in memory-graph-panel.js, not to this function', () => {
-    const weak = dominantBlend(new Map([['a', 0.0001]]), new Map([['a', 0]]));
-    const strong = dominantBlend(new Map([['a', 50]]), new Map([['a', 0]]));
-    assert.equal(weak.a, strong.a, 'alpha must not depend on the field\'s absolute magnitude at all');
-    assert.equal(weak.a, 1);
+test('dominantBlend() alpha does not depend on the field\'s absolute magnitude — only on border-vs-fill (real bug found live: alpha used to fade with distance, leaving almost the whole "plane" unpainted; then a second live bug — flat full alpha everywhere made borders and fills look equally bright)', () => {
+    const weakFill = dominantBlend(new Map([['a', 0.0001]]), new Map([['a', 0]]));
+    const strongFill = dominantBlend(new Map([['a', 50]]), new Map([['a', 0]]));
+    assert.equal(weakFill.a, strongFill.a, 'a lone region\'s alpha must not depend on the field\'s absolute magnitude at all');
+    const weakBorder = dominantBlend(new Map([['a', 0.0001], ['b', 0.0001]]), new Map([['a', 0], ['b', 240]]));
+    const strongBorder = dominantBlend(new Map([['a', 50], ['b', 50]]), new Map([['a', 0], ['b', 240]]));
+    assert.equal(weakBorder.a, strongBorder.a, 'a border\'s alpha must not depend on the field\'s absolute magnitude either');
+});
+
+test('dominantBlend() paints the BORDER between two equally strong regions at full brightness, and the FILL deep inside a single dominant region much more transparently — real bug found live: the whole blob used to be painted at flat full opacity, borders and fills looked identically bright, screenshot complaint was "borders should stay this bright, but the fill should be much more transparent"', () => {
+    const border = dominantBlend(new Map([['a', 5], ['b', 5]]), new Map([['a', 0], ['b', 240]]));
+    const fill = dominantBlend(new Map([['a', 5], ['b', 0.0001]]), new Map([['a', 0], ['b', 240]]));
+    assert.equal(border.a, 1, 'an even tie between two regions is the definition of a border — must render at full alpha');
+    assert.ok(fill.a < 0.3, `deep inside one region's own territory the fill must be noticeably dimmer than the border (got ${fill.a})`);
+    assert.ok(border.a > fill.a);
+});
+
+test('dominantBlend() treats a single region with no competitor in the field as pure fill (dim), not as a border — there is no neighbor to form a seam with', () => {
+    const result = dominantBlend(new Map([['a', 10]]), new Map([['a', 0]]));
+    assert.ok(result.a < 0.3, `a lone region with no neighbor in reach must render as dim fill (got ${result.a})`);
 });
 
 test('dominantBlend() narrows the color transition as sharpness increases, for the same unequal field strengths', () => {
