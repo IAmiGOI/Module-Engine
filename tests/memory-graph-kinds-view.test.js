@@ -70,7 +70,7 @@ test('the kind and core metrics exist only as structured metrics and are found b
 test('no node rule paints a white outline, and node labels use the shared font', () => {
     const rules = graphStylesheet();
     for (const rule of rules.filter(r => /protectedNode|core/.test(r.selector))) assert.equal(rule.style['border-color'], undefined, rule.selector);
-    const label = rules.find(r => r.selector.startsWith('node[?protectedNode]'));
+    const label = rules.find(r => r.selector.startsWith('node.lod-label'));
     assert.match(label.style['font-family'], /Noto Sans/);
     assert.equal(label.style['font-size'], 10);
 });

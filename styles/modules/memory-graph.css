@@ -143,3 +143,7 @@
 .stme-mg-library-thumb { width: 120px; height: 120px; align-self: center; border-radius: 6px; background: #0b0f1a; }
 .stme-mg-library-meta { display: flex; flex-direction: column; gap: 2px; }
 .stme-mg-library-card .stme-row { flex-wrap: wrap; }
+
+/* Названия регионов поверх карты (label-lod.js): крупные и яркие издалека, гаснут при приближении. */
+.stme-mg-region-label { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; color: #fff; font-family: "Noto Sans", "Segoe UI", system-ui, -apple-system, sans-serif; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; text-shadow: 0 0 6px rgba(0, 0, 0, 0.85), 0 0 2px rgba(0, 0, 0, 0.9); pointer-events: none; transition: opacity 0.15s; }
+.stme-mg-region-label small { margin-left: 0.5em; font-weight: 400; opacity: 0.6; letter-spacing: 0; font-size: 0.7em; }

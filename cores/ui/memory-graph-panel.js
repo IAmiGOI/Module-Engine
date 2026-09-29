@@ -10,6 +10,7 @@ import {
 } from '../../libraries/shared/widgets.js';
 import { createLibraryTab } from './memory-graph-library.js';
 import { buildThumbnailSvg } from './memory-graph/thumbnail.js';
+import { regionLabelStyle, labelTier, chooseNodeLabels, chooseRegionLabels } from './memory-graph/label-lod.js';
 import { normalizeTab } from './memory-graph/library-view.js';
 import { summarizeDecision } from '../memory-graph/decision-log.js';
 // MEMORY_GRAPH_UI_PLAN.md, Этап 1 — геометрия и стили Cytoscape вынесены в отдельные файлы БЕЗ ИЗМЕНЕНИЯ
@@ -76,6 +77,7 @@ const MODULE_UI_NAMESPACE = 'core.ui.memoryGraph';
 const WINDOW_KEY = 'window';
 const CANVAS_ID = 'stme-memory-graph-canvas';
 const BG_ID = 'stme-memory-graph-region-bg';
+const LABELS_ID = 'stme-memory-graph-region-labels';
 const ZONES_CANVAS_ID = 'stme-memory-graph-zones-canvas';
 const GLOW_CANVAS_ID = 'stme-memory-graph-glow-canvas';
 // Цвет ребра ВНЕ режима "Color by region" (или когда у ОБОИХ концов нет региона) — то же значение, что раньше было
@@ -958,18 +960,6 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(offscreen, 0, 0, fieldGrid, fieldGrid, 0, 0, size, size);
-
-        ctx.font = '9px sans-serif';
-        ctx.fillStyle = 'rgba(255,255,255,0.45)';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        for (const zone of zones) {
-            const angle = (zone.a0 + zone.a1) / 2;
-            const labelRadius = Math.max(0, zone.rOuter - 10);
-            const label = zone.label ?? (zone.regionId ?? 'Unplaced');
-            const countText = Number.isFinite(zone.capacity) ? `${zone.count}/${zone.capacity}` : `${zone.count}`;
-            ctx.fillText(`${label} · ${countText}`, half + Math.cos(angle) * labelRadius, half + Math.sin(angle) * labelRadius);
-        }
     }
 
     // --- Свечение нод — НАСТОЯЩИЙ мягкий свет, не заливка сплошным цветом ------
@@ -1174,6 +1164,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         const halfExtent = currentZones.length ? Math.max(...currentZones.map(zone => zone.rOuter)) : 200;
         cy.viewport({ zoom: Math.min(width, height) / (2 * halfExtent), pan: { x: width / 2, y: height / 2 } });
         cy.on('pan zoom', updateBackgroundTransform);
+        cy.on('pan zoom resize', scheduleLabels);
         updateBackgroundTransform();
         cy.on('tap', 'node', event => {
             if (event.target.id() === PREVIEW_ID) return; // не настоящий узел — нечего редактировать
@@ -1282,6 +1273,71 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         return cy;
     }
 
+    // --- Подписи по масштабу (label-lod.js) ---------------------------------------------------------------
+    // Названия регионов — HTML-слой поверх канваса (не запечены в фон: там они масштабировались вместе с картой и
+    // издалека становились крошечными); нод — класс `.lod-label` по масштабу и без наложений.
+    let lastZones = [];
+    let renderedZoneKey = '';
+    let labelFrame = 0;
+    function scheduleLabels() {
+        if (labelFrame || !cy) return;
+        labelFrame = requestAnimationFrame(() => { labelFrame = 0; updateLabels(); });
+    }
+    function updateRegionLabels(zoom, pan) {
+        const root = document.getElementById(LABELS_ID);
+        if (!root) return;
+        const zoneKey = lastZones.map(zone => `${zone.regionId}:${zone.label ?? ''}:${zone.count}`).join('|');
+        if (zoneKey !== renderedZoneKey) {
+            renderedZoneKey = zoneKey;
+            root.replaceChildren(...lastZones.map(zone => {
+                const label = document.createElement('div');
+                label.className = 'stme-mg-region-label';
+                label.textContent = `${zone.label ?? zone.regionId ?? 'Unplaced'}`;
+                const count = document.createElement('small');
+                count.textContent = Number.isFinite(zone.capacity) ? `${zone.count}/${zone.capacity}` : `${zone.count}`;
+                label.append(count);
+                return label;
+            }));
+        }
+        const { opacity, fontPx } = regionLabelStyle(zoom);
+        const items = lastZones.map((zone, index) => {
+            const angle = (zone.a0 + zone.a1) / 2;
+            const radius = (zone.rInner + zone.rOuter) / 2;
+            return { id: index, label: zone.label ?? zone.regionId ?? 'Unplaced', x: Math.cos(angle) * radius * zoom + pan.x, y: Math.sin(angle) * radius * zoom + pan.y, fontPx, weight: zone.count ?? 0 };
+        });
+        const shown = chooseRegionLabels(items); // налезающие друг на друга названия прячутся (сильное отдаление)
+        for (const item of items) {
+            const element = root.children[item.id];
+            if (!element) continue;
+            element.style.left = `${item.x}px`;
+            element.style.top = `${item.y}px`;
+            element.style.fontSize = `${fontPx}px`;
+            element.style.opacity = shown.has(item.id) ? String(opacity) : '0';
+        }
+    }
+    function updateLabels() {
+        if (!cy) return;
+        const zoom = cy.zoom();
+        updateRegionLabels(zoom, cy.pan());
+        const byId = nodesById();
+        const candidates = [];
+        cy.nodes().forEach(ele => {
+            const node = byId.get(ele.id());
+            if (!node || ele.hasClass('filtered')) return;
+            const at = ele.renderedPosition();
+            candidates.push({
+                id: ele.id(), label: node.label, x: at.x, y: at.y, radius: ele.renderedWidth() / 2,
+                tier: labelTier({ core: node.core, protectedNode: node.protectedNode, size: ele.data('size') }),
+                weight: node.protectedNode ? 100 + (node.importance ?? 0) : (node.weightRank ?? 0) * 10 + (node.degree ?? 0),
+            });
+        });
+        const chosen = chooseNodeLabels(candidates, zoom, { viewport: { width: cy.width(), height: cy.height() } });
+        cy.batch(() => cy.nodes().forEach(ele => {
+            const want = chosen.has(ele.id());
+            if (ele.hasClass('lod-label') !== want) ele.toggleClass('lod-label', want);
+        }));
+    }
+
     /**
      * Синхронизация БЕЗ полной пересборки (Б3 плана, Этап 4.1) — раньше `cy.elements().remove()` + добавление
      * всего заново на КАЖДОЕ изменение графа сбрасывало выделение и обрывало перетаскивание (нода "прыгала"
@@ -1313,8 +1369,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             if (item.data) ele.data(item.data);
             if (item.position) ele.position(item.position);
         }
+        lastZones = zones;
         updateZonesBackground(zones);
         paintGlowCanvas([...next.values()]);
+        scheduleLabels();
         updateBackgroundTransform(); // новая половина стороны свечения (см. paintGlowCanvas()) — применить её трансформ сразу, не ждать следующего pan/zoom
         applyRetrievalOverlay();
         applySearchFilters();
@@ -1409,6 +1467,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             ele.toggleClass('match', Boolean(query) && ((node.label ?? '').toLowerCase().includes(query) || (node.content ?? '').toLowerCase().includes(query)));
         });
         cy.edges().forEach(ele => ele.toggleClass('filtered', !showEdges()));
+        scheduleLabels(); // скрытые фильтром ноды не занимают места под подписи
     }
 
     /** Enter в поле поиска — первое совпадение центрируется и выделяется, повторный Enter — следующее по кругу (план 6.5). */
@@ -1971,6 +2030,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                         h('canvas', { id: ZONES_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } }),
                         h('canvas', { id: GLOW_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } })),
                     h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
+                    h('div', { id: LABELS_ID, style: { position: 'absolute', inset: '0', 'pointer-events': 'none', overflow: 'hidden' } }),
                     hoverTooltip(),
                     moveToastBlock(),
                     canvasCornerTools(),
