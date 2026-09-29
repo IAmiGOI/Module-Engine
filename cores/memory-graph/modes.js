@@ -42,6 +42,7 @@ export function normalizeGraphMeta(raw) {
     const meta = { mode: normalizeMode(source.mode), version: 1, createdAt: Number.isFinite(source.createdAt) ? source.createdAt : null };
     if (typeof source.libraryId === 'string' && source.libraryId) meta.libraryId = source.libraryId;
     if (typeof source.convertedFrom === 'string') meta.convertedFrom = source.convertedFrom;
+    if (Number.isFinite(source.bootstrapCoreCount)) meta.bootstrapCoreCount = source.bootstrapCoreCount; // Core на конец бутстрапа/конвертации: не запирают автоповышение (core-tier.js)
     return meta;
 }
 

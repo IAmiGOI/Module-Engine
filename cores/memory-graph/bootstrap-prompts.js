@@ -140,15 +140,15 @@ export function parseAdditionalCentersResponse(parsed, entries) {
 export const CHUNK_CANDIDATES_SKELETON = 3;
 export const CHUNK_CANDIDATES_CENTERS = 2;
 
-function labelIndexListing(allEntries) {
+export function labelIndexListing(allEntries) {
     return allEntries.map(entry => `${entry.uid}. ${entryTitle(entry)}`).join('\n');
 }
 
-function fullTextListing(entries) {
+export function fullTextListing(entries) {
     return entries.map(entry => `${entry.uid}. ${entryTitle(entry)}: ${entry.content}`).join('\n');
 }
 
-const CANDIDATE_REPLY_SHAPE = '[{"region": "region name", "candidates": [{"uid": number, "note": "max 15 words: what this entry is"}, ...]}, ...]';
+export const CANDIDATE_REPLY_SHAPE = '[{"region": "region name", "candidates": [{"uid": number, "note": "max 15 words: what this entry is"}, ...]}, ...]';
 
 /** Проход 1, map — кандидаты в под-центры по базовым регионам из записей ЭТОГО чанка. */
 export function buildSkeletonPartPrompt({ partEntries, allEntries, partNumber, partCount, baseRegionNames, candidatesPerRegion = CHUNK_CANDIDATES_SKELETON }) {
@@ -248,7 +248,7 @@ export function trimCandidatesToBudget(groups, budgetTokens) {
     return { groups: working, trimmed };
 }
 
-function candidateListing(groups) {
+export function candidateListing(groups) {
     return groups.map(group => `Region "${group.region}":\n${group.candidates.map(candidateLine).join('\n')}`).join('\n\n');
 }
 
@@ -288,13 +288,16 @@ export function pickNearestRegion(embedding, anchors) {
  * `extractCharacterNames()` внутри `attachToRegionByKey()`, как и раньше
  * (решено с пользователем: "пока оставим старым").
  */
-export function buildRegionEdgesPrompt(regionNodes) {
+export function buildRegionEdgesPrompt(regionNodes, { withKinds = false } = {}) {
     const listing = regionNodes.map(node => `${node.id}. ${node.label}: ${node.content}`).join('\n');
+    if (withKinds) return `These entries all belong to the SAME region of a memory graph:\n\n${listing}\n\nDo two things.\n1. Propose meaningful connections BETWEEN these entries — which ones are genuinely related (not every pair needs one).\n2. Classify entries that are NOT plain lore facts: \"entity\" (a living being: character, creature), \"object\" (a thing, place or group; add \"subtype\": \"item\" | \"place\" | \"group\"). Leave out anything that is simply a fact or piece of world lore.\n\nReply with ONLY a JSON object, using the exact ids given above: {\"edges\": [{\"from\": \"id\", \"to\": \"id\"}, ...], \"kinds\": {\"id\": {\"kind\": \"entity\" | \"object\", \"subtype\": \"item\" | \"place\" | \"group\"}, ...}} (empty edges / kinds if nothing applies).`;
     return `These entries all belong to the SAME region of a memory graph:\n\n${listing}\n\nPropose meaningful connections BETWEEN these entries — which ones are genuinely related and would benefit from being linked (not every pair needs one). Reply with ONLY a JSON array of pairs, using the exact ids given above: [{"from": "id", "to": "id"}, ...] (empty array if truly nothing connects).`;
 }
 
 /** Разбор ответа Прохода 3 — фильтрует к валидным id региона, без петель на себя, без дублей (неориентированная пара). */
 export function parseRegionEdgesResponse(parsed, regionNodes) {
+    // Старый ответ — массив рёбер; расширенный (`withKinds`) — объект `{edges, kinds}`, здесь берутся только рёбра.
+    if (!Array.isArray(parsed)) parsed = parsed && typeof parsed === 'object' ? parsed.edges : null;
     if (!Array.isArray(parsed)) return [];
     const validIds = new Set(regionNodes.map(node => node.id));
     const seen = new Set();
@@ -352,4 +355,18 @@ export function parseOrphanConnectionsResponse(parsed, allNodes, orphanIds) {
         }
     }
     return edges;
+}
+
+/** Виды из расширенного ответа Прохода 3: `{ id: { kind, subtype } }` — только entity/object у известных id; всё остальное молча игнорируется (факт — значение по умолчанию). */
+export function parseRegionKindsResponse(parsed, regionNodes) {
+    const result = {};
+    const raw = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.kinds : null;
+    if (!raw || typeof raw !== 'object') return result;
+    const validIds = new Set(regionNodes.map(node => node.id));
+    for (const [id, value] of Object.entries(raw)) {
+        if (!validIds.has(id) || !value || typeof value !== 'object') continue;
+        if (!['entity', 'object'].includes(value.kind)) continue;
+        result[id] = { kind: value.kind, subtype: value.kind === 'object' && ['item', 'place', 'group'].includes(value.subtype) ? value.subtype : null };
+    }
+    return result;
 }

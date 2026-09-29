@@ -143,7 +143,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.settings', 'memoryGraph.configure', 'memoryGraph.nodes', 'memoryGraph.regions', 'memoryGraph.check',
             'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging', 'memoryGraph.retrievalStatus',
             'memoryGraph.mode', 'memoryGraph.setMode', 'memoryGraph.convertToStructured',
-            'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
+            'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move', 'memoryGraph.nodes.pin',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
             'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
@@ -3187,4 +3187,76 @@ test('an unknown subject becomes an entity only from its second appearance', asy
     await call(caller, 'memoryGraph.checkAndPlace', { text: 'Marcus hammers iron all afternoon, and late into the evening.' });
 
     assert.equal((await call(caller, 'memoryGraph.nodes')).value.some(n => n.label === 'Marcus' && n.kind === 'entity'), true);
+});
+
+test('in a structured graph only the first node of a region is a center, and later nodes are ordinary until promoted', async () => {
+    const { caller } = await structuredEngine(); // Anchor — центр, SubOne/SubTwo — обычные
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+
+    assert.equal(nodes.find(n => n.label === 'Anchor').core, true);
+    assert.equal(nodes.find(n => n.label === 'SubOne').core, false);
+    assert.equal(nodes.find(n => n.label === 'SubOne').protectedNode, false);
+});
+
+test('pinning a node makes it a core and a sub-center of its region, without a cap', async () => {
+    const { caller } = await structuredEngine();
+    const before = (await call(caller, 'memoryGraph.nodes')).value.find(n => n.label === 'SubOne');
+
+    const result = (await call(caller, 'memoryGraph.nodes.pin', { id: before.id })).value;
+
+    assert.deepEqual([result.ok, result.role], [true, 'subCenter']);
+    const region = (await call(caller, 'memoryGraph.regions')).value.find(r => r.subCenterIds?.includes(before.id));
+    assert.ok(region);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === before.id).core, true);
+});
+
+test('a pinned node that is more important than the center takes the center role and the old center stays a sub-center', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Big', content: 'the most important thing here.', sector: 0, ring: 0, importance: 10 });
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const big = nodes.find(n => n.label === 'Big');
+    const anchor = nodes.find(n => n.label === 'Anchor');
+
+    await call(caller, 'memoryGraph.nodes.pin', { id: big.id });
+
+    const region = (await call(caller, 'memoryGraph.regions')).value.find(r => r.nodeIds?.includes(big.id));
+    assert.equal(region.centerNodeId, big.id);
+    assert.ok(region.subCenterIds.includes(anchor.id));
+});
+
+test('core nodes are never evicted when a region overflows', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.configure', { maxNodesPerRegion: 4 });
+    const pinned = (await call(caller, 'memoryGraph.nodes')).value.find(n => n.label === 'SubOne');
+    await call(caller, 'memoryGraph.nodes.pin', { id: pinned.id });
+    for (let i = 0; i < 8; i += 1) await call(caller, 'memoryGraph.nodes.create', { label: `Filler ${i}`, content: `unrelated filler ${i} about ${'q'.repeat(i + 2)} things.`, sector: 0, ring: 0 });
+
+    const labels = (await call(caller, 'memoryGraph.nodes')).value.map(n => n.label);
+
+    assert.ok(labels.includes('Anchor'));
+    assert.ok(labels.includes('SubOne'));
+});
+
+test('a legacy graph cannot pin a core', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Old', content: 'plain legacy node.', sector: 0, ring: 0 });
+    const node = (await call(caller, 'memoryGraph.nodes')).value[0];
+
+    assert.equal((await call(caller, 'memoryGraph.nodes.pin', { id: node.id })).value.ok, false);
+});
+
+test('a structured bootstrap with no base region names builds thematic regions, makes the region center a core, and takes lorebook keys as aliases', async () => {
+    const entries = MODE_ENTRIES.map(entry => (entry.uid === 0 ? { ...entry, key: ['the tavern keeper', 'Marc'] } : entry));
+    const built = buildEngine({ lorebookEntries: entries, fetchReplies: ['[{"region":"Market town trade","subCenterUids":[1]}]', '[{"region":"Market town trade","centerUid":0}]', '{"edges":[],"kinds":{}}'] });
+    await call(built.caller, 'memoryGraph.configure', { defaultGraphMode: 'structured', subCentersPerRegion: 0 });
+    await built.graphCore.load();
+
+    await built.graphCore.bootstrapFromLorebook();
+
+    const regions = (await call(built.caller, 'memoryGraph.regions')).value;
+    const nodes = (await call(built.caller, 'memoryGraph.nodes')).value;
+    assert.ok(regions.some(region => region.name === 'Market town trade' || region.id === 'Market town trade' || JSON.stringify(region).includes('Market town trade')));
+    const marcus = nodes.find(n => n.label === 'Marcus');
+    assert.equal(marcus.core, true);
+    assert.deepEqual(marcus.aliases, ['the tavern keeper', 'Marc']);
 });
