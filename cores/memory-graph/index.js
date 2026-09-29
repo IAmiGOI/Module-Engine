@@ -1,5 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
+import { checkEdge, normalizeKind, kindOf, isCore } from './kinds.js';
 import { featuresFor, normalizeGraphMeta, normalizeMode, migrateNodesToStructured } from './modes.js';
 import { selectBeacons, shouldRefreshSticky, recentQueryText, buildBeaconTree } from './beacons.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
@@ -208,6 +209,24 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         graphMeta = normalizeGraphMeta(raw);
         features = featuresFor(graphMeta.mode);
     }
+    /**
+     * Можно ли создать ребро между двумя нодами: в legacy — всегда (прежнее поведение); в structured — по правилу видов
+     * (kinds.js). Автоматические пути (связывание по имени, бэкбон, проходы бутстрапа) просто пропускают запрещённую пару,
+     * ручной путь отвечает причиной.
+     */
+    function edgeAllowed(a, b) {
+        // Проверяется только запрошенное направление a → b; хранение пока симметричное, направленные рёбра (`dir`) — этап 2 плана.
+        return !features.kinds || checkEdge(a, b).ok;
+    }
+
+    /** Поля structured-графа для ноды, которая только что получила роль в регионе: вид (по умолчанию факт), `core` = центр/под-центр/закреплённая. Legacy — не трогает ноду вовсе. */
+    function stampStructured(node) {
+        if (!features.kinds) return;
+        node.kind = kindOf(node);
+        node.core = Boolean(node.core || node.protectedNode);
+        if (node.core) node.protectedNode = true; // синонимы: существующий код вытеснения/весов/маяков читает protectedNode
+    }
+
     async function persistGraphMeta() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: GRAPH_META_KEY, value: graphMeta }); }
 
     async function loadState() {
@@ -471,7 +490,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     function tryQueueReconsolidation(key, members) {
         const alreadyQueued = new Set(Object.values(reconsolidationQueue).flatMap(entry => entry.nodeIds));
-        const eligible = members.filter(member => !member.protectedNode && !alreadyQueued.has(member.id));
+        let eligible = members.filter(member => !member.protectedNode && !alreadyQueued.has(member.id));
+        // structured: сворачивать можно только ноды ОДНОГО вида (факты с фактами) — берём самую многочисленную группу.
+        if (features.kinds) {
+            const byKind = Map.groupBy(eligible, member => kindOf(member));
+            eligible = [...byKind.values()].sort((a, b) => b.length - a.length)[0] ?? [];
+        }
         if (eligible.length < settings.reconsolidationMinCluster) return false;
 
         const weakest = eligible
@@ -531,6 +555,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             .filter(id => id !== node.id)
             .map(id => nodes[id])
             .filter(Boolean)
+            .filter(member => !features.kinds || kindOf(member) === kindOf(node)) // structured: слияние только внутри одного вида
             .map(member => ({ id: member.id, embedding: member.embedding, words: wordsOf(member.content) }));
         const matchId = findMergeCandidate(newNode, members, {
             wordOverlapThreshold: settings.mergeWordOverlapThreshold,
@@ -604,6 +629,15 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             edges: mergedEdges,
             gameTime: originals.find(node => node.gameTime)?.gameTime ?? null,
         };
+        if (features.kinds) {
+            // Слияние идёт внутри одного вида; Core не «поглощается»: если он есть в группе, слитая нода — Core (protectedNode выше уже true).
+            merged.kind = kindOf(originals[0]);
+            const subtype = originals.find(node => node.subtype)?.subtype;
+            if (subtype) merged.subtype = subtype;
+            merged.core = originals.some(isCore);
+            const aliases = [...new Set(originals.flatMap(node => node.aliases ?? []))].slice(0, 8);
+            if (aliases.length) merged.aliases = aliases;
+        }
         nodes[mergedId] = merged;
 
         for (const other of Object.values(nodes)) {
@@ -682,11 +716,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // не органическое связывание по имени.
             if (!node.protectedNode && (node.degree ?? 0) >= settings.ordinaryMaxDegree) continue;
             if (!owner.protectedNode && (owner.degree ?? 0) >= settings.ordinaryMaxDegree) continue;
+            if (!edgeAllowed(node, owner)) continue;
             node.edges = [...(node.edges ?? []), { to: owner.id, type: 'mentions' }];
             owner.edges = [...(owner.edges ?? []), { to: node.id, type: 'mentions' }];
             node.degree = (node.degree ?? 0) + 1;
             owner.degree = (owner.degree ?? 0) + 1;
         }
+        stampStructured(node);
         detectMergeCandidate(node, key);
         enforceRegionCapacity(key);
     }
@@ -727,6 +763,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
     function addBackboneEdge(a, b) {
         if ((a.edges ?? []).some(edge => edge.to === b.id)) return; // уже связаны (органически или предыдущим проходом)
+        if (!edgeAllowed(a, b)) return;
         a.edges = [...(a.edges ?? []), { to: b.id, type: 'backbone' }];
         b.edges = [...(b.edges ?? []), { to: a.id, type: 'backbone' }];
         a.degree = (a.degree ?? 0) + 1;
@@ -836,7 +873,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * для органической ноды — создание в переполненный регион МОЖЕТ
      * вызвать вытеснение/реконсолидацию/объединение уже лежащих там узлов).
      */
-    async function createNodeManually({ label, content, importance = 0, sector, ring, regionId } = {}) {
+    async function createNodeManually({ label, content, importance = 0, sector, ring, regionId, kind, subtype, core } = {}) {
         return enqueueWrite(async () => {
             // `regionId` (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П1) — берёт приоритет над sector/ring: единственный
             // способ положить ноду руками в СЕМАНТИЧЕСКИЙ регион бутстрапа из Lorebook (у него нет "сектор:кольцо"
@@ -868,6 +905,11 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 gameTime: null,
                 source: 'manual', // Этап 6.1 плана — единственный путь создания ноды, что НЕ идёт через placeNewNode()
             };
+            // structured: вид/подвид/Core из формы; в legacy эти поля игнорируются — данные legacy-графа не меняют формы.
+            if (features.kinds) {
+                Object.assign(node, normalizeKind(kind, subtype), { core: Boolean(core) });
+                if (node.core) node.protectedNode = true;
+            }
             nodes[node.id] = node;
             // Слияние/переполнение при вставке — как обычно, это уже внутри attachToRegionByKey()/attachToRegion()
             // (detectMergeCandidate()/enforceRegionCapacity()) независимо от того, каким путём выбран регион.
@@ -887,9 +929,15 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * маяки/merge-detection (оба читают `embedding` как источник истины о содержимом узла). НЕ персистит и не
      * публикует событие сама — оба вызывающих делают это по-своему (один узел сразу vs пачкой в конце `checkAndPlace()`).
      */
-    async function applyNodeUpdate({ id, label, content, importance, protectedNode } = {}) {
+    async function applyNodeUpdate({ id, label, content, importance, protectedNode, kind, subtype, core } = {}) {
         const node = nodes[id];
         if (!node) return { ok: false, error: `no such node: ${id}` };
+        if (features.kinds && kind !== undefined) {
+            // Смена вида не должна нарушить правило рёбер: событию (не Core) нельзя иметь рёбра в не-события — сначала их надо убрать.
+            const next = normalizeKind(kind, subtype ?? node.subtype);
+            const wouldBreak = next.kind === 'event' && !isCore(node) && !isCore({ core }) && (node.edges ?? []).some(edge => nodes[edge.to] && !checkEdge({ ...node, kind: 'event' }, nodes[edge.to]).ok);
+            if (wouldBreak) return { ok: false, error: 'An event can only continue into another event — remove its links to lore first.' };
+        }
 
         const nextLabel = label === undefined ? node.label : (String(label).trim() || node.label);
         const nextContent = content === undefined ? node.content : String(content).trim();
@@ -904,7 +952,15 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         node.label = nextLabel;
         node.content = nextContent;
         if (importance !== undefined) node.importance = Number(importance) || 0;
-        if (protectedNode !== undefined) node.protectedNode = Boolean(protectedNode);
+        if (features.kinds) {
+            // Core защищены и не разжалуются (решение владельца): `core: false` и `protectedNode: false` для Core игнорируются;
+            // `core: true` — ручное закрепление (роль под-центра в регионе назначит этап 4).
+            if (kind !== undefined) Object.assign(node, normalizeKind(kind, subtype ?? node.subtype));
+            else if (subtype !== undefined && kindOf(node) === 'object') Object.assign(node, normalizeKind('object', subtype));
+            if (core === true) node.core = true;
+            if (protectedNode !== undefined && !isCore(node)) node.protectedNode = Boolean(protectedNode);
+            if (isCore(node)) node.protectedNode = true;
+        } else if (protectedNode !== undefined) node.protectedNode = Boolean(protectedNode);
         node.lastTouchedTurn = turnCounter;
         return { ok: true };
     }
@@ -994,6 +1050,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             if (fromId === toId) return { ok: false, error: 'a node cannot have an edge to itself.' };
             const edgeType = String(type ?? '').trim() || 'mentions';
             if ((from.edges ?? []).some(edge => edge.to === toId && edge.type === edgeType)) return { ok: true };
+            if (!edgeAllowed(from, to)) {
+                const verdict = [checkEdge(from, to), checkEdge(to, from)].find(check => !check.ok);
+                return { ok: false, error: verdict.reason };
+            }
 
             from.edges = [...(from.edges ?? []), { to: toId, type: edgeType }];
             to.edges = [...(to.edges ?? []), { to: fromId, type: edgeType }];
@@ -1204,7 +1264,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * passage) — это query-vs-passage, ожидаемое протоколом E5 сопоставление, тогда как самой ноде для БУДУЩИХ
      * сравнений (слияние/маяки/бэкбон) нужен passage-эмбединг её же содержимого, не сцены-триггера.
      */
-    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter }, { placementEmbedding = embedding, source = 'chat' } = {}) {
+    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter, kind, subtype }, { placementEmbedding = embedding, source = 'chat' } = {}) {
         const node = {
             id: makeId('node', now, random),
             label, content, embedding, importance,
@@ -1221,6 +1281,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // органическая нода из живого чата; `createNodeFromCharacterCard()` передаёт 'card' явно.
             source,
         };
+        if (features.kinds) Object.assign(node, normalizeKind(kind, subtype), { core: false }); // structured: вид от извлечения (по умолчанию факт)
         const decision = decideFirstPlacement({ nameMatchRegion: findNameMatchRegion(content), embedding: placementEmbedding, anchors: collectAnchors(), settings });
 
         nodes[node.id] = node;
@@ -1848,6 +1909,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                         const to = nodes[edge.to];
                         if (!from || !to) continue;
                         if ((from.edges ?? []).some(existingEdge => existingEdge.to === to.id)) continue; // уже связаны (например, mentions выше)
+                        if (!edgeAllowed(from, to)) continue;
                         from.edges = [...(from.edges ?? []), { to: to.id, type: 'related' }];
                         to.edges = [...(to.edges ?? []), { to: from.id, type: 'related' }];
                         from.degree = (from.degree ?? 0) + 1;
@@ -1893,6 +1955,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                             const to = nodes[edge.to];
                             if (!from || !to) continue;
                             if ((from.edges ?? []).some(existingEdge => existingEdge.to === to.id)) continue;
+                            if (!edgeAllowed(from, to)) continue;
                             from.edges = [...(from.edges ?? []), { to: to.id, type: 'related' }];
                             to.edges = [...(to.edges ?? []), { to: from.id, type: 'related' }];
                             from.degree = (from.degree ?? 0) + 1;
