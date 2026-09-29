@@ -3022,3 +3022,64 @@ test('upgrading a legacy graph backs it up first, turns protected nodes into cor
     assert.deepEqual([meta.mode, meta.meta.convertedFrom], ['structured', 'legacy']);
     assert.equal((await call(caller, 'memoryGraph.convertToStructured')).value.unchanged, true);
 });
+
+async function structuredEngine() {
+    const built = buildEngine();
+    await call(built.caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+    await call(built.caller, 'memoryGraph.reset');
+    // Первые три ноды региона — центр и два под-центра (пока они автоматически Core); тестовые ноды идут четвёртой и далее — обычные.
+    for (const label of ['Anchor', 'SubOne', 'SubTwo']) await call(built.caller, 'memoryGraph.nodes.create', { label, content: `${label} — filler node holding a region role.`, sector: 0, ring: 0 });
+    return built;
+}
+
+test('in a structured graph a manual link from an event to a fact is refused, while fact to event and event to event are allowed', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Fact', content: 'some lore about the city walls.', sector: 0, ring: 0, kind: 'fact' });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Battle', content: 'the gates fell at dawn.', sector: 0, ring: 0, kind: 'event' });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Aftermath', content: 'the survivors fled north.', sector: 0, ring: 0, kind: 'event' });
+    const byLabel = Object.fromEntries((await call(caller, 'memoryGraph.nodes')).value.map(n => [n.label, n]));
+
+    const refused = (await call(caller, 'memoryGraph.edges.create', { fromId: byLabel.Battle.id, toId: byLabel.Fact.id })).value;
+    assert.equal(refused.ok, false);
+    assert.equal((await call(caller, 'memoryGraph.edges.create', { fromId: byLabel.Fact.id, toId: byLabel.Battle.id })).value.ok, true);
+    assert.equal((await call(caller, 'memoryGraph.edges.create', { fromId: byLabel.Battle.id, toId: byLabel.Aftermath.id })).value.ok, true);
+});
+
+test('a core event may link out to a fact and core survives an attempt to clear it', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Fact', content: 'some lore about the city walls.', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Coup', content: 'the king was deposed.', sector: 0, ring: 0, kind: 'event', core: true });
+    const byLabel = Object.fromEntries((await call(caller, 'memoryGraph.nodes')).value.map(n => [n.label, n]));
+
+    assert.equal((await call(caller, 'memoryGraph.edges.create', { fromId: byLabel.Coup.id, toId: byLabel.Fact.id })).value.ok, true);
+    await call(caller, 'memoryGraph.nodes.update', { id: byLabel.Coup.id, core: false, protectedNode: false });
+
+    const coup = (await call(caller, 'memoryGraph.nodes')).value.find(n => n.label === 'Coup');
+    assert.equal(coup.core, true);
+    assert.equal(coup.protectedNode, true);
+});
+
+test('a fact linked to lore cannot be turned into an ordinary event', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'A', content: 'first lore node here.', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'B', content: 'second lore node there.', sector: 0, ring: 0 });
+    const nodesNow = (await call(caller, 'memoryGraph.nodes')).value;
+    const a = nodesNow.find(n => n.label === 'A');
+    const b = nodesNow.find(n => n.label === 'B');
+    await call(caller, 'memoryGraph.edges.create', { fromId: a.id, toId: b.id, type: 'knows' });
+
+    const result = (await call(caller, 'memoryGraph.nodes.update', { id: a.id, kind: 'event' })).value;
+
+    assert.equal(result.ok, false);
+    assert.equal((await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === a.id).kind, 'fact');
+});
+
+test('a legacy graph ignores kind and core on manual creation and gets no new fields', async () => {
+    const { caller } = buildEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Old', content: 'plain legacy node.', sector: 0, ring: 0, kind: 'event', core: true });
+
+    const node = (await call(caller, 'memoryGraph.nodes')).value[0];
+
+    assert.equal(node.kind, undefined);
+    assert.equal(node.core, undefined);
+});
