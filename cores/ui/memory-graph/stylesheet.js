@@ -65,13 +65,11 @@ export function graphStylesheet() {
                 'underlay-opacity': 0, 'underlay-shape': 'ellipse',
             },
         },
-        // Подпись — ВСЕГДА у защищённых (центр/под-центр региона) и у достаточно крупных нод (size >= 20px), у
-        // остальных — только под курсором (класс `.hovered`, тот же `mouseover`/`mouseout`, что и раньше): при
-        // реальном графе подписи разом на ВСЕХ нодах превращались в нечитаемое нагромождение (жалоба пользователя,
-        // унаследована от Этапа-1 версии этого файла). Светлый текст с тёмной обводкой — читается на любом фоне
-        // зоны (Этап 4.3 красит фон зон в цвет их региона, не всегда тёмно-серый).
+        // Подписи нод — по масштабу и без наложений (label-lod.js): издалека только Core, ближе — крупные ноды, вплотную —
+        // остальные; подпись, налезающая на уже выбранную, пропускается. Класс `.lod-label` ставит панель, под курсором —
+        // `.hovered`. Светлый текст с лёгкой тёмной обводкой читается на любом фоне зоны.
         {
-            selector: 'node[?protectedNode], node[size >= 20], node.hovered',
+            selector: 'node.lod-label, node.hovered', // .lod-label ставит панель по масштабу и без наложений (label-lod.js)
             style: {
                 label: 'data(label)', 'text-valign': 'bottom', 'text-margin-y': 5, 'min-zoomed-font-size': 8,
                 ...LABEL_FONT, color: '#e8ecf8', 'text-outline-color': '#0b0f1a', 'text-outline-width': 1.5, 'text-outline-opacity': 0.75,

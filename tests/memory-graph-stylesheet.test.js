@@ -51,11 +51,12 @@ test('graphStylesheet() still lets the retrieval-highlight classes (beacon/route
     assert.ok(noiseRule.style['underlay-opacity'] > 0);
 });
 
-test('graphStylesheet() shows a label for protected nodes and large nodes without requiring hover, but keeps hover working for everything else', () => {
+test('graphStylesheet() labels only nodes the panel marked by zoom level (lod-label) or hovered nodes — never every node at once', () => {
     const rules = graphStylesheet();
-    const labelRule = rules.find(rule => rule.selector.includes('protectedNode') && rule.selector.includes('hovered'));
-    assert.ok(labelRule, 'one rule must cover protected OR large OR hovered nodes');
+    const labelRule = rules.find(rule => rule.selector.includes('lod-label') && rule.selector.includes('hovered'));
+    assert.ok(labelRule, 'one rule covers zoom-chosen OR hovered nodes');
     assert.equal(labelRule.style.label, 'data(label)');
+    assert.equal(rules.find(rule => rule.selector === 'node').style.label, undefined, 'a plain node has no label');
 });
 
 test('graphStylesheet() still carries the PREVIEW_ID marker rule, unchanged in spirit — a dashed, non-interactive placeholder', () => {
