@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { METRICS, findMetric, metricColor, metricDomain, glowValue } from '../cores/ui/memory-graph/metrics.js';
+import { METRICS, findMetric, metricColor, metricDomain, glowValue, averageHue } from '../cores/ui/memory-graph/metrics.js';
 
 const weight = findMetric('weight');
 const risk = findMetric('risk');
@@ -116,4 +116,24 @@ test('glowValue() in \'weight\' mode starts from 0 (not the old 0.12 floor) for 
 test('glowValue() in \'retrieved\' mode starts from 0 for the least-retrieved node in the domain, not the old 0.12 floor', () => {
     const node = { protectedNode: false, retrievedCount: 0 };
     assert.equal(glowValue(node, 'retrieved', {}, { min: 0, max: 10 }), 0);
+});
+
+// --- averageHue() (реворк цвета рёбер по региону, прямой запрос владельца) --------------------------------------
+
+test('averageHue() of two nearby hues is the ordinary midpoint', () => {
+    assert.ok(Math.abs(averageHue(10, 30) - 20) < 0.001);
+});
+
+test('averageHue() wraps CORRECTLY across the 0/360 seam — the arithmetic mean would be wrong here on purpose', () => {
+    const hue = averageHue(350, 10);
+    // Правильная середина короткой дуги 350°→10° — это 0° (они соседи на цветовом круге); арифметическое
+    // среднее (350+10)/2=180 дало бы противоположный, совершенно случайный цвет.
+    const distance = Math.min(Math.abs(hue - 0), 360 - Math.abs(hue - 0));
+    assert.ok(distance < 0.001, `expected ~0°, got ${hue}°`);
+});
+
+test('averageHue() of two opposite hues (180° apart) is symmetric either way round', () => {
+    const a = averageHue(0, 180);
+    const b = averageHue(180, 0);
+    assert.ok(Math.abs(a - b) < 0.001 || Math.abs(Math.abs(a - b) - 360) < 0.001);
 });
