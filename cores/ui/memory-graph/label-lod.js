@@ -40,15 +40,18 @@ const overlaps = (a, b, margin) => a.left < b.right + margin && a.right > b.left
 /**
  * Какие ноды подписывать. `candidates` — `{ id, label, x, y, radius, tier, weight }` в экранных пикселях. Уровни включаются по
  * масштабу (`ZOOM_TIERS`); внутри уровня важнее — больший `weight`; подпись, налезающая на уже выбранную, пропускается.
- * `maxLabels` — потолок на случай огромных графов. Возвращает `Set` id.
+ * Кандидат с `forced: true` (под курсором, маяк ретрива) подписывается всегда и раньше остальных: он тоже занимает место, из-за него
+ * пропускаются другие. `maxLabels` — потолок на случай огромных графов. Возвращает `Set` id.
  */
 export function chooseNodeLabels(candidates, zoom, { viewport = null, maxLabels = 60, margin = 2 } = {}) {
     const visibleTier = zoom >= ZOOM_TIERS.near ? 2 : zoom >= ZOOM_TIERS.mid ? 1 : 0;
     const inView = point => !viewport || (point.x >= -20 && point.y >= -20 && point.x <= viewport.width + 20 && point.y <= viewport.height + 20);
-    const pool = candidates.filter(item => item.tier <= visibleTier && inView(item))
+    const forced = candidates.filter(item => item.forced && inView(item));
+    const pool = candidates.filter(item => !item.forced && item.tier <= visibleTier && inView(item))
         .sort((a, b) => a.tier - b.tier || (b.weight ?? 0) - (a.weight ?? 0));
     const accepted = [];
     const chosen = new Set();
+    for (const item of forced) { accepted.push(boxOf(item)); chosen.add(item.id); }
     for (const item of pool) {
         if (chosen.size >= maxLabels) break;
         const box = boxOf(item);
