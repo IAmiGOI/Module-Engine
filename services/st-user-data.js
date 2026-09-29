@@ -18,6 +18,7 @@
  */
 
 import { DEFERRED_PREFIX } from '../libraries/core/sync-runner.js';
+import { createIndexedDbGraphStore } from './graph-library.js';
 
 export const SYNC_CATEGORIES = Object.freeze([
     { id: 'characters', label: 'Characters' },
@@ -26,6 +27,7 @@ export const SYNC_CATEGORIES = Object.freeze([
     { id: 'presets', label: 'Presets & prompts (samplers, Prompt Manager, instruct, themes, Quick Replies)' },
     { id: 'backgrounds', label: 'Backgrounds' },
     { id: 'personas', label: 'Persona avatars' },
+    { id: 'graphs', label: 'Memory graph library (saved graphs)' },
 ]);
 
 /** Наши собственные фоны из репозитория фонов ставятся на каждом устройстве сами — синхронизировать их незачем. */
@@ -59,6 +61,7 @@ export function registerStUserDataService(bus, {
     concurrency = DEFAULT_CONCURRENCY,
     now = () => Date.now(),
     refreshCharacters = () => getContext()?.getCharacters?.(),
+    graphStore = typeof indexedDB === 'undefined' ? null : createIndexedDbGraphStore(),
 } = {}) {
     const headers = (options = {}) => getContext()?.getRequestHeaders?.(options) ?? {};
 
@@ -374,7 +377,34 @@ export function registerStUserDataService(bus, {
         return [name.slice(0, slash), name.slice(slash + 1)];
     }
 
-    const providers = [characters, chats, groups, groupChats, worlds, presets, themes, quickReplies, backgrounds, personas];
+    // Библиотека графов памяти — раздел без эндпоинтов ST: записи лежат в indexedDB браузера (services/graph-library.js) и уезжают
+    // между устройствами как файлы `stmeGraphs/<id>.json` — запись библиотеки целиком, как её отдаёт `graphLibrary.get`.
+    // Штамп — время правки и размер записи: без чтения тела видно, менялась ли она.
+    const graphStamp = record => `${record.updatedAt ?? 0}|${record.size ?? 0}`;
+    const graphs = {
+        id: 'stmeGraphs', category: 'graphs',
+        async list() {
+            if (!graphStore) return [];
+            return ((await graphStore.all()) ?? []).map(record => ({ path: `stmeGraphs/${record.id}.json`, stamp: graphStamp(record), size: record.size ?? 0, modified: record.updatedAt ?? 0 }));
+        },
+        async read(name) {
+            const record = graphStore ? await graphStore.get(stripExt(name, '.json')) : null;
+            if (!record) throw new Error(`graph "${name}" was not found in the library`);
+            return new BlobCtor([JSON.stringify(record)], { type: 'application/json' });
+        },
+        async write(name, blob) {
+            if (!graphStore) throw new Error('the graph library is not available in this browser');
+            const record = JSON.parse(await blob.text());
+            if (record?.format !== 'stme-memory-graph' || !record.graph) throw new Error(`"${name}" is not a memory graph record`);
+            // Имя файла — id записи: копия-конфликт синхронизации (`... (conflict …).json`) не перезапишет оригинал.
+            record.id = stripExt(name, '.json');
+            await graphStore.put(record);
+            return { stamp: graphStamp(record), size: record.size ?? 0, modified: record.updatedAt ?? 0 };
+        },
+        async remove(name) { if (graphStore) await graphStore.delete(stripExt(name, '.json')); },
+    };
+
+    const providers = [characters, chats, groups, groupChats, worlds, presets, themes, quickReplies, backgrounds, personas, graphs];
     const byId = new Map(providers.map(provider => [provider.id, provider]));
 
     function resolve(path) {

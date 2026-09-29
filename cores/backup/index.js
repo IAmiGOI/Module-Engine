@@ -82,6 +82,38 @@ export function createBackupCore(host) {
  * ordinarily this Ядро бэкапа's OWN host, since reading/writing chatMetadata
  * is a `cores` -> `services` crossing either way.
  */
+/**
+ * Библиотека графов памяти (`graphLibrary.*`, indexedDB браузера) как источник бэкапа: попадает и в полный бэкап, и в пресет.
+ * Читает записи целиком; при импорте записи объединяются по id — существующая перезаписывается только более новой (`updatedAt`),
+ * ничего не удаляется (импорт пресета не стирает графы, которых в файле нет).
+ */
+export function createGraphLibraryBackupSource(host) {
+    const call = async (contract, params) => {
+        const result = await request(host.services, contract, { params });
+        if (!result.ok) throw new Error(result.error.message);
+        return result.value;
+    };
+    return {
+        async readRaw() {
+            const summaries = (await call('graphLibrary.list', {})) ?? [];
+            const records = [];
+            for (const summary of summaries) {
+                const record = await call('graphLibrary.get', { id: summary.id });
+                if (record) records.push(record);
+            }
+            return { version: 1, records };
+        },
+        async writeRaw(raw) {
+            const existing = new Map(((await call('graphLibrary.list', {})) ?? []).map(item => [item.id, item.updatedAt ?? 0]));
+            for (const record of raw?.records ?? []) {
+                if (record?.format !== 'stme-memory-graph' || !record.id || !record.graph) continue;
+                if (existing.has(record.id) && (existing.get(record.id) ?? 0) >= (record.updatedAt ?? 0)) continue;
+                await call('graphLibrary.put', { record });
+            }
+        },
+    };
+}
+
 export function createChatMetadataBackupSource(host) {
     return {
         async readRaw() {

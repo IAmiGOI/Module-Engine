@@ -39,7 +39,7 @@ test('the categories the service exposes match the ones the library knows, and e
     registerStUserDataService(buses.services, { getContext: () => ({}), fetch: async () => ({ ok: true, json: async () => [] }) });
     const listed = await new Promise(resolve => buses.services.subscribe('stUserData.categories', {}, result => resolve(result.value)));
     assert.deepEqual(listed.map(item => item.id), [...SYNC_CATEGORY_IDS]);
-    for (const section of ['characters', 'chats', 'groups', 'groupChats', 'worlds', 'presets', 'themes', 'quickReplies', 'backgrounds', 'personas']) {
+    for (const section of ['characters', 'chats', 'groups', 'groupChats', 'worlds', 'presets', 'themes', 'quickReplies', 'backgrounds', 'personas', 'stmeGraphs']) {
         assert.ok(SYNC_CATEGORY_IDS.includes(categoryOfPath(`${section}/x`)), section);
     }
 });
@@ -111,12 +111,15 @@ test('the page-load switch defaults to on, can be turned off, and is shown to th
 
 test('settings saved before "presets" existed get the new category switched on once, without touching what the user turned off', () => {
     const old = sanitizeSyncConfig({ categories: ['characters', 'chats', 'worlds', 'backgrounds', 'personas'] }, options);
-    assert.deepEqual(old.categories, ['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas']);
+    assert.deepEqual(old.categories, ['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas', 'graphs']);
     const someOff = sanitizeSyncConfig({ categories: ['chats', 'backgrounds'] }, options);
-    assert.deepEqual(someOff.categories, ['chats', 'presets', 'backgrounds'], 'chats and backgrounds stay, characters stay off');
-    assert.equal(old.categoryVersion, 2);
-    const later = sanitizeSyncConfig({ categoryVersion: 2, categories: ['chats'] }, options);
-    assert.deepEqual(later.categories, ['chats'], 'a user who later turns presets off is respected');
+    assert.deepEqual(someOff.categories, ['chats', 'presets', 'backgrounds', 'graphs'], 'chats and backgrounds stay, characters stay off');
+    assert.equal(old.categoryVersion, 3);
+    const version2 = sanitizeSyncConfig({ categoryVersion: 2, categories: ['chats'] }, options);
+    assert.deepEqual(version2.categories, ['chats', 'graphs'], 'settings from before the graph library get only that category switched on');
+    const later = sanitizeSyncConfig({ categoryVersion: 3, categories: ['chats'] }, options);
+    assert.deepEqual(later.categories, ['chats'], 'a user who later turns presets or graphs off is respected');
+    assert.equal(categoryOfPath('stmeGraphs/x.json'), 'graphs');
     assert.equal(categoryOfPath('themes/x.json'), 'presets');
     assert.equal(categoryOfPath('quickReplies/x.json'), 'presets');
     assert.equal(categoryOfPath('presets/openai/x.json'), 'presets');

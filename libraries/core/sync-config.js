@@ -7,10 +7,12 @@ import { DEFAULT_GITHUB_MAX_FILE_BYTES, sanitizeGithubSettings } from './sync-gi
  * (`groupChats/…`). Несколько разделов могут принадлежать одной категории (все виды чатов — одна галочка).
  */
 
-export const SYNC_CATEGORY_IDS = Object.freeze(['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas']);
+export const SYNC_CATEGORY_IDS = Object.freeze(['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas', 'graphs']);
 
 /** Версия набора категорий: у настроек, сохранённых до появления «presets», новая категория включается один раз сама. */
-const CATEGORY_VERSION = 2;
+const CATEGORY_VERSION = 3;
+/** В какой версии набора появилась категория (у первых пяти — с самого начала): при обновлении она включается ОДИН раз. */
+const CATEGORY_ADDED_IN = Object.freeze({ presets: 2, graphs: 3 });
 
 const SECTION_TO_CATEGORY = Object.freeze({
     characters: 'characters',
@@ -23,6 +25,7 @@ const SECTION_TO_CATEGORY = Object.freeze({
     quickReplies: 'presets',
     backgrounds: 'backgrounds',
     personas: 'personas',
+    stmeGraphs: 'graphs', // библиотека графов памяти (сервис graphLibrary), не файлы ST
 });
 
 export function categoryOfPath(path) {
@@ -60,10 +63,13 @@ export function conflictPolicyFor(path) {
     return CONFLICT_POLICY[categoryOfPath(path)] ?? 'copy';
 }
 
-/** Настройки старше версии 2 не знали про «presets»: включаем её один раз (список у них сохранён явный, и без этого новая категория была бы выключена). */
+/** Настройки, сохранённые до появления категории («presets» — версия 2, «graphs» — 3), не знали о ней: включаем её один раз (список у них сохранён явный, и без этого новая категория была бы выключена). Выключенное пользователем позже уважается. */
 function migrateCategories(categories, input) {
-    if (Array.isArray(input.categories) && (Number(input.categoryVersion) || 1) < CATEGORY_VERSION && !categories.includes('presets')) return SYNC_CATEGORY_IDS.filter(id => id === 'presets' || categories.includes(id));
-    return categories;
+    if (!Array.isArray(input.categories)) return categories;
+    const version = Number(input.categoryVersion) || 1;
+    if (version >= CATEGORY_VERSION) return categories;
+    const added = Object.entries(CATEGORY_ADDED_IN).filter(([, since]) => since > version).map(([id]) => id);
+    return SYNC_CATEGORY_IDS.filter(id => added.includes(id) || categories.includes(id));
 }
 
 export function sanitizeCategories(raw) {

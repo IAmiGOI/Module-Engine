@@ -51,7 +51,7 @@ import { createDiffusionCore } from '../cores/models/diffusion.js';
 import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createChatHistoryCore } from '../cores/chat-history/index.js';
 import { createSettingsCore } from '../cores/settings/index.js';
-import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource } from '../cores/backup/index.js';
+import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource, createGraphLibraryBackupSource } from '../cores/backup/index.js';
 import { createTrackingCore } from '../cores/tracking/index.js';
 import { createMacrosCore } from '../cores/macros/index.js';
 import { createSpeakerCore } from '../cores/speaker/index.js';
@@ -555,6 +555,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     const backupCore = createBackupCore(backupHost);
     backupCore.registerSource('chatMemory', createChatMetadataBackupSource(backupHost));
     backupCore.registerSource('settings', createExtensionSettingsBackupSource(backupHost));
+    backupCore.registerSource('graphLibrary', createGraphLibraryBackupSource(backupHost)); // сохранённые графы памяти — и в бэкап, и в пресет
 
     // Ядро событий строится раньше всех, кто публикует события: они получают
     // его `publish` при сборке, чтобы защиты и реестр видели ВСЮ поверхность,

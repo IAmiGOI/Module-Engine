@@ -36,13 +36,13 @@ export function createPresetCard(deps) {
      * пресетом состояния сам, каждый Ядро — своим собственным путём.
      */
     async function exportPreset() {
-        const result = await call('backup.export', { sourceIds: ['settings'] });
+        const result = await call('backup.export', { sourceIds: ['settings', 'graphLibrary'] });
         if (!result.ok) { flash(presetFlash, 'error'); await notify('error', result.error.message); return; }
         const stamp = new Date().toISOString().slice(0, 10);
         const saved = await callService('file.download', { filename: `stme-preset-${stamp}.json`, content: JSON.stringify(result.value, null, 2) });
         flash(presetFlash, saved.ok ? 'ok' : 'error');
         await notify(saved.ok ? 'ok' : 'error',
-            saved.ok ? 'Preset downloaded — all settings and the module set in one file.' : saved.error.message);
+            saved.ok ? 'Preset downloaded — all settings, the module set and saved memory graphs in one file.' : saved.error.message);
     }
 
     async function importPreset(file) {
