@@ -2,11 +2,15 @@
  * Завершающая обработка собранных сообщений и параметры в тело запроса (Chat Completion).
  * Чистые функции. Служебные поля (`_block`, `_hid`) снимаются последним шагом — провайдер их не должен видеть.
  */
-/** Параметры пресета → поля тела запроса ST (только заданные в пресете; имена — как у эндпоинта generate). */
+/**
+ * Параметры пресета → поля тела запроса ST (только заданные в пресете; имена — как у эндпоинта generate).
+ * `stream` сюда НЕ входит намеренно: ST разбирает ответ по своей настройке стриминга, и расхождение с телом запроса сломало бы
+ * приём ответа. Стриминг переключается настройкой ST на время генерации (`stPromptData.setStreaming`), см. ядро PM.
+ */
 const PARAM_TO_BODY = {
     temperature: 'temperature', top_p: 'top_p', top_k: 'top_k', top_a: 'top_a', min_p: 'min_p',
     frequency_penalty: 'frequency_penalty', presence_penalty: 'presence_penalty', repetition_penalty: 'repetition_penalty',
-    openai_max_tokens: 'max_tokens', stream_openai: 'stream', seed: 'seed', n: 'n',
+    openai_max_tokens: 'max_tokens', seed: 'seed', n: 'n',
     reasoning_effort: 'reasoning_effort', verbosity: 'verbosity',
 };
 

@@ -12,6 +12,8 @@
  *   orders      — прочие списки `prompt_order` ST как есть (для точного экспорта),
  *   primaryOrder— character_id того списка, из которого собрано дерево,
  *   extensions  — `extensions` ST как есть (regex_scripts и др.),
+ *   rules       — текстовые правила (pm-rules.js); у импортированных из ST сюда переложены `extensions.regex_scripts`
+ *   cot         — Guided CoT (pm-cot.js), null пока не настроен
  *   opaque      — всё нераспознанное, включая поля подключения (не применяем, секреты чистим при экспорте).
  *
  * Блок хранит ТОЛЬКО те поля, что были в источнике: экспорт не выдумывает лишнего.
@@ -52,7 +54,7 @@ export function createEmptyPreset(name = 'New preset') {
     return {
         formatVersion: PM_FORMAT_VERSION, name,
         params: {}, templates: {}, blocks: [], tree: [],
-        orders: [], primaryOrder: null, extensions: {}, opaque: {},
+        orders: [], primaryOrder: null, extensions: {}, opaque: {}, rules: [], cot: null,
     };
 }
 

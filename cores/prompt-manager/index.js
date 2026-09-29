@@ -3,6 +3,7 @@ import { buildRequest } from '../../libraries/core/pm-run.js';
 import { compareRequests, analyzeStability } from '../../libraries/core/pm-cache.js';
 import { assemblePrompt } from '../../libraries/core/pm-assemble.js';
 import { shouldRunCot, runCot, buildCotInjection, cotRecord, normalizeCot, CotStepError } from '../../libraries/core/pm-cot.js';
+import { resolveParams, setOverride, DEFAULT_OVERRIDES } from '../../libraries/core/pm-overrides.js';
 import { createPresetStore } from './presets.js';
 import { createContributionRegistry, placeContribution, resetContribution } from './contributions.js';
 
@@ -12,7 +13,7 @@ const PAYLOAD_PIPELINE = 'generation.payload';
 const CAPTURE_CONTRACT = 'promptManager.capture';
 const REWRITE_CONTRACT = 'promptManager.rewrite';
 const CAPTURE_TTL_MS = 60_000;
-const DEFAULT_SETTINGS = { enabled: true, activePresetId: null, headroom: 0.1, freezeRandom: true, applyParams: true, logSize: 20, autoPrepared: false };
+const DEFAULT_SETTINGS = { enabled: true, activePresetId: null, headroom: 0.1, freezeRandom: true, applyParams: true, applyStreaming: true, logSize: 20, autoPrepared: false, overrides: DEFAULT_OVERRIDES };
 
 /**
  * Ядро Prompt Manager (PROMPT_MANAGER_PLAN.md). Заменяет сборку промпта ST, когда включено и есть активный пресет:
@@ -30,6 +31,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
     let warnedUnsupported = null;
     let pendingCot = null; // запись CoT текущей генерации: сохраняется в метаданные чата, когда готово сообщение
     let manualCot = false;
+    let streamRestore = null; // прежнее значение стриминга ST, если мы его временно меняли
     let lastCotSteps = null; // шаги последнего CoT — для режима «только финал» при перегенерации
 
     const own = async (contract, params) => {
@@ -99,7 +101,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
     }
 
     /** Одна сборка: и для настоящей отправки, и для превью. Ничего не отправляет. */
-    async function assemble(chat, { commit = false } = {}) {
+    async function assemble(chat, { commit = false, model } = {}) {
         const record = settings.activePresetId ? await store.get(settings.activePresetId) : null;
         if (!record) return { skipped: 'no active preset' };
         const info = await service('stPromptData.read', {});
@@ -110,12 +112,13 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         let changed = false;
         for (const contribution of contributions.list()) changed = placeContribution(record.preset.tree, contribution) || changed;
         if (changed) await store.save(record, { label: 'new module contribution' });
-        const result = buildRequest(record.preset, materials, {
+        const { params, sources } = resolveParams(record.preset.params, settings.overrides, { model: model ?? info.model, char: info.char, chatId: info.chatId });
+        const result = buildRequest({ ...record.preset, params }, materials, {
             contributions: contributions.asContext(), globals, timed, prevCut: chatState.cut ?? 0, headroom: settings.headroom,
             seed: settings.freezeRandom ? (info.chatId ?? 'chat') : undefined,
         });
         if (commit) await request(host.own, 'storage.chatMemory.set', { params: { namespace: NAMESPACE, key: 'state', value: { cut: result.cut, timed } } });
-        return { record, info, result };
+        return { record, info, result, overrideSources: sources, params };
     }
 
     function pushLog(entry) {
@@ -145,10 +148,10 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
                 return payload;
             }
             warnedUnsupported = null;
-            const assembled = await assemble(fresh.chat, { commit: true });
+            const assembled = await assemble(fresh.chat, { commit: true, model: payload.model });
             if (assembled.skipped) return payload;
             const { result, record } = assembled;
-            const cotSteps = await runGuidedCot(record.preset, result, fresh.type);
+            const cotSteps = await runGuidedCot({ ...record.preset, params: assembled.params }, result, fresh.type);
             if (cotSteps) result.messages.push(buildCotInjection(cotSteps, { injectAs: normalizeCot(record.preset.cot).injectAs }));
             const body = settings.applyParams ? result.body : {};
             pushLog({ at: now(), presetId: record.id, presetName: record.name, messages: result.messages, withMarkers: result.withMarkers, tokens: result.tokens.total, budget: result.budget, dropped: result.dropped, report: result.report, macros: result.macros, lore: result.lore, overBudget: result.overBudget });
@@ -217,6 +220,28 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         await request(host.own, 'storage.chatMemory.set', { params: { namespace: NAMESPACE, key: 'cot', value: { ...all, [index]: record } } });
     }
 
+    /**
+     * Стриминг задаёт ST по СВОЕЙ настройке, а не по телу запроса (тело переписывать нельзя — ответ разберётся не так), поэтому
+     * значение из пресета ставится настройкой ST на время генерации и возвращается по её окончании.
+     */
+    async function applyStreaming() {
+        if (!settings.enabled || !settings.applyStreaming || !settings.activePresetId || streamRestore !== null) return;
+        const info = await service('stPromptData.read', {});
+        if (!info || unsupported(info)) return;
+        const record = await store.get(settings.activePresetId);
+        const { params } = resolveParams(record?.preset?.params, settings.overrides, { model: info.model, char: info.char, chatId: info.chatId });
+        if (typeof params.stream_openai !== 'boolean') return;
+        const answer = await service('stPromptData.streaming', { value: params.stream_openai });
+        if (answer && answer.previous !== params.stream_openai) streamRestore = answer.previous;
+    }
+
+    async function restoreStreaming() {
+        if (streamRestore === null) return;
+        const value = streamRestore;
+        streamRestore = null;
+        await service('stPromptData.streaming', { value });
+    }
+
     /** Берёт ли PM сборку на себя прямо сейчас: включён, есть активный пресет, режим поддерживается. Вкладчики решают по этому, что делать. */
     async function takesOver() {
         if (!settings.enabled || !settings.activePresetId) return false;
@@ -229,7 +254,12 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         host.events.subscribe('generation.completed', () => { persistCot().catch(() => {}); });
         host.own.register('promptManager.reset', () => { contributions.clear(); return true; });
         await request(host.own, 'pipeline.stages.add', { params: { pipelineId: 'generation.prepare', stage: { id: 'prompt-manager:reset', contract: 'promptManager.reset', onExhausted: 'flag' } } });
-        host.own.register(CAPTURE_CONTRACT, params => { captured = { chat: params?.chat ?? [], type: params?.type ?? 'normal', at: now() }; return true; });
+        host.own.register(CAPTURE_CONTRACT, async params => {
+            captured = { chat: params?.chat ?? [], type: params?.type ?? 'normal', at: now() };
+            await applyStreaming().catch(() => {});
+            return true;
+        });
+        for (const event of ['generation.completed', 'generation.aborted']) host.events.subscribe(event, () => { restoreStreaming().catch(() => {}); });
         host.own.register(REWRITE_CONTRACT, params => rewrite(params ?? {}));
         await request(host.own, 'pipeline.stages.add', { params: { pipelineId: BEFORE_SEND_PIPELINE, stage: { id: 'prompt-manager:capture', contract: CAPTURE_CONTRACT, params: { chat: { $from: '$input.chat' }, type: { $from: '$input.type' } }, onExhausted: 'flag' } } });
         await request(host.own, 'pipeline.stages.add', { params: { pipelineId: PAYLOAD_PIPELINE, stage: { id: 'prompt-manager:rewrite', contract: REWRITE_CONTRACT, params: { payload: { $from: '$value' } }, onExhausted: 'abort' } } });
@@ -277,6 +307,8 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
             await store.save(record, { label: 'reset contribution position' });
             return true;
         }),
+        host.own.register('promptManager.setOverride', params => saveSettings({ overrides: setOverride(settings.overrides, params?.scope, params?.key, params?.params) })),
+        host.own.register('promptManager.context', async () => { const info = await service('stPromptData.read', {}); return info ? { char: info.char, chatId: info.chatId, model: info.model } : null; }),
         host.own.register('promptManager.runCotNext', () => { manualCot = true; return true; }),
         host.own.register('promptManager.cotRecords', async () => (await own('storage.chatMemory.get', { namespace: NAMESPACE, key: 'cot', fallback: {} })) ?? {}),
         host.own.register('promptManager.log', () => log.map(({ withMarkers, messages, ...rest }) => rest)),

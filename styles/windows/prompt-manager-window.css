@@ -39,3 +39,4 @@
 .stme-pm-rule-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .stme-pm-rule-field { display: flex; flex-direction: column; gap: 2px; font-size: .85em; }
 .stme-pm-rule-sentence { font-size: .85em; opacity: .8; font-style: italic; }
+.stme-pm-try { white-space: pre-wrap; padding: 6px 8px; background: var(--stme-level-2); border-radius: var(--stme-radius-sm); margin: 0; }

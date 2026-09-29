@@ -8,6 +8,7 @@ import { createPreviewTab } from './prompt-manager/preview-tab.js';
 import { createLogTab } from './prompt-manager/log-tab.js';
 import { createSettingsTab } from './prompt-manager/settings-tab.js';
 import { createCotTab } from './prompt-manager/cot-tab.js';
+import { createRulesTab } from './prompt-manager/rules-tab.js';
 
 /**
  * Окно Prompt Manager (PROMPT_MANAGER_PLAN.md, «Интерфейс»): порядок промптов, предпросмотр «что уйдёт модели»,
@@ -17,7 +18,7 @@ import { createCotTab } from './prompt-manager/cot-tab.js';
  */
 const MODULE_UI_NAMESPACE = 'core.ui.promptManager';
 const WINDOW_KEY = 'window';
-const TABS = [['order', 'Order'], ['preview', 'Preview'], ['log', 'Log & cache'], ['cot', 'CoT'], ['settings', 'Settings']];
+const TABS = [['order', 'Order'], ['preview', 'Preview'], ['log', 'Log & cache'], ['cot', 'CoT'], ['rules', 'Text rules'], ['settings', 'Settings']];
 const DEFAULT_SIZE = { width: 980, height: 680 };
 
 /** Выбор файла: скрытый `<input type=file>`, кликаем из обработчика кнопки (без пользовательского клика диалог не откроется). */
@@ -160,6 +161,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
         preview: createPreviewTab({ call }),
         log: createLogTab({ call }),
     cot: createCotTab({ state, actions, call }),
+    rules: createRulesTab({ state, actions, pickFile }),
         settings: createSettingsTab({ state, actions, call }),
     };
     const tabViews = Object.fromEntries(Object.entries(tabs).map(([key, value]) => [key, value.tree()]));

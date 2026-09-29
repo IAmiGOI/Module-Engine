@@ -6,6 +6,7 @@ import { trimMessages } from './pm-trim.js';
 import { summarizeTokens } from './pm-tokens.js';
 import { finalizeMessages, paramsToBody } from './pm-finalize.js';
 import { blockById } from './pm-preset-format.js';
+import { applyRules } from './pm-rules.js';
 
 /** Приоритет обрезки по умолчанию для служебных маркеров: ниже 100 — можно резать (лорбук и примеры раньше всего). */
 const DEFAULT_PRIORITY = { worldInfoBefore: 40, worldInfoAfter: 40, dialogueExamples: 30 };
@@ -58,7 +59,8 @@ export function buildRequest(preset, materials, options = {}) {
         setVariable: (name, value) => engine.vars.set(name, value),
     });
 
-    const withPriority = assembled.messages.map(message => {
+    const ruled = applyRules(assembled.messages, preset.rules, { substitute: engine.substitute });
+    const withPriority = ruled.map(message => {
         const block = blockById(preset, message._block);
         const priority = block?.trimPriority ?? DEFAULT_PRIORITY[message._block];
         return priority === undefined ? message : { ...message, _priority: priority };

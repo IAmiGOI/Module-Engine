@@ -1,5 +1,6 @@
 import { PM_FORMAT_VERSION, PARAM_KEYS, TEMPLATE_KEYS, createEmptyPreset } from './pm-preset-format.js';
 import { glueWrapperGroups } from './pm-wrapper-groups.js';
+import { importStRegexScripts } from './pm-rules.js';
 
 /** Поля промпта ST, которые понимаем: имя в ST -> имя в блоке. Остальное уходит в `extra`. */
 const PROMPT_FIELDS = {
@@ -45,6 +46,7 @@ export function stToPreset(source, { name = 'Imported preset' } = {}) {
         else if (!known.has(key)) preset.opaque[key] = value;
     }
     if (st.extensions !== undefined) preset.extensions = st.extensions;
+    preset.rules = importStRegexScripts(st.extensions?.regex_scripts); // extensions остаётся как есть — для точного экспорта
     preset.blocks = st.prompts.map(importPrompt);
 
     const lists = (Array.isArray(st.prompt_order) ? st.prompt_order : []).filter(list => Array.isArray(list?.order));
