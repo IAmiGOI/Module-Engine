@@ -131,8 +131,25 @@ export const METRICS = [
     },
 ];
 
+/** Метрики structured-графа (вид ноды и Core) — в списке выбора только у таких графов; `findMetric` находит их по id. */
+export const STRUCTURED_METRICS = [
+    {
+        id: 'kind', label: 'Kind', description: 'Entity, object, fact or event — what the node is.',
+        value: node => node.kind ?? 'fact',
+        scale: 'categorical', palette: value => KIND_COLORS[value] ?? GRAY_HEX,
+        format: value => value ?? 'fact',
+    },
+    {
+        id: 'core', label: 'Core', description: 'Core nodes are bright, everything else is muted — shows the plot skeleton.',
+        value: node => (node.core ? 1 : 0.15),
+        scale: 'rank', palette: [RGB.darkGray, RGB.amber], higherIsBetter: true,
+        format: value => (value >= 1 ? 'core' : '—'),
+    },
+];
+const KIND_COLORS = { entity: '#4c9aff', object: '#2ecc71', fact: '#f1c40f', event: '#e874e0' };
+
 export function findMetric(id) {
-    return METRICS.find(metric => metric.id === id) ?? METRICS[0];
+    return METRICS.find(metric => metric.id === id) ?? STRUCTURED_METRICS.find(metric => metric.id === id) ?? METRICS[0];
 }
 
 /** Значение метрики → цвет. `domain` — только для `linear` (см. `metricDomain()`); `rank`/`categorical` его игнорируют. */
@@ -173,6 +190,7 @@ export function glowValue(node, mode, ctx, retrievedDomain) {
             return Math.min(0.9, GLOW_CEILING * t + bump);
         }
         case 'risk': return Math.min(0.9, GLOW_CEILING * findMetric('risk').value(node, ctx) + bump);
+        case 'core': return node.core ? 0.5 : 0;
         case 'none': return bump;
         case 'weight':
         default: return Math.min(0.9, GLOW_CEILING * (node.protectedNode ? 1 : (node.weightRank ?? 0)) + bump);
