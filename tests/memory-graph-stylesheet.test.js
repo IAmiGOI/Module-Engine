@@ -21,14 +21,34 @@ test('weightColor() treats a non-finite rank (null/NaN — e.g. a brand-new node
     assert.equal(weightColor(NaN), weightColor(0));
 });
 
-test('graphStylesheet() drives node size/color/glow ENTIRELY from data() — never a hardcoded number for a metric-driven property', () => {
+test('graphStylesheet() drives node size/color ENTIRELY from data() — never a hardcoded number for a metric-driven property', () => {
     const rules = graphStylesheet();
     const nodeRule = rules.find(rule => rule.selector === 'node');
     assert.equal(nodeRule.style.width, 'data(size)');
     assert.equal(nodeRule.style.height, 'data(size)');
     assert.equal(nodeRule.style['background-color'], 'data(color)');
     assert.equal(nodeRule.style['underlay-color'], 'data(color)');
-    assert.equal(nodeRule.style['underlay-opacity'], 'data(glow)');
+});
+
+// РЕАЛЬНАЯ ЖАЛОБА владельца (реворк UI, ROADMAP.md 5.108м): "СВЕЧЕНИЕ ВСЕ ЕЩЕ УЖАСНОЕ. ПОЧЕМУ ОНО КРУГОМ, А НЕ
+// СВЕТОМ?" — Cytoscape's underlay-* не умеет градиент/затухание, только заливку сплошным цветом. Повседневное
+// свечение переехало на честный canvas-радиальный градиент (`paintGlowCanvas()`, memory-graph-panel.js); базовая
+// `underlay-opacity` теперь константный `0` — НЕ `data(glow)` (старый контракт), — `underlay-color`/`-padding`/
+// `-shape` остаются только донором для классов подсветки ретрива ниже.
+test('graphStylesheet() disables the base node underlay entirely — ambient glow moved to a real canvas radial gradient, not Cytoscape\'s flat-color underlay', () => {
+    const rules = graphStylesheet();
+    const nodeRule = rules.find(rule => rule.selector === 'node');
+    assert.equal(nodeRule.style['underlay-opacity'], 0);
+});
+
+test('graphStylesheet() still lets the retrieval-highlight classes (beacon/route-node/noise) override underlay-opacity for their own, independent highlight — a secondary language, not the disabled ambient glow', () => {
+    const rules = graphStylesheet();
+    const beaconRule = rules.find(rule => rule.selector === 'node.beacon');
+    const routeNodeRule = rules.find(rule => rule.selector === 'node.route-node');
+    const noiseRule = rules.find(rule => rule.selector === 'node.noise');
+    assert.ok(beaconRule.style['underlay-opacity'] > 0);
+    assert.ok(routeNodeRule.style['underlay-opacity'] > 0);
+    assert.ok(noiseRule.style['underlay-opacity'] > 0);
 });
 
 test('graphStylesheet() shows a label for protected nodes and large nodes without requiring hover, but keeps hover working for everything else', () => {
