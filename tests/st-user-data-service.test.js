@@ -319,3 +319,59 @@ test('one scan reads the preset catalog ONCE for all three sections, and MovingU
     await call('stUserData.read', { path: 'presets/openai/Default.json' });
     assert.equal(st.settingsGetCalls.length, 1, 'reads right after a scan reuse it');
 });
+
+// --- Библиотека графов памяти как раздел синхронизации ---
+
+function setupWithGraphs() {
+    const st = createFakeSt();
+    const buses = createFakeBuses();
+    const rows = new Map();
+    registerStUserDataService(buses.services, {
+        getContext: st.getContext, fetch: st.fetch,
+        graphStore: { all: async () => [...rows.values()], get: async id => rows.get(id), put: async record => { rows.set(record.id, record); }, delete: async id => { rows.delete(id); } },
+    });
+    const call = (contract, params) => request(buses.services, contract, { params }).then(result => { if (!result.ok) throw new Error(result.error.message); return result.value; });
+    return { rows, call };
+}
+
+const graphRecord = (id, updatedAt = 5) => ({ format: 'stme-memory-graph', version: 1, id, name: `Graph ${id}`, updatedAt, size: 321, graph: { nodes: {}, regions: {} } });
+
+test('the graph library is a sync category, listed as stmeGraphs files with a stamp from the edit time and size', async () => {
+    const { rows, call } = setupWithGraphs();
+    rows.set('g1', graphRecord('g1', 77));
+    assert.ok(SYNC_CATEGORIES.some(category => category.id === 'graphs'));
+
+    const listed = (await call('stUserData.list', { categories: ['graphs'] }));
+
+    assert.deepEqual(listed, [{ path: 'stmeGraphs/g1.json', stamp: '77|321', size: 321, modified: 77 }]);
+});
+
+test('a graph record is read whole, written into the library, and removed — all through the ordinary sync file calls', async () => {
+    const { rows, call } = setupWithGraphs();
+    rows.set('g1', graphRecord('g1'));
+
+    const blob = await call('stUserData.read', { path: 'stmeGraphs/g1.json' });
+    assert.equal(JSON.parse(await blob.text()).name, 'Graph g1');
+
+    const written = await call('stUserData.write', { path: 'stmeGraphs/g2.json', blob: new Blob([JSON.stringify(graphRecord('other-id', 9))]) });
+    assert.equal(rows.get('g2').name, 'Graph other-id', 'the file name is the record id');
+    assert.equal(written.stamp, '9|321');
+
+    await call('stUserData.remove', { path: 'stmeGraphs/g1.json' });
+    assert.equal(rows.has('g1'), false);
+});
+
+test('a sync conflict copy of a graph becomes its own record and never overwrites the original', async () => {
+    const { rows, call } = setupWithGraphs();
+    rows.set('g1', graphRecord('g1', 5));
+
+    await call('stUserData.write', { path: 'stmeGraphs/g1 (conflict 2026-09-20).json', blob: new Blob([JSON.stringify(graphRecord('g1', 8))]) });
+
+    assert.equal(rows.get('g1').updatedAt, 5);
+    assert.equal(rows.get('g1 (conflict 2026-09-20)').updatedAt, 8);
+});
+
+test('a file that is not a memory graph record is refused', async () => {
+    const { call } = setupWithGraphs();
+    await assert.rejects(() => call('stUserData.write', { path: 'stmeGraphs/x.json', blob: new Blob(['{"hello":1}']) }), /not a memory graph record/);
+});

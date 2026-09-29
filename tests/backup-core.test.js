@@ -152,3 +152,45 @@ test('a Module without the right to backup.export is refused before the Ядро
 
     assert.equal(result.ok, false);
 });
+
+// --- Библиотека графов в бэкапе и пресете ---
+
+import { registerGraphLibraryService } from '../services/graph-library.js';
+import { createGraphLibraryBackupSource } from '../cores/backup/index.js';
+
+function buildEngineWithGraphLibrary(rows) {
+    const engine = createEngine();
+    registerGraphLibraryService(engine.buses.services, { store: { all: async () => [...rows.values()], get: async id => rows.get(id), put: async record => { rows.set(record.id, record); }, delete: async id => { rows.delete(id); } } });
+    const host = engine.registerCaller('core.backup.graphs', 'cores', { tier: 'official' });
+    const core = createBackupCore(host);
+    core.registerSource('graphLibrary', createGraphLibraryBackupSource(host));
+    return { host };
+}
+const record = (id, updatedAt, name = id) => ({ format: 'stme-memory-graph', version: 1, id, name, updatedAt, graph: { nodes: {}, regions: {} } });
+
+test('the graph library is exported whole (with the graphs), by itself as a preset source, and restored on import', async () => {
+    const rows = new Map([['a', record('a', 5)], ['b', record('b', 6)]]);
+    const { host } = buildEngineWithGraphLibrary(rows);
+
+    const exported = await new Promise(resolve => host.own.subscribe('backup.export', { params: { sourceIds: ['graphLibrary'] } }, resolve));
+    assert.deepEqual(exported.value.sources.graphLibrary.records.map(item => item.id).sort(), ['a', 'b']);
+
+    rows.clear();
+    const imported = await new Promise(resolve => host.own.subscribe('backup.import', { params: { snapshot: exported.value } }, resolve));
+    assert.deepEqual(imported.value, ['graphLibrary']);
+    assert.deepEqual([...rows.keys()].sort(), ['a', 'b']);
+});
+
+test('importing graphs replaces a record only with a newer one and never deletes graphs missing from the file', async () => {
+    const rows = new Map([['a', record('a', 10, 'local newer')], ['b', record('b', 1, 'local older')], ['keep', record('keep', 3)]]);
+    const { host } = buildEngineWithGraphLibrary(rows);
+    const snapshot = { format: 'stme-backup', version: 1, sources: { graphLibrary: { version: 1, records: [record('a', 5, 'file older'), record('b', 9, 'file newer'), { junk: true }] } } };
+    const exportedShape = await new Promise(resolve => host.own.subscribe('backup.export', { params: { sourceIds: ['graphLibrary'] } }, resolve));
+    snapshot.format = exportedShape.value.format; snapshot.version = exportedShape.value.version;
+
+    await new Promise(resolve => host.own.subscribe('backup.import', { params: { snapshot } }, resolve));
+
+    assert.equal(rows.get('a').name, 'local newer');
+    assert.equal(rows.get('b').name, 'file newer');
+    assert.ok(rows.has('keep'));
+});
