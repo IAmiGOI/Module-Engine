@@ -48,3 +48,29 @@ test('a region key is a slug of the label and takes a numeric suffix on collisio
     assert.equal(regionKeyForLabel('The Varekh Succession!', []), 'region:the-varekh-succession');
     assert.equal(regionKeyForLabel('Kira', ['region:kira', 'region:kira-2']), 'region:kira-3');
 });
+
+import { coreScore, rankCoreCandidates, percentile75, CORE_SCORE_THRESHOLD } from '../cores/memory-graph/core-candidates.js';
+
+test('each core signal adds its points and names its reason', () => {
+    const context = { degreeP75: 3, retrievedP75: 5, coreIds: new Set(['c1', 'c2']) };
+    assert.equal(coreScore({ importance: 9 }, context).score, 2);
+    assert.equal(coreScore({ coreProposed: true }, context).score, 2);
+    assert.equal(coreScore({ degree: 4 }, context).score, 1);
+    assert.equal(coreScore({ retrievedCount: 6 }, context).score, 1);
+    assert.equal(coreScore({ constant: true }, context).score, 1);
+    assert.equal(coreScore({ edges: [{ to: 'c1' }, { to: 'c2' }] }, context).score, 1);
+    assert.deepEqual(coreScore({ importance: 9, coreProposed: true }, context).reasons, ['high importance', 'proposed by the model']);
+});
+
+test('the model proposal alone stays below the promotion threshold, and with high importance it reaches it', () => {
+    const nodes = { a: { id: 'a', coreProposed: true, importance: 5 }, b: { id: 'b', coreProposed: true, importance: 9 } };
+    const ranked = rankCoreCandidates(nodes, new Set());
+    assert.deepEqual(ranked.map(entry => entry.id), ['b']);
+    assert.equal(ranked[0].score >= CORE_SCORE_THRESHOLD, true);
+});
+
+test('existing cores are never ranked again, and the 75th percentile handles empty lists', () => {
+    assert.deepEqual(rankCoreCandidates({ a: { id: 'a', coreProposed: true, importance: 9 } }, new Set(['a'])), []);
+    assert.equal(percentile75([]), 0);
+    assert.equal(percentile75([1, 2, 3, 4]), 4);
+});

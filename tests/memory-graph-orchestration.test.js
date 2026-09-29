@@ -146,7 +146,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move', 'memoryGraph.nodes.pin',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
-            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
+            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepCores', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
             // Прямой доступ к хранилищу — только для тестов Этапа 2 (MEMORY_GRAPH_FIX_PLAN.md), которым нужно
             // подложить данные "старого формата" (нода с большим createdTurn, без CLOCK_KEY), не воспроизводимые
             // никаким обычным вызовом контракта Ядра.
@@ -3326,4 +3326,51 @@ test('no new region is seeded once the region cap is reached', async () => {
 
     assert.equal((await call(caller, 'memoryGraph.regions')).value.length, 5);
     assert.equal((await call(caller, 'memoryGraph.nodes')).value.find(n => n.id === 'far').regionId, 'Theme 0');
+});
+
+test('a fact the model proposes as core with high importance is promoted right after placement, and a lone proposal is not', async () => {
+    const reply = JSON.stringify({ facts: [
+        { op: 'create', kind: 'fact', label: 'The crown curse', content: 'The crown carries a curse that kills every heir.', importance: 9, core: true, subjects: ['Kira'] },
+        { op: 'create', kind: 'fact', label: 'Minor rumor', content: 'A rumor says the baker waters the ale.', importance: 3, core: true, subjects: ['Kira'] },
+    ] });
+    const { caller } = await structuredWithKira(reply);
+
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'The crown curse is revealed, and there is a rumor about ale.' });
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    assert.equal(nodes.find(n => n.label === 'The crown curse').core, true);
+    assert.equal(nodes.find(n => n.label === 'Minor rumor').core, false);
+    assert.ok(nodes.find(n => n.label === 'The crown curse').corePromotedBy.includes('high importance'));
+});
+
+test('automatic promotion stops at the core cap while manual pinning still works', async () => {
+    const { caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.configure', { coreMinCap: 1, coreMaxShare: 0, coreSweepEveryTurns: 1 });
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const target = nodes.find(n => n.label === 'SubOne');
+
+    const swept = (await call(caller, 'memoryGraph.sweepCores')).value;
+
+    assert.deepEqual(swept.promoted, []);
+    assert.equal((await call(caller, 'memoryGraph.nodes.pin', { id: target.id })).value.ok, true);
+});
+
+test('the plot core message appears only when switched on, lists cores by importance, and is separate from the memory block', async () => {
+    const { graphCore, caller } = await structuredEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Crown', content: 'alpha bravo charlie delta echo', importance: 8, sector: 0, ring: 0 });
+    const crown = (await call(caller, 'memoryGraph.nodes')).value.find(n => n.label === 'Crown');
+    await call(caller, 'memoryGraph.nodes.pin', { id: crown.id });
+    const scene = () => [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }];
+
+    const off = scene();
+    await graphCore.injectIntoPrompt({ chat: off });
+    assert.equal(off.some(m => m.name === 'Plot core'), false);
+
+    await call(caller, 'memoryGraph.configure', { plotSkeletonInPrompt: true });
+    const on = scene();
+    await graphCore.injectIntoPrompt({ chat: on });
+
+    const plot = on.find(m => m.name === 'Plot core');
+    assert.match(plot.mes, /^Plot core: Crown, Anchor/);
+    assert.equal(on.find(m => m.name === 'Memory').mes.includes('Plot core'), false);
 });

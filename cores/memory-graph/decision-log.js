@@ -25,7 +25,7 @@ export function appendDecision(log, entry, limit = 100) {
  * сработало ничего) — topic-пара, как основной/первый сигнал в `entry.gate`.
  */
 export function summarizeDecision(entry) {
-    const { clock, gate, extractor, error, node, placement, capacity, structured } = entry;
+    const { clock, gate, extractor, error, node, placement, capacity, structured, promotedCores } = entry;
 
     const topicFired = gate.topicDistance > gate.topicThreshold;
     const noveltyFired = gate.noveltyDistance > gate.noveltyThreshold;
@@ -69,6 +69,8 @@ export function summarizeDecision(entry) {
         if (structured.skipped) bits.push(`skipped: ${structured.skipped}`);
         line += ` · ${bits.join(', ')}`;
     }
+
+    if (promotedCores?.length) line += ` · core: ${promotedCores.map(item => `${item.label} (${item.reasons.join(', ')})`).join('; ')}`;
 
     return line;
 }
