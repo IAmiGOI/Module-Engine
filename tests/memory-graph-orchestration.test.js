@@ -142,6 +142,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
         allowedContracts: [
             'memoryGraph.settings', 'memoryGraph.configure', 'memoryGraph.nodes', 'memoryGraph.regions', 'memoryGraph.check',
             'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging', 'memoryGraph.retrievalStatus',
+            'memoryGraph.mode', 'memoryGraph.setMode', 'memoryGraph.convertToStructured',
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
@@ -2937,4 +2938,87 @@ test('an organic node with no name match is placed by similarity into an existin
     const created = (await call(caller, 'memoryGraph.nodes')).value.find(node => node.label === 'Lighthouse keeper');
     assert.deepEqual(regions, ['Story']);
     assert.equal(created.regionId, 'Story');
+});
+
+// --- Режимы графа: legacy / structured (MEMORY_GRAPH_TYPES_PLAN.md, этап 0) ---
+
+const MODE_ENTRIES = [
+    { uid: 0, comment: 'Marcus', content: 'Marcus runs the old tavern near the market square.' },
+    { uid: 1, comment: 'Elena', content: 'Elena often visits Marcus to trade rare herbs.' },
+    { uid: 2, comment: 'Ruins', content: 'Elena explores Ruins searching for lost artifacts.' },
+];
+const MODE_REPLIES = ['[{"region":"Story","subCenterUids":[1]}]', '[{"region":"Story","centerUid":0}]', '[]'];
+
+async function bootstrapped(extra = {}) {
+    const built = buildEngine({ lorebookEntries: MODE_ENTRIES, fetchReplies: MODE_REPLIES, ...extra });
+    await call(built.caller, 'memoryGraph.configure', { subCentersPerRegion: 0 });
+    await built.graphCore.load();
+    return built;
+}
+
+test('a chat without graph metadata is a legacy graph, and nothing of the structured model appears in its data', async () => {
+    const { graphCore, caller } = await bootstrapped();
+    await graphCore.bootstrapFromLorebook();
+
+    const mode = (await call(caller, 'memoryGraph.mode')).value;
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+
+    assert.equal(mode.mode, 'legacy');
+    assert.ok(Object.values(mode.features).every(flag => flag === false));
+    assert.ok(nodes.length >= 3);
+    for (const node of nodes) {
+        assert.equal(node.kind, undefined);
+        assert.equal(node.core, undefined);
+        assert.ok((node.edges ?? []).every(edge => edge.dir === undefined));
+    }
+});
+
+test('the mode of an empty graph can be chosen, is remembered in the chat memory, and cannot change once the graph has nodes', async () => {
+    const { graphCore, caller } = await bootstrapped();
+
+    assert.equal((await call(caller, 'memoryGraph.setMode', { mode: 'structured' })).value.mode, 'structured');
+    const stored = (await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'graphMeta', fallback: null })).value;
+    assert.equal(stored.mode, 'structured');
+    assert.equal((await call(caller, 'memoryGraph.mode')).value.features.kinds, true);
+    assert.equal((await call(caller, 'memoryGraph.setMode', { mode: 'nonsense' })).value.ok, false);
+
+    await graphCore.bootstrapFromLorebook();
+    const refused = (await call(caller, 'memoryGraph.setMode', { mode: 'legacy' })).value;
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /only change by upgrading/);
+});
+
+test('a new empty graph takes its mode from the default-mode setting, and the choice is remembered at once', async () => {
+    const { caller } = await bootstrapped();
+    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+
+    await call(caller, 'memoryGraph.reset');
+
+    assert.equal((await call(caller, 'memoryGraph.mode')).value.mode, 'structured');
+    const stored = (await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'graphMeta', fallback: null })).value;
+    assert.equal(stored.mode, 'structured');
+});
+
+test('upgrading a legacy graph backs it up first, turns protected nodes into core, gives every node a kind, and a second upgrade changes nothing', async () => {
+    const { graphCore, caller } = await bootstrapped();
+    await graphCore.bootstrapFromLorebook();
+    const before = (await call(caller, 'memoryGraph.nodes')).value;
+    const protectedIds = before.filter(node => node.protectedNode).map(node => node.id);
+    assert.ok(protectedIds.length >= 1);
+
+    const result = (await call(caller, 'memoryGraph.convertToStructured')).value;
+
+    assert.equal(result.ok, true);
+    const after = (await call(caller, 'memoryGraph.nodes')).value;
+    for (const node of after) {
+        assert.equal(node.kind, 'fact');
+        assert.equal(node.core, protectedIds.includes(node.id));
+        if (node.core) assert.equal(node.protectedNode, true);
+    }
+    const backup = (await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'graphBackupBeforeUpgrade', fallback: null })).value;
+    assert.equal(Object.keys(backup.nodes).length, before.length);
+    assert.equal(backup.nodes[before[0].id].kind, undefined, 'the backup keeps the legacy shape');
+    const meta = (await call(caller, 'memoryGraph.mode')).value;
+    assert.deepEqual([meta.mode, meta.meta.convertedFrom], ['structured', 'legacy']);
+    assert.equal((await call(caller, 'memoryGraph.convertToStructured')).value.unchanged, true);
 });
