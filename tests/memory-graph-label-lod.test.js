@@ -50,3 +50,12 @@ test('region names that would overlap are hidden, the region with more nodes sta
     ]);
     assert.deepEqual([...chosen].sort(), ['big', 'far']);
 });
+
+test('a forced label (hovered node, retrieval beacon) is always shown, ahead of the zoom tiers, and pushes overlapping ones out', () => {
+    const chosen = chooseNodeLabels([
+        { ...item('hovered', 300, 300, 2), forced: true },
+        item('core-under', 305, 302, 0, 99),
+        item('elsewhere', 700, 300, 0, 1),
+    ], 0.4);
+    assert.deepEqual([...chosen].sort(), ['elsewhere', 'hovered']);
+});

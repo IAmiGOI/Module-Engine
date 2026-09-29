@@ -1,7 +1,8 @@
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { KIND_LABEL, nodeKindData, directedEdgeEnds, hiddenByKind, isOrbitEvent, eventAnchorId, placeEventsNearAnchors, structuredStyleRules, DEFAULT_KIND_FILTERS } from '../cores/ui/memory-graph/kinds-view.js';
-import { graphStylesheet } from '../cores/ui/memory-graph/stylesheet.js';
+import { graphStylesheet, LABEL_FONT } from '../cores/ui/memory-graph/stylesheet.js';
 import { findMetric, glowValue, STRUCTURED_METRICS } from '../cores/ui/memory-graph/metrics.js';
 
 const event = (id, anchorId, extra = {}) => ({ id, kind: 'event', createdAt: 0, edges: anchorId ? [{ to: anchorId, type: 'participates', dir: 'in' }] : [], ...extra });
@@ -67,11 +68,17 @@ test('the kind and core metrics exist only as structured metrics and are found b
     assert.equal(glowValue({ core: false }, 'core', {}, {}), 0);
 });
 
-test('no node rule paints a white outline, and node labels use the shared font', () => {
-    const rules = graphStylesheet();
-    for (const rule of rules.filter(r => /protectedNode|core/.test(r.selector))) assert.equal(rule.style['border-color'], undefined, rule.selector);
-    const label = rules.find(r => r.selector.startsWith('node.lod-label'));
-    assert.match(label.style['font-family'], /Noto Sans/);
-    assert.equal(label.style['font-weight'], 600);
-    assert.equal(label.style['text-transform'], 'uppercase');
+test('no node rule paints a white outline', () => {
+    for (const rule of graphStylesheet().filter(r => /protectedNode|core/.test(r.selector))) assert.equal(rule.style['border-color'], undefined, rule.selector);
+});
+
+test('node labels and region names share one font family, weight, case and letter spacing in the css', () => {
+    const css = readFileSync(new URL('../styles/modules/memory-graph.css', import.meta.url), 'utf8');
+    const block = name => css.match(new RegExp(`\\.${name} \\{([^}]*)\\}`))[1];
+    const node = block('stme-mg-node-label');
+    const region = block('stme-mg-region-label');
+    for (const property of ['font-family', 'font-weight', 'letter-spacing', 'text-transform']) {
+        assert.equal(node.match(new RegExp(`${property}: ([^;]+);`))[1], region.match(new RegExp(`${property}: ([^;]+);`))[1], property);
+    }
+    assert.match(LABEL_FONT['font-family'], /Noto Sans/, 'the preview marker keeps the same family');
 });

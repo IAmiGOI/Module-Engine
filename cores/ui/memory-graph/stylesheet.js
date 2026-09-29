@@ -68,18 +68,9 @@ export function graphStylesheet() {
                 'underlay-opacity': 0, 'underlay-shape': 'ellipse',
             },
         },
-        // Подписи нод — по масштабу и без наложений (label-lod.js): издалека только Core, ближе — крупные ноды, вплотную —
-        // остальные; подпись, налезающая на уже выбранную, пропускается. Класс `.lod-label` ставит панель, под курсором —
-        // `.hovered`. Светлый текст с лёгкой тёмной обводкой читается на любом фоне зоны.
-        {
-            selector: 'node.lod-label, node.hovered', // .lod-label ставит панель по масштабу и без наложений (label-lod.js)
-            style: {
-                label: 'data(label)', 'text-valign': 'bottom', 'text-margin-y': 5, 'min-zoomed-font-size': 8,
-                ...LABEL_FONT, color: '#e8ecf8', 'text-outline-color': '#0b0f1a', 'text-outline-width': 1.5, 'text-outline-opacity': 0.75,
-            },
-        },
-        // Защищённые — та же заливка по весу (у них `weightRank` всегда 1, см. Ядро), только БЕЛАЯ ОБВОДКА и
-        // усиленное свечение отличают роль — не отдельный цвет (иначе он спорил бы со шкалой веса/метрики).
+        // Подписей нод в стилях Cytoscape НЕТ: они рисуются HTML-слоем поверх канваса (`#stme-memory-graph-node-labels`, панель +
+        // label-lod.js) — тем же шрифтом с разрядкой, что и названия регионов (Cytoscape `letter-spacing` не умеет), по масштабу
+        // и без наложений. Здесь остаётся только маркер места будущей ноды (`#PREVIEW_ID` ниже).
         // `line-color` — из данных, не хардкод (прямой запрос владельца: ребро красится в цвет региона, который оно
         // соединяет, когда узлы красятся по метрике `region`; считает `buildNextElements()`/`regionEdgeStyle()` в
         // memory-graph-panel.js). ВНЕ этого режима — `DEFAULT_EDGE_COLOR`, тот же цвет, что раньше был здесь
@@ -110,7 +101,7 @@ export function graphStylesheet() {
         // Подсветка ретрива — MEMORY_GRAPH_UI_PLAN.md, Этап 5 (пункт 4 запроса, ПЕРЕКЛЮЧАТЕЛЬ, не таймер). Классы
         // считает чистая `retrievalClasses()` (retrieval-overlay.js), панель только вешает/снимает их на элементы —
         // сам стиль, как и везде выше, ничего не знает ПРО ЧТО именно подсвечивает.
-        { selector: 'node.beacon', style: { 'underlay-opacity': 0.6, 'underlay-padding': 'mapData(size, 8, 34, 12, 22)', 'border-color': '#7aa2ff', 'border-width': 2, label: 'data(label)' } },
+        { selector: 'node.beacon', style: { 'underlay-opacity': 0.6, 'underlay-padding': 'mapData(size, 8, 34, 12, 22)', 'border-color': '#7aa2ff', 'border-width': 2 } },
         { selector: 'node.route-node', style: { 'underlay-opacity': 0.4 } },
         { selector: 'node.noise', style: { 'border-width': 1, 'border-color': 'rgba(255,255,255,0.4)', 'underlay-opacity': 0.3 } },
         // `.dimmed` идёт ПОСЛЕДНИМ — должен побеждать `opacity` независимо от того, какие ещё классы/селекторы

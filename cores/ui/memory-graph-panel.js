@@ -78,6 +78,7 @@ const WINDOW_KEY = 'window';
 const CANVAS_ID = 'stme-memory-graph-canvas';
 const BG_ID = 'stme-memory-graph-region-bg';
 const LABELS_ID = 'stme-memory-graph-region-labels';
+const NODE_LABELS_ID = 'stme-memory-graph-node-labels';
 const ZONES_CANVAS_ID = 'stme-memory-graph-zones-canvas';
 const GLOW_CANVAS_ID = 'stme-memory-graph-glow-canvas';
 // Цвет ребра ВНЕ режима "Color by region" (или когда у ОБОИХ концов нет региона) — то же значение, что раньше было
@@ -1186,11 +1187,12 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // класс `.hovered` покрывает только ОСТАЛЬНЫЕ, мелкие ноды.
         cy.on('mouseover', 'node', event => {
             event.target.addClass('hovered');
+            scheduleLabels();
             if (event.target.id() === PREVIEW_ID) return;
             hoveredNodeId.set(event.target.id());
             hoveredScreenPos.set({ x: event.renderedPosition.x, y: event.renderedPosition.y });
         });
-        cy.on('mouseout', 'node', event => { event.target.removeClass('hovered'); hoveredNodeId.set(null); });
+        cy.on('mouseout', 'node', event => { event.target.removeClass('hovered'); hoveredNodeId.set(null); scheduleLabels(); });
         // Клик по ребру ВЫДЕЛЯЕТ его (Этап 7.4, Б5 плана: раньше удалял СРАЗУ — случайные удаления, реальная
         // жалоба). Панель "type · Delete" — в сайдбаре (`edgeSelectionPanel()`); само удаление — только кнопкой
         // или клавишей Delete/Backspace (`handleGlobalKeydown()` ниже), не одним кликом.
@@ -1275,7 +1277,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
 
     // --- Подписи по масштабу (label-lod.js) ---------------------------------------------------------------
     // Названия регионов — HTML-слой поверх канваса (не запечены в фон: там они масштабировались вместе с картой и
-    // издалека становились крошечными); нод — класс `.lod-label` по масштабу и без наложений.
+    // издалека становились крошечными); нод — тоже HTML-слоем (тот же шрифт с разрядкой), по масштабу и без наложений.
+    const nodeLabelElements = new Map(); // id ноды → div подписи
+    let nodeLabelLayer = null;
     let lastZones = [];
     let renderedZoneKey = '';
     let labelFrame = 0;
@@ -1319,23 +1323,46 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (!cy) return;
         const zoom = cy.zoom();
         updateRegionLabels(zoom, cy.pan());
+        const layer = document.getElementById(NODE_LABELS_ID);
+        if (!layer) return;
+        if (layer !== nodeLabelLayer) { nodeLabelElements.clear(); nodeLabelLayer = layer; } // окно закрывали и открыли — слой новый, старые div'ы в нём не лежат
         const byId = nodesById();
+        const hovered = hoveredNodeId.peek();
         const candidates = [];
+        const rendered = new Map();
         cy.nodes().forEach(ele => {
             const node = byId.get(ele.id());
             if (!node || ele.hasClass('filtered')) return;
             const at = ele.renderedPosition();
+            const radius = ele.renderedWidth() / 2;
+            rendered.set(ele.id(), { at, radius, text: node.label });
             candidates.push({
-                id: ele.id(), label: node.label, x: at.x, y: at.y, radius: ele.renderedWidth() / 2,
+                id: ele.id(), label: node.label, x: at.x, y: at.y, radius,
                 tier: labelTier({ core: node.core, protectedNode: node.protectedNode, size: ele.data('size') }),
                 weight: node.protectedNode ? 100 + (node.importance ?? 0) : (node.weightRank ?? 0) * 10 + (node.degree ?? 0),
+                forced: ele.id() === hovered || ele.hasClass('beacon'), // под курсором и маяки ретрива подписаны всегда
             });
         });
         const chosen = chooseNodeLabels(candidates, zoom, { viewport: { width: cy.width(), height: cy.height() } });
-        cy.batch(() => cy.nodes().forEach(ele => {
-            const want = chosen.has(ele.id());
-            if (ele.hasClass('lod-label') !== want) ele.toggleClass('lod-label', want);
-        }));
+        for (const [id, element] of nodeLabelElements) {
+            if (chosen.has(id)) continue;
+            element.remove();
+            nodeLabelElements.delete(id);
+        }
+        for (const id of chosen) {
+            const info = rendered.get(id);
+            if (!info) continue;
+            let element = nodeLabelElements.get(id);
+            if (!element) {
+                element = document.createElement('div');
+                element.className = 'stme-mg-node-label';
+                layer.append(element);
+                nodeLabelElements.set(id, element);
+            }
+            if (element.textContent !== info.text) element.textContent = info.text;
+            element.style.left = `${info.at.x}px`;
+            element.style.top = `${info.at.y + info.radius + 3}px`;
+        }
     }
 
     /**
@@ -2030,6 +2057,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                         h('canvas', { id: ZONES_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } }),
                         h('canvas', { id: GLOW_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } })),
                     h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
+                    h('div', { id: NODE_LABELS_ID, style: { position: 'absolute', inset: '0', 'pointer-events': 'none', overflow: 'hidden' } }),
                     h('div', { id: LABELS_ID, style: { position: 'absolute', inset: '0', 'pointer-events': 'none', overflow: 'hidden' } }),
                     hoverTooltip(),
                     moveToastBlock(),

@@ -51,12 +51,9 @@ test('graphStylesheet() still lets the retrieval-highlight classes (beacon/route
     assert.ok(noiseRule.style['underlay-opacity'] > 0);
 });
 
-test('graphStylesheet() labels only nodes the panel marked by zoom level (lod-label) or hovered nodes — never every node at once', () => {
+test('graphStylesheet() gives no node a Cytoscape label — labels are an HTML layer with the same font as region names', () => {
     const rules = graphStylesheet();
-    const labelRule = rules.find(rule => rule.selector.includes('lod-label') && rule.selector.includes('hovered'));
-    assert.ok(labelRule, 'one rule covers zoom-chosen OR hovered nodes');
-    assert.equal(labelRule.style.label, 'data(label)');
-    assert.equal(rules.find(rule => rule.selector === 'node').style.label, undefined, 'a plain node has no label');
+    assert.equal(rules.filter(rule => rule.selector.startsWith('node') && rule.style.label !== undefined).length, 0);
 });
 
 test('graphStylesheet() still carries the PREVIEW_ID marker rule, unchanged in spirit — a dashed, non-interactive placeholder', () => {
