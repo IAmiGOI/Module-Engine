@@ -6,6 +6,7 @@ import { loadCytoscape } from '../../libraries/core/graph-rendering.js';
 import {
     FloatingPanel, Card, Section, Button, TextInput, TextArea, NumberInput, Toggle,
     Details, Row, Field, EmptyState, Badge, Slider, Select, ProgressBar, HoldButton,
+    EdgeDrawer, IconButton,
 } from '../../libraries/shared/widgets.js';
 import { summarizeDecision } from '../memory-graph/decision-log.js';
 // MEMORY_GRAPH_UI_PLAN.md, Этап 1 — геометрия и стили Cytoscape вынесены в отдельные файлы БЕЗ ИЗМЕНЕНИЯ
@@ -40,7 +41,7 @@ import { dropDecision, connectModeStep, edgeTypesInGraph } from './memory-graph/
 import { zonesSignature } from './memory-graph/zones-svg.js';
 import { computePlaneOutline, planeRadiusAt, regionFieldAt, dominantBlend } from './memory-graph/plane-field.js';
 import { retrievalClasses, routeChainLabels } from './memory-graph/retrieval-overlay.js';
-import { METRICS, findMetric, metricColor, metricDomain } from './memory-graph/metrics.js';
+import { METRICS, findMetric, metricColor, metricDomain, glowValue } from './memory-graph/metrics.js';
 
 /**
  * Визуальный редактор графа памяти — решено с пользователем явно:
@@ -87,6 +88,12 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // Органичная подложка регионов ("плоскость графа") — реальная жалоба пользователя: раньше её нельзя было
     // включить/выключить вовсе. По умолчанию включена (то же поведение, что было безусловным раньше).
     const zonesBackgroundEnabled = signal(true);
+    // Реворк UI (ROADMAP.md 5.108м) — тело окна теперь ТОЛЬКО канвас, настройки уехали в две выезжающие сбоку
+    // панели (левая — общая логика/несколько нод, правая — визуал), ОБЕ скрыты по умолчанию по прямому запросу
+    // владельца ("все три скрыты по умолчанию"). Нижняя (форма ноды) — БЕЗ своего сигнала, её видимость целиком
+    // решает `selectedNode()` (см. `tree()`), поэтому здесь только эти два.
+    const leftDrawerOpen = signal(false);
+    const rightDrawerOpen = signal(false);
 
     async function saveWindowState() {
         await call('storage.settings.set', {
@@ -95,6 +102,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 visible: panelVisible.peek(), collapsed: panelCollapsed.peek(), position: panelPosition.peek(), size: panelSize.peek(),
                 retrievalOverlayEnabled: retrievalOverlayEnabled.peek(), zonesBackgroundEnabled: zonesBackgroundEnabled.peek(),
                 colorMetricId: colorMetricId.peek(), sizeMode: sizeMode.peek(), glowMode: glowMode.peek(),
+                leftDrawerOpen: leftDrawerOpen.peek(), rightDrawerOpen: rightDrawerOpen.peek(),
             },
         });
     }
@@ -114,6 +122,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (saved.colorMetricId) colorMetricId.set(saved.colorMetricId);
         if (saved.sizeMode) sizeMode.set(saved.sizeMode);
         if (saved.glowMode) glowMode.set(saved.glowMode);
+        leftDrawerOpen.set(Boolean(saved.leftDrawerOpen));
+        rightDrawerOpen.set(Boolean(saved.rightDrawerOpen));
     }
 
     // --- Состояние графа, зеркалируемое из контрактов -------------------
@@ -606,21 +616,6 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     }
 
     /** "Glow by" (Этап 6.2) — 0..1, протектным нодам всегда добавлена надбавка (та же визуальная гарантия "роль виднее", что была в Этапе 4, независимо от режима). */
-    function glowValue(node, ctx, retrievedDomain) {
-        const bump = node.protectedNode ? 0.25 : 0;
-        switch (glowMode()) {
-            case 'none': return Math.min(0.9, 0.12 + bump);
-            case 'retrieved': {
-                const { min, max } = retrievedDomain;
-                const t = max > min ? ((node.retrievedCount ?? 0) - min) / (max - min) : 0;
-                return Math.min(0.9, 0.12 + 0.5 * t + bump);
-            }
-            case 'risk': return Math.min(0.9, 0.12 + 0.5 * findMetric('risk').value(node, ctx) + bump);
-            case 'weight':
-            default: return Math.min(0.9, 0.12 + 0.5 * (node.protectedNode ? 1 : (node.weightRank ?? 0)) + bump);
-        }
-    }
-
     /** Ноды по id — переиспользуется рёбрами, фильтрами/поиском, тултипом. */
     function nodesById() {
         return new Map(nodes().map(node => [node.id, node]));
@@ -651,7 +646,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     // важно (`weight`/`risk` — см. metrics.js); остальные метрики (region/source/age/…) красят
                     // защищённую ноду ТАК ЖЕ, как обычную — белая обводка (graphStylesheet()) и так отличает роль.
                     color: metricColor(colorMetric, colorMetric.value(node, ctx), colorDomain),
-                    glow: glowValue(node, ctx, retrievedDomain),
+                    glow: glowValue(node, glowMode(), ctx, retrievedDomain),
                 },
                 position: positions.get(node.id) ?? { x: 0, y: 0 },
             });
@@ -1206,10 +1201,23 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         });
     }
 
-    /** Секция "Retrieval" (Этап 5.5) — детали ВЫБРАННОГО (историей или Live) ретрива: время, sticky, маяки, цепочка маршрута, шум, запрос. */
+    /**
+     * Кнопка режима Pathway (подсветка ретрива, `retrievalOverlayEnabled`) — маленькая, в углу самого канваса, а
+     * НЕ в выезжающем меню настроек (реворк UI, ROADMAP.md 5.108м, прямой запрос владельца). Тот же приём, что
+     * `canvasTools()` в `modules/map/index.js` — `computed()`-обёртка нужна, чтобы `IconButton`'s `active`
+     * (обычная, не реактивная строка класса на самом виджете) перерисовывалась при переключении сигнала.
+     */
+    function canvasCornerTools() {
+        return computed(() => IconButton('🛰', () => { retrievalOverlayEnabled.set(!retrievalOverlayEnabled.peek()); saveWindowState(); }, {
+            active: retrievalOverlayEnabled(),
+            title: retrievalOverlayEnabled() ? 'Pathway: on (hide retrieval overlay)' : 'Pathway: off (show retrieval overlay)',
+        }));
+    }
+
+    /** Секция "Retrieval" (Этап 5.5) — детали ВЫБРАННОГО (историей или Live) ретрива: время, sticky, маяки, цепочка маршрута, шум, запрос. Переключатель overlay переехал в canvasCornerTools() — угол канваса, не сюда (реворк UI, ROADMAP.md 5.108м). */
     function retrievalSection() {
         return h('div', { class: 'stme-mg-retrieval-section' },
-            Row(Toggle('Retrieval overlay', retrievalOverlayEnabled), retrievalHistoryStrip()),
+            retrievalHistoryStrip(),
             computed(() => {
                 const retrieval = currentRetrieval();
                 if (!retrieval) return h('small', { class: 'stme-module-hint' }, 'No retrieval recorded yet this chat.');
@@ -1489,6 +1497,16 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         });
     }
 
+    /**
+     * Реворк UI (ROADMAP.md 5.108м, прямой запрос владельца) — тело окна теперь ТОЛЬКО канвас на всю панель, а не
+     * канвас 480×480 рядом с ПОСТОЯННО видимым сайдбаром. Всё, что раньше жило в сайдбаре, распределено по трём
+     * скрытым по умолчанию выезжающим панелям (`EdgeDrawer`, см. doc-comment у самого виджета) по СКОУПУ, как явно
+     * сформулировал владелец: справа — только визуал (`mapModeSection()`), слева — общая логика/несколько нод
+     * (bootstrap, ретрив, поиск/фильтры, статистика, дебаг), снизу — только ВЫБРАННАЯ нода (`nodeForm()`), причём
+     * снизу открывается САМА при выборе ноды (`computed` от `selectedNode()`, не отдельный сигнал-тумблер) — клик
+     * по её вкладке, пока нода выбрана, трактуется как "Cancel" (закрыть форму), другого смысла у ручного закрытия
+     * здесь нет. Кнопка режима Pathway (`canvasCornerTools()`) — в углу самого канваса, не в одной из панелей.
+     */
     function tree() {
         return h('div', { class: 'stme-memory-graph-panel-root' }, computed(() => (panelVisible() ? FloatingPanel(
             'Memory Graph',
@@ -1506,43 +1524,62 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 // пропадает").
                 onClose: () => { panelVisible.set(false); saveWindowState(); if (cy) { cy.destroy(); cy = null; } },
                 drag: createDragHandlers(panelPosition, { onDrop: dropped => { panelPosition.set(clampToViewport(dropped, { width: panelSize.peek().width ?? 720, height: panelSize.peek().height ?? 560, viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })); saveWindowState(); } }),
-                onResize: next => { panelSize.set(next); saveWindowState(); },
+                // Канвас теперь ЗАПОЛНЯЕТ тело окна (flex:1 в CSS, не фиксированные 480×480) — сам ресайз окна
+                // меняет РЕАЛЬНЫЙ пиксельный размер контейнера Cytoscape. `backgroundTransformCss()` (зоны-канвас)
+                // считает трансформацию ТОЛЬКО из pan/zoom/половины плоскости (см. её doc-comment) — от размера
+                // контейнера не зависит вовсе, отдельно дёргать не нужно. Cytoscape же САМ не замечает ресайз
+                // СВОЕГО контейнера без явного вызова (он слушает `window`-resize, а не resize конкретного div —
+                // задокументированное поведение библиотеки) — без `cy.resize()` тут канвас остался бы растянут/
+                // обрезан по СТАРЫМ размерам после перетаскивания угла окна.
+                onResize: next => { panelSize.set(next); saveWindowState(); if (cy) cy.resize(); },
             },
-            h('div', { class: 'stme-memory-graph-body', style: { display: 'flex', gap: '8px', minWidth: '680px', minHeight: '480px' } },
-                // Обёртка — колонка: канвас + легенда под ним, тем же
-                // приёмом, что hint-параграфы у остальных секций (реальная
-                // жалоба: "очень плохой UI... ноль объяснений" — сам канвас
-                // до этого не объяснял НИ ОДНОГО своего взаимодействия:
-                // клик, драг узла, драг рёбер-хендла).
-                h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', flexShrink: '0' } },
-                    // position:relative, ДВА слоя внутри: фон региона (SVG,
-                    // рисуется напрямую в DOM, см. ensureCytoscape()) и сам
-                    // канвас Cytoscape поверх с прозрачным фоном, чтобы
-                    // подложка была видна сквозь него.
-                    h('div', { class: 'stme-mg-canvas-wrap', style: { position: 'relative', width: '480px', height: '480px', borderRadius: '8px', overflow: 'hidden' } },
-                        h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } },
-                            h('canvas', { id: ZONES_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } })),
-                        h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
-                        hoverTooltip(),
-                        moveToastBlock(),
+            h('div', { class: 'stme-memory-graph-body', style: { display: 'flex', minWidth: '560px', minHeight: '480px' } },
+                // position:relative — сам якорь для оверлеев/панелей ниже (тултип, тост, угловая кнопка, три
+                // EdgeDrawer). ДВА слоя фона внутри: подложка региона (canvas, см. ensureCytoscape()) и сам канвас
+                // Cytoscape поверх с прозрачным фоном, чтобы подложка была видна сквозь него.
+                h('div', { class: 'stme-mg-canvas-wrap', style: { position: 'relative', flex: '1', borderRadius: '8px', overflow: 'hidden' } },
+                    h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } },
+                        h('canvas', { id: ZONES_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } })),
+                    h('div', { id: CANVAS_ID, style: { position: 'absolute', inset: '0', background: 'transparent' } }),
+                    hoverTooltip(),
+                    moveToastBlock(),
+                    canvasCornerTools(),
+                    EdgeDrawer(leftDrawerOpen, {
+                        title: 'Bootstrap & graph', side: 'left',
+                        onToggle: value => { leftDrawerOpen.set(value); saveWindowState(); },
+                    },
+                        // Подсказка про взаимодействие с канвасом (реальная жалоба: "очень плохой UI... ноль
+                        // объяснений") переехала сюда из-под канваса — под ним самим больше нет места, он теперь
+                        // на всю панель.
+                        h('p', { class: 'stme-memory-graph-hint' },
+                            'Click a node to edit it. Drag a node onto a different dartboard cell to move it into that region. Drag from a node\'s edge handle to another node to connect them.'),
+                        generationRow(),
+                        progressRow(),
+                        retrievalRow(),
+                        retrievalSection(),
+                        connectAndEdgeRow(),
+                        searchAndFiltersRow(),
+                        statsSection(),
+                        computed(() => (statusText() ? h('div', { class: 'stme-memory-graph-status' }, statusText()) : null)),
+                        footerRow(),
+                        debugBlock(),
+                        whyBlock(),
                     ),
-                    h('p', { class: 'stme-memory-graph-hint', style: { width: '480px', boxSizing: 'border-box' } },
-                        'Click a node to edit it. Drag a node onto a different dartboard cell to move it into that region. Drag from a node\'s edge handle to another node to connect them.'),
-                ),
-                h('div', { class: 'stme-memory-graph-sidebar stme-module-body stme-mg-flat' },
-                    generationRow(),
-                    progressRow(),
-                    retrievalRow(),
-                    connectAndEdgeRow(),
-                    mapModeSection(),
-                    searchAndFiltersRow(),
-                    statsSection(),
-                    retrievalSection(),
-                    computed(() => (statusText() ? h('div', { class: 'stme-memory-graph-status' }, statusText()) : null)),
-                    nodeForm(),
-                    footerRow(),
-                    debugBlock(),
-                    whyBlock(),
+                    EdgeDrawer(rightDrawerOpen, {
+                        title: 'Map visuals', side: 'right',
+                        onToggle: value => { rightDrawerOpen.set(value); saveWindowState(); },
+                    },
+                        mapModeSection(),
+                    ),
+                    EdgeDrawer(computed(() => Boolean(selectedNode())), {
+                        title: 'Edit node', side: 'bottom',
+                        // Открытость целиком решает `selectedNode()` — клик по вкладке, пока нода выбрана, не
+                        // должен просто "спрятать" панель, оставив выбор висеть (снова открылась бы сама на
+                        // следующей же перерисовке) — трактуется как Cancel, ровно то, что уже делает closeForm().
+                        onToggle: value => { if (!value) closeForm(); },
+                    },
+                        nodeForm(),
+                    ),
                 ),
             ),
         ) : null)));
