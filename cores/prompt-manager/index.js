@@ -36,9 +36,25 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         return result.ok ? result.value : undefined;
     };
 
+    /**
+     * Родное окно Prompt Manager у ST прячем, пока PM включён; кнопка ST открывает наше окно. Не нашли разметку —
+     * PM выключается с предупреждением (запасного варианта нет — решение владельца).
+     */
+    async function syncNativeWindow() {
+        if (!settings.enabled) { await service('stPmUi.uninstall', {}); return; }
+        const answer = await service('stPmUi.install', { handler: () => publish('promptManager.openRequested', {}) });
+        if (answer && answer.found === false) {
+            settings = { ...settings, enabled: false };
+            await request(host.own, 'storage.settings.set', { params: { namespace: NAMESPACE, key: 'settings', value: settings } });
+            publish('promptManager.unsupported', { reason: 'Could not find the Prompt Manager window of this SillyTavern version to replace it. The Prompt Manager is switched off.' });
+        }
+    }
+
     async function saveSettings(patch) {
+        const wasEnabled = settings.enabled;
         settings = { ...settings, ...patch };
         await request(host.own, 'storage.settings.set', { params: { namespace: NAMESPACE, key: 'settings', value: settings } });
+        if (settings.enabled !== wasEnabled) await syncNativeWindow();
         return settings;
     }
 
@@ -46,6 +62,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         const stored = await own('storage.settings.get', { namespace: NAMESPACE, key: 'settings', fallback: {} });
         settings = { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
         await registerStages();
+        await syncNativeWindow();
         return settings;
     }
 
@@ -154,12 +171,21 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         await request(host.own, 'pipeline.stages.add', { params: { pipelineId: PAYLOAD_PIPELINE, stage: { id: 'prompt-manager:rewrite', contract: REWRITE_CONTRACT, params: { payload: { $from: '$value' } }, onExhausted: 'flag' } } });
     }
 
+    /** Понятное имя источника сообщения для таблиц: имя блока пресета, вклад модуля, лорбук или история. */
+    function nameOfBlock(preset, id) {
+        if (id === 'history') return 'Chat history';
+        if (id === 'newChat') return 'New chat line';
+        if (String(id).startsWith('lore:')) return `Lorebook entry ${String(id).slice(5)} (depth)`;
+        if (String(id).startsWith('inject:')) return `Module: ${String(id).slice(7)}`;
+        return preset.blocks.find(block => block.id === id)?.name ?? id;
+    }
+
     /** Превью «что уйдёт модели» по текущему чату ST — без отправки. */
     async function preview() {
         const chat = (await service('stPromptData.chat', {})) ?? captured?.chat ?? [];
         const assembled = await assemble(chat);
         if (assembled.skipped) return { skipped: assembled.skipped };
-        return { messages: assembled.result.messages, report: assembled.result.report, tokens: { total: assembled.result.tokens.total, byBlock: [...assembled.result.tokens.byBlock] }, dropped: assembled.result.dropped, budget: assembled.result.budget, macros: assembled.result.macros };
+        return { messages: assembled.result.messages, report: assembled.result.report, tokens: { total: assembled.result.tokens.total, byBlock: [...assembled.result.tokens.byBlock].map(([id, tokens]) => [nameOfBlock(assembled.record.preset, id), tokens]) }, dropped: assembled.result.dropped, budget: assembled.result.budget, macros: assembled.result.macros };
     }
 
     const registrations = [

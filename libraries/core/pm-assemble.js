@@ -89,6 +89,7 @@ export function assemblePrompt(preset, context) {
                 report.push({ blockId: node.id ?? node.block ?? node.contribution, name: node.name, included: false, reason: 'condition' });
                 continue;
             }
+            if (node.type === 'note') continue; // заметка для человека, в промпт не идёт
             if (node.type === 'choice') {
                 const option = node.options?.find(o => o.id === node.selected) ?? node.options?.[0];
                 if (!node.enabled || !option) { report.push({ blockId: node.id, name: node.name, included: false, reason: 'disabled' }); continue; }

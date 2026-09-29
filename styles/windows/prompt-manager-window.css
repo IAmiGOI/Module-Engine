@@ -1,0 +1,35 @@
+/* --- Окно Prompt Manager ------------------------------------------------------ */
+.stme-pm-window { z-index: 6950; }
+.stme-pm-tabs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--stme-border); }
+.stme-pm-body { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
+.stme-pm-toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.stme-pm-split { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(280px, 1fr); gap: 10px; align-items: start; }
+@media (max-width: 720px) { .stme-pm-split { grid-template-columns: 1fr; } }
+.stme-pm-list { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow: auto; }
+.stme-pm-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--stme-radius-sm); border: 1px solid transparent; cursor: pointer; background: var(--stme-level-1); }
+.stme-pm-row:hover { border-color: var(--stme-border); }
+.stme-pm-selected { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
+.stme-pm-off .stme-pm-label { opacity: .45; text-decoration: line-through; }
+.stme-pm-kind-group { font-weight: 600; }
+.stme-pm-kind-marker .stme-pm-label { color: var(--stme-accent); }
+.stme-pm-kind-module .stme-pm-label { color: var(--stme-ok-bright); }
+.stme-pm-kind-note { font-style: italic; opacity: .8; }
+.stme-pm-kind-missing .stme-pm-label { color: var(--stme-danger-bright); }
+.stme-pm-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stme-pm-detail { font-size: .8em; opacity: .65; white-space: nowrap; }
+.stme-pm-actions { display: flex; gap: 2px; }
+.stme-pm-spacer { display: inline-block; width: 22px; }
+.stme-pm-drop-before { box-shadow: 0 -2px 0 var(--stme-accent); }
+.stme-pm-drop-after { box-shadow: 0 2px 0 var(--stme-accent); }
+.stme-pm-drop-inside { outline: 2px dashed var(--stme-accent); }
+.stme-pm-editor { display: flex; flex-direction: column; gap: 8px; }
+.stme-pm-help { font-size: .85em; opacity: .75; margin: 0; }
+.stme-pm-table { width: 100%; border-collapse: collapse; font-size: .9em; }
+.stme-pm-table th, .stme-pm-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--stme-border); }
+.stme-pm-message pre { white-space: pre-wrap; margin: 2px 0 8px; max-height: 240px; overflow: auto; font-size: .85em; }
+.stme-pm-warning, .stme-pm-advice { padding: 6px 8px; border-left: 3px solid var(--stme-warn); background: color-mix(in srgb, var(--stme-warn) 12%, transparent); margin: 6px 0; }
+.stme-pm-row .stme-icon-button { width: 24px; height: 24px; min-width: 24px; padding: 0; font-size: 12px; line-height: 1; }
+.stme-pm-row input[type="checkbox"] { margin: 0; }
+.stme-pm-toolbar .menu_button { padding: 3px 10px; }
+.stme-pm-side { position: sticky; top: 0; }
+.stme-pm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; }
