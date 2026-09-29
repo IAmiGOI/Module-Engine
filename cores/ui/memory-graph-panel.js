@@ -638,6 +638,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         usage: { color: 'retrieved', size: 'retrieved', glow: 'retrieved' },
         structure: { color: 'region', size: 'connections', glow: 'none' },
         timeline: { color: 'age', size: 'uniform', glow: 'none' },
+        types: { color: 'kind', size: 'connections', glow: 'none' }, // structured: вид ноды цветом (все ноды — круги)
         plot: { color: 'core', size: 'connections', glow: 'core' }, // structured: каркас сюжета — Core яркие, остальное приглушено
     };
     function applyMapModePreset(name) {
@@ -1698,6 +1699,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 Button('Usage', () => applyMapModePreset('usage')),
                 Button('Structure', () => applyMapModePreset('structure')),
                 Button('Timeline', () => applyMapModePreset('timeline')),
+                computed(() => (isStructured() ? Button('Types', () => applyMapModePreset('types')) : null)),
                 computed(() => (isStructured() ? Button('Plot', () => applyMapModePreset('plot')) : null)),
             ),
             legendBlock(),

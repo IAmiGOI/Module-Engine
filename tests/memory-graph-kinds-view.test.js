@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { KIND_SHAPE, nodeKindData, directedEdgeEnds, hiddenByKind, isOrbitEvent, eventAnchorId, placeEventsNearAnchors, structuredStyleRules, DEFAULT_KIND_FILTERS } from '../cores/ui/memory-graph/kinds-view.js';
+import { KIND_LABEL, nodeKindData, directedEdgeEnds, hiddenByKind, isOrbitEvent, eventAnchorId, placeEventsNearAnchors, structuredStyleRules, DEFAULT_KIND_FILTERS } from '../cores/ui/memory-graph/kinds-view.js';
 import { graphStylesheet } from '../cores/ui/memory-graph/stylesheet.js';
 import { findMetric, glowValue, STRUCTURED_METRICS } from '../cores/ui/memory-graph/metrics.js';
 
 const event = (id, anchorId, extra = {}) => ({ id, kind: 'event', createdAt: 0, edges: anchorId ? [{ to: anchorId, type: 'participates', dir: 'in' }] : [], ...extra });
 
-test('each kind has its own shape and a node without a kind is drawn as a fact', () => {
-    assert.deepEqual(Object.values(KIND_SHAPE).sort(), ['diamond', 'ellipse', 'hexagon', 'round-rectangle']);
-    assert.equal(nodeKindData({}).shape, 'diamond');
+test('the kind is carried as data for the color metric only — no shape, every node stays a circle', () => {
+    assert.deepEqual(Object.keys(KIND_LABEL), ['entity', 'object', 'fact', 'event']);
+    assert.equal(nodeKindData({}).kind, 'fact');
+    assert.equal(nodeKindData({}).shape, undefined);
     assert.equal(nodeKindData({ kind: 'event', core: true }).core, true);
     assert.equal(nodeKindData({ kind: 'object', subtype: 'place' }).subtype, 'place');
 });
@@ -20,9 +21,9 @@ test('an event edge is drawn once from its out record with an arrow, and the in 
     assert.equal(directedEdgeEnds({ id: 'a' }, { to: 'b', type: 'related' }), null, 'a lore edge stays a plain line');
 });
 
-test('the structured style rules give shape, core outline, arrows and thicker chains, and the full stylesheet includes them', () => {
+test('the structured style rules give only arrows and thicker chains, and the full stylesheet includes them', () => {
     const selectors = structuredStyleRules().map(rule => rule.selector);
-    assert.deepEqual(selectors, ['node[shape]', 'node[?core]', 'edge[?directed]', 'edge[?chain]']);
+    assert.deepEqual(selectors, ['edge[?directed]', 'edge[?chain]']);
     const all = graphStylesheet().map(rule => rule.selector);
     for (const selector of selectors) assert.ok(all.includes(selector));
     assert.ok(all.indexOf('.dimmed') > all.indexOf('edge[?directed]'), 'dimming still wins over the structured rules');
@@ -64,4 +65,12 @@ test('the kind and core metrics exist only as structured metrics and are found b
     assert.ok(findMetric('core').value({ core: true }) > findMetric('core').value({ core: false }));
     assert.equal(glowValue({ core: true }, 'core', {}, {}), 0.5);
     assert.equal(glowValue({ core: false }, 'core', {}, {}), 0);
+});
+
+test('no node rule paints a white outline, and node labels use the shared font', () => {
+    const rules = graphStylesheet();
+    for (const rule of rules.filter(r => /protectedNode|core/.test(r.selector))) assert.equal(rule.style['border-color'], undefined, rule.selector);
+    const label = rules.find(r => r.selector.startsWith('node[?protectedNode]'));
+    assert.match(label.style['font-family'], /Noto Sans/);
+    assert.equal(label.style['font-size'], 10);
 });

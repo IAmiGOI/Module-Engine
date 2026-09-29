@@ -3,17 +3,16 @@
  * Окно берёт режим из `memoryGraph.mode`: у legacy-графа ни одна функция отсюда не вызывается, элементы карты остаются прежними.
  */
 
-/** Форма узла по виду: сущность — круг, объект — скруглённый квадрат (место и группа — подвиды объекта), факт — ромб, событие — шестиугольник. */
-export const KIND_SHAPE = Object.freeze({ entity: 'ellipse', object: 'round-rectangle', fact: 'diamond', event: 'hexagon' });
+/** Вид ноды показывается ЦВЕТОМ (метрика `kind`, режим карты «Types»), а не формой — все ноды остаются кругами (решение владельца). */
 export const KIND_LABEL = Object.freeze({ entity: 'Entity', object: 'Object', fact: 'Fact', event: 'Event' });
-const KINDS = Object.keys(KIND_SHAPE);
+const KINDS = Object.keys(KIND_LABEL);
 
 const kindOf = node => (KINDS.includes(node?.kind) ? node.kind : 'fact');
 
-/** Поля элемента Cytoscape для ноды structured-графа (`data(kind|core|shape|subtype)`). */
+/** Поля элемента Cytoscape для ноды structured-графа (`data(kind|core|subtype)`). */
 export function nodeKindData(node) {
     const kind = kindOf(node);
-    return { kind, shape: KIND_SHAPE[kind], core: Boolean(node.core), subtype: kind === 'object' ? (node.subtype ?? '') : '' };
+    return { kind, core: Boolean(node.core), subtype: kind === 'object' ? (node.subtype ?? '') : '' };
 }
 
 /**
@@ -26,12 +25,9 @@ export function directedEdgeEnds(node, edge) {
     return null;
 }
 
-/** Правила стиля structured — только по данным (`data(shape)` и т. п.), поэтому на legacy-элементах, у которых этих полей нет, не срабатывают. */
+/** Правила стиля structured — только по данным (`data(directed|chain)`), поэтому на legacy-элементах, у которых этих полей нет, не срабатывают. */
 export function structuredStyleRules() {
     return [
-        { selector: 'node[shape]', style: { shape: 'data(shape)' } },
-        // Core — крупная светлая обводка и подпись при любом масштабе (та же обводка, что раньше показывала защищённые ноды).
-        { selector: 'node[?core]', style: { 'border-width': 3, 'border-color': '#fff', label: 'data(label)', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4, color: '#eef2ff', 'text-outline-color': '#0b0f1a', 'text-outline-width': 2 } },
         { selector: 'edge[?directed]', style: { 'target-arrow-shape': 'triangle', 'target-arrow-color': 'data(lineColor)', 'arrow-scale': 0.8, 'curve-style': 'bezier' } },
         { selector: 'edge[?chain]', style: { width: 1.6, 'line-opacity': 0.7 } },
     ];
