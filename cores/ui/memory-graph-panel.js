@@ -33,12 +33,14 @@ export {
 import { layoutGraph, nodeRadius, zoneAt } from './memory-graph/layout.js';
 import { diffElements } from './memory-graph/elements-diff.js';
 import { dropDecision, connectModeStep, edgeTypesInGraph } from './memory-graph/interactions.js';
-// `renderZonesSvg()`/`ZONES_SVG_ID` (zones-svg.js) БОЛЬШЕ НЕ ЗОВУТСЯ отсюда — реальная жалоба пользователя (плюс
-// присланный скриншот): угловатые клинья, подложка не всегда отображается, нет переключателя. Заменены на
-// органичную "плоскость графа" (`plane-field.js`) — canvas + честное поле по расстоянию, см. doc-comment у
-// `paintZonesCanvas()` ниже. Сам `zones-svg.js` и его тесты НЕ трогаем и не удаляем (тот же принцип, что у
-// `legacy-geometry.js` с Этапа 1 — старый код с тестами остаётся, просто больше не в рендер-пути).
-import { zonesSignature } from './memory-graph/zones-svg.js';
+// `renderZonesSvg()`/`ZONES_SVG_ID`/`zonesSignature()` (zones-svg.js) БОЛЬШЕ НЕ ЗОВУТСЯ отсюда — реальная жалоба
+// пользователя (плюс присланный скриншот): угловатые клинья, подложка не всегда отображается, нет переключателя.
+// Заменены на органичную "плоскость графа" (`plane-field.js`) — canvas + честное поле по расстоянию, см. doc-comment
+// у `paintZonesCanvas()` ниже. `zonesSignature()` (сигнатура-кэш перерисовки) тоже больше не зовётся — ROADMAP.md
+// 5.109д, владелец: "пусть считается после каждого обновления" (кэш по агрегатам зоны не ловил сдвиг позиций
+// ОТДЕЛЬНЫХ нод внутри региона, от которого зависит цвет поля). Сам `zones-svg.js` и его тесты НЕ трогаем и не
+// удаляем (тот же принцип, что у `legacy-geometry.js` с Этапа 1 — старый код с тестами остаётся, просто больше не
+// в рендер-пути).
 import { computePlaneOutline, planeRadiusAt, regionFieldAt, dominantBlend } from './memory-graph/plane-field.js';
 import { retrievalClasses, routeChainLabels } from './memory-graph/retrieval-overlay.js';
 import { METRICS, findMetric, metricColor, metricDomain, glowValue, averageHue } from './memory-graph/metrics.js';
@@ -516,7 +518,6 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // набор зон определяет и СТРОКУ SVG, и половину его стороны для смещения в `backgroundTransformCss()`, но
     // пересчитывать/перерисовывать саму строку на каждый 'pan'/'zoom' незачем — только на реальное изменение зон).
     let currentZones = [];
-    let lastZonesSignature = null;
     // Половина стороны CANVAS'а подложки — теперь больше, чем `zonesHalfExtent(currentZones)`: "плоскость графа"
     // (`computePlaneOutline()`, plane-field.js) расширяет реальный край зон ("клякса/галактика", реальная жалоба
     // пользователя на угловатую подложку). `updateBackgroundTransform()` использует ИМЕННО это значение, не
@@ -824,25 +825,47 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         const offCtx = offscreen.getContext('2d');
         const imageData = offCtx.createImageData(fieldGrid, fieldGrid);
         const featherWidth = half * EDGE_FEATHER_FRACTION;
+        // РЕАЛЬНАЯ ЖАЛОБА владельца: "внешние границы тоже должны быть явными, как внутренние" — внутренние швы
+        // между регионами ярки (`BORDER_ALPHA=1`, dominantBlend()/5.108л), а внешний край плоскости просто гас в
+        // ноль (`edgeMask` ниже раньше только УМЕНЬШАЛ альфу к краю) — сам контур кляксы был не виден, только
+        // плавное затухание в черноту. `EDGE_RIM_FRACTION` — доля `featherWidth`, где яркость КАЙМЫ (не самой
+        // заливки) поднимается к пику у самого края; `EDGE_CUTOFF_FRACTION` — узкая полоска ПОСЛЕ пика, где яркость
+        // уже честно уходит в 0 (без неё контур обрывался бы резко ровно на `planeRadius`).
+        const EDGE_RIM_FRACTION = 1; // пик яркости — у самого planeRadius (вся ширина feather — подъём к краю)
+        const EDGE_CUTOFF_FRACTION = 0.15; // последние 15% feather — честный спад в прозрачность
         for (let gridY = 0; gridY < fieldGrid; gridY += 1) {
             for (let gridX = 0; gridX < fieldGrid; gridX += 1) {
                 const x = ((gridX + 0.5) / fieldGrid) * size - half;
                 const y = ((gridY + 0.5) / fieldGrid) * size - half;
                 const distanceFromCenter = Math.hypot(x, y);
                 const planeRadius = planeRadiusAt(Math.atan2(y, x), zones);
-                // Мягкий край плоскости (не резкий обрез) — smoothstep на последних EDGE_FEATHER_FRACTION радиуса.
-                let edgeMask = 1;
-                if (distanceFromCenter > planeRadius) edgeMask = 0;
-                else if (distanceFromCenter > planeRadius - featherWidth) {
-                    const t = Math.max(0, Math.min(1, (planeRadius - distanceFromCenter) / featherWidth));
-                    edgeMask = t * t * (3 - 2 * t);
+                let edgeMask = 1; // финальный честный спад в прозрачность — только у САМОГО края
+                let rimBoost = 0; // яркость каймы — растёт к краю НЕЗАВИСИМО от заливки/границы под ней
+                if (distanceFromCenter > planeRadius) {
+                    edgeMask = 0;
+                } else {
+                    const distToEdge = planeRadius - distanceFromCenter;
+                    const cutoffWidth = featherWidth * EDGE_CUTOFF_FRACTION;
+                    if (distToEdge < cutoffWidth) {
+                        const t = Math.max(0, Math.min(1, distToEdge / cutoffWidth));
+                        edgeMask = t * t * (3 - 2 * t);
+                    }
+                    const rimWidth = featherWidth * EDGE_RIM_FRACTION;
+                    if (distToEdge < rimWidth) {
+                        const t = Math.max(0, Math.min(1, 1 - distToEdge / rimWidth)); // 0 вдали от края → 1 у самого края
+                        rimBoost = t * t * (3 - 2 * t);
+                    }
                 }
                 const color = dominantBlend(regionFieldAt(x, y, nearbyNodePoints(buckets, INFLUENCE_CUTOFF, x, y)), lastHueByRegionId);
+                // Кайма ПЕРЕБИВАЕТ тусклую заливку (видимый контур кляксы даже посреди дальней от границ регионов
+                // области), но не спорит с уже яркой внутренней границей (там `color.a` и так у потолка) — берём
+                // максимум, не сумму, тем же принципом "никакого насыщения", что уже применён к свечению.
+                const finalAlpha = Math.max(color.a, rimBoost) * edgeMask;
                 const index = (gridY * fieldGrid + gridX) * 4;
                 imageData.data[index] = color.r;
                 imageData.data[index + 1] = color.g;
                 imageData.data[index + 2] = color.b;
-                imageData.data[index + 3] = Math.round(color.a * edgeMask * 255);
+                imageData.data[index + 3] = Math.round(finalAlpha * 255);
             }
         }
         offCtx.putImageData(imageData, 0, 0);
@@ -1019,22 +1042,22 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     }
 
     /**
-     * Перерисовывает подложку ТОЛЬКО когда зоны реально изменились ИЛИ переключатель поменялся (`zonesSignature()`
-     * + `zonesBackgroundEnabled()` в одной строке-сигнатуре) — план прямо просит не делать этого на каждый
-     * pan/zoom/refresh, раз `layoutGraph()` детерминирован и часто отдаёт БАЙТ-В-БАЙТ те же зоны.
-     *
-     * РЕАЛЬНЫЙ БАГ, найден по жалобе пользователя ("отображается не всегда"): `lastZonesSignature` раньше НИКОГДА
-     * не сбрасывался при уничтожении `cy` (`onClose`/`hide()`) — при закрытии окна весь поддерево (включая канвас
-     * подложки) уничтожался вместе с DOM, а при повторном открытии сигнатура зон часто СОВПАДАЛА с прошлой
-     * (граф не менялся) → эта функция молча пропускала перерисовку, подложка оставалась пустой до первого
-     * реального изменения графа. Исправлено — `ensureCytoscape()` сбрасывает `lastZonesSignature = null` перед
-     * первой отрисовкой при КАЖДОМ (пере)создании `cy`, гарантируя перерисовку на каждое открытие окна.
+     * Перерисовывает подложку на КАЖДЫЙ вызов (из `syncCytoscape()`, т.е. на каждое реальное изменение графа) —
+     * БЕЗ кэша по сигнатуре зон, раньше он тут был (`zonesSignature()` + `zonesBackgroundEnabled()` в одной строке,
+     * план тогда прямо просил не пересчитывать на каждый pan/zoom/refresh). РЕАЛЬНАЯ ЖАЛОБА владельца — живой граф
+     * с резкими "квадратными" границами, не менявшимися между правками кода: `zonesSignature()` хэширует только
+     * ЗОНЫ (`a0`/`a1`/`rOuter`/`count`/`capacity`) — не позиции ОТДЕЛЬНЫХ нод внутри зоны, хотя цвет поля
+     * (`regionFieldAt()`) считается именно по ним. Если позиции нод внутри региона сдвигались (перепаковка при
+     * добавлении соседа и т.п.) без изменения агрегатов зоны — сигнатура СОВПАДАЛА, перерисовка молча
+     * пропускалась, и на экране оставался УСТАРЕВШИЙ битмап, посчитанный по старым позициям/старой версии кода.
+     * Прямой запрос владельца: "пусть считается после каждого обновления" — самый честный способ никогда не
+     * рассинхронизироваться с реальным состоянием графа. `paintZonesCanvas()`'s собственная сетка уже ограничена
+     * (`FIELD_GRID_MAX=420`) и не растёт с частотой вызовов; `syncCytoscape()` и так вызывается только на реальные
+     * изменения (сигналы `nodes()`/`regions()`/режимов в `effect()`), не на каждый кадр/пиксель драга — тот же
+     * порядок стоимости, что уже принят для свечения (`paintGlowCanvas()`, вызывается БЕЗ кэша с самого начала).
      */
     function updateZonesBackground(zones) {
         currentZones = zones;
-        const signature = `${zonesBackgroundEnabled()}|${zonesSignature(zones)}`;
-        if (signature === lastZonesSignature) { updateBackgroundTransform(); return; }
-        lastZonesSignature = signature;
         paintZonesCanvas(zones);
         updateBackgroundTransform();
     }
@@ -1043,10 +1066,6 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (cy) return cy;
         const container = document.getElementById(CANVAS_ID);
         if (!container) return null;
-        // Багфикс "подложка отображается не всегда" (см. updateZonesBackground()'s doc-comment) — сброс ЗДЕСЬ, а
-        // не только в конструкторе state'а, гарантирует перерисовку на КАЖДОЕ открытие окна независимо от того,
-        // изменился ли граф с прошлого закрытия.
-        lastZonesSignature = null;
         const cytoscape = await loadCytoscape();
         cy = cytoscape({
             container,
