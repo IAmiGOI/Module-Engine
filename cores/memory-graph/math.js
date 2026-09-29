@@ -187,6 +187,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // меняется охотно; `sticky` — высокий запас, блок держится, пока
     // сцена/тема разговора не изменится реально ощутимо.
     retrievalStability: 'balanced',
+    // Закреплённый блок живёт не дольше стольких ходов подряд, даже если сцена почти не менялась (beacons.js).
+    retrievalMaxStickyTurns: 12,
     // LLM-driven семантические регионы бутстрапа (решено с пользователем,
     // MEMORY_GRAPH.md — "80% нод без связи" на старом дартборд-бутстрапе):
     // `baseRegionNames` — ЕДИНСТВЕННЫЙ источник регионов для Прохода 1
@@ -303,6 +305,7 @@ export function clampGraphSettings(values = {}) {
         retrievalTargetNodes: clampInt(values.retrievalTargetNodes, 1, 200, DEFAULT_SETTINGS.retrievalTargetNodes),
         noiseFanoutPerNode: clampInt(values.noiseFanoutPerNode, 1, 20, DEFAULT_SETTINGS.noiseFanoutPerNode),
         retrievalStability: RETRIEVAL_STABILITY_LEVELS.includes(values.retrievalStability) ? values.retrievalStability : DEFAULT_SETTINGS.retrievalStability,
+        retrievalMaxStickyTurns: clampInt(values.retrievalMaxStickyTurns, 1, 500, DEFAULT_SETTINGS.retrievalMaxStickyTurns),
         baseRegionNames: Array.isArray(values.baseRegionNames) && values.baseRegionNames.length
             ? values.baseRegionNames.map(name => String(name).trim()).filter(Boolean)
             : DEFAULT_SETTINGS.baseRegionNames,

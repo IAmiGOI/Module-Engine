@@ -1,5 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
+import { selectBeacons, shouldRefreshSticky, recentQueryText } from './beacons.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { packEntriesIntoChunks } from '../../libraries/core/entry-chunker.js';
 import { extractRecentText } from './context-text.js';
@@ -2230,22 +2231,25 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const candidates = Object.values(nodes).filter(node => node.regionId);
             if (!candidates.length) return true;
 
-            const contextText = extractLatestText(chat);
+            // Запрос — последние несколько сообщений, не одна реплика (beacons.js, ROADMAP 5.109).
+            const contextText = recentQueryText(chat, 3) || extractLatestText(chat);
             if (!contextText.trim()) return true;
             const embeddingResult = await callService('embedding.compute', { text: contextText, kind: 'query' });
             if (!stillSameChat(epoch)) return true; // мягкая деградация — просто не трогаем chat/stickyRetrieval этим проходом
             if (!embeddingResult.ok) return true;
             const contextEmbedding = embeddingResult.value;
 
-            const freshBeaconIds = pickBeacons(candidates, contextEmbedding, {
-                count: settings.beaconCount, weightFactor: settings.beaconWeightFactor, settings, turnCounter,
-            });
+            // Маяки второй версии (beacons.js, ROADMAP 5.109): смысл первым, вес и защищённость — ограниченные бонусы, имя из сцены —
+            // сильный бонус. Прежний pickBeacons() давал защищённым нодам бесконечный счёт — маяками всегда были первые центры бутстрапа.
+            const freshBeaconIds = selectBeacons(candidates, contextEmbedding, {
+                count: settings.beaconCount, queryText: contextText,
+                weightOf: node => computeNodeWeight({ importance: node.importance, degree: node.degree, elapsed: elapsedTurnsFor(node), protectedNode: false, settings }),
+            }).map(beacon => beacon.id);
             if (!freshBeaconIds.length) return true;
 
-            const stickyScore = stickyRetrieval ? scoreBeaconSet(stickyRetrieval.beaconIds, nodes, contextEmbedding) : null;
-
-            if (stickyRetrieval && !shouldReplaceStickySet({
-                stickyScore, freshScore: scoreBeaconSet(freshBeaconIds, nodes, contextEmbedding), stability: settings.retrievalStability,
+            if (!shouldRefreshSticky({
+                sticky: stickyRetrieval, freshIds: freshBeaconIds, nodesById: nodes, contextEmbedding,
+                stability: settings.retrievalStability, turn: turnCounter, maxAgeTurns: settings.retrievalMaxStickyTurns,
             })) {
                 // Закреплённый блок побеждает — переиспользуем ЕГО ТЕКСТ как
                 // есть, не трогая маршрут/шум заново (см. doc-comment выше).
@@ -2294,7 +2298,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             }
             for (const id of freshBeaconIds) { if (nodes[id]) nodes[id].beaconCount = (nodes[id].beaconCount ?? 0) + 1; }
 
-            stickyRetrieval = { beaconIds: freshBeaconIds, text };
+            stickyRetrieval = { beaconIds: freshBeaconIds, text, turn: turnCounter };
             // Публикация ретрива (Этап 2, П3/П6) — тот же формат, что и в sticky-ветке выше, но с ПОСЧИТАННЫМИ
             // маршрутом/шумом (не переизданием старого). `query` обрезан до 200 символов — план явно ограничивает,
             // это подсказка для панели ("что искали"), не полный текст сцены.
