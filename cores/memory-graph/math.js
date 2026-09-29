@@ -213,7 +213,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     baseRegionNames: ['Locations', 'Main Characters', 'Factions'],
     // Режим НОВЫХ графов (MEMORY_GRAPH_TYPES_PLAN.md, этап 0): 'legacy' | 'structured'. До конца этапов 1–8 плана — legacy;
     // потом отдельным коммитом станет 'structured'. Существующие чаты не затрагивает: их режим хранится в самом графе (`graphMeta`).
-    defaultGraphMode: 'legacy',
+    defaultGraphMode: 'structured',
     entriesPerRegionCenter: 20,
     // Найдено живьём: `model.generate` без явного `maxTokens` в запросе
     // падает на `REQUEST_DEFAULTS.maxTokens = 1000`
@@ -285,7 +285,7 @@ function clampInt(value, min, max, fallback) {
 /** Тот же защитный клэмп, что у остальных `DEFAULT_SETTINGS` в движке — ручная правка файла настроек не должна осесть как есть. */
 export function clampGraphSettings(values = {}) {
     return {
-        defaultGraphMode: values.defaultGraphMode === 'structured' ? 'structured' : 'legacy',
+        defaultGraphMode: ['legacy', 'structured'].includes(values.defaultGraphMode) ? values.defaultGraphMode : DEFAULT_SETTINGS.defaultGraphMode,
         thresholdK: clampInt(values.thresholdK * 10, 1, 100, DEFAULT_SETTINGS.thresholdK * 10) / 10,
         keywordWeight: clampInt(values.keywordWeight * 10, 0, 100, DEFAULT_SETTINGS.keywordWeight * 10) / 10,
         extractionContextMessages: clampInt(values.extractionContextMessages, 1, 20, DEFAULT_SETTINGS.extractionContextMessages),
