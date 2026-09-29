@@ -24,6 +24,7 @@ export function registerStPromptDataService(bus, { getContext, fetchImpl = (...a
             persona: power.persona_description ?? '',
             chatLength: context.chat?.length ?? 0,
             chatId: context.getCurrentChatId?.() ?? null,
+            model: (() => { try { return String(context.getChatCompletionModel?.() ?? ''); } catch { return ''; } })(),
             selectedPresetName: context.getPresetManager?.('openai')?.getSelectedPresetName?.() ?? null,
             wiScanDepth: context.worldInfoSettings?.world_info_depth ?? null,
             wiBudgetPercent: context.worldInfoSettings?.world_info_budget ?? null,
@@ -47,6 +48,15 @@ export function registerStPromptDataService(bus, { getContext, fetchImpl = (...a
     /** Копия истории чата ST в её родном виде (`mes`, `is_user`, `extra`…) — для превью вне генерации. */
     const chat = () => (getContext()?.chat ?? []).map(entry => ({ ...entry }));
 
-    const unregisters = [bus.register('stPromptData.chat', () => chat()), bus.register('stPromptData.read', () => read()), bus.register('stPromptData.presets', () => presets())];
+    /** Стриминг ST (`stream_openai`): читает и ставит; ядро PM возвращает прежнее значение по окончании генерации. */
+    function streaming(params) {
+        const settings = getContext()?.chatCompletionSettings;
+        if (!settings) return null;
+        const previous = Boolean(settings.stream_openai);
+        if (params && typeof params.value === 'boolean') settings.stream_openai = params.value;
+        return { previous, current: Boolean(settings.stream_openai) };
+    }
+
+    const unregisters = [bus.register('stPromptData.streaming', params => streaming(params)), bus.register('stPromptData.chat', () => chat()), bus.register('stPromptData.read', () => read()), bus.register('stPromptData.presets', () => presets())];
     return { read, presets, unregister: () => { for (const unregister of unregisters) unregister(); } };
 }

@@ -56,3 +56,13 @@ test('a seed freezes random macros and the result reports that randomness was us
     assert.deepEqual(a.messages, b.messages);
     assert.equal(a.macros.usedRandom, true);
 });
+
+test('text rules of the preset change only the outgoing prompt and imported ST regex scripts are applied', () => {
+    const preset = amigo();
+    preset.rules = [{ id: 'r', enabled: true, find: { kind: 'text', value: 'dragon' }, replace: 'wyrm', scope: { targets: 'history' } }];
+    const result = buildRequest(preset, materials);
+    const text = result.messages.map(m => m.content).join('\n');
+    assert.ok(text.includes('about the wyrm'));
+    assert.equal(materials.chat.at(-1).mes.includes('dragon'), true, 'the saved chat is untouched');
+    assert.ok(text.includes('Dragons guard castles.'), 'the lorebook text is a prompt block, not history');
+});

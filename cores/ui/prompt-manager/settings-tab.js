@@ -1,6 +1,6 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Button, Row, Field, NumberInput, Toggle, Select, Slider, EmptyState } from '../../../libraries/shared/widgets.js';
+import { Button, Row, Field, NumberInput, Toggle, Select, Slider, EmptyState, Badge } from '../../../libraries/shared/widgets.js';
 
 const REASONING = [{ value: 'auto', label: 'auto' }, { value: 'min', label: 'min' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }, { value: 'max', label: 'max' }];
 
@@ -38,6 +38,28 @@ export function createSettingsTab({ state, actions, call }) {
         value.set = next => { set(next); actions.patch(preset => { preset.params.reasoning_effort = next; }); };
         return value;
     })();
+    // Переопределения: слой (модель / персонаж / чат) → пять самых нужных параметров. По умолчанию выключено.
+    const OVERRIDE_KEYS = [['temperature', 'Temperature'], ['top_p', 'Top P'], ['top_k', 'Top K'], ['min_p', 'Min P'], ['openai_max_tokens', 'Max response']];
+    const scope = signal('character');
+    const context = signal(null);
+    const layer = Object.fromEntries(OVERRIDE_KEYS.map(([key]) => [key, signal('')]));
+    const overrideOn = signal(Boolean(state.settings().overrides?.enabled));
+    const setOverrideOn = overrideOn.set;
+    overrideOn.set = value => { setOverrideOn(value); actions.configure({ overrides: { ...(state.settings().overrides ?? {}), enabled: value } }); };
+    const keyOf = () => ({ model: context()?.model, character: context()?.char, chat: context()?.chatId })[scope()] ?? '';
+    async function loadOverrideContext() {
+        const answer = await call('promptManager.context');
+        context.set(answer.ok ? answer.value : null);
+        const saved = state.settings().overrides?.[{ model: 'byModel', character: 'byCharacter', chat: 'byChat' }[scope()]]?.[keyOf()] ?? {};
+        for (const [key] of OVERRIDE_KEYS) layer[key].set(saved[key] ?? '');
+    }
+    async function saveLayer(clear = false) {
+        const params = clear ? {} : Object.fromEntries(OVERRIDE_KEYS.map(([key]) => [key, layer[key]()]).filter(([, value]) => value !== '' && value !== null).map(([key, value]) => [key, Number(value)]));
+        await call('promptManager.setOverride', { scope: scope(), key: keyOf(), params });
+        const fresh = await call('promptManager.settings');
+        if (fresh.ok) await actions.configure({ overrides: fresh.value.overrides });
+        if (clear) for (const [key] of OVERRIDE_KEYS) layer[key].set('');
+    }
     const headroom = signal(Math.round((state.settings().headroom ?? 0.1) * 100));
     const setHeadroom = headroom.set;
     headroom.set = next => { setHeadroom(next); actions.configure({ headroom: next / 100 }); };
@@ -56,6 +78,13 @@ export function createSettingsTab({ state, actions, call }) {
                 Toggle('Function calling', flagSignal('function_calling')), Toggle('Squash system messages', flagSignal('squash_system_messages')),
                 Toggle('Unlocked context', flagSignal('max_context_unlocked')),
             ) : EmptyState('Select a preset first.'))),
+            h('h4', {}, 'Overrides (off by default)'),
+            Toggle('Use overrides for this model, character or chat', overrideOn),
+            Row(Select(scope, [{ value: 'character', label: 'this character' }, { value: 'chat', label: 'this chat' }, { value: 'model', label: 'this model' }], { onChange: () => loadOverrideContext() }), Button('Load current', loadOverrideContext),
+                computed(() => (context() ? Badge(keyOf() || 'unknown') : null))),
+            h('div', { class: 'stme-pm-grid' }, OVERRIDE_KEYS.map(([key, label]) => Field(label, NumberInput(layer[key], { step: 0.01 })))),
+            Row(Button('Save this layer', () => saveLayer(false)), Button('Clear this layer', () => saveLayer(true), { variant: 'danger' })),
+            h('p', { class: 'stme-pm-help' }, 'Priority: chat over character over model over the preset. Empty fields keep the preset value.'),
             h('h4', {}, 'Versions'),
             Row(Button('Load versions', loadVersions)),
             computed(() => (versions().length ? h('div', {}, versions().map(version => Row(

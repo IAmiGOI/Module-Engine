@@ -233,3 +233,24 @@ test('on a regenerate with the final-only mode the earlier steps are reused inst
     await all.send(undefined, 'regenerate');
     assert.equal(all.stepCalls.length, 4, 'the default reruns the whole chain');
 });
+
+test('parameter overrides are ignored until switched on and then the chat beats the preset', async () => {
+    const { pm, send, call } = await build();
+    await pm.autoPrepare();
+    await call('promptManager.setOverride', { scope: 'chat', key: 'chat-1', params: { temperature: 1.3 } });
+    assert.equal((await send()).temperature, 0.85, 'overrides are off by default');
+    await pm.configure({ overrides: { ...pm.settings().overrides, enabled: true } });
+    assert.equal((await send()).temperature, 1.3);
+});
+
+test('streaming from the preset is set in ST for the generation and given back afterwards, never written into the request body', async () => {
+    const { pm, send, context, fire } = await build();
+    context.chatCompletionSettings.stream_openai = false;
+    await pm.autoPrepare();
+    const body = await send();
+    assert.equal(context.chatCompletionSettings.stream_openai, true, 'the preset says stream');
+    assert.equal('stream' in body && body.stream !== undefined, false, 'the request body keeps what ST built');
+    fire('generation_ended');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(context.chatCompletionSettings.stream_openai, false, 'the user setting is restored');
+});

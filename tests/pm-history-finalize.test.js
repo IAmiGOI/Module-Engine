@@ -32,7 +32,8 @@ test('macros in history text are substituted with the given function', () => {
 });
 
 test('only the parameters set in the preset go into the request body under the endpoint names', () => {
-    assert.deepEqual(paramsToBody({ temperature: 0.85, openai_max_tokens: 4000, stream_openai: true, seed: -1, top_k: undefined }), { temperature: 0.85, max_tokens: 4000, stream: true, seed: -1 });
+    assert.deepEqual(paramsToBody({ temperature: 0.85, openai_max_tokens: 4000, stream_openai: true, seed: -1, top_k: undefined }), { temperature: 0.85, max_tokens: 4000, seed: -1 });
+    assert.equal('stream' in paramsToBody({ stream_openai: false }), false, 'streaming is never rewritten in the body: ST parses the answer by its own setting');
 });
 
 test('consecutive system messages are squashed only when the preset asks for it', () => {
