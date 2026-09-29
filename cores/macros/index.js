@@ -215,6 +215,8 @@ export function createMacrosCore(host) {
     // it never gets a JS reference at all — so without these, no UI could
     // ever list/save a program. Same shape as `tracking.trackers`/`tracking.
     // configure`.
+    // Все текущие значения макросов одним объектом — Prompt Manager подставляет наши макросы сам, минуя ST.
+    const unregisterSnapshot = host.own.register('macros.snapshot', () => Object.fromEntries(cachedResults));
     const unregisterPrograms = host.own.register('macros.programs', () => [...programs.values()].map(program => ({ ...program })));
     const unregisterConfigure = host.own.register('macros.configure', params => configurePrograms(params?.programs ?? []));
     // Draft preview — see `testProgram()`'s own doc-comment for why it never
@@ -237,7 +239,7 @@ export function createMacrosCore(host) {
         clearValueMacro,
         unregister: () => {
             for (const unsubscribers of triggerUnsubscribers.values()) for (const unsubscribe of unsubscribers) unsubscribe();
-            unregisterRun(); unregisterValue(); unregisterPrograms(); unregisterConfigure(); unregisterTest();
+            unregisterRun(); unregisterValue(); unregisterPrograms(); unregisterSnapshot(); unregisterConfigure(); unregisterTest();
             unregisterSetValue(); unregisterClearValue();
         },
     };

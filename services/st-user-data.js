@@ -19,6 +19,7 @@
 
 import { DEFERRED_PREFIX } from '../libraries/core/sync-runner.js';
 import { createIndexedDbGraphStore } from './graph-library.js';
+import { createIndexedDbPresetStore } from './pm-presets.js';
 
 export const SYNC_CATEGORIES = Object.freeze([
     { id: 'characters', label: 'Characters' },
@@ -28,6 +29,7 @@ export const SYNC_CATEGORIES = Object.freeze([
     { id: 'backgrounds', label: 'Backgrounds' },
     { id: 'personas', label: 'Persona avatars' },
     { id: 'graphs', label: 'Memory graph library (saved graphs)' },
+    { id: 'pmPresets', label: 'Prompt Manager presets (own format)' },
 ]);
 
 /** Наши собственные фоны из репозитория фонов ставятся на каждом устройстве сами — синхронизировать их незачем. */
@@ -62,6 +64,7 @@ export function registerStUserDataService(bus, {
     now = () => Date.now(),
     refreshCharacters = () => getContext()?.getCharacters?.(),
     graphStore = typeof indexedDB === 'undefined' ? null : createIndexedDbGraphStore(),
+    pmStore = typeof indexedDB === 'undefined' ? null : createIndexedDbPresetStore(),
 } = {}) {
     const headers = (options = {}) => getContext()?.getRequestHeaders?.(options) ?? {};
 
@@ -404,7 +407,32 @@ export function registerStUserDataService(bus, {
         async remove(name) { if (graphStore) await graphStore.delete(stripExt(name, '.json')); },
     };
 
-    const providers = [characters, chats, groups, groupChats, worlds, presets, themes, quickReplies, backgrounds, personas, graphs];
+    // Пресеты Prompt Manager (свой формат) — тоже indexedDB, файлы `stmePmPresets/<id>.json` — запись целиком (без версий: у каждого
+    // устройства своя история правок, на другое уезжает актуальное состояние). Штамп и защита от чужого формата — как у графов.
+    const pmStamp = record => `${record.updatedAt ?? 0}|${record.size ?? 0}`;
+    const pmPresets = {
+        id: 'stmePmPresets', category: 'pmPresets',
+        async list() {
+            if (!pmStore) return [];
+            return ((await pmStore.all('presets')) ?? []).map(record => ({ path: `stmePmPresets/${record.id}.json`, stamp: pmStamp(record), size: record.size ?? 0, modified: record.updatedAt ?? 0 }));
+        },
+        async read(name) {
+            const record = pmStore ? await pmStore.get('presets', stripExt(name, '.json')) : null;
+            if (!record) throw new Error(`Prompt Manager preset "${name}" was not found`);
+            return new BlobCtor([JSON.stringify(record)], { type: 'application/json' });
+        },
+        async write(name, blob) {
+            if (!pmStore) throw new Error('the Prompt Manager storage is not available in this browser');
+            const record = JSON.parse(await blob.text());
+            if (!record?.preset || !Array.isArray(record.preset.blocks)) throw new Error(`"${name}" is not a Prompt Manager preset record`);
+            record.id = stripExt(name, '.json');
+            await pmStore.put('presets', record);
+            return { stamp: pmStamp(record), size: record.size ?? 0, modified: record.updatedAt ?? 0 };
+        },
+        async remove(name) { if (pmStore) await pmStore.delete('presets', stripExt(name, '.json')); },
+    };
+
+    const providers = [characters, chats, groups, groupChats, worlds, presets, themes, quickReplies, backgrounds, personas, graphs, pmPresets];
     const byId = new Map(providers.map(provider => [provider.id, provider]));
 
     function resolve(path) {

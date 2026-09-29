@@ -79,6 +79,7 @@ export function assemblePrompt(preset, context) {
     const ctx = { markers: {}, history: [], ...context };
     const substitute = ctx.substitute ?? (text => text);
     const report = [];
+    const historyLead = []; // вклады «в начале истории»: стоят сразу после строки нового чата, как вставки модулей в реальном запросе
     const injections = (ctx.injections ?? []).filter(item => !isBlank(item.content))
         .map(item => ({ depth: item.depth ?? 4, order: item.order ?? 100, message: { role: item.role ?? 'system', content: substitute(item.content), _block: item.block ?? 'injection' } }));
 
@@ -103,7 +104,7 @@ export function assemblePrompt(preset, context) {
                 if (node.placement?.mode === 'depth') {
                     injections.push({ depth: node.placement.depth ?? 0, order: node.placement.order ?? 100, message: { ...message, _block: `inject:${node.contribution}` } });
                     report.push({ blockId: node.contribution, name: node.name, included: true, role: message.role, chars: text.length, depth: node.placement.depth ?? 0 });
-                } else pushMessage(sink, message, `inject:${node.contribution}`, report, node.name ?? node.contribution);
+                } else pushMessage(node.atHistoryStart ? historyLead : sink, message, `inject:${node.contribution}`, report, node.name ?? node.contribution);
                 continue;
             }
             if (node.type === 'group') {
@@ -142,7 +143,7 @@ export function assemblePrompt(preset, context) {
     const history = ctx.history.map(m => ({ ...m }));
     const newChat = !isBlank(preset.templates.newChat) && history.length
         ? [{ role: 'system', content: substitute(preset.templates.newChat), _block: 'newChat' }] : [];
-    const withInjections = spliceDepth(history, injections);
+    const withInjections = spliceDepth([...historyLead, ...history], injections);
     const slotIndex = flat.findIndex(m => m._historySlot);
     const messages = slotIndex < 0
         ? [...flat, ...withInjections]

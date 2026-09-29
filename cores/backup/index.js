@@ -114,6 +114,33 @@ export function createGraphLibraryBackupSource(host) {
     };
 }
 
+/** Пресеты Prompt Manager (свой формат, `pmPresets.*`) как источник бэкапа и пресета движка; слияние по id — побеждает более новая правка, версии не переносятся. */
+export function createPmPresetsBackupSource(host) {
+    const call = async (contract, params) => {
+        const result = await request(host.services, contract, { params });
+        if (!result.ok) throw new Error(result.error.message);
+        return result.value;
+    };
+    return {
+        async readRaw() {
+            const records = [];
+            for (const summary of (await call('pmPresets.list', {})) ?? []) {
+                const record = await call('pmPresets.get', { id: summary.id });
+                if (record) records.push(record);
+            }
+            return { version: 1, records };
+        },
+        async writeRaw(raw) {
+            const existing = new Map(((await call('pmPresets.list', {})) ?? []).map(item => [item.id, item.updatedAt ?? 0]));
+            for (const record of raw?.records ?? []) {
+                if (!record?.id || !Array.isArray(record.preset?.blocks)) continue;
+                if (existing.has(record.id) && (existing.get(record.id) ?? 0) >= (record.updatedAt ?? 0)) continue;
+                await call('pmPresets.put', { record });
+            }
+        },
+    };
+}
+
 export function createChatMetadataBackupSource(host) {
     return {
         async readRaw() {
