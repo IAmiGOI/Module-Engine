@@ -1661,7 +1661,19 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 // EdgeDrawer). ТРИ слоя фона внутри, снизу вверх: подложка региона, свечение нод (оба — canvas, см.
                 // ensureCytoscape()/paintGlowCanvas()), сам канвас Cytoscape поверх с прозрачным фоном, чтобы оба
                 // слоя ниже были видны сквозь него.
-                h('div', { class: 'stme-mg-canvas-wrap', style: { position: 'relative', flex: '1', borderRadius: '8px', overflow: 'hidden' } },
+                // `minWidth` ЗДЕСЬ, а не только `minWidth` на самом `FloatingPanel` — реальный найденный баг
+                // (владелец: "Кнопка открытия левой панели работает некорректно", со скриншотом сжавшегося в
+                // полоску окна): ВСЕ дети canvas-wrap — оверлеи с `position:absolute` (обе canvas-подложки, канвас
+                // Cytoscape, тултип/тост, угловая кнопка, ВСЕ ТРИ `EdgeDrawer`), а абсолютно спозиционированные
+                // элементы НИКОГДА не участвуют в подсчёте "естественной" ширины родителя. Значит без ЯВНОГО
+                // `min-width` собственная ширина canvas-wrap (а через `flex:1` — и всего тела, и, когда у окна ещё
+                // нет запомненного размера — самого `FloatingPanel`, который иначе сжимается по контенту) сама по
+                // себе равна нулю — окно схлопывается до голого `minWidth` самого FloatingPanel'а или того меньше,
+                // если что-то в цепочке успевает применить размер раньше. Открытие/закрытие выезжающей панели тут
+                // ни при чём (она `position:absolute`, физически не может изменить размер предка) — просто ДО этой
+                // правки ЛЮБОЕ первое открытие окна (ещё без запомненного пользователем размера) неизбежно
+                // схлопывалось в узкую полоску, а пользователь заметил это именно пробуя кнопку панели.
+                h('div', { class: 'stme-mg-canvas-wrap', style: { position: 'relative', flex: '1', minWidth: '480px', borderRadius: '8px', overflow: 'hidden' } },
                     h('div', { id: BG_ID, style: { position: 'absolute', inset: '0' } },
                         h('canvas', { id: ZONES_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } }),
                         h('canvas', { id: GLOW_CANVAS_ID, style: { position: 'absolute', left: '0', top: '0', 'transform-origin': '0 0' } })),
