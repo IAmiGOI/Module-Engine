@@ -436,6 +436,27 @@ test('EdgeDrawer() toggles its open class from the signal, and the tab click rep
     assert.equal(node.props.class(), 'stme-edge-drawer stme-edge-drawer-open');
 });
 
+test('EdgeDrawer() with side:"left"/"bottom" (memory graph UI rework, ROADMAP.md 5.108м) carries a modifier class and flips its arrow, but the toggle mechanics stay identical', () => {
+    const open = signal(false);
+    const left = EdgeDrawer(open, { side: 'left' }, 'x');
+    assert.equal(left.props.class(), 'stme-edge-drawer stme-edge-drawer-left');
+    open.set(true);
+    assert.equal(left.props.class(), 'stme-edge-drawer stme-edge-drawer-left stme-edge-drawer-open');
+
+    const bottomOpen = signal(false);
+    const bottom = EdgeDrawer(bottomOpen, { side: 'bottom' }, 'x');
+    assert.equal(bottom.props.class(), 'stme-edge-drawer stme-edge-drawer-bottom');
+    const tab = bottom.children[0];
+    assert.equal(tab.children[0](), '▾', 'closed bottom drawer shows a downward arrow, not the right-side default');
+    bottomOpen.set(true);
+    assert.equal(tab.children[0](), '▴', 'open bottom drawer shows an upward arrow');
+});
+
+test('EdgeDrawer() defaults to side:"right" when omitted — the map module\'s existing call site must keep producing the exact same class string it always has', () => {
+    const node = EdgeDrawer(signal(false), {}, 'x');
+    assert.equal(node.props.class(), 'stme-edge-drawer', 'no side modifier for the default right side');
+});
+
 test('IconButton() carries its own class (never menu_button chrome) and marks the active state, for toggle-style tool palettes', () => {
     let clicked = 0;
     const inactive = IconButton('📍', () => { clicked += 1; });

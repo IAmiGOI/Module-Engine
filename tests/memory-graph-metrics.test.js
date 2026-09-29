@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { METRICS, findMetric, metricColor, metricDomain } from '../cores/ui/memory-graph/metrics.js';
+import { METRICS, findMetric, metricColor, metricDomain, glowValue } from '../cores/ui/memory-graph/metrics.js';
 
 const weight = findMetric('weight');
 const risk = findMetric('risk');
@@ -90,4 +90,30 @@ test('metricColor() for a linear metric interpolates smoothly between its domain
     const high = metricColor(connections, 10, { min: 0, max: 10 });
     assert.notEqual(low, mid);
     assert.notEqual(mid, high);
+});
+
+// --- glowValue() (реворк UI, ROADMAP.md 5.108м) -----------------------------
+// Реальный баг, найденный по жалобе владельца ("свет активен всегда, а его включение активирует его второй раз
+// поверх"): раньше КАЖДЫЙ режим, включая 'none', нёс безусловный floor 0.12 — настоящего "выключено" не было.
+
+test('glowValue() in \'none\' mode is a HONEST zero for an ordinary node — no hidden floor', () => {
+    const node = { protectedNode: false, weightRank: 0.9 };
+    assert.equal(glowValue(node, 'none', {}, { min: 0, max: 1 }), 0);
+});
+
+test('glowValue() in \'none\' mode for a PROTECTED node is only its own bump (0.25) — the old 0.12 floor must not be added on top', () => {
+    const node = { protectedNode: true, weightRank: 1 };
+    assert.equal(glowValue(node, 'none', {}, { min: 0, max: 1 }), 0.25);
+});
+
+test('glowValue() in \'weight\' mode starts from 0 (not the old 0.12 floor) for the weakest node, and grows with weightRank', () => {
+    const weakest = glowValue({ protectedNode: false, weightRank: 0 }, 'weight', {}, { min: 0, max: 1 });
+    const strongest = glowValue({ protectedNode: false, weightRank: 1 }, 'weight', {}, { min: 0, max: 1 });
+    assert.equal(weakest, 0);
+    assert.ok(strongest > weakest);
+});
+
+test('glowValue() in \'retrieved\' mode starts from 0 for the least-retrieved node in the domain, not the old 0.12 floor', () => {
+    const node = { protectedNode: false, retrievedCount: 0 };
+    assert.equal(glowValue(node, 'retrieved', {}, { min: 0, max: 10 }), 0);
 });

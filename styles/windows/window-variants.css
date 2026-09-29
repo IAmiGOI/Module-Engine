@@ -92,3 +92,53 @@
     overflow-y: auto;
 }
 
+/* --- Левая и нижняя сторона (реворк UI графа памяти, ROADMAP.md 5.108м) ---
+   Тот же механизм, что и правая (клик по вкладке, выезжает по CSS-переходу),
+   просто зеркальная/повёрнутая геометрия — правая версия выше остаётся
+   дефолтом (`side` не задан) ради обратной совместимости с Картой. */
+.stme-edge-drawer-left {
+    left: 0;
+    right: auto;
+}
+.stme-edge-drawer-left .stme-edge-drawer-tab {
+    border-right: 2px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-left: none;
+    border-radius: 0 8px 8px 0;
+}
+.stme-edge-drawer-left .stme-edge-drawer-body {
+    border-left: none;
+    border-right: 1px solid color-mix(in srgb, var(--stme-border) 55%, transparent);
+}
+
+/* Нижняя — другая ось целиком: тело едет по высоте, не по ширине, вкладка сидит по центру НАД телом, не сбоку. */
+.stme-edge-drawer-bottom {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    flex-direction: column;
+    align-items: stretch;
+}
+.stme-edge-drawer-bottom .stme-edge-drawer-tab {
+    align-self: center;
+    width: 64px;
+    height: 18px;
+    border: 2px solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+}
+.stme-edge-drawer-bottom .stme-edge-drawer-body {
+    width: auto;
+    height: 0;
+    max-height: 60%;
+    border-left: none;
+    border-top: 1px solid color-mix(in srgb, var(--stme-border) 55%, transparent);
+    transition: height .2s ease;
+    white-space: normal;
+}
+.stme-edge-drawer-bottom.stme-edge-drawer-open .stme-edge-drawer-body {
+    width: auto;
+    height: 220px;
+    max-height: 60%;
+}
+

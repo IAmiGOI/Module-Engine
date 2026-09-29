@@ -130,6 +130,40 @@ export function metricColor(metric, value, domain) {
     return interpolateStops(metric.palette, t);
 }
 
+// РЕАЛЬНАЯ ЖАЛОБА владельца (реворк UI, ROADMAP.md 5.108м, скриншоты ноды с резким кольцом свечения): "свет
+// активен всегда, а его включение активирует его второй раз поверх, что просто баг". Раньше КАЖДЫЙ режим,
+// включая `'none'`, возвращал безусловный floor `0.12` (плюс `+0.25` у защищённых нод) — настоящего "выключено"
+// не существовало, любое усиление свечения (смена режима, подсветка ретрива поверх) выглядело как наложение
+// НА УЖЕ ГОРЯЩИЙ огонёк, а не честное включение с нуля. `GLOW_CEILING` снижен с прежних 0.9 — тот же потолок
+// раньше при увеличенном (широком, см. `underlay-padding` в stylesheet.js) радиусе подложки выглядел бы сплошным
+// ярким пятном, а не мягким свечением.
+const GLOW_CEILING = 0.5;
+
+/**
+ * Свечение ноды (`data(glow)` → `underlay-opacity` в `graphStylesheet()`) — раньше жило ВНУТРИ
+ * `createMemoryGraphPanelCore()` (`memory-graph-panel.js`) как замыкание над сигналом `glowMode()`, непроверяемо
+ * напрямую (единственный тест панели — смоук без настоящего DOM/cytoscape, эта функция реально не выполнялась).
+ * Перенесена сюда как чистая функция — `mode` явным параметром вместо чтения сигнала изнутри, тот же приём, что
+ * у `findMetric()`/`metricColor()`/`metricDomain()` выше — теперь юнит-тестируема напрямую.
+ *
+ * `'none'` — ЧЕСТНЫЙ ноль для обычной ноды (защищённая — только свой `bump`, тоже без скрытого floor). Остальные
+ * режимы растут от 0 (не от прежнего floor) до `GLOW_CEILING`, плюс тот же `bump`.
+ */
+export function glowValue(node, mode, ctx, retrievedDomain) {
+    const bump = node.protectedNode ? 0.25 : 0;
+    switch (mode) {
+        case 'retrieved': {
+            const { min, max } = retrievedDomain;
+            const t = max > min ? ((node.retrievedCount ?? 0) - min) / (max - min) : 0;
+            return Math.min(0.9, GLOW_CEILING * t + bump);
+        }
+        case 'risk': return Math.min(0.9, GLOW_CEILING * findMetric('risk').value(node, ctx) + bump);
+        case 'none': return bump;
+        case 'weight':
+        default: return Math.min(0.9, GLOW_CEILING * (node.protectedNode ? 1 : (node.weightRank ?? 0)) + bump);
+    }
+}
+
 /** `linear` → `{min,max}` по РЕАЛЬНЫМ данным (не выдуманный диапазон — план прямо просит "реальные min/max по нодам"); `categorical` → список различных значений; `rank` — фиксированная шкала [0,1], зависеть от данных ей незачем. */
 export function metricDomain(metric, nodes, ctx) {
     if (metric.scale === 'linear') {

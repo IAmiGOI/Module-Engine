@@ -44,8 +44,14 @@ export function graphStylesheet() {
                 // только применяет.
                 width: 'data(size)', height: 'data(size)', 'background-color': 'data(color)', color: '#fff',
                 // Свечение (пункт 3 запроса) — подложка Cytoscape (`underlay-*`, есть в 3.30.2). `data(glow)` —
-                // тоже посчитан заранее (см. doc-comment файла), сам стиль не знает, ПОЧЕМУ узел светится сильнее.
-                'underlay-color': 'data(color)', 'underlay-padding': 'mapData(size, 8, 34, 3, 10)',
+                // тоже посчитан заранее (см. doc-comment файла и `glowValue()` в metrics.js), сам стиль не знает,
+                // ПОЧЕМУ узел светится сильнее. РЕАЛЬНАЯ ЖАЛОБА владельца (реворк UI, ROADMAP.md 5.108м,
+                // скриншоты — резкое узкое кольцо): `underlay-*` — заливка сплошным цветом с жёстким краем, нет
+                // родного градиента/блюра у этого свойства (Cytoscape 3.30.2) — честный способ сделать её ШИРОКОЙ
+                // и МЯГКОЙ в этих рамках — раздвинуть padding заметно дальше самого узла (было 3-10px, почти
+                // вплотную к краю); настоящая мягкость (сниженная пиковая непрозрачность, не съедающая экран
+                // сплошным пятном при таком большом радиусе) — на стороне `glowValue()` (`GLOW_CEILING`).
+                'underlay-color': 'data(color)', 'underlay-padding': 'mapData(size, 8, 34, 16, 46)',
                 'underlay-opacity': 'data(glow)', 'underlay-shape': 'ellipse',
             },
         },

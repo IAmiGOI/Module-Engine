@@ -636,13 +636,23 @@ export function DockButton(icon, { position, drag, title } = {}) {
  *
  * Pure, like every other widget here: `open` is a signal the CALLER owns,
  * `onToggle` is how this widget asks for it to change — no state of its own.
+ *
+ * `side` (memory graph panel rework, ROADMAP.md 5.108м) — the map module only ever needed the right edge, so the
+ * class/arrow were hardcoded to it; the memory graph window needs THREE drawers (left/right/bottom) sharing this
+ * same mechanism. Defaults to `'right'` so every existing caller (just the map module today) keeps producing the
+ * EXACT class strings it always has (`tests/widgets.test.js`'s `EdgeDrawer()` test asserts the literal string
+ * `'stme-edge-drawer'`/`'stme-edge-drawer stme-edge-drawer-open'`, no modifier) — a modifier class is only added
+ * for a non-default side, never for `'right'`. The tab's arrow flips to match which way the body actually slides.
  */
-export function EdgeDrawer(open, { onToggle, title = 'Settings' } = {}, ...children) {
-    return h('div', { class: computed(() => `stme-edge-drawer${open() ? ' stme-edge-drawer-open' : ''}`) },
+export function EdgeDrawer(open, { onToggle, title = 'Settings', side = 'right' } = {}, ...children) {
+    const sideClass = side === 'right' ? '' : ` stme-edge-drawer-${side}`;
+    const closedArrow = side === 'left' ? '›' : side === 'bottom' ? '▾' : '‹';
+    const openArrow = side === 'left' ? '‹' : side === 'bottom' ? '▴' : '›';
+    return h('div', { class: computed(() => `stme-edge-drawer${sideClass}${open() ? ' stme-edge-drawer-open' : ''}`) },
         h('button', {
             type: 'button', class: 'stme-edge-drawer-tab', title,
             'on:click': () => onToggle?.(!open()),
-        }, computed(() => (open() ? '›' : '‹'))),
+        }, computed(() => (open() ? openArrow : closedArrow))),
         h('div', { class: 'stme-edge-drawer-body' }, children),
     );
 }
