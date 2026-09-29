@@ -14,6 +14,8 @@ const NUMBERS = [
 /** Вкладка «Settings»: параметры самого PM, параметры генерации активного пресета, версии пресета с откатом. */
 export function createSettingsTab({ state, actions, call }) {
     const versions = signal([]);
+    const pluginList = signal([]);
+    async function loadPlugins() { const answer = await call('promptManager.plugins'); pluginList.set(answer.ok ? answer.value : []); }
     async function loadVersions() {
         const id = state.activeId.peek();
         const answer = id ? await call('promptManager.versions', { presetId: id }) : null;
@@ -85,6 +87,13 @@ export function createSettingsTab({ state, actions, call }) {
             h('div', { class: 'stme-pm-grid' }, OVERRIDE_KEYS.map(([key, label]) => Field(label, NumberInput(layer[key], { step: 0.01 })))),
             Row(Button('Save this layer', () => saveLayer(false)), Button('Clear this layer', () => saveLayer(true), { variant: 'danger' })),
             h('p', { class: 'stme-pm-help' }, 'Priority: chat over character over model over the preset. Empty fields keep the preset value.'),
+            h('h4', {}, 'Plugins'),
+            Row(Button('Refresh plugins', loadPlugins)),
+            computed(() => (pluginList().length ? h('div', {}, pluginList().map(plugin => Row(
+                h('strong', {}, `${plugin.name} ${plugin.version}`), Badge(plugin.provides.join(', ')),
+                plugin.error ? Badge(`switched off: ${plugin.error}`, { tone: 'error' }) : null,
+                Button(plugin.enabled ? 'Switch off' : 'Switch on', async () => { await call('promptManager.setPluginEnabled', { id: plugin.id, enabled: !plugin.enabled }); await loadPlugins(); }))))
+                : EmptyState('No plugins installed. A plugin adds condition types, macros or prompt transforms and can be swapped without a reload.'))),
             h('h4', {}, 'Versions'),
             Row(Button('Load versions', loadVersions)),
             computed(() => (versions().length ? h('div', {}, versions().map(version => Row(
@@ -93,5 +102,5 @@ export function createSettingsTab({ state, actions, call }) {
                 : EmptyState('No versions loaded.'))),
         );
     }
-    return { tree, loadVersions };
+    return { tree, loadVersions, loadPlugins };
 }

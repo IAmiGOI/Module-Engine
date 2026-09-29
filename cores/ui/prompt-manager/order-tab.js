@@ -17,7 +17,7 @@ export function createOrderTab({ state, actions }) {
     let dragging = null;
 
     const editor = createNodeEditor({
-        getPreset: () => state.preset.peek(),
+        getPreset: () => state.preset.peek(), getPluginTypes: state.pluginTypes,
         patch: mutator => actions.patch(mutator),
         resetContribution: node => actions.resetContribution(node),
     });

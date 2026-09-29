@@ -89,7 +89,7 @@ export function createCotTab({ state, actions, call }) {
                 h('p', { class: 'stme-pm-help' }, 'Guided CoT: hidden steps that run before the answer. Every step is a separate request; the result goes into the final prompt after the whole history, and the thinking is kept with the message in a collapsed form.'),
                 Toggle('Guided CoT enabled (off by default)', bound('enabled', cot.enabled)),
                 Field('Run', Select(mode, MODES)),
-                computed(() => (mode() === 'trigger' ? ConditionBuilder({ getCondition: () => (preset.cot ?? cot).condition ?? null, setCondition: condition => setCot('condition', condition) }) : null)),
+                computed(() => (mode() === 'trigger' ? ConditionBuilder({ plugins: state.pluginTypes(), getCondition: () => (preset.cot ?? cot).condition ?? null, setCondition: condition => setCot('condition', condition) }) : null)),
                 Row(Button('Run on the next generation', () => call('promptManager.runCotNext')), Button('Refresh', refresh)),
                 h('h4', {}, 'Steps'),
                 cot.steps.length ? cot.steps.map((node, index) => stepRow(node, index, { ...preset, cot })) : EmptyState('No steps yet.'),

@@ -27,7 +27,7 @@ function bound(initial, commit) {
  * Редактор выбранного узла: текстовый блок, группа, заметка, вклад модуля. Любое изменение сразу уходит в `apply(mutator)` —
  * окно применяет его к пресету и помечает пресет «изменён»; сохраняет пользователь кнопкой Save.
  */
-export function createNodeEditor({ getPreset, patch, resetContribution }) {
+export function createNodeEditor({ getPreset, patch, resetContribution, getPluginTypes = () => [] }) {
     function editBlock(id, changes) {
         patch(preset => { const block = preset.blocks.find(b => b.id === id); if (block) Object.assign(block, changes); });
     }
@@ -84,6 +84,7 @@ export function createNodeEditor({ getPreset, patch, resetContribution }) {
         return h('div', { class: 'stme-pm-editor' },
             Toggle('Send only when a condition is true', on),
             computed(() => (on() ? ConditionBuilder({
+                plugins: getPluginTypes(),
                 getCondition: () => getAt(getPreset().tree, path)?.condition ?? null,
                 setCondition: condition => editNode(path, { condition: condition ?? undefined }),
             }) : node.condition ? null : null)),
