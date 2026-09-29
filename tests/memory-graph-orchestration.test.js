@@ -3588,3 +3588,73 @@ test('a graph built from another lorebook opens with a warning, and a graph from
 
     assert.match(opened.warning, /different lorebook/);
 });
+
+// --- Карточка персонажа в structured-графе ------------------------------------
+
+const KIRA = { name: 'Kira', description: 'A young noblewoman hiding from the Legion.', personality: 'Brave and stubborn.' };
+
+async function structuredWithCharacter(extra = {}) {
+    const built = buildEngine({ character: KIRA, ...extra });
+    await call(built.caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+    await call(built.caller, 'memoryGraph.reset');
+    return built;
+}
+
+test('the character card node is a core entity linked to nodes that mention the hero and to nodes the card mentions', async () => {
+    const { caller } = await structuredWithCharacter();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Old tower', content: 'Kira hides in the old tower by the road.', sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Legion', content: 'An army that hunts the last heir.', sector: 0, ring: 0 });
+
+    const result = (await call(caller, 'memoryGraph.nodes.createFromCharacterCard')).value;
+
+    assert.equal(result.ok, true);
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const card = nodes.find(n => n.label === 'Kira');
+    assert.deepEqual([card.kind, card.core, card.source], ['entity', true, 'card']);
+    const linked = card.edges.map(edge => nodes.find(n => n.id === edge.to).label).sort();
+    assert.deepEqual(linked, ['Legion', 'Old tower']);
+});
+
+test('an existing stub node of the hero is completed by the card instead of getting a second node', async () => {
+    const { caller } = await structuredWithCharacter();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Kira', content: 'Kira appears in the story.', sector: 0, ring: 0, kind: 'entity' });
+
+    const result = (await call(caller, 'memoryGraph.nodes.createFromCharacterCard')).value;
+
+    assert.equal(result.reused, true);
+    const heroes = (await call(caller, 'memoryGraph.nodes')).value.filter(n => n.label === 'Kira');
+    assert.equal(heroes.length, 1);
+    assert.match(heroes[0].content, /young noblewoman/);
+    assert.equal(heroes[0].source, 'card');
+});
+
+test('opening a library graph in a chat with a character adds the hero card to the opened graph with links, not as a lone node later', async () => {
+    const source = buildEngine();
+    await call(source.caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+    await call(source.caller, 'memoryGraph.reset');
+    await call(source.caller, 'memoryGraph.nodes.create', { label: 'Old tower', content: 'Kira hides in the old tower by the road.', sector: 0, ring: 0 });
+    const { id } = (await call(source.caller, 'memoryGraph.library.save', { name: 'World' })).value;
+
+    const target = buildEngine({ character: KIRA });
+    for (const [key, value] of source.libraryRecords) target.libraryRecords.set(key, value);
+    await call(target.caller, 'memoryGraph.library.open', { id });
+
+    const nodes = (await call(target.caller, 'memoryGraph.nodes')).value;
+    const card = nodes.find(n => n.label === 'Kira');
+    assert.ok(card, 'the hero is in the graph right after opening');
+    assert.ok(card.edges.length >= 1, 'and it is linked to the tower that mentions her');
+});
+
+test('the first mention of the hero in the chat creates the real card node, not an empty stub, even on the first sighting', async () => {
+    const reply = JSON.stringify({ facts: [{ op: 'create', kind: 'fact', label: 'Kira flees north', content: 'Kira flees north from the Legion.', importance: 6, subjects: ['Kira'] }] });
+    const { caller } = await structuredWithCharacter({ fetchReply: reply });
+
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'Kira flees north from the Legion.' });
+
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const heroes = nodes.filter(n => n.label === 'Kira');
+    assert.equal(heroes.length, 1);
+    assert.deepEqual([heroes[0].source, heroes[0].core, /young noblewoman/.test(heroes[0].content)], ['card', true, true]);
+    const fact = nodes.find(n => n.label === 'Kira flees north');
+    assert.ok(fact.edges.some(edge => edge.to === heroes[0].id), 'the fact is linked to the hero');
+});

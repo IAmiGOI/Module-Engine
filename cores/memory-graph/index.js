@@ -6,6 +6,7 @@ import { createTimelineOps } from './structured/timeline-ops.js';
 import { createExtractionOps } from './structured/extraction-ops.js';
 import { createModeOps } from './structured/mode-ops.js';
 import { createLibraryOps } from './structured/library-ops.js';
+import { createCardOps } from './structured/card-ops.js';
 import { createReclassifyOps } from './structured/reclassify-ops.js';
 import { addDirectedEdge } from './edges.js';
 import { checkEdge, normalizeKind, kindOf, isCore, isEvent } from './kinds.js';
@@ -853,27 +854,14 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function createNodeFromCharacterCard() {
         return enqueueWrite(async () => {
-            // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): вызывается на смене персонажа/чата
-            // (см. подписку ниже), сама может ждать эмбединг секунды — тот же сценарий гонки, что у checkAndPlace().
+            // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): вызывается на смене персонажа/чата, сама ждёт эмбединг.
             const epoch = chatEpoch;
-            const characterResult = await callService('stCharacter.current');
-            if (!characterResult.ok || !characterResult.value) return { ok: false, error: 'No active character.' };
-            const character = characterResult.value;
-            const label = String(character.name ?? '').trim() || 'Main Character';
-            const content = [character.description, character.personality]
-                .map(part => String(part ?? '').trim()).filter(Boolean).join('\n\n');
-            if (!content) return { ok: false, error: 'Character card has no description/personality to import.' };
-
-            const embeddingResult = await callService('embedding.compute', { text: `${label}: ${content}`, kind: 'passage' });
-            if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // чат сменился, пока ждали эмбединг — не мутируем уже ЧУЖОЙ (новый) граф
-            if (!embeddingResult.ok) return { ok: false, error: embeddingResult.error.message };
-            const result = placeNewNode({ label, content, embedding: embeddingResult.value, importance: MAIN_CHARACTER_IMPORTANCE, kind: 'entity' }, { source: 'card' });
-            if (features.core && nodes[result.nodeId]) promoteToCore(result.nodeId, { manual: true }); // главный герой — Core (этап 4 плана типов)
-            // См. комментарий в checkAndPlace() — то же самое: attachToRegion()
-            // может тронуть mergeQueue/reconsolidationQueue, не только nodes/regions/staging.
+            const result = await cardOps.applyCharacterCard({ epoch });
+            if (result.status === 'chat-changed' || !result.ok) return result;
+            // См. комментарий в checkAndPlace() — то же самое: attachToRegion() может тронуть mergeQueue/reconsolidationQueue.
             await Promise.all([persistNodes(), persistRegions(), persistStaging(), persistMergeQueue(), persistReconsolidationQueue()]);
             publishEvent('memoryGraph.nodeCreated', { nodeId: result.nodeId, status: result.status, source: 'characterCard' });
-            return { ok: true, nodeId: result.nodeId, status: result.status, label };
+            return result;
         });
     }
 
@@ -2609,6 +2597,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         publishEvent: (...args) => publishEvent(...args), enqueueWrite: task => enqueueWrite(task), stillSameChat: epoch => stillSameChat(epoch),
         persistNodes: () => persistNodes(), persistRegions: () => persistRegions(), persistGraphMeta: () => persistGraphMeta(),
         applyGraphMeta: raw => applyGraphMeta(raw), collectAnchors: () => collectAnchors(), edgeAllowed: (a, b) => edgeAllowed(a, b),
+        mainCharacterImportance: MAIN_CHARACTER_IMPORTANCE, promoteToCore: (...args) => promoteToCore(...args),
+        applyCharacterCard: options => cardOps.applyCharacterCard(options), characterName: () => cardOps.characterName(),
         placeNewNode: (...args) => placeNewNode(...args), foldNodesInGraph: (...args) => foldNodesInGraph(...args),
         get bootstrapActive() { return bootstrapActive; },
         graphState: () => ({ nodes, regions, staging, mergeQueue, reconsolidationQueue, distanceStats, noveltyStats }),
@@ -2623,6 +2613,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         persistAll: () => Promise.all([persistEverything(), persistStats(), persistStickyRetrieval(), persistDecisionLog(), persistGraphMeta()]),
     };
     const coreOps = createCoreOps(structuredCtx);
+    const cardOps = createCardOps(structuredCtx);
     const timelineOps = createTimelineOps(structuredCtx);
     const extractionOps = createExtractionOps(structuredCtx);
     const { promoteToCore, runCoreSweep, sweepCores, plotCoreMessage, pinNode } = coreOps;
