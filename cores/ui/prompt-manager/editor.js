@@ -2,6 +2,8 @@ import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
 import { Button, TextInput, TextArea, NumberInput, Toggle, Row, Field, Select, Badge, EmptyState } from '../../../libraries/shared/widgets.js';
 import { getAt } from './tree-model.js';
+import { ConditionBuilder } from './condition-builder.js';
+import { describeCondition } from './condition-model.js';
 
 const ROLES = [{ value: 'system', label: 'system' }, { value: 'user', label: 'user' }, { value: 'assistant', label: 'assistant' }];
 const POSITIONS = [{ value: 'relative', label: 'in order (where it stands in the list)' }, { value: 'depth', label: 'inside the chat, N messages from the end' }];
@@ -74,17 +76,33 @@ export function createNodeEditor({ getPreset, patch, resetContribution }) {
         );
     }
 
+    /** Условие отправки: включается тумблером, дальше конструктор правил (без кода). */
+    function conditionSection(node, path) {
+        const on = signal(Boolean(node.condition));
+        const set = on.set;
+        on.set = value => { set(value); if (!value) editNode(path, { condition: undefined }); };
+        return h('div', { class: 'stme-pm-editor' },
+            Toggle('Send only when a condition is true', on),
+            computed(() => (on() ? ConditionBuilder({
+                getCondition: () => getAt(getPreset().tree, path)?.condition ?? null,
+                setCondition: condition => editNode(path, { condition: condition ?? undefined }),
+            }) : node.condition ? null : null)),
+            node.condition ? h('p', { class: 'stme-pm-help' }, `Now: ${describeCondition(node.condition)}`) : null,
+        );
+    }
+
     /** Форма выбранного узла (`path` — путь в дереве). */
     function form(path) {
         const preset = getPreset();
         const node = preset && path ? getAt(preset.tree, path) : null;
         if (!node) return EmptyState('Select a row to edit it.');
-        if (node.type === 'group') return groupForm(node, path);
+        const withCondition = body => h('div', { class: 'stme-pm-editor' }, body, node.type === 'note' ? null : conditionSection(node, path));
+        if (node.type === 'group') return withCondition(groupForm(node, path));
         if (node.type === 'note') return noteForm(node, path);
-        if (node.type === 'inject') return injectForm(node, path);
+        if (node.type === 'inject') return withCondition(injectForm(node, path));
         if (node.type === 'item') {
             const block = preset.blocks.find(b => b.id === node.block);
-            return block ? blockForm(block, path) : EmptyState('This row points to a prompt that is missing.');
+            return block ? withCondition(blockForm(block, path)) : EmptyState('This row points to a prompt that is missing.');
         }
         return EmptyState('This row type has no editor yet.');
     }

@@ -34,17 +34,32 @@ async function build({ mainApi = 'openai', groupId = null } = {}) {
     const engine = createEngine();
     const chat = [{ is_user: false, name: 'Lena', mes: 'Greetings.' }, { is_user: true, name: 'Sasha', mes: 'Tell me about the dragon.' }];
     const backendCalls = [];
-    const target = { fetch: async (url, init) => { backendCalls.push(JSON.parse(init.body)); return new Response('{}', { status: 200 }); } };
+    const listeners = new Map();
+    const stepCalls = [];
+    const stepBehavior = { failTimes: 0 };
+    const target = {
+        fetch: async (url, init) => {
+            const body = JSON.parse(init.body);
+            if (body.max_tokens === 1500) { // запрос шага Guided CoT
+                stepCalls.push(body);
+                if (stepBehavior.failTimes > 0) { stepBehavior.failTimes--; return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 500 }); }
+                return new Response(JSON.stringify({ choices: [{ message: { content: `answer ${stepCalls.length}`, reasoning_content: `thought ${stepCalls.length}` } }] }), { status: 200 });
+            }
+            backendCalls.push(body);
+            return new Response('{}', { status: 200 });
+        },
+    };
     const context = {
-        eventTypes: {}, eventSource: { on() {}, off() {} }, mainApi, groupId, chat, name1: 'Sasha', name2: 'Lena', characterId: 0,
+        eventTypes: { GENERATION_ENDED: 'generation_ended' },
+        eventSource: { on: (name, handler) => listeners.set(name, [...(listeners.get(name) ?? []), handler]), off() {} }, mainApi, groupId, chat, name1: 'Sasha', name2: 'Lena', characterId: 0,
         characters: [{ name: 'Lena', description: 'Lena is a Handler.', personality: 'Kind.', scenario: '', mes_example: '' }],
         powerUserSettings: { persona_description: '18 yo Male' }, chatMetadata: {}, saveMetadataDebounced() {},
         extensionSettings: {}, saveSettingsDebounced() {}, getCurrentChatId: () => 'chat-1',
-        getPresetManager: () => ({ getSelectedPresetName: () => 'AmiGO' }), getRequestHeaders: () => ({}),
+        chatCompletionSettings: { chat_completion_source: 'openai' }, getPresetManager: () => ({ getSelectedPresetName: () => 'AmiGO' }), getRequestHeaders: () => ({}),
     };
     const fetchImpl = async () => new Response(JSON.stringify({ openai_setting_names: ['AmiGO'], openai_settings: [amigoJson] }), { status: 200 });
     registerStEventsService(engine.buses.services, { getContext: () => context });
-    registerStGenerationService(engine.buses.services, { target });
+    registerStGenerationService(engine.buses.services, { target, getContext: () => context });
     registerChatMetadataService(engine.buses.services, { getContext: () => context });
     registerExtensionSettingsService(engine.buses.services, { getContext: () => context });
     registerPmPresetsService(engine.buses.services, { store: memoryStore() });
@@ -60,10 +75,11 @@ async function build({ mainApi = 'openai', groupId = null } = {}) {
     macros.own.register('macros.snapshot', () => ({ 'rp-time_year': '2148', 'rp-time_month': 'May', 'rp-time_day': '22', 'rp-time_time': '23:10', 'rp-time_period': 'night' }));
     const warnings = [];
     const pm = createPromptManagerCore(engine.registerCaller('core.promptManager', 'cores', { tier: 'official' }), { publish: (event, payload) => { warnings.push({ event, payload }); } });
+    await eventsCore.bridge();
     await generationCore.install();
     await pm.load();
-    const send = async (payload = { model: 'm', temperature: 1, messages: [{ role: 'system', content: 'ST assembled' }] }) => {
-        await target[INTERCEPTOR_NAME](chat, 4096, () => {}, 'normal');
+    const send = async (payload = { model: 'm', temperature: 1, messages: [{ role: 'system', content: 'ST assembled' }] }, type = 'normal') => {
+        await target[INTERCEPTOR_NAME](chat, 4096, () => {}, type);
         await target.fetch('/api/backends/chat-completions/generate', { method: 'POST', body: JSON.stringify(payload) });
         return backendCalls.at(-1);
     };
@@ -72,7 +88,9 @@ async function build({ mainApi = 'openai', groupId = null } = {}) {
         lore.own.register('test.contribute', () => { pm.contributions.set(contribution); return true; });
         await request(lore.own, 'pipeline.stages.add', { params: { pipelineId: 'generation.beforeSend', stage: { id: 'test:contribute', contract: 'test.contribute', onExhausted: 'flag' } } });
     };
-    return { pm, send, warnings, chat, context, backendCalls, contribute };
+    const fire = name => { for (const handler of listeners.get(name) ?? []) handler(); };
+    const call = (contract, params) => request(lore.own, contract, { params });
+    return { pm, send, warnings, chat, context, backendCalls, contribute, stepCalls, stepBehavior, fire, call };
 }
 
 test('the first run turns every ST preset into an internal copy and activates the one selected in ST', async () => {
@@ -151,4 +169,67 @@ test('every request is logged with its size and the second one is compared with 
     assert.ok(log[1].cache.sharedTokens >= 200);
     assert.ok(log[1].cache.ratio < 0.2);
     assert.equal(log[1].cache.culprit.block, 'history #2');
+});
+
+async function withCot(cot, options) {
+    const env = await build(options);
+    await env.pm.autoPrepare();
+    const record = await env.pm.store.get(env.pm.settings().activePresetId);
+    record.preset.blocks.push({ id: 's1', name: 'Plan', role: 'system', content: 'Plan the scene for {{char}}.' }, { id: 's2', name: 'Check', role: 'system', content: 'Check the plan.' });
+    record.preset.cot = { enabled: true, mode: 'always', steps: [{ type: 'item', block: 's1', enabled: true }, { type: 'item', block: 's2', enabled: true }], ...cot };
+    await env.pm.store.save(record, { version: false });
+    return env;
+}
+
+test('Guided CoT runs its steps before the main request and hands the result to the final prompt', async () => {
+    const { send, stepCalls } = await withCot({});
+    const body = await send();
+    assert.equal(stepCalls.length, 2);
+    assert.equal(stepCalls[0].messages.at(-1).role, 'user', 'a step is sent as a user message');
+    assert.equal(stepCalls[0].messages.at(-1).content, 'Plan the scene for Lena.');
+    assert.equal(stepCalls[1].messages.at(-2).content, 'answer 1', 'the second step sees the first answer');
+    assert.equal(stepCalls[1].messages.at(-2).reasoning_content, 'thought 1', 'and its reasoning is kept between steps');
+    assert.ok(body.messages.at(-1).content.includes('answer 2'), 'the final request carries the thinking after the whole history');
+});
+
+test('Guided CoT is off unless the preset switches it on', async () => {
+    const { send, stepCalls } = await withCot({ enabled: false });
+    await send();
+    assert.equal(stepCalls.length, 0);
+});
+
+test('a CoT step that fails once is retried and a second failure cancels the generation', async () => {
+    const retry = await withCot({});
+    retry.stepBehavior.failTimes = 1;
+    await retry.send();
+    assert.equal(retry.stepCalls.length, 3, 'one failed attempt plus two steps');
+    const abort = await withCot({});
+    abort.stepBehavior.failTimes = 5;
+    await abort.send().catch(() => {});
+    assert.equal(abort.backendCalls.length, 0, 'the main request must not be sent after a failed chain');
+    assert.ok(abort.warnings.some(w => w.event === 'promptManager.cotFailed'));
+});
+
+test('the finished thinking is stored with the chat under the number of the new message', async () => {
+    const { send, chat, fire, call } = await withCot({});
+    await send();
+    chat.push({ is_user: false, name: 'Lena', mes: 'Answer.' });
+    fire('generation_ended');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const records = (await call('promptManager.cotRecords', {})).value;
+    assert.equal(records[chat.length - 1].steps.length, 2);
+    assert.equal(records[chat.length - 1].steps[0].text, 'answer 1');
+});
+
+test('on a regenerate with the final-only mode the earlier steps are reused instead of running the chain again', async () => {
+    const { send, stepCalls } = await withCot({ regen: 'final' });
+    await send();
+    assert.equal(stepCalls.length, 2);
+    const body = await send(undefined, 'regenerate');
+    assert.equal(stepCalls.length, 2, 'no new step requests');
+    assert.ok(body.messages.at(-1).content.includes('answer 2'));
+    const all = await withCot({ regen: 'all' });
+    await all.send();
+    await all.send(undefined, 'regenerate');
+    assert.equal(all.stepCalls.length, 4, 'the default reruns the whole chain');
 });

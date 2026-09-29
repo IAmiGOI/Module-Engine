@@ -1,4 +1,4 @@
-import { buildMainConnectionRequest, describeMainConnection, extractMainConnectionText } from '../libraries/core/st-main-request.js';
+import { buildMainConnectionRequest, describeMainConnection, extractMainConnectionText, extractMainConnectionReasoning } from '../libraries/core/st-main-request.js';
 
 /**
  * Сервис перехвата генерации ST — единственное место во всём движке, которое
@@ -153,7 +153,7 @@ export function registerStGenerationService(bus, { target = globalThis, getConte
         if (!response.ok || serverError) {
             return { ok: false, status: response.ok ? 502 : response.status, error: serverError || raw.slice(0, 200) || `HTTP ${response.status}` };
         }
-        return { ok: true, status: response.status, text: extractMainConnectionText(json) };
+        return { ok: true, status: response.status, text: extractMainConnectionText(json), reasoning: extractMainConnectionReasoning(json) };
     }
 
     const unregisters = [

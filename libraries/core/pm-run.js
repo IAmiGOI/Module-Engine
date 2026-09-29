@@ -73,5 +73,7 @@ export function buildRequest(preset, materials, options = {}) {
         lore: { activated: lore.activated, skipped: lore.skipped },
         macros: { usedRandom: engine.state.usedRandom, unresolved: [...new Set(engine.state.unresolved)] },
         withMarkers: trimmed.messages,
+        /** Всё, что нужно, чтобы собрать промпты шагов Guided CoT теми же макросами и условиями. */
+        stepEnv: { substitute: engine.substitute, facts, contributions: options.contributions ?? {}, setVariable: (name, value) => engine.vars.set(name, value) },
     };
 }
