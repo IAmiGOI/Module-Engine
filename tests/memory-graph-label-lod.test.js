@@ -59,3 +59,13 @@ test('a forced label (hovered node, retrieval beacon) is always shown, ahead of 
     ], 0.4);
     assert.deepEqual([...chosen].sort(), ['elsewhere', 'hovered']);
 });
+
+import { duplicatesVisibleRegionName } from '../cores/ui/memory-graph/label-lod.js';
+
+test('a node label equal to a visible region name is redundant, but comes back once the region name fades', () => {
+    const names = new Set(['the legion', 'para-raid']);
+    assert.equal(duplicatesVisibleRegionName('The Legion', names, 0.9), true);
+    assert.equal(duplicatesVisibleRegionName('Kira', names, 0.9), false);
+    assert.equal(duplicatesVisibleRegionName('The Legion', names, 0), false);
+    assert.equal(duplicatesVisibleRegionName('', names, 0.9), false);
+});

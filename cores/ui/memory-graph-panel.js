@@ -10,7 +10,7 @@ import {
 } from '../../libraries/shared/widgets.js';
 import { createLibraryTab } from './memory-graph-library.js';
 import { buildThumbnailSvg } from './memory-graph/thumbnail.js';
-import { regionLabelStyle, labelTier, chooseNodeLabels, chooseRegionLabels } from './memory-graph/label-lod.js';
+import { regionLabelStyle, labelTier, chooseNodeLabels, chooseRegionLabels, duplicatesVisibleRegionName } from './memory-graph/label-lod.js';
 import { normalizeTab } from './memory-graph/library-view.js';
 import { summarizeDecision } from '../memory-graph/decision-log.js';
 // MEMORY_GRAPH_UI_PLAN.md, Этап 1 — геометрия и стили Cytoscape вынесены в отдельные файлы БЕЗ ИЗМЕНЕНИЯ
@@ -1328,11 +1328,14 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (layer !== nodeLabelLayer) { nodeLabelElements.clear(); nodeLabelLayer = layer; } // окно закрывали и открыли — слой новый, старые div'ы в нём не лежат
         const byId = nodesById();
         const hovered = hoveredNodeId.peek();
+        const regionOpacity = regionLabelStyle(zoom).opacity;
+        const regionNames = new Set(lastZones.map(zone => String(zone.label ?? zone.regionId ?? '').trim().toLowerCase()));
         const candidates = [];
         const rendered = new Map();
         cy.nodes().forEach(ele => {
             const node = byId.get(ele.id());
             if (!node || ele.hasClass('filtered')) return;
+            if (ele.id() !== hovered && duplicatesVisibleRegionName(node.label, regionNames, regionOpacity)) return; // центр региона: имя уже написано крупно
             const at = ele.renderedPosition();
             const radius = ele.renderedWidth() / 2;
             rendered.set(ele.id(), { at, radius, text: node.label });
