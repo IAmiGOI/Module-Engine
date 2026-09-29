@@ -137,7 +137,17 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         }
     }
 
+    /** Берёт ли PM сборку на себя прямо сейчас: включён, есть активный пресет, режим поддерживается. Вкладчики решают по этому, что делать. */
+    async function takesOver() {
+        if (!settings.enabled || !settings.activePresetId) return false;
+        const info = await service('stPromptData.read', {});
+        return Boolean(info) && !unsupported(info);
+    }
+
     async function registerStages() {
+        host.own.register('promptManager.takesOver', () => takesOver());
+        host.own.register('promptManager.reset', () => { contributions.clear(); return true; });
+        await request(host.own, 'pipeline.stages.add', { params: { pipelineId: 'generation.prepare', stage: { id: 'prompt-manager:reset', contract: 'promptManager.reset', onExhausted: 'flag' } } });
         host.own.register(CAPTURE_CONTRACT, params => { captured = { chat: params?.chat ?? [], at: now() }; return true; });
         host.own.register(REWRITE_CONTRACT, params => rewrite(params ?? {}));
         await request(host.own, 'pipeline.stages.add', { params: { pipelineId: BEFORE_SEND_PIPELINE, stage: { id: 'prompt-manager:capture', contract: CAPTURE_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' } } });

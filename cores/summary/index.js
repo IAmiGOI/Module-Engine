@@ -1,4 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
+import { deliverToPrompt } from '../../libraries/shared/prompt-contribution.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 
 const SETTINGS_NAMESPACE = 'core.summary';
@@ -677,7 +678,10 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
             });
             if (pruned.length !== chat.length) chat.splice(0, chat.length, ...pruned);
             const messages = active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: formatSummaryMessage(record) }));
-            chat.unshift(...messages);
+            await deliverToPrompt({
+                call, contribution: { id: 'summary', name: 'Summaries', role: 'assistant', content: messages.map(message => message.mes).join('\n\n'), defaultPlacement: 'before-history', stable: true },
+                legacy: () => chat.unshift(...messages),
+            });
         }
         return true;
     }
