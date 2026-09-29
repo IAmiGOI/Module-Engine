@@ -15,6 +15,9 @@ import { structuredStyleRules } from './kinds-view.js';
 
 export const PREVIEW_ID = '__memory_graph_preview__';
 
+/** Шрифт подписей нод: системный гротеск вместо шрифта Cytoscape по умолчанию, чуть плотнее и без тяжёлой обводки. */
+export const LABEL_FONT = Object.freeze({ 'font-family': '"Noto Sans", "Segoe UI", system-ui, -apple-system, sans-serif', 'font-size': 10, 'font-weight': 500 });
+
 const WEIGHT_COLOR_STOPS = [
     [0xe7, 0x4c, 0x3c], // 0.0 — красный (самый слабый узел по весу — первый кандидат на вытеснение)
     [0xf1, 0xc4, 0x0f], // 0.5 — янтарный
@@ -70,13 +73,12 @@ export function graphStylesheet() {
         {
             selector: 'node[?protectedNode], node[size >= 20], node.hovered',
             style: {
-                label: 'data(label)', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4,
-                'min-zoomed-font-size': 8, color: '#eef2ff', 'text-outline-color': '#0b0f1a', 'text-outline-width': 2,
+                label: 'data(label)', 'text-valign': 'bottom', 'text-margin-y': 5, 'min-zoomed-font-size': 8,
+                ...LABEL_FONT, color: '#e8ecf8', 'text-outline-color': '#0b0f1a', 'text-outline-width': 1.5, 'text-outline-opacity': 0.75,
             },
         },
         // Защищённые — та же заливка по весу (у них `weightRank` всегда 1, см. Ядро), только БЕЛАЯ ОБВОДКА и
         // усиленное свечение отличают роль — не отдельный цвет (иначе он спорил бы со шкалой веса/метрики).
-        { selector: 'node[?protectedNode]', style: { 'border-width': 1.5, 'border-color': '#fff' } },
         // `line-color` — из данных, не хардкод (прямой запрос владельца: ребро красится в цвет региона, который оно
         // соединяет, когда узлы красятся по метрике `region`; считает `buildNextElements()`/`regionEdgeStyle()` в
         // memory-graph-panel.js). ВНЕ этого режима — `DEFAULT_EDGE_COLOR`, тот же цвет, что раньше был здесь
@@ -135,7 +137,7 @@ export function graphStylesheet() {
             style: {
                 label: 'data(label)', 'background-color': 'rgba(74,158,255,0.15)',
                 'border-width': 2, 'border-style': 'dashed', 'border-color': '#4a9eff',
-                color: '#4a9eff', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 4,
+                color: '#4a9eff', ...LABEL_FONT, 'text-valign': 'bottom', 'text-margin-y': 4,
                 width: 2.4, height: 2.4,
             },
         },
