@@ -1,13 +1,13 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
 import { buildThematicSkeletonPrompt, buildThematicSkeletonPartPrompt, buildThematicSkeletonReducePrompt, normalizeThematicRegions } from './bootstrap-thematic.js';
-import { shouldSeedRegion, regionKeyForLabel, bestCenterSimilarity } from './region-birth.js';
-import { rankCoreCandidates } from './core-candidates.js';
-import { coreCap, planRegionRole } from './core-tier.js';
+import { createCoreOps } from './structured/core-ops.js';
+import { createTimelineOps } from './structured/timeline-ops.js';
+import { createExtractionOps } from './structured/extraction-ops.js';
+import { createModeOps } from './structured/mode-ops.js';
 import { addDirectedEdge } from './edges.js';
-import { pickEventsToFold } from './timeline-compact.js';
 import { checkEdge, normalizeKind, kindOf, isCore, isEvent } from './kinds.js';
-import { featuresFor, normalizeGraphMeta, normalizeMode, migrateNodesToStructured } from './modes.js';
+import { featuresFor, normalizeGraphMeta, normalizeMode } from './modes.js';
 import { selectBeacons, shouldRefreshSticky, recentQueryText, buildBeaconTree } from './beacons.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { packEntriesIntoChunks } from '../../libraries/core/entry-chunker.js';
@@ -17,7 +17,7 @@ import { pickRegionBySimilarity } from './placement.js';
 import { updateEwmaStats, isStrongChangeEwma, ewmaStddev } from './gate.js';
 import { appendDecision } from './decision-log.js';
 import { buildExtractionPrompt, buildStructuredExtractionPrompt, parseExtractionResponse } from './extraction-prompt.js';
-import { resolveSubject, addAliases } from './subjects.js';
+import { addAliases } from './subjects.js';
 // MEMORY_GRAPH_FIX_PLAN.md, Этап 9 (необязательный, ROADMAP 5.107и) — чистые функции, раньше жившие прямо здесь,
 // наверху файла, перенесены в math.js/bootstrap-prompts.js БЕЗ ИЗМЕНЕНИЯ ПОВЕДЕНИЯ (см. их собственный doc-comment
 // за тем, что именно куда легло и почему); импортированы здесь как обычно (нужны самому Ядру ниже) и заново
@@ -121,10 +121,6 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     let graphMeta = normalizeGraphMeta(null);
     let features = featuresFor('legacy');
     let turnCounter = 0;
-    const SUBJECT_CREATE_AFTER = 2; // заглушка сущности — со второй встречи неразрешённого имени (этап 3 плана типов)
-    const pendingSubjects = new Map(); // имя (нижний регистр) → сколько раз встречалось; в памяти, после перезагрузки счёт заново
-    let lastCoreSweepTurn = -Infinity;
-    let lastTimelineFoldTurn = -Infinity; // ход последней попытки свернуть события (не сохраняется — после перезагрузки первая попытка сразу)
     // `true`, когда `loadState()` увидел ноды, записанные ДО появления `CLOCK_KEY` (старая версия, счётчик был в
     // памяти) — их `createdTurn`/`lastTouchedTurn`/`queuedTurn`/`firstAttemptTurn` в единицах СТАРОГО счётчика,
     // бессмысленны рядом с новыми, основанными на длине чата часами. Разовая миграция происходит при первом же
@@ -278,9 +274,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // Часов ещё нет — либо граф совсем свежий (мигрировать нечего), либо это данные ДО появления часов
             // (старый счётчик-в-памяти) — у него есть ноды, но их временные отметки бессмысленны рядом с новыми.
             turnCounter = 0;
-            lastCoreSweepTurn = -Infinity;
-            lastTimelineFoldTurn = -Infinity;
-            pendingSubjects.clear();
+            coreOps.resetClock(); timelineOps.resetClock(); extractionOps.resetPending(); // счётчики структурных прогонов — заново для нового чата
             lastExtractionClock = 0;
             needsClockMigration = Object.keys(nodes).length > 0;
         }
@@ -947,58 +941,6 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * маяки/merge-detection (оба читают `embedding` как источник истины о содержимом узла). НЕ персистит и не
      * публикует событие сама — оба вызывающих делают это по-своему (один узел сразу vs пачкой в конце `checkAndPlace()`).
      */
-    /**
-     * structured: повысить ноду до Core (этап 4 плана). Ручное закрепление (`manual`) потолок не проверяет, автоповышение — да.
-     * Нода с регионом получает роль: под-центр, либо меняется ролью с центром, если важнее (старый центр остаётся под-центром при
-     * наличии места). Событие без региона — просто Core. Возвращает `{ ok, role?, reason? }`.
-     */
-    /** Рождение региона вокруг Core: `regionKey` нового региона или `null`. Потолок `maxRegions` и порог «не похож ни на один центр» — region-birth.js. */
-    function seedRegionFor(node) {
-        if (!features.regionBirth || !node.embedding || Object.keys(regions).length >= settings.maxRegions) return null;
-        const own = node.regionId ? regions[node.regionId] : null;
-        if (own && (own.centerNodeId === node.id || own.subCenterIds.includes(node.id))) return null; // уже центр/под-центр — регион у неё есть
-        const anchors = collectAnchors().filter(anchor => anchor.regionId !== node.regionId || regions[anchor.regionId]?.centerNodeId !== node.id);
-        const reference = Object.values(nodes).filter(other => other.id !== node.id && !isCore(other) && other.embedding).map(other => bestCenterSimilarity(other.embedding, anchors)).filter(value => value !== null);
-        if (!shouldSeedRegion(node.embedding, anchors, reference)) return null;
-        // Из прежнего региона нода уходит (она была там обычной): вычёркиваем её оттуда, как это делает удаление ноды.
-        if (own) regions[node.regionId] = { ...own, nodeIds: own.nodeIds.filter(id => id !== node.id) };
-        const key = regionKeyForLabel(node.label, Object.keys(regions));
-        regions[key] = { name: node.label, centerNodeId: node.id, subCenterIds: [], nodeIds: [node.id], wordProfile: {} };
-        node.regionId = key;
-        publishEvent('memoryGraph.regionCreated', { regionId: key, centerNodeId: node.id });
-        return key;
-    }
-
-    function promoteToCore(nodeId, { manual = false } = {}) {
-        const node = nodes[nodeId];
-        if (!node) return { ok: false, reason: 'no such node' };
-        if (!features.core) return { ok: false, reason: 'core needs a structured graph' };
-        if (!isCore(node)) {
-            const coreCount = Object.values(nodes).filter(isCore).length;
-            const cap = coreCap(Object.keys(nodes).length, { coreMaxShare: settings.coreMaxShare, coreMinCap: settings.coreMinCap, bootstrapCoreCount: graphMeta.bootstrapCoreCount ?? 0 });
-            if (!manual && coreCount >= cap) return { ok: false, reason: 'core cap reached' };
-        }
-        // Далёкий от всех центров Core засевает НОВЫЙ регион и становится его центром (этап 5); иначе — роль в своём регионе.
-        // Считаем ДО того, как нода станет Core: её собственные сходства не должны попасть в образец «типичного» графа.
-        const seeded = seedRegionFor(node);
-        node.core = true;
-        node.protectedNode = true;
-        if (seeded) return { ok: true, role: 'center', seeded: seeded };
-        const key = node.regionId;
-        const region = key ? regions[key] : null;
-        const plan = planRegionRole(node, region, nodes, { subCentersPerRegion: settings.subCentersPerRegion });
-        if (plan.role === 'center') {
-            const oldCenterId = region.centerNodeId;
-            const room = region.subCenterIds.length < settings.subCentersPerRegion;
-            regions[key] = {
-                ...region,
-                centerNodeId: node.id,
-                subCenterIds: [...region.subCenterIds.filter(id => id !== node.id), ...(plan.demoteCenter && oldCenterId && room ? [oldCenterId] : [])],
-            };
-        } else if (plan.role === 'subCenter') regions[key] = { ...region, subCenterIds: [...region.subCenterIds, node.id] };
-        return { ok: true, role: plan.role };
-    }
-
     async function applyNodeUpdate({ id, label, content, importance, protectedNode, kind, subtype, core } = {}) {
         const node = nodes[id];
         if (!node) return { ok: false, error: `no such node: ${id}` };
@@ -1140,56 +1082,6 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         });
     }
 
-    /**
-     * structured: повысить кандидатов в Core (core-candidates.js) до потолка. Синхронно, вызывается ИЗНУТРИ уже идущей записи
-     * (после размещения в `checkAndPlace`, из `sweepCores`). Возвращает `[{ id, label, reasons }]` повышенных.
-     */
-    function runCoreSweep() {
-        if (!features.core) return [];
-        const coreIds = new Set(Object.values(nodes).filter(isCore).map(node => node.id));
-        const promoted = [];
-        for (const candidate of rankCoreCandidates(nodes, coreIds)) {
-            const result = promoteToCore(candidate.id);
-            if (!result.ok) { if (result.reason === 'core cap reached') break; continue; }
-            nodes[candidate.id].corePromotedBy = candidate.reasons;
-            promoted.push({ id: candidate.id, label: nodes[candidate.id].label, reasons: candidate.reasons });
-            publishEvent('memoryGraph.coreCreated', { nodeId: candidate.id, reasons: candidate.reasons });
-        }
-        return promoted;
-    }
-
-    /** Периодический прогон повышения (не чаще `coreSweepEveryTurns` ходов) — со своей записью на диск. */
-    async function sweepCores() {
-        if (!features.core) return { promoted: [] };
-        return enqueueWrite(async () => {
-            if (turnCounter - lastCoreSweepTurn < settings.coreSweepEveryTurns) return { promoted: [] };
-            lastCoreSweepTurn = turnCounter;
-            const promoted = runCoreSweep();
-            if (promoted.length) await Promise.all([persistNodes(), persistRegions()]);
-            return { promoted };
-        });
-    }
-
-    /** Текст сообщения «сюжетный каркас» (до 8 Core по важности, затем связям) или `null`, если настройка выключена / Core нет. */
-    function plotCoreMessage() {
-        if (!features.core || !settings.plotSkeletonInPrompt) return null;
-        const labels = Object.values(nodes).filter(isCore)
-            .sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0) || (b.degree ?? 0) - (a.degree ?? 0))
-            .slice(0, 8).map(node => node.label);
-        return labels.length ? `Plot core: ${labels.join(', ')}` : null;
-    }
-
-    /** Ручное закрепление ноды как Core (кнопка «Make core»): потолок не действует. */
-    async function pinNode({ id } = {}) {
-        return enqueueWrite(async () => {
-            const result = promoteToCore(id, { manual: true });
-            if (!result.ok) return { ok: false, error: result.reason };
-            await Promise.all([persistNodes(), persistRegions()]);
-            publishEvent('memoryGraph.nodeUpdated', { nodeId: id });
-            return { ok: true, role: result.role };
-        });
-    }
-
     /** Ручное удаление ребра — снимает обе стороны, degree--. */
     async function deleteEdgeManually({ fromId, toId, type } = {}) {
         return enqueueWrite(async () => {
@@ -1225,43 +1117,6 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * следующий бутстрап реально стартует с чистого листа, а не подхватит
      * осиротевший `region.centerNodeId`, указывающий на уже удалённую ноду.
      */
-    /**
-     * Режим НОВОГО (пустого) графа выбирает пользователь до первого бутстрапа (этап 0, п. 5). Когда ноды уже есть, режим
-     * меняется только конвертацией или открытием графа из библиотеки — иначе данные остались бы в формате не того режима.
-     */
-    async function setModeForEmptyGraph(mode) {
-        return enqueueWrite(async () => {
-            if (!['legacy', 'structured'].includes(mode)) return { ok: false, error: `Unknown mode "${mode}".` };
-            if (Object.keys(nodes).length) return { ok: false, error: 'The mode of a graph that already has nodes can only change by upgrading it.' };
-            applyGraphMeta({ ...graphMeta, mode, createdAt: graphMeta.createdAt ?? now() });
-            await persistGraphMeta();
-            publishEvent('memoryGraph.modeChanged', { mode: graphMeta.mode });
-            return { ok: true, mode: graphMeta.mode };
-        });
-    }
-
-    /**
-     * Конвертация legacy → structured (этап 0, п. 7): (а) СНИМОК прежних данных — без него конвертация не выполняется;
-     * (б) режим и `convertedFrom`; (в) миграция структуры (`migrateNodesToStructured`). Обратной конвертации нет — виды, события
-     * и Core теряли бы смысл; вернуть можно только из снимка. Пока нет библиотеки графов (этап 9), снимок лежит в памяти чата
-     * одним ключом (`graphBackupBeforeUpgrade`) — библиотека потом заменит его. Повторная конвертация — no-op.
-     */
-    async function convertToStructured() {
-        return enqueueWrite(async () => {
-            if (graphMeta.mode === 'structured') return { ok: true, unchanged: true, mode: 'structured' };
-            const backup = await call('storage.chatMemory.set', {
-                namespace: PERSISTENCE_NAMESPACE, key: GRAPH_BACKUP_KEY,
-                value: { savedAt: now(), mode: 'legacy', nodes, regions, staging, mergeQueue, reconsolidationQueue },
-            });
-            if (!backup.ok) return { ok: false, error: `Could not back up the graph first: ${backup.error?.message ?? 'unknown error'}` };
-            nodes = migrateNodesToStructured(nodes);
-            applyGraphMeta({ ...graphMeta, mode: 'structured', convertedFrom: 'legacy', bootstrapCoreCount: Object.values(nodes).filter(isCore).length });
-            await Promise.all([persistNodes(), persistGraphMeta()]);
-            publishEvent('memoryGraph.modeChanged', { mode: 'structured', convertedFrom: 'legacy' });
-            return { ok: true, mode: 'structured', converted: Object.keys(nodes).length };
-        });
-    }
-
     async function resetGraph() {
         return enqueueWrite(async () => {
             nodes = {};
@@ -1428,70 +1283,6 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // `decision`, но раньше терялись здесь же, не покидая эту функцию. Оба сегодняшних вызывающих
         // (checkAndPlace(), createNodeFromCharacterCard()) читали только `.status`/`.nodeId` — лишние поля им не мешают.
         return { ...decision, nodeId: node.id };
-    }
-
-    /** Метки сущностей/объектов для промпта structured-извлечения: до 60, недавно тронутые и важные — первыми. */
-    function knownSubjectNames() {
-        return Object.values(nodes)
-            .filter(node => node.label && ['entity', 'object'].includes(kindOf(node)))
-            .sort((a, b) => (b.lastTouchedTurn ?? 0) - (a.lastTouchedTurn ?? 0) || (b.importance ?? 0) - (a.importance ?? 0))
-            .slice(0, 60).map(node => node.label);
-    }
-
-    /** Дескриптор региона ноды для `decideFirstPlacement` (приоритет «регион главного субъекта»); `null`, если у ноды региона нет. */
-    function regionDescriptorOf(node) {
-        const region = node?.regionId ? regions[node.regionId] : null;
-        return region ? { regionId: node.regionId, sector: region.sector, ring: region.ring } : null;
-    }
-
-    /**
-     * structured: подготовка факта до размещения — псевдонимы из ответа; субъекты → ноды; неразрешённый субъект получает
-     * ноду-заглушку сущности только со ВТОРОЙ встречи (`pendingSubjects`), чтобы не плодить ноды под случайных статистов.
-     * Возвращает `{ subjectIds, relatedIds }` (id существующих нод) или `null`, если чат сменился по ходу.
-     */
-    async function resolveFactSubjects(fact, { epoch, contextEmbedding }) {
-        for (const [name, list] of Object.entries(fact.aliases ?? {})) {
-            const ownerId = resolveSubject(name, nodes);
-            if (ownerId) addAliases(nodes[ownerId], list);
-        }
-        const subjectIds = [];
-        for (const name of fact.subjects ?? []) {
-            let id = resolveSubject(name, nodes);
-            const isSelf = kindOf(fact) !== 'fact' && String(name).trim().toLowerCase() === fact.label.trim().toLowerCase();
-            if (!id && !isSelf) {
-                const key = name.trim().toLowerCase();
-                const seen = (pendingSubjects.get(key) ?? 0) + 1;
-                pendingSubjects.set(key, seen);
-                if (seen >= SUBJECT_CREATE_AFTER) {
-                    const content = `${name} appears in the story.`;
-                    const embeddingResult = await callService('embedding.compute', { text: `${name}: ${content}`, kind: 'passage' });
-                    if (!stillSameChat(epoch)) return null;
-                    if (embeddingResult.ok) {
-                        id = placeNewNode({ label: name, content, embedding: embeddingResult.value, importance: 3, kind: 'entity' }, { placementEmbedding: contextEmbedding }).nodeId;
-                        pendingSubjects.delete(key);
-                    }
-                }
-            }
-            if (id && !subjectIds.includes(id)) subjectIds.push(id);
-        }
-        const relatedIds = (fact.related ?? []).map(item => ({ id: resolveSubject(item.name, nodes), relation: item.relation })).filter(item => item.id);
-        return { subjectIds, relatedIds };
-    }
-
-    /** structured: рёбра новой ноды к субъектам и связанным (проверка правила рёбер внутри); возвращает число созданных. Потолок связей здесь не применяется — у героя их закономерно много. */
-    function linkStructuredNode(node, { subjectIds, relatedIds }, sameBatchEvent) {
-        const targets = [...subjectIds.map(id => ({ id, relation: 'related' })), ...relatedIds.map(item => ({ id: item.id, relation: item.relation || 'related' }))];
-        if (sameBatchEvent && !isEvent(node)) targets.push({ id: sameBatchEvent.id, relation: 'participates' }); // факт указывает на установившее его событие
-        let created = 0;
-        for (const { id, relation } of targets) {
-            const other = nodes[id];
-            if (!other || other.id === node.id) continue;
-            // Событие — конец, в который входят: субъект → событие; факт → событие; иначе от новой ноды к цели.
-            const [from, to] = isEvent(node) ? [other, node] : [node, other];
-            if (!edgeAllowed(from, to)) continue;
-            if (addDirectedEdge(from, to, relation).created) created += 1;
-        }
-        return created;
     }
 
     /**
@@ -2367,36 +2158,6 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * накопителя) — объединение двух конкретных текстов не сжимается в
      * общую классификацию так же естественно, как короткие ярлыки потеряшек.
      */
-    /**
-     * structured: сворачивает самые старые события в одно событие-сводку (не чаще раза в `timelineFoldEveryTurns` ходов).
-     * Слияние делает `foldNodesInGraph`: связи `participates` объединяются, цепочка `next` замыкается через сводку.
-     * Устойчиво к сбою модели: не удалось — события остаются как были, попытка повторится через тот же интервал.
-     */
-    async function sweepTimeline() {
-        if (!features.timeline) return { folded: 0 };
-        return enqueueWrite(async () => {
-            if (turnCounter - lastTimelineFoldTurn < settings.timelineFoldEveryTurns) return { folded: 0 };
-            lastTimelineFoldTurn = turnCounter;
-            const batch = pickEventsToFold(Object.values(nodes), { keepRecent: settings.timelineKeepRecent, foldBatch: settings.timelineFoldBatch });
-            if (!batch.length) return { folded: 0 };
-            const epoch = chatEpoch;
-            const listing = batch.map((node, i) => `${i + 1}. ${node.label}: ${node.content}`).join('\n');
-            const prompt = `These ${batch.length} older events of a story happened in this order:\n\n${listing}\n\nRetell them as ONE shorter event that keeps who did what and how it turned out. Reply with ONLY a JSON object: {"label": short name, "content": the retelling, "importance": 0-10}.`;
-            const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.reconsolidationMaxTokens, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
-            if (!stillSameChat(epoch) || !result.ok) return { folded: 0 };
-            const parsed = parseModelJson(result.value);
-            if (!parsed?.label || !parsed?.content) return { folded: 0 };
-            const embeddingResult = await callService('embedding.compute', { text: `${parsed.label}: ${parsed.content}`, kind: 'passage' });
-            if (!stillSameChat(epoch) || !embeddingResult.ok) return { folded: 0 };
-            const verdict = { label: String(parsed.label), content: String(parsed.content), importance: Number(parsed.importance) || 0 };
-            const mergedId = foldNodesInGraph(batch.map(node => node.id), verdict, embeddingResult.value);
-            if (!mergedId) return { folded: 0 };
-            await Promise.all([persistNodes(), persistRegions()]);
-            publishEvent('memoryGraph.nodesMerged', { mergedId, from: batch.map(node => node.id) });
-            return { folded: batch.length, mergedId };
-        });
-    }
-
     async function sweepMergeQueue() {
         return enqueueWrite(async () => {
             // stillSameChat() — Этап 5 (ROADMAP 5.107д, П6 плана): каждая пара ждёт свой SideCar-вызов и
@@ -2823,6 +2584,28 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         await sweepCores();
         return placement;
     }
+
+    // Структурированная часть Ядра (structured/*): модули получают доступ к состоянию через геттеры (значения подменяются при
+    // загрузке чата) и лениво вызывают функции Ядра — порядок объявления здесь не важен.
+    const structuredCtx = {
+        get nodes() { return nodes; }, get regions() { return regions; }, get staging() { return staging; }, get mergeQueue() { return mergeQueue; },
+        get reconsolidationQueue() { return reconsolidationQueue; }, get settings() { return settings; }, get features() { return features; },
+        get graphMeta() { return graphMeta; }, get turnCounter() { return turnCounter; }, get epoch() { return chatEpoch; },
+        namespace: PERSISTENCE_NAMESPACE, backupKey: GRAPH_BACKUP_KEY, now: () => now(),
+        setNodes: value => { nodes = value; },
+        call: (...args) => call(...args), callService: (...args) => callService(...args), parseModelJson: value => parseModelJson(value),
+        publishEvent: (...args) => publishEvent(...args), enqueueWrite: task => enqueueWrite(task), stillSameChat: epoch => stillSameChat(epoch),
+        persistNodes: () => persistNodes(), persistRegions: () => persistRegions(), persistGraphMeta: () => persistGraphMeta(),
+        applyGraphMeta: raw => applyGraphMeta(raw), collectAnchors: () => collectAnchors(), edgeAllowed: (a, b) => edgeAllowed(a, b),
+        placeNewNode: (...args) => placeNewNode(...args), foldNodesInGraph: (...args) => foldNodesInGraph(...args),
+    };
+    const coreOps = createCoreOps(structuredCtx);
+    const timelineOps = createTimelineOps(structuredCtx);
+    const extractionOps = createExtractionOps(structuredCtx);
+    const { promoteToCore, runCoreSweep, sweepCores, plotCoreMessage, pinNode } = coreOps;
+    const { sweepTimeline } = timelineOps;
+    const { knownSubjectNames, regionDescriptorOf, resolveFactSubjects, linkStructuredNode } = extractionOps;
+    const { setModeForEmptyGraph, convertToStructured } = createModeOps(structuredCtx);
 
     const unregisters = [
         host.own.register('memoryGraph.settings', () => settings),
