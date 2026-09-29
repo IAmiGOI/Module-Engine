@@ -17,6 +17,7 @@ import { pickRegionBySimilarity } from './placement.js';
 import { updateEwmaStats, isStrongChangeEwma, ewmaStddev } from './gate.js';
 import { appendDecision } from './decision-log.js';
 import { buildExtractionPrompt, buildStructuredExtractionPrompt, parseExtractionResponse } from './extraction-prompt.js';
+import { buildTimelineSection } from './timeline-prompt.js';
 import { addAliases } from './subjects.js';
 // MEMORY_GRAPH_FIX_PLAN.md, Этап 9 (необязательный, ROADMAP 5.107и) — чистые функции, раньше жившие прямо здесь,
 // наверху файла, перенесены в math.js/bootstrap-prompts.js БЕЗ ИЗМЕНЕНИЯ ПОВЕДЕНИЯ (см. их собственный doc-comment
@@ -2423,7 +2424,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // сменился за это время, `stickyRetrieval`/`nodes` дальше — уже про НОВЫЙ чат, писать в них по
             // результатам старого нельзя (в частности перед `persistStickyRetrieval()` ниже).
             const epoch = chatEpoch;
-            const candidates = Object.values(nodes).filter(node => node.regionId);
+            // Маяки — лор: событие (не Core) в кандидаты не идёт, оно подтягивается через ноды (timeline-prompt.js); Core-событие с регионом — может быть маяком.
+            const candidates = Object.values(nodes).filter(node => node.regionId && !(features.eventsInRetrieval && isEvent(node) && !isCore(node)));
             if (!candidates.length) {
                 const total = Object.keys(nodes).length;
                 return skipRetrieval('no-placed-nodes', total ? `${total} node(s), none placed in a region (all unplaced)` : 'the graph is empty');
@@ -2478,14 +2480,21 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             }
 
             // Дерево с неявной связью «входит в регион» (beacons.js, ROADMAP 5.109а) — цепочка по порядку рвалась на нодах без рёбер.
-            const route = buildBeaconTree(nodes, freshBeaconIds, {
+            // structured: маршрут, шум и основной блок — по слою лора (события, не Core, вынесены в секцию таймлайна ниже, чтобы не дублироваться шумом).
+            const loreView = features.eventsInRetrieval ? Object.fromEntries(Object.entries(nodes).filter(([, node]) => !(isEvent(node) && !isCore(node)))) : nodes;
+            const route = buildBeaconTree(loreView, freshBeaconIds, {
                 maxHops: settings.routeMaxHops,
                 centerOf: id => { const regionId = nodes[id]?.regionId; return regionId ? regions[regionId]?.centerNodeId ?? null : null; },
             });
             const routeNodeIds = [...new Set([...route.segments.flatMap(step => [step.from, step.to]), ...route.standalone])];
-            const noise = expandNoiseNodes(nodes, routeNodeIds, { targetTotal: settings.retrievalTargetNodes, fanoutPerNode: settings.noiseFanoutPerNode, random });
-            const text = renderMemoryPrompt({ ...route, noise }, nodes);
+            const noise = expandNoiseNodes(loreView, routeNodeIds, { targetTotal: settings.retrievalTargetNodes, fanoutPerNode: settings.noiseFanoutPerNode, random });
+            let text = renderMemoryPrompt({ ...route, noise }, loreView);
             if (!text) return true;
+            if (features.eventsInRetrieval && settings.retrievalEventsMax > 0) {
+                const involved = [...new Set([...routeNodeIds, ...noise.map(edge => edge.to)])];
+                const timeline = buildTimelineSection(nodes, involved, { max: settings.retrievalEventsMax, excludeIds: new Set(involved) });
+                if (timeline) text = `${text}\n\n${timeline}`;
+            }
 
             // Decay по факту использования (Этап 7) + счётчики ретрива (MEMORY_GRAPH_UI_PLAN.md, Этап 2, П5) —
             // КАЖДЫЙ узел, реально попавший в готовый блок (маяки, маршрут, шум — тот же набор id, что

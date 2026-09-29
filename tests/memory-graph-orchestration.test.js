@@ -3374,3 +3374,54 @@ test('the plot core message appears only when switched on, lists cores by import
     assert.match(plot.mes, /^Plot core: Crown, Anchor/);
     assert.equal(on.find(m => m.name === 'Memory').mes.includes('Plot core'), false);
 });
+
+async function structuredWithEvents() {
+    const built = await structuredEngine();
+    await call(built.caller, 'memoryGraph.nodes.create', { label: 'Topic', content: 'alpha bravo charlie delta echo', importance: 5, sector: 0, ring: 0, kind: 'entity' });
+    for (const label of ['First clash', 'Second clash']) await call(built.caller, 'memoryGraph.nodes.create', { label, content: `${label} at the gate of the old fortress.`, sector: 0, ring: 0, kind: 'event' });
+    const nodes = (await call(built.caller, 'memoryGraph.nodes')).value;
+    const topic = nodes.find(n => n.label === 'Topic');
+    for (const event of nodes.filter(n => n.kind === 'event')) await call(built.caller, 'memoryGraph.edges.create', { fromId: topic.id, toId: event.id });
+    return built;
+}
+
+test('in a structured graph the retrieval block gets a Recent events section for the events of the shown nodes', async () => {
+    const { graphCore } = await structuredWithEvents();
+    const chat = [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }];
+
+    await graphCore.injectIntoPrompt({ chat });
+
+    const memory = chat.find(m => m.name === 'Memory').mes;
+    assert.match(memory, /Recent events:/);
+    assert.match(memory, /First clash/);
+    assert.match(memory, /Second clash/);
+});
+
+test('the number of events in the retrieval block follows the limit setting, and zero switches the section off', async () => {
+    const { graphCore, caller } = await structuredWithEvents();
+    await call(caller, 'memoryGraph.configure', { retrievalEventsMax: 1 });
+    const chat = [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }];
+    await graphCore.injectIntoPrompt({ chat });
+    assert.equal((chat.find(m => m.name === 'Memory').mes.match(/clash at the gate/g) ?? []).length, 1);
+
+});
+
+test('a zero events limit switches the Recent events section off', async () => {
+    const { graphCore, caller } = await structuredWithEvents();
+    await call(caller, 'memoryGraph.configure', { retrievalEventsMax: 0 });
+    const chat = [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }];
+
+    await graphCore.injectIntoPrompt({ chat });
+
+    assert.equal(chat.find(m => m.name === 'Memory').mes.includes('Recent events'), false);
+});
+
+test('a legacy graph never gets a Recent events section', async () => {
+    const { graphCore, caller } = buildEngine();
+    await call(caller, 'memoryGraph.nodes.create', { label: 'Topic', content: 'alpha bravo charlie delta echo', importance: 5, sector: 0, ring: 0 });
+    const chat = [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }];
+
+    await graphCore.injectIntoPrompt({ chat });
+
+    assert.equal(chat.find(m => m.name === 'Memory').mes.includes('Recent events'), false);
+});

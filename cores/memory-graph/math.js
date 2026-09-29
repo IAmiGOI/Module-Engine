@@ -130,6 +130,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // structured: сворачивание старых событий в сводку (timeline-compact.js) — оставить свежих, сколько сворачивать за раз, как часто (в ходах).
     // structured: потолок автоповышения до Core — доля от числа нод, но не меньше `coreMinCap` (core-tier.js); ручное закрепление потолок обходит.
     maxRegions: 24, // потолок числа регионов: и для тематического бутстрапа, и для рождения регионов вокруг Core (окно раскладки выдерживает ~30)
+    retrievalEventsMax: 5, // structured: сколько последних событий якорных нод добавлять секцией «Recent events» в блок ретрива
     coreSweepEveryTurns: 10, // как часто (в ходах) искать кандидатов в Core помимо проверки после каждого размещения
     plotSkeletonInPrompt: false, // отдельное сообщение «Plot core: …» с метками главных Core (не входит в закреплённый блок ретрива)
     coreMaxShare: 0.08,
@@ -308,6 +309,7 @@ export function clampGraphSettings(values = {}) {
         mergeSimilarityThreshold: clampInt(values.mergeSimilarityThreshold * 100, 0, 100, DEFAULT_SETTINGS.mergeSimilarityThreshold * 100) / 100,
         mergeQueueMaxTurns: clampInt(values.mergeQueueMaxTurns, 1, 200, DEFAULT_SETTINGS.mergeQueueMaxTurns),
         maxRegions: clampInt(values.maxRegions, 1, 60, DEFAULT_SETTINGS.maxRegions),
+        retrievalEventsMax: clampInt(values.retrievalEventsMax, 0, 30, DEFAULT_SETTINGS.retrievalEventsMax),
         coreSweepEveryTurns: clampInt(values.coreSweepEveryTurns, 1, 500, DEFAULT_SETTINGS.coreSweepEveryTurns),
         plotSkeletonInPrompt: values.plotSkeletonInPrompt === true,
         coreMaxShare: clampInt(values.coreMaxShare * 100, 0, 100, DEFAULT_SETTINGS.coreMaxShare * 100) / 100,
