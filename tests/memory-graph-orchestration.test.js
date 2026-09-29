@@ -10,6 +10,7 @@ import { createChatMemoryCore } from '../cores/memory/index.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createMemoryGraphCore, BOOTSTRAP_SYSTEM_PROMPT, DEFAULT_SETTINGS } from '../cores/memory-graph/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
+import { registerGraphLibraryService } from '../services/graph-library.js';
 
 /**
  * Scenario level (TESTING.md "Уровень 2") — реальный движок, реальные
@@ -135,6 +136,17 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
     const characterHost = engine.registerCaller('service.character', 'services', { tier: 'official' });
     characterHost.own.register('stCharacter.current', () => character);
 
+    // Библиотека графов: настоящий сервис поверх хранилища в памяти; `file.download` запоминает скачанное.
+    const libraryRecords = new Map();
+    registerGraphLibraryService(engine.buses.services, {
+        store: {
+            all: async () => [...libraryRecords.values()], get: async id => libraryRecords.get(String(id)),
+            put: async record => { libraryRecords.set(record.id, record); }, delete: async id => { libraryRecords.delete(String(id)); },
+        },
+    });
+    const downloads = [];
+    engine.registerCaller('service.file', 'services', { tier: 'official' }).own.register('file.download', params => { downloads.push(params); return true; });
+
     const graphCore = createMemoryGraphCore(engine.registerCaller('core.memoryGraph', 'cores', { tier: 'official' }), random ? { random } : {});
 
     const caller = engine.registerCaller('module.probe', 'modules', {
@@ -146,7 +158,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move', 'memoryGraph.nodes.pin',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
-            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepCores', 'memoryGraph.reclassify', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
+            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepCores', 'memoryGraph.reclassify', 'memoryGraph.library.list', 'memoryGraph.library.save', 'memoryGraph.library.saveBack', 'memoryGraph.library.open', 'memoryGraph.library.rename', 'memoryGraph.library.duplicate', 'memoryGraph.library.delete', 'memoryGraph.library.export', 'memoryGraph.library.import', 'memoryGraph.library.findByLorebook', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
             // Прямой доступ к хранилищу — только для тестов Этапа 2 (MEMORY_GRAPH_FIX_PLAN.md), которым нужно
             // подложить данные "старого формата" (нода с большим createdTurn, без CLOCK_KEY), не воспроизводимые
             // никаким обычным вызовом контракта Ядра.
@@ -154,7 +166,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
         ],
     });
 
-    return { engine, graphCore, caller, context, pipelineCore, createEntryCalls };
+    return { engine, graphCore, caller, context, pipelineCore, createEntryCalls, libraryRecords, downloads };
 }
 
 function call(caller, contract, params) {
@@ -3455,4 +3467,119 @@ test('reclassify asks the model per region, sets entity and object kinds from th
 test('reclassify is refused for a legacy graph', async () => {
     const { caller } = buildEngine();
     assert.equal((await call(caller, 'memoryGraph.reclassify')).value.ok, false);
+});
+
+// --- Библиотека графов (этап 9) ------------------------------------------------
+
+async function libraryGraph(options = {}) {
+    const built = buildEngine({ lorebookEntries: MODE_ENTRIES, character: { name: 'Kira' }, ...options });
+    await call(built.caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+    await call(built.caller, 'memoryGraph.reset');
+    await call(built.caller, 'memoryGraph.nodes.create', { label: 'Kira', content: 'a young noblewoman.', sector: 0, ring: 0, kind: 'entity' });
+    await call(built.caller, 'memoryGraph.nodes.create', { label: 'Old tower', content: 'a ruined watchtower by the road.', sector: 0, ring: 0, kind: 'object', subtype: 'place' });
+    return built;
+}
+
+test('saving the current graph puts a record into the library with counts, mode and source, and refuses an empty graph', async () => {
+    const { caller } = buildEngine();
+    assert.equal((await call(caller, 'memoryGraph.library.save', { name: 'Nothing' })).value.ok, false);
+
+    const built = await libraryGraph();
+    const saved = (await call(built.caller, 'memoryGraph.library.save', { name: 'Kira world' })).value;
+
+    assert.equal(saved.ok, true);
+    const [entry] = (await call(built.caller, 'memoryGraph.library.list')).value;
+    assert.deepEqual([entry.name, entry.mode, entry.counts.nodes, entry.source.characterName], ['Kira world', 'structured', 2, 'Kira']);
+    assert.equal(entry.graph, undefined);
+    assert.equal((await call(built.caller, 'memoryGraph.mode')).value.meta.libraryId, saved.id);
+});
+
+test('opening a record in an empty chat copies the graph and leaves the library record untouched', async () => {
+    const source = await libraryGraph();
+    await call(source.caller, 'memoryGraph.library.save', { name: 'Kira world' });
+    const record = [...source.libraryRecords.values()][0];
+    const before = JSON.stringify(record);
+
+    const target = buildEngine({ lorebookEntries: MODE_ENTRIES });
+    for (const [id, value] of source.libraryRecords) target.libraryRecords.set(id, value);
+    const result = (await call(target.caller, 'memoryGraph.library.open', { id: record.id })).value;
+
+    assert.equal(result.ok, true);
+    const nodes = (await call(target.caller, 'memoryGraph.nodes')).value;
+    assert.deepEqual(nodes.map(n => n.label).sort(), ['Kira', 'Old tower']);
+    assert.equal((await call(target.caller, 'memoryGraph.mode')).value.mode, 'structured');
+    assert.equal(JSON.stringify(target.libraryRecords.get(record.id)), before, 'the library record did not change');
+    await call(target.caller, 'memoryGraph.nodes.create', { label: 'Extra', content: 'added in the new chat.', sector: 0, ring: 0 });
+    assert.equal(JSON.stringify(target.libraryRecords.get(record.id)), before, 'later edits in the chat do not reach the record');
+});
+
+test('opening over a non-empty graph asks for confirmation first, then makes an automatic before-open snapshot', async () => {
+    const built = await libraryGraph();
+    const saved = (await call(built.caller, 'memoryGraph.library.save', { name: 'Kira world' })).value;
+    await call(built.caller, 'memoryGraph.nodes.create', { label: 'Later', content: 'something added after saving.', sector: 0, ring: 0 });
+
+    const asked = (await call(built.caller, 'memoryGraph.library.open', { id: saved.id })).value;
+    assert.deepEqual([asked.ok, asked.needsConfirmation], [false, true]);
+
+    const opened = (await call(built.caller, 'memoryGraph.library.open', { id: saved.id, confirmed: true })).value;
+
+    assert.equal(opened.ok, true);
+    const names = (await call(built.caller, 'memoryGraph.library.list')).value.map(item => item.name);
+    assert.ok(names.includes('Kira world (before open)'));
+    assert.equal((await call(built.caller, 'memoryGraph.nodes')).value.some(n => n.label === 'Later'), false);
+});
+
+test('save back overwrites the record the graph was opened from, and is refused for a graph that never came from the library', async () => {
+    const built = await libraryGraph();
+    assert.equal((await call(built.caller, 'memoryGraph.library.saveBack')).value.ok, false);
+    const saved = (await call(built.caller, 'memoryGraph.library.save', { name: 'Kira world' })).value;
+    await call(built.caller, 'memoryGraph.nodes.create', { label: 'Later', content: 'something added after saving.', sector: 0, ring: 0 });
+
+    assert.equal((await call(built.caller, 'memoryGraph.library.saveBack')).value.ok, true);
+
+    const list = (await call(built.caller, 'memoryGraph.library.list')).value;
+    assert.equal(list.length, 1);
+    assert.equal(list[0].id, saved.id);
+    assert.equal(list[0].counts.nodes, 3);
+    assert.equal(list[0].name, 'Kira world');
+});
+
+test('rename, duplicate and delete change the library as expected', async () => {
+    const built = await libraryGraph();
+    const { id } = (await call(built.caller, 'memoryGraph.library.save', { name: 'One' })).value;
+
+    await call(built.caller, 'memoryGraph.library.rename', { id, name: 'Renamed' });
+    const copy = (await call(built.caller, 'memoryGraph.library.duplicate', { id })).value;
+    assert.deepEqual((await call(built.caller, 'memoryGraph.library.list')).value.map(item => item.name).sort(), ['Renamed', 'Renamed (copy)']);
+
+    await call(built.caller, 'memoryGraph.library.delete', { id: copy.id });
+    assert.equal((await call(built.caller, 'memoryGraph.library.list')).value.length, 1);
+    assert.equal((await call(built.caller, 'memoryGraph.library.rename', { id, name: '  ' })).value.ok, false);
+});
+
+test('an export downloads the record as a json file and an import of it into a library that already has that id creates a copy', async () => {
+    const built = await libraryGraph();
+    const { id } = (await call(built.caller, 'memoryGraph.library.save', { name: 'Kira world' })).value;
+
+    const exported = (await call(built.caller, 'memoryGraph.library.export', { id })).value;
+
+    assert.equal(exported.filename, 'Kira-world.json');
+    const imported = (await call(built.caller, 'memoryGraph.library.import', { text: built.downloads[0].content })).value;
+    assert.equal(imported.ok, true);
+    assert.notEqual(imported.id, id, 'the existing record was not overwritten');
+    assert.equal((await call(built.caller, 'memoryGraph.library.list')).value.length, 2);
+    assert.equal((await call(built.caller, 'memoryGraph.library.import', { text: '{"format":"other"}' })).value.ok, false);
+});
+
+test('a graph built from another lorebook opens with a warning, and a graph from the same lorebook is found before bootstrap', async () => {
+    const built = await libraryGraph();
+    const { id } = (await call(built.caller, 'memoryGraph.library.save', { name: 'Kira world' })).value;
+    assert.equal((await call(built.caller, 'memoryGraph.library.findByLorebook')).value.id, id);
+
+    const other = buildEngine({ lorebookEntries: [{ uid: 0, comment: 'Different', content: 'another book entirely.' }] });
+    for (const [key, value] of built.libraryRecords) other.libraryRecords.set(key, value);
+    assert.equal((await call(other.caller, 'memoryGraph.library.findByLorebook')).value, null);
+    const opened = (await call(other.caller, 'memoryGraph.library.open', { id })).value;
+
+    assert.match(opened.warning, /different lorebook/);
 });

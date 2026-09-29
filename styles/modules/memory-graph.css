@@ -136,3 +136,10 @@
     padding: 6px 10px; font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #eef2ff;
 }
 
+
+/* Вкладки Graph | Library и вкладка Library (этап 9 плана типов). */
+.stme-mg-tabs { border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.stme-mg-library-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
+.stme-mg-library-thumb { width: 120px; height: 120px; align-self: center; border-radius: 6px; background: #0b0f1a; }
+.stme-mg-library-meta { display: flex; flex-direction: column; gap: 2px; }
+.stme-mg-library-card .stme-row { flex-wrap: wrap; }
