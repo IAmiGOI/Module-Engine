@@ -211,3 +211,55 @@ A (лорбук — свой движок активации, результат
 - **Служебные:** `{{model}}`, `{{maxPrompt}}`, `{{original}}`, `{{lastGenerationType}}`, `{{outlet::имя}}`, `{{summary}}`, `{{authorsNote}}`, `{{bias "…"}}`, `{{banned "…"}}`.
 - **Наши:** все макросы ME (трекер, время, блокнот и т. д.) и макросы, объявленные плагинами PM.
 - **Вне объёма (Chat Completion):** макросы instruct/context-шаблонов Text Completion.
+
+---
+
+## 9. Разбор образцов пресетов (получены от владельца; ST 1.18+)
+
+Четыре файла: **AmiGO** (Module Engine, 43 промпта), **FaPuTa Test alpha** (43), **Marinara's Spaghetti Recipe v10** (80), **White Lotus 4.1.0** (91, 105 КБ). Ниже — что в них реально лежит. Это факты по файлам; выводы для дизайна отмечены «→».
+
+### 9.1 Структура файла пресета
+Один JSON из трёх частей:
+1. **Параметры генерации** (плоские поля верхнего уровня): `temperature`, `top_p`, `top_k`, `top_a`, `min_p`, `frequency_penalty`, `presence_penalty`, `repetition_penalty`, `openai_max_context`, `openai_max_tokens`, `max_context_unlocked`, `seed`, `n`, `stream_openai`, `reasoning_effort` (значения в образцах: `min`, `high`), `show_thoughts`, `verbosity`, `function_calling`, `tool_call_recurse_limit`, `tool_reasoning_mode`, `enable_web_search`, `use_sysprompt`, `squash_system_messages`, `names_behavior` (`-1`/`0`/`2`), `assistant_prefill`, `assistant_impersonation`, `continue_prefill`, `continue_postfix`, `media_inlining`, `inline_image_quality`, `request_images`, `request_image_aspect_ratio`, `request_image_resolution`, `bias_preset_selected` (только имя пресета logit bias — сами смещения лежат отдельно).
+2. **Служебные шаблоны-строки:** `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, `continue_nudge_prompt`, `group_nudge_prompt`, `send_if_empty`, `wi_format` (`{0}` — место содержимого лорбука), `scenario_format`, `personality_format` (в них тоже макросы: `{{scenario}}`, `{{char}}'s personality: {{personality}}`, `{{trim}}`).
+3. **Промпты:** массив `prompts` (библиотека) и массив `prompt_order` (порядок и включение).
+Плюс `extensions` (у White Lotus и Marinara там `regex_scripts`).
+
+### 9.2 Промпты (`prompts[]`)
+- Поля: `identifier`, `name`, `role` (`system` / `user` / `assistant`), `content`, `system_prompt`, `marker`, `enabled`, `injection_position` (`0` / `1`), `injection_depth`, `injection_order`, `injection_trigger` (массив, во всех образцах пустой), `forbid_overrides`.
+- **Маркеры (8 штук во всех файлах):** `dialogueExamples`, `chatHistory`, `worldInfoBefore`, `worldInfoAfter`, `charDescription`, `charPersonality`, `scenario`, `personaDescription` — без `content`, ST подставляет своё содержимое. У маркеров иногда бывают лишние поля (`role`, `content`, `injection_*`) — игнорируются.
+- **Встроенные не-маркеры:** `main`, `nsfw`, `jailbreak`, `enhanceDefinitions` (`system_prompt: true`). **Пользователи переиспользуют их под свои цели** и переименовывают: `nsfw` = «====Character instructions====» (FaPuTa) или «| NSFW Prompt» (Marinara), `jailbreak` = «Post-History Instructions», `enhanceDefinitions` = «====Pre-Response Instructions====». → идентификатор значим для ST, имя — метка пользователя; конвертер обязан сохранять оба.
+- **Собственные промпты** имеют UUID в `identifier`, `system_prompt: false`, `marker: false`.
+- **`injection_position`:** `0` — «относительно»: место определяет порядок в `prompt_order`; `1` — «абсолютно»: вставка в историю чата на `injection_depth` от конца, порядок среди вставок одной глубины по `injection_order` (значения в образцах: 1, 5, 97–110, 5000). `injection_depth` у относительных бессмысленно (4 по умолчанию).
+- **Роли в образцах:** есть `user` и `assistant` промпты (префиллы, «Group Nudge», «User Persona (first user message)»), а не только `system`.
+- **Ключевая находка:** у собственных промптов в `prompts[]` `enabled` в образцах равен `false`, а в `prompt_order` те же промпты `enabled: true`. **Эффективное включение — в `prompt_order[].enabled`**, поле `enabled` внутри промпта — устаревший/справочный остаток. → внутренний формат хранит включение ТОЛЬКО в порядке; конвертер при импорте берёт его оттуда (проверить по реальному запросу).
+
+### 9.3 Порядок (`prompt_order[]`)
+- Два списка: `character_id: 100000` и `100001`. **`100000` — короткий стандартный порядок (11 идентификаторов: main, worldInfoBefore, charDescription, charPersonality, scenario, enhanceDefinitions, nsfw, worldInfoAfter, dialogueExamples, chatHistory, jailbreak); `100001` — полный рабочий порядок пользователя (43 / 79 / 91 идентификатора).** Вероятно, `100001` — «глобальный» порядок для всех персонажей (по памяти о ST: в режиме глобальной стратегии используется «пустышка»). **Проверить**, что ST 1.18 использует именно его.
+- Каждая запись — `{ identifier, enabled }`; **один идентификатор может встречаться в порядке несколько раз** (в AmiGO `main`, `nsfw`, `jailbreak`, `enhanceDefinitions` есть как в начале блока, так и в конце) — нужно проверять, что ST делает с повтором; в образцах повтор идентификатора в одном списке не замечен, но `chatHistory`/маркеры встречаются по одному разу.
+- Абсолютные (`injection_position: 1`) промпты тоже стоят в `prompt_order` и там же включаются/выключаются.
+
+### 9.4 Что пользователи делают внутри пресетов (то, что PM должен делать штатно)
+1. **XML-обёртки парными промптами:** отдельные промпты `<setting>` … `</setting>`, `<CoT>` … `</CoT>`, `<info>` … `</info>` и т. д. Их порядок держит структура вручную. → **группа с оберткой** (открывающий и закрывающий тег генерируются группой) — типовая функция.
+2. **Разделители и комментарии:** пустые промпты «━+ Enable Only One Toggles», «‒+ Type», «====Main Prompt====», «✉ Read-Me» (README целиком лежит в `content` внутри `{{// ... }}`). → **разделитель / заметка** как отдельный тип блока (не уходит в промпт).
+3. **Переключатели через переменные:** у Marinara и White Lotus десятки «тумблер-промптов» с `content` вида `{{setvar::tense::past tense}}{{trim}}`; другой промпт использует `{{getvar::tense}}`. Эти пресеты вручную строят **«выбери один из»**, причём взаимоисключение держит только подпись «Enable only one». → **группа «выбор одного» (radio)** с одной активной опцией и значением, которое доступно как переменная; условие и шаблон видят выбранное. Это прямой ответ на «динамические промпты» и «визуальный конструктор».
+4. **«Тумблеры-стили» и порядок:** сотни строк текста в `content`, единицы `injection_order` для порядка внутри одной глубины.
+5. **Префиллы и наджи:** роли `assistant` и `user` с текстом, включаемые вручную (в групповом чате и т. д.).
+6. **Тонкая работа с концом чата:** `<last_message>` … `</last_message>` абсолютными промптами глубин 0/1 с `injection_order` 99/101 — оборачивание последнего сообщения. → PM должен уметь обернуть последнее сообщение / блок сообщений в парные теги (в модели «история = начало + конец» это одна из привязок).
+7. **Наши макросы и инструменты уже используются:** AmiGO содержит `{{rp-time_year}}`, `{{rp-time_month}}`, `{{rp-time_day}}`, `{{rp-time_time}}`, `{{rp-time_period}}` (макросы Модуля «Время») и инструкции про Notebook и TunnelVision-инструменты.
+
+### 9.5 Макросы, реально встреченные в промптах и служебных шаблонах
+`{{user}}` (195), `{{char}}` (66), `{{trim}}` (94), `{{// … }}` многострочные комментарии (46, встречаются и в служебных шаблонах: `{{//This is prompt…}}`), `{{setvar::имя::значение}}` (46; значение может быть длинным текстом со знаками препинания), `{{getvar::имя}}` (13), `{{random::…}}` (10, White Lotus), `{{scenario}}`, `{{personality}}`, `{{persona}}`, `{{group}}`, `{{summary}}`, `{{lastChatMessage}}` (не `lastMessage`!), `{{rp-time_*}}` (наши). **Устаревшие угловые:** `<USER>` и `<BOT>` (Marinara, внутри значений `setvar`, где ST подставит имена позже). Есть нестандартные написания вроде `{{//Toggle …}}` (комментарий без пробела после `//`). → перечень раздела 8 нужно дополнить: `lastChatMessage`, угловые `<USER>`/`<BOT>`; порядок раскрытия вложенных макросов внутри значений `setvar`.
+
+### 9.6 Расширения и связанные данные
+- **`extensions.regex_scripts`** (White Lotus: 4 скрипта; Marinara: пустой список): предустановленные regex-скрипты пресета. Поля: `scriptName`, `findRegex`, `replaceString`, `placement` (`[2]`), `disabled`, `markdownOnly`, `promptOnly` (`true` = менять только исходящий промпт), `runOnEdit`, `substituteRegex`, `trimStrings`, `minDepth`/`maxDepth`. → **если сборка наша, скрипты с `promptOnly` и нужным `placement` должны применяться нами**, иначе пресет поведёт себя иначе, чем в ST. Открытый вопрос, входит ли это в первую версию.
+- **Настройки подключения внутри пресета** (White Lotus): `chat_completion_source` (`nanogpt`), модели всех провайдеров (`openai_model`, `claude_model`, `openrouter_model`, `deepseek_model`, `zai_model`, `custom_url`, `reverse_proxy`, `proxy_password` и др.), провайдерные параметры OpenRouter (`openrouter_providers`, `_allow_fallbacks`, `_middleout`). В остальных образцах их нет. Пароль в образце пуст. → **PM их не применяет (решение владельца), но при импорте/экспорте сохраняет как непрозрачные поля** и при экспорте чистит секретные (`proxy_password` и т. п.) — уточнить.
+- **`bias_preset_selected`** — только ссылка по имени; сами смещения логитов в файле пресета не лежат (отдельный объект ST).
+
+### 9.7 Выводы для плана
+1. **Формат ST — плоский и хорошо определён**, конвертер ST ↔ ME без потерь реален; главная тонкость — «эффективное включение в порядке», повтор идентификаторов и переиспользование встроенных идентификаторов.
+2. **Обязательно поддержать типы блоков:** маркер, текстовый (роль), разделитель/заметка, группа с обёрткой, «выбор одного» с переменной, абсолютная вставка на глубину относительно конца, обёртка последнего сообщения.
+3. **Переменные и `setvar`/`getvar` — базовая часть**, а не экзотика (сотни использований). Раскрытие макросов должно быть детерминированным и с областью видимости на одну сборку.
+4. **Regex-скрипты пресета** и **`{{random}}`** (недетерминизм ломает кеш префикса!) — отдельные решения (раздел 2).
+5. **Токенный бюджет:** максимальный контекст в образцах 25 000 – 1 000 000, `max_context_unlocked: false`. Нужны и «разблокированный контекст», и ограничение на ответ (`openai_max_tokens` 2000–8192).
+6. **Тестовые данные:** файлы Marinara и White Lotus — чужие публичные пресеты; в репозиторий их целиком класть не стоит (авторские права) — **делаем синтетические фикстуры с той же структурой** (тексты сокращены до заглушек), плюс полные файлы владельца оставляем вне репозитория для ручной проверки. Решение владельца нужно.
