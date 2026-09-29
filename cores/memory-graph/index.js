@@ -1,5 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { cosineSimilarity } from '../../libraries/core/embedding.js';
+import { featuresFor, normalizeGraphMeta, normalizeMode, migrateNodesToStructured } from './modes.js';
 import { selectBeacons, shouldRefreshSticky, recentQueryText, buildBeaconTree } from './beacons.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { packEntriesIntoChunks } from '../../libraries/core/entry-chunker.js';
@@ -64,6 +65,8 @@ const STATS_KEY = 'distanceStats';
 const STICKY_KEY = 'stickyRetrieval';
 const NOVELTY_STATS_KEY = 'noveltyStats';
 const CLOCK_KEY = 'clock'; // MEMORY_GRAPH_FIX_PLAN.md, Этап 2 (ROADMAP 5.107б) — { value, version: 1 }; см. doc-comment у `turnCounter`.
+const GRAPH_META_KEY = 'graphMeta'; // MEMORY_GRAPH_TYPES_PLAN.md, этап 0 — { mode, version, ... }; нет ключа — legacy (см. modes.js)
+const GRAPH_BACKUP_KEY = 'graphBackupBeforeUpgrade'; // временный снимок перед конвертацией в structured (до библиотеки графов, этап 9)
 const DECISION_LOG_KEY = 'decisionLog'; // MEMORY_GRAPH_FIX_PLAN.md, Этап 6 (ROADMAP 5.107е) — массив записей decision-log.js, старые молча вытесняются
 const DECISION_LOG_LIMIT = 100; // фиксированное число из самого плана, не настройка пользователя (см. decision-log.js)
 const PREPARE_PIPELINE = 'generation.prepare';
@@ -107,6 +110,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     // длина чата (`advanceClock()`, clock.js): переживает перезагрузку сама (хранится вместе с чатом в ST), не
     // двигается от реролла/свайпа. Имя переменной и её единицы измерения (условный "ход") оставлены прежними
     // ради минимума правок по всему файлу — присваивает ей значение теперь ТОЛЬКО `checkAndPlace()`.
+    let graphMeta = normalizeGraphMeta(null);
+    let features = featuresFor('legacy');
     let turnCounter = 0;
     // `true`, когда `loadState()` увидел ноды, записанные ДО появления `CLOCK_KEY` (старая версия, счётчик был в
     // памяти) — их `createdTurn`/`lastTouchedTurn`/`queuedTurn`/`firstAttemptTurn` в единицах СТАРОГО счётчика,
@@ -198,8 +203,15 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         return settings;
     }
 
+    /** Режим и его флаги — единственное место, где они пересчитываются (загрузка чата, конвертация, будущее открытие из библиотеки). */
+    function applyGraphMeta(raw) {
+        graphMeta = normalizeGraphMeta(raw);
+        features = featuresFor(graphMeta.mode);
+    }
+    async function persistGraphMeta() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: GRAPH_META_KEY, value: graphMeta }); }
+
     async function loadState() {
-        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult, noveltyResult, clockResult, decisionLogResult] = await Promise.all([
+        const [nodesResult, regionsResult, stagingResult, mergeQueueResult, reconsolidationQueueResult, statsResult, stickyResult, noveltyResult, clockResult, decisionLogResult, metaResult] = await Promise.all([
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: REGIONS_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: STAGING_KEY, fallback: {} }),
@@ -210,6 +222,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: NOVELTY_STATS_KEY, fallback: null }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: CLOCK_KEY, fallback: null }),
             call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: DECISION_LOG_KEY, fallback: [] }),
+            call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: GRAPH_META_KEY, fallback: null }),
         ]);
         nodes = nodesResult.ok ? nodesResult.value ?? {} : {};
         regions = regionsResult.ok ? regionsResult.value ?? {} : {};
@@ -220,6 +233,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         stickyRetrieval = stickyResult.ok ? stickyResult.value : null;
         noveltyStats = noveltyResult.ok ? noveltyResult.value : null;
         decisionLog = decisionLogResult.ok ? decisionLogResult.value ?? [] : [];
+        // Режим: сохранённый; у ПУСТОГО графа без метаданных — «новый граф», режим из настройки по умолчанию (этап 0, п. 5). Структурный
+        // выбор запоминается сразу: иначе после первой же ноды и перезагрузки граф без метаданных прочитался бы как legacy.
+        // Legacy — отсутствие ключа, писать нечего (чаты, где граф не заводили, не получают лишних записей в метаданные).
+        const storedMeta = metaResult.ok ? metaResult.value : null;
+        const isNewGraph = !storedMeta && !Object.keys(nodes).length;
+        applyGraphMeta(isNewGraph ? { mode: settings.defaultGraphMode, createdAt: now() } : storedMeta);
+        if (isNewGraph && graphMeta.mode === 'structured') await persistGraphMeta();
         const clock = clockResult.ok ? clockResult.value : null;
         if (clock && typeof clock.value === 'number') {
             turnCounter = clock.value;
@@ -1021,6 +1041,43 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * следующий бутстрап реально стартует с чистого листа, а не подхватит
      * осиротевший `region.centerNodeId`, указывающий на уже удалённую ноду.
      */
+    /**
+     * Режим НОВОГО (пустого) графа выбирает пользователь до первого бутстрапа (этап 0, п. 5). Когда ноды уже есть, режим
+     * меняется только конвертацией или открытием графа из библиотеки — иначе данные остались бы в формате не того режима.
+     */
+    async function setModeForEmptyGraph(mode) {
+        return enqueueWrite(async () => {
+            if (!['legacy', 'structured'].includes(mode)) return { ok: false, error: `Unknown mode "${mode}".` };
+            if (Object.keys(nodes).length) return { ok: false, error: 'The mode of a graph that already has nodes can only change by upgrading it.' };
+            applyGraphMeta({ ...graphMeta, mode, createdAt: graphMeta.createdAt ?? now() });
+            await persistGraphMeta();
+            publishEvent('memoryGraph.modeChanged', { mode: graphMeta.mode });
+            return { ok: true, mode: graphMeta.mode };
+        });
+    }
+
+    /**
+     * Конвертация legacy → structured (этап 0, п. 7): (а) СНИМОК прежних данных — без него конвертация не выполняется;
+     * (б) режим и `convertedFrom`; (в) миграция структуры (`migrateNodesToStructured`). Обратной конвертации нет — виды, события
+     * и Core теряли бы смысл; вернуть можно только из снимка. Пока нет библиотеки графов (этап 9), снимок лежит в памяти чата
+     * одним ключом (`graphBackupBeforeUpgrade`) — библиотека потом заменит его. Повторная конвертация — no-op.
+     */
+    async function convertToStructured() {
+        return enqueueWrite(async () => {
+            if (graphMeta.mode === 'structured') return { ok: true, unchanged: true, mode: 'structured' };
+            const backup = await call('storage.chatMemory.set', {
+                namespace: PERSISTENCE_NAMESPACE, key: GRAPH_BACKUP_KEY,
+                value: { savedAt: now(), mode: 'legacy', nodes, regions, staging, mergeQueue, reconsolidationQueue },
+            });
+            if (!backup.ok) return { ok: false, error: `Could not back up the graph first: ${backup.error?.message ?? 'unknown error'}` };
+            nodes = migrateNodesToStructured(nodes);
+            applyGraphMeta({ ...graphMeta, mode: 'structured', convertedFrom: 'legacy' });
+            await Promise.all([persistNodes(), persistGraphMeta()]);
+            publishEvent('memoryGraph.modeChanged', { mode: 'structured', convertedFrom: 'legacy' });
+            return { ok: true, mode: 'structured', converted: Object.keys(nodes).length };
+        });
+    }
+
     async function resetGraph() {
         return enqueueWrite(async () => {
             nodes = {};
@@ -1032,11 +1089,14 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             noveltyStats = null;
             stickyRetrieval = null;
             decisionLog = []; // Этап 6 — тоже часть состояния графа, тот же принцип "очищает ВСЁ", что и у остального выше
+            // Пустой граф — «новый»: режим снова из настройки по умолчанию (этап 0, п. 5), а не наследуется от удалённого графа.
+            applyGraphMeta({ mode: settings.defaultGraphMode, createdAt: now() });
             await Promise.all([
                 persistNodes(), persistRegions(), persistStaging(),
                 persistMergeQueue(), persistReconsolidationQueue(),
-                persistStats(), persistStickyRetrieval(), persistDecisionLog(),
+                persistStats(), persistStickyRetrieval(), persistDecisionLog(), persistGraphMeta(),
             ]);
+            publishEvent('memoryGraph.modeChanged', { mode: graphMeta.mode });
             publishEvent('memoryGraph.reset', {});
             return { ok: true };
         });
@@ -2445,6 +2505,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.edges.create', params => createEdgeManually(params ?? {})),
         host.own.register('memoryGraph.edges.delete', params => deleteEdgeManually(params ?? {})),
         host.own.register('memoryGraph.reset', () => resetGraph()),
+        host.own.register('memoryGraph.mode', () => ({ mode: graphMeta.mode, features, meta: graphMeta })),
+        host.own.register('memoryGraph.setMode', params => setModeForEmptyGraph(params?.mode)),
+        host.own.register('memoryGraph.convertToStructured', () => convertToStructured()),
         // "Вызов любой функции вручную" (решено с пользователем) — тонкие
         // обёртки над уже существующими оркестрационными операциями.
         host.own.register('memoryGraph.checkAndPlace', params => checkAndPlace(String(params?.text ?? ''))),

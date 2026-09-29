@@ -148,6 +148,8 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     const retrievalHistory = signal([]);
     // Почему последний ретрив не состоялся (Ядро, `memoryGraph.retrievalStatus`, ROADMAP 5.109б) — иначе «ретрива не было» не отличить от поломки кнопки.
     const retrievalStatus = signal(null);
+    // Режим графа (MEMORY_GRAPH_TYPES_PLAN.md, этап 0): { mode, features, meta } — Ядро, `memoryGraph.mode`.
+    const graphMode = signal({ mode: 'legacy', features: {}, meta: {} });
     const retrievalHistoryIndex = signal(null);
     const busy = signal(false);
     const statusText = signal('');
@@ -183,10 +185,11 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     }
 
     async function refresh() {
-        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult, decisionLogResult, retrievalsResult, statusResult] = await Promise.all([
+        const [nodesResult, regionsResult, mergeResult, reconResult, stagingResult, decisionLogResult, retrievalsResult, statusResult, modeResult] = await Promise.all([
             call('memoryGraph.nodes'), call('memoryGraph.regions'), call('memoryGraph.mergeQueue'), call('memoryGraph.reconsolidationQueue'), call('memoryGraph.staging'), call('memoryGraph.decisionLog'), call('memoryGraph.retrievals'),
-            call('memoryGraph.retrievalStatus'),
+            call('memoryGraph.retrievalStatus'), call('memoryGraph.mode'),
         ]);
+        if (modeResult.ok) graphMode.set(modeResult.value);
         if (statusResult.ok) retrievalStatus.set(statusResult.value ?? null);
         if (nodesResult.ok) nodes.set(nodesResult.value);
         if (regionsResult.ok) regions.set(regionsResult.value);
@@ -1371,6 +1374,37 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     }
 
     /** Строка построения: две кнопки и размер чанка рядом (как строка управления в модуле Music — без заголовков и рамок). */
+    /**
+     * Режим графа: бейдж «Legacy»/«Structured»; у пустого графа — выбор режима до первого бутстрапа; у legacy-графа с нодами —
+     * кнопка «Upgrade to structured» (Ядро сначала снимает копию; обратной конвертации нет).
+     */
+    async function chooseMode(mode) {
+        const result = await call('memoryGraph.setMode', { mode });
+        if (!result.ok || result.value?.ok === false) statusText.set(`Could not change the mode: ${result.value?.error ?? result.error?.message}`);
+        await refresh();
+    }
+    async function upgradeGraph() {
+        if (!globalThis.confirm?.('Upgrade this graph to the structured model? A copy of the current graph is saved first. There is no way back except restoring that copy.')) return;
+        busy.set(true);
+        try {
+            const result = await call('memoryGraph.convertToStructured');
+            statusText.set(result.ok && result.value?.ok !== false ? 'Graph upgraded to structured.' : `Upgrade failed: ${result.value?.error ?? result.error?.message}`);
+            await refresh();
+        } finally { busy.set(false); }
+    }
+    function modeRow() {
+        return computed(() => {
+            const { mode } = graphMode();
+            const empty = nodes().length === 0;
+            return Row(
+                Badge(mode === 'structured' ? 'Structured' : 'Legacy', { tone: mode === 'structured' ? 'ok' : 'muted' }),
+                empty
+                    ? Button(mode === 'structured' ? 'Use legacy for this graph' : 'Use structured for this graph', () => chooseMode(mode === 'structured' ? 'legacy' : 'structured'))
+                    : (mode === 'legacy' ? Button('Upgrade to structured', upgradeGraph, { disabled: busy }) : null),
+            );
+        });
+    }
+
     function generationRow() {
         return Row(
             Button(computed(() => (bootstrapRunning() ? 'Building…' : 'Generate + character card')), () => runBootstrap({ includeCard: true }), { disabled: bootstrapRunning }),
@@ -1841,6 +1875,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                         // на всю панель.
                         h('p', { class: 'stme-memory-graph-hint' },
                             'Click a node to edit it. Drag a node onto a different dartboard cell to move it into that region. Drag from a node\'s edge handle to another node to connect them.'),
+                        modeRow(),
                         generationRow(),
                         progressRow(),
                         retrievalRow(),
@@ -1917,7 +1952,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             ...[
                 'memoryGraph.nodeCreated', 'memoryGraph.nodeUpdated', 'memoryGraph.nodeDeleted', 'memoryGraph.nodeMoved',
                 'memoryGraph.nodeEvicted', 'memoryGraph.nodesMerged', 'memoryGraph.nodesReconsolidated', 'memoryGraph.bootstrapped',
-                'memoryGraph.edgeCreated', 'memoryGraph.edgeDeleted', 'memoryGraph.reset',
+                'memoryGraph.edgeCreated', 'memoryGraph.edgeDeleted', 'memoryGraph.reset', 'memoryGraph.modeChanged',
                 // Сменили чат: Ядро загрузило граф нового чата — перерисовываем (и сбрасываем выбранную ноду прежнего графа).
                 'memoryGraph.loaded',
                 // Новый ретрив (Этап 5) — `refresh()` заново подтягивает `memoryGraph.retrievals`; пока пользователь
