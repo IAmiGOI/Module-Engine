@@ -4,6 +4,7 @@ import { compareRequests, analyzeStability } from '../../libraries/core/pm-cache
 import { assemblePrompt } from '../../libraries/core/pm-assemble.js';
 import { shouldRunCot, runCot, buildCotInjection, cotRecord, normalizeCot, CotStepError } from '../../libraries/core/pm-cot.js';
 import { resolveParams, setOverride, DEFAULT_OVERRIDES } from '../../libraries/core/pm-overrides.js';
+import { createPluginRegistry } from '../../libraries/core/pm-plugins.js';
 import { createPresetStore } from './presets.js';
 import { createContributionRegistry, placeContribution, resetContribution } from './contributions.js';
 
@@ -24,6 +25,7 @@ const DEFAULT_SETTINGS = { enabled: true, activePresetId: null, headroom: 0.1, f
 export function createPromptManagerCore(host, { publish = () => {}, now = () => Date.now() } = {}) {
     const store = createPresetStore(host, { now });
     const contributions = createContributionRegistry();
+    const plugins = createPluginRegistry({ onDisable: info => publish('promptManager.pluginDisabled', info) });
     let settings = { ...DEFAULT_SETTINGS };
     let captured = null; // { chat, at }
     const log = [];
@@ -109,12 +111,14 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         const chatState = await loadChatState();
         const timed = { ...(chatState.timed ?? {}) };
         const materials = await gatherMaterials(chat, info);
+        materials.macros = { ...plugins.macros(), ...materials.macros }; // наши макросы (rp-time…) важнее одноимённых из плагинов
         let changed = false;
         for (const contribution of contributions.list()) changed = placeContribution(record.preset.tree, contribution) || changed;
         if (changed) await store.save(record, { label: 'new module contribution' });
         const { params, sources } = resolveParams(record.preset.params, settings.overrides, { model: model ?? info.model, char: info.char, chatId: info.chatId });
         const result = buildRequest({ ...record.preset, params }, materials, {
-            contributions: contributions.asContext(), globals, timed, prevCut: chatState.cut ?? 0, headroom: settings.headroom,
+            contributions: contributions.asContext(), globals, timed, plugins: plugins.conditions(), transform: (messages, env) => plugins.transform(messages, env),
+            onPluginError: () => {}, prevCut: chatState.cut ?? 0, headroom: settings.headroom,
             seed: settings.freezeRandom ? (info.chatId ?? 'chat') : undefined,
         });
         if (commit) await request(host.own, 'storage.chatMemory.set', { params: { namespace: NAMESPACE, key: 'state', value: { cut: result.cut, timed } } });
@@ -309,6 +313,11 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         }),
         host.own.register('promptManager.setOverride', params => saveSettings({ overrides: setOverride(settings.overrides, params?.scope, params?.key, params?.params) })),
         host.own.register('promptManager.context', async () => { const info = await service('stPromptData.read', {}); return info ? { char: info.char, chatId: info.chatId, model: info.model } : null; }),
+        host.own.register('promptManager.plugins', () => plugins.list()),
+        host.own.register('promptManager.registerPlugin', params => plugins.register(params?.plugin)),
+        host.own.register('promptManager.unregisterPlugin', params => plugins.unregister(params?.id)),
+        host.own.register('promptManager.setPluginEnabled', params => plugins.setEnabled(params?.id, params?.enabled)),
+        host.own.register('promptManager.conditionTypes', () => plugins.conditionTypes()),
         host.own.register('promptManager.runCotNext', () => { manualCot = true; return true; }),
         host.own.register('promptManager.cotRecords', async () => (await own('storage.chatMemory.get', { namespace: NAMESPACE, key: 'cot', fallback: {} })) ?? {}),
         host.own.register('promptManager.log', () => log.map(({ withMarkers, messages, ...rest }) => rest)),

@@ -254,3 +254,19 @@ test('streaming from the preset is set in ST for the generation and given back a
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(context.chatCompletionSettings.stream_openai, false, 'the user setting is restored');
 });
+
+test('a plugin registered while running takes part in the very next request and a broken one is switched off without breaking it', async () => {
+    const { pm, send, call } = await build();
+    await pm.autoPrepare();
+    await call('promptManager.registerPlugin', { plugin: { id: 'shout', provides: { transform: messages => messages.map(m => (m.role === 'user' ? { ...m, content: m.content.toUpperCase() } : m)) } } });
+    const body = await send();
+    assert.ok(body.messages.some(m => m.role === 'user' && m.content === 'TELL ME ABOUT THE DRAGON.'));
+    await call('promptManager.registerPlugin', { plugin: { id: 'bad', provides: { transform: () => { throw new Error('boom'); } } } });
+    const again = await send();
+    assert.ok(again.messages.length > 5, 'the request still went out');
+    const list = (await call('promptManager.plugins', {})).value;
+    assert.equal(list.find(p => p.id === 'bad').enabled, false);
+    assert.equal(list.find(p => p.id === 'shout').enabled, true);
+    await call('promptManager.unregisterPlugin', { id: 'shout' });
+    assert.ok((await send()).messages.some(m => m.content === 'Tell me about the dragon.'));
+});

@@ -59,7 +59,7 @@ export function buildRequest(preset, materials, options = {}) {
         setVariable: (name, value) => engine.vars.set(name, value),
     });
 
-    const ruled = applyRules(assembled.messages, preset.rules, { substitute: engine.substitute });
+    const ruled = options.transform ? options.transform(applyRules(assembled.messages, preset.rules, { substitute: engine.substitute }), { preset, materials }) : applyRules(assembled.messages, preset.rules, { substitute: engine.substitute });
     const withPriority = ruled.map(message => {
         const block = blockById(preset, message._block);
         const priority = block?.trimPriority ?? DEFAULT_PRIORITY[message._block];

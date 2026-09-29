@@ -52,12 +52,13 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     const preset = signal(null);
     const dirty = signal(false);
     const rev = signal(0);
+    let pluginTypes = [];
     const enabled = signal(true);
     let settings = {};
     let revTimer = null;
 
     const state = {
-        preset, activeId, dirty, rev, enabled, settings: () => settings,
+        preset, activeId, dirty, rev, enabled, settings: () => settings, pluginTypes: () => pluginTypes,
         presetOptions: () => presets().map(item => ({ value: item.id, label: item.name })),
     };
 
@@ -80,6 +81,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
         const answer = await call('promptManager.settings');
         settings = answer.ok ? answer.value : {};
         enabled.set(settings.enabled !== false);
+        pluginTypes = (await call('promptManager.conditionTypes')).value ?? [];
         await reloadList();
         if (!presets.peek().length && !settings.autoPrepared) { await call('promptManager.autoPrepare'); settings = (await call('promptManager.settings')).value ?? settings; await reloadList(); }
         await loadPreset(settings.activePresetId ?? presets.peek()[0]?.id ?? '');
@@ -188,7 +190,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
             drag: createDragHandlers(position, { onDrop: dropped => { position.set(clampToViewport(dropped, { ...size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })); saveWindowState(); } }),
             onResize: next => { size.set(next); saveWindowState(); },
         },
-        h('div', { class: 'stme-pm-tabs' }, TABS.map(([key, title]) => Button(title, () => { tab.set(key); if (key === 'log') tabs.log.refresh(); if (key === 'cot') tabs.cot.refresh(); if (key === 'settings') tabs.settings.loadVersions(); }, { variant: 'default' })),
+        h('div', { class: 'stme-pm-tabs' }, TABS.map(([key, title]) => Button(title, () => { tab.set(key); if (key === 'log') tabs.log.refresh(); if (key === 'cot') tabs.cot.refresh(); if (key === 'settings') { tabs.settings.loadVersions(); tabs.settings.loadPlugins(); } }, { variant: 'default' })),
             computed(() => (status() ? Badge(status()) : null))),
         h('div', { class: 'stme-pm-body' }, TABS.map(([key]) => h('div', { class: 'stme-pm-tabpage', style: computed(() => ({ display: tab() === key ? 'block' : 'none' })) }, tabViews[key]))),
         ) : null)));
