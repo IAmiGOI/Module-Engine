@@ -77,3 +77,41 @@ test('the retrieval query is the last few messages, not only the newest line', (
     const chat = [{ mes: 'one' }, { mes: '<b>The mine</b> collapses.' }, { mes: 'sys', is_system: true }, { mes: 'ok, we go there' }];
     assert.equal(recentQueryText(chat, 2), 'The mine collapses.\nok, we go there');
 });
+
+// --- Маршрут — дерево с неявной связью «входит в регион» ---
+import { buildBeaconTree } from '../cores/memory-graph/beacons.js';
+import { renderMemoryPrompt } from '../cores/memory-graph/math.js';
+import { routeChainLabels } from '../cores/ui/memory-graph/retrieval-overlay.js';
+
+const graph = () => {
+    const make = (id, edges = []) => ({ id, label: id, content: `${id} text`, edges });
+    return {
+        cA: make('cA', [{ to: 'cB', type: 'backbone' }]), cB: make('cB', [{ to: 'cA', type: 'backbone' }]),
+        a1: make('a1'), a2: make('a2'), b1: make('b1'), lone: make('lone'),
+    };
+};
+const centerOf = id => ({ a1: 'cA', a2: 'cA', b1: 'cB' }[id] ?? null);
+
+test('beacons without any edges are still joined into one pathway through their region centers', () => {
+    const route = buildBeaconTree(graph(), ['a1', 'b1', 'a2'], { centerOf });
+    assert.deepEqual(route.standalone, []);
+    const touched = new Set(route.segments.flatMap(step => [step.from, step.to]));
+    for (const id of ['a1', 'b1', 'a2', 'cA', 'cB']) assert.ok(touched.has(id), id);
+    assert.ok(route.segments.some(step => step.type === 'in-region'));
+});
+
+test('a beacon that cannot be reached within the hop limit stays standalone', () => {
+    const route = buildBeaconTree(graph(), ['a1', 'lone'], { centerOf });
+    assert.deepEqual(route.standalone, ['lone']);
+});
+
+test('a branching pathway is written as one line per branch, in the prompt and in the window', () => {
+    const nodes = graph();
+    const route = buildBeaconTree(nodes, ['a1', 'b1', 'a2'], { centerOf });
+    const text = renderMemoryPrompt({ ...route, noise: [] }, nodes);
+    const chainLines = text.split('\n').filter(line => line.includes('-['));
+    assert.ok(chainLines.length >= 1);
+    for (const line of chainLines) assert.ok(!line.startsWith('- '));
+    const labels = routeChainLabels([{ from: 'x', to: 'y' }, { from: 'y', to: 'z' }, { from: 'x', to: 'w' }], new Map());
+    assert.deepEqual(labels, ['x', 'y', 'z', '·', 'x', 'w']);
+});

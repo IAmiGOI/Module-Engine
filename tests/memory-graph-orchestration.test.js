@@ -141,7 +141,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
         tier: 'community',
         allowedContracts: [
             'memoryGraph.settings', 'memoryGraph.configure', 'memoryGraph.nodes', 'memoryGraph.regions', 'memoryGraph.check',
-            'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging',
+            'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging', 'memoryGraph.retrievalStatus',
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
@@ -2879,4 +2879,15 @@ test('memoryGraph.bootstrapAbort stops a running build: it ends without success,
     assert.equal(await build, false);
     assert.equal(finished.at(-1).success, false);
     assert.match(finished.at(-1).reason, /stopped by user/);
+});
+
+test('a retrieval that could not run leaves its reason for the graph window instead of silently doing nothing', async () => {
+    const { graphCore, pipelineCore, caller } = buildEngine({ lorebookEntries: [] });
+    await graphCore.load();
+
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: [{ mes: 'Where is Marcus?' }] } });
+
+    const { value: status } = await call(caller, 'memoryGraph.retrievalStatus');
+    assert.equal(status.lastSkip.reason, 'no-placed-nodes');
+    assert.equal(status.lastRetrievalAt, null);
 });
