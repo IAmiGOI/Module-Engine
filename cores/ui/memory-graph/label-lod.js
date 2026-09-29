@@ -5,7 +5,7 @@
  */
 
 export const LABEL_FONT_PX = 10;
-const CHAR_WIDTH = 5.6;
+const CHAR_WIDTH = 6.4; // заглавные полужирные 9px — шире строчных
 const LABEL_HEIGHT = 13;
 
 /** Порог масштаба, с которого подписи получает каждый уровень важности: Core — всегда, крупные ноды — от `mid`, остальные — от `near`. */
