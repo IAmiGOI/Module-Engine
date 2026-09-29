@@ -1,4 +1,5 @@
 import { blockById } from './pm-preset-format.js';
+import { evaluateCondition } from './pm-conditions.js';
 
 /**
  * Чистая сборка промпта из пресета PM (PROMPT_MANAGER_PLAN.md, этап 2). Без ввода-вывода:
@@ -9,6 +10,8 @@ import { blockById } from './pm-preset-format.js';
  *               worldInfoBefore, worldInfoAfter, dialogueExamples (строка или массив сообщений) }
  *   history — сообщения чата по возрастанию времени: { role, content, … } (вставки модулей уже внутри)
  *   substitute(text) — подстановка макросов (по умолчанию как есть)
+ *   contributions — вклады модулей { id: { role, content } } для узлов `inject` (контракт chat-inject)
+ *   facts — данные для условий узлов (pm-conditions.js); setVariable(name, value) — для узлов `choice`
  *
  * Возвращает { messages, report }. report — по строке на каждый блок: что вошло и почему нет
  * (для превью «что уходит модели»). Правила сверены с реальным запросом ST 1.18 (раздел 11):
@@ -78,6 +81,28 @@ export function assemblePrompt(preset, context) {
 
     const emit = (nodes, sink) => {
         for (const node of nodes) {
+            if (node.condition && node.enabled !== false && !evaluateCondition(node.condition, ctx.facts ?? {})) {
+                report.push({ blockId: node.id ?? node.block ?? node.contribution, name: node.name, included: false, reason: 'condition' });
+                continue;
+            }
+            if (node.type === 'choice') {
+                const option = node.options?.find(o => o.id === node.selected) ?? node.options?.[0];
+                if (!node.enabled || !option) { report.push({ blockId: node.id, name: node.name, included: false, reason: 'disabled' }); continue; }
+                if (node.variable) ctx.setVariable?.(node.variable, option.value ?? option.label ?? option.id);
+                emit(option.children ?? [], sink);
+                continue;
+            }
+            if (node.type === 'inject') {
+                const contribution = ctx.contributions?.[node.contribution];
+                const text = contribution && substitute(contribution.content ?? '');
+                if (!node.enabled || isBlank(text)) { report.push({ blockId: node.contribution, name: node.name, included: false, reason: node.enabled ? 'empty' : 'disabled' }); continue; }
+                const message = { role: contribution.role ?? 'system', content: text };
+                if (node.placement?.mode === 'depth') {
+                    injections.push({ depth: node.placement.depth ?? 0, order: node.placement.order ?? 100, message: { ...message, _block: `inject:${node.contribution}` } });
+                    report.push({ blockId: node.contribution, name: node.name, included: true, role: message.role, chars: text.length, depth: node.placement.depth ?? 0 });
+                } else pushMessage(sink, message, `inject:${node.contribution}`, report, node.name ?? node.contribution);
+                continue;
+            }
             if (node.type === 'group') {
                 if (!node.enabled) { report.push({ blockId: node.id, name: node.name, included: false, reason: 'disabled' }); continue; }
                 const inner = [];
