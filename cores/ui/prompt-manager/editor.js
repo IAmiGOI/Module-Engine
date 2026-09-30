@@ -1,6 +1,7 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Button, TextInput, TextArea, NumberInput, Toggle, Row, Field, Select, Badge, EmptyState } from '../../../libraries/shared/widgets.js';
+import { Button, TextInput, TextArea, NumberInput, Toggle, Row, Field, Badge, EmptyState } from '../../../libraries/shared/widgets.js';
+import { Select } from './dropdown.js';
 import { getAt } from './tree-model.js';
 import { ConditionBuilder } from './condition-builder.js';
 import { describeCondition } from './condition-model.js';

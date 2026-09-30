@@ -1,6 +1,7 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Button, Row, Field, TextInput, TextArea, NumberInput, Toggle, Select, Badge, EmptyState } from '../../../libraries/shared/widgets.js';
+import { Button, Row, Field, TextInput, TextArea, NumberInput, Toggle, Badge, EmptyState } from '../../../libraries/shared/widgets.js';
+import { Select } from './dropdown.js';
 import { applyRules, importStRegexScripts } from '../../../libraries/core/pm-rules.js';
 
 const KINDS = [
