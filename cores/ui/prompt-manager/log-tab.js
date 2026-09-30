@@ -18,6 +18,7 @@ export function createLogTab({ call }) {
     function tree() {
         return h('div', { class: 'stme-pm-log' },
             Row(Button('Refresh', refresh)),
+            computed(() => (stability()?.verdict ? h('div', { class: stability().verdict.verdict === 'good' ? 'stme-pm-ok' : 'stme-pm-advice' }, stability().verdict.text, stability().cachedTokens !== null && stability().cachedTokens !== undefined ? ` The provider reported ${stability().cachedTokens} cached tokens.` : '') : null)),
             computed(() => {
                 const advice = stability();
                 if (!advice?.recoverableTokens) return null;

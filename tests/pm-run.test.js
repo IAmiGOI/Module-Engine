@@ -66,3 +66,11 @@ test('text rules of the preset change only the outgoing prompt and imported ST r
     assert.equal(materials.chat.at(-1).mes.includes('dragon'), true, 'the saved chat is untouched');
     assert.ok(text.includes('Dragons guard castles.'), 'the lorebook text is a prompt block, not history');
 });
+
+test('the usual informational macros are available: model, maxPrompt, lastMessageId and lastChatMessage', () => {
+    const preset = amigo();
+    preset.blocks.push({ id: 'i', role: 'system', content: 'M={{model}} P={{maxPrompt}} I={{lastMessageId}} L={{lastChatMessage}}' });
+    preset.tree.push({ type: 'item', block: 'i', enabled: true });
+    const text = buildRequest(preset, { ...materials, model: 'gpt-x' }).messages.map(m => m.content).join('\n');
+    assert.ok(text.includes('M=gpt-x P=35000 I=2 L=Hi, who are you? Tell me about the dragon.'));
+});

@@ -5,6 +5,7 @@ import { assemblePrompt } from '../../libraries/core/pm-assemble.js';
 import { shouldRunCot, runCot, buildCotInjection, cotRecord, normalizeCot, CotStepError } from '../../libraries/core/pm-cot.js';
 import { resolveParams, setOverride, DEFAULT_OVERRIDES } from '../../libraries/core/pm-overrides.js';
 import { createPluginRegistry } from '../../libraries/core/pm-plugins.js';
+import { cacheVerdict, extractCachedTokens } from '../../libraries/core/pm-cache-hints.js';
 import { createPresetStore } from './presets.js';
 import { createContributionRegistry, placeContribution, resetContribution } from './contributions.js';
 
@@ -158,7 +159,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
             const cotSteps = await runGuidedCot({ ...record.preset, params: assembled.params }, result, fresh.type);
             if (cotSteps) result.messages.push(buildCotInjection(cotSteps, { injectAs: normalizeCot(record.preset.cot).injectAs }));
             const body = settings.applyParams ? result.body : {};
-            pushLog({ at: now(), presetId: record.id, presetName: record.name, messages: result.messages, withMarkers: result.withMarkers, tokens: result.tokens.total, budget: result.budget, dropped: result.dropped, report: result.report, macros: result.macros, lore: result.lore, overBudget: result.overBudget });
+            pushLog({ at: now(), source: assembled.info.chatCompletionSource, presetId: record.id, presetName: record.name, messages: result.messages, withMarkers: result.withMarkers, tokens: result.tokens.total, budget: result.budget, dropped: result.dropped, report: result.report, macros: result.macros, lore: result.lore, overBudget: result.overBudget });
             contributions.clear();
             publish('promptManager.assembled', { tokens: result.tokens.total, dropped: result.dropped.length });
             return { ...payload, ...body, messages: result.messages };
@@ -321,7 +322,12 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         host.own.register('promptManager.runCotNext', () => { manualCot = true; return true; }),
         host.own.register('promptManager.cotRecords', async () => (await own('storage.chatMemory.get', { namespace: NAMESPACE, key: 'cot', fallback: {} })) ?? {}),
         host.own.register('promptManager.log', () => log.map(({ withMarkers, messages, ...rest }) => rest)),
-        host.own.register('promptManager.stability', () => analyzeStability(log.map(item => item.withMarkers))),
+        host.own.register('promptManager.stability', () => {
+            const last = log.at(-1);
+            return { ...analyzeStability(log.map(item => item.withMarkers)), verdict: last ? cacheVerdict(last.source, last.cache) : null, cachedTokens: last?.usageCached ?? null };
+        }),
+        /** Ответ провайдера с `usage` (например, от расширения-наблюдателя): запоминаем, сколько токенов взял кеш, у последнего запроса. */
+        host.own.register('promptManager.reportUsage', params => { const last = log.at(-1); if (last) last.usageCached = extractCachedTokens(params?.usage); return last?.usageCached ?? null; }),
         host.own.register('promptManager.preview', () => preview()),
     ];
 

@@ -29,7 +29,8 @@ export function buildRequest(preset, materials, options = {}) {
     const values = {
         user: materials.user, char: materials.char, description: materials.description, personality: materials.personality,
         scenario: materials.scenario, persona: materials.persona, summary: materials.summary ?? '', input: materials.input ?? '',
-        lastMessage: textOf(chat.at(-1)), lastChatMessage: textOf(chat.at(-1)),
+        lastMessage: textOf(chat.at(-1)), lastChatMessage: textOf(chat.at(-1)), lastMessageId: chat.length ? String(chat.length - 1) : '',
+        model: materials.model ?? '', maxPrompt: String(preset.params?.openai_max_context ?? ''), group: materials.group ?? '',
         lastUserMessage: lastOf(entry => entry.is_user), lastCharMessage: lastOf(entry => !entry.is_user && !entry.is_system),
     };
     const engine = createMacroEngine({ values, macros: materials.macros, globals: options.globals, seed: options.seed });

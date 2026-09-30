@@ -40,3 +40,7 @@
 .stme-pm-rule-field { display: flex; flex-direction: column; gap: 2px; font-size: .85em; }
 .stme-pm-rule-sentence { font-size: .85em; opacity: .8; font-style: italic; }
 .stme-pm-try { white-space: pre-wrap; padding: 6px 8px; background: var(--stme-level-2); border-radius: var(--stme-radius-sm); margin: 0; }
+.stme-cot-block { margin: 6px 0 0; padding: 4px 8px; border-left: 3px solid var(--stme-accent); background: var(--stme-level-1); border-radius: var(--stme-radius-sm); font-size: .9em; }
+.stme-cot-block pre { white-space: pre-wrap; margin: 2px 0 8px; opacity: .85; }
+.stme-cot-block summary { cursor: pointer; opacity: .8; }
+.stme-pm-ok { padding: 6px 8px; border-left: 3px solid var(--stme-ok); background: color-mix(in srgb, var(--stme-ok) 12%, transparent); margin: 6px 0; }
