@@ -3,7 +3,7 @@ import { TwoColumn } from '../../../libraries/shared/widgets.js';
 
 /** Два дерева Ядра панели: основной экран и экран настроек. */
 export function createPanelTrees(deps) {
-    const { modelsCard, macrosCard, lorebookCard, summaryCard, modulesCard, statusCard, chatViewportCard, presetCard, updatesCard, syncCard, backgroundsCard } = deps;
+    const { modelsCard, macrosCard, lorebookCard, summaryCard, modulesCard, statusCard, chatViewportCard, presetCard, updatesCard, syncCard, backgroundsCard, promptManagerCard } = deps;
 
     function tree() {
         return h('div', { class: 'stme-panel' },
@@ -41,6 +41,7 @@ export function createPanelTrees(deps) {
             // машине, им место рядом с пресетами и апдейтами, а не в основном
             // экране работы.
             statusCard(),
+            promptManagerCard(),
             chatViewportCard(),
             presetCard(),
             updatesCard(),

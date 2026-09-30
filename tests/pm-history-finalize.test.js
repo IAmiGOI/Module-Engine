@@ -19,12 +19,13 @@ test('names are prefixed or attached as a field according to the names behavior'
     assert.equal(chatToMessages(chat, { namesBehavior: 0 })[0].name, undefined);
 });
 
-test('tool invocations of a message are expanded into a call and its results kept together', () => {
-    const chat = [{ is_user: false, mes: 'ok', extra: { tool_invocations: [{ id: 'c1', name: 'Notebook', parameters: { a: 1 }, result: 'Saved' }] } }];
+test('tool invocations of a message are expanded into a call and its results kept together, and the on-screen summary text of that message is not sent — as SillyTavern 1.18 does', () => {
+    const chat = [{ is_user: false, is_system: true, mes: '<div>Notebook called</div>', extra: { tool_invocations: [{ id: 'c1', name: 'Notebook', parameters: { a: 1 }, result: 'Saved' }, { id: 'c2', name: 'Secrets', parameters: '{}', result: '' }] } }];
     const messages = chatToMessages(chat);
-    assert.deepEqual(messages.map(m => m.role), ['assistant', 'assistant', 'tool']);
-    assert.equal(messages[1].tool_calls[0].function.name, 'Notebook');
-    assert.equal(messages[2].tool_call_id, 'c1');
+    assert.deepEqual(messages.map(m => m.role), ['assistant', 'tool', 'tool']);
+    assert.deepEqual(messages[0].tool_calls.map(call => [call.id, call.function.name, call.function.arguments]), [['c1', 'Notebook', '{"a":1}'], ['c2', 'Secrets', '{}']]);
+    assert.deepEqual(messages.slice(1).map(m => [m.tool_call_id, m.content]), [['c1', 'Saved'], ['c2', '[No content]']]);
+    assert.ok(!messages.some(m => String(m.content).includes('Notebook called')));
 });
 
 test('macros in history text are substituted with the given function', () => {

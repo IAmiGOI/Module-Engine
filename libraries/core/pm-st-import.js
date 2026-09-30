@@ -22,8 +22,13 @@ function importPrompt(raw) {
     return block;
 }
 
-/** Основной список порядка: самый длинный (у ST это «глобальный» 100001), при равенстве — последний. */
+/** Глобальный список Chat Completion: ST 1.18 читает только его (openai.js, `promptOrder: { strategy: 'global', dummyId: 100001 }`). */
+const ST_GLOBAL_ORDER_ID = 100001;
+
+/** Основной список порядка: 100001, как у ST; нет его — самый длинный, при равенстве последний. */
 function pickPrimaryOrder(lists) {
+    const global = lists.find(list => Number(list.character_id) === ST_GLOBAL_ORDER_ID);
+    if (global) return global;
     let best = null;
     for (const list of lists) if (!best || list.order.length >= best.order.length) best = list;
     return best;

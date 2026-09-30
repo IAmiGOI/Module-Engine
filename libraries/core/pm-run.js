@@ -7,6 +7,7 @@ import { summarizeTokens } from './pm-tokens.js';
 import { finalizeMessages, paramsToBody } from './pm-finalize.js';
 import { blockById } from './pm-preset-format.js';
 import { applyRules } from './pm-rules.js';
+import { joinWrappers } from './pm-wrap-join.js';
 
 /** Приоритет обрезки по умолчанию для служебных маркеров: ниже 100 — можно резать (лорбук и примеры раньше всего). */
 const DEFAULT_PRIORITY = { worldInfoBefore: 40, worldInfoAfter: 40, dialogueExamples: 30 };
@@ -69,13 +70,14 @@ export function buildRequest(preset, materials, options = {}) {
     const reserved = params.openai_max_tokens ?? 0;
     const budget = options.budgetOverride ?? Math.max(maxContext - reserved, 0);
     const trimmed = trimMessages(withPriority, { budget, headroom: options.headroom ?? 0.1, prevCut: options.prevCut ?? 0 });
-    const messages = finalizeMessages(trimmed.messages, { params, substitute: engine.substitute });
+    const joined = joinWrappers(trimmed.messages); // группы с обёрткой — одним сообщением, после обрезки (pm-wrap-join.js)
+    const messages = finalizeMessages(joined, { params, substitute: engine.substitute });
     return {
         messages, body: paramsToBody(params), report: assembled.report, dropped: trimmed.dropped, cut: trimmed.cut,
         tokens: summarizeTokens(trimmed.messages), overBudget: trimmed.overBudget, budget,
         lore: { activated: lore.activated, skipped: lore.skipped },
         macros: { usedRandom: engine.state.usedRandom, unresolved: [...new Set(engine.state.unresolved)] },
-        withMarkers: trimmed.messages,
+        withMarkers: joined,
         /** Всё, что нужно, чтобы собрать промпты шагов Guided CoT теми же макросами и условиями. */
         stepEnv: { substitute: engine.substitute, facts, contributions: options.contributions ?? {}, setVariable: (name, value) => engine.vars.set(name, value) },
     };

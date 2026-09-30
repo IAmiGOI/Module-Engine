@@ -2,7 +2,7 @@ import { h } from './tree.js';
 import { signal, computed } from './reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { createDragHandlers, clampToViewport } from '../../libraries/shared/draggable.js';
-import { FloatingPanel, Button, Badge } from '../../libraries/shared/widgets.js';
+import { FloatingPanel } from '../../libraries/shared/widgets.js';
 import { createOrderTab } from './prompt-manager/order-tab.js';
 import { createPreviewTab } from './prompt-manager/preview-tab.js';
 import { createLogTab } from './prompt-manager/log-tab.js';
@@ -12,10 +12,12 @@ import { createRulesTab } from './prompt-manager/rules-tab.js';
 import { createCotBlocks } from './prompt-manager/cot-blocks.js';
 
 /**
- * Окно Prompt Manager (PROMPT_MANAGER_PLAN.md, «Интерфейс»): порядок промптов, предпросмотр «что уйдёт модели»,
- * журнал запросов с кешем префикса, настройки и параметры генерации. Форма — как у остальных окон движка (свой
- * `official`-корень через `uiEngine.mount()`); читает и пишет ТОЛЬКО через контракты `promptManager.*`.
- * Открывается кнопкой ST «Prompt Manager» (перехват — `services/st-pm-button.js`) и командой `show()`.
+ * Prompt Manager (PROMPT_MANAGER_PLAN.md, «Интерфейс»): порядок промптов, предпросмотр «что уйдёт модели»,
+ * журнал запросов с кешем префикса, настройки и параметры генерации; читает и пишет ТОЛЬКО через контракты
+ * `promptManager.*`. Своё плавающее окно, открывается ИКОНКОЙ ST «AI Response Configuration» — сама иконка
+ * перехвачена (`services/st-pm-ui.js`), штатная панель ST под ней не открывается вообще (решение владельца,
+ * ROADMAP.md 5.141: никакого нативного окна ST рядом ни в каком виде, ни целиком, ни частично). Любую вкладку
+ * можно вынести в отдельное плавающее окно.
  */
 const MODULE_UI_NAMESPACE = 'core.ui.promptManager';
 const WINDOW_KEY = 'window';
@@ -171,20 +173,6 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     };
     const tabViews = Object.fromEntries(Object.entries(tabs).map(([key, value]) => [key, value.tree()]));
 
-    async function saveWindowState() {
-        await call('storage.settings.set', { namespace: MODULE_UI_NAMESPACE, key: WINDOW_KEY, value: { visible: visible.peek(), collapsed: collapsed.peek(), position: position.peek(), size: size.peek() } });
-    }
-
-    async function loadWindowState() {
-        const result = await call('storage.settings.get', { namespace: MODULE_UI_NAMESPACE, key: WINDOW_KEY, fallback: {} });
-        const saved = (result.ok ? result.value : null) ?? {};
-        visible.set(Boolean(saved.visible));
-        collapsed.set(Boolean(saved.collapsed));
-        const savedSize = saved.size ?? {};
-        size.set({ width: savedSize.width > 0 ? savedSize.width : DEFAULT_SIZE.width, height: savedSize.height > 0 ? savedSize.height : DEFAULT_SIZE.height });
-        position.set(saved.position?.left === undefined ? {} : clampToViewport(saved.position, { ...size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 }));
-    }
-
     /** Вкладка в отдельное окно (несколько окон по блокам, решение владельца): у окна свои положение и размер, состояние общее. */
     function popOut(key) {
         const index = popoutCounter++;
@@ -200,24 +188,71 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
             onToggle: value => entry.collapsed.set(value), onClose: () => closePopout(entry.id),
             drag: createDragHandlers(entry.position, { onDrop: dropped => entry.position.set(clampToViewport(dropped, { ...entry.size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })) }),
             onResize: next => entry.size.set(next),
-        }, h('div', { class: 'stme-pm-body' }, tabs[entry.key].tree()));
+        }, h('div', { class: 'stme-panel stme-pm-body' }, tabs[entry.key].tree()));
     }
+
+    function selectTab(key) {
+        tab.set(key);
+        if (key === 'log') tabs.log.refresh();
+        if (key === 'cot') tabs.cot.refresh();
+        if (key === 'settings') { tabs.settings.loadVersions(); tabs.settings.loadPlugins(); }
+    }
+
+    const tabButton = ([key, title]) => h('button', {
+        type: 'button', 'on:click': () => selectTab(key),
+        class: computed(() => (tab() === key ? 'menu_button stme-pm-tab stme-pm-tab-active' : 'menu_button stme-pm-tab')),
+    }, title);
+
+    async function saveWindowState() {
+        await call('storage.settings.set', { namespace: MODULE_UI_NAMESPACE, key: WINDOW_KEY, value: { visible: visible.peek(), collapsed: collapsed.peek(), position: position.peek(), size: size.peek() } });
+    }
+
+    /**
+     * Никогда не открывавшееся окно (нет сохранённой позиции) ставится явно у верхнего правого края, а не отдаётся
+     * CSS-анкеру `right/bottom` — тот якорит от НИЖНЕГО правого угла и вместе с шириной окна (980px) на обычном экране
+     * оставлял его от края до края, наползая на левую колонку иконок ST/движка (владелец: «в левом верхнем углу,
+     * частично под панелью»). Отступ слева не меньше 72px — там как раз эта колонка.
+     */
+    function defaultPosition(currentSize) {
+        const viewportWidth = globalThis.innerWidth ?? 1920;
+        return { left: Math.max(72, viewportWidth - currentSize.width - 24), top: 60 };
+    }
+
+    async function loadWindowState() {
+        const result = await call('storage.settings.get', { namespace: MODULE_UI_NAMESPACE, key: WINDOW_KEY, fallback: {} });
+        const saved = (result.ok ? result.value : null) ?? {};
+        visible.set(Boolean(saved.visible));
+        collapsed.set(Boolean(saved.collapsed));
+        const savedSize = saved.size ?? {};
+        size.set({ width: savedSize.width > 0 ? savedSize.width : DEFAULT_SIZE.width, height: savedSize.height > 0 ? savedSize.height : DEFAULT_SIZE.height });
+        const viewport = { viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 };
+        position.set(saved.position?.left === undefined
+            ? clampToViewport(defaultPosition(size.peek()), { ...size.peek(), ...viewport })
+            : clampToViewport(saved.position, { ...size.peek(), ...viewport }));
+    }
+
+    // Окно — только редактор; включение/выключение самой сборки живёт в настройках движка (владелец: «убери кнопку
+    // включения PM из самого его окна и помести в настройки движка», `cores/ui/panel-cards/prompt-manager-card.js`).
+    // Выключенный PM тут не прячет вкладки — правка пресета не зависит от того, использует ли его сборка прямо сейчас.
+    const windowBody = [
+        h('div', { class: 'stme-pm-tabs' }, TABS.map(tabButton),
+            h('button', { type: 'button', class: 'menu_button stme-pm-tab stme-pm-popout', title: 'Open this tab in its own window', 'on:click': () => popOut(tab.peek()) }, '⧉'),
+            computed(() => (status() ? h('span', { class: 'stme-pm-status' }, status()) : null))),
+        computed(() => (enabled() ? null : h('p', { class: 'stme-pm-warning' }, 'Prompt Manager is off in engine settings — SillyTavern builds the request itself, edits here won\'t apply until it\'s turned back on.'))),
+        h('div', { class: 'stme-pm-body' }, TABS.map(([key]) => h('div', { class: 'stme-pm-tabpage', style: computed(() => ({ display: tab() === key ? 'block' : 'none' })) }, tabViews[key]))),
+    ];
 
     function tree() {
         return h('div', { class: 'stme-pm-root' }, computed(() => popouts().map(popoutWindow)), computed(() => (visible() ? FloatingPanel('Prompt Manager', {
-            position, size, collapsed, className: 'stme-pm-window', minWidth: 520, minHeight: 320,
+            position, size, collapsed, className: 'stme-pm-window', minWidth: 420, minHeight: 280,
             onToggle: value => { collapsed.set(value); saveWindowState(); },
             onClose: () => { visible.set(false); saveWindowState(); },
             drag: createDragHandlers(position, { onDrop: dropped => { position.set(clampToViewport(dropped, { ...size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })); saveWindowState(); } }),
             onResize: next => { size.set(next); saveWindowState(); },
-        },
-        h('div', { class: 'stme-pm-tabs' }, TABS.map(([key, title]) => Button(title, () => { tab.set(key); if (key === 'log') tabs.log.refresh(); if (key === 'cot') tabs.cot.refresh(); if (key === 'settings') { tabs.settings.loadVersions(); tabs.settings.loadPlugins(); } }, { variant: 'default' })),
-            Button('Pop out this tab', () => popOut(tab.peek())),
-            computed(() => (status() ? Badge(status()) : null))),
-        h('div', { class: 'stme-pm-body' }, TABS.map(([key]) => h('div', { class: 'stme-pm-tabpage', style: computed(() => ({ display: tab() === key ? 'block' : 'none' })) }, tabViews[key]))),
-        ) : null)));
+        }, h('div', { class: 'stme-panel stme-pm-window-body' }, windowBody)) : null)));
     }
 
+    /** Открывается ИКОНКОЙ ST, перехваченной сервисом (`stPmUi.install`) — штатная панель ST под ней не появляется вообще. */
     async function open() {
         await loadWindowState();
         const finalUi = mount(tree());
@@ -227,9 +262,12 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
 
     function show() { visible.set(true); saveWindowState(); refresh(); }
     function hide() { visible.set(false); saveWindowState(); }
+    /** Иконка ST переоткрывает окно — теперь тоже закрывает (владелец: «кнопка... не закрывает его»). */
+    function toggle() { if (visible.peek()) hide(); else show(); }
 
     const cotBlocks = createCotBlocks(host);
-    host.events.subscribe('promptManager.openRequested', () => show());
+    host.events.subscribe('promptManager.openRequested', () => toggle());
+    host.events.subscribe('promptManager.prepared', () => { if (visible.peek()) refresh().catch(() => {}); });
     /** Малый вид Guided CoT: строка «thinking: step 2 of 4» уведомлением; расширенный вид — в окне на вкладке CoT. */
     host.events.subscribe('promptManager.cotProgress', payload => {
         if (payload?.phase === 'done' && payload.display === 'extended') request(host.own, 'ui.notify', { params: { tone: 'muted', text: `${payload.name || `Step ${payload.index + 1}`}: ${String(payload.text ?? '').slice(0, 300)}` } });
@@ -238,5 +276,5 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     host.events.subscribe('promptManager.cotFailed', payload => request(host.own, 'ui.notify', { params: { tone: 'error', text: payload?.message ?? 'Guided CoT failed.' } }));
     host.events.subscribe('promptManager.unsupported', payload => request(host.own, 'ui.notify', { params: { tone: 'error', text: payload?.reason ?? 'Prompt Manager is off.' } }));
 
-    return { tree, open, show, hide, cotBlocks, popOut, popouts, refresh, state, actions, isVisible: () => visible.peek(), stop() {} };
+    return { tree, open, show, hide, cotBlocks, popOut, popouts, refresh, state, actions, selectTab, isVisible: () => visible.peek(), stop() {} };
 }

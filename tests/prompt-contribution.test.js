@@ -28,10 +28,10 @@ test('when the Prompt Manager does not take over the old insertion into the chat
     assert.equal(legacy, 1);
 });
 
-test('empty content withdraws an earlier contribution instead of sending nothing new', async () => {
+test('empty content still contributes — the module\'s place stays in the preset tree even with nothing to say yet (owner: "модуль должен публиковать своё место даже если он пустой")', async () => {
     const { call, calls } = fakeCall({ takes: true });
-    await deliverToPrompt({ call, contribution: { id: 'notebook', content: '  ' } });
-    assert.deepEqual(calls.at(-1), ['promptManager.retract', { id: 'notebook' }]);
+    assert.equal(await deliverToPrompt({ call, contribution: { id: 'notebook', content: '  ' } }), 'contributed');
+    assert.deepEqual(calls.at(-1), ['promptManager.contribute', { id: 'notebook', content: '  ' }]);
 });
 
 test('a broken or missing Prompt Manager never breaks the module: it falls back to the old insertion', async () => {

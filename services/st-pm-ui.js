@@ -1,48 +1,66 @@
 /**
- * Сервис родного окна Prompt Manager у ST: прячет его и ставит вместо него кнопку «Open Prompt Manager (Module Engine)».
- * Единственное место, знающее разметку ST для этого (`#completion_prompt_manager`, версия ST 1.18+).
- * Разметка меняется между версиями, поэтому если контейнер не найден, сервис честно отвечает `{ found: false }` —
- * ядро Prompt Manager тогда выключается с предупреждением (решение владельца: запасного варианта нет).
+ * Сервис места родного Prompt Manager у ST — решение владельца (после реального фото: даже сжатая иконка
+ * оставляла ПОЛНУЮ левую панель ST «AI Response Configuration» доступной — пресеты, сэмплер, Seed, Quick/Utility
+ * Prompts и порядок промптов, всё нативное и вживую редактируемое рядом с нашим PM): «отключи кнопку показа
+ * панели ST и подключи нашу кнопку вместо неё». Значит НЕ прячется один под-блок — перехватывается САМА иконка
+ * открытия панели (`#ai-config-button`), и панель ST (`#left-nav-panel`) не открывается через неё вообще; открытие
+ * зовёт наш обработчик вместо штатного тоггла. Панель заодно прячется CSS насовсем — защита от другого пути её
+ * открыть (сохранённое состояние «закреплена открытой» между сессиями, `RossAscends-mods.js`, восстанавливается
+ * БЕЗ клика).
  *
- *   stPmUi.install({ handler })  — спрятать родное окно, кнопка зовёт handler; { found }
- *   stPmUi.uninstall()           — вернуть родное окно как было
+ * Перехват — на `document`, в фазе ПОГРУЖЕНИЯ (`capture: true`): у ST обработчик навешан `$('.drawer-toggle').on
+ * ('click', ...)` ПРЯМО на иконку при старте страницы, раньше нашего кода; слушатель на том же узле сработал бы
+ * ПОСЛЕ него (порядок регистрации, а не фаза), поэтому перехват нужен на предке — там погружение идёт раньше
+ * пузырька у цели, независимо от порядка регистрации. `stopImmediatePropagation()` останавливает событие ДО
+ * штатного обработчика — панель не успевает получить класс открытия.
+ *
+ *   stPmUi.install({ onOpen }) — перехватить иконку (вместо штатного тоггла зовёт onOpen), спрятать панель ST насовсем; { found }
+ *   stPmUi.uninstall()         — снять перехват и спрятанность (полный демонтаж нашего UI)
  */
-const CONTAINER_ID = 'completion_prompt_manager';
-const BUTTON_ID = 'stme-pm-open';
+const BUTTON_ID = 'ai-config-button';
+const PANEL_ID = 'left-nav-panel';
 const STYLE_ID = 'stme-pm-suppress';
 
 export function registerStPmUiService(bus, { document: doc = globalThis.document } = {}) {
-    let handler = null;
+    let onOpenHandler = null;
+    let listener = null;
+
+    function toggleOf() {
+        return doc?.getElementById?.(BUTTON_ID)?.querySelector?.('.drawer-toggle') ?? doc?.getElementById?.(BUTTON_ID) ?? null;
+    }
 
     function install(params) {
-        handler = params?.handler ?? null;
-        const container = doc?.getElementById?.(CONTAINER_ID);
-        if (!container) return { found: false };
+        onOpenHandler = params?.onOpen ?? null;
+        const toggle = toggleOf();
+        if (!toggle) return { found: false };
         if (!doc.getElementById(STYLE_ID)) {
             const style = doc.createElement('style');
             style.id = STYLE_ID;
-            style.textContent = `#${CONTAINER_ID} > *:not(#${BUTTON_ID}) { display: none !important; }`;
+            style.textContent = `#${PANEL_ID} { display: none !important; }`;
             doc.head.append(style);
         }
-        if (!doc.getElementById(BUTTON_ID)) {
-            const button = doc.createElement('button');
-            button.id = BUTTON_ID;
-            button.type = 'button';
-            button.className = 'menu_button';
-            button.textContent = 'Open Prompt Manager (Module Engine)';
-            button.addEventListener('click', () => handler?.());
-            container.prepend(button);
+        if (!listener) {
+            listener = event => {
+                if (!event.target?.closest?.(`#${BUTTON_ID}`)) return;
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                onOpenHandler?.();
+            };
+            doc.addEventListener('click', listener, true);
         }
         return { found: true };
     }
 
     function uninstall() {
         doc?.getElementById?.(STYLE_ID)?.remove();
-        doc?.getElementById?.(BUTTON_ID)?.remove();
-        handler = null;
+        if (listener) { doc.removeEventListener('click', listener, true); listener = null; }
+        onOpenHandler = null;
         return true;
     }
 
-    const unregisters = [bus.register('stPmUi.install', params => install(params)), bus.register('stPmUi.uninstall', () => uninstall())];
+    const unregisters = [
+        bus.register('stPmUi.install', params => install(params)),
+        bus.register('stPmUi.uninstall', () => uninstall()),
+    ];
     return { install, uninstall, unregister: () => { for (const unregister of unregisters) unregister(); } };
 }

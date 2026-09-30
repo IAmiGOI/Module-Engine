@@ -427,6 +427,25 @@ test('the beforeSend stage contributes nothing when there is no summary yet', as
     assert.deepEqual(outgoing, [{ mes: 'a' }]);
 });
 
+test('with no summary yet, Prompt Manager still gets Summaries\' PLACE, just empty — owner: "модуль должен публиковать своё место даже если он пустой" (before this, Summaries was invisible in the PM tree until the first fold)', async () => {
+    const { engine, caller, summaryCore, pipelineCore } = buildEngine({ chat: makeChat(2) });
+    const contributed = [];
+    const pm = engine.registerCaller('core.promptManager', 'cores', { tier: 'official' });
+    pm.own.register('promptManager.takesOver', () => true);
+    pm.own.register('promptManager.contribute', params => { contributed.push(params); return true; });
+    await summaryCore.load();
+    await call(caller, 'summary.configure', { levels: [{ batchSize: 3 }], protectedWindow: 2 });
+    await call(caller, 'summary.check');
+    const outgoing = [{ mes: 'a' }];
+
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+
+    assert.deepEqual(outgoing, [{ mes: 'a' }], 'chat untouched — went through PM, not an unshift');
+    assert.equal(contributed.length, 1);
+    assert.equal(contributed[0].id, 'summary');
+    assert.equal(contributed[0].content, '');
+});
+
 test('the beforeSend stage CUTS hidden ToolCall messages covered by a summary — ST keeps them in the prompt otherwise', async () => {
     // Живая проблема 11.09: ST'овский фильтр `is_system` имеет исключение для
     // тул-коллов (`script.js`: `!x.is_system || (canUseTools &&

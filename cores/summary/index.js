@@ -665,6 +665,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     async function injectIntoPrompt({ chat } = {}) {
         if (!Array.isArray(chat)) return true;
         const active = activeSummaries(summaries);
+        let messages = [];
         if (active.length) {
             // Вырезание скрытых тул-коллов СТАРЕЕ защищённого окна (позиция
             // считается ОТ КОНЦА — решение архитектора 11.09), затем unshift
@@ -677,12 +678,14 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
                 return !(isToolCall && message.is_system && index < windowStart);
             });
             if (pruned.length !== chat.length) chat.splice(0, chat.length, ...pruned);
-            const messages = active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: formatSummaryMessage(record) }));
-            await deliverToPrompt({
-                call, contribution: { id: 'summary', name: 'Summaries', role: 'assistant', content: messages.map(message => message.mes).join('\n\n'), defaultPlacement: 'before-history', stable: true },
-                legacy: () => chat.unshift(...messages),
-            });
+            messages = active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: formatSummaryMessage(record) }));
         }
+        // Место публикуется ВСЕГДА, даже без активных саммари (владелец: «модуль должен публиковать своё место
+        // даже если он пустой») — иначе до первой свёртки истории Summaries нигде не было видно в дереве PM.
+        await deliverToPrompt({
+            call, contribution: { id: 'summary', name: 'Summaries', role: 'assistant', content: messages.map(message => message.mes).join('\n\n'), defaultPlacement: 'before-history', stable: true },
+            legacy: () => { if (messages.length) chat.unshift(...messages); },
+        });
         return true;
     }
 

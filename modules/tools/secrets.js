@@ -317,12 +317,14 @@ export function createSecretsModule(host) {
      * ничего не трогает.
      */
     async function injectIntoPrompt({ chat } = {}) {
-        const list = secrets.peek();
-        if (!Array.isArray(chat) || !list.length) return true;
-        const text = buildSecretsPrompt(list);
+        if (!Array.isArray(chat)) return true;
+        const text = buildSecretsPrompt(secrets.peek());
+        // Место публикуется ВСЕГДА, даже пустым (владелец: «модуль должен публиковать своё место даже если он
+        // пустой») — иначе пустой список секретов был бы невидим в дереве PM. Старая вставка в `chat` (PM выключен)
+        // — только когда реально есть что вставлять, как и раньше.
         await deliverToPrompt({
             call, contribution: { id: 'secrets', name: 'Secrets', role: 'system', content: text, defaultPlacement: { mode: 'depth', depth: injectionDepth.peek(), order: 100 } },
-            legacy: () => chat.splice(computeInsertIndex(chat.length, injectionDepth.peek()), 0, { is_user: false, is_system: true, name: 'Secrets', mes: text }),
+            legacy: () => { if (text) chat.splice(computeInsertIndex(chat.length, injectionDepth.peek()), 0, { is_user: false, is_system: true, name: 'Secrets', mes: text }); },
         });
         return true;
     }

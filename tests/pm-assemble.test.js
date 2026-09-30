@@ -19,11 +19,12 @@ test('the real preset assembles in the same order as the real ST 1.18 request fr
     const s = short(messages);
     const at = text => s.findIndex(line => line.includes(text));
     const order = ['<settings>', '</settings>', '<chat examples>', '</chat examples>', '<info>', 'DESC', 'PERS', '18 yo Male', '</info>', 'LORE',
-        '[Start a new Chat]', '<char instructions>', '</char instructions>', 'assistant:memory graph', 'assistant:greeting', 'Hi, who are you?', 'Saved',
+        '[Start a new Chat]', 'assistant:memory graph', 'assistant:greeting', 'Hi, who are you?', 'Saved',
         '<need guidelines>', '<goal guidelines>', '<logic>', '<narration>', '<CoT>', '</CoT>'];
     const positions = order.map(at);
     assert.ok(positions.every(p => p >= 0), `missing: ${order.filter((_, i) => positions[i] < 0)}`);
     assert.deepEqual([...positions].sort((a, b) => a - b), positions, `wrong order: ${s.join(' | ')}`);
+    assert.equal(at('<char instructions>'), -1, 'the depth-8 <char instructions> group is empty in this preset, so it sends nothing (ST sent the bare tag pair)');
 });
 
 test('empty prompts and empty groups send no messages at all', () => {
@@ -54,6 +55,16 @@ test('injections of the same depth keep ascending order and a depth beyond the h
     });
     const { messages } = assemblePrompt(preset, { history: [{ role: 'user', content: 'x' }, { role: 'assistant', content: 'y' }] });
     assert.deepEqual(messages.map(m => m.content), ['FAR', 'x', 'A', 'B', 'y']);
+});
+
+test('injections of the same depth and order go assistant, then user, then system — the role order SillyTavern 1.18 uses (system lands closest to the end)', () => {
+    const p = (identifier, role, order) => ({ identifier, role, content: identifier.toUpperCase(), injection_position: 1, injection_depth: 0, injection_order: order });
+    const preset = stToPreset({
+        prompts: [{ identifier: 'h', marker: true }, p('sys', 'system', 100), p('usr', 'user', 100), p('ast', 'assistant', 100), p('early', 'system', 50)],
+        prompt_order: [{ character_id: 1, order: ['h', 'sys', 'usr', 'ast', 'early'].map(identifier => ({ identifier, enabled: true })) }],
+    });
+    const { messages } = assemblePrompt(preset, { history: [{ role: 'user', content: 'x' }] });
+    assert.deepEqual(messages.map(m => m.content), ['x', 'EARLY', 'AST', 'USR', 'SYS']);
 });
 
 test('a disabled block is skipped and reported and macros are substituted by the given function', () => {

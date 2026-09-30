@@ -261,11 +261,31 @@ test('a USER tracker field update calls the macro-registration hook; a SYSTEM tr
         { id: 'engineStats', kind: 'system', workerId: 'fast', fields: [{ name: 'turns', prompt: '', default: 0 }] },
     ]);
     const module = engine.registerCaller('module.ui', 'modules', { tier: 'official' });
+    registeredMacros.length = 0; // объявления при настройке — отдельный тест ниже
 
     await new Promise(resolve => module.cores.subscribe('tracking.set', { params: { trackerId: 'char', fieldName: 'health', value: 50 } }, resolve));
     await new Promise(resolve => module.cores.subscribe('tracking.set', { params: { trackerId: 'engineStats', fieldName: 'turns', value: 1 } }, resolve));
 
     assert.deepEqual(registeredMacros, [{ trackerId: 'char', fieldName: 'health', value: 50 }]);
+});
+
+test('user tracker macros are registered right away from saved values on chat load and from defaults on configure, not only after the first model poll — otherwise SillyTavern left {{rp-time_year}} as raw text after a page reload and kept the previous chat\'s value after a chat switch', async () => {
+    const { engine, trackingCore, registeredMacros } = buildEngine();
+    let saved = {};
+    engine.registerCaller('core.memory', 'cores', { tier: 'official' }).own.register('storage.chatMemory.get', () => saved);
+
+    trackingCore.configureTrackers([
+        { id: 'char', kind: 'user', workerId: 'fast', fields: [{ name: 'health', prompt: '', default: 100 }] },
+        { id: 'engineStats', kind: 'system', workerId: 'fast', fields: [{ name: 'turns', prompt: '', default: 0 }] },
+    ]);
+    assert.deepEqual(registeredMacros, [{ trackerId: 'char', fieldName: 'health', value: 100 }]);
+
+    registeredMacros.length = 0;
+    saved = { 'char:health': 42 };
+    engine.events.emit('st.chatChanged', {});
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    assert.deepEqual(registeredMacros, [{ trackerId: 'char', fieldName: 'health', value: 42 }]);
 });
 
 test('tracking.value/set/fields/poll against an unrecognized trackerId fail through the normal error envelope', async () => {

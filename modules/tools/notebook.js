@@ -316,12 +316,14 @@ export function createNotebookSubmodule(host) {
      * заметку из воздуха.
      */
     async function injectIntoPrompt({ chat } = {}) {
-        const list = notes.peek();
-        if (!Array.isArray(chat) || !list.length) return true;
-        const text = buildNotebookPrompt(list);
+        if (!Array.isArray(chat)) return true;
+        const text = buildNotebookPrompt(notes.peek());
+        // Место публикуется ВСЕГДА, даже пустым (владелец: «модуль должен публиковать своё место даже если он
+        // пустой») — иначе пустой блокнот был бы невидим в дереве PM, и его негде занять место заранее. Старая
+        // вставка в `chat` (PM выключен) — только когда реально есть что вставлять, как и раньше.
         await deliverToPrompt({
             call, contribution: { id: 'notebook', name: 'Notebook', role: 'system', content: text, defaultPlacement: { mode: 'depth', depth: injectionDepth.peek(), order: 100 } },
-            legacy: () => chat.splice(computeInsertIndex(chat.length, injectionDepth.peek()), 0, { is_user: false, is_system: true, name: 'Notebook', mes: text }),
+            legacy: () => { if (text) chat.splice(computeInsertIndex(chat.length, injectionDepth.peek()), 0, { is_user: false, is_system: true, name: 'Notebook', mes: text }); },
         });
         return true;
     }

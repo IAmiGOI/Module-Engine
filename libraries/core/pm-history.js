@@ -2,7 +2,8 @@
  * История чата ST → сообщения Chat Completion (PROMPT_MANAGER_PLAN.md, раздел 11.1).
  * Чистая функция над массивом `chat` ST. Каждое сообщение получает `_hid` — стабильный номер в чате
  * (нужен обрезке и кешу). Вызовы инструментов (`extra.tool_invocations`) разворачиваются в пару
- * `assistant + tool_calls` → `tool`-результаты, как их отдаёт ST 1.13+.
+ * `assistant + tool_calls` → `tool`-результаты, как их отдаёт ST 1.13+. Как у ST 1.18 (openai.js, `continue` после вызовов):
+ * текст такой записи НЕ уходит — это экранная сводка вызова (`tool-calling.js`), а пустой результат уходит как `[No content]`.
  *
  * namesBehavior (параметр пресета `names_behavior`): -1 и 0 — имена не добавляем; 1 — префикс `Имя: ` в тексте;
  * 2 — поле `name` сообщения. Сообщения `is_system` (вставки модулей и подсказки) идут как assistant, как в реальном
@@ -14,7 +15,7 @@ function toolMessages(invocations, hid) {
     for (const item of invocations ?? []) {
         const id = item.id ?? `call_${hid}_${calls.length}`;
         calls.push({ id, type: 'function', function: { name: item.name, arguments: typeof item.parameters === 'string' ? item.parameters : JSON.stringify(item.parameters ?? {}) } });
-        results.push({ role: 'tool', content: String(item.result ?? ''), tool_call_id: id, _hid: hid });
+        results.push({ role: 'tool', content: String(item.result || '[No content]'), tool_call_id: id, _hid: hid });
     }
     return calls.length ? [{ role: 'assistant', content: '', tool_calls: calls, _hid: hid }, ...results] : [];
 }
@@ -26,7 +27,7 @@ export function chatToMessages(chat, { namesBehavior = 0, substitute = text => t
         const role = entry?.is_user ? 'user' : 'assistant';
         const tools = toolMessages(entry?.extra?.tool_invocations, index);
         if (!text.trim() && !tools.length) return;
-        if (text.trim()) {
+        if (text.trim() && !tools.length) {
             const message = { role, content: text, _hid: index };
             const name = entry?.name;
             if (name && namesBehavior === 1) message.content = `${name}: ${text}`;
