@@ -27,7 +27,7 @@
 .stme-pm-row:active { cursor: grabbing; }
 .stme-pm-selected { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
 .stme-pm-off .stme-pm-label { opacity: .45; text-decoration: line-through; }
-.stme-pm-kind-group { font-weight: 600; }
+.stme-pm-kind-group { font-weight: 700; text-transform: uppercase; font-size: .82em; letter-spacing: .04em; background: var(--stme-level-2); border-color: color-mix(in srgb, var(--stme-accent) 35%, var(--stme-border)); border-left: 3px solid var(--stme-accent); }
 .stme-pm-kind-marker .stme-pm-label { color: var(--stme-accent); }
 .stme-pm-kind-module .stme-pm-label { color: var(--stme-ok-bright); }
 .stme-pm-kind-note { font-style: italic; opacity: .8; }

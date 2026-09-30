@@ -117,9 +117,8 @@ export function createOrderTab({ state, actions }) {
             ),
             h('div', { class: 'stme-pm-toolbar' },
                 Button('+ Prompt', addPrompt), Button('+ Group', addGroup), Button('+ Note', addNote),
-                Button('Import from ST file', () => actions.pickFile('st')), Button('Import ME file', () => actions.pickFile('native')),
-                Button('Export for ST', () => actions.exportSt()), Button('Export ME', () => actions.exportNative()),
-                Button('Duplicate', () => actions.duplicate()), Button('Delete', () => actions.remove(), { variant: 'danger' }),
+                Button('Import from ST file', () => actions.pickFile('st')), Button('Export for ST', () => actions.exportSt()),
+                Button('Delete', () => actions.remove(), { variant: 'danger' }),
             ),
             computed(() => {
                 const preset = state.preset();
