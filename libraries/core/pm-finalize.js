@@ -30,8 +30,11 @@ function resolveReasoningEffort(value) {
 export function paramsToBody(params) {
     const body = {};
     for (const [key, target] of Object.entries(PARAM_TO_BODY)) if (params?.[key] !== undefined && params[key] !== null) body[target] = params[key];
-    const reasoningEffort = resolveReasoningEffort(params?.reasoning_effort);
-    if (reasoningEffort !== undefined) body.reasoning_effort = reasoningEffort;
+    // Ключ пишется даже когда резолвится в `undefined` (пресет реально настроил "auto") — ST сам кладёт в payload
+    // СВОЙ reasoning_effort ДО нашего вмешательства (родная настройка подключения), и просто не добавить ключ в тело —
+    // не значит убрать его: `{...payload, ...body}` ничего не перезапишет, если ключа нет вообще. Явный `undefined`
+    // здесь — это то самое перезаписывание (спред копирует ключ, JSON.stringify потом сам уберёт undefined-поле).
+    if (params?.reasoning_effort !== undefined && params.reasoning_effort !== null) body.reasoning_effort = resolveReasoningEffort(params.reasoning_effort);
     return body;
 }
 

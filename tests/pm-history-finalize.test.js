@@ -38,10 +38,15 @@ test('only the parameters set in the preset go into the request body under the e
 });
 
 test('reasoning_effort: ST\'s own labels ("auto", "min") are translated, not sent literally — a real OpenRouter route rejected "auto" with a 400', () => {
-    assert.equal('reasoning_effort' in paramsToBody({ reasoning_effort: 'auto' }), false, '"auto" means "let the provider decide" — the field must be OMITTED, not sent as the literal string');
+    // "auto" resolves to the KEY existing with value `undefined`, not the key being absent: ST's own base payload
+    // already carries its OWN reasoning_effort (its connection-profile default, "auto") before we ever run, and
+    // `{...payload, ...body}` only overrides a key that is actually present — an absent key changes nothing.
+    const autoBody = paramsToBody({ reasoning_effort: 'auto' });
+    assert.equal('reasoning_effort' in autoBody, true, 'the key must be present so it OVERRIDES whatever ST already put in the payload');
+    assert.equal(autoBody.reasoning_effort, undefined, 'and its value must be undefined so JSON.stringify drops it from the actual request');
     assert.equal(paramsToBody({ reasoning_effort: 'min' }).reasoning_effort, 'minimal');
     assert.equal(paramsToBody({ reasoning_effort: 'high' }).reasoning_effort, 'high', 'values already valid for the API pass through unchanged');
-    assert.equal('reasoning_effort' in paramsToBody({}), false);
+    assert.equal('reasoning_effort' in paramsToBody({}), false, 'preset never configured it at all — leave ST\'s own payload value alone');
 });
 
 test('consecutive system messages are squashed only when the preset asks for it', () => {
