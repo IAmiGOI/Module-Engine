@@ -36,7 +36,9 @@ export function createOrderTab({ state, actions }) {
         const dropMark = drop()?.key === row.key ? ` stme-pm-drop-${drop().where}` : '';
         return h('div', {
             class: `stme-pm-row stme-pm-kind-${row.kind}${isSelected ? ' stme-pm-selected' : ''}${row.node.enabled === false ? ' stme-pm-off' : ''}${dropMark}`,
-            style: { paddingLeft: `${8 + row.depth * 18}px` },
+            // Отступ вложенности — на самом БЛОКЕ (margin, сдвигает всю рамку строки), не только на тексте внутри
+            // него: владелец хотел, чтобы вложенность группы было видно по смещению самих строк, а не только текста.
+            style: { marginLeft: `${row.depth * 20}px` },
             draggable: 'true',
             'on:dragstart': event => { dragging = row.path; event.dataTransfer?.setData('text/plain', row.key); },
             'on:dragover': event => { event.preventDefault(); drop.set({ key: row.key, where: dropWhere(event, row) }); },

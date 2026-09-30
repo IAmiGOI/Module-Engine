@@ -42,7 +42,7 @@
 .stme-pm-step { display: none; gap: 2px; }
 .stme-android .stme-pm-step { display: flex; }
 .stme-pm-row:focus-visible { outline: 1px solid var(--stme-accent); outline-offset: -1px; }
-.stme-pm-spacer { display: inline-block; width: 22px; }
+.stme-pm-spacer { display: inline-block; width: 24px; height: 24px; box-sizing: border-box; }
 .stme-pm-drop-before { box-shadow: 0 -2px 0 var(--stme-accent); }
 .stme-pm-drop-after { box-shadow: 0 2px 0 var(--stme-accent); }
 .stme-pm-drop-inside { outline: 2px dashed var(--stme-accent); }
@@ -52,7 +52,9 @@
 .stme-pm-table th, .stme-pm-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--stme-border); }
 .stme-pm-message pre { white-space: pre-wrap; margin: 2px 0 8px; max-height: 240px; overflow: auto; font-size: .85em; }
 .stme-pm-warning, .stme-pm-advice { padding: 6px 8px; border-left: 3px solid var(--stme-warn); background: color-mix(in srgb, var(--stme-warn) 12%, transparent); margin: 6px 0; }
-.stme-pm-row .stme-icon-button { width: 24px; height: 24px; min-width: 24px; padding: 0; font-size: 12px; line-height: 1; }
+/* `box-sizing: border-box` на обеих — иначе бордер кнопки (наследуется от базового `.stme-icon-button`) добавляет ей
+   лишнюю ширину сверх заглушки-спейсера, и текст строк с кнопкой сворачивания и без неё съезжает на разный оффсет. */
+.stme-pm-row .stme-icon-button { width: 24px; height: 24px; min-width: 24px; padding: 0; font-size: 12px; line-height: 1; box-sizing: border-box; }
 .stme-pm-toolbar .menu_button { padding: 3px 10px; }
 .stme-pm-side { position: sticky; top: 0; }
 .stme-pm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; }
