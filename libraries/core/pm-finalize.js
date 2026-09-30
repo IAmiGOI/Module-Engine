@@ -12,12 +12,26 @@ const PARAM_TO_BODY = {
     temperature: 'temperature', top_p: 'top_p', top_k: 'top_k', top_a: 'top_a', min_p: 'min_p',
     frequency_penalty: 'frequency_penalty', presence_penalty: 'presence_penalty', repetition_penalty: 'repetition_penalty',
     openai_max_tokens: 'max_tokens', seed: 'seed', n: 'n',
-    reasoning_effort: 'reasoning_effort', verbosity: 'verbosity',
+    verbosity: 'verbosity',
 };
+
+/**
+ * `reasoning_effort` в НАШЕЙ вкладке настроек — ST-шные метки (`auto`, `min`, `max`), не буквальные значения API:
+ * настоящий провайдер (найдено живьём через OpenRouter) принимает только `minimal|low|medium|high|max|xhigh|none` и падает
+ * на "auto" 400-й ошибкой. ST у себя (`openai.js: resolveReasoningEffort`) это переводит per-source; мы одной парой правил
+ * покрываем общий случай — `auto` вообще не отправляем (провайдер сам решает), `min` → `minimal` (стандартный термин).
+ */
+function resolveReasoningEffort(value) {
+    if (value === undefined || value === null || value === 'auto') return undefined;
+    if (value === 'min') return 'minimal';
+    return value;
+}
 
 export function paramsToBody(params) {
     const body = {};
     for (const [key, target] of Object.entries(PARAM_TO_BODY)) if (params?.[key] !== undefined && params[key] !== null) body[target] = params[key];
+    const reasoningEffort = resolveReasoningEffort(params?.reasoning_effort);
+    if (reasoningEffort !== undefined) body.reasoning_effort = reasoningEffort;
     return body;
 }
 

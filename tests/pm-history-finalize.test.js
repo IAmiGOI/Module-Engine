@@ -37,6 +37,13 @@ test('only the parameters set in the preset go into the request body under the e
     assert.equal('stream' in paramsToBody({ stream_openai: false }), false, 'streaming is never rewritten in the body: ST parses the answer by its own setting');
 });
 
+test('reasoning_effort: ST\'s own labels ("auto", "min") are translated, not sent literally — a real OpenRouter route rejected "auto" with a 400', () => {
+    assert.equal('reasoning_effort' in paramsToBody({ reasoning_effort: 'auto' }), false, '"auto" means "let the provider decide" — the field must be OMITTED, not sent as the literal string');
+    assert.equal(paramsToBody({ reasoning_effort: 'min' }).reasoning_effort, 'minimal');
+    assert.equal(paramsToBody({ reasoning_effort: 'high' }).reasoning_effort, 'high', 'values already valid for the API pass through unchanged');
+    assert.equal('reasoning_effort' in paramsToBody({}), false);
+});
+
 test('consecutive system messages are squashed only when the preset asks for it', () => {
     const list = [{ role: 'system', content: 'a' }, { role: 'system', content: 'b' }, { role: 'user', content: 'c' }, { role: 'system', content: 'd' }];
     assert.deepEqual(squashSystem(list).map(m => m.content), ['a\nb', 'c', 'd']);
