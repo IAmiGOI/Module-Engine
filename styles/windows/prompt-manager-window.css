@@ -22,7 +22,7 @@
 .stme-pm-split { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr); gap: 10px; align-items: start; }
 @container (max-width: 620px) { .stme-pm-split { grid-template-columns: 1fr; } }
 .stme-pm-list { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow: auto; }
-.stme-pm-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--stme-radius-sm); border: 1px solid transparent; cursor: grab; background: var(--stme-level-1); transition: background-color .1s, border-color .1s; }
+.stme-pm-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--stme-radius-sm); border: 1px solid var(--stme-border); cursor: grab; background: var(--stme-level-1); transition: background-color .1s, border-color .1s; }
 .stme-pm-row:hover { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 8%, var(--stme-level-1)); }
 .stme-pm-row:active { cursor: grabbing; }
 .stme-pm-selected { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
