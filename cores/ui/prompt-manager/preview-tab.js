@@ -19,7 +19,7 @@ export function createPreviewTab({ call }) {
 
     const tokenTable = data => h('table', { class: 'stme-pm-table' },
         h('thead', {}, h('tr', {}, h('th', {}, 'Block'), h('th', {}, 'Tokens'))),
-        h('tbody', {}, [...data.tokens.byBlock].sort((a, b) => b[1] - a[1]).map(([block, tokens]) => h('tr', {}, h('td', {}, block), h('td', {}, String(tokens))))));
+        h('tbody', {}, [...data.tokens.byBlock].map(([block, tokens]) => h('tr', {}, h('td', {}, block), h('td', {}, String(tokens))))));
 
     function tree() {
         return h('div', { class: 'stme-pm-preview' },
