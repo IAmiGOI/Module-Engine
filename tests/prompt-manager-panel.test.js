@@ -19,14 +19,15 @@ function findByClass(node, className) {
 }
 const styleOf = node => resolve(node?.props?.style) ?? {};
 
-function build() {
+function build({ settings = { enabled: true }, presets = [], presetById = {} } = {}) {
     const engine = createEngine();
     const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
     registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
     const host = engine.registerCaller('core.ui.promptManager', 'cores', { tier: 'official' });
-    host.own.register('promptManager.settings', () => ({ enabled: true }));
-    host.own.register('promptManager.presets', () => []);
+    host.own.register('promptManager.settings', () => ({ ...settings }));
+    host.own.register('promptManager.presets', () => presets);
+    host.own.register('promptManager.preset', params => presetById[params?.id] ?? null);
     host.own.register('promptManager.conditionTypes', () => []);
     host.own.register('promptManager.autoPrepare', () => []);
     const panel = createPromptManagerPanelCore(host, { mount: node => ({ settled: async () => {}, getRoot: () => node, unmount() {} }) });
@@ -70,6 +71,24 @@ test('a position the owner actually dragged to is restored on the next open(), n
     const { left, top } = styleOf(window_);
     assert.equal(left, '15px');
     assert.equal(top, '15px');
+});
+
+test('a window left open across a page reload actually loads its data, not just its visibility — owner: "не вносит нужные данные в себя и остаётся открытым но пустым"', async () => {
+    const preset = { params: { reasoning_effort: 'auto' }, tree: [], blocks: [] };
+    const { engine, panel } = build({
+        settings: { enabled: true, activePresetId: 'p1' },
+        presets: [{ id: 'p1', name: 'My preset' }],
+        presetById: { p1: { preset } },
+    });
+    const settingsCaller = engine.registerCaller('probe', 'cores', { tier: 'official' });
+    const { request } = await import('../libraries/shared/request.js');
+    await request(settingsCaller.own, 'storage.settings.set', { params: { namespace: 'core.ui.promptManager', key: 'window', value: { visible: true, position: { left: 15, top: 15 }, size: { width: 700, height: 500 } } } });
+
+    await panel.open();
+
+    assert.equal(panel.isVisible(), true, 'the persisted "visible: true" must be honored');
+    assert.equal(panel.state.activeId(), 'p1', 'refresh() must run on restore, exactly like show() already does, so the preset actually loads instead of leaving the window blank');
+    assert.deepEqual(panel.state.preset(), preset);
 });
 
 test('a size saved on a wide screen is clamped to a narrow one on reopen — a phone must not inherit a desktop-wide window (owner: "на малых разрешениях блок редактирования открывается под ним")', async () => {

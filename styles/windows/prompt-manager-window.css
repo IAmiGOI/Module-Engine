@@ -69,3 +69,40 @@
 .stme-cot-block pre { white-space: pre-wrap; margin: 2px 0 8px; opacity: .85; }
 .stme-cot-block summary { cursor: pointer; opacity: .8; }
 .stme-pm-ok { padding: 6px 8px; border-left: 3px solid var(--stme-ok); background: color-mix(in srgb, var(--stme-ok) 12%, transparent); margin: 6px 0; }
+
+/* Свой выпадающий список (cores/ui/prompt-manager/dropdown.js) вместо нативного `<select>` — владелец: «убери все
+   дефолтные системные/браузерные кнопки, списки». Список — обычный `<div>`, не popup ОС, поэтому стилизуется
+   целиком, вплоть до скроллбара списка (styles/base — общий оверрайд скроллбара уже покрывает `.stme-pm-dropdown-list`). */
+.stme-pm-dropdown { position: relative; display: block; width: 100%; }
+.stme-panel .stme-pm-dropdown-btn {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%;
+    padding: 4px 10px; border-radius: var(--stme-radius-sm); border: 1px solid var(--stme-border);
+    background: var(--stme-level-1); color: var(--stme-text); font: inherit; text-align: left; cursor: pointer;
+}
+.stme-panel .stme-pm-dropdown-btn:hover { border-color: var(--stme-accent); }
+.stme-pm-dropdown-btn[aria-expanded="true"] { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 10%, var(--stme-level-1)); }
+.stme-pm-dropdown-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stme-pm-dropdown-arrow { opacity: .7; font-size: .85em; }
+/* Список — ВСЕГДА в дереве (dropdown.js), скрыт по умолчанию через `display:none`, а не условным
+   insert/remove — тот вариант живьём давал гонку (диффер эмитил remove и тут же свежий insert того же узла
+   одним тиком, список оставался открытым после выбора). */
+.stme-pm-dropdown-list { display: none; }
+.stme-pm-dropdown-list.stme-pm-dropdown-list-open {
+    display: block;
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; max-height: 220px; overflow: auto;
+    /* `--stme-level-1` — полупрозрачная подложка НАД непрозрачной поверхностью панели, не для парящего попапа: без
+       собственного opaque-слоя ряды под списком (тумблеры, текст) просвечивали сквозь него (найдено живьём).
+       Тот же приём непрозрачности, что у самого окна PM (`.stme-pm-window` выше): цвет темы поверх жёсткого hex. */
+    background: linear-gradient(var(--stme-level-1), var(--stme-level-1)), linear-gradient(var(--stme-surface), var(--stme-surface)), #15171e;
+    border: 1px solid var(--stme-accent); border-radius: var(--stme-radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .4); padding: 4px;
+}
+.stme-pm-dropdown-option { padding: 5px 8px; border-radius: var(--stme-radius-sm); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stme-pm-dropdown-option:hover { background: color-mix(in srgb, var(--stme-accent) 16%, transparent); }
+.stme-pm-dropdown-option-active { color: var(--stme-accent); font-weight: 600; }
+
+/* Число без родных браузерных стрелочек-спиннеров — тот же список жалоб владельца: своё поле, не вид ОС.
+   Селектор нарочно `.stme-pm-window-body`, а не общий `.stme-panel` — правка только для окна PM, не для всего
+   движка (владелец ограничил переделку одним окном). */
+.stme-pm-window-body input.stme-number::-webkit-outer-spin-button, .stme-pm-window-body input.stme-number::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.stme-pm-window-body input.stme-number { -moz-appearance: textfield; appearance: textfield; }

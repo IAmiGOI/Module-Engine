@@ -1,6 +1,7 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Button, Row, Field, TextInput, TextArea, NumberInput, Toggle, Select, Badge, EmptyState } from '../../../libraries/shared/widgets.js';
+import { Button, Row, Field, TextInput, TextArea, NumberInput, Toggle, Badge, EmptyState } from '../../../libraries/shared/widgets.js';
+import { Select } from './dropdown.js';
 import { normalizeCot } from '../../../libraries/core/pm-cot.js';
 import { createTextBlock } from './tree-model.js';
 import { ConditionBuilder } from './condition-builder.js';

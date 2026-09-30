@@ -1,6 +1,7 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Button, Select, Badge, EmptyState, IconButton } from '../../../libraries/shared/widgets.js';
+import { Button, Badge, EmptyState, IconButton } from '../../../libraries/shared/widgets.js';
+import { Select } from './dropdown.js';
 import { flattenRows, toggleAt, removeAt, moveNode, stepNode, createTextBlock, createWrapperGroup, createNote, unusedBlockIds } from './tree-model.js';
 import { createNodeEditor } from './editor.js';
 

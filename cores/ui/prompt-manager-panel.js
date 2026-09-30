@@ -267,6 +267,11 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     /** Открывается ИКОНКОЙ ST, перехваченной сервисом (`stPmUi.install`) — штатная панель ST под ней не появляется вообще. */
     async function open() {
         await loadWindowState();
+        // Окно могло остаться "открытым" в сохранённом состоянии с прошлой перезагрузки страницы — `show()` (клик по
+        // иконке) всегда зовёт `refresh()`, а это единственное другое место, где `visible` выставляется в true, его
+        // не звало вовсе. Без этого окно рисовалось видимым, но совершенно пустым (владелец: «не вносит нужные данные
+        // в себя и остаётся открытым но пустым», надо было закрыть и открыть заново, чтобы данные подгрузились).
+        if (visible.peek()) await refresh().catch(() => {});
         const finalUi = mount(tree());
         await finalUi.settled?.();
         return finalUi;

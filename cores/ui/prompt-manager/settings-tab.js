@@ -1,6 +1,7 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Button, Row, Field, NumberInput, Toggle, Select, Slider, EmptyState, Badge } from '../../../libraries/shared/widgets.js';
+import { Button, Row, Field, NumberInput, Toggle, Slider, EmptyState, Badge } from '../../../libraries/shared/widgets.js';
+import { Select } from './dropdown.js';
 
 const REASONING = [{ value: 'auto', label: 'auto' }, { value: 'min', label: 'min' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }, { value: 'max', label: 'max' }];
 
