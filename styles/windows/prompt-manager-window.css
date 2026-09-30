@@ -1,13 +1,30 @@
-/* --- Окно Prompt Manager ------------------------------------------------------ */
-.stme-pm-window { z-index: 6950; }
-.stme-pm-tabs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--stme-border); }
+/* --- Prompt Manager ------------------------------------------------------------ */
+/* Своё плавающее окно (services/st-pm-ui.js перехватывает иконку ST «AI Response Configuration» — родная панель ST
+   не открывается вообще, ни целиком, ни каким-то под-блоком: ROADMAP.md 5.141). Корень несёт `.stme-panel`
+   (feedback-floating-window-css-scope): окно стоит вне `.stme-panel` движка, своих оверрайдов `.menu_button`/
+   `.text_pole` без этого не было бы, и кнопки/поля выглядели бы сырыми дефолтами ST. */
+.stme-floating-panel.stme-pm-window { z-index: 6950; background: linear-gradient(var(--stme-surface), var(--stme-surface)), #15171e; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.stme-pm-window-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+
+/* Вкладки — сегменты в одну строку (без переноса подписи по словам), активная подсвечена. */
+.stme-pm-tabs { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--stme-border); }
+.stme-panel .menu_button.stme-pm-tab { padding: 3px 10px; border-width: 1px; font-size: 12px; white-space: nowrap; border-color: transparent; opacity: .8; }
+.stme-panel .menu_button.stme-pm-tab.stme-pm-tab-active { opacity: 1; border-color: var(--stme-accent); color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 12%, transparent); }
+.stme-panel .menu_button.stme-pm-popout { margin-left: auto; }
+.stme-pm-status { font-size: 12px; opacity: .8; }
+
+/* Панель инструментов редактора: компактные кнопки в одну строку каждая. */
+.stme-panel .stme-pm-toolbar .menu_button { padding: 3px 10px; border-width: 1px; font-size: 12px; white-space: nowrap; }
+
 .stme-pm-body { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
-.stme-pm-toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
-.stme-pm-split { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(280px, 1fr); gap: 10px; align-items: start; }
-@media (max-width: 720px) { .stme-pm-split { grid-template-columns: 1fr; } }
+.stme-pm-toolbar { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+/* Раскладка «список / редактор»: рядом на широком окне, друг под другом на узком (окно можно сузить руками). */
+.stme-pm-split { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr); gap: 10px; align-items: start; }
+@container (max-width: 620px) { .stme-pm-split { grid-template-columns: 1fr; } }
 .stme-pm-list { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow: auto; }
-.stme-pm-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--stme-radius-sm); border: 1px solid transparent; cursor: pointer; background: var(--stme-level-1); }
-.stme-pm-row:hover { border-color: var(--stme-border); }
+.stme-pm-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--stme-radius-sm); border: 1px solid transparent; cursor: grab; background: var(--stme-level-1); transition: background-color .1s, border-color .1s; }
+.stme-pm-row:hover { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 8%, var(--stme-level-1)); }
+.stme-pm-row:active { cursor: grabbing; }
 .stme-pm-selected { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
 .stme-pm-off .stme-pm-label { opacity: .45; text-decoration: line-through; }
 .stme-pm-kind-group { font-weight: 600; }
@@ -18,6 +35,10 @@
 .stme-pm-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stme-pm-detail { font-size: .8em; opacity: .65; white-space: nowrap; }
 .stme-pm-actions { display: flex; gap: 2px; }
+/* Порядок меняется перетаскиванием и Alt+↑/↓; стрелки — только на тач-экране, где перетаскивания HTML5 нет. */
+.stme-pm-step { display: none; gap: 2px; }
+.stme-android .stme-pm-step { display: flex; }
+.stme-pm-row:focus-visible { outline: 1px solid var(--stme-accent); outline-offset: -1px; }
 .stme-pm-spacer { display: inline-block; width: 22px; }
 .stme-pm-drop-before { box-shadow: 0 -2px 0 var(--stme-accent); }
 .stme-pm-drop-after { box-shadow: 0 2px 0 var(--stme-accent); }
@@ -29,7 +50,6 @@
 .stme-pm-message pre { white-space: pre-wrap; margin: 2px 0 8px; max-height: 240px; overflow: auto; font-size: .85em; }
 .stme-pm-warning, .stme-pm-advice { padding: 6px 8px; border-left: 3px solid var(--stme-warn); background: color-mix(in srgb, var(--stme-warn) 12%, transparent); margin: 6px 0; }
 .stme-pm-row .stme-icon-button { width: 24px; height: 24px; min-width: 24px; padding: 0; font-size: 12px; line-height: 1; }
-.stme-pm-row input[type="checkbox"] { margin: 0; }
 .stme-pm-toolbar .menu_button { padding: 3px 10px; }
 .stme-pm-side { position: sticky; top: 0; }
 .stme-pm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; }

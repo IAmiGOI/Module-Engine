@@ -1,6 +1,6 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Button, Select, Toggle, Badge, EmptyState, IconButton } from '../../../libraries/shared/widgets.js';
+import { Button, Select, Badge, EmptyState, IconButton } from '../../../libraries/shared/widgets.js';
 import { flattenRows, toggleAt, removeAt, moveNode, stepNode, createTextBlock, createWrapperGroup, createNote, unusedBlockIds } from './tree-model.js';
 import { createNodeEditor } from './editor.js';
 
@@ -49,6 +49,15 @@ export function createOrderTab({ state, actions }) {
                 dragging = null;
             },
             'on:click': () => selected.set(row.path),
+            'on:dblclick': event => { event.preventDefault(); setTree(tree => toggleAt(tree, row.path)); },
+            title: 'Двойной клик — вкл/выкл, перетаскивание — порядок',
+            // Клавиатура: Alt+↑/↓ двигает выбранную строку (мышью — перетаскиванием).
+            tabindex: '0',
+            'on:keydown': event => {
+                if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+                event.preventDefault();
+                step(row, event.key === 'ArrowUp' ? -1 : 1);
+            },
         },
         row.hasChildren ? IconButton(row.collapsed ? '▸' : '▾', event => {
             event.stopPropagation();
@@ -56,14 +65,23 @@ export function createOrderTab({ state, actions }) {
             if (next.has(row.key)) next.delete(row.key); else next.add(row.key);
             collapsed.set(next);
         }, { title: 'Collapse or expand' }) : h('span', { class: 'stme-pm-spacer' }),
-        h('input', { type: 'checkbox', checked: row.node.enabled !== false, title: 'Send this to the model', 'on:click': event => event.stopPropagation(), 'on:change': () => setTree(tree => toggleAt(tree, row.path)) }),
         h('span', { class: 'stme-pm-label' }, row.label),
         row.detail ? h('span', { class: 'stme-pm-detail' }, row.detail) : null,
         h('span', { class: 'stme-pm-actions' },
-            IconButton('↑', event => { event.stopPropagation(); setTree(tree => stepNode(tree, row.path, -1)); }, { title: 'Move up' }),
-            IconButton('↓', event => { event.stopPropagation(); setTree(tree => stepNode(tree, row.path, 1)); }, { title: 'Move down' }),
+            // Стрелки — только на тач-экране (CSS: `.stme-android`): перетаскивание HTML5 там не работает.
+            h('span', { class: 'stme-pm-step' },
+                IconButton('↑', event => { event.stopPropagation(); step(row, -1); }, { title: 'Move up' }),
+                IconButton('↓', event => { event.stopPropagation(); step(row, 1); }, { title: 'Move down' })),
             row.kind === 'marker' ? null : IconButton('✕', event => { event.stopPropagation(); removeRow(row); }, { title: 'Remove' })),
         );
+    }
+
+    /** Сдвиг на одну позицию; выделение идёт вслед за строкой. */
+    function step(row, delta) {
+        const to = row.path.at(-1) + delta;
+        const siblings = row.path.length > 1 ? null : state.preset.peek()?.tree;
+        setTree(tree => stepNode(tree, row.path, delta));
+        if (to >= 0 && (!siblings || to < siblings.length)) selected.set([...row.path.slice(0, -1), to]);
     }
 
     function removeRow(row) {
@@ -94,7 +112,6 @@ export function createOrderTab({ state, actions }) {
         return h('div', { class: 'stme-pm-order' },
             h('div', { class: 'stme-pm-toolbar' },
                 Select(state.activeId, state.presetOptions, { onChange: id => actions.selectPreset(id) }),
-                Toggle('Prompt Manager on', state.enabled, { onChange: value => actions.configure({ enabled: value }) }),
                 computed(() => (state.dirty() ? Badge('unsaved', { tone: 'error' }) : null)),
                 Button('Save', () => actions.save(), { disabled: false }),
             ),
