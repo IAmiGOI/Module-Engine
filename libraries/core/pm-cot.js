@@ -73,7 +73,7 @@ export async function runCot({ baseMessages, steps, sendStep, cot, onProgress = 
         }
         if (!output) throw new CotStepError(index, step.name, lastError);
         done.push({ id: step.id, name: step.name, text: output.text, reasoning: output.reasoning ?? '' });
-        onProgress({ index, total: steps.length, phase: 'done', name: step.name });
+        onProgress({ index, total: steps.length, phase: 'done', name: step.name, text: output.text });
     }
     return done;
 }

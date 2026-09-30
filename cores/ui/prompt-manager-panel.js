@@ -9,6 +9,7 @@ import { createLogTab } from './prompt-manager/log-tab.js';
 import { createSettingsTab } from './prompt-manager/settings-tab.js';
 import { createCotTab } from './prompt-manager/cot-tab.js';
 import { createRulesTab } from './prompt-manager/rules-tab.js';
+import { createCotBlocks } from './prompt-manager/cot-blocks.js';
 
 /**
  * Окно Prompt Manager (PROMPT_MANAGER_PLAN.md, «Интерфейс»): порядок промптов, предпросмотр «что уйдёт модели»,
@@ -45,6 +46,8 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     const size = signal({ ...DEFAULT_SIZE });
     const tab = signal('order');
     const status = signal('');
+    const popouts = signal([]); // отдельные окна вкладок: { id, key, position, size }
+    let popoutCounter = 0;
 
     // Состояние редактора: черновик пресета в памяти, «изменён» — пока не нажат Save.
     const presets = signal([]);
@@ -182,8 +185,26 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
         position.set(saved.position?.left === undefined ? {} : clampToViewport(saved.position, { ...size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 }));
     }
 
+    /** Вкладка в отдельное окно (несколько окон по блокам, решение владельца): у окна свои положение и размер, состояние общее. */
+    function popOut(key) {
+        const index = popoutCounter++;
+        const entry = { id: `popout-${index}`, key, position: signal({ left: 80 + index * 28, top: 90 + index * 28 }), size: signal({ width: 560, height: 520 }), collapsed: signal(false) };
+        popouts.set([...popouts.peek(), entry]);
+    }
+    const closePopout = id => popouts.set(popouts.peek().filter(entry => entry.id !== id));
+
+    function popoutWindow(entry) {
+        const title = TABS.find(([key]) => key === entry.key)?.[1] ?? entry.key;
+        return FloatingPanel(`Prompt Manager · ${title}`, {
+            position: entry.position, size: entry.size, collapsed: entry.collapsed, className: 'stme-pm-window', minWidth: 360, minHeight: 240,
+            onToggle: value => entry.collapsed.set(value), onClose: () => closePopout(entry.id),
+            drag: createDragHandlers(entry.position, { onDrop: dropped => entry.position.set(clampToViewport(dropped, { ...entry.size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })) }),
+            onResize: next => entry.size.set(next),
+        }, h('div', { class: 'stme-pm-body' }, tabs[entry.key].tree()));
+    }
+
     function tree() {
-        return h('div', { class: 'stme-pm-root' }, computed(() => (visible() ? FloatingPanel('Prompt Manager', {
+        return h('div', { class: 'stme-pm-root' }, computed(() => popouts().map(popoutWindow)), computed(() => (visible() ? FloatingPanel('Prompt Manager', {
             position, size, collapsed, className: 'stme-pm-window', minWidth: 520, minHeight: 320,
             onToggle: value => { collapsed.set(value); saveWindowState(); },
             onClose: () => { visible.set(false); saveWindowState(); },
@@ -191,6 +212,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
             onResize: next => { size.set(next); saveWindowState(); },
         },
         h('div', { class: 'stme-pm-tabs' }, TABS.map(([key, title]) => Button(title, () => { tab.set(key); if (key === 'log') tabs.log.refresh(); if (key === 'cot') tabs.cot.refresh(); if (key === 'settings') { tabs.settings.loadVersions(); tabs.settings.loadPlugins(); } }, { variant: 'default' })),
+            Button('Pop out this tab', () => popOut(tab.peek())),
             computed(() => (status() ? Badge(status()) : null))),
         h('div', { class: 'stme-pm-body' }, TABS.map(([key]) => h('div', { class: 'stme-pm-tabpage', style: computed(() => ({ display: tab() === key ? 'block' : 'none' })) }, tabViews[key]))),
         ) : null)));
@@ -206,13 +228,15 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     function show() { visible.set(true); saveWindowState(); refresh(); }
     function hide() { visible.set(false); saveWindowState(); }
 
+    const cotBlocks = createCotBlocks(host);
     host.events.subscribe('promptManager.openRequested', () => show());
     /** Малый вид Guided CoT: строка «thinking: step 2 of 4» уведомлением; расширенный вид — в окне на вкладке CoT. */
     host.events.subscribe('promptManager.cotProgress', payload => {
+        if (payload?.phase === 'done' && payload.display === 'extended') request(host.own, 'ui.notify', { params: { tone: 'muted', text: `${payload.name || `Step ${payload.index + 1}`}: ${String(payload.text ?? '').slice(0, 300)}` } });
         if (payload?.phase === 'start') request(host.own, 'ui.notify', { params: { key: 'pm-cot', tone: 'muted', text: `Thinking: step ${payload.index + 1} of ${payload.total}${payload.display === 'extended' && payload.name ? ` — ${payload.name}` : ''}` } });
     });
     host.events.subscribe('promptManager.cotFailed', payload => request(host.own, 'ui.notify', { params: { tone: 'error', text: payload?.message ?? 'Guided CoT failed.' } }));
     host.events.subscribe('promptManager.unsupported', payload => request(host.own, 'ui.notify', { params: { tone: 'error', text: payload?.reason ?? 'Prompt Manager is off.' } }));
 
-    return { tree, open, show, hide, refresh, state, actions, isVisible: () => visible.peek(), stop() {} };
+    return { tree, open, show, hide, cotBlocks, popOut, popouts, refresh, state, actions, isVisible: () => visible.peek(), stop() {} };
 }

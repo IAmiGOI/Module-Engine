@@ -270,3 +270,17 @@ test('a plugin registered while running takes part in the very next request and 
     await call('promptManager.unregisterPlugin', { id: 'shout' });
     assert.ok((await send()).messages.some(m => m.content === 'Tell me about the dragon.'));
 });
+
+test('the log tells whether the shared start is enough for the cache of the provider and remembers reported usage', async () => {
+    const { pm, send, chat, call, context } = await build();
+    context.chatCompletionSettings.chat_completion_source = 'openai';
+    await pm.autoPrepare();
+    await send();
+    chat.push({ is_user: false, name: 'Lena', mes: 'A new answer.' }, { is_user: true, name: 'Sasha', mes: 'And then?' });
+    await send();
+    await call('promptManager.reportUsage', { usage: { prompt_tokens_details: { cached_tokens: 1234 } } });
+    const advice = (await call('promptManager.stability', {})).value;
+    assert.ok(['broken', 'short', 'good'].includes(advice.verdict.verdict));
+    assert.equal(advice.cachedTokens, 1234);
+    assert.match(advice.verdict.text, /OpenAI|shared/);
+});
