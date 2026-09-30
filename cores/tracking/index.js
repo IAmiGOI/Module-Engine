@@ -219,6 +219,19 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         }
     }
 
+    /**
+     * Отдаёт ВСЕ поля пользовательских трекеров в `onUserFieldRegistered` (макросы `{{трекер_поле}}`), а не только
+     * обновлённые опросом. Иначе после перезагрузки страницы макрос не зарегистрирован до первого опроса (ST оставлял
+     * `{{rp-time_year}}` текстом — лог владельца, PROMPT_MANAGER_PLAN.md раздел 12, п. 6), а после смены чата держал
+     * значение ПРЕДЫДУЩЕГО чата — и в ST, и в `macros.snapshot`, из которого берёт значения Prompt Manager.
+     */
+    function announceUserFields() {
+        for (const tracker of trackers.values()) {
+            if (tracker.kind !== 'user') continue;
+            for (const field of tracker.fields ?? []) onUserFieldRegistered({ trackerId: tracker.id, fieldName: field.name, value: chatValues[fieldKey(tracker.id, field.name)] });
+        }
+    }
+
     /** Читает натрекан­ные значения ТЕКУЩЕГО чата — источник правды `storage.chatMemory`, кэш в памяти только ускоряет повторные чтения. Без Ядра памяти чата рядом (узкие тесты) тихо остаётся при дефолтах. */
     async function loadValuesForCurrentChat() {
         const result = await request(host.own, 'storage.chatMemory.get', {
@@ -226,6 +239,7 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         });
         chatValues = result.ok ? { ...(result.value ?? {}) } : {};
         seedDefaults();
+        announceUserFields();
     }
 
     /** Пишет ВЕСЬ кэш текущего чата одним запросом — та же форма, что `saveBadges()` у Модуля «RP Time». Молча остаётся только в памяти, если писать некуда (см. doc-comment Ядра). */
@@ -347,6 +361,7 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
         // новый трекер/поле обязано читаться сразу, даже до того, как для
         // ЭТОГО чата вообще позвали `loadValuesForCurrentChat()`.
         seedDefaults();
+        announceUserFields();
     }
 
     const persisted = createPersistedList(host, { namespace: PERSISTENCE_NAMESPACE, key: 'trackers', apply: applyTrackers });
@@ -395,6 +410,7 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
     async function reset(trackerId) {
         const tracker = requireTracker(trackerId);
         for (const field of tracker.fields ?? []) chatValues[fieldKey(trackerId, field.name)] = field.default;
+        announceUserFields();
         await saveChatValues();
         publishEvent(tracker.kind === 'system' ? 'tracking.systemBlocks.changed' : 'tracking.blocks.changed', { trackerId });
         return listFields(trackerId);

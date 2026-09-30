@@ -152,12 +152,15 @@ function buildEngine({ rights } = {}) {
     const pipelineCore = createPipelineCore(engine.registerCaller('core.pipeline', 'cores', { tier: 'official' }), { resolveAs: engine.resolveAs });
     pipelineCore.define({ id: BEFORE_SEND_PIPELINE, mode: 'collect' });
 
+    // Список — копия реального (harness/engine-wiring.js, NOTEBOOK_MODULE_ID): найденный вживую баг был именно
+    // расхождением этих двух копий — реальный список не пускал вклад в PM, а этот тестовый копией не был.
     const moduleHost = engine.registerCaller(MODULE_ID, 'modules', rights ?? {
         tier: 'community',
         allowedContracts: [
             'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
             'generation.registerTool', 'generation.unregisterTool',
             'pipeline.stages.add', 'pipeline.stages.remove',
+            'promptManager.takesOver', 'promptManager.contribute',
             'ui.notify',
         ],
     });
@@ -260,6 +263,41 @@ test('an empty notebook contributes nothing to the pipeline — chat is left exa
     await pipelineCore.run({ pipelineId: BEFORE_SEND_PIPELINE, input: { chat } });
 
     assert.deepEqual(chat, [{ mes: 'hello' }]);
+});
+
+test('with no notes yet, Prompt Manager still gets Notebook\'s PLACE, just empty — owner: "модуль должен публиковать своё место даже если он пустой" (before this, an empty notebook was invisible in the PM tree)', async () => {
+    const { engine, module, pipelineCore } = buildEngine();
+    const contributed = [];
+    const pm = engine.registerCaller('core.promptManager', 'cores', { tier: 'official' });
+    pm.own.register('promptManager.takesOver', () => true);
+    pm.own.register('promptManager.contribute', params => { contributed.push(params); return true; });
+    await module.load();
+    const chat = [{ mes: 'hello' }];
+
+    await pipelineCore.run({ pipelineId: BEFORE_SEND_PIPELINE, input: { chat } });
+
+    assert.deepEqual(chat, [{ mes: 'hello' }]);
+    assert.equal(contributed.length, 1);
+    assert.equal(contributed[0].id, 'notebook');
+    assert.equal(contributed[0].content, '');
+});
+
+test('when Prompt Manager takes over, the note reaches it through promptManager.contribute instead of being spliced into chat — a live bug found by the owner: the module\'s Gate rights never listed these two contracts, so the Gate silently denied every call and the module fell back to legacy forever, even with PM on', async () => {
+    const { engine, tools, module, pipelineCore } = buildEngine();
+    const contributed = [];
+    const pm = engine.registerCaller('core.promptManager', 'cores', { tier: 'official' });
+    pm.own.register('promptManager.takesOver', () => true);
+    pm.own.register('promptManager.contribute', params => { contributed.push(params); return true; });
+    await module.load();
+    await invoke(tools, { action: 'write', title: 'Plan', content: 'Sneak in at dusk' });
+    const chat = [{ mes: 'hello' }];
+
+    await pipelineCore.run({ pipelineId: BEFORE_SEND_PIPELINE, input: { chat } });
+
+    assert.deepEqual(chat, [{ mes: 'hello' }], 'chat is untouched — the note went through PM, not a splice');
+    assert.equal(contributed.length, 1);
+    assert.equal(contributed[0].id, 'notebook');
+    assert.match(contributed[0].content, /Sneak in at dusk/);
 });
 
 test('injection depth controls WHERE the note lands, not just whether it does', async () => {

@@ -2,6 +2,8 @@ import { request } from '../../libraries/shared/request.js';
 import { buildRequest } from '../../libraries/core/pm-run.js';
 import { compareRequests, analyzeStability } from '../../libraries/core/pm-cache.js';
 import { assemblePrompt } from '../../libraries/core/pm-assemble.js';
+import { joinWrappers } from '../../libraries/core/pm-wrap-join.js';
+import { regroupTree } from '../../libraries/core/pm-wrapper-groups.js';
 import { shouldRunCot, runCot, buildCotInjection, cotRecord, normalizeCot, CotStepError } from '../../libraries/core/pm-cot.js';
 import { resolveParams, setOverride, DEFAULT_OVERRIDES } from '../../libraries/core/pm-overrides.js';
 import { createPluginRegistry } from '../../libraries/core/pm-plugins.js';
@@ -47,24 +49,25 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
     };
 
     /**
-     * Родное окно Prompt Manager у ST прячем, пока PM включён; кнопка ST открывает наше окно. Не нашли разметку —
-     * PM выключается с предупреждением (запасного варианта нет — решение владельца).
+     * Родная панель ST («AI Response Configuration» — пресеты, сэмплер, Seed, Quick/Utility Prompts, порядок
+     * промптов) убрана ПОЛНОСТЬЮ и НАВСЕГДА, независимо от `enabled` (решение владельца после живого скриншота:
+     * сжатая иконка внутри PM не годится — сама иконка ОТКРЫТИЯ панели у ST перехватывается и зовёт наше окно
+     * вместо штатного тоггла; панель ST не открывается вообще никаким кликом). Переключатель `enabled` никогда не
+     * возвращает панель ST, он только решает, берёт ли PM на себя сборку запроса. Не нашли иконку (`found: false`)
+     * — вот это настоящий запасной случай: перехватывать нечего, PM выключается с предупреждением.
      */
     async function syncNativeWindow() {
-        if (!settings.enabled) { await service('stPmUi.uninstall', {}); return; }
-        const answer = await service('stPmUi.install', { handler: () => publish('promptManager.openRequested', {}) });
-        if (answer && answer.found === false) {
+        const answer = await service('stPmUi.install', { onOpen: () => publish('promptManager.openRequested', {}) });
+        if (answer && answer.found === false && settings.enabled) {
             settings = { ...settings, enabled: false };
             await request(host.own, 'storage.settings.set', { params: { namespace: NAMESPACE, key: 'settings', value: settings } });
-            publish('promptManager.unsupported', { reason: 'Could not find the Prompt Manager window of this SillyTavern version to replace it. The Prompt Manager is switched off.' });
+            publish('promptManager.unsupported', { reason: 'Could not find the "AI Response Configuration" button of this SillyTavern version to take over. The Prompt Manager is switched off.' });
         }
     }
 
     async function saveSettings(patch) {
-        const wasEnabled = settings.enabled;
         settings = { ...settings, ...patch };
         await request(host.own, 'storage.settings.set', { params: { namespace: NAMESPACE, key: 'settings', value: settings } });
-        if (settings.enabled !== wasEnabled) await syncNativeWindow();
         return settings;
     }
 
@@ -73,18 +76,40 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         settings = { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
         await registerStages();
         await syncNativeWindow();
+        // Подготовка пресетов — при загрузке, а не только при открытии окна: «включён по умолчанию» без активного пресета
+        // молча отдавал сборку ST (проверено на живом ST 1.18). В фоне — загрузку движка не держим.
+        // Активный пресет может отсутствовать в ЭТОМ браузере: настройки PM лежат в settings.json ST (общие), а пресеты —
+        // в indexedDB браузера. Тогда активный выбирается заново, как при первом запуске (живой ST 1.18: другой браузер).
+        if (settings.enabled) {
+            activeMissing().then(missing => { if (missing || !settings.autoPrepared) return autoPrepare(); return null; })
+                .catch(error => publish('promptManager.failed', { message: `Could not prepare presets: ${error?.message ?? error}` }));
+        }
         return settings;
     }
 
-    /** Первый запуск: внутренние копии всех пресетов ST, активным становится выбранный в ST. */
-    async function autoPrepare() {
+    async function activeMissing() {
+        return !settings.activePresetId || !(await store.get(settings.activePresetId));
+    }
+
+    /**
+     * Первый запуск: внутренние копии всех пресетов ST, активным становится выбранный в ST. Один прогон за раз:
+     * фоновая подготовка при загрузке и открытие окна PM, пересекшись, иначе оба видели пустой список и плодили копии.
+     */
+    let preparing = null;
+    function autoPrepare() {
+        preparing ??= prepareOnce().finally(() => { preparing = null; });
+        return preparing;
+    }
+
+    async function prepareOnce() {
         const stPresets = await service('stPromptData.presets', {});
         if (!stPresets) return [];
         const created = await store.prepareFromSt(stPresets);
         const info = await service('stPromptData.read', {});
-        if (!settings.activePresetId && info?.selectedPresetName) {
-            const match = (await store.list()).find(item => item.sourceName === info.selectedPresetName);
-            if (match) await saveSettings({ activePresetId: match.id });
+        if (await activeMissing()) {
+            const list = await store.list();
+            const match = list.find(item => item.sourceName === info?.selectedPresetName) ?? list[0];
+            await saveSettings({ activePresetId: match?.id ?? null });
         }
         await saveSettings({ autoPrepared: true });
         publish('promptManager.prepared', { created: created.length });
@@ -113,6 +138,9 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         const timed = { ...(chatState.timed ?? {}) };
         const materials = await gatherMaterials(chat, info);
         materials.macros = { ...plugins.macros(), ...materials.macros }; // наши макросы (rp-time…) важнее одноимённых из плагинов
+        // Пресеты, подготовленные до 5.140: пары-обёртки на глубине досклеиваются в группы (одно сообщение, пустая — не уходит).
+        const regrouped = regroupTree(record.preset.tree, new Map(record.preset.blocks.map(block => [block.id, block])));
+        if (regrouped.changed) { record.preset.tree = regrouped.tree; await store.save(record, { label: 'wrapper tags grouped' }); }
         let changed = false;
         for (const contribution of contributions.list()) changed = placeContribution(record.preset.tree, contribution) || changed;
         if (changed) await store.save(record, { label: 'new module contribution' });
@@ -175,7 +203,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         const cot = normalizeCot(preset.cot);
         return cot.steps.map((node, index) => {
             const built = assemblePrompt({ ...preset, tree: [node] }, { markers: {}, history: [], ...env });
-            const text = built.messages.map(message => message.content).join('\n\n').trim();
+            const text = joinWrappers(built.messages).map(message => message.content).join('\n\n').trim();
             return { id: node.id ?? node.block ?? `step${index + 1}`, name: node.name ?? preset.blocks.find(block => block.id === node.block)?.name ?? `Step ${index + 1}`, prompt: text };
         }).filter(step => step.prompt);
     }
@@ -332,5 +360,5 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
     ];
 
     const logView = () => log.map(({ withMarkers, messages, ...rest }) => rest);
-    return { load, autoPrepare, log: logView, configure: saveSettings, rewrite, assemble, preview, store, contributions, settings: () => ({ ...settings }), unregister: () => { for (const unregister of registrations) unregister(); } };
+    return { load, autoPrepare, whenPrepared: () => preparing ?? Promise.resolve([]), log: logView, configure: saveSettings, rewrite, assemble, preview, store, contributions, settings: () => ({ ...settings }), unregister: () => { for (const unregister of registrations) unregister(); } };
 }

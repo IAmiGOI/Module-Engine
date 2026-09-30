@@ -1,6 +1,7 @@
 /**
  * Завершающая обработка собранных сообщений и параметры в тело запроса (Chat Completion).
- * Чистые функции. Служебные поля (`_block`, `_hid`) снимаются последним шагом — провайдер их не должен видеть.
+ * Чистые функции. Служебные поля (всё, что начинается с `_`: `_block`, `_hid`, `_priority`, `_open`…) снимаются последним
+ * шагом — провайдер их не должен видеть (раньше снимались только `_block`/`_hid`, и `_priority` уходил в запрос — живой ST 1.18).
  */
 /**
  * Параметры пресета → поля тела запроса ST (только заданные в пресете; имена — как у эндпоинта generate).
@@ -37,5 +38,5 @@ export function finalizeMessages(messages, { params = {}, substitute = text => t
     if (params.squash_system_messages) out = squashSystem(out);
     const prefill = substitute(params.assistant_prefill ?? '');
     if (typeof prefill === 'string' && prefill.trim()) out = [...out, { role: 'assistant', content: prefill }];
-    return out.map(({ _block, _hid, ...rest }) => rest);
+    return out.map(message => Object.fromEntries(Object.entries(message).filter(([key]) => !key.startsWith('_'))));
 }

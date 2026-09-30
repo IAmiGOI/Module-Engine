@@ -134,6 +134,10 @@ const DEFINITIONS = [{
             // исполняется под ПРАВАМИ ЭТОГО Модуля (см. cores/pipeline/index.js
             // про `resolveAs`), регистрирует и снимает этап сам Модуль.
             'pipeline.stages.add', 'pipeline.stages.remove',
+            // Вклад в Prompt Manager (deliverToPrompt) — без этих двух прав Гейт молча отклонял оба вызова,
+            // deliverToPrompt читал это как «PM не берёт сборку» и тихо уходил в `legacy` ВСЕГДА, даже когда PM
+            // реально включён (найдено по факту: владелец пожаловался, что вклад не появляется в окне PM).
+            'promptManager.takesOver', 'promptManager.contribute',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
@@ -157,6 +161,9 @@ const DEFINITIONS = [{
             // (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
             // и снимает этап сам Модуль, отсюда — эти два права.
             'pipeline.stages.add', 'pipeline.stages.remove',
+            // Вклад в Prompt Manager (deliverToPrompt) — без них Гейт молча отклонял вызов, и вклад блокнота
+            // никогда не доходил до PM, даже когда тот включён (владелец: «почему [эти модули] не публикуют»).
+            'promptManager.takesOver', 'promptManager.contribute',
             'ui.notify',
         ],
     },
@@ -179,6 +186,8 @@ const DEFINITIONS = [{
             // (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
             // и снимает этап сам Модуль, отсюда — эти два права.
             'pipeline.stages.add', 'pipeline.stages.remove',
+            // Вклад в Prompt Manager (deliverToPrompt) — без них Гейт молча отклонял вызов (см. Notebook выше).
+            'promptManager.takesOver', 'promptManager.contribute',
             'ui.notify',
         ],
     },
@@ -682,7 +691,8 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         { mount: node => uiEngine.mount('memoryGraph', node) },
     );
 
-    // Окно Prompt Manager: открывается кнопкой ST «Prompt Manager» (событие promptManager.openRequested от Ядра PM).
+    // Prompt Manager: своё плавающее окно, открывается иконкой ST «AI Response Configuration», перехваченной
+    // сервисом (services/st-pm-ui.js) — родная панель ST под ней не открывается вообще (ROADMAP.md 5.141).
     const promptManagerPanel = createPromptManagerPanelCore(
         engine.registerCaller('core.ui.promptManager', 'cores', { tier: 'official' }),
         { mount: node => uiEngine.mount('promptManager', node) },

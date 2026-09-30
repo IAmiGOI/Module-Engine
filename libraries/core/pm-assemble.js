@@ -1,5 +1,6 @@
 import { blockById } from './pm-preset-format.js';
 import { evaluateCondition } from './pm-conditions.js';
+import { mergeWrapped } from './pm-wrap-join.js';
 
 /**
  * Чистая сборка промпта из пресета PM (PROMPT_MANAGER_PLAN.md, этап 2). Без ввода-вывода:
@@ -19,6 +20,8 @@ import { evaluateCondition } from './pm-conditions.js';
  * каждый блок — отдельное сообщение, пустое содержимое не отправляется, вставка на глубину
  * `depth` встаёт перед последними `depth` сообщениями истории (0 — после последнего), вставки
  * одной глубины идут по возрастанию `order`, пустая группа-обёртка не отправляет свои теги.
+ * Группа с обёрткой — одно сообщение `<tag>\n…\n</tag>` (pm-wrap-join.js): группа на глубине склеивается здесь,
+ * обычная — после обрезки (теги помечены `_open`/`_close`).
  */
 const MARKER_TEXT = {
     charDescription: ctx => ctx.markers.charDescription,
@@ -54,6 +57,13 @@ function markerMessages(block, ctx, templates, substitute) {
     return isBlank(text) ? [] : [{ role: 'system', content: substitute(text) }];
 }
 
+/**
+ * Порядок вставок одной глубины — как у ST 1.18 (openai.js `populationInjectionPrompts`): меньший `order` раньше, при равном
+ * `order` роли идут assistant → user → system (system ближе всего к концу — «most important go lower»); дальше порядок пресета.
+ */
+const ROLE_RANK = { assistant: 0, user: 1, system: 2 };
+const byInjectionOrder = (a, b) => (a.order - b.order) || ((ROLE_RANK[a.message.role] ?? 2) - (ROLE_RANK[b.message.role] ?? 2));
+
 /** Вставки на глубину распределяются по истории; возвращает новый массив сообщений. */
 function spliceDepth(history, injections) {
     const byDepth = new Map();
@@ -65,13 +75,13 @@ function spliceDepth(history, injections) {
     const out = [];
     for (let i = 0; i <= history.length; i++) {
         const depth = history.length - i; // сколько сообщений истории останется после этой точки
-        const here = (byDepth.get(depth) ?? []).sort((a, b) => a.order - b.order);
+        const here = (byDepth.get(depth) ?? []).sort(byInjectionOrder);
         for (const item of here) out.push(item.message);
         if (i < history.length) out.push(history[i]);
     }
     // Глубина больше длины истории — в самое начало истории.
     const start = [...byDepth.entries()].filter(([depth]) => depth > history.length).sort((a, b) => b[0] - a[0]);
-    const lead = start.flatMap(([, list]) => list.sort((a, b) => a.order - b.order).map(item => item.message));
+    const lead = start.flatMap(([, list]) => list.sort(byInjectionOrder).map(item => item.message));
     return [...lead, ...out];
 }
 
@@ -82,6 +92,8 @@ export function assemblePrompt(preset, context) {
     const historyLead = []; // вклады «в начале истории»: стоят сразу после строки нового чата, как вставки модулей в реальном запросе
     const injections = (ctx.injections ?? []).filter(item => !isBlank(item.content))
         .map(item => ({ depth: item.depth ?? 4, order: item.order ?? 100, message: { role: item.role ?? 'system', content: substitute(item.content), _block: item.block ?? 'injection' } }));
+    let captureDepth = null; // внутри группы на глубине: её вставки собираются в группу
+    const toDepth = (depth, order, message) => (captureDepth ? captureDepth.push(message) : injections.push({ depth, order, message }));
 
     const emit = (nodes, sink) => {
         for (const node of nodes) {
@@ -103,20 +115,32 @@ export function assemblePrompt(preset, context) {
                 if (!node.enabled || isBlank(text)) { report.push({ blockId: node.contribution, name: node.name, included: false, reason: node.enabled ? 'empty' : 'disabled' }); continue; }
                 const message = { role: contribution.role ?? 'system', content: text };
                 if (node.placement?.mode === 'depth') {
-                    injections.push({ depth: node.placement.depth ?? 0, order: node.placement.order ?? 100, message: { ...message, _block: `inject:${node.contribution}` } });
+                    toDepth(node.placement.depth ?? 0, node.placement.order ?? 100, { ...message, _block: `inject:${node.contribution}` });
                     report.push({ blockId: node.contribution, name: node.name, included: true, role: message.role, chars: text.length, depth: node.placement.depth ?? 0 });
                 } else pushMessage(node.atHistoryStart ? historyLead : sink, message, `inject:${node.contribution}`, report, node.name ?? node.contribution);
                 continue;
             }
             if (node.type === 'group') {
                 if (!node.enabled) { report.push({ blockId: node.id, name: node.name, included: false, reason: 'disabled' }); continue; }
+                const atDepth = node.placement?.mode === 'depth';
                 const inner = [];
+                const outerCapture = captureDepth;
+                if (atDepth) captureDepth = inner; // вставки на глубину внутри группы на глубине — её содержимое, а не отдельные вставки
                 emit(node.children, inner);
+                captureDepth = outerCapture;
                 if (!inner.length && node.skipWhenEmpty) { report.push({ blockId: node.id, name: node.name, included: false, reason: 'empty group' }); continue; }
-                const open = blockById(preset, node.wrap.open), close = blockById(preset, node.wrap.close);
-                if (open) pushMessage(sink, { role: open.role ?? 'system', content: substitute(open.content ?? '') }, open.id, report, open.name);
+                const open = node.wrap && blockById(preset, node.wrap.open), close = node.wrap && blockById(preset, node.wrap.close);
+                const tag = block => block && { role: block.role ?? 'system', content: substitute(block.content ?? ''), _block: block.id };
+                if (atDepth) {
+                    const merged = mergeWrapped(tag(open), inner, tag(close), node.id);
+                    for (const message of merged) toDepth(node.placement.depth ?? 0, node.placement.order ?? 100, message);
+                    report.push({ blockId: node.id, name: node.name, included: true, role: merged[0]?.role, depth: node.placement.depth ?? 0 });
+                    continue;
+                }
+                // Обычная группа: теги помечены, склейка в одно сообщение — после обрезки (pm-wrap-join.js).
+                if (open) pushMessage(sink, { ...tag(open), _open: node.id }, open.id, report, open.name);
                 sink.push(...inner);
-                if (close) pushMessage(sink, { role: close.role ?? 'system', content: substitute(close.content ?? '') }, close.id, report, close.name);
+                if (close) pushMessage(sink, { ...tag(close), _close: node.id }, close.id, report, close.name);
                 continue;
             }
             const block = blockById(preset, node.block);
@@ -133,7 +157,7 @@ export function assemblePrompt(preset, context) {
             if (isBlank(content)) { report.push({ blockId: block.id, name: block.name, included: false, reason: 'empty' }); continue; }
             const message = { role: block.role ?? 'system', content };
             if (block.position === 'depth') {
-                injections.push({ depth: block.depth ?? 4, order: block.order ?? 100, message: { ...message, _block: block.id } });
+                toDepth(block.depth ?? 4, block.order ?? 100, { ...message, _block: block.id });
                 report.push({ blockId: block.id, name: block.name, included: true, role: message.role, chars: content.length, depth: block.depth ?? 4 });
             } else pushMessage(sink, message, block.id, report, block.name);
         }

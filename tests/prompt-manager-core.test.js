@@ -9,6 +9,8 @@ import { registerChatMetadataService } from '../services/chat-metadata.js';
 import { registerExtensionSettingsService } from '../services/extension-settings.js';
 import { registerPmPresetsService } from '../services/pm-presets.js';
 import { registerStPromptDataService } from '../services/st-prompt-data.js';
+import { registerStPmUiService } from '../services/st-pm-ui.js';
+import { makeFakeDocument, FakeElement } from './helpers/fake-document.js';
 import { createEventsCore } from '../cores/events/index.js';
 import { createGenerationCore, INTERCEPTOR_NAME } from '../cores/generation/index.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
@@ -30,7 +32,28 @@ function memoryStore() {
     };
 }
 
-async function build({ mainApi = 'openai', groupId = null } = {}) {
+/** Поддельный документ с иконкой ST «AI Response Configuration», для проверки, что родная панель ST убрана. */
+function makeStDocument({ withButton = true } = {}) {
+    const doc = makeFakeDocument();
+    doc.head = new FakeElement('head');
+    if (withButton) {
+        const button = new FakeElement('div');
+        button.id = 'ai-config-button';
+        button.append(new FakeElement('div'));
+        doc.body.append(button);
+    }
+    const find = (node, id) => {
+        if (node.id === id) return node;
+        for (const child of node.children ?? []) { const hit = find(child, id); if (hit) return hit; }
+        return null;
+    };
+    doc.getElementById = id => find(doc.head, id) ?? find(doc.body, id);
+    doc.addEventListener = () => {};
+    doc.removeEventListener = () => {};
+    return doc;
+}
+
+async function build({ mainApi = 'openai', groupId = null, stDoc = makeStDocument() } = {}) {
     const engine = createEngine();
     const chat = [{ is_user: false, name: 'Lena', mes: 'Greetings.' }, { is_user: true, name: 'Sasha', mes: 'Tell me about the dragon.' }];
     const backendCalls = [];
@@ -64,6 +87,7 @@ async function build({ mainApi = 'openai', groupId = null } = {}) {
     registerExtensionSettingsService(engine.buses.services, { getContext: () => context });
     registerPmPresetsService(engine.buses.services, { store: memoryStore() });
     registerStPromptDataService(engine.buses.services, { getContext: () => context, fetchImpl });
+    registerStPmUiService(engine.buses.services, { document: stDoc });
     createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
     createChatMemoryCore(engine.registerCaller('core.memory.chat', 'cores', { tier: 'official' }));
     const eventsCore = createEventsCore(engine.registerCaller('core.events', 'cores', { tier: 'official' }));
@@ -90,15 +114,32 @@ async function build({ mainApi = 'openai', groupId = null } = {}) {
     };
     const fire = name => { for (const handler of listeners.get(name) ?? []) handler(); };
     const call = (contract, params) => request(lore.own, contract, { params });
-    return { pm, send, warnings, chat, context, backendCalls, contribute, stepCalls, stepBehavior, fire, call };
+    return { pm, send, warnings, chat, context, backendCalls, contribute, stepCalls, stepBehavior, fire, call, stDoc };
 }
 
-test('the first run turns every ST preset into an internal copy and activates the one selected in ST', async () => {
+test('loading the core by itself turns every ST preset into an internal copy and activates the one selected in ST — without anyone opening the Prompt Manager window (live ST 1.18: "on by default" without an active preset silently left the assembly to ST)', async () => {
     const { pm } = await build();
-    const created = await pm.autoPrepare();
+    const created = await pm.whenPrepared();
     assert.equal(created.length, 1);
     assert.equal(pm.settings().activePresetId, created[0].id);
     assert.equal((await pm.autoPrepare()).length, 0, 'a second run creates nothing new');
+});
+
+test('an active preset that does not exist in this browser (settings are shared through ST, presets live in the browser) is replaced by the one selected in ST', async () => {
+    const { pm } = await build();
+    const [created] = await pm.whenPrepared();
+    await pm.configure({ activePresetId: 'pm_from_another_browser' });
+    await pm.autoPrepare();
+    assert.equal(pm.settings().activePresetId, created.id);
+});
+
+test('two preparations running at the same time share one run and do not duplicate presets', async () => {
+    const { pm, call } = await build();
+    await pm.whenPrepared();
+    await pm.configure({ activePresetId: null });
+    await Promise.all([pm.autoPrepare(), pm.autoPrepare()]);
+    assert.equal((await call('promptManager.presets')).value.length, 1);
+    assert.ok(pm.settings().activePresetId, 'the preset selected in ST becomes active again');
 });
 
 test('with an active preset the outgoing request is assembled by the Prompt Manager instead of ST', async () => {
@@ -123,6 +164,24 @@ test('without an active preset or when switched off the request goes out untouch
     assert.equal((await send()).messages[0].content === 'ST assembled', false);
 });
 
+test('SillyTavern\'s "AI Response Configuration" panel is hidden as soon as the core loads and NEVER comes back while switching `enabled` on and off — owner: "убрать полностью", no coexistence in any state', async () => {
+    const { pm, stDoc } = await build();
+    const suppressed = () => Boolean(stDoc.getElementById('stme-pm-suppress'));
+    assert.equal(suppressed(), true, 'hidden immediately on load, before any preset exists');
+
+    await pm.configure({ enabled: false });
+    assert.equal(suppressed(), true, 'turning PM off must NOT bring ST\'s own panel back');
+
+    await pm.configure({ enabled: true });
+    assert.equal(suppressed(), true, 'turning it back on keeps it hidden — was already hidden, nothing to redo');
+});
+
+test('when SillyTavern\'s "AI Response Configuration" icon cannot be found, PM disables itself and warns — there is nothing to intercept, so this is the one real fallback case', async () => {
+    const { pm, warnings } = await build({ stDoc: makeStDocument({ withButton: false }) });
+    assert.equal(pm.settings().enabled, false);
+    assert.ok(warnings.some(w => w.event === 'promptManager.unsupported'));
+});
+
 test('group chats and Text Completion are passed through and the user is warned once', async () => {
     const group = await build({ groupId: 'g1' });
     await group.pm.autoPrepare();
@@ -139,7 +198,7 @@ test('a module contribution appears in the request at its default place and the 
     await contribute({ id: 'graph', name: 'Memory graph', role: 'assistant', content: 'MEMORY GRAPH TEXT', defaultPlacement: 'before-history' });
     const body = await send();
     const contents = body.messages.map(m => m.content);
-    assert.equal(contents.indexOf('MEMORY GRAPH TEXT'), contents.indexOf('<char instructions>') + 2, 'in the history start: after the depth-injected char instructions, before the greeting');
+    assert.equal(contents.indexOf('MEMORY GRAPH TEXT'), contents.findIndex(text => String(text).includes('[Start a new Chat]')) + 1, 'in the history start: right after the new chat line (the empty <char instructions> group sends nothing), before the greeting');
     assert.ok(contents.indexOf('MEMORY GRAPH TEXT') < contents.indexOf('Greetings.'));
     const record = await pm.store.get(pm.settings().activePresetId);
     assert.ok(record.preset.tree.some(node => node.type === 'inject' && node.contribution === 'graph'));
@@ -166,7 +225,8 @@ test('every request is logged with its size and the second one is compared with 
     assert.equal(log[0].cache, null);
     // Инструкции пресета после истории (~3000 токенов) стоят ПОСЛЕ неё, поэтому новое сообщение сдвигает их и кеш
     // держится только до конца прежней истории — ровно то, что режим кеша обязан показывать (PROMPT_MANAGER_PLAN.md, 11.5).
-    assert.ok(log[1].cache.sharedTokens >= 200);
+    assert.ok(log[1].cache.sharedTokens >= 150); // группы-обёртки идут одним сообщением — служебных токенов на сообщение меньше, чем при тегах отдельно
+
     assert.ok(log[1].cache.ratio < 0.2);
     assert.equal(log[1].cache.culprit.block, 'history #2');
 });

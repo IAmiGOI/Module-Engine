@@ -5,6 +5,7 @@ import { fillTemplate } from '../../libraries/core/fill-template.js';
 import { createDragHandlers, clampToViewport } from '../../libraries/shared/draggable.js';
 import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, StatBlock, FloatingPanel } from '../../libraries/shared/widgets.js';
 import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
+import { deliverToPrompt } from '../../libraries/shared/prompt-contribution.js';
 import { SAMPLER_PRESETS, REASONING_MODES, clampSamplerSettings, clampReasoningSettings, buildCustomPreset } from '../../cores/models/internal-engine.js';
 
 /**
@@ -835,10 +836,19 @@ export function createTimeModule(host) {
         return `[Current in-world time]\n${current}`;
     }
 
+    /**
+     * Вклад через Prompt Manager (владелец: «почему саммари не публикует свой инжект в ПМ, добавь такой же для RP
+     * Time» — тот же контракт `promptManager.contribute`, что уже есть у Summary/Notebook/Secrets/графа памяти;
+     * без него время висло вставкой в `chat`, невидимой и непереставляемой в окне PM). PM выключен/недоступен —
+     * прежний `chat.unshift`, поведение не меняется.
+     */
     async function injectCurrentTime({ chat } = {}) {
         if (!Array.isArray(chat)) return true;
         const text = buildTimeInjectText();
-        if (text) chat.unshift({ is_user: false, is_system: true, name: 'System', mes: text });
+        await deliverToPrompt({
+            call, contribution: { id: 'time', name: 'RP Time', role: 'system', content: text, defaultPlacement: 'before-history' },
+            legacy: () => { if (text) chat.unshift({ is_user: false, is_system: true, name: 'System', mes: text }); },
+        });
         return true;
     }
 
@@ -883,9 +893,19 @@ export function createTimeModule(host) {
         // бейджа (скрытие бейджа — визуальное, инжект в промпт отдельное
         // решение). При `enabled: false` сам текст пуст — этап уйдёт без
         // вклада, отдельного снятия регистрации не требуется.
+        // Контракт регистрируется на `host.own` — этап пайплайна вызывает его по имени, а не саму функцию напрямую
+        // (тот же приём, что у Notebook/Secrets, `pipelineStage()`). ЭТОГО РЕГИСТРА НЕ БЫЛО ВООБЩЕ — контракт
+        // `time.injectCurrent` объявлялся в `pipeline.stages.add`, но никто на него не отвечал: `pipeline.run()`
+        // резолвил контракт в пустоту, `onExhausted: 'flag'` тихо это проглатывал, и «текущее время» не попадало
+        // в промпт НИ РАЗУ, ни вкладом в PM, ни старой вставкой в `chat` — найдено тестом, гоняющим настоящий пайплайн.
+        host.own.register(TIME_INJECT_CONTRACT, params => injectCurrentTime(params));
+        // `params: { chat: { $from: '$input.chat' } }` — БЕЗ этой карты пайплайн не передаёт `chat` в контракт вообще
+        // (та же карта у Notebook/Secrets/Summary/графа памяти/`map-narration`); без неё `injectCurrentTime({chat}
+        // = {})` получал `chat: undefined` и выходил первой же строкой — второй слой той же немоты, что и
+        // отсутствовавшая регистрация контракта выше.
         await call('pipeline.stages.add', {
             pipelineId: 'generation.beforeSend',
-            stage: { id: TIME_INJECT_STAGE_ID, contract: TIME_INJECT_CONTRACT, onExhausted: 'flag' },
+            stage: { id: TIME_INJECT_STAGE_ID, contract: TIME_INJECT_CONTRACT, params: { chat: { $from: '$input.chat' } }, onExhausted: 'flag' },
         });
         // Трекер заводится в Ядре сразу: он должен существовать ещё до первого
         // опроса, иначе первый же ответ упёрся бы в «неизвестный трекер».

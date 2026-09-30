@@ -131,6 +131,7 @@ function buildEngine({ replies, gate, fail = false } = {}) {
     footerHost.own.register('ui.messageFooter.release', () => true);
     footerHost.own.register('ui.messageFooter.liveMesid', () => live.mesid);
 
+    // Список — копия реального (harness/engine-wiring.js, TIME_MODULE_ID).
     const moduleHost = engine.registerCaller(MODULE_ID, 'modules', {
         tier: 'community',
         allowedContracts: [
@@ -138,12 +139,13 @@ function buildEngine({ replies, gate, fail = false } = {}) {
             'storage.settings.get', 'storage.settings.set',
             'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations',
             'pipeline.stages.add', 'pipeline.stages.remove',
+            'promptManager.takesOver', 'promptManager.contribute',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
     });
     const setWorkers = list => { workerList = list; };
-    return { engine, trackingCore, prompts, calls, macroWrites, claims, live, module: createTimeModule(moduleHost), setWorkers, settingsContext };
+    return { engine, trackingCore, prompts, calls, macroWrites, claims, live, module: createTimeModule(moduleHost), setWorkers, settingsContext, pipelineCore };
 }
 
 test('the module owns NO tracking of its own — it registers one tracker in the shared Ядро', async () => {
@@ -342,6 +344,7 @@ test('the same value twice does not pad the timeline with duplicates', async () 
 test('the worked-out time reaches the macro — through the Ядро, exactly like any other tracker', async () => {
     const { module, macroWrites } = buildEngine();
     await module.load();
+    macroWrites.length = 0; // начальные значения при загрузке — не то, что проверяет этот тест
 
     await module.advance();
 
@@ -520,6 +523,40 @@ test('the load() registers the time-inject stage on generation.beforeSend — th
 
     const hit = added.find(entry => entry.pipelineId === 'generation.beforeSend' && entry.added === 'time:inject-current');
     assert.ok(hit, 'этап инъекции времени зарегистрирован');
+});
+
+test('when Prompt Manager takes over, the current time reaches it through promptManager.contribute instead of being unshifted into chat — the module\'s Gate rights never listed these two contracts, so it silently fell back to legacy forever, even with PM on (owner: "добавь такой же [вклад в PM] для RP Time")', async () => {
+    const { engine, module, live, pipelineCore } = buildEngine();
+    const contributed = [];
+    const pm = engine.registerCaller('core.promptManager', 'cores', { tier: 'official' });
+    pm.own.register('promptManager.takesOver', () => true);
+    pm.own.register('promptManager.contribute', params => { contributed.push(params); return true; });
+    await module.load();
+    module.applyPreset('clock-only');
+    live.mesid = '1';
+    await module.advance(); // 11:40
+    const chat = [{ mes: 'hello' }];
+
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat } });
+
+    assert.deepEqual(chat, [{ mes: 'hello' }], 'chat is untouched — the time went through PM, not an unshift');
+    assert.equal(contributed.length, 1);
+    assert.equal(contributed[0].id, 'time');
+    assert.match(contributed[0].content, /11:40/);
+});
+
+test('with no Prompt Manager to take over, the old unshift into chat still runs — legacy behavior unchanged', async () => {
+    const { module, live, pipelineCore } = buildEngine();
+    await module.load();
+    module.applyPreset('clock-only');
+    live.mesid = '1';
+    await module.advance();
+    const chat = [{ mes: 'hello' }];
+
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat } });
+
+    assert.equal(chat.length, 2);
+    assert.match(chat[0].mes, /Current in-world time/);
 });
 
 test('advancing marks the message it was LIVE under, and leaves the ones before it alone', async () => {

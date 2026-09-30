@@ -33,6 +33,31 @@ test('the longest prompt order becomes the tree and the shorter one is kept for 
     assert.equal(preset.orders.find(list => list.characterId === 100000).raw.length, 11);
 });
 
+test('the global 100001 prompt order becomes the tree even when a character-specific list is longer, because SillyTavern 1.18 reads only 100001 for Chat Completion', () => {
+    const block = id => ({ identifier: id, name: id, role: 'system', content: id });
+    const preset = stToPreset({
+        prompts: ['a', 'b', 'c'].map(block),
+        prompt_order: [
+            { character_id: 100001, order: [{ identifier: 'a', enabled: true }] },
+            { character_id: 58, order: ['a', 'b', 'c'].map(identifier => ({ identifier, enabled: true })) },
+        ],
+    });
+    assert.equal(preset.primaryOrder, 100001);
+    assert.deepEqual(flattenTree(preset.tree).map(entry => entry.identifier), ['a']);
+});
+
+test('without a 100001 list the longest prompt order becomes the tree', () => {
+    const block = id => ({ identifier: id, name: id, role: 'system', content: id });
+    const preset = stToPreset({
+        prompts: ['a', 'b'].map(block),
+        prompt_order: [
+            { character_id: 100000, order: [{ identifier: 'a', enabled: true }] },
+            { character_id: 7, order: ['a', 'b'].map(identifier => ({ identifier, enabled: true })) },
+        ],
+    });
+    assert.equal(preset.primaryOrder, 7);
+});
+
 test('paired wrapper prompts of the real preset are glued into groups and expand back to the same order', () => {
     const preset = stToPreset(amigo());
     const groups = [...walkTree(preset.tree)].filter(node => node.type === 'group');
@@ -64,15 +89,31 @@ test('nested wrappers of the same tag pair up by depth', () => {
     assert.equal(preset.tree[0].children[0].wrap.close, 'c2');
 });
 
-test('a depth-injected wrapper is left as a plain prompt', () => {
-    const preset = stToPreset({
-        prompts: [
-            { identifier: 'o', role: 'system', content: '<last>', injection_position: 1 },
-            { identifier: 'c', role: 'system', content: '</last>', injection_position: 1 },
-        ],
-        prompt_order: [{ character_id: 1, order: [{ identifier: 'o', enabled: true }, { identifier: 'c', enabled: true }] }],
+test('a wrapper pair injected at one depth, with everything between it at that depth and inside its order range, becomes a group placed at that depth — like <char instructions> 8/101 … 8/102-105 … 8/106 in the owner\'s presets', () => {
+    const d = (identifier, content, order, depth = 8) => ({ identifier, role: 'system', content, injection_position: 1, injection_depth: depth, injection_order: order });
+    const st = {
+        prompts: [d('o', '<char instructions>', 101), d('m', 'Be brief.', 102), d('c', '</char instructions>', 106)],
+        prompt_order: [{ character_id: 100001, order: ['o', 'm', 'c'].map(identifier => ({ identifier, enabled: true })) }],
+    };
+    const preset = stToPreset(st);
+    assert.equal(preset.tree.length, 1);
+    assert.deepEqual(preset.tree[0].placement, { mode: 'depth', depth: 8, order: 101 });
+    const out = presetToSt(preset);
+    assert.deepEqual({ prompts: out.prompts, prompt_order: out.prompt_order }, st, 'export unfolds the group back into the same three prompts');
+});
+
+test('a wrapper pair spanning different depths or holding a block outside its depth stays plain prompts — that is last-message wrapping, not a group', () => {
+    const d = (identifier, content, order, depth) => ({ identifier, role: 'system', content, injection_position: 1, injection_depth: depth, injection_order: order });
+    const across = stToPreset({
+        prompts: [d('o', '<last_message>', 101, 1), d('c', '</last_message>', 99, 0)],
+        prompt_order: [{ character_id: 100001, order: ['o', 'c'].map(identifier => ({ identifier, enabled: true })) }],
     });
-    assert.equal(preset.tree.length, 2);
+    assert.equal(across.tree.length, 2);
+    const mixed = stToPreset({
+        prompts: [d('o', '<x>', 101, 8), d('m', 'Elsewhere.', 102, 2), d('c', '</x>', 106, 8)],
+        prompt_order: [{ character_id: 100001, order: ['o', 'm', 'c'].map(identifier => ({ identifier, enabled: true })) }],
+    });
+    assert.equal(mixed.tree.length, 3);
 });
 
 test('secrets and connection passwords are removed on export while other connection fields are kept', () => {
