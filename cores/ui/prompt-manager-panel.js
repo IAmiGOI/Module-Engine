@@ -224,8 +224,16 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
         visible.set(Boolean(saved.visible));
         collapsed.set(Boolean(saved.collapsed));
         const savedSize = saved.size ?? {};
-        size.set({ width: savedSize.width > 0 ? savedSize.width : DEFAULT_SIZE.width, height: savedSize.height > 0 ? savedSize.height : DEFAULT_SIZE.height });
         const viewport = { viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 };
+        // Размер, сохранённый на широком экране, иначе восстанавливается как есть на телефоне — шире самого viewport
+        // (владелец: «блок редактирования должен открываться под ним для телефонов», найдено при проверке: CSS
+        // `max-width` панель не спасал, `resize: both` в паре с уже выставленным инлайновым width её обходит).
+        // Без этого `.stme-pm-split`'а контейнерный запрос (620px) никогда не видит узкую ширину — измеряет раздутое
+        // окно, а не реальный экран.
+        size.set({
+            width: Math.min(savedSize.width > 0 ? savedSize.width : DEFAULT_SIZE.width, viewport.viewportWidth - 32),
+            height: Math.min(savedSize.height > 0 ? savedSize.height : DEFAULT_SIZE.height, viewport.viewportHeight - 32),
+        });
         position.set(saved.position?.left === undefined
             ? clampToViewport(defaultPosition(size.peek()), { ...size.peek(), ...viewport })
             : clampToViewport(saved.position, { ...size.peek(), ...viewport }));
@@ -243,8 +251,12 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     ];
 
     function tree() {
+        // `minWidth` — жёсткий пол окна (FloatingPanel держит его СИЛЬНЕЕ max-width из CSS: спецификация отдаёт
+        // приоритет min- над max-, так что статичные 420 не давали окну сжаться ниже этого даже после клампа
+        // size() на телефоне — владелец: «блок редактирования должен открываться под ним для телефонов».
+        const minWidth = Math.min(420, (globalThis.innerWidth ?? 1920) - 32);
         return h('div', { class: 'stme-pm-root' }, computed(() => popouts().map(popoutWindow)), computed(() => (visible() ? FloatingPanel('Prompt Manager', {
-            position, size, collapsed, className: 'stme-pm-window', minWidth: 420, minHeight: 280,
+            position, size, collapsed, className: 'stme-pm-window', minWidth, minHeight: 280,
             onToggle: value => { collapsed.set(value); saveWindowState(); },
             onClose: () => { visible.set(false); saveWindowState(); },
             drag: createDragHandlers(position, { onDrop: dropped => { position.set(clampToViewport(dropped, { ...size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })); saveWindowState(); } }),

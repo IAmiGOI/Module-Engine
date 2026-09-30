@@ -4,7 +4,10 @@
    (feedback-floating-window-css-scope): окно стоит вне `.stme-panel` движка, своих оверрайдов `.menu_button`/
    `.text_pole` без этого не было бы, и кнопки/поля выглядели бы сырыми дефолтами ST. */
 .stme-floating-panel.stme-pm-window { z-index: 6950; background: linear-gradient(var(--stme-surface), var(--stme-surface)), #15171e; backdrop-filter: none; -webkit-backdrop-filter: none; }
-.stme-pm-window-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+/* `min-width: 0` — без него classic flex-контейнер отказывается сжиматься ниже intrinsic-ширины своего контента
+   (два столбца `.stme-pm-split` требуют ~520px), окно раздувается вместо того, чтобы скроллиться, и `@container` ниже
+   никогда не видит узкую ширину — измеряет раздутый контейнер, а не то, что реально видно на телефоне. */
+.stme-pm-window-body { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1; }
 
 /* Вкладки — сегменты в одну строку (без переноса подписи по словам), активная подсвечена. */
 .stme-pm-tabs { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--stme-border); }
@@ -16,10 +19,10 @@
 /* Панель инструментов редактора: компактные кнопки в одну строку каждая. */
 .stme-panel .stme-pm-toolbar .menu_button { padding: 3px 10px; border-width: 1px; font-size: 12px; white-space: nowrap; }
 
-.stme-pm-body { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
+.stme-pm-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 8px; }
 .stme-pm-toolbar { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
 /* Раскладка «список / редактор»: рядом на широком окне, друг под другом на узком (окно можно сузить руками). */
-.stme-pm-split { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr); gap: 10px; align-items: start; }
+.stme-pm-split { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr); gap: 10px; align-items: start; min-width: 0; }
 @container (max-width: 620px) { .stme-pm-split { grid-template-columns: 1fr; } }
 .stme-pm-list { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow: auto; }
 .stme-pm-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--stme-radius-sm); border: 1px solid var(--stme-border); cursor: grab; background: var(--stme-level-1); transition: background-color .1s, border-color .1s; }
