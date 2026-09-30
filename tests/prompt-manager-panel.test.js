@@ -71,3 +71,22 @@ test('a position the owner actually dragged to is restored on the next open(), n
     assert.equal(left, '15px');
     assert.equal(top, '15px');
 });
+
+test('a size saved on a wide screen is clamped to a narrow one on reopen — a phone must not inherit a desktop-wide window (owner: "на малых разрешениях блок редактирования открывается под ним")', async () => {
+    const { engine, panel } = build();
+    const settings = engine.registerCaller('probe', 'cores', { tier: 'official' });
+    const { request } = await import('../libraries/shared/request.js');
+    await request(settings.own, 'storage.settings.set', { params: { namespace: 'core.ui.promptManager', key: 'window', value: { visible: false, position: { left: 15, top: 15 }, size: { width: 980, height: 680 } } } });
+
+    const previousWidth = globalThis.innerWidth;
+    globalThis.innerWidth = 375; // телефон
+    try {
+        await panel.open();
+        panel.show();
+        const window_ = findByClass(panel.tree(), 'stme-pm-window');
+        const { width } = styleOf(window_);
+        assert.ok(parseFloat(width) <= 375 - 32, `width (${width}) must fit the 375px viewport, not the saved 980px`);
+    } finally {
+        globalThis.innerWidth = previousWidth;
+    }
+});
