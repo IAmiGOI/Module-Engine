@@ -47,7 +47,7 @@ const vec = (...names) => {
     return v.map(x => x / norm);
 };
 
-function buildEngine({ chat = [], model = null } = {}) {
+function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
     const engine = createEngine();
     const settingsContext = { extensionSettings: {}, chatMetadata: {}, saveSettingsDebounced: () => {}, saveMetadataDebounced: () => {} };
     registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
@@ -99,6 +99,14 @@ function buildEngine({ chat = [], model = null } = {}) {
         }));
     });
 
+    // Ядро музыкального сервера — фейк над теми же контрактами (реальное ходит в сеть). `serverTracks` — треки единственного раздела «fantasy»; без него сервера нет.
+    if (serverTracks) {
+        engine.buses.cores.register('musicServer.sections', () => ({ configured: true, ok: true, sections: [{ id: 'fantasy', name: 'Fantasy', tracks: serverTracks.length }] }));
+        engine.buses.cores.register('musicServer.section', ({ id }) => (id === 'fantasy'
+            ? { ok: true, name: 'Fantasy', tracks: serverTracks }
+            : { ok: false, reason: 'no such section', tracks: [] }));
+    }
+
     const notifications = [];
     const moduleHost = engine.registerCaller(MODULE_ID, 'modules', {
         tier: 'community',
@@ -106,7 +114,7 @@ function buildEngine({ chat = [], model = null } = {}) {
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
             'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek', 'model.generate',
-            'embedding.compute',
+            'embedding.compute', 'musicServer.sections', 'musicServer.section',
         ],
     });
     const rawNotify = moduleHost.cores.subscribe.bind(moduleHost.cores);
@@ -401,4 +409,58 @@ test('tracks saved by the earlier YouTube build are dropped on load: they cannot
         { id: 'b', name: 'Local' },
     ]);
     assert.deepEqual(cleaned.map(track => track.id), ['a', 'b']);
+});
+
+// --- Раздел сервера владельца ---------------------------------------------------
+
+const serverTrack = (id, v) => ({
+    id: `srv_fantasy_${id}`, name: '', description: '', vector: v, playCount: 0, source: { kind: 'url', ref: `https://music.example/audio/${id}.mp3` },
+    artist: '', tagged: 'manual', server: true,
+});
+
+test('a chosen server section plays by the scene — its tracks are never listed, saved, or named for the user', async () => {
+    const chat = ['Blades clash in the rain — a brutal fight erupts.'];
+    const { module, audio, settingsContext } = buildEngine({ chat, serverTracks: [serverTrack('a1', vec('sea')), serverTrack('b2', vec('fight'))] });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(module.server.sections.peek().map(item => item.id), ['fantasy'], 'sections arrive in the background');
+
+    await module.chooseSection('fantasy');
+    assert.equal(module.tracks.peek().length, 0, 'the section is not mixed into the own library');
+    await module.onGenerationCompleted();
+
+    assert.equal(audio.playing, true);
+    assert.equal(audio.lastSource.ref, 'https://music.example/audio/b2.mp3', 'the fight track fits the fight scene and plays from its address');
+    assert.equal(module.nowPlaying.peek().name, 'Fantasy', 'the user sees the section, not a track name');
+    const stored = JSON.stringify(settingsContext.extensionSettings);
+    assert.equal(stored.includes('srv_fantasy'), false, 'server tracks are not persisted');
+    assert.equal(stored.includes('"section":"fantasy"'), true, 'the chosen section is remembered');
+});
+
+test('the chosen section is restored after a reload; a section the server no longer has is forgotten', async () => {
+    const first = buildEngine({ serverTracks: [serverTrack('a1', vec('fight'))] });
+    await first.module.load();
+    await first.module.chooseSection('fantasy');
+    await first.module.saveSettings();
+
+    const second = buildEngine({ serverTracks: [serverTrack('a1', vec('fight'))] });
+    Object.assign(second.settingsContext.extensionSettings, first.settingsContext.extensionSettings);
+    await second.module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(second.module.server.selected.peek(), 'fantasy');
+    assert.equal(second.module.server.tracks.peek().length, 1);
+
+    const third = buildEngine();
+    Object.assign(third.settingsContext.extensionSettings, first.settingsContext.extensionSettings);
+    third.engine.buses.cores.register('musicServer.sections', () => ({ configured: true, ok: true, sections: [{ id: 'other', name: 'Other', tracks: 1 }] }));
+    await third.module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(third.module.server.selected.peek(), '', 'a vanished section is dropped, not left selected');
+});
+
+test('with no server at all nothing changes: no sections, user tracks play as before', async () => {
+    const { module } = buildEngine();
+    await module.load();
+    assert.equal(module.server.configured.peek(), false);
+    assert.deepEqual(module.server.sections.peek(), []);
 });

@@ -18,6 +18,8 @@
  */
 
 const MODEL_ID = 'Xenova/multilingual-e5-small';
+/** Нужна музыкальному серверу: его векторы сравнимы с векторами ME, только если модель та же (`libraries/shared/music-catalog.js`). */
+export const EMBEDDING_MODEL_ID = MODEL_ID;
 const TRANSFORMERS_CDN_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6';
 /** Реальный max_seq_length модели (проверено по офиц. карточке, не по общим сведениям о семействе E5 — см. MEMORY_GRAPH.md). Символы, не токены — грубая, но безопасная в обе стороны отсечка (токенизатор всё равно сам обрежет остаток, это только чтобы не гонять WASM на мегабайтном тексте зря). */
 const MAX_CHARS = 512 * 4;

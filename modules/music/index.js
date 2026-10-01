@@ -10,6 +10,8 @@ import { sanitizeSource, isRemoteSource } from '../../libraries/shared/music-sou
 import { importLink } from './link-import.js';
 import { DEFAULTS, sanitizeTracks, buildSceneText } from './tracks.js';
 import { createMusicCard } from './card.js';
+import { createServerSection } from './server-section.js';
+import { isServerTrack } from '../../libraries/shared/music-catalog.js';
 import { tagWithModel } from './tagging.js';
 import { embeddingText, TAG_KINDS } from '../../libraries/shared/music-tagging.js';
 
@@ -53,6 +55,7 @@ export function createMusicModule(host) {
     const volume = signal(DEFAULTS.volume);
     const muted = signal(false);
     const autoTag = signal(DEFAULTS.autoTag);
+    const server = createServerSection(host);   // раздел сервера владельца: треки не показываются и не сохраняются
     const progress = signal({ time: 0, duration: 0 }); // секунды; обновляется опросом Сервиса, пока трек играет
 
     const nowPlaying = signal({ trackId: null, name: null, playing: false, blocked: false, similarity: null });
@@ -64,6 +67,9 @@ export function createMusicModule(host) {
     let currentTrackId = null;
     let currentSimilarity = null;
     let userPaused = false;
+
+    /** Всё, из чего подбираем: свои треки и треки выбранного раздела сервера. */
+    const pool = () => [...tracks.peek(), ...server.tracks.peek()];
 
     async function call(contract, params) {
         return request(host.cores, contract, { params });
@@ -82,7 +88,7 @@ export function createMusicModule(host) {
             namespace: SETTINGS_NAMESPACE,
             key: PLAYER_KEY,
             value: {
-                volume: volume.peek(), muted: muted.peek(), autoTag: autoTag.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
+                section: server.selected.peek(), volume: volume.peek(), muted: muted.peek(), autoTag: autoTag.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
                 minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(), player: {
                     collapsed: hudCollapsed.peek(), visible: hudVisible.peek(), position: hudPosition.peek(),
                 },
@@ -178,12 +184,12 @@ export function createMusicModule(host) {
         if (!started) return;
         if (isNew) {
             // playCount растёт один раз на трек (не на каждый replay) — ровно тот контракт, что ловят тесты.
-            const next = tracks.peek().map(item => (item.id === track.id ? { ...item, playCount: (item.playCount ?? 0) + 1 } : item));
-            tracks.set(next);
-            await saveTracks();
+            const bump = item => (item.id === track.id ? { ...item, playCount: (item.playCount ?? 0) + 1 } : item);
+            if (isServerTrack(track)) server.tracks.set(server.tracks.peek().map(bump));   // у серверных счётчик только в памяти
+            else { tracks.set(tracks.peek().map(bump)); await saveTracks(); }
         }
         userPaused = false;
-        setNowPlaying({ trackId: track.id, name: track.name, playing: true, blocked: false, similarity });
+        setNowPlaying({ trackId: track.id, name: isServerTrack(track) ? (server.sectionName.peek() || 'Music') : track.name, playing: true, blocked: false, similarity });
         if (isNew || !progress.peek().duration) progress.set({ time: 0, duration: 0 });
         startPolling();
         await refreshPlayingState();
@@ -206,7 +212,7 @@ export function createMusicModule(host) {
     }
 
     function resume() {
-        const track = tracks.peek().find(item => item.id === nowPlaying.peek().trackId);
+        const track = pool().find(item => item.id === nowPlaying.peek().trackId);
         if (!track) return skip();
         userPaused = false;
         return playTrack(track, nowPlaying.peek().similarity);
@@ -217,7 +223,7 @@ export function createMusicModule(host) {
         const sceneVector = await computeSceneVector();
         if (!sceneVector) return;
         const picked = selectTrack({
-            tracks: tracks.peek(), sceneVector,
+            tracks: pool(), sceneVector,
             minSimilarity: -1, // skip — намеренный: играем лучший из имеющихся, даже слабый
             closeMargin: 1, randomFn: Math.random,
         });
@@ -225,7 +231,7 @@ export function createMusicModule(host) {
     }
 
     function replayCurrent() {
-        const track = tracks.peek().find(item => item.id === currentTrackId);
+        const track = pool().find(item => item.id === currentTrackId);
         if (track) playTrack(track, currentSimilarity).catch(() => {});
     }
 
@@ -246,13 +252,13 @@ export function createMusicModule(host) {
      * шум косинуса не дёргает музыку каждое сообщение.
      */
     async function onGenerationCompleted() {
-        if (busy.peek() || !autoSwitch.peek() || !tracks.peek().length) return;
+        if (busy.peek() || !autoSwitch.peek() || !pool().length) return;
         busy.set(true);
         try {
             const sceneVector = await computeSceneVector();
             if (!sceneVector) return;
             const picked = selectTrack({
-                tracks: tracks.peek(), sceneVector,
+                tracks: pool(), sceneVector,
                 minSimilarity: minSimilarity.peek(),
                 closeMargin: 0.04, randomFn: Math.random,
             });
@@ -380,7 +386,7 @@ export function createMusicModule(host) {
     // --- Плавающий плеер (паттерн HUD Трекера) ---
 
     function playerPanel() {
-        const hasTracks = computed(() => tracks().length > 0);
+        const hasTracks = computed(() => tracks().length + server.tracks().length > 0);
         return FloatingPanel('Music', {
             position: hudPosition,
             // Размера у окна нет: оно фиксированное (CSS `.stme-music-window`). Сохранённый размер прежнего изменяемого окна больше не читается — иначе его инлайновые
@@ -428,7 +434,8 @@ export function createMusicModule(host) {
     function tree() {
         return createMusicCard({
             tracks, autoSwitch, contextMessages, minSimilarity, switchMargin, autoTag,
-            actions: { saveSettings, savePlayer, importFiles, importLinkText, tagTracks, updateDescription, removeTrack },
+            server,
+            actions: { chooseSection, saveSettings, savePlayer, importFiles, importLinkText, tagTracks, updateDescription, removeTrack },
         });
     }
 
@@ -456,6 +463,7 @@ export function createMusicModule(host) {
             volume.set(Number.isFinite(player.value.volume) ? player.value.volume : DEFAULTS.volume);
             muted.set(Boolean(player.value.muted));
             autoTag.set(player.value.autoTag !== false);
+            server.selected.set(typeof player.value.section === 'string' ? player.value.section : '');
             hudCollapsed.set(Boolean(player.value.player?.collapsed));
             hudVisible.set(player.value.player?.visible !== false);
             // Позицию, сохранённую при другом размере окна (или экрана), возвращаем в пределы экрана: окно у края, ставшее шире, иначе оказалось бы обрезанным.
@@ -464,6 +472,16 @@ export function createMusicModule(host) {
                 ? clampToViewport(savedPosition, { ...WINDOW_SIZE, viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })
                 : savedPosition);
         }
+        void loadServer().catch(() => {});   // разделы сервера подтягиваются фоном: сбой не мешает запуску
+    }
+
+    /** Подтянуть разделы сервера и треки выбранного. Вызывается при старте и по кнопке; без сервера или сети тихо ничего не делает. */
+    const loadServer = () => server.refresh();
+
+    /** Пользователь выбрал раздел: запомнить и загрузить его треки. */
+    async function chooseSection(id) {
+        await server.select(id);
+        await savePlayer();
     }
 
     /** Кнопка дока вызвала показ HUD-окна (generic-канал Раннера — см. requestHud в engine-wiring.js). Отсутствует у Модуля без hud — Раннер честно вернёт false. */
@@ -477,6 +495,9 @@ export function createMusicModule(host) {
         title: 'Music',
         description: 'Plays background music that matches the scene — chosen locally by embedding meaning, with no model calls.',
         load,
+        loadServer,
+        chooseSection,
+        server,
         tree,
         hud,
         tracks,

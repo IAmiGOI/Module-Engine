@@ -15,6 +15,7 @@ import { registerSyncPeerService } from '../services/sync-peer.js';
 import { createSyncCore } from '../cores/sync/index.js';
 import { createStartupCore } from '../cores/startup/index.js';
 import { createBackgroundsCore } from '../cores/backgrounds/index.js';
+import { createMusicServerCore } from '../cores/music-server/index.js';
 import { createGlAnimationsCore } from '../cores/ui/gl-animations.js';
 import { registerHttpService } from '../services/http.js';
 import { registerChatMetadataService } from '../services/chat-metadata.js';
@@ -230,6 +231,8 @@ const DEFINITIONS = [{
             'model.generate',
             // Вектор сцены и вектора треков — локальный эмбединг.
             'embedding.compute', 'embedding.similarity',
+            // Разделы музыкального сервера владельца (сеть — только у Ядра).
+            'musicServer.sections', 'musicServer.section',
         ],
     },
     create: host => createMusicModule(host),
@@ -496,6 +499,9 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
  * самого себя.
  */
 export const CORE_REPO = Object.freeze({ owner: 'IAmiGOI', repo: 'Module-Engine' });
+/** Музыкальный сервер владельца (tools/music-server): адрес и ключ чтения. Пустой адрес — функция выключена, в Music ничего не появляется. */
+const MUSIC_SERVER = { url: 'https://45-38-19-165.sslip.io:24817', key: '63F3JcY2lDtXIroj' };
+
 /** Репозиторий с фонами: любой файл-картинка/видео, положенный туда, сам появляется в списке фонов ST (cores/backgrounds). */
 export const BACKGROUNDS_REPO = Object.freeze({ owner: 'IAmiGOI', repo: 'Module-Engine-Backgrounds' });
 
@@ -754,6 +760,8 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         engine.registerCaller('core.backgrounds', 'cores', { tier: 'official', networkAccess: true }),
         { ...BACKGROUNDS_REPO, publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.backgrounds' }) },
     );
+    // Разделы и векторы треков с музыкального сервера владельца: единственное, что Music берёт из сети (аудио потом тянет плеер по прямой ссылке).
+    const musicServer = createMusicServerCore(engine.registerCaller('core.musicServer', 'cores', { tier: 'official', networkAccess: true }), { server: MUSIC_SERVER });
     // Синхронизация файлов между устройствами (напрямую по WebRTC) и с репозиторием GitHub. Запускается из index.js вместе с фонами.
     const syncCore = createSyncCore(
         engine.registerCaller('core.sync', 'cores', { tier: 'official', networkAccess: true }),
@@ -972,5 +980,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, promptManagerCore, promptManagerPanel, modelsCore, trackingCore, macrosCore, lorebookCore, characterCardsCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
+    return { engine, musicServer, promptManagerCore, promptManagerPanel, modelsCore, trackingCore, macrosCore, lorebookCore, characterCardsCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
 }

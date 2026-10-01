@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Музыкальный сервер ME</title>
+<style>
+    :root { color-scheme: light dark; --bg: #f6f6f8; --card: #fff; --line: #d9d9e0; --text: #1c1c22; --dim: #6b6b78; --accent: #5b6cf0; --warn: #b8741a; --bad: #c0392b; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #16161a; --card: #202026; --line: #34343e; --text: #ececf1; --dim: #9a9aa8; --accent: #8b97ff; --warn: #e0a24a; --bad: #ff7a6b; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    main { max-width: 980px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+    h1 { font-size: 18px; margin: 0 0 12px; grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    button, input, textarea, select { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+    button { cursor: pointer; } button:hover { border-color: var(--accent); } button.primary { background: var(--accent); border-color: var(--accent); color: #fff; } button.danger { color: var(--bad); }
+    textarea { width: 100%; resize: vertical; min-height: 56px; } input.wide { width: 100%; }
+    .sections button.item { display: flex; justify-content: space-between; width: 100%; margin-bottom: 6px; text-align: left; }
+    .sections button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--card)); }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .row > .grow { flex: 1; min-width: 160px; }
+    .track { border-top: 1px solid var(--line); padding: 10px 0; } .track:first-child { border-top: 0; }
+    .dim { color: var(--dim); font-size: 13px; } .warn { color: var(--warn); } .ok { color: var(--accent); }
+    .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--dim); margin-bottom: 12px; }
+    .drop.over { border-color: var(--accent); color: var(--text); }
+    #login { max-width: 360px; margin: 80px auto; }
+</style>
+</head>
+<body>
+<div id="login" class="card" hidden>
+    <h1>Музыкальный сервер ME</h1>
+    <p class="dim">Токен владельца (ADMIN_TOKEN). Сохраняется только в этом браузере.</p>
+    <div class="row"><input id="token" class="grow" type="password" placeholder="токен"><button class="primary" id="enter">Войти</button></div>
+    <p id="loginError" class="warn"></p>
+</div>
+<main id="app" hidden>
+    <h1>Музыкальный сервер ME <button id="logout">Выйти</button></h1>
+    <aside class="card sections">
+        <div id="sectionList"></div>
+        <div class="row"><input id="newSection" class="grow" placeholder="Новый раздел"><button class="primary" id="addSection">+</button></div>
+    </aside>
+    <section class="card">
+        <div id="empty" class="dim">Создайте раздел слева.</div>
+        <div id="panel" hidden>
+            <div class="row"><input id="sectionName" class="grow"><button id="renameSection">Переименовать</button><button class="danger" id="deleteSection">Удалить раздел</button></div>
+            <p class="dim">Раздел увидят пользователи ME в выпадающем списке. Трек играет только когда у него есть тег.</p>
+            <div class="drop" id="drop">Перетащите аудиофайлы сюда или <input type="file" id="files" accept="audio/*" multiple></div>
+            <textarea id="uploadTag" placeholder="Тег для загружаемых файлов (необязательно — можно вписать потом у каждого трека). Например: тихий ночной лагерь, акустическая гитара, грусть и покой"></textarea>
+            <div id="progress" class="dim"></div>
+            <div id="tracks"></div>
+        </div>
+    </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let token = localStorage.getItem('musicToken') || '';
+let catalog = { sections: [], tracks: [] };
+let current = '';
+
+async function api(path, { method = 'GET', body } = {}) {
+    const response = await fetch(path, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) { logout(); throw new Error('неверный токен'); }
+    if (!response.ok) throw new Error(data.error || `ошибка ${response.status}`);
+    return data;
+}
+const fail = error => alert(error.message || error);
+const el = (tag, props = {}, ...kids) => { const node = Object.assign(document.createElement(tag), props); node.append(...kids); return node; };
+
+function logout() { localStorage.removeItem('musicToken'); token = ''; $('app').hidden = true; $('login').hidden = false; }
+async function load() {
+    catalog = await api('/api/admin/catalog');
+    if (!catalog.sections.some(item => item.id === current)) current = catalog.sections[0]?.id || '';
+    render();
+}
+
+function render() {
+    $('sectionList').replaceChildren(...catalog.sections.map(section => {
+        const count = catalog.tracks.filter(track => track.section === section.id).length;
+        const button = el('button', { className: `item${section.id === current ? ' active' : ''}` }, el('span', {}, section.name), el('span', { className: 'dim' }, String(count)));
+        button.onclick = () => { current = section.id; render(); };
+        return button;
+    }));
+    const section = catalog.sections.find(item => item.id === current);
+    $('empty').hidden = Boolean(section); $('panel').hidden = !section;
+    if (!section) return;
+    $('sectionName').value = section.name;
+    const tracks = catalog.tracks.filter(track => track.section === current).sort((a, b) => b.createdAt - a.createdAt);
+    $('tracks').replaceChildren(...(tracks.length ? tracks.map(trackRow) : [el('p', { className: 'dim' }, 'В разделе пока нет треков.')]));
+}
+
+function trackRow(track) {
+    const title = el('input', { className: 'grow', value: track.title });
+    const tag = el('textarea', { value: track.description, placeholder: 'Тег: настроение, темп, звучание, к какой сцене подходит' });
+    const move = el('select', {}, ...catalog.sections.map(section => el('option', { value: section.id, selected: section.id === track.section }, section.name)));
+    const status = el('span', { className: track.tagged ? 'ok' : 'warn' }, track.tagged ? 'играет по тегу' : 'нет тега — не играет');
+    const save = el('button', { className: 'primary' }, 'Сохранить');
+    save.onclick = async () => {
+        save.disabled = true; save.textContent = 'Считаю вектор…';
+        try { await api(`/api/admin/tracks/${track.id}`, { method: 'PATCH', body: { title: title.value, description: tag.value, section: move.value } }); await load(); } catch (error) { fail(error); save.disabled = false; save.textContent = 'Сохранить'; }
+    };
+    const del = el('button', { className: 'danger' }, 'Удалить');
+    del.onclick = async () => { if (confirm(`Удалить «${track.title}»?`)) { try { await api(`/api/admin/tracks/${track.id}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } } };
+    const listen = el('button', {}, '▶');
+    let audio = null;
+    listen.onclick = async () => {   // <audio> не умеет Authorization — тянем файл с токеном и играем из памяти
+        if (audio) { audio.pause(); audio = null; listen.textContent = '▶'; return; }
+        const response = await fetch(`/audio/${track.id}.${track.ext}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!response.ok) return fail('не удалось загрузить аудио');
+        audio = new Audio(URL.createObjectURL(await response.blob())); audio.onended = () => { audio = null; listen.textContent = '▶'; };
+        audio.play(); listen.textContent = '■';
+    };
+    return el('div', { className: 'track' }, el('div', { className: 'row' }, listen, title, move), tag, el('div', { className: 'row' }, status, el('span', { className: 'grow' }), save, del));
+}
+
+async function upload(files) {
+    const tag = $('uploadTag').value.trim();
+    for (const [index, file] of [...files].entries()) {
+        $('progress').textContent = `Загрузка ${index + 1}/${files.length}: ${file.name}`;
+        const ext = (file.name.match(/\.([a-z0-9]+)$/i) || [])[1] || '';
+        const title = file.name.replace(/\.[^.]+$/, '');
+        const query = new URLSearchParams({ section: current, title, ext, description: tag });
+        try {
+            const response = await fetch(`/api/admin/tracks?${query}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: file });
+            if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `ошибка ${response.status}`);
+        } catch (error) { fail(`${file.name}: ${error.message}`); }
+    }
+    $('progress').textContent = '';
+    await load();
+}
+
+$('enter').onclick = async () => { token = $('token').value.trim(); localStorage.setItem('musicToken', token); try { await load(); $('login').hidden = true; $('app').hidden = false; } catch (error) { $('loginError').textContent = error.message; } };
+$('logout').onclick = logout;
+$('addSection').onclick = async () => { const name = $('newSection').value.trim(); if (!name) return; try { const created = await api('/api/admin/sections', { method: 'POST', body: { name } }); $('newSection').value = ''; current = created.id; await load(); } catch (error) { fail(error); } };
+$('renameSection').onclick = async () => { try { await api(`/api/admin/sections/${current}`, { method: 'PATCH', body: { name: $('sectionName').value } }); await load(); } catch (error) { fail(error); } };
+$('deleteSection').onclick = async () => { if (confirm('Удалить раздел?')) { try { await api(`/api/admin/sections/${current}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } } };
+$('files').onchange = event => { upload(event.target.files); event.target.value = ''; };
+$('drop').ondragover = event => { event.preventDefault(); $('drop').classList.add('over'); };
+$('drop').ondragleave = () => $('drop').classList.remove('over');
+$('drop').ondrop = event => { event.preventDefault(); $('drop').classList.remove('over'); upload(event.dataTransfer.files); };
+
+(async () => { if (token) { try { await load(); $('app').hidden = false; return; } catch { /* покажем вход */ } } $('login').hidden = false; })();
+</script>
+</body>
+</html>

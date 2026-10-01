@@ -1,13 +1,13 @@
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
-import { Button, TextInput, TextArea, Slider, Toggle, Field, Row, EmptyState } from '../../libraries/shared/widgets.js';
+import { Button, TextInput, TextArea, Select, Slider, Toggle, Field, Row, EmptyState } from '../../libraries/shared/widgets.js';
 
 /**
  * Карточка Модуля Music в панели движка: настройки, добавление треков (файлы, прямая ссылка), кнопка разметки моделью и список треков с описаниями. Дерево `h()`;
  * состояние и действия приходят из Модуля (`index.js`) — здесь своего поведения нет.
  */
-export function createMusicCard({ tracks, autoSwitch, contextMessages, minSimilarity, switchMargin, autoTag, actions }) {
-    const { saveSettings, savePlayer, importFiles, importLinkText, tagTracks, updateDescription, removeTrack } = actions;
+export function createMusicCard({ tracks, autoSwitch, contextMessages, minSimilarity, switchMargin, autoTag, server, actions }) {
+    const { saveSettings, savePlayer, importFiles, importLinkText, tagTracks, updateDescription, removeTrack, chooseSection } = actions;
 
     function trackRow(track) {
         const draft = signal(track.description);
@@ -42,7 +42,13 @@ export function createMusicCard({ tracks, autoSwitch, contextMessages, minSimila
             },
         });
         const linkDraft = signal('');
+        // Библиотека сервера: виден только выбор раздела — ни треков, ни тегов пользователь не видит. Нет сервера или разделов — блока нет.
+        const sectionOptions = computed(() => [{ value: '', label: 'Off — only my own tracks' }, ...server.sections().map(item => ({ value: item.id, label: item.name }))]);
+        const sectionPicker = computed(() => (server.configured() && server.sections().length
+            ? Field('Music library', Select(server.selected, sectionOptions, { onChange: id => { void chooseSection(id); } }), { hint: 'Ready-made music from the server. Pick a section — tracks start on their own to match the scene.' })
+            : null));
         return h('div', { class: 'stme-module-body' },
+            sectionPicker,
             Row(
                 h('small', { class: 'stme-module-hint' }, 'Picks background music that matches the scene — locally, by meaning, with no model calls. Describe each track in words; the closer its description to what is happening in the chat, the more likely it plays.'),
                 Button('Save settings', saveSettings),
