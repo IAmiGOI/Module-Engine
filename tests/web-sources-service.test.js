@@ -95,3 +95,20 @@ test('the new actions are safe and continue by themselves; the character list, t
     assert.match((await actions['web.wiki'].run({ host: 'x.fandom.com', query: 'T' })).detail, /1\. T — https:\/\/x\.fandom\.com\/wiki\/T\n {3}s/);
     assert.deepEqual(await createWebActions({ callService: async () => ({ ok: false, error: { message: 'down' } }) })['web.character'].run({ name: 'a' }), { ok: false, message: 'The character search failed: down' });
 });
+
+test('models name parameters their own way: query for a name, series for a franchise, link for a url, arguments inside "arguments", a page address for a wiki host; and missing ones are answered with the exact way to send them', async () => {
+    const seen = [];
+    const actions = createWebActions({ callService: async (contract, params) => { seen.push([contract, params]); return contract === 'stWebSearch.characters' ? { ok: true, value: { candidates: [], failed: [] } } : { ok: true, value: { wikis: [], results: [], matches: [] } }; } });
+    await actions['web.character'].run({ query: 'Nanahoshi Shizuka', series: 'Mushoku Tensei' });
+    assert.deepEqual(seen.at(-1), ['stWebSearch.characters', { query: 'Nanahoshi Shizuka', franchise: 'Mushoku Tensei' }]);
+    await actions['web.wikis'].run({ arguments: { series: 'Mushoku Tensei' } });
+    assert.deepEqual(seen.at(-1), ['stWebSearch.wikiGuess', { franchise: 'Mushoku Tensei' }]);
+    await actions['web.wiki'].run({ wiki: 'https://mushokutensei.fandom.com/wiki/Main_Page', q: 'Shizuka' });
+    assert.deepEqual(seen.at(-1), ['stWebSearch.wiki', { host: 'mushokutensei.fandom.com', query: 'Shizuka' }]);
+    const before = seen.length;
+    const empty = await actions['web.character'].run({});
+    assert.equal(empty.ok, false);
+    assert.match(empty.message, /Send it as \{"name": "Emilia", "franchise": "Re:Zero"\}/);
+    assert.equal(seen.length, before, 'nothing was asked of the service with empty parameters');
+    for (const id of ['web.search', 'web.wikis', 'web.wiki', 'web.read', 'web.page', 'web.find']) assert.match((await actions[id].run({})).message, /Send it as/, id);
+});

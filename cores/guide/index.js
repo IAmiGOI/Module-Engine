@@ -14,6 +14,7 @@ import { createGuideContext } from './context.js';
 import { createGuideAvatar } from './avatar.js';
 import { NEUTRAL, nextFocus, detectFocus, isClosing, isTaskRequest, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
 import { cutAfterDigest, planHistoryFold, buildDigestPrompt, clampDigest, DIGEST_MAX_TOKENS } from '../../libraries/core/guide-digest.js';
+import { computeRepetitionCut } from '../../libraries/core/guide-repetition.js';
 import { splitThinking, streamingText, streamingStage, insertPlan, formatEngineResult, MAX_PLAN_CHARS } from '../../libraries/core/guide-thinking.js';
 
 /**
@@ -78,6 +79,7 @@ const FAILED_CHANGE_FOLLOW_UP = 'The change you sent could not be applied; the r
 const PLAN_OPEN_FOLLOW_UP = 'Your plan still has open steps, and your last reply ended with no action and no question to the user, so the work stopped. Do the next step of the plan now (send its action block and stop right after it). Only if you truly need something from the user, ask them plainly with a question.';
 const UNKEPT_PROMISE_FOLLOW_UP = 'You said you would look something up or read something, but your reply has no action block, so nothing happened. Send the action block now (web.page, web.find, web.read…) and stop right after it.';
 const DEAD_LINK_FOLLOW_UP = 'The link you wrote does not open anything: [Label](stme:…) is only for blocks of the interface from the anchor list, and <continue/> only waits for such a block. A web page is read with an action block: web.read {"url": …} (or {"ref": …}), then web.page / web.find. Send the action block now and stop right after it.';
+const FAILED_ACTION_FOLLOW_UP = 'The action you sent failed; the reason and the right way to send it are in the last result. Send it again correctly, or take another route, or tell the user plainly what is not working.';
 const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 
@@ -250,8 +252,27 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     // Стриминг: чанки приходят событием ядра моделей `model.generate.chunk` с нашим `requestId`; в окно идёт видимая часть (без рассуждений и недописанных карточек),
     // не чаще раза в STREAM_PAINT_MS — перерисовывать список на каждый токен незачем.
     let streaming = null;
+    // Почему ответ оборван: `'user'` — кнопка «Стоп», `'repeat'` — модель зациклилась. `chainStopped` обрывает и цепочку автоходов до следующей реплики человека.
+    let stopReason = null;
+    let chainStopped = false;
+    let repeatKeep = '';
+    const cancelStreaming = () => { if (streaming) void call('model.generate.cancel', { requestId: streaming.requestId }); };
+    /** Кнопка «Стоп»: оборвать ответ и всю цепочку автоматических ходов. */
+    function stop() {
+        if (!busy.peek()) return false;
+        stopReason = 'user';
+        chainStopped = true;
+        cancelStreaming();
+        return true;
+    }
     const unsubscribeChunks = host.events?.subscribe?.('model.generate.chunk', payload => {
         if (!streaming || payload?.requestId !== streaming.requestId) return;
+        streaming.lastText = payload.text;
+        // Модель зациклилась (одна и та же фраза снова и снова): обрываем, оставив один экземпляр; остальное — мусор, который тянул бы токены до конца лимита.
+        if (!stopReason) {
+            const cut = computeRepetitionCut(payload.text);
+            if (cut >= 0) { stopReason = 'repeat'; repeatKeep = payload.text.slice(0, cut); chainStopped = true; cancelStreaming(); return; }
+        }
         const at = now();
         if (at - streaming.painted < STREAM_PAINT_MS) return;
         streaming.painted = at;
@@ -266,7 +287,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     async function ask(text, { echo = true, internal = false, followUp = FOLLOW_UP } = {}) {
         const question = internal ? '' : String(text ?? '').trim();
         if (internal ? false : (!question || busy.peek())) return false;
-        if (!internal) { continues = 0; actionContinues = 0; }
+        if (internal && chainStopped) return false;
+        if (!internal) { continues = 0; actionContinues = 0; chainStopped = false; stopReason = null; }
         if (echo && !internal) push({ role: 'user', text: question });
         if (!(await hasModel())) {
             mode.set('scenario');
@@ -344,6 +366,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 if (done.ok && ACTIONS[run.action]?.thenContinue) autoFollowUp = ACTIONS[run.action].followUp ?? ACTION_FOLLOW_UP;
                 // Правка, которую не удалось применить (поле не подошло, нет карточки), — тоже повод для хода: ошибка в заметке, она исправляет.
                 else if (!done.ok && ACTIONS[run.action]?.autoApply) autoFollowUp = FAILED_CHANGE_FOLLOW_UP;
+                // Безопасное действие, которое не удалось (не те параметры, страница не открылась), тоже даёт ход: причина в заметке, она поправляет вызов или говорит человеку — а не замирает.
+                else if (!done.ok && ACTIONS[run.action]?.safe) autoFollowUp = FAILED_ACTION_FOLLOW_UP;
             }
             // Ей нужно посмотреть блок, чтобы продолжить: ждём, пока он раскроется, и даём ещё один ход без участия человека (не больше MAX_CONTINUES подряд).
             if (looking) {
@@ -360,9 +384,17 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             }
             return true;
         } catch (error) {
+            if (stopReason) {
+                // Оборвано нами: то, что успело прийти (без блоков и мыслей), остаётся в чате, дальше — короткая пометка.
+                const kept = streamingText(stopReason === 'repeat' ? repeatKeep : (streaming?.lastText ?? '')).trim();
+                if (kept) push({ role: 'assistant', text: kept });
+                push({ role: 'note', text: stopReason === 'repeat' ? 'The model started repeating itself, so I stopped it. Rephrase or ask again.' : 'Stopped.', ok: stopReason !== 'repeat' });
+                return false;
+            }
             push({ role: 'note', text: `I couldn't answer: ${error.message}`, ok: false });
             return false;
         } finally {
+            stopReason = null;
             streaming = null;
             streamDraft.set(null);
             streamStage.set(null);
@@ -458,7 +490,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         };
     }
 
-    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, streamStage, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
+    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, streamStage, stop, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
 
     const unregisters = [
         host.own.register('guide.open', () => open()),
@@ -470,7 +502,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     ];
 
     return {
-        load, open, close, ask, chooseOption, pick, runAction, saveSettings, resetChat, status, checklistState,
+        load, open, close, ask, stop, chooseOption, pick, runAction, saveSettings, resetChat, status, checklistState,
         persona, messages, mode, visible, streamDraft, streamStage,
         mountWindow: async () => { const finalUi = mount(ui.tree()); await finalUi.settled?.(); return finalUi; },
         unregister: () => { unsubscribeChunks?.(); unsubscribeAvatar?.(); avatar.unregister(); for (const unregister of unregisters) unregister(); },

@@ -8,7 +8,28 @@ import { createPageSearch } from './page-search.js';
 /** Страница короче этого приходит в ответ целиком; длиннее — только оглавление, остальное она берёт кусками. */
 const SMALL_PAGE_CHARS = 3000;
 
+/**
+ * Модели называют параметры по-своему (`query` вместо `name`, `series` вместо `franchise`, `link` вместо `url`, аргументы внутри `arguments`): берём привычные варианты, а не отвечаем
+ * ошибкой «Whose character should I look up?», после которой работа вставала.
+ */
+const ALIASES = Object.freeze({
+    query: ['query', 'q', 'search', 'text', 'keywords', 'term'],
+    name: ['name', 'character', 'character_name', 'query', 'q'],
+    franchise: ['franchise', 'series', 'title', 'work', 'show', 'anime', 'query', 'name'],
+    host: ['host', 'wiki', 'domain', 'site', 'url'],
+    url: ['url', 'link', 'address', 'href'],
+    ref: ['ref', 'character_ref'],
+    id: ['id', 'page_id', 'pageId', 'page'],
+});
+const flatten = params => ({ ...(params ?? {}), ...(params?.arguments && typeof params.arguments === 'object' ? params.arguments : {}), ...(params?.parameters && typeof params.parameters === 'object' ? params.parameters : {}) });
+const pick = (params, key) => {
+    for (const alias of ALIASES[key]) if (params[alias] !== undefined && params[alias] !== null && String(params[alias]).trim() !== '') return params[alias];
+    return undefined;
+};
+const hostOfValue = value => { try { return new URL(String(value)).hostname; } catch { return String(value ?? '').trim(); } };
+
 export function createWebActions({ callService }) {
+    const missing = example => ({ ok: false, message: `That action did not get what it needs. Send it as ${example}.` });
     const pageSearch = createPageSearch({ callService });
     const buildFailure = message => ({ ok: false, message });
     const hostOf = address => { try { return new URL(address).hostname; } catch { return address; } };
@@ -18,7 +39,9 @@ export function createWebActions({ callService }) {
             safe: true,
             thenContinue: true,
             description: 'Search the web (used to check the facts of a canon character, a place, a term). Params: {"query": "Faputa Made in Abyss appearance tails"}. Returns up to 6 results (title, address, snippet). Then open the best page with web.read.',
-            async run({ query } = {}) {
+            async run(raw = {}) {
+                const query = pick(flatten(raw), 'query');
+                if (!query) return missing('{"query": "Faputa Made in Abyss appearance"}');
                 const found = await callService('stWebSearch.search', { query });
                 if (!found.ok) return buildFailure(`The search failed: ${found.error.message}`);
                 const { source, results } = found.value;
@@ -32,7 +55,11 @@ export function createWebActions({ callService }) {
             safe: true,
             thenContinue: true,
             description: 'FIRST STEP for an anime, manga, visual novel or game character: look the name up in AniList, VNDB and MyAnimeList (open databases — names, nicknames, age, description, the titles she appears in). Params: {"name": "Emilia", "franchise": "Re:Zero" (optional — candidates from it come first; keep the name itself short, the databases match names, not sentences)}. Returns up to 6 candidates, best first, each with a ref; the same name can belong to several characters, so check the titles and ask the user if it is unclear which one. Then open one with web.read {"ref": …}. The databases give the basics; the franchise wiki (web.wikis, web.wiki) gives the depth.',
-            async run({ name, franchise } = {}) {
+            async run(raw = {}) {
+                const params = flatten(raw);
+                const name = pick(params, 'name');
+                const franchise = params.franchise ?? params.series ?? params.work ?? params.show ?? params.anime;
+                if (!name) return missing('{"name": "Emilia", "franchise": "Re:Zero"}');
                 const found = await callService('stWebSearch.characters', { query: name, franchise });
                 if (!found.ok) return buildFailure(`The character search failed: ${found.error.message}`);
                 const { candidates, failed } = found.value;
@@ -49,7 +76,9 @@ export function createWebActions({ callService }) {
             safe: true,
             thenContinue: true,
             description: 'Find the fan wiki of a franchise (Fandom, wiki.gg). Params: {"franchise": "Made in Abyss"}. Returns the wiki hosts that exist (like madeinabyss.fandom.com). Then search inside it with web.wiki. If none is found, use web.search ("<franchise> fandom wiki").',
-            async run({ franchise } = {}) {
+            async run(raw = {}) {
+                const franchise = pick(flatten(raw), 'franchise');
+                if (!franchise) return missing('{"franchise": "Made in Abyss"}');
                 const found = await callService('stWebSearch.wikiGuess', { franchise });
                 if (!found.ok) return buildFailure(`The wiki search failed: ${found.error.message}`);
                 const { wikis } = found.value;
@@ -61,7 +90,11 @@ export function createWebActions({ callService }) {
             safe: true,
             thenContinue: true,
             description: 'Search INSIDE one wiki. Params: {"host": "madeinabyss.fandom.com", "query": "Faputa"}. Returns up to 6 pages (title, address, snippet); open the best with web.read {"url"} — wiki pages come with their Infobox and sections. Much better than a general web search for canon facts.',
-            async run({ host, query } = {}) {
+            async run(raw = {}) {
+                const params = flatten(raw);
+                const host = pick(params, 'host') ? hostOfValue(pick(params, 'host')) : undefined;
+                const query = pick(params, 'query') ?? pick(params, 'name');
+                if (!host || !query) return missing('{"host": "madeinabyss.fandom.com", "query": "Faputa"}');
                 const found = await callService('stWebSearch.wiki', { host, query });
                 if (!found.ok) return buildFailure(`The wiki search failed: ${found.error.message}`);
                 const { results } = found.value;
@@ -73,7 +106,11 @@ export function createWebActions({ callService }) {
             safe: true,
             thenContinue: true,
             description: 'Open a web page in the engine memory WITHOUT pulling it into the chat. Params: {"url": "https://…"} or {"ref": "anilist:88572"} (a character found with web.character). Use an address from web.search / web.wiki or one the user gave. You get the page id, its size, the list of its sections and the first lines; a short page comes whole. A wiki page starts with its Infobox (age, height, voice actors…). Then read only what you need: web.page for a section or a stretch of text, web.find to look for words. Open pages stay available for the whole work on the card.',
-            async run({ url, ref } = {}) {
+            async run(raw = {}) {
+                const params = flatten(raw);
+                const url = pick(params, 'url');
+                const ref = pick(params, 'ref');
+                if (!url && !ref) return missing('{"url": "https://…"} or {"ref": "anilist:88572"}');
                 const opened = await callService('stWebSearch.open', { url, ref });
                 if (!opened.ok) return buildFailure(`The page did not open: ${opened.error.message}`);
                 const page = opened.value;
@@ -94,7 +131,11 @@ export function createWebActions({ callService }) {
             safe: true,
             thenContinue: true,
             description: 'Read a piece of a page opened with web.read. Params: {"id": "p1", "section": 2 or part of its title} or {"id": "p1", "offset": 3000, "chars": 3000 (default 3000, up to 8000)}. The result tells where the piece ends and from which offset to continue.',
-            async run({ id, section, offset, chars } = {}) {
+            async run(raw = {}) {
+                const params = flatten(raw);
+                const id = pick(params, 'id');
+                const { section, offset, chars } = params;
+                if (!id) return missing('{"id": "p1", "section": 2}');
                 const piece = await callService('stWebSearch.view', { id, section, offset, chars });
                 if (!piece.ok) return buildFailure(piece.error.message);
                 const view = piece.value;
@@ -107,7 +148,11 @@ export function createWebActions({ callService }) {
             safe: true,
             thenContinue: true,
             description: 'Look for something on a page opened with web.read — by the words AND by the meaning ("how she behaves in a fight" finds "attacks fiercely and never retreats"). Params: {"id": "p1", "query": "tails height" or a short phrase}. Returns the best places with a bit of text around each, the section and how it was found (words / meaning / both); read more of a place with web.page and its offset. The first search on a page takes a few seconds while the page is prepared.',
-            async run({ id, query } = {}) {
+            async run(raw = {}) {
+                const params = flatten(raw);
+                const id = pick(params, 'id');
+                const query = pick(params, 'query');
+                if (!id || !query) return missing('{"id": "p1", "query": "how she speaks"}');
                 const found = await pageSearch.search({ id, query });
                 if (!found.ok) return buildFailure(found.error.message);
                 const { matches, meaning } = found.value;
