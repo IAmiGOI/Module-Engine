@@ -13,7 +13,7 @@ import { CREATOR } from '../../libraries/core/guide-creator.js';
  */
 const CLEAR_CONFIRM_MS = 4000;
 
-export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, streamStage = signal(null), stop = () => false, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
+export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, streamStage = signal(null), stop = () => false, debugText = () => '', runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 540, height: 680 });
     const collapsed = signal(false);
@@ -197,6 +197,18 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
             composer());
     }
 
+    async function copyDebug() {
+        const text = debugText();
+        try { await globalThis.navigator.clipboard.writeText(text); } catch {
+            const area = globalThis.document.createElement('textarea');
+            area.value = text;
+            globalThis.document.body.append(area);
+            area.select();
+            globalThis.document.execCommand('copy');
+            area.remove();
+        }
+    }
+
     function settingsView() {
         const current = persona.peek();
         const fields = Object.fromEntries(Object.keys(current).map(key => [key, signal(current[key] ?? '')]));
@@ -212,7 +224,9 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
             Field('Extra instructions', TextArea(fields.instructions, { rows: 3 })),
             Field('Your own knowledge', TextArea(fields.knowledge, { rows: 5, placeholder: 'Notes she always knows. Separate notes with a line of ---' })),
             Row(Button('Save', async () => { await saveSettings(read()); view.set('chat'); }), Button('Back', () => view.set('chat'))),
-            Row(Button('Clear the chat', () => resetChat()), Button('Replay the setup scenario', () => { view.set('chat'); void resetChat({ scenario: true }); })));
+            Row(Button('Clear the chat', () => resetChat()), Button('Replay the setup scenario', () => { view.set('chat'); void resetChat({ scenario: true }); })),
+            // Журнал последних ходов (сырые ответы провайдера и решения гида): копируется в буфер, чтобы прислать при странной остановке.
+            Row(Button('Copy debug log', copyDebug)));
     }
 
     function tree() {

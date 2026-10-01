@@ -320,3 +320,20 @@ test('a model that starts repeating itself is cut off at once: the request is ca
     assert.match(shown.at(-1).text, /started repeating itself/);
     assert.equal(world.calls.length, 1);
 });
+
+test('the debug log of the guide shows, for every turn, what the model said, what the engine did with it and why the chain went on or ended, with the raw provider answer attached', async () => {
+    const world = build({ generate: count => (count === 1 ? `Let me read it.\n${READ_ACTION}` : 'All done.') });
+    await world.guide.load();
+    world.engine.events.subscribe('model.generate.finished', () => {});
+    await world.guide.ask('Look up Emilia.');
+    const requestId = world.calls[0].requestId;
+    world.engine.events.emit('model.generate.raw', { requestId, status: 200, format: 'openai', body: 'data: {"choices":[{"delta":{"content":"Let me read it."},"finish_reason":"stop"}]}\n\ndata: [DONE]', content: 'Let me read it.' });
+    const log = JSON.parse(world.guide.debugText());
+    assert.equal(log.turns.length, 2);
+    const [first, second] = log.turns;
+    assert.deepEqual([first.kind, first.because, first.actions.map(item => item.action), first.results, first.next], ['user', 'user message', ['web.search'], [{ action: 'web.search', ok: true }], 'follow-up: action-result']);
+    assert.equal(first.reply.startsWith('Let me read it.'), true);
+    assert.equal(first.raw.finishReasons[0], 'stop', 'the raw answer is attached to its turn');
+    assert.deepEqual([second.kind, second.because, second.next], ['automatic', 'action-result', 'ended: the reply is final (no action, no nudge needed)']);
+    assert.equal(log.meta.focus, 'general');
+});
