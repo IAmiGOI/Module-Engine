@@ -3,11 +3,29 @@
  * реально запишется (libraries/core/guide-character.js), и записывается это нажатием «Apply». Вся проверка и запись — в Ядре `characterCard`; здесь только
  * перевод предложения в вызов его контрактов.
  */
+import { buildCharacterView } from '../../libraries/core/guide-character.js';
+import { computeCardNegationProblems } from '../../libraries/core/character-lint.js';
+
 /** После применённой правки карточки она сама идёт дальше: следующий шаг плана или короткий отчёт — без того, чтобы человек писал «продолжай». */
 const CHANGE_FOLLOW_UP = 'The card change was applied (see the last result). Continue the task: if your plan has a next step, do it now; if the card is finished, tell the user in one or two lines what is written and what is still open. Do not repeat the text you just wrote, and do not ask whether to apply — it is already applied.';
 
 export function createCharacterActions({ call }) {
     const buildFailure = message => ({ ok: false, message });
+    // Правило про стоящие отрицания не отклоняет работу: движок ВСЕГДА сохраняет карточку, а места, которые читаются как стоящие отрицания, записывает ей в план первым пунктом —
+    // «поправить перед следующим этапом» (маленьким character.update только этих полей). Прежде отказ заставлял её переписывать всю карточку по кругу (по 3000 токенов за раз), и она упиралась в лимит.
+    // Долг по отрицаниям помнится по карточкам и полям: исправленное поле из плана уходит, когда не осталось ни одного.
+    const debt = new Map();
+    const MAX_PLAN_ITEMS = 6;
+    const settle = (avatar, fields, explicit) => {
+        const found = explicit === true ? [] : computeCardNegationProblems(fields);
+        const own = debt.get(avatar) ?? new Map();
+        for (const key of Object.keys(fields)) own.delete(key);
+        for (const item of found) own.set(item.field, [...(own.get(item.field) ?? []), item]);
+        if (own.size) debt.set(avatar, own); else debt.delete(avatar);
+        const items = [...debt.values()].flatMap(map => [...map.values()].flat());
+        const line = items.length ? `[fix] Before the next stage, reword the standing negations the engine found (send ONE small character.update with only the fields named here, each rewritten as what the character DOES; a negation may stay only in brackets right after its positive sentence): ${items.slice(0, MAX_PLAN_ITEMS).map(item => `${item.field}: “${item.sentence}” (${item.problem})`).join('; ')}${items.length > MAX_PLAN_ITEMS ? `; and ${items.length - MAX_PLAN_ITEMS} more` : ''}.` : '';
+        return { planFix: line, note: found.length ? ` Saved. ${found.length} line${found.length === 1 ? '' : 's'} read as standing negations: they are in your plan to fix before the next stage.` : '' };
+    };
     const splitTarget = ({ avatar, label, negations_ok: negationsOk, ...fields }) => ({ avatar, label, negationsOk, fields });
 
     return {
@@ -19,8 +37,10 @@ export function createCharacterActions({ call }) {
             async run(params = {}) {
                 // `label` и `avatar` — параметры правки (character.update): модель переносит их и сюда, а карточка при создании их не знает. Они не поля — отбрасываются, не ошибка.
                 const { label: _label, avatar: _avatar, negations_ok: negationsOk, ...fields } = params;
-                const created = await call('characterCard.create', { fields, ...(negationsOk === true ? { negationsOk } : {}) });
-                return created.ok ? { ok: true, message: `Character “${created.value.name}” is created (${created.value.avatar}).` } : buildFailure(created.error.message);
+                const created = await call('characterCard.create', { fields, negationsOk: true });
+                if (!created.ok) return buildFailure(created.error.message);
+                const { planFix, note } = settle(created.value.avatar, fields, negationsOk);
+                return { ok: true, message: `Character “${created.value.name}” is created (${created.value.avatar}).${note}`, planFix };
             },
         },
         'character.update': {
@@ -31,8 +51,10 @@ export function createCharacterActions({ call }) {
             async run(params = {}) {
                 const { avatar, label, negationsOk, fields } = splitTarget(params);
                 if (!avatar) return buildFailure('Which character? Its avatar file is needed.');
-                const updated = await call('characterCard.update', { avatar, label, fields, ...(negationsOk === true ? { negationsOk } : {}) });
-                return updated.ok ? { ok: true, message: `Character “${updated.value.name}” is updated (${updated.value.changed.join(', ')}). The previous version is saved.` } : buildFailure(updated.error.message);
+                const updated = await call('characterCard.update', { avatar, label, fields, negationsOk: true });
+                if (!updated.ok) return buildFailure(updated.error.message);
+                const { planFix, note } = settle(avatar, fields, negationsOk);
+                return { ok: true, message: `Character “${updated.value.name}” is updated (${updated.value.changed.join(', ')}). The previous version is saved.${note}`, planFix };
             },
         },
         'character.avatar': {
@@ -56,6 +78,17 @@ export function createCharacterActions({ call }) {
             async run(params = {}) {
                 const restored = await call('characterCard.restore', { avatar: params.avatar, key: params.key });
                 return restored.ok ? { ok: true, message: `Character ${restored.value.avatar} is back to the chosen version (${restored.value.changed.join(', ') || 'no field differed'}).` } : buildFailure(restored.error.message);
+            },
+        },
+        'character.read': {
+            safe: true,
+            thenContinue: true,
+            followUp: 'The full card is in the last result. Use it for the task; do not re-read it unless you changed it.',
+            description: 'Read the FULL card of any character, even one that is not open or named in the chat (the state shows only a few cards in full). Params: {"avatar": "<file from the list>"} or {"name": "<exact name>"}. Use it to compare cards, to copy a style from another card, or before editing one the state does not show.',
+            async run(params = {}) {
+                if (!params.avatar && !params.name) return buildFailure('Which character? Its avatar file or exact name is needed.');
+                const card = await call('characterCard.get', params.avatar ? { avatar: params.avatar } : { name: params.name });
+                return card.ok ? { ok: true, message: `Read the card of “${card.value.fields?.name ?? params.name ?? params.avatar}”.`, detail: buildCharacterView(card.value) } : buildFailure(card.error.message);
             },
         },
         'character.test': {

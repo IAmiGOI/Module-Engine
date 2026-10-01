@@ -190,6 +190,8 @@ test('a change that cannot be applied gives her a turn too, with the reason, so 
     assert.equal(calls.length, 2);
     assert.ok(lastTurns(calls).some(turn => turn.includes('The name is taken.')), 'she sees the reason');
     assert.match(lastTurns(calls).at(-1), /could not be applied/);
+    const failNote = guide.messages.peek().find(message => message.role === 'note' && /name is taken/.test(message.text));
+    assert.equal(failNote?.hidden, true, 'the failure she fixes herself is kept for her but hidden from the user');
     const other = buildCards({ generate: () => 'Here you go.\n```proposal\n{"action":"tracker.create","params":{"title":"Health","fields":[{"name":"health","prompt":"hp","default":1}]}}\n```', create: () => ({}) });
     await other.guide.load();
     await other.guide.ask('Make a health tracker.');
@@ -369,4 +371,33 @@ test('a working chain goes on by itself until she says <done/>: a silent stop af
     await asking.guide.load();
     await asking.guide.ask('Look it up.');
     assert.equal(asking.calls.length, 2, 'a question waits for the user');
+});
+
+test('the negation rule never refuses the work: the card is saved at once, the places that read as standing negations go first into her plan ("fix before the next stage"), and the line leaves the plan when a small update has fixed them', async () => {
+    const sent = [];
+    const bad = '```proposal\n{"action":"character.create","params":{"name":"Emilia","description":"She does not step back. She does not step forward."}}\n```';
+    const fix = '```proposal\n{"action":"character.update","params":{"avatar":"Emilia.png","description":"She holds her ground."}}\n```';
+    const { guide, calls } = buildCards({
+        generate: count => (count === 1 ? bad : (count === 2 ? fix : 'Card is ready.')),
+        create: params => { sent.push(params.negationsOk); return { name: 'Emilia', avatar: 'Emilia.png' }; },
+    });
+    await guide.load();
+    await guide.ask('Make a card for Emilia.');
+    assert.deepEqual(sent, [true], 'written at the first send, no refusal');
+    const planOf = call => JSON.stringify(call.messages.filter(message => message.role === 'system').slice(1));
+    assert.match(planOf(calls[1]), /\[fix\] Before the next stage[^]*two negations in a row/, 'the debt is the first line of her plan on the next turn');
+    assert.ok(!/\[fix\]/.test(planOf(calls[2])), 'a small update fixed it, the line is gone');
+    assert.ok(guide.messages.peek().some(message => message.role === 'note' && /is created[^]*standing negations/.test(message.text)));
+    assert.equal(calls.length, 3);
+});
+
+test('she can read the full card of any character on demand with character.read, and the card text goes to her, not to the chat', async () => {
+    const READ = '```action\n{"action":"character.read","params":{"avatar":"Mira.png"}}\n```';
+    const { guide, calls, bus } = buildCards({ generate: count => (count === 1 ? READ : 'Compared.'), create: () => ({}) });
+    bus.register('characterCard.get', params => ({ avatar: params.avatar, fields: { name: 'Mira', description: 'Mira answers in one sentence.', alternate_greetings: [], tags: [], depth_prompt: { depth: 4, role: 'system', prompt: '' } } }));
+    await guide.load();
+    await guide.ask('Copy the style of Mira.');
+    assert.equal(calls.length, 2);
+    assert.ok(lastTurns(calls).some(turn => turn.includes('Mira answers in one sentence.')), 'she reads the card text');
+    assert.ok(!guide.messages.peek().some(message => message.role === 'assistant' && /Mira answers in one sentence/.test(message.text)));
 });
