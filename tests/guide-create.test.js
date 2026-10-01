@@ -136,7 +136,8 @@ test('a choice option with an action runs it at once — no second button, no mo
 });
 
 test('a harmless action the model marks "auto" runs by itself and leaves no button; the reply text is kept', async () => {
-    const { guide } = build({ generate: () => 'Checking now.\n```action\n{"label":"Check","action":"models.check","auto":true}\n```' });
+    let calls = 0;
+    const { guide } = build({ generate: () => ((calls += 1) === 1 ? 'Checking now.\n```action\n{"label":"Check","action":"models.check","auto":true}\n```' : 'All good.') });
     await guide.load();
     await guide.ask('check my connections');
     const [, reply, note] = guide.messages.peek();
