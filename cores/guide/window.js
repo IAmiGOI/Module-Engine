@@ -173,7 +173,12 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
             type: 'button', class: computed(() => `stme-input-circle stme-input-regenerate stme-guide-clear${confirmingClear() ? ' stme-input-send-stop' : ''}`),
             title: computed(() => (confirmingClear() ? 'Press again to clear the chat history' : 'Clear the chat history')), 'aria-label': 'Clear the chat history', 'on:click': clearHistory,
         }, h('i', { class: computed(() => `fa-solid ${confirmingClear() ? 'fa-check' : 'fa-broom'}`), 'aria-hidden': 'true' }));
-        return h('div', { class: 'stme-guide-composer' }, clear, field,
+        // Журнал отладки — прямо в строке ввода: окно настроек из чата не открывается, а журнал нужен именно после странной остановки.
+        const bug = h('button', {
+            type: 'button', class: 'stme-input-circle stme-input-regenerate stme-guide-clear stme-guide-debug',
+            title: computed(() => (debugCopied() ? 'Copied — paste it to the developer' : 'Copy the debug log (raw replies and decisions of the last turns)')), 'aria-label': 'Copy the debug log', 'on:click': copyDebug,
+        }, h('i', { class: computed(() => `fa-solid ${debugCopied() ? 'fa-check' : 'fa-bug'}`), 'aria-hidden': 'true' }));
+        return h('div', { class: 'stme-guide-composer' }, clear, bug, field,
             // Пока она отвечает, вместо «Отправить» — «Стоп»: обрывает ответ и все автоматические ходы после него.
             h('button', { type: 'button', class: computed(() => `stme-input-circle stme-input-send${busy() ? ' stme-input-send-stop' : ''}`), title: computed(() => (busy() ? 'Stop' : 'Send')), 'aria-label': computed(() => (busy() ? 'Stop' : 'Send')), 'on:click': () => (busy.peek() ? stop() : send()) },
                 h('i', { class: computed(() => `fa-solid ${busy() ? 'fa-stop' : 'fa-paper-plane'}`), 'aria-hidden': 'true' })));
@@ -197,6 +202,8 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
             composer());
     }
 
+    const debugCopied = signal(false);
+    let debugTimer = null;
     async function copyDebug() {
         const text = debugText();
         try { await globalThis.navigator.clipboard.writeText(text); } catch {
@@ -207,6 +214,9 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
             globalThis.document.execCommand('copy');
             area.remove();
         }
+        debugCopied.set(true);
+        clearTimeout(debugTimer);
+        debugTimer = setTimeout(() => debugCopied.set(false), 1800);
     }
 
     function settingsView() {
