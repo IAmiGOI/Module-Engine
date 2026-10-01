@@ -15,8 +15,8 @@ export function createLorebookActions({ call, callService }) {
     const failure = message => ({ ok: false, message });
     const reason = text => String(text ?? '').replace(/[.\s]+$/, '');
     const knownBooks = async () => {
-        const state = await callService('stLorebook.rawState');
-        return [...new Set([...(state.ok ? state.value?.allNames ?? [] : [])])];
+        const names = await call('lorebook.names');
+        return names.ok ? names.value ?? [] : [];
     };
 
     return {
@@ -29,12 +29,12 @@ export function createLorebookActions({ call, callService }) {
                 let name = wanted;
                 let entries;
                 if (wanted) {
-                    const loaded = await callService('stLorebook.load', { name: wanted });
-                    if (!loaded.ok || !loaded.value || typeof loaded.value.entries !== 'object') {
+                    const loaded = await call('lorebook.read', { name: wanted });
+                    if (!loaded.ok) {
                         const names = await knownBooks();
                         return failure(`There is no lorebook named “${wanted}”.${names.length ? ` Books that exist: ${names.slice(0, 60).join(', ')}.` : ''}`);
                     }
-                    entries = Object.values(loaded.value.entries);
+                    entries = loaded.value;
                 } else {
                     await call('lorebook.scan');
                     const all = await call('lorebook.entries');
@@ -72,7 +72,7 @@ export function createLorebookActions({ call, callService }) {
             async run(params = {}) {
                 const name = String(params.name ?? params.book ?? params.title ?? '').trim();
                 if (!name) return failure('What should the lorebook be called? Send {"name": "…"}.');
-                const created = await callService('stLorebook.create', { name });
+                const created = await call('lorebook.createBook', { name });
                 if (!created.ok) return failure(created.error.message);
                 let attached = '';
                 const avatar = String(params.avatar ?? '').trim();

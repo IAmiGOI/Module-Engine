@@ -165,6 +165,31 @@ export function createLorebookCore(host, { publish } = {}) {
         return undefined;
     }
 
+    // --- Книги, которые не обязательно активны: чтение по имени, список всех, создание ---
+
+    /** Записи любой книги по имени (даже не прикреплённой к чату): только чтение, ничего не меняет и в индекс активных не попадает. */
+    async function readBook(name) {
+        const book = String(name ?? '').trim();
+        if (!book) throw new Error('lorebook.read: "name" is required.');
+        const loaded = await callService('stLorebook.load', { name: book });
+        if (!loaded.ok || !loaded.value || typeof loaded.value.entries !== 'object') throw new Error(`There is no lorebook named “${book}”.`);
+        return Object.values(loaded.value.entries).map(entry => ({ ...entry, book }));
+    }
+
+    /** Имена всех книг ST (не только активных). */
+    async function allBookNames() {
+        const state = await callService('stLorebook.rawState');
+        return state.ok && Array.isArray(state.value?.allNames) ? state.value.allNames.map(String) : [];
+    }
+
+    /** Новая пустая книга (имя и занятость проверяет Сервис); после создания индекс обновляется. */
+    async function createBook(name) {
+        const created = await callService('stLorebook.create', { name });
+        if (!created.ok) throw new Error(created.error.message);
+        await scan();
+        return created.value;
+    }
+
     // --- Публикация: запись → настоящий {{macro}} ------------------------
 
     async function readPublished() {
@@ -304,6 +329,9 @@ export function createLorebookCore(host, { publish } = {}) {
         host.own.register('lorebook.find', params => find(params)),
         host.own.register('lorebook.get', params => { const { uid, book } = requireEntryLocation(params); return getEntry(uid, book); }),
         host.own.register('lorebook.books', () => books),
+        host.own.register('lorebook.read', params => readBook(params?.name)),
+        host.own.register('lorebook.names', () => allBookNames()),
+        host.own.register('lorebook.createBook', params => createBook(params?.name)),
         // Полные записи активных книг — вход собственного движка активации Prompt Manager (pm-lorebook.js).
         host.own.register('lorebook.entries', () => [...byUid.entries()].map(([key, entry]) => ({ ...entry, book: entry.book ?? key.slice(0, key.lastIndexOf(':')) }))),
         host.own.register('lorebook.lastActivated', () => lastActivated),
