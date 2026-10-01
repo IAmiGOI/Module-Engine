@@ -6,7 +6,7 @@ import { normalizeCardFields, TEXT_FIELD_LIMITS } from './character-card.js';
  * `buildCharacterView`: текст карточки для модели, где явно помечено всё, что не поместилось целиком.
  */
 
-export const CHARACTER_ACTIONS = Object.freeze(['character.create', 'character.update', 'character.restore']);
+export const CHARACTER_ACTIONS = Object.freeze(['character.create', 'character.update', 'character.restore', 'character.avatar']);
 
 const PREVIEW_CHARS = 320;
 const FIELD_VIEW_CAP_CHARS = 12000;
@@ -58,6 +58,12 @@ export function describeCardFields(fields) {
 
 /** Карточка-предложение: `{ ok, title, lines, danger }` либо `{ ok: false, error }`. */
 export function describeCharacter(action, params = {}) {
+    if (action === 'character.avatar') {
+        if (!params.avatar) return { ok: false, error: 'Which character? Its avatar file is needed.' };
+        if (params.undo === true) return { ok: true, title: `Put the previous picture of “${String(params.avatar).replace(/\.png$/i, '')}” back`, lines: ['The last replaced picture of this session returns.'] };
+        if (!params.url) return { ok: false, error: 'Which picture? An image address is needed.' };
+        return { ok: true, title: `New picture for “${String(params.avatar).replace(/\.png$/i, '')}”`, lines: [`From: ${params.url}`, `Kept part of the frame: ${params.focus || 'center'} (cropped to a 2:3 portrait)`] };
+    }
     if (action === 'character.restore') {
         if (!params.avatar) return { ok: false, error: 'Which character? Its avatar file is needed.' };
         if (!params.key) return { ok: false, error: 'Which version? Its key from the list is needed.' };

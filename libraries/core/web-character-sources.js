@@ -12,13 +12,13 @@ export const JIKAN_URL = 'https://api.jikan.moe/v4/characters';
 export const MAX_CANDIDATES = 6;
 const DESCRIPTION_LIMIT = 40000;
 
-const ANILIST_QUERY = 'query($search: String, $id: Int) { Page(perPage: 8) { characters(search: $search, id: $id, sort: FAVOURITES_DESC) { id name { full native alternative alternativeSpoiler } description(asHtml: false) gender age dateOfBirth { year month day } bloodType favourites siteUrl media(perPage: 6, sort: POPULARITY_DESC) { nodes { type title { romaji english } } } } } }';
+const ANILIST_QUERY = 'query($search: String, $id: Int) { Page(perPage: 8) { characters(search: $search, id: $id, sort: FAVOURITES_DESC) { id name { full native alternative alternativeSpoiler } image { large } description(asHtml: false) gender age dateOfBirth { year month day } bloodType favourites siteUrl media(perPage: 6, sort: POPULARITY_DESC) { nodes { type title { romaji english } } } } } }';
 
 export const buildAnilistBody = ({ search, id } = {}) => ({ query: ANILIST_QUERY, variables: id ? { id: Number(id) } : { search: String(search ?? '').slice(0, 100) } });
 
 export const buildVndbBody = ({ search, id } = {}) => ({
     filters: id ? ['id', '=', String(id)] : ['search', '=', String(search ?? '').slice(0, 100)],
-    fields: 'id,name,original,aliases,description,age,birthday,blood_type,height,weight,bust,waist,hips,sex,vns.title',
+    fields: 'id,name,original,aliases,description,age,birthday,blood_type,height,weight,bust,waist,hips,sex,vns.title,image.url',
     results: 8, sort: 'searchrank',
 });
 
@@ -52,7 +52,7 @@ export function computeAnilistCandidates(json) {
         ref: `anilist:${item.id}`, source: 'AniList', id: item.id, name: item.name?.full ?? '', native: item.name?.native ?? '',
         aliases: [...(item.name?.alternative ?? []), ...(item.name?.alternativeSpoiler ?? [])].filter(Boolean),
         titles: (item.media?.nodes ?? []).map(node => node.title?.english || node.title?.romaji).filter(Boolean),
-        favourites: item.favourites ?? 0, url: item.siteUrl ?? `https://anilist.co/character/${item.id}`,
+        favourites: item.favourites ?? 0, url: item.siteUrl ?? `https://anilist.co/character/${item.id}`, image: item.image?.large ?? '',
         facts: facts([['Gender', item.gender], ['Age', item.age], ['Birthday', birthday(item.dateOfBirth)], ['Blood type', item.bloodType]]),
         description: computeAnilistDescription(item.description),
     }));
@@ -61,7 +61,7 @@ export function computeAnilistCandidates(json) {
 export function computeVndbCandidates(json) {
     return (json?.results ?? []).map(item => ({
         ref: `vndb:${item.id}`, source: 'VNDB', id: item.id, name: item.name ?? '', native: item.original ?? '', aliases: item.aliases ?? [],
-        titles: (item.vns ?? []).map(vn => vn.title).filter(Boolean).slice(0, 6), favourites: 0, url: `https://vndb.org/${item.id}`,
+        titles: (item.vns ?? []).map(vn => vn.title).filter(Boolean).slice(0, 6), favourites: 0, url: `https://vndb.org/${item.id}`, image: item.image?.url ?? '',
         facts: facts([['Sex', Array.isArray(item.sex) ? item.sex[0] : item.sex], ['Age', item.age], ['Birthday', Array.isArray(item.birthday) ? item.birthday.join('-') : item.birthday], ['Blood type', item.blood_type], ['Height', item.height && `${item.height} cm`], ['Weight', item.weight && `${item.weight} kg`], ['Bust / waist / hips', item.bust ? `${item.bust} / ${item.waist} / ${item.hips}` : '']]),
         description: computeVndbDescription(item.description),
     }));
@@ -72,7 +72,7 @@ export function computeJikanCandidates(json) {
     return list.map(item => ({
         ref: `jikan:${item.mal_id}`, source: 'MyAnimeList', id: item.mal_id, name: item.name ?? '', native: item.name_kanji ?? '', aliases: item.nicknames ?? [],
         titles: [...(item.anime ?? []), ...(item.manga ?? [])].map(entry => entry.anime?.title ?? entry.manga?.title).filter(Boolean).slice(0, 6), favourites: item.favorites ?? 0,
-        url: item.url ?? `https://myanimelist.net/character/${item.mal_id}`, facts: [], description: clean(item.about),
+        url: item.url ?? `https://myanimelist.net/character/${item.mal_id}`, image: item.images?.jpg?.image_url ?? '', facts: [], description: clean(item.about),
     }));
 }
 
@@ -110,6 +110,7 @@ export function computeCharacterPageText(item) {
     if (names.length) parts.push('## Names', ...names);
     if (item.facts.length) parts.push('## Facts', ...item.facts.map(([field, value]) => `${field}: ${value}`));
     if (item.titles.length) parts.push('## Appears in', ...item.titles);
+    if (item.image) parts.push('## Images', `Portrait (${item.source}${item.source === 'VNDB' ? ' — this host usually blocks direct download' : ''}): ${item.image}`);
     if (item.description) parts.push('## Description', item.description);
     return parts.join('\n');
 }
