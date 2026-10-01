@@ -6,7 +6,7 @@ import { TRIGGER_MODES, computeTriggers } from './trigger-modes.js';
  * ОПИСАНИЕ для человека — то, что он увидит на карточке перед нажатием «Apply». Карточка показывает не слова модели, а то, что реально запишется.
  */
 
-export const CREATE_ACTIONS = Object.freeze(['tracker.create', 'macro.create', 'lorebook.addEntry']);
+export const CREATE_ACTIONS = Object.freeze(['tracker.create', 'macro.create', 'lorebook.addEntry', 'lorebook.addEntries', 'lorebook.createBook']);
 
 const LIMITS = Object.freeze({ fields: 12, prompt: 300, defaultText: 80, macroText: 2000, macroCode: 4000, keys: 8, key: 40, content: 4000, title: 80 });
 const TRACKER_WHEN = TRIGGER_MODES.map(mode => mode.value);
@@ -60,7 +60,20 @@ export function normalizeLorebookEntry(params = {}) {
     return { ok: true, value: { comment: text(params.title, LIMITS.title) || keys[0] || 'Entry', key: keys, content, constant: always } };
 }
 
-const NORMALIZERS = Object.freeze({ 'tracker.create': normalizeTracker, 'macro.create': normalizeMacro, 'lorebook.addEntry': normalizeLorebookEntry });
+/** Новая книга: только имя (проверку занятости и знаков делает Сервис). */
+export function normalizeLorebookBook(params = {}) {
+    const name = text(params.name ?? params.book ?? params.title, 80);
+    return name ? { ok: true, value: { name, avatar: text(params.avatar, 200) } } : fail('The lorebook needs a name.');
+}
+
+/** Пакет записей: до 20, каждая проверяется как одиночная; хотя бы одна должна быть годной. */
+export function normalizeLorebookEntries(params = {}) {
+    const items = (Array.isArray(params.entries) ? params.entries : []).slice(0, 20).map(item => normalizeLorebookEntry(item ?? {}));
+    const good = items.filter(item => item.ok).map(item => item.value);
+    return good.length ? { ok: true, value: { book: text(params.book, 80), entries: good } } : fail('No entry in the list is usable: each needs text and a trigger word.');
+}
+
+const NORMALIZERS = Object.freeze({ 'tracker.create': normalizeTracker, 'macro.create': normalizeMacro, 'lorebook.addEntry': normalizeLorebookEntry, 'lorebook.createBook': normalizeLorebookBook, 'lorebook.addEntries': normalizeLorebookEntries });
 
 const WHEN_LABEL = Object.freeze(Object.fromEntries(TRIGGER_MODES.map(mode => [mode.value, mode.label.toLowerCase()])));
 
@@ -81,6 +94,8 @@ export function describeProposal(action, params) {
     if (action === 'macro.create') {
         return { ok: true, title: `Macro {{${value.macroName}}}`, lines: [value.kind === 'code' ? 'A small program:' : 'Inserts the text:', value.source.slice(0, 240)] };
     }
+    if (action === 'lorebook.createBook') return { ok: true, title: `Lorebook “${value.name}”`, lines: ['A new empty lorebook.'] };
+    if (action === 'lorebook.addEntries') return { ok: true, title: `${value.entries.length} lorebook entries`, lines: value.entries.map(entry => entry.comment).slice(0, 12) };
     return {
         ok: true, title: `Lorebook entry “${value.comment}”`,
         lines: [value.constant ? 'Always active.' : `Triggers on: ${value.key.join(', ')}.`, value.content.slice(0, 240)],

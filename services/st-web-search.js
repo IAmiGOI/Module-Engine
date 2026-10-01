@@ -152,6 +152,13 @@ export function registerStWebSearchService(bus, { getContext, fetch: fetchImpl =
         return { id: page.id, url, chars: page.text.length, outline: page.outline, head: page.text.slice(0, OVERVIEW_HEAD_CHARS) };
     }
 
+    /** Свой текст как страница (лорбук гида и подобное): тот же просмотр, разделы и поиск, что и у веб-страницы; `url` — ключ (то же `url` заменяет прежнюю страницу). */
+    function openText({ url, text, maxChars } = {}) {
+        if (!url || !String(text ?? '').trim()) throw new Error('A page needs an address key and some text.');
+        const page = pages.open({ url: String(url), text, maxChars });
+        return { id: page.id, url: page.url, chars: page.text.length, outline: page.outline, head: page.text.slice(0, OVERVIEW_HEAD_CHARS) };
+    }
+
     function requirePage(id) {
         const page = pages.get(id);
         if (!page) throw new Error(`There is no open page “${id ?? ''}”. Open it first with web.read; open pages: ${pages.list().map(item => item.id).join(', ') || 'none'}.`);
@@ -193,6 +200,7 @@ export function registerStWebSearchService(bus, { getContext, fetch: fetchImpl =
         bus.register('stWebSearch.search', params => search(params), { loadMetric: () => 1 }),
         bus.register('stWebSearch.read', params => read(params), { loadMetric: () => 1 }),
         bus.register('stWebSearch.open', params => open(params), { loadMetric: () => 1 }),
+        bus.register('stWebSearch.openText', params => openText(params), { loadMetric: () => 1 }),
         bus.register('stWebSearch.view', params => view(params), { loadMetric: () => 1 }),
         bus.register('stWebSearch.find', params => find(params), { loadMetric: () => 1 }),
         bus.register('stWebSearch.text', params => textOf(params), { loadMetric: () => 1 }),

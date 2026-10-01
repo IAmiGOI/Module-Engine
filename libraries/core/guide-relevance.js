@@ -10,7 +10,7 @@
 
 const TRACKERS = /\b(trackers?|tracking|tracked|poll|polling)\b/i;
 const MACROS = /\bmacros?\b|\{\{/i;
-const LOREBOOK = /\b(lore|lorebook|lorebooks|world\s?info|entry|entries)\b/i;
+const LOREBOOK = /\b(lore|lorebook|lorebooks|world\s?info|wi|world\s?building|entry|entries)\b/i;
 const CHARACTERS = /\b(characters?|char cards?|character cards?|first message|first_mes|greetings?|example dialogues?|mes_example|creator'?s? notes?|post[- ]history)\b/i;
 const SETTINGS = /\b(settings?|sliders?|options?|threshold|tune|tuning)\b/i;
 const PRESET = /\b(preset|presets|sampler|samplers|temperature|top[- ]?p|top[- ]?k|min[- ]?p|repetition penalty|rep(?:etition)?[- ]?pen|frequency penalty|presence penalty|context template|instruct(?:\s+mode|\s+template)?|generation settings)\b/i;

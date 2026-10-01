@@ -9,6 +9,7 @@ import { createCreateActions } from './create-actions.js';
 import { createEditActions } from './edit-actions.js';
 import { createCharacterActions } from './character-actions.js';
 import { createWebActions } from './web-actions.js';
+import { createLorebookActions } from './lorebook-actions.js';
 import { createWhatsNew } from './whats-new.js';
 import { createGuideContext } from './context.js';
 import { createGuideAvatar } from './avatar.js';
@@ -163,6 +164,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         ...createEditActions({ call, modules }),
         ...createCharacterActions({ call }),
         ...createWebActions({ callService }),
+        ...createLorebookActions({ call, callService }),
     };
 
     async function runAction(action, params) {
@@ -350,7 +352,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 anchors: anchorsResult.ok ? anchorsResult.value ?? [] : [],
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
                 digest: digest.text,
-                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: focus.characters ? ['characters'] : [] }),
+                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: [...(focus.characters ? ['characters'] : []), ...(focus.lorebook ? ['lorebook'] : [])] }),
             });
             const turns = trimHistory(history.map(toTurn), focus.characters ? CHARACTER_HISTORY_TOKEN_LIMIT : HISTORY_TOKEN_LIMIT);
             if (internal) turns.push({ role: 'user', content: `(automatic — the user did not type this) ${followUp.replace(/^\(automatic[^)]*\)\s*/, '')}${END_OF_TURN_RULE}` });

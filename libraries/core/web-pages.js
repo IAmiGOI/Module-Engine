@@ -80,11 +80,11 @@ export function createPageStore({ limit = PAGE_STORE_LIMIT } = {}) {
     const pages = new Map();
     let counter = 0;
     return {
-        open({ url, text }) {
+        open({ url, text, maxChars = PAGE_MAX_CHARS }) {
             for (const [id, page] of pages) if (page.url === url) pages.delete(id);
             counter += 1;
             const id = `p${counter}`;
-            const body = String(text ?? '').slice(0, PAGE_MAX_CHARS);
+            const body = String(text ?? '').slice(0, Math.max(1, Number(maxChars) || PAGE_MAX_CHARS));
             pages.set(id, { id, url, text: body, outline: computeOutline(body) });
             while (pages.size > limit) pages.delete(pages.keys().next().value);
             return pages.get(id);
