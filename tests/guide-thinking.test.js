@@ -296,7 +296,7 @@ test('automatic rounds are capped at three per request; a <continue/> with nothi
     const nothing = buildLoop(['I already know it.<continue/>']);
     await nothing.guide.load();
     await nothing.guide.ask('hello');
-    assert.equal(nothing.sent.length, 1 + 4, 'a <continue/> with no real link is told once per turn that nothing opens, and the automatic turns are capped');
+    assert.equal(nothing.sent.length, 1 + 3, 'a <continue/> with no real link is told that nothing opens, and after three such nudges without progress she stops');
     assert.ok(nothing.sent[1].messages.at(-1).content.includes('does not open anything'));
     const again = buildLoop(['Looking: [Music](stme:module:module.music).<continue/>', 'Done looking.', 'Looking again: [Music](stme:module:module.music).<continue/>', 'Done again.']);
     await again.guide.load();
