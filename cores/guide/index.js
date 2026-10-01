@@ -71,7 +71,10 @@ const STREAM_PAINT_MS = 60;
 const MAX_CONTINUES = 3;
 const REVEAL_SETTLE_MS = 800;
 /** Сколько раз подряд действия-«узнать» (поиск, чтение, проверка) дают гиду ещё один ход на один запрос человека: больше — это уже петля. */
-const MAX_ACTION_CONTINUES = 4;
+/** Автоходов после действий — без предела (решение владельца: цепочка исследования длинная, и лимит обрывал её на середине); остановить можно кнопкой «Стоп». */
+const MAX_ACTION_CONTINUES = Infinity;
+/** Предохранитель только от БЕСПРОГРЕССНОЙ петли: столько подсказок подряд («пришли действие», «исправь вызов») без единого удавшегося шага — и она останавливается и говорит об этом. */
+const MAX_IDLE_NUDGES = 3;
 /** Полный текст результата для модели хранится вместе с заметкой, но не бесконечно: он живёт в сохранённом чате. */
 const MAX_NOTE_DETAIL_CHARS = 14000;
 const FABRICATION_FOLLOW_UP = 'Your last reply contained text that looked like a tool result — it was thrown away, you never see results that way. If you still need information, send the action block now (web.page, web.find, web.read…) and stop right after it; the engine will give you the real result. If you already have what you need, continue from the real results above.';
@@ -80,6 +83,8 @@ const PLAN_OPEN_FOLLOW_UP = 'Your plan still has open steps, and your last reply
 const UNKEPT_PROMISE_FOLLOW_UP = 'You said you would look something up or read something, but your reply has no action block, so nothing happened. Send the action block now (web.page, web.find, web.read…) and stop right after it.';
 const DEAD_LINK_FOLLOW_UP = 'The link you wrote does not open anything: [Label](stme:…) is only for blocks of the interface from the anchor list, and <continue/> only waits for such a block. A web page is read with an action block: web.read {"url": …} (or {"ref": …}), then web.page / web.find. Send the action block now and stop right after it.';
 const FAILED_ACTION_FOLLOW_UP = 'The action you sent failed; the reason and the right way to send it are in the last result. Send it again correctly, or take another route, or tell the user plainly what is not working.';
+/** Подсказки без шага работы: считаются подряд (MAX_IDLE_NUDGES). */
+const NUDGE_FOLLOW_UPS = new Set([FABRICATION_FOLLOW_UP, FAILED_CHANGE_FOLLOW_UP, PLAN_OPEN_FOLLOW_UP, UNKEPT_PROMISE_FOLLOW_UP, DEAD_LINK_FOLLOW_UP, FAILED_ACTION_FOLLOW_UP]);
 const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 
@@ -159,7 +164,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         if (result.message) push({ role: 'note', text: result.message, ok: result.ok, ...(result.detail ? { detail: String(result.detail).slice(0, MAX_NOTE_DETAIL_CHARS) } : {}) });
         // Действие, чей результат гид должна прочитать сразу (поиск, чтение, проверка, тест карточки), даёт ей ещё один ход без участия человека.
         // Внутри её же ответа (`busy`) продолжение ставит сам `ask`, после того как выполнит все действия реплики.
-        if (result.ok && entry.thenContinue && !busy.peek() && actionContinues < MAX_ACTION_CONTINUES) { actionContinues += 1; void ask(null, { internal: true, followUp: entry.followUp ?? ACTION_FOLLOW_UP }); }
+        if (result.ok && entry.thenContinue && !busy.peek() && actionContinues < actionLimit()) { actionContinues += 1; void ask(null, { internal: true, followUp: entry.followUp ?? ACTION_FOLLOW_UP }); }
         if (result.ok && COMPLETING_ACTIONS.has(action)) { focus = { ...focus, done: true }; void saveChat(); }   // факт завершения: на следующей реплике — нейтральный режим, если не назовут новую тему
         changed();
         return result;
@@ -282,13 +287,15 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
 
     let continues = 0;
     let actionContinues = 0;
+    const actionLimit = () => MAX_ACTION_CONTINUES;
+    let idleNudges = 0;
 
     /** `internal` — автоматический ход после того, как гид открыла блок и попросила `<continue/>`: без реплики человека, в разгар её же запроса. */
     async function ask(text, { echo = true, internal = false, followUp = FOLLOW_UP } = {}) {
         const question = internal ? '' : String(text ?? '').trim();
         if (internal ? false : (!question || busy.peek())) return false;
         if (internal && chainStopped) return false;
-        if (!internal) { continues = 0; actionContinues = 0; chainStopped = false; stopReason = null; }
+        if (!internal) { continues = 0; actionContinues = 0; idleNudges = 0; chainStopped = false; stopReason = null; }
         if (echo && !internal) push({ role: 'user', text: question });
         if (!(await hasModel())) {
             mode.set('scenario');
@@ -358,7 +365,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             // Пообещала посмотреть, а блока действия нет: без этого она замирала на словах, и человек писал «ну?».
             if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && isUnkeptPromise(shown)) autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP;
             // `<continue/>` без единой настоящей ссылки на блок: ждать нечего — чаще всего это попытка «открыть» веб-страницу ссылкой.
-            if (!autoFollowUp && !autoRuns.length && thought.more && !extractAnchors(quiet).length) autoFollowUp = DEAD_LINK_FOLLOW_UP;
+            if (!autoFollowUp && !autoRuns.length && thought.more && !extractAnchors(quiet).length && !calm.includes('```')) autoFollowUp = DEAD_LINK_FOLLOW_UP;
             // Пока открыт её план (она стирает его, когда закончила), реплика без действия и без вопроса человеку — это остановка на полпути, а не конец работы.
             if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && plan.trim() && !/\?\s*$/.test(shown.trim()) && !calm.includes('```')) autoFollowUp = PLAN_OPEN_FOLLOW_UP;
             for (const run of autoRuns) {
@@ -373,12 +380,15 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             if (looking) {
                 continues += 1;
                 // Ссылка ни на что не вела (не якорь интерфейса — например, адрес вики): это не «смотрю блок», и повторять тот же ход бессмысленно; она узнаёт, чем читать страницу.
-                if (!(await opening) && actionContinues < MAX_ACTION_CONTINUES) { actionContinues += 1; return await ask(null, { internal: true, followUp: DEAD_LINK_FOLLOW_UP }); }
+                if (!(await opening) && actionContinues < actionLimit()) { actionContinues += 1; return await ask(null, { internal: true, followUp: DEAD_LINK_FOLLOW_UP }); }
                 await sleep(REVEAL_SETTLE_MS);
                 return await ask(null, { internal: true });
             }
             // Результат поиска или проверки, который она сама запустила, она читает сразу же, а не ждёт, пока человек напишет ещё раз.
-            if (autoFollowUp && actionContinues < MAX_ACTION_CONTINUES) {
+            if (autoFollowUp && actionContinues < actionLimit()) {
+                // Подсказка («пришли действие», «исправь вызов») — не шаг работы: подряд без единого удавшегося действия они считаются, а удавшееся действие счёт обнуляет.
+                idleNudges = NUDGE_FOLLOW_UPS.has(autoFollowUp) ? idleNudges + 1 : 0;
+                if (idleNudges > MAX_IDLE_NUDGES) { push({ role: 'note', text: 'I keep getting stuck without making progress, so I stopped. Tell me how to go on.', ok: false }); return true; }
                 actionContinues += 1;
                 return await ask(null, { internal: true, followUp: autoFollowUp });
             }

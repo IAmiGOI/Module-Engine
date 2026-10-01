@@ -67,15 +67,22 @@ test('a search she runs by herself inside her reply is read in the same go: the 
     ]);
 });
 
-test('a model that keeps searching is stopped after four automatic rounds for one request, and a new request from the user starts the count again', async () => {
-    const { guide, calls } = build({ generate: () => `Searching again.\n${SEARCH_ACTION}` });
+test('a long research chain is not cut: every successful step gives her the next turn, with no limit, until she stops asking for actions; a new request from the user starts clean', async () => {
+    const { guide, calls } = build({ generate: count => (count <= 7 ? `Searching again.\n${SEARCH_ACTION}` : 'That is everything about Faputa.') });
     await guide.load();
     await guide.ask('Tell me everything about Faputa.');
-    assert.equal(calls.length, 5, 'the user turn plus four automatic ones, then she stops');
-    await guide.ask('And again?');
-    assert.equal(calls.length, 10, 'the count started over with the new request');
+    assert.equal(calls.length, 8, 'seven searches in a row, each read by her, then the answer');
+    assert.equal(guide.messages.peek().at(-1).text, 'That is everything about Faputa.');
+    assert.ok(!guide.messages.peek().some(message => /paused|stuck/.test(message.text ?? '')), 'nothing cut it short');
 });
 
+test('only a chain that makes NO progress is stopped: three nudges in a row without one successful step end with a plain note, and a successful step starts the count over', async () => {
+    const { guide, calls } = build({ generate: () => 'Let me look at that for you now.' });
+    await guide.load();
+    await guide.ask('Go on.');
+    assert.equal(calls.length, 4, 'the user turn plus three nudges, then she stops');
+    assert.match(guide.messages.peek().at(-1).text, /I keep getting stuck without making progress/);
+});
 test('a search she writes without the "auto" flag still runs by itself — no button asks the user for a permission that the request already gave', async () => {
     const forgotten = SEARCH_ACTION.replace(',"auto":true', '');
     const { guide, calls } = build({ generate: count => (count === 1 ? `Let me read her page.\n${forgotten}` : 'Five tails.') });
@@ -208,7 +215,7 @@ test('the same sentence and the same action repeated in one reply are shown once
 });
 
 test('a reply that only promises to look something up gets a nudge to send the action, instead of stopping until the user writes "so?"; questions, finished answers and replies with blocks do not', async () => {
-    const { guide, calls } = build({ generate: count => (count === 1 ? 'Patience, I am reading. Let me grab her personality and quotes sections.' : `Here you go.${READ_ACTION}`) });
+    const { guide, calls } = build({ generate: count => (count === 1 ? 'Patience, I am reading. Let me grab her personality and quotes sections.' : (count === 2 ? `Here you go.${READ_ACTION}` : 'Done.')) });
     await guide.load();
     await guide.ask('Go on.');
     assert.equal(calls.length >= 2, true, 'she was asked to follow through');
@@ -224,7 +231,7 @@ test('a reply that only promises to look something up gets a nudge to send the a
 
 test('while her plan is open, a reply that ends with no action and no question is a stop halfway: she is sent on to the next step; a question, a finished plan or a block waiting for the user is not', async () => {
     const planned = text => `<plan>1. read the page 2. write the card</plan>${text}`;
-    const { guide, calls } = build({ generate: count => (count === 1 ? planned('The page is long, I have the idea of her now.') : `Reading.${READ_ACTION}`) });
+    const { guide, calls } = build({ generate: count => (count === 1 ? planned('The page is long, I have the idea of her now.') : (count === 2 ? `Reading.${READ_ACTION}` : '<plan></plan>Done.')) });
     await guide.load();
     await guide.ask('Make a card for Emilia.');
     assert.ok(calls[1].messages.at(-1).content.includes('Your plan still has open steps'), 'sent on by the plan');
@@ -244,7 +251,7 @@ test('while her plan is open, a reply that ends with no action and no question i
 
 test('a link to a web page after stme: is no anchor: it is shown as plain words, and a reply that "looks" at a link that opens nothing is told how to read a web page instead of looping', async () => {
     const dead = 'Let me open the wiki page.[Read main wiki page](stme:https://mushoku.fandom.com/wiki/Shizuka)<continue/>';
-    const { guide, calls } = build({ generate: count => (count === 1 ? dead : `Reading.${READ_ACTION}`) });
+    const { guide, calls } = build({ generate: count => (count === 1 ? dead : (count === 2 ? `Reading.${READ_ACTION}` : 'Done.')) });
     await guide.load();
     await guide.ask('Look her up.');
     assert.ok(calls[1].messages.at(-1).content.includes('does not open anything'), 'told that this is not how a web page is read');
