@@ -13,11 +13,18 @@ import { CREATOR } from '../../libraries/core/guide-creator.js';
  */
 const CLEAR_CONFIRM_MS = 4000;
 
-export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, streamStage = signal(null), stop = () => false, debugText = () => '', runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
+export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, avatarMode = () => 'normal', toggleAvatarMode = () => {}, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, streamStage = signal(null), stop = () => false, debugText = () => '', runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 540, height: 680 });
     const collapsed = signal(false);
     const draft = signal('');
+    // Кнопка шапки: выбрать основной вид — обычный или чиби (нажата = чиби).
+    const modeButton = () => h('button', {
+        type: 'button', class: 'stme-floating-panel-btn stme-guide-mode',
+        title: computed(() => (avatarMode() === 'chibi' ? 'Main look: chibi — click for the normal look' : 'Main look: normal — click for chibi')),
+        'aria-pressed': computed(() => (avatarMode() === 'chibi' ? 'true' : 'false')),
+        'on:click': () => toggleAvatarMode(),
+    }, '☻');
 
     const anchorChip = (label, anchor) => h('button', { type: 'button', class: 'stme-guide-link', title: `Show: ${anchor}`, 'on:click': () => reveal(anchor) }, label);
 
@@ -242,7 +249,7 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
     function tree() {
         return h('div', { class: 'stme-guide-root' }, computed(() => (visible() ? FloatingPanel(persona().name, {
             position, size, collapsed, className: 'stme-guide-window', minWidth: 380, minHeight: 420,
-            onToggle: value => collapsed.set(value), onClose: () => close(),
+            actions: [modeButton()], onToggle: value => collapsed.set(value), onClose: () => close(),
             drag: createDragHandlers(position), onResize: next => size.set(next),
         },
         view() === 'settings' ? settingsView() : chatView()) : null)));

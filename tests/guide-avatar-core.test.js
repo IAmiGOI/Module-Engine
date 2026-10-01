@@ -136,3 +136,40 @@ test('unregister() clears the tick timer and the health subscription without thr
     assert.doesNotThrow(() => t.avatar.unregister());
     assert.equal(t.timers.length, 0);
 });
+
+test('the owner picks the main look: chibi mode always shows a chibi picture (the base pose, a keyword pose, and angry/happy from the health of the engine), normal mode is the usual look, and the choice is remembered', async () => {
+    const stored = {};
+    const t = setup({ chibiPoses: [{ id: 'laying', keywords: ['tired'] }], stored });
+    await t.avatar.load();
+    assert.equal(t.fileName(), 'tier-1-full.png', 'normal by default');
+    t.avatar.toggleMode();
+    assert.equal(t.avatar.mode.peek(), 'chibi');
+    assert.equal(t.fileName(), 'chibi-side.png', 'no pose, no trouble: the base chibi pose');
+    t.avatar.noteReply('I am so tired of this.');
+    assert.equal(t.fileName(), 'chibi-laying.png', 'a keyword pose still works');
+    t.setWorkers([{ state: 'down' }]);
+    t.engine.events.emit('model.workers.status.changed', { workers: [{ state: 'down' }] });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(t.fileName(), 'chibi-angry.png', 'the health of the engine is still the boss');
+    const reloaded = setup({ stored });
+    await reloaded.avatar.load();
+    assert.equal(reloaded.avatar.mode.peek(), 'chibi', 'the choice is remembered');
+    t.avatar.noteReply('A calm reply.');
+    t.avatar.toggleMode();
+    assert.equal(t.fileName(), 'status-red.png', 'back to normal: the usual status picture');
+});
+
+test('the base chibi pose can be changed by the owner (default option), and normal mode keeps the old behaviour: no chibi without configured poses', async () => {
+    const engine = createEngine();
+    const host = engine.registerCaller('core.guide.avatar', 'cores', { tier: 'official' });
+    engine.buses.cores.register('storage.settings.get', ({ key, fallback }) => (key === 'avatarMode' ? 'chibi' : fallback));
+    engine.buses.cores.register('storage.settings.set', () => true);
+    engine.buses.cores.register('model.workers.status', () => []);
+    const avatar = createGuideAvatar(host, { defaultChibi: () => 'back', schedule: () => ({}), cancel: () => {}, scheduleTimeout: () => ({}), cancelTimeout: () => {} });
+    await avatar.load();
+    assert.equal(decodeURIComponent(avatar.url.peek().slice(BASE_URL.length)), 'chibi-back.png');
+    const plain = setup();
+    await plain.avatar.load();
+    plain.avatar.noteReply('Hmm.');
+    assert.equal(plain.fileName(), 'tier-1-full.png');
+});

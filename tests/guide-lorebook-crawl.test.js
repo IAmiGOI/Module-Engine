@@ -114,3 +114,24 @@ test('adding one entry to a named book goes straight in (no active book needed),
     await taken.guide.ask('Make a book called Town.');
     assert.match(textOf(taken.calls[1]), /A lorebook named “Town” already exists\./);
 });
+
+test('an action that needs no confirmation (create a lorebook, add entries, a card change) runs at once even when the model sends it as an ```action block instead of a ```proposal: no button is left in the chat', async () => {
+    const writes = [];
+    const replies = [action('lorebook.createBook', { name: 'Mushoku Tensei', avatar: 'Mira.png' }), action('lorebook.addEntries', { book: 'Mushoku Tensei', entries: [{ title: 'Orsted', keys: ['Orsted'], content: 'The Dragon God.' }] }), 'Done.<done/>'];
+    const { guide, calls } = build({ books: {}, active: [], writes, generate: count => replies[count - 1] });
+    await guide.load();
+    await guide.ask('Make the lorebook.');
+    assert.deepEqual(writes.map(item => item.join(':')), ['book:Mushoku Tensei', 'attach:Mira.png:Mushoku Tensei', 'entry:Mushoku Tensei:Orsted']);
+    assert.ok(!guide.messages.peek().some(message => /```action/.test(message.text ?? '')), 'no action block (button) is left in the chat');
+    assert.equal(calls.length, 3);
+});
+
+test('when a person presses a button and the action fails, the error is shown in the chat (it is hidden only inside her own turn, where she fixes it herself)', async () => {
+    const { guide } = build({ books: { Town: bigBook() }, generate: () => 'ok<done/>' });
+    await guide.load();
+    const result = await guide.runAction('lorebook.createBook', { name: 'Town' });
+    assert.equal(result.ok, false);
+    const note = guide.messages.peek().find(message => message.role === 'note' && /already exists/.test(message.text));
+    assert.ok(note, 'the note exists');
+    assert.notEqual(note.hidden, true, 'and it is visible');
+});

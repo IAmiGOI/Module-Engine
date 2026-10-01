@@ -26,13 +26,16 @@ export const DEFAULT_TIER_HOURS = Object.freeze([10, 25]);
 const TICK_MS = 30 * 1000;
 const SAVE_DEBOUNCE_MS = 5000;
 const STATE_KEY = 'avatarState';
+const MODE_KEY = 'avatarMode';
 
 export function createGuideAvatar(host, {
-    now = () => Date.now(), tierHours = DEFAULT_TIER_HOURS, chibiPoses = () => [], getNekoUnlocked = async () => false,
+    now = () => Date.now(), tierHours = DEFAULT_TIER_HOURS, chibiPoses = () => [], defaultChibi = () => 'side', getNekoUnlocked = async () => false,
     onTierUp = () => {}, schedule = setInterval, cancel = clearInterval, scheduleTimeout = setTimeout, cancelTimeout = clearTimeout,
 } = {}) {
     const call = (contract, params) => request(host.own, contract, { params });
     const url = signal('');
+    // Основной вид, выбранный владельцем в шапке окна: 'normal' (тир/статус; чиби-позы только если настроены) или 'chibi' (всегда чиби). Хранится в настройках.
+    const mode = signal('normal');
     let usageMs = 0;
     let announcedTier = 1; // самый высокий тир, про который она уже сама написала — 1 никогда не объявляется, это стартовый вид
     let lastTickAt = null;
@@ -53,7 +56,7 @@ export function createGuideAvatar(host, {
     }
 
     function recompute() {
-        const picked = resolveAvatar({ health: health.status, lastCoT, chibiPoses: chibiPoses(), tier: currentTier(), nekoUnlocked });
+        const picked = resolveAvatar({ health: health.status, lastCoT, chibiPoses: chibiPoses(), tier: currentTier(), nekoUnlocked, mode: mode.peek(), defaultChibi: defaultChibi() });
         url.set(fileFor(picked));
     }
 
@@ -107,9 +110,18 @@ export function createGuideAvatar(host, {
         recompute();
     }
 
+    /** Выбрать основной вид: обычный ↔ чиби. Запоминается, картинка меняется сразу. */
+    function toggleMode() {
+        mode.set(mode.peek() === 'chibi' ? 'normal' : 'chibi');
+        void call('storage.settings.set', { namespace: NAMESPACE, key: MODE_KEY, value: mode.peek() });
+        recompute();
+    }
+
     async function load() {
         const saved = await call('storage.settings.get', { namespace: NAMESPACE, key: STATE_KEY, fallback: null });
         const state = saved.ok && saved.value && typeof saved.value === 'object' ? saved.value : null;
+        const savedMode = await call('storage.settings.get', { namespace: NAMESPACE, key: MODE_KEY, fallback: 'normal' });
+        mode.set(savedMode.ok && savedMode.value === 'chibi' ? 'chibi' : 'normal');
         usageMs = Number(state?.usageMs) || 0;
         announcedTier = Number(state?.announcedTier) || 1;
         lastTickAt = now();
@@ -122,7 +134,7 @@ export function createGuideAvatar(host, {
     }
 
     return {
-        url, noteReply, load, normalFallbackFor,
+        url, mode, toggleMode, noteReply, load, normalFallbackFor,
         /** Для отладки/тестов: сколько накоплено и что сейчас видно по здоровью — не для прод-кода. */
         debugState: () => ({ usageMs, health: health.status, nekoUnlocked }),
         unregister: () => { if (tickTimer !== null) cancel(tickTimer); if (saveTimer !== null) cancelTimeout(saveTimer); unsubscribeWorkers?.(); },
