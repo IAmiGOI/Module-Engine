@@ -38,6 +38,7 @@ import { registerStCharacterService } from '../services/st-character.js';
 import { registerStCharacterCardsService } from '../services/st-character-cards.js';
 import { registerCharacterCardVersionsService } from '../services/character-card-versions.js';
 import { registerStWebSearchService } from '../services/st-web-search.js';
+import { registerStCharacterAvatarService } from '../services/st-character-avatar.js';
 import { registerStEventsService } from '../services/st-events.js';
 import { registerStToolsService } from '../services/st-tools.js';
 import { registerStGenerationService } from '../services/st-generation.js';
@@ -547,6 +548,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerStCharacterCardsService(engine.buses.services, { getContext, fetch });
     registerCharacterCardVersionsService(engine.buses.services);
     registerStWebSearchService(engine.buses.services, { getContext, fetch });
+    registerStCharacterAvatarService(engine.buses.services, { getContext, fetch });
     registerStEventsService(engine.buses.services, { getContext });
     registerStToolsService(engine.buses.services, { getContext });
     // Только для чтения — гид анализирует их, править остаётся за родными экранами ST (см. doc-comment обоих Сервисов).

@@ -8,7 +8,7 @@ const CHANGE_FOLLOW_UP = 'The card change was applied (see the last result). Con
 
 export function createCharacterActions({ call }) {
     const buildFailure = message => ({ ok: false, message });
-    const splitTarget = ({ avatar, label, ...fields }) => ({ avatar, label, fields });
+    const splitTarget = ({ avatar, label, negations_ok: negationsOk, ...fields }) => ({ avatar, label, negationsOk, fields });
 
     return {
         'character.create': {
@@ -18,8 +18,8 @@ export function createCharacterActions({ call }) {
             description: 'Create a new character card. Params are the card fields, all optional except name: {"name", "description", "personality", "scenario", "first_mes", "mes_example", "creator_notes", "system_prompt", "post_history_instructions", "alternate_greetings": [..], "tags": [..], "creator", "character_version", "talkativeness": 0-1, "fav", "world", "depth_prompt": {"prompt", "depth", "role"}, "character_book": {"name", "entries": [{"name", "keys": [..], "content", "constant"}]}, "extensions": {}}. Follow "Writing character cards". A name that is already taken is refused. Send it in a ```proposal``` block.',
             async run(params = {}) {
                 // `label` и `avatar` — параметры правки (character.update): модель переносит их и сюда, а карточка при создании их не знает. Они не поля — отбрасываются, не ошибка.
-                const { label: _label, avatar: _avatar, ...fields } = params;
-                const created = await call('characterCard.create', { fields });
+                const { label: _label, avatar: _avatar, negations_ok: negationsOk, ...fields } = params;
+                const created = await call('characterCard.create', { fields, ...(negationsOk === true ? { negationsOk } : {}) });
                 return created.ok ? { ok: true, message: `Character “${created.value.name}” is created (${created.value.avatar}).` } : buildFailure(created.error.message);
             },
         },
@@ -29,10 +29,23 @@ export function createCharacterActions({ call }) {
             followUp: CHANGE_FOLLOW_UP,
             description: 'Change an existing character card. Params: {"avatar": "<file from the state>", "label": "optional note for the version list", plus ONLY the fields that change, same names as in character.create}. A list field (tags, alternate_greetings) is replaced as a whole; for character_book use {"entries": [{"id": 3, ...changes}, {"name", "keys", "content"} (no id = new)], "removeEntries": [ids]} — entries you do not mention stay. The previous version is saved automatically and can be restored. Send it in a ```proposal``` block.',
             async run(params = {}) {
-                const { avatar, label, fields } = splitTarget(params);
+                const { avatar, label, negationsOk, fields } = splitTarget(params);
                 if (!avatar) return buildFailure('Which character? Its avatar file is needed.');
-                const updated = await call('characterCard.update', { avatar, label, fields });
+                const updated = await call('characterCard.update', { avatar, label, fields, ...(negationsOk === true ? { negationsOk } : {}) });
                 return updated.ok ? { ok: true, message: `Character “${updated.value.name}” is updated (${updated.value.changed.join(', ')}). The previous version is saved.` } : buildFailure(updated.error.message);
+            },
+        },
+        'character.avatar': {
+            autoApply: true,
+            thenContinue: true,
+            followUp: 'The picture was set (see the last result). You cannot see it: tell the user in one line which image you used and from where, and that they can ask for another one or for a different part of the frame. Then continue.',
+            description: 'Set the picture (avatar) of an existing character card. You do NOT need to see images: pick the address by its source and label. Params: {"avatar": "<file from the state or the create result>", "url": "<image address>", "focus": "center" (default) | "left" | "right" | "top" | "bottom" — which part of a wide or tall picture to keep for the 2:3 portrait}. Image addresses are listed in opened pages: a character found with web.character has a portrait under Images (AniList is best: a ready portrait); a wiki page has its Infobox images with labels (Anime, Manga, Light Novel…). Prefer a portrait-shaped one. Only hosts that allow download work (AniList, Wikipedia, Fandom). {"avatar": "…", "undo": true} puts the previous picture back (the last replacement of this session).',
+            async run({ avatar, url, focus, undo } = {}) {
+                if (!avatar) return buildFailure('Which character? Its avatar file is needed.');
+                if (undo !== true && !url) return buildFailure('Which picture? An image address is needed (see the Images of an opened page).');
+                const done = await call('characterCard.avatar', { avatar, url, focus, ...(undo === true ? { undo: true } : {}) });
+                if (!done.ok) return buildFailure(done.error.message);
+                return { ok: true, message: done.value.undone ? `The previous picture of “${done.value.name}” is back.` : `The picture of “${done.value.name}” is set (${done.value.source[0]}×${done.value.source[1]} cropped to a 2:3 portrait).` };
             },
         },
         'character.restore': {

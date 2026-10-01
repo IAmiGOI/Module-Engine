@@ -39,6 +39,36 @@ function computeTableFacts(html) {
     return facts;
 }
 
+const MAX_IMAGES = 6;
+const attribute = (tag, name) => new RegExp(`\\b${name}="([^"]*)"`, 'i').exec(tag)?.[1] ?? '';
+
+/**
+ * Картинки инфобокса: `[{ label, url }]` — для аватара карточки (Mea выбирает по подписи, не глядя). Fandom: полноразмерные адреса из ссылок `class="image"` с подписью вкладки
+ * («Anime», «Manga»); Википедия: картинка таблицы с `alt`/подписью. Не больше MAX_IMAGES, без повторов.
+ */
+export function computeInfoboxImages(html) {
+    const source = String(html ?? '');
+    const found = [];
+    const add = (label, url) => { if (url && !found.some(item => item.url === url) && found.length < MAX_IMAGES) found.push({ label: label.trim() || 'image', url }); };
+    const aside = /<aside[^>]*portable-infobox[\s\S]*?<\/aside>/i.exec(source)?.[0];
+    if (aside) {
+        for (const [tag] of aside.matchAll(/<a\b[^>]*>/gi)) {
+            if (!/class="[^"]*\bimage\b/i.test(tag)) continue;
+            const href = decode(attribute(tag, 'href'));
+            if (/^https:\/\/static\.wikia\.nocookie\.net\//.test(href)) add(decode(attribute(tag, 'title')), href);
+        }
+        return found;
+    }
+    const start = source.search(/<table[^>]*class="[^"]*\binfobox\b/);
+    if (start < 0) return found;
+    const table = source.slice(start, source.indexOf('</table>', start) < 0 ? undefined : source.indexOf('</table>', start));
+    for (const [tag] of table.matchAll(/<img\b[^>]*>/gi)) {
+        const src = decode(attribute(tag, 'src')).replace(/^\/\//, 'https://').replace(/\?.*$/, '');
+        if (/^https:\/\/upload\.wikimedia\.org\//.test(src) && !/\.svg(?:\.png)?$/i.test(src)) add(decode(attribute(tag, 'alt')), src);
+    }
+    return found;
+}
+
 export function computeInfoboxFacts(html) {
     const source = String(html ?? '');
     const portable = computePortableFacts(source);
@@ -48,12 +78,14 @@ export function computeInfoboxFacts(html) {
 /** Текст раздела «Infobox» для страницы: строки `Поле: значение`, группы — подзаголовками-строками; пусто, если инфобокса нет. */
 export function computeInfoboxText(html) {
     const facts = computeInfoboxFacts(html);
-    if (!facts.length) return '';
+    const images = computeInfoboxImages(html);
+    if (!facts.length && !images.length) return '';
     const lines = ['## Infobox'];
     let group = '';
     for (const fact of facts) {
         if (fact.group && fact.group !== group) { group = fact.group; lines.push(`[${group}]`); }
         lines.push(`${fact.label}: ${fact.value}`);
     }
+    if (images.length) lines.push('[Images — for character.avatar]', ...images.map(image => `Image (${image.label}): ${image.url}`));
     return lines.join('\n');
 }

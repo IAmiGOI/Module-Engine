@@ -1,5 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { createCardTestRunner } from './card-test.js';
+import { computeCardNegationProblems, buildNegationRefusal } from '../../libraries/core/character-lint.js';
 import { normalizeCardFields, computeFlatCard, computeBookAfterPatch, computeChangedFieldNames, buildCreateForm, buildMergeBody, buildRestoreBody } from '../../libraries/core/character-card.js';
 
 /**
@@ -46,10 +47,18 @@ export function createCharacterCardsCore(host, { publish, now = () => Date.now()
         await callCharacterCardService('characterCardVersions.put', { record: { avatar, at: now(), label, card: rawCard } });
     }
 
+    // Правило владельца: стоящие отрицания карательно отклоняются (character-lint.js); `negationsOk` — только когда человек или тест их потребовал.
+    function requireNoStandingNegations(fields, negationsOk) {
+        if (negationsOk === true) return;
+        const problems = computeCardNegationProblems(fields);
+        if (problems.length) throw new Error(`characterCard: ${buildNegationRefusal(problems)}`);
+    }
+
     async function createCard(params = {}) {
         const made = normalizeCardFields(params.fields ?? {}, { isNewCard: true });
         if (!made.ok) throw new Error(`characterCard: ${made.error}`);
         const fields = made.value;
+        requireNoStandingNegations(fields, params.negationsOk);
         const taken = (await callCharacterCardService('stCharacterCard.list')).find(entry => isSameName(entry.name, fields.name));
         if (taken) throw new Error(`characterCard: a character called "${taken.name}" already exists (${taken.avatar}) — pick another name, or edit that one.`);
         // Книгу собираем ДО создания: отказ по её записям не должен оставлять в ST пустую карточку с одним именем.
@@ -67,6 +76,7 @@ export function createCharacterCardsCore(host, { publish, now = () => Date.now()
         const made = normalizeCardFields(params.fields ?? {}, { isNewCard: false });
         if (!made.ok) throw new Error(`characterCard: ${made.error}`);
         const fields = made.value;
+        requireNoStandingNegations(fields, params.negationsOk);
         const entry = await requireCharacterEntry(params);
         if (fields.name !== undefined && !isSameName(fields.name, entry.name)) {
             const clash = (await callCharacterCardService('stCharacterCard.list')).find(other => other.avatar !== entry.avatar && isSameName(other.name, fields.name));
@@ -103,6 +113,19 @@ export function createCharacterCardsCore(host, { publish, now = () => Date.now()
         return { avatar: entry.avatar, changed: computeChangedFieldNames(computeFlatCard(rawBefore), computeFlatCard(version.card)) };
     }
 
+    // Картинка карточки: Сервис качает, обрезает и пишет её в ST; здесь — только какая карточка и событие об изменении.
+    async function setAvatar(params = {}) {
+        const entry = await requireCharacterEntry(params);
+        if (params.undo === true) {
+            await callCharacterCardService('stCharacterAvatar.undo', { avatar: entry.avatar });
+            emitChanged('characterCard.changed', { avatar: entry.avatar, action: 'avatar' });
+            return { avatar: entry.avatar, name: entry.name, undone: true };
+        }
+        const done = await callCharacterCardService('stCharacterAvatar.set', { avatar: entry.avatar, url: params.url, focus: params.focus });
+        emitChanged('characterCard.changed', { avatar: entry.avatar, action: 'avatar' });
+        return { avatar: entry.avatar, name: entry.name, source: done.source, canUndo: done.canUndo };
+    }
+
     const cardTest = createCardTestRunner(host, { readCard });
 
     const unregisters = [
@@ -112,6 +135,7 @@ export function createCharacterCardsCore(host, { publish, now = () => Date.now()
         host.own.register('characterCard.update', params => updateCard(params)),
         host.own.register('characterCard.versions', params => listVersions(params)),
         host.own.register('characterCard.restore', params => restoreVersion(params)),
+        host.own.register('characterCard.avatar', params => setAvatar(params)),
         host.own.register('characterCard.test', params => cardTest.runTest(params)),
         host.own.register('characterCard.chatExcerpt', params => cardTest.readChatExcerpt(params)),
     ];

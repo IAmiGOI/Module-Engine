@@ -17,7 +17,7 @@ export function createWebActions({ callService }) {
         'web.search': {
             safe: true,
             thenContinue: true,
-            description: 'Search the web (used to check the facts of a canon character, a place, a term — never guess canon). Params: {"query": "Faputa Made in Abyss appearance tails"}. Returns up to 6 results (title, address, snippet). Then open the best page with web.read.',
+            description: 'Search the web (used to check the facts of a canon character, a place, a term). Params: {"query": "Faputa Made in Abyss appearance tails"}. Returns up to 6 results (title, address, snippet). Then open the best page with web.read.',
             async run({ query } = {}) {
                 const found = await callService('stWebSearch.search', { query });
                 if (!found.ok) return buildFailure(`The search failed: ${found.error.message}`);
