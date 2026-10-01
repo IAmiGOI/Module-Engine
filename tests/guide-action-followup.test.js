@@ -82,7 +82,7 @@ test('a long research chain is not cut: every successful step gives her the next
 });
 
 test('only a chain that makes NO progress is stopped: three nudges in a row without one successful step end with a plain note, and a successful step starts the count over', async () => {
-    const { guide, calls } = build({ generate: () => 'Let me look at that for you now.' });
+    const { guide, calls } = build({ noDone: true, generate: () => 'Let me look at that for you now.' });
     await guide.load();
     await guide.ask('Go on.');
     assert.equal(calls.length, 4, 'the user turn plus three nudges, then she stops');
@@ -222,7 +222,7 @@ test('the same sentence and the same action repeated in one reply are shown once
 });
 
 test('a reply that only promises to look something up gets a nudge to send the action, instead of stopping until the user writes "so?"; questions, finished answers and replies with blocks do not', async () => {
-    const { guide, calls } = build({ generate: count => (count === 1 ? 'Patience, I am reading. Let me grab her personality and quotes sections.' : (count === 2 ? `Here you go.${READ_ACTION}` : 'Done.')) });
+    const { guide, calls } = build({ noDone: true, generate: count => (count === 1 ? 'Patience, I am reading. Let me grab her personality and quotes sections.' : (count === 2 ? `Here you go.${READ_ACTION}` : 'Done.')) });
     await guide.load();
     await guide.ask('Go on.');
     assert.equal(calls.length >= 2, true, 'she was asked to follow through');
@@ -238,7 +238,7 @@ test('a reply that only promises to look something up gets a nudge to send the a
 
 test('while her plan is open, a reply that ends with no action and no question is a stop halfway: she is sent on to the next step; a question, a finished plan or a block waiting for the user is not', async () => {
     const planned = text => `<plan>1. read the page 2. write the card</plan>${text}`;
-    const { guide, calls } = build({ generate: count => (count === 1 ? planned('The page is long, I have the idea of her now.') : (count === 2 ? `Reading.${READ_ACTION}` : '<plan></plan>Done.')) });
+    const { guide, calls } = build({ noDone: true, generate: count => (count === 1 ? planned('The page is long, I have the idea of her now.') : (count === 2 ? `Reading.${READ_ACTION}` : '<plan></plan>Done.')) });
     await guide.load();
     await guide.ask('Make a card for Emilia.');
     assert.ok(calls[1].messages.at(-1).content.includes('Your plan still has open steps'), 'sent on by the plan');
@@ -250,7 +250,11 @@ test('while her plan is open, a reply that ends with no action and no question i
     await noPlan.guide.load();
     await noPlan.guide.ask('Tell me about her.');
     assert.equal(noPlan.calls.length, 1, 'no plan, nothing to continue');
-    const finished = build({ generate: count => (count === 1 ? planned('Reading.') : '<plan></plan>The card is finished.') });
+    const careful = build({ noDone: true, generate: () => planned('Two things I need from you: 1. which arc? 2. where does she start (the default is the academy).<done/>') });
+    await careful.guide.load();
+    await careful.guide.ask('Make a card.');
+    assert.equal(careful.calls.length, 1, 'questions that end with <done/> wait for the user even with the plan open and no question mark at the end');
+    const finished = build({ noDone: true, generate: count => (count === 1 ? planned('Reading.') : '<plan></plan>The card is finished.') });
     await finished.guide.load();
     await finished.guide.ask('Make a card.');
     assert.equal(finished.calls.length, 2, 'one nudge, and after she clears the plan she is left alone');
