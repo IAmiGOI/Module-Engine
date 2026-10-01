@@ -75,7 +75,9 @@ const MAX_ACTION_CONTINUES = 4;
 const MAX_NOTE_DETAIL_CHARS = 14000;
 const FABRICATION_FOLLOW_UP = 'Your last reply contained text that looked like a tool result — it was thrown away, you never see results that way. If you still need information, send the action block now (web.page, web.find, web.read…) and stop right after it; the engine will give you the real result. If you already have what you need, continue from the real results above.';
 const FAILED_CHANGE_FOLLOW_UP = 'The change you sent could not be applied; the reason is in the last note. Fix it (a different value, a field that exists, the right avatar) and send the corrected change, or ask the user if you need something from them.';
+const PLAN_OPEN_FOLLOW_UP = 'Your plan still has open steps, and your last reply ended with no action and no question to the user, so the work stopped. Do the next step of the plan now (send its action block and stop right after it). Only if you truly need something from the user, ask them plainly with a question.';
 const UNKEPT_PROMISE_FOLLOW_UP = 'You said you would look something up or read something, but your reply has no action block, so nothing happened. Send the action block now (web.page, web.find, web.read…) and stop right after it.';
+const DEAD_LINK_FOLLOW_UP = 'The link you wrote does not open anything: [Label](stme:…) is only for blocks of the interface from the anchor list, and <continue/> only waits for such a block. A web page is read with an action block: web.read {"url": …} (or {"ref": …}), then web.page / web.find. Send the action block now and stop right after it.';
 const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 
@@ -173,12 +175,15 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const preview = (action, params) => describeProposal(action, params, { settingsOf: id => modules?.guideSettings?.(id)?.specs ?? null, titleOf: id => modules?.list?.().find(item => item.id === id)?.title });
 
     /** Открывает блоки, на которые сослалась реплика, — сама, без нажатий (чипы в окне остаются информацией). Не ждём: реплика уже показана. */
+    /** Открывает блоки, на которые сослалась реплика; возвращает, сколько действительно открылось (0 — ссылки ни на что не вели). */
     async function openLinked(text) {
         const anchors = extractAnchors(text).slice(0, REVEAL_LIMIT);
+        let opened = 0;
         for (const [index, anchor] of anchors.entries()) {
             if (index) await sleep(REVEAL_GAP_MS);
-            await reveal(anchor);
+            if (await reveal(anchor)) opened += 1;
         }
+        return opened;
     }
 
     async function reveal(anchor) {
@@ -326,10 +331,14 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const calm = looking ? stripBlocks(quiet, ['proposal', 'choice']) : quiet;
             const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true, id => ACTIONS[id]?.autoApply === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
-            const opening = openLinked(shown).catch(() => {});
+            const opening = openLinked(shown).catch(() => 0);
             let autoFollowUp = thought.fabricated && !autoRuns.length ? FABRICATION_FOLLOW_UP : null;
             // Пообещала посмотреть, а блока действия нет: без этого она замирала на словах, и человек писал «ну?».
             if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && isUnkeptPromise(shown)) autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP;
+            // `<continue/>` без единой настоящей ссылки на блок: ждать нечего — чаще всего это попытка «открыть» веб-страницу ссылкой.
+            if (!autoFollowUp && !autoRuns.length && thought.more && !extractAnchors(quiet).length) autoFollowUp = DEAD_LINK_FOLLOW_UP;
+            // Пока открыт её план (она стирает его, когда закончила), реплика без действия и без вопроса человеку — это остановка на полпути, а не конец работы.
+            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && plan.trim() && !/\?\s*$/.test(shown.trim()) && !calm.includes('```')) autoFollowUp = PLAN_OPEN_FOLLOW_UP;
             for (const run of autoRuns) {
                 const done = await runAction(run.action, run.params);
                 if (done.ok && ACTIONS[run.action]?.thenContinue) autoFollowUp = ACTIONS[run.action].followUp ?? ACTION_FOLLOW_UP;
@@ -339,7 +348,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             // Ей нужно посмотреть блок, чтобы продолжить: ждём, пока он раскроется, и даём ещё один ход без участия человека (не больше MAX_CONTINUES подряд).
             if (looking) {
                 continues += 1;
-                await opening;
+                // Ссылка ни на что не вела (не якорь интерфейса — например, адрес вики): это не «смотрю блок», и повторять тот же ход бессмысленно; она узнаёт, чем читать страницу.
+                if (!(await opening) && actionContinues < MAX_ACTION_CONTINUES) { actionContinues += 1; return await ask(null, { internal: true, followUp: DEAD_LINK_FOLLOW_UP }); }
                 await sleep(REVEAL_SETTLE_MS);
                 return await ask(null, { internal: true });
             }

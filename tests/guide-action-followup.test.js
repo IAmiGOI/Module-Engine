@@ -221,3 +221,32 @@ test('a reply that only promises to look something up gets a nudge to send the a
         assert.equal(world.calls.length, 1, quiet);
     }
 });
+
+test('while her plan is open, a reply that ends with no action and no question is a stop halfway: she is sent on to the next step; a question, a finished plan or a block waiting for the user is not', async () => {
+    const planned = text => `<plan>1. read the page 2. write the card</plan>${text}`;
+    const { guide, calls } = build({ generate: count => (count === 1 ? planned('The page is long, I have the idea of her now.') : `Reading.${READ_ACTION}`) });
+    await guide.load();
+    await guide.ask('Make a card for Emilia.');
+    assert.ok(calls[1].messages.at(-1).content.includes('Your plan still has open steps'), 'sent on by the plan');
+    const asking = build({ generate: () => planned('Which arc should she be from?') });
+    await asking.guide.load();
+    await asking.guide.ask('Make a card.');
+    assert.equal(asking.calls.length, 1, 'a question to the user is a real stop');
+    const noPlan = build({ generate: () => 'Here is what I think about her.' });
+    await noPlan.guide.load();
+    await noPlan.guide.ask('Tell me about her.');
+    assert.equal(noPlan.calls.length, 1, 'no plan, nothing to continue');
+    const finished = build({ generate: count => (count === 1 ? planned('Reading.') : '<plan></plan>The card is finished.') });
+    await finished.guide.load();
+    await finished.guide.ask('Make a card.');
+    assert.equal(finished.calls.length, 2, 'one nudge, and after she clears the plan she is left alone');
+});
+
+test('a link to a web page after stme: is no anchor: it is shown as plain words, and a reply that "looks" at a link that opens nothing is told how to read a web page instead of looping', async () => {
+    const dead = 'Let me open the wiki page.[Read main wiki page](stme:https://mushoku.fandom.com/wiki/Shizuka)<continue/>';
+    const { guide, calls } = build({ generate: count => (count === 1 ? dead : `Reading.${READ_ACTION}`) });
+    await guide.load();
+    await guide.ask('Look her up.');
+    assert.ok(calls[1].messages.at(-1).content.includes('does not open anything'), 'told that this is not how a web page is read');
+    assert.ok(guide.messages.peek().some(message => message.role === 'note' && /Searched/.test(message.text ?? '')), 'and the real action ran');
+});

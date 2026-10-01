@@ -67,6 +67,12 @@ export function parseGuideReply(reply) {
 
 const INLINE = /\[([^\]]+)\]\((stme:[^)\s]+|https?:\/\/[^)\s]+)\)|\*\*([^*]+)\*\*|`([^`\n]+)`|(?<![*\w])\*([^*\n]+?)\*(?![*\w])/g;
 
+/**
+ * Годный адрес блока интерфейса: `пространство:имя` (`card:models`, `module:module.music`). Адрес сайта (`https://…`), слово без двоеточия и пустота — не якорь: модель иногда
+ * кладёт в `stme:` ссылку на веб-страницу, и «пилюля» ничего не открывает, а гид принимает её за «смотрю блок» и зацикливается.
+ */
+export const isInterfaceAnchor = anchor => /^[a-z][a-z0-9_-]*:[\w.:-]{1,80}$/i.test(String(anchor ?? '')) && !String(anchor).includes('//');
+
 /** Строка текста → `[{ type: 'text' | 'bold' | 'italic' | 'code', text } | { type: 'anchor', label, anchor } | { type: 'url', label, url }]`. */
 export function parseInline(line) {
     const source = String(line ?? '');
@@ -77,7 +83,7 @@ export function parseInline(line) {
         if (match[3] !== undefined) parts.push({ type: 'bold', text: match[3] });
         else if (match[4] !== undefined) parts.push({ type: 'code', text: match[4] });
         else if (match[5] !== undefined) parts.push({ type: 'italic', text: match[5] });
-        else if (match[2].startsWith('stme:')) parts.push({ type: 'anchor', label: match[1], anchor: match[2].slice(5) });
+        else if (match[2].startsWith('stme:')) parts.push(isInterfaceAnchor(match[2].slice(5)) ? { type: 'anchor', label: match[1], anchor: match[2].slice(5) } : { type: 'text', text: match[1] });
         else parts.push({ type: 'url', label: match[1], url: match[2] });
         last = match.index + match[0].length;
     }
