@@ -2,7 +2,7 @@ import { numberSetting, booleanSetting } from '../../libraries/core/guide-settin
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed, effect } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
-import { selectTrack, shouldSwitch } from '../../libraries/core/track-selection.js';
+import { selectTrack, shouldSwitch, pickWeighted } from '../../libraries/core/track-selection.js';
 import { clampToViewport, createDragHandlers } from '../../libraries/shared/draggable.js';
 import { FloatingPanel } from '../../libraries/shared/widgets.js';
 import { MusicPlayerBody } from '../../libraries/shared/music-player-view.js';
@@ -68,6 +68,20 @@ export function createMusicModule(host) {
     let currentSimilarity = null;
     let userPaused = false;
 
+    // Раздел сервера: подбор делает САМ сервер (ME шлёт только вектор сцены). Трек, который он выбрал, ME знает лишь по id и адресу аудио.
+    let remoteTrack = null;
+    const remote = () => server.mode.peek() === 'server' && Boolean(server.selected.peek());
+
+    async function pickRemote({ vector, ended = false, force = false } = {}) {
+        const result = await request(host.cores, 'musicServer.pick', {
+            params: { section: server.selected.peek(), vector, current: remoteTrack?.rawId ?? null, ended, force, minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek() },
+        });
+        const value = result.ok ? result.value : null;
+        if (value?.action !== 'play') return;   // «оставь» и «ничего не подходит» — играющее продолжается
+        remoteTrack = value.track;
+        await playTrack(value.track, value.similarity);
+    }
+
     /** Всё, из чего подбираем: свои треки и треки выбранного раздела сервера. */
     const pool = () => [...tracks.peek(), ...server.tracks.peek()];
 
@@ -88,7 +102,7 @@ export function createMusicModule(host) {
             namespace: SETTINGS_NAMESPACE,
             key: PLAYER_KEY,
             value: {
-                section: server.selected.peek(), volume: volume.peek(), muted: muted.peek(), autoTag: autoTag.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
+                section: server.selected.peek(), serverSelection: server.mode.peek(), volume: volume.peek(), muted: muted.peek(), autoTag: autoTag.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
                 minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(), player: {
                     collapsed: hudCollapsed.peek(), visible: hudVisible.peek(), position: hudPosition.peek(),
                 },
@@ -212,7 +226,7 @@ export function createMusicModule(host) {
     }
 
     function resume() {
-        const track = pool().find(item => item.id === nowPlaying.peek().trackId);
+        const track = pool().find(item => item.id === nowPlaying.peek().trackId) ?? (remoteTrack?.id === nowPlaying.peek().trackId ? remoteTrack : null);
         if (!track) return skip();
         userPaused = false;
         return playTrack(track, nowPlaying.peek().similarity);
@@ -222,6 +236,7 @@ export function createMusicModule(host) {
     async function skip() {
         const sceneVector = await computeSceneVector();
         if (!sceneVector) return;
+        if (remote()) return pickRemote({ vector: sceneVector, force: true });
         const picked = selectTrack({
             tracks: pool(), sceneVector,
             minSimilarity: -1, // skip — намеренный: играем лучший из имеющихся, даже слабый
@@ -230,9 +245,17 @@ export function createMusicModule(host) {
         if (picked) await playTrack(picked.track, picked.similarity);
     }
 
+    /**
+     * Трек закончился: свой трек играет заново, а в серверной группе — другой трек той же группы (по очереди, `1/(playCount+1)`), чтобы группа не крутила один и тот же.
+     * В группе один трек — повторяется он.
+     */
     function replayCurrent() {
-        const track = pool().find(item => item.id === currentTrackId);
-        if (track) playTrack(track, currentSimilarity).catch(() => {});
+        if (remote() && remoteTrack?.id === currentTrackId) { void pickRemote({ ended: true }); return; }   // сервер сам решает, какой трек группы следующий
+        const all = pool();
+        const track = all.find(item => item.id === currentTrackId);
+        if (!track) return;
+        const sameGroup = track.group ? all.filter(item => item.group === track.group && item.id !== track.id) : [];
+        playTrack(pickWeighted(sameGroup) ?? track, currentSimilarity).catch(() => {});
     }
 
     /** Один `embedding.compute` на смену трека. Недоступен — мягкая деградация: музыка продолжает играть, это не ошибка прогона. */
@@ -252,11 +275,12 @@ export function createMusicModule(host) {
      * шум косинуса не дёргает музыку каждое сообщение.
      */
     async function onGenerationCompleted() {
-        if (busy.peek() || !autoSwitch.peek() || !pool().length) return;
+        if (busy.peek() || !autoSwitch.peek() || (!pool().length && !remote())) return;
         busy.set(true);
         try {
             const sceneVector = await computeSceneVector();
             if (!sceneVector) return;
+            if (remote()) { await pickRemote({ vector: sceneVector }); return; }
             const picked = selectTrack({
                 tracks: pool(), sceneVector,
                 minSimilarity: minSimilarity.peek(),
@@ -386,7 +410,7 @@ export function createMusicModule(host) {
     // --- Плавающий плеер (паттерн HUD Трекера) ---
 
     function playerPanel() {
-        const hasTracks = computed(() => tracks().length + server.tracks().length > 0);
+        const hasTracks = computed(() => tracks().length + server.tracks().length > 0 || (server.mode() === 'server' && server.selected() !== ''));
         return FloatingPanel('Music', {
             position: hudPosition,
             // Размера у окна нет: оно фиксированное (CSS `.stme-music-window`). Сохранённый размер прежнего изменяемого окна больше не читается — иначе его инлайновые
@@ -463,6 +487,7 @@ export function createMusicModule(host) {
             volume.set(Number.isFinite(player.value.volume) ? player.value.volume : DEFAULTS.volume);
             muted.set(Boolean(player.value.muted));
             autoTag.set(player.value.autoTag !== false);
+            server.mode.set(player.value.serverSelection === 'local' ? 'local' : 'server');
             server.selected.set(typeof player.value.section === 'string' ? player.value.section : '');
             hudCollapsed.set(Boolean(player.value.player?.collapsed));
             hudVisible.set(player.value.player?.visible !== false);

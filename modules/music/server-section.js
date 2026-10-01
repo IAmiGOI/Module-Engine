@@ -10,11 +10,17 @@ export function createServerSection(host) {
     const configured = signal(false);  // есть ли сервер вообще: нет — в карточке ничего не появляется
     const selected = signal('');       // id выбранного раздела или ''
     const tracks = signal([]);         // треки выбранного раздела (в форме подбора)
-    const sectionName = signal('');    // как называть играющее: имени трека у пользователя нет, только раздел
+    const sectionName = signal('');
+    // Как выбирается трек: 'server' — решает сервер по вектору сцены (основной режим); 'local' — прежний: ME берёт векторы раздела и подбирает сам. Прежний режим скрыт, в интерфейсе его нет.
+    const mode = signal('server');    // как называть играющее: имени трека у пользователя нет, только раздел
 
     const ask = (contract, params) => request(host.cores, contract, { params });
 
+    const nameOf = id => sections.peek().find(item => item.id === id)?.name ?? '';
+
     async function loadTracks({ force = false } = {}) {
+        sectionName.set(nameOf(selected.peek()));
+        if (mode.peek() === 'server') { tracks.set([]); return; }   // треков раздела у ME нет: их выбирает сервер
         if (!selected.peek()) { tracks.set([]); sectionName.set(''); return; }
         const id = selected.peek();
         const result = await ask('musicServer.section', { id, force });
@@ -40,5 +46,5 @@ export function createServerSection(host) {
         await loadTracks();
     }
 
-    return { sections, configured, selected, tracks, sectionName, refresh, select };
+    return { mode, sections, configured, selected, tracks, sectionName, refresh, select };
 }

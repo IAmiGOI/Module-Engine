@@ -114,7 +114,7 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
             'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek', 'model.generate',
-            'embedding.compute', 'musicServer.sections', 'musicServer.section',
+            'embedding.compute', 'musicServer.sections', 'musicServer.section', 'musicServer.pick',
         ],
     });
     const rawNotify = moduleHost.cores.subscribe.bind(moduleHost.cores);
@@ -425,6 +425,7 @@ test('a chosen server section plays by the scene — its tracks are never listed
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(module.server.sections.peek().map(item => item.id), ['fantasy'], 'sections arrive in the background');
 
+    module.server.mode.set('local');
     await module.chooseSection('fantasy');
     assert.equal(module.tracks.peek().length, 0, 'the section is not mixed into the own library');
     await module.onGenerationCompleted();
@@ -440,6 +441,7 @@ test('a chosen server section plays by the scene — its tracks are never listed
 test('the chosen section is restored after a reload; a section the server no longer has is forgotten', async () => {
     const first = buildEngine({ serverTracks: [serverTrack('a1', vec('fight'))] });
     await first.module.load();
+    first.module.server.mode.set('local');
     await first.module.chooseSection('fantasy');
     await first.module.saveSettings();
 
@@ -463,4 +465,65 @@ test('with no server at all nothing changes: no sections, user tracks play as be
     await module.load();
     assert.equal(module.server.configured.peek(), false);
     assert.deepEqual(module.server.sections.peek(), []);
+});
+
+test('in a server group the best GROUP wins, and when a track ends another track of that group plays — not the same one again', async () => {
+    const love = vec('calm'), fight = vec('fight');
+    const groupTrack = (id, group, v) => ({ ...serverTrack(id, v), group: `fantasy_${group}` });
+    const { module, audio } = buildEngine({
+        chat: ['Blades clash in the rain — a brutal fight erupts.'],
+        serverTracks: [groupTrack('l1', 'love', love), groupTrack('f1', 'fight', fight), groupTrack('f2', 'fight', fight), groupTrack('f3', 'fight', fight)],
+    });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    module.server.mode.set('local');
+    await module.chooseSection('fantasy');
+    await module.onGenerationCompleted();
+
+    const first = module.nowPlaying.peek().trackId;
+    assert.match(first, /^srv_fantasy_f\d$/, 'a track of the fight group plays — never the love one');
+    const seen = new Set([first]);
+    let previous = first;
+    for (let round = 0; round < 6; round += 1) {
+        audio.onEnded();
+        await new Promise(resolve => setImmediate(resolve));
+        const now = module.nowPlaying.peek().trackId;
+        assert.match(now, /^srv_fantasy_f\d$/, 'the next track still belongs to the group');
+        assert.notEqual(now, previous, 'the same track does not repeat back to back');
+        seen.add(now);
+        previous = now;
+    }
+    assert.ok(seen.size > 1, 'the group rotates through its tracks');
+});
+
+// --- Выбор делает сервер ----------------------------------------------------------------
+
+test('with a section on, ME sends only the scene vector; the server answers with one track, and the next one when it ends', async () => {
+    const asked = [];
+    const answers = [{ action: 'play', id: 'k1', ext: 'mp3' }, { action: 'play', id: 'k2', ext: 'mp3' }, { action: 'keep' }];
+    const { module, audio, engine } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], serverTracks: [] });
+    engine.buses.cores.register('musicServer.pick', params => {
+        asked.push(params);
+        const answer = answers.shift() ?? { action: 'none' };
+        return answer.action === 'play' ? { action: 'play', similarity: 0.9, track: { id: `srv_fantasy_${answer.id}`, rawId: answer.id, name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: `https://music.example/audio/${answer.id}.mp3` } } } : answer;
+    });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await module.chooseSection('fantasy');
+    assert.equal(module.server.tracks.peek().length, 0, 'ME holds no tracks of the section');
+
+    await module.onGenerationCompleted();
+    assert.equal(audio.lastSource.ref, 'https://music.example/audio/k1.mp3');
+    assert.deepEqual(asked[0].vector, vec('fight'), 'the scene vector goes out…');
+    assert.equal(JSON.stringify(asked[0]).includes('Blades'), false, '…never the chat text');
+    assert.equal(module.nowPlaying.peek().name, 'Fantasy');
+
+    audio.onEnded();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(asked[1].ended, true);
+    assert.equal(asked[1].current, 'k1', 'the server is told what has just ended');
+    assert.equal(audio.lastSource.ref, 'https://music.example/audio/k2.mp3');
+
+    await module.onGenerationCompleted();   // «keep» — музыка не меняется
+    assert.equal(audio.lastSource.ref, 'https://music.example/audio/k2.mp3');
 });

@@ -232,7 +232,7 @@ const DEFINITIONS = [{
             // Вектор сцены и вектора треков — локальный эмбединг.
             'embedding.compute', 'embedding.similarity',
             // Разделы музыкального сервера владельца (сеть — только у Ядра).
-            'musicServer.sections', 'musicServer.section',
+            'musicServer.sections', 'musicServer.section', 'musicServer.pick',
         ],
     },
     create: host => createMusicModule(host),
