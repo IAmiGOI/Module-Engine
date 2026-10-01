@@ -45,9 +45,14 @@ export function describeTestResult({ name, modelLabel, presetName, results }) {
     return [header, ...body].join('\n\n');
 }
 
-/** Последние сообщения настоящего чата для разбора: только реплики (не системные), каждая обрезана, чтобы разбор не съел весь промпт. */
+/** Какие сообщения чата идут в разбор: только реплики (не системные и не пустые), последние `CHAT_EXCERPT_MAX_MESSAGES`. */
+export function selectExcerptMessages(messages) {
+    return messages.filter(message => !message.isSystem && message.text.trim()).slice(-CHAT_EXCERPT_MAX_MESSAGES);
+}
+
+/** Последние сообщения настоящего чата для разбора, каждое обрезано, чтобы разбор не съел весь промпт. */
 export function describeChatExcerpt({ name, messages }) {
-    const shown = messages.filter(message => !message.isSystem && message.text.trim()).slice(-CHAT_EXCERPT_MAX_MESSAGES);
+    const shown = selectExcerptMessages(messages);
     const lines = shown.map(message => `${message.isUser ? '{{user}}' : message.name || name}: ${message.text.length > CHAT_EXCERPT_MESSAGE_CHARS ? `${message.text.slice(0, CHAT_EXCERPT_MESSAGE_CHARS)}\n[cut: ${message.text.length} characters in all]` : message.text}`);
     return `The last ${shown.length} messages of the open chat with “${name}” (oldest first):\n\n${lines.join('\n\n')}`;
 }

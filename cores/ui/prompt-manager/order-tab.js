@@ -2,7 +2,7 @@ import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
 import { Button, Badge, EmptyState, IconButton } from '../../../libraries/shared/widgets.js';
 import { Select } from './dropdown.js';
-import { flattenRows, toggleAt, removeAt, moveNode, stepNode, createTextBlock, createWrapperGroup, createNote, unusedBlockIds } from './tree-model.js';
+import { flattenRows, toggleAt, removeAt, moveNode, stepNode, createTextBlock, createWrapperGroup, createNote, unusedBlockIds, insertDividerPair, removeDividerPair } from './tree-model.js';
 import { createNodeEditor } from './editor.js';
 
 const samePath = (a, b) => Boolean(a && b) && a.length === b.length && a.every((v, i) => v === b[i]);
@@ -32,14 +32,28 @@ export function createOrderTab({ state, actions }) {
         return ratio < 0.5 ? 'before' : 'after';
     }
 
+    /** Рейки областей слева (внешние ближе к краю) и цвет самой полосы. */
+    const RAIL_WIDTH = 5;
+    function railStyle(row) {
+        const rails = row.rails ?? [];
+        const style = {};
+        if (rails.length) {
+            style.boxShadow = rails.map((color, index) => `inset ${(index + 1) * RAIL_WIDTH}px 0 0 0 ${color}`).join(', ');
+            style.paddingLeft = `${8 + rails.length * RAIL_WIDTH}px`;
+        }
+        // Цвет полосы — прямо в стиле строки: `h()` задаёт style присваиванием свойств, а пользовательские CSS-переменные так не ставятся.
+        if (row.divider) { style.background = `color-mix(in srgb, ${row.divider.color} 32%, transparent)`; style.borderColor = row.divider.color; }
+        return style;
+    }
+
     function rowView(row) {
         const isSelected = samePath(selected(), row.path);
         const dropMark = drop()?.key === row.key ? ` stme-pm-drop-${drop().where}` : '';
         return h('div', {
-            class: `stme-pm-row stme-pm-kind-${row.kind}${isSelected ? ' stme-pm-selected' : ''}${row.node.enabled === false ? ' stme-pm-off' : ''}${dropMark}`,
+            class: `stme-pm-row stme-pm-kind-${row.kind}${row.divider ? ` stme-pm-divider-${row.divider.edge}${row.divider.broken ? ' stme-pm-divider-broken' : ''}` : ''}${row.rails?.length ? ' stme-pm-railed' : ''}${isSelected ? ' stme-pm-selected' : ''}${row.node.enabled === false ? ' stme-pm-off' : ''}${dropMark}`,
             // Отступ вложенности — на самом БЛОКЕ (margin, сдвигает всю рамку строки), не только на тексте внутри
             // него: владелец хотел, чтобы вложенность группы было видно по смещению самих строк, а не только текста.
-            style: { marginLeft: `${row.depth * 20}px` },
+            style: { marginLeft: `${row.depth * 20}px`, ...railStyle(row) },
             draggable: 'true',
             'on:dragstart': event => { dragging = row.path; event.dataTransfer?.setData('text/plain', row.key); },
             'on:dragover': event => { event.preventDefault(); drop.set({ key: row.key, where: dropWhere(event, row) }); },
@@ -88,6 +102,8 @@ export function createOrderTab({ state, actions }) {
     }
 
     function removeRow(row) {
+        // Полосу удаляем вместе с парой: одна половина разметки ничего не значит; блоки между ними остаются.
+        if (row.node.type === 'divider') { setTree(tree => removeDividerPair(tree, row.node.pair)); selected.set(null); return; }
         actions.edit(preset => {
             preset.tree = removeAt(preset.tree, row.path);
             const drop = new Set(unusedBlockIds(preset.tree, preset.blocks));
@@ -106,6 +122,12 @@ export function createOrderTab({ state, actions }) {
         actions.edit(preset => { preset.blocks.push(...group.blocks); preset.tree.push(group.node); });
         selected.set([state.preset().tree.length - 1]);
     }
+    /** Пара полос вокруг выбранной строки или пустая в конце списка; выделяется верхняя полоса — у неё условие. */
+    function addDivider() {
+        let created = null;
+        actions.edit(preset => { created = insertDividerPair(preset.tree, selected.peek()); preset.tree = created.tree; });
+        if (created) selected.set(created.path);
+    }
     function addNote() {
         actions.edit(preset => { preset.tree.push(createNote('Note')); });
         selected.set([state.preset().tree.length - 1]);
@@ -119,7 +141,7 @@ export function createOrderTab({ state, actions }) {
                 Button('Save', () => actions.save(), { disabled: false }),
             ),
             h('div', { class: 'stme-pm-toolbar' },
-                Button('+ Prompt', addPrompt), Button('+ Group', addGroup), Button('+ Note', addNote),
+                Button('+ Prompt', addPrompt), Button('+ Group', addGroup), Button('+ Divider', addDivider), Button('+ Note', addNote),
                 Button('Import from ST file', () => actions.pickFile('st')), Button('Export for ST', () => actions.exportSt()),
                 Button('Delete', () => actions.remove(), { variant: 'danger' }),
             ),

@@ -68,3 +68,5 @@
 | **Проверка карточки** | Ядра | ✅ [libraries/core/character-test.js](libraries/core/character-test.js) — Пробы теста, чат теста, тексты результата и выдержки из чата для гида. |
 | **Карточки для гида** | Ядра | ✅ [libraries/core/guide-character.js](libraries/core/guide-character.js) — Карточка-предложение «что запишется» и текст карточки для модели с пометкой TRUNCATED. |
 | **Разбор веб-страниц** | Ядра | ✅ [libraries/core/web-text.js](libraries/core/web-text.js) — Выдача DuckDuckGo и Википедии, читаемый текст страницы, адреса MediaWiki API, проверка адреса. |
+| **Разделители Prompt Manager** | Ядра | ✅ [libraries/core/pm-dividers.js](libraries/core/pm-dividers.js) — две цветные полосы в списке порядка, область между ними по условию; вложенные пары, сломанная пара не действует. |
+| **Вопросы к Jev** | Ядра | ✅ [libraries/core/jev-question.js](libraries/core/jev-question.js) — условия `jev` в дереве, срез чата, группировка вопросов в вызовы, ключ кэша; запрос и ответ эндпоинта — [libraries/core/jev-request.js](libraries/core/jev-request.js). |

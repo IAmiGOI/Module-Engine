@@ -2,7 +2,8 @@ import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
 import { Button, TextInput, TextArea, NumberInput, Toggle, Row, Field, Badge, EmptyState } from '../../../libraries/shared/widgets.js';
 import { Select } from './dropdown.js';
-import { getAt } from './tree-model.js';
+import { getAt, patchDividerPair } from './tree-model.js';
+import { DIVIDER_PALETTE } from '../../../libraries/core/pm-dividers.js';
 import { ConditionBuilder } from './condition-builder.js';
 import { describeCondition } from './condition-model.js';
 
@@ -60,6 +61,23 @@ export function createNodeEditor({ getPreset, patch, resetContribution, getPlugi
         );
     }
 
+    /** Полоса-разделитель: имя и цвет общие у пары, условие — только у верхней полосы. */
+    function dividerForm(node) {
+        const changePair = changes => patch(preset => { preset.tree = patchDividerPair(preset.tree, node.pair, changes); });
+        const color = bound(node.color, value => changePair({ color: value }));
+        return h('div', { class: 'stme-pm-editor' },
+            Badge(node.edge === 'begin' ? 'divider · top' : 'divider · bottom'),
+            h('p', { class: 'stme-pm-help' }, node.edge === 'begin'
+                ? 'Everything between this strip and its bottom strip belongs to this region. The region is sent only while the condition below is true. Drag the strips to change what is inside.'
+                : 'The bottom strip closes the region that starts at the top strip of the same colour. It sends nothing.'),
+            Field('Name', TextInput(bound(node.name ?? '', value => changePair({ name: value })))),
+            Field('Colour', h('div', { class: 'stme-pm-swatches' }, DIVIDER_PALETTE.map(swatch => h('button', {
+                type: 'button', class: `stme-pm-swatch${swatch === node.color ? ' stme-pm-swatch-on' : ''}`, style: { background: swatch }, title: swatch, 'aria-label': `Colour ${swatch}`,
+                'on:click': () => color.set(swatch),
+            })))),
+        );
+    }
+
     function noteForm(node, path) {
         return h('div', { class: 'stme-pm-editor' }, Field('Note (never sent to the model)', TextArea(bound(node.text ?? '', value => editNode(path, { text: value })), { rows: 4 })));
     }
@@ -101,6 +119,7 @@ export function createNodeEditor({ getPreset, patch, resetContribution, getPlugi
         const withCondition = body => h('div', { class: 'stme-pm-editor' }, body, node.type === 'note' ? null : conditionSection(node, path));
         if (node.type === 'group') return withCondition(groupForm(node, path));
         if (node.type === 'note') return noteForm(node, path);
+        if (node.type === 'divider') return node.edge === 'begin' ? withCondition(dividerForm(node)) : dividerForm(node);
         if (node.type === 'inject') return withCondition(injectForm(node, path));
         if (node.type === 'item') {
             const block = preset.blocks.find(b => b.id === node.block);

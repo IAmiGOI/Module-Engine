@@ -71,17 +71,6 @@ test('reading a page goes through ST and returns readable text; an address that 
     assert.equal(calls.length, 1);
 });
 
-test('the guide\'s web actions are safe to run by themselves and report results or failures as plain notes', async () => {
-    const callService = async (contract, params) => (contract === 'stWebSearch.search'
-        ? (params.query === 'none' ? { ok: true, value: { source: 'web', results: [] } } : { ok: true, value: { source: 'wikipedia', results: [{ title: 'T', url: 'https://x.org', snippet: 'S' }] } })
-        : { ok: false, error: { message: 'HTTP 500' } });
-    const actions = createWebActions({ callService });
-    assert.equal(actions['web.search'].safe && actions['web.read'].safe, true);
-    assert.equal((await actions['web.search'].run({ query: 'q' })).message, 'Search results for “q” (Wikipedia):\n1. T — https://x.org\n   S');
-    assert.match((await actions['web.search'].run({ query: 'none' })).message, /Nothing found/);
-    assert.deepEqual(await actions['web.read'].run({ url: 'https://x.org' }), { ok: false, message: 'The page did not open: HTTP 500' });
-});
-
 test('a wiki page address gets the API addresses of the wiki engine; anything that is not a wiki page gets none', () => {
     assert.deepEqual(computeMediaWikiParseUrls('https://madeinabyss.fandom.com/wiki/Faputa'), [
         'https://madeinabyss.fandom.com/api.php?action=parse&prop=text&format=json&origin=*&disableeditsection=1&redirects=1&page=Faputa',
@@ -100,3 +89,21 @@ test('when ST cannot open a wiki page (Fandom answers it with an error) the page
     assert.match((await failing.call('stWebSearch.read', { url: 'https://madeinabyss.fandom.com/wiki/Faputa' })).error.message, /did not open \(HTTP 500\)/);
     assert.match((await failing.call('stWebSearch.read', { url: 'https://example.org/page' })).error.message, /did not open/);
 });
+
+test('the guide’s web actions are safe to run by themselves; the chat gets a one-line note and the full text goes to the model as the detail, and a failure is a plain note', async () => {
+    const callService = async (contract, params) => (contract === 'stWebSearch.search'
+        ? (params.query === 'none' ? { ok: true, value: { source: 'web', results: [] } } : { ok: true, value: { source: 'wikipedia', results: [{ title: 'T', url: 'https://x.org', snippet: 'S' }] } })
+        : (params.url === 'https://x.org/ok' ? { ok: true, value: { url: params.url, text: 'Page body text.' } } : { ok: false, error: { message: 'HTTP 500' } }));
+    const actions = createWebActions({ callService });
+    assert.equal(actions['web.search'].safe && actions['web.read'].safe, true);
+    assert.equal(actions['web.search'].thenContinue && actions['web.read'].thenContinue, true, 'she reads the result by herself');
+    const found = await actions['web.search'].run({ query: 'q' });
+    assert.equal(found.message, 'Searched Wikipedia for “q”: 1 result.');
+    assert.equal(found.detail, 'Search results for “q” (Wikipedia):\n1. T — https://x.org\n   S');
+    assert.match((await actions['web.search'].run({ query: 'none' })).detail, /Nothing found/);
+    const page = await actions['web.read'].run({ url: 'https://x.org/ok' });
+    assert.equal(page.message, 'Read a page from x.org (15 characters).');
+    assert.equal(page.detail, 'Page https://x.org/ok:\nPage body text.');
+    assert.deepEqual(await actions['web.read'].run({ url: 'https://x.org/bad' }), { ok: false, message: 'The page did not open: HTTP 500' });
+});
+

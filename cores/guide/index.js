@@ -65,6 +65,11 @@ const STREAM_PAINT_MS = 60;
 /** Сколько раз подряд гид может сама «зайти в блок и продолжить» за один запрос человека, и сколько ждать, пока блок раскроется на экране. */
 const MAX_CONTINUES = 3;
 const REVEAL_SETTLE_MS = 800;
+/** Сколько раз подряд действия-«узнать» (поиск, чтение, проверка) дают гиду ещё один ход на один запрос человека: больше — это уже петля. */
+const MAX_ACTION_CONTINUES = 4;
+/** Полный текст результата для модели хранится вместе с заметкой, но не бесконечно: он живёт в сохранённом чате. */
+const MAX_NOTE_DETAIL_CHARS = 14000;
+const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 
 export function createGuideCore(host, { publish, mount, loadText = async () => null, modules = null, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
@@ -136,9 +141,11 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         if (!entry) { push({ role: 'note', text: `Unknown action "${action}".`, ok: false }); return { ok: false }; }
         let result;
         try { result = await entry.run(params ?? {}); } catch (error) { result = { ok: false, message: error.message }; }
-        if (result.message) push({ role: 'note', text: result.message, ok: result.ok });
-        // Действие, чей результат гид должна прочитать сразу (тест карточки), даёт ей ещё один ход без участия человека.
-        if (result.ok && entry.thenContinue && !busy.peek()) void ask(null, { internal: true, followUp: entry.followUp });
+        // В чат — короткая заметка; полный текст (страница, найденное, переписка теста) идёт только модели: `detail`.
+        if (result.message) push({ role: 'note', text: result.message, ok: result.ok, ...(result.detail ? { detail: String(result.detail).slice(0, MAX_NOTE_DETAIL_CHARS) } : {}) });
+        // Действие, чей результат гид должна прочитать сразу (поиск, чтение, проверка, тест карточки), даёт ей ещё один ход без участия человека.
+        // Внутри её же ответа (`busy`) продолжение ставит сам `ask`, после того как выполнит все действия реплики.
+        if (result.ok && entry.thenContinue && !busy.peek() && actionContinues < MAX_ACTION_CONTINUES) { actionContinues += 1; void ask(null, { internal: true, followUp: entry.followUp ?? ACTION_FOLLOW_UP }); }
         if (result.ok && COMPLETING_ACTIONS.has(action)) { focus = { ...focus, done: true }; void saveChat(); }   // факт завершения: на следующей реплике — нейтральный режим, если не назовут новую тему
         changed();
         return result;
@@ -237,12 +244,13 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     });
 
     let continues = 0;
+    let actionContinues = 0;
 
     /** `internal` — автоматический ход после того, как гид открыла блок и попросила `<continue/>`: без реплики человека, в разгар её же запроса. */
     async function ask(text, { echo = true, internal = false, followUp = FOLLOW_UP } = {}) {
         const question = internal ? '' : String(text ?? '').trim();
         if (internal ? false : (!question || busy.peek())) return false;
-        if (!internal) continues = 0;
+        if (!internal) { continues = 0; actionContinues = 0; }
         if (echo && !internal) push({ role: 'user', text: question });
         if (!(await hasModel())) {
             mode.set('scenario');
@@ -278,7 +286,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
                 articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: focus.characters ? ['characters'] : [] }), notes,
             });
-            const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
+            const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.detail ?? message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
             if (internal) turns.push({ role: 'user', content: `(automatic — the user did not type this) ${followUp.replace(/^\(automatic[^)]*\)\s*/, '')}` });
             const requestId = `guide-${now()}-${(counter += 1)}`;
             streaming = { requestId, painted: 0 };
@@ -302,13 +310,22 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
             const opening = openLinked(shown).catch(() => {});
-            for (const run of autoRuns) await runAction(run.action, run.params);
+            let autoFollowUp = null;
+            for (const run of autoRuns) {
+                const done = await runAction(run.action, run.params);
+                if (done.ok && ACTIONS[run.action]?.thenContinue) autoFollowUp = ACTIONS[run.action].followUp ?? ACTION_FOLLOW_UP;
+            }
             // Ей нужно посмотреть блок, чтобы продолжить: ждём, пока он раскроется, и даём ещё один ход без участия человека (не больше MAX_CONTINUES подряд).
             if (looking) {
                 continues += 1;
                 await opening;
                 await sleep(REVEAL_SETTLE_MS);
                 return await ask(null, { internal: true });
+            }
+            // Результат поиска или проверки, который она сама запустила, она читает сразу же, а не ждёт, пока человек напишет ещё раз.
+            if (autoFollowUp && actionContinues < MAX_ACTION_CONTINUES) {
+                actionContinues += 1;
+                return await ask(null, { internal: true, followUp: autoFollowUp });
             }
             return true;
         } catch (error) {

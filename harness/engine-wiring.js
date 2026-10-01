@@ -67,6 +67,7 @@ import { createMapCore } from '../cores/map/index.js';
 import { createMapNarrationCore } from '../cores/map-narration/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
 import { createCharacterCardsCore } from '../cores/character-cards/index.js';
+import { createClassifierCore } from '../cores/classifier/index.js';
 import { createBasicSummaryCore } from '../cores/summary/index.js';
 import { createMemoryGraphCore } from '../cores/memory-graph/index.js';
 import { createUiEngineCore } from '../cores/ui/ui-engine.js';
@@ -664,6 +665,9 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.lorebook' }),
     });
 
+    // Классификатор (Jev): ответы на вопросы-утверждения для условий блоков Prompt Manager; ходит в сеть, поэтому `networkAccess`.
+    const classifierCore = createClassifierCore(engine.registerCaller('core.classifier', 'cores', { tier: 'official', networkAccess: true }));
+
     // Карточки персонажей ST: чтение, создание и правка всех полей (гид и любые Модули — через контракты `characterCards.*`).
     const characterCardsCore = createCharacterCardsCore(engine.registerCaller('core.characterCard', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.characterCard' }),
@@ -892,7 +896,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // silently leaving a real, non-empty Lorebook's graph bootstrap empty
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
-    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), summaryCore.load(), promptManagerCore.load()]);
+    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), classifierCore.load(), summaryCore.load(), promptManagerCore.load()]);
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
     // отдельно" — при большом Lorebook эмбединг каждой записи по
@@ -966,5 +970,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, promptManagerCore, promptManagerPanel, modelsCore, trackingCore, macrosCore, lorebookCore, characterCardsCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
+    return { engine, promptManagerCore, promptManagerPanel, modelsCore, trackingCore, macrosCore, lorebookCore, characterCardsCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
 }

@@ -4,6 +4,9 @@
  * Ветки выбора «одного из» в путь входят как ребёнок: `[i, optionIndex, j]` — поэтому у `choice` дети лежат в `options[k].children`.
  * Все операции возвращают НОВОЕ дерево, исходное не трогают.
  */
+import { isDivider, computeValidPairs, createDividerPair, pickDividerColor } from '../../../libraries/core/pm-dividers.js';
+import { describeCondition } from './condition-model.js';
+
 const clone = value => structuredClone(value);
 
 export function childrenOf(node) {
@@ -36,6 +39,7 @@ export function describeNode(node, blocks) {
     if (node.type === 'group') return { label: node.name || 'Group', kind: 'group', detail: node.wrap ? `<${node.name}> … </${node.name}>` : '' };
     if (node.type === 'inject') return { label: node.name || node.contribution, kind: 'module', detail: node.placement?.mode === 'depth' ? `module · depth ${node.placement.depth}` : 'module contribution' };
     if (node.type === 'note') return { label: node.text || 'Note', kind: 'note', detail: '' };
+    if (isDivider(node)) return describeDivider(node);
     if (node.type === 'choice') return { label: node.name || 'Choice', kind: 'choice', detail: `one of ${node.options?.length ?? 0}` };
     const block = blocks.find(b => b.id === node.block);
     if (!block) return { label: node.block, kind: 'missing', detail: 'block is missing' };
@@ -43,14 +47,30 @@ export function describeNode(node, blocks) {
     return { label: block.name || block.id, kind: 'text', detail: block.position === 'depth' ? `${block.role ?? 'system'} · depth ${block.depth ?? 4}` : (block.role ?? 'system') };
 }
 
-/** Плоский список строк для отрисовки; свёрнутые группы прячут детей. */
+/** Подпись полосы-разделителя: верхняя несёт имя и условие («Jev: … не ниже 70%»), нижняя — только закрывает область. */
+function describeDivider(node) {
+    if (node.edge === 'end') return { label: node.name ? `end · ${node.name}` : 'end of the region', kind: 'divider', detail: '' };
+    return { label: node.name || 'Region', kind: 'divider', detail: node.condition ? describeCondition(node.condition) : 'no condition — always sent' };
+}
+
+/**
+ * Плоский список строк для отрисовки; свёрнутые группы прячут детей. Каждая строка несёт `rails` — цвета областей-разделителей, внутри которых она стоит
+ * (внешние первыми): по ним окно рисует цветные рейки слева. Сами полосы стоят на рейках внешних областей, свой цвет у полосы — фоном. Область не пересекает
+ * уровни дерева: пара действует только в одном списке (pm-dividers.js), поэтому и рейки считаются по каждому списку отдельно.
+ */
 export function flattenRows(tree, blocks, collapsed = new Set(), path = [], depth = 0) {
     const rows = [];
+    const valid = computeValidPairs(tree);
+    const open = [];
     tree.forEach((node, index) => {
         const nodePath = [...path, index];
         const key = nodePath.join('.');
         const children = childrenOf(node);
-        rows.push({ path: nodePath, key, depth, node, ...describeNode(node, blocks), hasChildren: Boolean(children), collapsed: collapsed.has(key) });
+        const divider = isDivider(node) && valid.has(node.pair);
+        const rails = open.map(frame => frame.color);
+        if (divider && node.edge === 'begin') open.push({ pair: node.pair, color: node.color });
+        if (divider && node.edge === 'end') { const at = open.map(frame => frame.pair).lastIndexOf(node.pair); if (at >= 0) open.splice(at); }
+        rows.push({ path: nodePath, key, depth, node, ...describeNode(node, blocks), hasChildren: Boolean(children), collapsed: collapsed.has(key), rails, divider: isDivider(node) ? { edge: node.edge, color: node.color, broken: !valid.has(node.pair) } : null });
         if (children && !collapsed.has(key)) rows.push(...flattenRows(children, blocks, collapsed, nodePath, depth + 1));
     });
     return rows;
@@ -129,6 +149,43 @@ export function createWrapperGroup(tag = 'section') {
 }
 
 export const createNote = text => ({ type: 'note', text: text || 'Note', enabled: true });
+
+/**
+ * Пара полос вокруг выбранной строки (верхняя перед ней, нижняя после) либо пустая пара в конце списка, если ничего не выбрано. Цвет — первый свободный из палитры.
+ * Возвращает `{ tree, path }`: новое дерево и путь верхней полосы (её и выделяет окно, там условие).
+ */
+export function insertDividerPair(tree, selectedPath) {
+    const next = clone(tree);
+    const [begin, end] = createDividerPair({ color: pickDividerColor(tree) });
+    if (!selectedPath) { next.push(begin, end); return { tree: next, path: [next.length - 2] }; }
+    const list = parentList(next, selectedPath);
+    const at = selectedPath.at(-1);
+    list.splice(at + 1, 0, end);
+    list.splice(at, 0, begin);
+    return { tree: next, path: [...selectedPath.slice(0, -1), at] };
+}
+
+/** Удаляет обе полосы пары (где бы они ни стояли): одна без другой ничего не значит. Блоки между ними остаются на местах. */
+export function removeDividerPair(tree, pair) {
+    const strip = nodes => nodes.filter(node => !(isDivider(node) && node.pair === pair)).map(node => {
+        if (node.type === 'group') return { ...node, children: strip(node.children ?? []) };
+        if (node.type === 'choice') return { ...node, options: (node.options ?? []).map(option => ({ ...option, children: strip(option.children ?? []) })) };
+        return node;
+    });
+    return strip(clone(tree));
+}
+
+/** Меняет поля обеих полос пары разом (имя, цвет): полосы одной пары всегда одного цвета и с одним именем. */
+export function patchDividerPair(tree, pair, changes) {
+    const next = clone(tree);
+    const visit = nodes => nodes.forEach(node => {
+        if (isDivider(node) && node.pair === pair) Object.assign(node, changes);
+        if (node.type === 'group') visit(node.children ?? []);
+        if (node.type === 'choice') node.options?.forEach(option => visit(option.children ?? []));
+    });
+    visit(next);
+    return next;
+}
 
 /** Удаление узла вместе с блоками, на которые больше никто не ссылается (блоки-обёртки группы — тоже). */
 export function unusedBlockIds(tree, blocks) {
