@@ -250,3 +250,15 @@ test('a link to a web page after stme: is no anchor: it is shown as plain words,
     assert.ok(calls[1].messages.at(-1).content.includes('does not open anything'), 'told that this is not how a web page is read');
     assert.ok(guide.messages.peek().some(message => message.role === 'note' && /Searched/.test(message.text ?? '')), 'and the real action ran');
 });
+
+test('a GLM-style tool call in her reply runs as a real action and leaves no markup in the chat, and she reads the result', async () => {
+    const reply = 'Let me look her up.<tool_call>web.search\n<arg_key>query</arg_key>\n<arg_value>Emilia Re:Zero</arg_value>\n</tool_call>$0$';
+    const { guide, calls } = build({ generate: count => (count === 1 ? reply : 'Found her.') });
+    await guide.load();
+    await guide.ask('Look up Emilia.');
+    const texts = guide.messages.peek().map(message => message.text ?? '');
+    assert.ok(texts.includes('Let me look her up.'));
+    assert.ok(!texts.some(text => /tool_call|arg_key|arg_value|\$\d\$/.test(text)), 'no foreign markup in the chat');
+    assert.ok(texts.some(text => text.startsWith('Searched the web for “Emilia Re:Zero”')), 'the real search ran');
+    assert.equal(calls.length, 2);
+});

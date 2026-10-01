@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createEngine } from '../libraries/shared/engine.js';
-import { splitThinking, streamingStage, planMessage, insertPlan, formatEngineResult, MAX_PLAN_CHARS, PLAN_DEPTH } from '../libraries/core/guide-thinking.js';
+import { splitThinking, streamingStage, normalizeToolCalls, planMessage, insertPlan, formatEngineResult, MAX_PLAN_CHARS, PLAN_DEPTH } from '../libraries/core/guide-thinking.js';
 import { normalizePassParams } from '../libraries/core/guide-edit.js';
 import { describeProposal } from '../libraries/core/guide-proposals.js';
 import { detectFocus } from '../libraries/core/guide-relevance.js';
@@ -556,4 +556,20 @@ test('the stage is published while chunks arrive and is gone when the reply is i
     await guide.ask('hello');
     assert.deepEqual(seen, ['Thinking', 'Writing the card · description', null]);
     assert.equal(guide.streamStage.peek(), null, 'nothing is left once the reply is in');
+});
+
+test('a model that calls tools in its own tag format (GLM: <tool_call>name<arg_key>…, or name: {json}$0$) is understood: the call becomes an ordinary action block and none of the markup reaches the chat', () => {
+    const glm = 'Let me look.<tool_call>web.read\n<arg_key>ref</arg_key>\n<arg_value>anilist:137816</arg_value>\n</tool_call>';
+    const converted = normalizeToolCalls(glm);
+    assert.match(converted, /^Let me look\.\n```action\n\{"label":"web\.read","action":"web\.read","params":\{"ref":"anilist:137816"\}\}\n```\n$/);
+    const mixed = 'Let me pull up her page<tool_call>web.read: {"ref": "anilist:137816"}$0$</arg_value><tool_call>web.wikis: {"franchise": "Mushoku Tensei"}$1$';
+    const both = normalizeToolCalls(mixed);
+    assert.equal((both.match(/```action/g) ?? []).length, 2);
+    assert.ok(both.includes('"franchise":"Mushoku Tensei"') && !/\$\d\$|arg_value|tool_call/.test(both));
+    assert.equal(normalizeToolCalls('<tool_call>web.search\n<arg_key>query</arg_key><arg_value>{"a":1}</arg_value></tool_call>').includes('"query":{"a":1}'), true, 'a JSON value stays JSON');
+    assert.equal(normalizeToolCalls('Plain text, no calls.'), 'Plain text, no calls.');
+    assert.equal(normalizeToolCalls('Broken <tool_call>nonsense'), 'Broken ', 'an unreadable call is cut out, not shown');
+    assert.equal(splitThinking(glm).visible.includes('tool_call'), false);
+    assert.equal(streamingText('Let me look.<tool_call>web.re'), 'Let me look.');
+    assert.deepEqual(streamingStage('Let me look.<tool_call>web.read\n<arg_key>re'), { label: 'Preparing an action' });
 });
