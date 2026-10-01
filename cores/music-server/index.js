@@ -1,6 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { EMBEDDING_MODEL_ID } from '../../libraries/core/embedding.js';
-import { isServerConfigured, sectionsUrl, sectionUrl, parseSections, parseSectionTracks } from '../../libraries/shared/music-catalog.js';
+import { isServerConfigured, sectionsUrl, sectionUrl, pickUrl, parseSections, parseSectionTracks, parsePick } from '../../libraries/shared/music-catalog.js';
 
 /**
  * Ядро музыкального сервера: единственное место, где Music ходит в сеть (Модуль — сообщество, `http.request` ему закрыт). Читает разделы и векторы треков раздела
@@ -47,9 +47,22 @@ export function createMusicServerCore(host, { server = {}, timeoutMs = TIMEOUT_M
         return result;
     }
 
+    /**
+     * Выбор трека делает сервер: ME присылает только вектор сцены (и что сейчас играет), в ответ — один трек или «оставь/ничего». `ended` — трек доиграл, `force` — кнопка «следующий».
+     * Сбой сети — `none`: играющее продолжается.
+     */
+    async function pick({ section: id, vector, current = null, ended = false, force = false, minSimilarity, switchMargin } = {}) {
+        const sectionId = String(id ?? '');
+        if (!isServerConfigured(server) || !sectionId) return { action: 'none' };
+        const body = JSON.stringify({ section: sectionId, vector, current, ended, force, minSimilarity, switchMargin });
+        const result = await request(host.network, 'http.request', { params: { url: pickUrl(server), method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, timeoutMs });
+        return result.ok && result.value?.ok ? parsePick(result.value.text, { server, sectionId }) : { action: 'none' };
+    }
+
     const unregisters = [
+        host.own.register('musicServer.pick', params => pick(params)),
         host.own.register('musicServer.sections', params => sections(params)),
         host.own.register('musicServer.section', params => section(params)),
     ];
-    return { sections, section, unregister: () => { for (const unregister of unregisters) unregister(); } };
+    return { sections, section, pick, unregister: () => { for (const unregister of unregisters) unregister(); } };
 }

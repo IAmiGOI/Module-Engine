@@ -44,16 +44,42 @@ export function parseSections(text, { model }) {
 export function parseSectionTracks(text, { server, sectionId, model, dim }) {
     const data = parseJson(text);
     if (!compatible(data, { model, dim }) || !Array.isArray(data.tracks)) return null;
+    const validVector = vector => Array.isArray(vector) && vector.length === dim && vector.every(Number.isFinite);
+    // Раздел «по группам»: вектор один на группу, у трека только ссылка `g`. Для подбора каждый трек получает вектор своей группы — группа с лучшим счётом выигрывает целиком, а трек внутри неё выбирается по очереди.
+    const groups = new Map((Array.isArray(data.groups) ? data.groups : [])
+        .filter(group => group && typeof group.id === 'string' && /^[\w-]+$/.test(group.id) && validVector(group.v))
+        .map(group => [group.id, group.v]));
     const tracks = [];
     for (const entry of data.tracks) {
         if (!entry || typeof entry.id !== 'string' || !/^[\w-]+$/.test(entry.id) || !/^[a-z0-9]{2,5}$/i.test(String(entry.ext ?? ''))) continue;
-        if (!Array.isArray(entry.v) || entry.v.length !== dim || !entry.v.every(Number.isFinite)) continue;
+        const grouped = entry.g !== undefined;
+        const vector = grouped ? groups.get(entry.g) : entry.v;
+        if (!validVector(vector)) continue;
         tracks.push({
-            id: `${SERVER_TRACK_PREFIX}${sectionId}_${entry.id}`, name: '', description: '', vector: entry.v, playCount: 0,
+            id: `${SERVER_TRACK_PREFIX}${sectionId}_${entry.id}`, name: '', description: '', vector, playCount: 0,
             source: { kind: SOURCE_KINDS.URL, ref: audioUrl(server, entry.id, entry.ext) }, artist: '', tagged: 'manual', server: true,
+            ...(grouped ? { group: `${sectionId}_${entry.g}` } : {}),
         });
     }
     return { name: String(data.name ?? sectionId), tracks };
+}
+
+export const pickUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/pick`, key);
+
+/** Трек, который выбрал сервер: у ME нет о нём ничего, кроме id и адреса аудио. `rawId` нужен, чтобы сказать серверу, что сейчас играет. */
+export const serverTrackFrom = ({ server, sectionId, id, ext }) => ({
+    id: `${SERVER_TRACK_PREFIX}${sectionId}_${id}`, rawId: id, name: '', description: '', vector: null, playCount: 0,
+    source: { kind: SOURCE_KINDS.URL, ref: audioUrl(server, id, ext) }, artist: '', tagged: 'manual', server: true,
+});
+
+/** Ответ сервера на выбор → `{ action: 'play' | 'keep' | 'none', track?, similarity? }`; мусор и недопустимые id — `none`. */
+export function parsePick(text, { server, sectionId }) {
+    const data = parseJson(text);
+    if (data?.action === 'keep') return { action: 'keep' };
+    if (data?.action === 'play' && /^[\w-]+$/.test(String(data.id)) && /^[a-z0-9]{2,5}$/i.test(String(data.ext))) {
+        return { action: 'play', similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
+    }
+    return { action: 'none' };
 }
 
 export const isServerTrack = track => track?.server === true;

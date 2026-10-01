@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { openStore, HttpError, AUDIO_EXT } from './store.js';
 import { MODEL_ID, DIM } from './embed.js';
+import { pickTrack } from './pick.js';
 import { CORS, sendJson, sendFile, readJson, sameSecret } from './http-utils.js';
 import { createRateLimiter, clientAddress } from './rate-limit.js';
 
@@ -20,15 +21,17 @@ const CONSOLE_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'co
 const DEFAULT_MAX_UPLOAD = 200 * 1024 * 1024;
 
 /** Лимиты по умолчанию: каталог 60 запросов/мин, аудио 90 запросов/мин (плеер на одну смену трека делает несколько Range-запросов) и 2 МБ/с на поток; на адрес. 0 — без ограничения. */
-export const DEFAULT_LIMITS = Object.freeze({ catalogPerMinute: 60, audioPerMinute: 90, audioBytesPerSecond: 2 * 1024 * 1024 });
+export const DEFAULT_LIMITS = Object.freeze({ pickPerMinute: 60, catalogPerMinute: 60, audioPerMinute: 90, audioBytesPerSecond: 2 * 1024 * 1024 });
 
-export async function createApp({ dir, embed, adminToken, readKey = '', maxUpload = DEFAULT_MAX_UPLOAD, limits = DEFAULT_LIMITS }) {
+export async function createApp({ dir, embed, adminToken, readKey = '', maxUpload = DEFAULT_MAX_UPLOAD, limits = DEFAULT_LIMITS, legacyCatalog = false }) {
     if (!adminToken) throw new Error('ADMIN_TOKEN обязателен: без него консоль была бы открыта всем');
     const store = await openStore({ dir, embed });
     const tmpDir = path.join(dir, 'tmp');
     await fsp.mkdir(tmpDir, { recursive: true });
 
     const catalogLimiter = limits.catalogPerMinute > 0 ? createRateLimiter({ perMinute: limits.catalogPerMinute }) : null;
+    const pickLimiter = limits.pickPerMinute > 0 ? createRateLimiter({ perMinute: limits.pickPerMinute }) : null;
+    const plays = new Map();   // сколько раз каждый трек выбирался (в памяти, до перезапуска): ротация внутри раздела
     const audioLimiter = limits.audioPerMinute > 0 ? createRateLimiter({ perMinute: limits.audioPerMinute }) : null;
     /** Владелец не ограничивается. Ответ 429 несёт `Retry-After`. */
     function limited(req, res, limiter) {
@@ -58,7 +61,7 @@ export async function createApp({ dir, embed, adminToken, readKey = '', maxUploa
         };
         try {
             await pipeline(req, limit, fs.createWriteStream(tmpFile));
-            return await store.addTrack({ sectionId: url.searchParams.get('section'), title: url.searchParams.get('title'), description: url.searchParams.get('description'), ext, tmpFile });
+            return await store.addTrack({ sectionId: url.searchParams.get('section'), groupId: url.searchParams.get('group'), title: url.searchParams.get('title'), description: url.searchParams.get('description'), ext, tmpFile });
         } catch (error) {
             await fsp.rm(tmpFile, { force: true });
             throw error;
@@ -91,8 +94,19 @@ export async function createApp({ dir, embed, adminToken, readKey = '', maxUploa
             if (limited(req, res, catalogLimiter)) return;
             if (!readAllowed(url)) return sendJson(res, 401, { error: 'нет доступа' });
             if (parts.length === 2) return sendJson(res, 200, { model: MODEL_ID, dim: DIM, sections: store.publicSections() });
+            if (!legacyCatalog) return sendJson(res, 404, { error: 'векторы не отдаются: подбор идёт на сервере' });   // прежний режим (подбор в ME) выключен
             const found = store.publicSection(decodeURIComponent(parts[2]));
             return found ? sendJson(res, 200, { model: MODEL_ID, dim: DIM, ...found }) : sendJson(res, 404, { error: 'нет такого раздела' });
+        }
+
+        if (method === 'POST' && parts[0] === 'api' && parts[1] === 'pick') {
+            if (!readAllowed(url)) return sendJson(res, 401, { error: 'нет доступа' });
+            if (limited(req, res, pickLimiter)) return;
+            const body = await readJson(req, 64 * 1024);
+            if (!store.hasSection(String(body.section))) return sendJson(res, 404, { error: 'нет такого раздела' });
+            const result = pickTrack({ items: store.pickItems(body.section), vector: body.vector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, plays });
+            if (result.action === 'play') plays.set(result.id, (plays.get(result.id) ?? 0) + 1);
+            return sendJson(res, 200, result);
         }
 
         if (parts[0] === 'api' && parts[1] === 'admin') {
@@ -100,9 +114,14 @@ export async function createApp({ dir, embed, adminToken, readKey = '', maxUploa
             const [, , what, id] = parts;
             if (what === 'catalog' && method === 'GET') return sendJson(res, 200, store.adminCatalog());
             if (what === 'sections') {
-                if (method === 'POST') return sendJson(res, 201, await store.addSection((await readJson(req)).name));
+                if (method === 'POST') { const body = await readJson(req); return sendJson(res, 201, await store.addSection(body.name, body.mode)); }
                 if (method === 'PATCH' && id) return sendJson(res, 200, await store.renameSection(id, (await readJson(req)).name));
                 if (method === 'DELETE' && id) { await store.deleteSection(id); return sendJson(res, 200, { ok: true }); }
+            }
+            if (what === 'groups') {
+                if (method === 'POST' && !id) { const body = await readJson(req); return sendJson(res, 201, await store.addGroup({ sectionId: body.section, name: body.name, description: body.description })); }
+                if (method === 'PATCH' && id) return sendJson(res, 200, await store.updateGroup(id, await readJson(req)));
+                if (method === 'DELETE' && id) { await store.deleteGroup(id); return sendJson(res, 200, { ok: true }); }
             }
             if (what === 'tracks') {
                 if (method === 'POST' && !id) return sendJson(res, 201, await upload(req, url));

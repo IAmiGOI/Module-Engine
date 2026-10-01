@@ -14,7 +14,9 @@ const server = await createApp({
     dir,
     adminToken: process.env.ADMIN_TOKEN,
     readKey: process.env.READ_KEY ?? '',
+    legacyCatalog: process.env.LEGACY_CATALOG === '1',   // прежний режим: ME сам подбирает по векторам, которые сервер тогда обязан отдавать
     limits: {
+        pickPerMinute: Number(process.env.LIMIT_PICK_PER_MIN ?? DEFAULT_LIMITS.pickPerMinute),
         catalogPerMinute: Number(process.env.LIMIT_CATALOG_PER_MIN ?? DEFAULT_LIMITS.catalogPerMinute),
         audioPerMinute: Number(process.env.LIMIT_AUDIO_PER_MIN ?? DEFAULT_LIMITS.audioPerMinute),
         audioBytesPerSecond: Number(process.env.LIMIT_AUDIO_BYTES_PER_SEC ?? DEFAULT_LIMITS.audioBytesPerSecond),

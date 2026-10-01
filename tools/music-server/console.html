@@ -19,6 +19,7 @@
     .sections button.item { display: flex; justify-content: space-between; width: 100%; margin-bottom: 6px; text-align: left; }
     .sections button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--card)); }
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .row > .grow { flex: 1; min-width: 160px; }
+    .group { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; } h3 { margin: 12px 0 8px; font-size: 15px; }
     .track { border-top: 1px solid var(--line); padding: 10px 0; } .track:first-child { border-top: 0; }
     .dim { color: var(--dim); font-size: 13px; } .warn { color: var(--warn); } .ok { color: var(--accent); }
     .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--dim); margin-bottom: 12px; }
@@ -38,12 +39,19 @@
     <aside class="card sections">
         <div id="sectionList"></div>
         <div class="row"><input id="newSection" class="grow" placeholder="Новый раздел"><button class="primary" id="addSection">+</button></div>
+        <select id="newMode" class="wide" title="Как ME выбирает музыку в этом разделе"><option value="tracks">Каждый трек со своим тегом</option><option value="groups">Треки по группам</option></select>
     </aside>
     <section class="card">
         <div id="empty" class="dim">Создайте раздел слева.</div>
         <div id="panel" hidden>
             <div class="row"><input id="sectionName" class="grow"><button id="renameSection">Переименовать</button><button class="danger" id="deleteSection">Удалить раздел</button></div>
-            <p class="dim">Раздел увидят пользователи ME в выпадающем списке. Трек играет только когда у него есть тег.</p>
+            <p class="dim" id="modeHint"></p>
+            <div id="groupsBox" hidden>
+                <h3>Группы</h3>
+                <div id="groups"></div>
+                <div class="row"><input id="newGroup" class="grow" placeholder="Новая группа (например, «Любовные сцены»)"><button class="primary" id="addGroup">Добавить группу</button></div>
+                <div class="row"><span class="dim">Загружать в группу:</span><select id="uploadGroup"></select></div>
+            </div>
             <div class="drop" id="drop">Перетащите аудиофайлы сюда или <input type="file" id="files" accept="audio/*" multiple></div>
             <textarea id="uploadTag" placeholder="Тег для загружаемых файлов (необязательно — можно вписать потом у каждого трека). Например: тихий ночной лагерь, акустическая гитара, грусть и покой"></textarea>
             <div id="progress" class="dim"></div>
@@ -85,19 +93,50 @@ function render() {
     $('empty').hidden = Boolean(section); $('panel').hidden = !section;
     if (!section) return;
     $('sectionName').value = section.name;
+    const grouped = section.mode === 'groups';
+    $('modeHint').textContent = grouped
+        ? 'Режим «по группам»: тег есть у группы, а не у трека. ME выбирает группу по сцене, а трек внутри неё — по очереди. Трек без группы не играет.'
+        : 'Режим «каждый трек со своим тегом». Раздел увидят пользователи ME в выпадающем списке. Трек играет, только когда у него есть тег.';
+    $('groupsBox').hidden = !grouped;
+    $('uploadTag').hidden = grouped;
+    if (grouped) {
+        const groups = catalog.groups.filter(group => group.section === current);
+        $('groups').replaceChildren(...(groups.length ? groups.map(groupRow) : [el('p', { className: 'dim' }, 'Групп пока нет — добавьте первую.')]));
+        const chosen = $('uploadGroup').value;
+        $('uploadGroup').replaceChildren(el('option', { value: '' }, '— без группы (не играет)'), ...groups.map(group => el('option', { value: group.id, selected: group.id === chosen }, group.name)));
+    }
     const tracks = catalog.tracks.filter(track => track.section === current).sort((a, b) => b.createdAt - a.createdAt);
     $('tracks').replaceChildren(...(tracks.length ? tracks.map(trackRow) : [el('p', { className: 'dim' }, 'В разделе пока нет треков.')]));
 }
 
-function trackRow(track) {
-    const title = el('input', { className: 'grow', value: track.title });
-    const tag = el('textarea', { value: track.description, placeholder: 'Тег: настроение, темп, звучание, к какой сцене подходит' });
-    const move = el('select', {}, ...catalog.sections.map(section => el('option', { value: section.id, selected: section.id === track.section }, section.name)));
-    const status = el('span', { className: track.tagged ? 'ok' : 'warn' }, track.tagged ? 'играет по тегу' : 'нет тега — не играет');
+function groupRow(group) {
+    const count = catalog.tracks.filter(track => track.group === group.id).length;
+    const name = el('input', { className: 'grow', value: group.name });
+    const tag = el('textarea', { value: group.description, placeholder: 'Тег ГРУППЫ: какие сцены и настроение. Например: нежный романтичный вечер, медленный темп, пианино' });
     const save = el('button', { className: 'primary' }, 'Сохранить');
     save.onclick = async () => {
         save.disabled = true; save.textContent = 'Считаю вектор…';
-        try { await api(`/api/admin/tracks/${track.id}`, { method: 'PATCH', body: { title: title.value, description: tag.value, section: move.value } }); await load(); } catch (error) { fail(error); save.disabled = false; save.textContent = 'Сохранить'; }
+        try { await api(`/api/admin/groups/${group.id}`, { method: 'PATCH', body: { name: name.value, description: tag.value } }); await load(); } catch (error) { fail(error); save.disabled = false; save.textContent = 'Сохранить'; }
+    };
+    const del = el('button', { className: 'danger' }, 'Удалить');
+    del.onclick = async () => { if (confirm(`Удалить группу «${group.name}»?`)) { try { await api(`/api/admin/groups/${group.id}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } } };
+    return el('div', { className: 'group' }, el('div', { className: 'row' }, name, el('span', { className: 'dim' }, `${count} треков`)), tag,
+        el('div', { className: 'row' }, el('span', { className: group.tagged ? 'ok' : 'warn' }, group.tagged ? 'тег задан' : 'нет тега — группа молчит'), el('span', { className: 'grow' }), save, del));
+}
+
+function trackRow(track) {
+    const title = el('input', { className: 'grow', value: track.title });
+    const section = catalog.sections.find(item => item.id === track.section);
+    const grouped = section?.mode === 'groups';
+    const tag = el('textarea', { value: track.description, placeholder: 'Тег: настроение, темп, звучание, к какой сцене подходит' });
+    const groupSelect = el('select', {}, el('option', { value: '' }, '— без группы'), ...catalog.groups.filter(group => group.section === track.section).map(group => el('option', { value: group.id, selected: group.id === track.group }, group.name)));
+    const move = el('select', {}, ...catalog.sections.map(section => el('option', { value: section.id, selected: section.id === track.section }, section.name)));
+    const playable = grouped ? catalog.groups.some(group => group.id === track.group && group.tagged) : track.tagged;
+    const status = el('span', { className: playable ? 'ok' : 'warn' }, playable ? (grouped ? 'играет в группе' : 'играет по тегу') : (grouped ? 'нет группы с тегом — не играет' : 'нет тега — не играет'));
+    const save = el('button', { className: 'primary' }, 'Сохранить');
+    save.onclick = async () => {
+        save.disabled = true; save.textContent = 'Считаю вектор…';
+        try { await api(`/api/admin/tracks/${track.id}`, { method: 'PATCH', body: { title: title.value, ...(grouped ? { group: groupSelect.value } : { description: tag.value }), section: move.value } }); await load(); } catch (error) { fail(error); save.disabled = false; save.textContent = 'Сохранить'; }
     };
     const del = el('button', { className: 'danger' }, 'Удалить');
     del.onclick = async () => { if (confirm(`Удалить «${track.title}»?`)) { try { await api(`/api/admin/tracks/${track.id}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } } };
@@ -110,7 +149,7 @@ function trackRow(track) {
         audio = new Audio(URL.createObjectURL(await response.blob())); audio.onended = () => { audio = null; listen.textContent = '▶'; };
         audio.play(); listen.textContent = '■';
     };
-    return el('div', { className: 'track' }, el('div', { className: 'row' }, listen, title, move), tag, el('div', { className: 'row' }, status, el('span', { className: 'grow' }), save, del));
+    return el('div', { className: 'track' }, el('div', { className: 'row' }, listen, title, move, ...(grouped ? [groupSelect] : [])), ...(grouped ? [] : [tag]), el('div', { className: 'row' }, status, el('span', { className: 'grow' }), save, del));
 }
 
 async function upload(files) {
@@ -119,7 +158,7 @@ async function upload(files) {
         $('progress').textContent = `Загрузка ${index + 1}/${files.length}: ${file.name}`;
         const ext = (file.name.match(/\.([a-z0-9]+)$/i) || [])[1] || '';
         const title = file.name.replace(/\.[^.]+$/, '');
-        const query = new URLSearchParams({ section: current, title, ext, description: tag });
+        const query = new URLSearchParams({ section: current, title, ext, description: tag, group: $('uploadGroup').value });
         try {
             const response = await fetch(`/api/admin/tracks?${query}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: file });
             if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `ошибка ${response.status}`);
@@ -131,7 +170,8 @@ async function upload(files) {
 
 $('enter').onclick = async () => { token = $('token').value.trim(); localStorage.setItem('musicToken', token); try { await load(); $('login').hidden = true; $('app').hidden = false; } catch (error) { $('loginError').textContent = error.message; } };
 $('logout').onclick = logout;
-$('addSection').onclick = async () => { const name = $('newSection').value.trim(); if (!name) return; try { const created = await api('/api/admin/sections', { method: 'POST', body: { name } }); $('newSection').value = ''; current = created.id; await load(); } catch (error) { fail(error); } };
+$('addSection').onclick = async () => { const name = $('newSection').value.trim(); if (!name) return; try { const created = await api('/api/admin/sections', { method: 'POST', body: { name, mode: $('newMode').value } }); $('newSection').value = ''; current = created.id; await load(); } catch (error) { fail(error); } };
+$('addGroup').onclick = async () => { const name = $('newGroup').value.trim(); if (!name) return; try { await api('/api/admin/groups', { method: 'POST', body: { section: current, name } }); $('newGroup').value = ''; await load(); } catch (error) { fail(error); } };
 $('renameSection').onclick = async () => { try { await api(`/api/admin/sections/${current}`, { method: 'PATCH', body: { name: $('sectionName').value } }); await load(); } catch (error) { fail(error); } };
 $('deleteSection').onclick = async () => { if (confirm('Удалить раздел?')) { try { await api(`/api/admin/sections/${current}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } } };
 $('files').onchange = event => { upload(event.target.files); event.target.value = ''; };
