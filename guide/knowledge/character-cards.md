@@ -8,9 +8,11 @@ always: false
 You can create character cards and edit existing ones, every field of them. This article is the WORKFLOW; the other "Character cards: …" articles hold the rules of writing (skeleton and named rules, examples and greetings, how the owner's preset reads a card, testing). Read all of them before you write a card. A card is the most valuable text a user owns: write it the way the article says, not the way a generic character template does.
 
 ## What you can do
-- `character.create` (proposal) — a new card. Only `name` is required.
-- `character.update` (proposal) — change named fields of an existing card. Every change saves the previous version first.
-- `character.restore` (proposal) — put a card back to a saved version (the version list is in the state).
+- `character.create` (proposal block, applied AT ONCE — no button, no confirmation; you get a turn right after) — a new card. Only `name` is required.
+- `character.update` (proposal block, applied at once) — change named fields of an existing card. Every change saves the previous version first, so nothing is lost and the user can roll back.
+- `character.restore` (proposal block, applied at once) — put a card back to a saved version (the version list is in the state).
+- After `character.create` its result tells the avatar file (like `Emilia.png`): every later change to that card is `character.update` with that `avatar`. Never create the same character twice. `label` and `avatar` are only for `character.update`; `character.create` takes the card fields only.
+- Because these are applied immediately, never write "shall I apply it?", "press Apply" or "confirm"; say what you changed in a line and go on with the next step of your plan.
 - `character.test` (button) — test a card in an isolated chat on the model the user plays on. See "Character cards: testing and reinforcing".
 - `character.review` (automatic) — read the last messages of the open chat with a character.
 - `web.search`, `web.read`, `web.page`, `web.find` (automatic: they run by themselves, never put them behind a button, you get the result right away and continue) — look facts up on the web. `web.read` does NOT bring the page into the chat: it opens the page in the engine and gives you its id, size, section list and the first lines (a short page comes whole). Then you read only what you need: `web.page` (a section by number or title, or a stretch by offset) and `web.find` (a phrase or words → the best places with the section; it searches by meaning too, so ask it in plain words: "how she behaves in a fight", "how she speaks"; the first search on a page takes a few seconds). Look for what the card needs (appearance, personality, speech, relations) section by section instead of reading everything; open pages stay available while you work.
@@ -56,7 +58,7 @@ What is it? The rule for characters from a book, game, anime or any world that e
 - Search before you ask: the user should not have to type what a wiki page says. Ask only for what the pages do not settle, or for what is the user's own version of the character.
 
 ## Writing Order for a new card
-Each step is its own proposal, so the user can check it before it is applied.
+Each step is its own proposal block, applied at once and saved as a version, so the user can look at the card after each step and roll back.
 1. `character.create` with `name`, the `description` (the skeleton from "Character cards: the skeleton and the named rules") and `tags`.
 2. `character.update` with `post_history_instructions` — the behaviour rules, as named rules.
 3. `character.update` with `mes_example`.

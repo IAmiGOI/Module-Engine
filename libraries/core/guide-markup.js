@@ -134,7 +134,7 @@ export function plainText(reply) {
  * Безопасные действия выполняются сразу (пометка `auto` не нужна — забытая модель оставляла кнопку) (человек уже попросил — второй раз кликать незачем). Возвращает
  * `{ text, actions }`: реплика без этих блоков и список того, что выполнить. Остальные блоки (и действия, меняющие состояние) не трогаются.
  */
-export function splitAutoActions(reply, isSafe) {
+export function splitAutoActions(reply, isSafe, isAutoProposal = () => false) {
     const source = String(reply ?? '');
     const actions = [];
     let text = '';
@@ -142,9 +142,10 @@ export function splitAutoActions(reply, isSafe) {
     for (const match of source.matchAll(FENCE)) {
         const [whole, kind, body] = match;
         let block = null;
-        if (kind === 'action') { try { block = normalizeBlock('action', body.trim() ? JSON.parse(body) : {}); } catch { block = null; } }
+        if (kind === 'action' || kind === 'proposal') { try { block = normalizeBlock(kind, body.trim() ? JSON.parse(body) : {}); } catch { block = null; } }
         // Безопасное (только чтение) действие выполняется само, даже если модель забыла пометить его `auto`: человек уже попросил, а кнопка «прочитать страницу» только мешает.
-        if (block && isSafe(block.action)) {
+        // Предложение действия, которое можно применять без подтверждения (карточки персонажей: каждая правка сохраняет прежнюю версию), тоже выполняется сразу.
+        if (block && (block.kind === 'proposal' ? isAutoProposal(block.action) : isSafe(block.action))) {
             actions.push({ action: block.action, params: block.params });
             text += source.slice(last, match.index);
             last = match.index + whole.length;
