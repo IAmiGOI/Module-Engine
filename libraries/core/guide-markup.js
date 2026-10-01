@@ -11,7 +11,7 @@ import { PROPOSAL_ACTIONS } from './guide-proposals.js';
  *   ```card     {"title": "…", "text": "…", "anchor": "card:models"}                  — карточка с заголовком и ссылкой;
  *   ```steps    {"title": "…", "items": [{"text": "…", "anchor": "…"}]}              — нумерованные шаги со ссылками;
  *   ```action   {"label": "Enable Tracker", "action": "modules.enable", "params": {"id": "module.tracker"}} — кнопка действия (нажатие = согласие);
- *               с `"auto": true` безопасное (только чтение) действие выполняется сразу, без кнопки — см. `splitAutoActions`;
+ *               безопасное (только чтение) действие выполняется сразу, с `"auto"` или без него, без кнопки — см. `splitAutoActions`;
  *   ```proposal {"action": "tracker.create", "params": {…}}                          — карточка «что будет создано» с кнопкой Apply (guide-create.js);
  * Кнопка выбора может сама запускать действие: `{"label": "Check now", "action": "models.check"}` — один клик, второй кнопки нет.
  *   ```checklist {}                                                                   — живой чек-лист первого запуска;
@@ -131,7 +131,7 @@ export function plainText(reply) {
 }
 
 /**
- * Безопасные действия, которые модель пометила `"auto": true`, выполняются сразу (человек уже попросил — второй раз кликать незачем). Возвращает
+ * Безопасные действия выполняются сразу (пометка `auto` не нужна — забытая модель оставляла кнопку) (человек уже попросил — второй раз кликать незачем). Возвращает
  * `{ text, actions }`: реплика без этих блоков и список того, что выполнить. Остальные блоки (и действия, меняющие состояние) не трогаются.
  */
 export function splitAutoActions(reply, isSafe) {
@@ -143,7 +143,8 @@ export function splitAutoActions(reply, isSafe) {
         const [whole, kind, body] = match;
         let block = null;
         if (kind === 'action') { try { block = normalizeBlock('action', body.trim() ? JSON.parse(body) : {}); } catch { block = null; } }
-        if (block?.auto && isSafe(block.action)) {
+        // Безопасное (только чтение) действие выполняется само, даже если модель забыла пометить его `auto`: человек уже попросил, а кнопка «прочитать страницу» только мешает.
+        if (block && isSafe(block.action)) {
             actions.push({ action: block.action, params: block.params });
             text += source.slice(last, match.index);
             last = match.index + whole.length;

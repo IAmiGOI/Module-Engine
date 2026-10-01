@@ -75,3 +75,40 @@ test('a model that keeps searching is stopped after four automatic rounds for on
     await guide.ask('And again?');
     assert.equal(calls.length, 10, 'the count started over with the new request');
 });
+
+test('a search she writes without the "auto" flag still runs by itself — no button asks the user for a permission that the request already gave', async () => {
+    const forgotten = SEARCH_ACTION.replace(',"auto":true', '');
+    const { guide, calls } = build({ generate: count => (count === 1 ? `Let me read her page.\n${forgotten}` : 'Five tails.') });
+    await guide.load();
+    await guide.ask('Make a character card for Faputa.');
+    assert.equal(calls.length, 2, 'the search ran and she answered with it');
+    assert.ok(!guide.messages.peek().some(message => /```action/.test(message.text ?? '')), 'no leftover button');
+});
+
+test('while she works on a character card the history may reach 50 thousand tokens; past that the oldest turns are folded into a summary by one model call, the fresh window stays word for word, and the summary is sent with every later request', async () => {
+    const { guide, calls } = build({ generate: (_, params) => (String(params.prompt ?? '').startsWith('You keep the memory') ? 'SUMMARY: Faputa, five tails, user wants a terse voice.' : 'Understood.') });
+    await guide.load();
+    const big = 'word '.repeat(9000); // ≈ 11 000 tokens
+    guide.messages.set(Array.from({ length: 7 }, (_, index) => ({ id: `m${index}`, at: index, role: index % 2 ? 'assistant' : 'user', text: `${index}: ${big}` })));
+    await guide.ask('Continue the character card for Faputa.');
+    const folding = calls.find(call => String(call.prompt).startsWith('You keep the memory'));
+    assert.ok(folding, 'the fold was asked for');
+    const answerCall = calls.at(-1);
+    assert.ok(answerCall.messages[0].content.includes('SUMMARY: Faputa, five tails'), 'the summary is in the system prompt');
+    const sent = answerCall.messages.slice(1).map(message => message.content).join(' ');
+    assert.ok(!sent.includes('0: word'), 'the folded oldest turn is no longer sent word for word');
+    assert.ok(sent.includes('6: word'), 'the newest turns stay');
+    const calls0 = calls.length;
+    await guide.ask('And one more thing.');
+    assert.equal(calls.slice(calls0).filter(call => String(call.prompt).startsWith('You keep the memory')).length, 0, 'under the limit nothing is folded again');
+    assert.ok(calls.at(-1).messages[0].content.includes('SUMMARY: Faputa'), 'the summary stays');
+});
+
+test('outside card work the history keeps the old 10 thousand token cut and nothing is folded', async () => {
+    const { guide, calls } = build({ generate: () => 'Sure.' });
+    await guide.load();
+    const big = 'word '.repeat(9000);
+    guide.messages.set(Array.from({ length: 7 }, (_, index) => ({ id: `m${index}`, at: index, role: index % 2 ? 'assistant' : 'user', text: `${index}: ${big}` })));
+    await guide.ask('What does the summary module do?');
+    assert.ok(!calls.some(call => String(call.prompt).startsWith('You keep the memory')));
+});

@@ -110,12 +110,7 @@ export function assemblePrompt(preset, context) {
     const toDepth = (depth, order, message) => (captureDepth ? captureDepth.push(message) : injections.push({ depth, order, message }));
 
     const emit = (list, sink) => {
-        // Разделители (pm-dividers.js) снимаются здесь, на каждом уровне списка: блоки закрытой области не доходят до остального разбора.
-        for (const broken of computeBrokenPairs(list)) report.push({ blockId: broken.pair, name: broken.name || 'Divider pair', included: false, reason: 'divider pair is not closed' });
-        const divided = applyDividers(list, { passes: begin => evaluateCondition(begin.condition, ctx.facts ?? {}) });
-        for (const gone of divided.skipped) report.push({ blockId: gone.pair, name: gone.name || 'Divider region', included: false, reason: gone.reason, blocks: gone.blocks });
-        const nodes = divided.nodes;
-        for (const node of nodes) {
+        for (const node of list) {
             if (node.condition && node.enabled !== false && !evaluateCondition(node.condition, ctx.facts ?? {})) {
                 report.push({ blockId: node.id ?? node.block ?? node.contribution, name: node.name, included: false, reason: 'condition' });
                 continue;
@@ -183,7 +178,11 @@ export function assemblePrompt(preset, context) {
     };
 
     const flat = [];
-    emit(preset.tree, flat);
+    // Разделители (pm-dividers.js) снимаются один раз на всё дерево: область идёт по порядку документа и может пересекать группы.
+    for (const broken of computeBrokenPairs(preset.tree)) report.push({ blockId: broken.pair, name: broken.name || 'Divider pair', included: false, reason: 'divider pair is not closed' });
+    const divided = applyDividers(preset.tree, { passes: begin => evaluateCondition(begin.condition, ctx.facts ?? {}) });
+    for (const gone of divided.skipped) report.push({ blockId: gone.pair, name: gone.name || 'Divider region', included: false, reason: gone.reason, blocks: gone.blocks });
+    emit(divided.nodes, flat);
     const history = ctx.history.map(m => ({ ...m }));
     const newChat = !isBlank(preset.templates.newChat) && history.length
         ? [{ role: 'system', content: substitute(preset.templates.newChat), _block: 'newChat' }] : [];
