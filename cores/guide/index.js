@@ -385,14 +385,14 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const opening = openLinked(shown).catch(() => 0);
             let autoFollowUp = thought.fabricated && !autoRuns.length ? FABRICATION_FOLLOW_UP : null;
             // Пообещала посмотреть, а блока действия нет: без этого она замирала на словах, и человек писал «ну?».
-            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && isUnkeptPromise(shown)) autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP;
-            // Рабочая цепочка (после действия или с открытым планом) идёт, пока она сама не скажет `<done/>` (готово или нужен ответ человека) и не задаст вопрос; один пинок на безмолвную остановку, дальше — конец без шума.
-            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && !thought.done && !doneNudged && (actionContinues > 0 || plan.trim()) && !/\?\s*$/.test(shown.trim()) && !calm.includes('```')) { autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP; doneNudged = true; }
+            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && !thought.done && isUnkeptPromise(shown)) autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP;
             if (autoRuns.length) doneNudged = false;
             // `<continue/>` без единой настоящей ссылки на блок: ждать нечего — чаще всего это попытка «открыть» веб-страницу ссылкой.
             if (!autoFollowUp && !autoRuns.length && thought.more && !extractAnchors(quiet).length && !calm.includes('```')) autoFollowUp = DEAD_LINK_FOLLOW_UP;
             // Пока открыт её план (она стирает его, когда закончила), реплика без действия и без вопроса человеку — это остановка на полпути, а не конец работы.
-            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && plan.trim() && !/\?\s*$/.test(shown.trim()) && !calm.includes('```')) autoFollowUp = PLAN_OPEN_FOLLOW_UP;
+            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && !thought.done && plan.trim() && !/\?\s*$/.test(shown.trim()) && !calm.includes('```')) autoFollowUp = PLAN_OPEN_FOLLOW_UP;
+            // Рабочая цепочка (после действия или с открытым планом) идёт, пока она сама не скажет `<done/>` (готово или нужен ответ человека) и не задаст вопрос; один пинок на безмолвную остановку, дальше — конец без шума.
+            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && !thought.done && thought.plan !== '' && !doneNudged && (actionContinues > 0 || plan.trim()) && !/\?\s*$/.test(shown.trim()) && !calm.includes('```')) { autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP; doneNudged = true; }
             for (const run of autoRuns) {
                 const done = await runAction(run.action, run.params);
                 trail.results = [...(trail.results ?? []), { action: run.action, ok: done.ok }];
