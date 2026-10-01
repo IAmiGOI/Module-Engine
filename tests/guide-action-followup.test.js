@@ -193,3 +193,31 @@ test('creating a card ignores "label" and "avatar" that models copy over from th
     assert.equal(result.ok, true);
     assert.deepEqual(seen, [{ name: 'Emilia', first_mes: 'Hi.' }]);
 });
+
+const READ_ACTION = '```action\n{"label":"Read","action":"web.search","params":{"query":"Emilia"}}\n```';
+
+test('the same sentence and the same action repeated in one reply are shown once and run once; the pieces between removed blocks are not glued into one line', async () => {
+    const stuck = `Let me read her main wiki page.${READ_ACTION}Let me pull up her main wiki page and her appearance page.${READ_ACTION}Let me pull up her main wiki page and her appearance page.${READ_ACTION}`;
+    const { guide, calls } = build({ generate: count => (count === 1 ? stuck : 'Read it.') });
+    await guide.load();
+    await guide.ask('Make a card.');
+    const shown = guide.messages.peek().filter(message => message.role === 'assistant')[0].text;
+    assert.equal(shown, 'Let me read her main wiki page.\nLet me pull up her main wiki page and her appearance page.');
+    assert.equal(guide.messages.peek().filter(message => message.role === 'note').length, 1, 'one search, not three');
+    assert.equal(calls.length, 2);
+});
+
+test('a reply that only promises to look something up gets a nudge to send the action, instead of stopping until the user writes "so?"; questions, finished answers and replies with blocks do not', async () => {
+    const { guide, calls } = build({ generate: count => (count === 1 ? 'Patience, I am reading. Let me grab her personality and quotes sections.' : `Here you go.${READ_ACTION}`) });
+    await guide.load();
+    await guide.ask('Go on.');
+    assert.equal(calls.length >= 2, true, 'she was asked to follow through');
+    assert.match(lastTurns(calls).at(-1) ?? '', /^$|Send the action block now|The result of the action/);
+    assert.ok(calls[1].messages.at(-1).content.includes('Send the action block now'), 'the nudge was the automatic turn');
+    for (const quiet of ['Let me know which version you want.', 'Should I read her wiki page first?', 'Done: the card is written.']) {
+        const world = build({ generate: () => quiet });
+        await world.guide.load();
+        await world.guide.ask('Go on.');
+        assert.equal(world.calls.length, 1, quiet);
+    }
+});

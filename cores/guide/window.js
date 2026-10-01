@@ -13,7 +13,7 @@ import { CREATOR } from '../../libraries/core/guide-creator.js';
  */
 const CLEAR_CONFIRM_MS = 4000;
 
-export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
+export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, streamStage = signal(null), runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 540, height: 680 });
     const collapsed = signal(false);
@@ -186,8 +186,11 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
                 const rendered = list.map((message, index) => messageView(message, message === lastAssistant, list[index - 1]?.role !== message.role));
                 const draft = streamDraft();
                 const fresh = list.at(-1)?.role !== 'assistant';
-                if (draft) rendered.push(row({ key: 'stream', kind: 'assistant', who: persona().name, showAvatar: fresh, body: h('div', { class: 'stme-guide-text' }, paragraphs(draft)) }));
-                else if (busy()) rendered.push(row({ key: 'typing', kind: 'assistant', who: persona().name, showAvatar: fresh, body: h('div', { class: 'stme-guide-text stme-guide-typing' }, 'is thinking…') }));
+                const stage = streamStage();
+                // Три точки мигают только прозрачностью (без перерасчёта вёрстки); подпись — что именно она делает: без неё долгая карточка выглядит зависанием.
+                const working = label => h('div', { class: 'stme-guide-typing stme-guide-stage' }, h('span', { class: 'stme-guide-dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), h('span', null, label));
+                if (draft) rendered.push(row({ key: 'stream', kind: 'assistant', who: persona().name, showAvatar: fresh, body: h('div', { class: 'stme-guide-text' }, paragraphs(draft), stage ? working(stage.label) : null) }));
+                else if (busy()) rendered.push(row({ key: 'typing', kind: 'assistant', who: persona().name, showAvatar: fresh, body: h('div', { class: 'stme-guide-text' }, working(stage ? stage.label : 'Thinking')) }));
                 return rendered.reverse();
             })),
             composer());

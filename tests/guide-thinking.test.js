@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createEngine } from '../libraries/shared/engine.js';
-import { splitThinking, planMessage, insertPlan, formatEngineResult, MAX_PLAN_CHARS, PLAN_DEPTH } from '../libraries/core/guide-thinking.js';
+import { splitThinking, streamingStage, planMessage, insertPlan, formatEngineResult, MAX_PLAN_CHARS, PLAN_DEPTH } from '../libraries/core/guide-thinking.js';
 import { normalizePassParams } from '../libraries/core/guide-edit.js';
 import { describeProposal } from '../libraries/core/guide-proposals.js';
 import { detectFocus } from '../libraries/core/guide-relevance.js';
@@ -507,4 +507,52 @@ test('invented tool results are cut from the reply (the engine frame, the old "(
     assert.equal(streamingText('Reading now. (res'), 'Reading now.');
     assert.equal(streamingText('Reading now. [ENGINE RE'), 'Reading now.');
     assert.match(formatEngineResult(' text '), /^\[ENGINE RESULT[^\]]*\]\ntext\n\[END ENGINE RESULT\]$/);
+});
+
+test('while a reply is still arriving, the window can say what she is doing: thinking, writing the plan, writing the card with the field that is being written now, preparing an action; a closed block and plain text are not a stage', () => {
+    assert.deepEqual(streamingStage('<think>hmm, first'), { label: 'Thinking' });
+    assert.equal(streamingStage('<think>done</think>Sure, here it is'), null);
+    assert.deepEqual(streamingStage('<plan>1. description 2. first'), { label: 'Writing the plan' });
+    assert.equal(streamingStage('<plan>x</plan>Hello'), null);
+    assert.deepEqual(streamingStage('Writing it.\n```proposal\n{"action":"character.create","params":{"name":"Emilia","descr'), { label: 'Writing the card · name' }, 'the name key is complete, the next one has not started');
+    assert.deepEqual(streamingStage('```proposal\n{"action":"character.create","params":{"name":"Emilia","description":"Emilia is'), { label: 'Writing the card · description' });
+    assert.deepEqual(streamingStage('```proposal\n{"action":"character.update","avatar":"E.png","params":{"description":"x","first_mes":"She stands'), { label: 'Writing the card · first message' });
+    assert.deepEqual(streamingStage('```proposal\n{"action":"character.avatar","params":{"url":"https://x'), { label: 'Choosing a picture' });
+    assert.deepEqual(streamingStage('```proposal\n{"action":"tracker.create","params":{'), { label: 'Preparing a proposal' });
+    assert.deepEqual(streamingStage('Searching.\n```action\n{"action":"web.sea'), { label: 'Preparing an action' });
+    assert.equal(streamingStage('```action\n{"action":"web.search","params":{}}\n```\nDone.'), null, 'a closed block is finished');
+    assert.equal(streamingStage('Just text.'), null);
+});
+
+test('the stage is published while chunks arrive and is gone when the reply is in, also after a failure', async () => {
+    const engine = createEngine();
+    const bus = engine.buses.cores;
+    const settings = new Map();
+    bus.register('storage.settings.get', ({ namespace, key, fallback }) => settings.get(`${namespace}/${key}`) ?? fallback);
+    bus.register('storage.settings.set', ({ namespace, key, value }) => { settings.set(`${namespace}/${key}`, value); return true; });
+    bus.register('model.workers.get', () => [{ id: 'w', state: 'up' }]);
+    bus.register('model.workers.status', () => [{ workerId: 'w', state: 'up' }]);
+    bus.register('model.workers.probe', () => [{ workerId: 'w', state: 'up' }]);
+    bus.register('ui.anchors.list', () => []);
+    bus.register('tracking.trackers', () => []);
+    bus.register('macros.programs', () => []);
+    bus.register('lorebook.find', () => []);
+    const seen = [];
+    let clock = 0;
+    let guide;
+    bus.register('model.generate', params => {
+        let text = '';
+        for (const part of ['<think>plan', '</think>Ok.\n```proposal\n{"action":"character.create","params":{"name":"A","description":"B', '"}}\n```']) {
+            text += part;
+            clock += 100;
+            engine.events.emit('model.generate.chunk', { requestId: params.requestId, delta: part, text });
+            seen.push(guide.streamStage.peek()?.label ?? null);
+        }
+        return 'Ok.';
+    });
+    guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official' }), { publish: () => {}, mount: () => ({}), modules: { list: () => [], enabled: () => [] }, now: () => clock, loadText: async () => '' });
+    await guide.load();
+    await guide.ask('hello');
+    assert.deepEqual(seen, ['Thinking', 'Writing the card · description', null]);
+    assert.equal(guide.streamStage.peek(), null, 'nothing is left once the reply is in');
 });

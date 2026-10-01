@@ -137,7 +137,8 @@ export function plainText(reply) {
 export function splitAutoActions(reply, isSafe, isAutoProposal = () => false) {
     const source = String(reply ?? '');
     const actions = [];
-    let text = '';
+    const pieces = [];
+    const seen = new Set();
     let last = 0;
     for (const match of source.matchAll(FENCE)) {
         const [whole, kind, body] = match;
@@ -146,12 +147,42 @@ export function splitAutoActions(reply, isSafe, isAutoProposal = () => false) {
         // Безопасное (только чтение) действие выполняется само, даже если модель забыла пометить его `auto`: человек уже попросил, а кнопка «прочитать страницу» только мешает.
         // Предложение действия, которое можно применять без подтверждения (карточки персонажей: каждая правка сохраняет прежнюю версию), тоже выполняется сразу.
         if (block && (block.kind === 'proposal' ? isAutoProposal(block.action) : isSafe(block.action))) {
-            actions.push({ action: block.action, params: block.params });
-            text += source.slice(last, match.index);
+            // Слабая модель иногда повторяет одно и то же действие несколько раз в одной реплике: одинаковое выполняется один раз.
+            const key = JSON.stringify([block.action, block.params]);
+            if (!seen.has(key)) { seen.add(key); actions.push({ action: block.action, params: block.params }); }
+            pieces.push(source.slice(last, match.index));
             last = match.index + whole.length;
         }
     }
-    return { text: (text + source.slice(last)).replace(/\n{3,}/g, '\n\n').trim(), actions };
+    pieces.push(source.slice(last));
+    // Куски между вырезанными блоками склеиваются с переводом строки: иначе «…page.```action…```Let me…» слипалось в «…page.Let me…».
+    const joined = pieces.map(piece => piece.trim()).filter(Boolean).join('\n');
+    return { text: dropRepeatedLines(joined).replace(/\n{3,}/g, '\n\n').trim(), actions };
+}
+
+/** Одинаковые строки обычного текста (не внутри блоков ```…```) повторяются только по сбою модели: остаётся первая. */
+export function dropRepeatedLines(text) {
+    let inFence = false;
+    const seen = new Set();
+    return String(text ?? '').split('\n').filter(line => {
+        if (/^\s*```/.test(line)) { inFence = !inFence; return true; }
+        if (inFence) return true;
+        const key = line.replace(/\s+/g, ' ').trim().toLowerCase();
+        if (key.length < 12) return true;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    }).join('\n');
+}
+
+/**
+ * Реплика обещает пойти и посмотреть («Let me grab her personality section…»), но блока действия в ней нет: она остановилась на словах, и человеку пришлось бы писать «ну?».
+ * Вопрос в конце — не обещание. Ловит форму, поэтому только для коротких реплик без блоков.
+ */
+export function isUnkeptPromise(visible) {
+    const text = String(visible ?? '').trim();
+    if (!text || text.length > 600 || text.includes('```') || /\?\s*$/.test(text)) return false;
+    return /\b(?:let me|i(?:'ll| will)|i'm going to|let's|going to)\b[^.!?\n]{0,70}\b(?:read|grab|pull(?: up)?|check|look(?: up| at| into| for)?|search|open|fetch|find|get|review|go through|dig)\b/i.test(text);
 }
 
 /**
