@@ -110,6 +110,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const manualDone = signal(new Set());
     let scenario = { start: 'hello', nodes: {} };
     let articles = [];
+    let chibiDefault = 'side'; // базовая чиби-поза режима «чиби» (guide/chibi-poses.json, поле default)
     let chibiPoses = []; // задаёт владелец (guide/chibi-poses.json) — пусто по умолчанию, чиби никогда не включится сама по себе
     let tierMessages = {}; // задаёт владелец (guide/tier-messages.json): текст, который она сама пишет первой при открытии нового тира одежды
     let counter = 0;
@@ -173,9 +174,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         let result;
         try { result = await entry.run(params ?? {}); } catch (error) { result = { ok: false, message: error.message }; }
         // В чат — короткая заметка; полный текст (страница, найденное, переписка теста) идёт только модели: `detail`.
-        // Сбой, который она сама исправит следующим ходом (правка карточки, безопасное действие), человеку не показывается: модель читает причину из истории, а в чате остаётся только итог.
+        // Сбой, который она сама исправит следующим ходом (правка карточки, безопасное действие), человеку не показывается (только внутри её хода; нажатую человеком кнопку ошибка не прячет): модель читает причину из истории, а в чате остаётся только итог.
         if (typeof result.planFix === 'string') { fixLine = result.planFix; plan = withFix(plan); void saveChat(); }
-        if (result.message) push({ role: 'note', text: result.message, ok: result.ok, ...(!result.ok && (entry.autoApply || entry.safe) ? { hidden: true } : {}), ...(result.detail ? { detail: String(result.detail).slice(0, MAX_NOTE_DETAIL_CHARS) } : {}) });
+        if (result.message) push({ role: 'note', text: result.message, ok: result.ok, ...(!result.ok && busy.peek() && (entry.autoApply || entry.safe) ? { hidden: true } : {}), ...(result.detail ? { detail: String(result.detail).slice(0, MAX_NOTE_DETAIL_CHARS) } : {}) });
         // Действие, чей результат гид должна прочитать сразу (поиск, чтение, проверка, тест карточки), даёт ей ещё один ход без участия человека.
         // Внутри её же ответа (`busy`) продолжение ставит сам `ask`, после того как выполнит все действия реплики.
         if (result.ok && entry.thenContinue && !busy.peek() && actionContinues < actionLimit()) { actionContinues += 1; void ask(null, { internal: true, followUp: entry.followUp ?? ACTION_FOLLOW_UP }); }
@@ -248,7 +249,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     // Динамическая аватарка (ROADMAP): здоровье воркеров ME, накопленное открытое время, её последний СЫРОЙ ответ (для чиби), чек-лист (4/4 = neko).
     // onTierUp: она сама пишет первой в момент открытия нового тира — текст владельца (guide/tier-messages.json), пустой/отсутствующий тир — молчание.
     const avatar = createGuideAvatar(host, {
-        chibiPoses: () => chibiPoses, getNekoUnlocked: async () => (await checklistState()).every(item => item.done),
+        chibiPoses: () => chibiPoses, defaultChibi: () => chibiDefault, getNekoUnlocked: async () => (await checklistState()).every(item => item.done),
         onTierUp: tier => { const text = tierMessages[tier]; if (text) push({ role: 'assistant', text: text.replaceAll('{{name}}', nameOf()) }); },
     });
     let avatarLoaded = false;
@@ -499,7 +500,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const index = JSON.parse(await loadText('knowledge/index.json'));
             articles = (await Promise.all((index.articles ?? []).map(async file => parseArticle(await loadText(`knowledge/${file}`), file.replace(/\.md$/, ''))))).filter(article => article.text);
         } catch { articles = []; }
-        try { chibiPoses = JSON.parse(await loadText('chibi-poses.json'))?.poses ?? []; } catch { chibiPoses = []; }
+        try { { const parsed = JSON.parse(await loadText('chibi-poses.json')); chibiPoses = parsed?.poses ?? []; if (typeof parsed?.default === 'string' && /^[\w-]+$/.test(parsed.default)) chibiDefault = parsed.default; } } catch { chibiPoses = []; }
         try { tierMessages = JSON.parse(await loadText('tier-messages.json'))?.messages ?? {}; } catch { tierMessages = {}; }
         await avatar.load();
         avatarLoaded = true;
@@ -543,7 +544,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         };
     }
 
-    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, streamStage, stop, debugText: () => debugLog.toText({ worker: persona.peek().workerId || 'any', focus: focus.characters ? 'characters' : 'general', planOpen: Boolean(plan.trim()), plan: plan.slice(0, 600), actionContinues, idleNudges, chainStopped }), runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
+    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, avatarMode: avatar.mode, toggleAvatarMode: avatar.toggleMode, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, streamStage, stop, debugText: () => debugLog.toText({ worker: persona.peek().workerId || 'any', focus: focus.characters ? 'characters' : 'general', planOpen: Boolean(plan.trim()), plan: plan.slice(0, 600), actionContinues, idleNudges, chainStopped }), runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
 
     const unregisters = [
         host.own.register('guide.open', () => open()),

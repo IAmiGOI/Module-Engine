@@ -62,6 +62,8 @@
     cursor: pointer;
 }
 .stme-floating-panel-btn:hover { opacity: 1; background: rgba(255, 255, 255, .08); }
+/* Кнопка-переключатель в шапке (закреплена картинка и т. п.): нажатое состояние заметно без подписи. */
+.stme-floating-panel-btn[aria-pressed="true"] { opacity: 1; background: color-mix(in srgb, var(--stme-accent, #8ab4ff) 28%, transparent); }
 /* position: relative — так EdgeDrawer (absolute, top/right/bottom:0) якорится
    на теле окна, а не на весь .stme-floating-panel (что накрыло бы и шапку). */
 /* `flex: 1; min-height: 0` (ROADMAP.md 5.49) — lets the body actually fill

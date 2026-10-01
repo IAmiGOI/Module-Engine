@@ -154,7 +154,8 @@ export function splitAutoActions(reply, isSafe, isAutoProposal = () => false) {
         if (kind === 'action' || kind === 'proposal') { try { block = normalizeBlock(kind, body.trim() ? JSON.parse(body) : {}); } catch { block = null; } }
         // Безопасное (только чтение) действие выполняется само, даже если модель забыла пометить его `auto`: человек уже попросил, а кнопка «прочитать страницу» только мешает.
         // Предложение действия, которое можно применять без подтверждения (карточки персонажей: каждая правка сохраняет прежнюю версию), тоже выполняется сразу.
-        if (block && (block.kind === 'proposal' ? isAutoProposal(block.action) : isSafe(block.action))) {
+        // Действие, которое применяется без подтверждения (правки карточек, запись лорбуков), идёт сразу и когда модель прислала его блоком ```action```, а не ```proposal```: форма блока не должна возвращать кнопку.
+        if (block && (block.kind === 'proposal' ? isAutoProposal(block.action) : (isSafe(block.action) || isAutoProposal(block.action)))) {
             // Слабая модель иногда повторяет одно и то же действие несколько раз в одной реплике: одинаковое выполняется один раз.
             const key = JSON.stringify([block.action, block.params]);
             if (!seen.has(key)) { seen.add(key); actions.push({ action: block.action, params: block.params }); }

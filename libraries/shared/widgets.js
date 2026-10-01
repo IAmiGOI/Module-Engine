@@ -188,6 +188,8 @@ export function FloatingStack(itemsSignal, { corner = 'top-left', renderItem } =
  */
 export function FloatingPanel(title, {
     position, size, collapsed, onToggle, onClose, onResize, resizable = Boolean(onResize), drag,
+    // `actions` — свои кнопки шапки (готовые узлы): ставятся перед кнопкой «свернуть» (например, «закрепить картинку» у окна гида).
+    actions = [],
     // `className` (extra CSS class, e.g. a fullscreen-default variant) and
     // `minWidth`/`minHeight` (px, ALWAYS enforced — unlike width/height,
     // which stay unset until the user actually resizes) added for the map
@@ -250,6 +252,7 @@ export function FloatingPanel(title, {
         h('div', { class: 'stme-floating-panel-head', ...(drag ?? {}) },
             h('span', { class: 'stme-floating-panel-grip', title: 'Drag to move' }, '⠿'),
             h('strong', {}, title),
+            ...actions,
             onToggle
                 ? h('button', {
                     type: 'button',

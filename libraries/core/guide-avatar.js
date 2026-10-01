@@ -63,7 +63,14 @@ export function matchChibiPose(text, poses) {
  * Сводит всё воедино по приоритету из doc-comment файла. Возвращает один из:
  * `{ track: 'chibi', id }`, `{ track: 'status', id: 'red'|'green' }`, `{ track: 'normal', tier, neko }`.
  */
-export function resolveAvatar({ health, lastCoT, chibiPoses, tier, nekoUnlocked }) {
+export function resolveAvatar({ health, lastCoT, chibiPoses, tier, nekoUnlocked, mode = 'normal', defaultChibi = 'side' }) {
+    // Режим «чиби» (выбор владельца в шапке окна): основной вид — всегда чиби. Поза по ключевым словам, как обычно; здоровье ME всё так же главнее (red → злость, green → радость);
+    // нет ни позы, ни проблем — базовая поза `defaultChibi` (файл `chibi-<id>.png`).
+    if (mode === 'chibi') {
+        if (health === 'red') return { track: 'chibi', id: 'angry' };
+        if (health === 'green') return { track: 'chibi', id: 'happy' };
+        return { track: 'chibi', id: matchChibiPose(lastCoT, chibiPoses) ?? defaultChibi };
+    }
     const chibiPose = matchChibiPose(lastCoT, chibiPoses);
     if (chibiPose !== null) {
         if (health === 'red') return { track: 'chibi', id: 'angry' };
