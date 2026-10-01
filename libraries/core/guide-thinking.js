@@ -9,6 +9,16 @@
  */
 
 export const MAX_PLAN_CHARS = 4000;
+
+/**
+ * Результат действия (поиск, страница, проверка) в истории для модели. Отдельная рамка, не её реплика: когда результаты шли как `(result: …)` её собственными
+ * словами, модель начинала писать такие результаты сама — выдумывала страницу, цитаты и «text continues» вместо того, чтобы запустить действие и дождаться ответа движка.
+ */
+export const formatEngineResult = text => `[ENGINE RESULT — made by the engine after your action ran; you never write these]\n${String(text ?? '').trim()}\n[END ENGINE RESULT]`;
+
+/** Следы выдуманного результата в ответе модели: рамка движка, прежний формат `(result: …)`, тег. Всё от первого следа и до конца — её выдумка, не показывается и не исполняется. */
+const FAKE_RESULT = /\[(?:END )?ENGINE RESULT|\(result\s*(?::|for\b)|<engine_result/i;
+const BROKEN_CONTINUE = /<continue\b[^>]*$/i;
 /** План лежит в истории на этой глубине (как вставка `@4` в SillyTavern): перед последними четырьмя сообщениями, а не в системном промпте — он всегда рядом с последними репликами. */
 export const PLAN_DEPTH = 4;
 
@@ -18,15 +28,18 @@ const PLAN = /<(?:plan|notes)>([\s\S]*?)(?:<\/(?:plan|notes)>|$)/gi;
 const CONTINUE = /<continue\s*\/?>(?:\s*<\/continue>)?/gi;
 
 /**
- * Ответ модели → `{ visible, plan, more }`. `visible` — то, что увидит человек. `plan`: `undefined` — план в ответе не менялся (прежний остаётся; подтверждения человека он не требует и ему не показывается), строка — новый
+ * Ответ модели → `{ visible, plan, more, fabricated }` (`fabricated` — в ответе были выдуманные «результаты» действий: они отброшены вместе со всем, что после них). `visible` — то, что увидит человек. `plan`: `undefined` — план в ответе не менялся (прежний остаётся; подтверждения человека он не требует и ему не показывается), строка — новый
  * (пустая — «задача закончена, план стереть»). `more` — модель просит продолжить сама, когда откроются блоки, на которые сослалась.
  */
 export function splitThinking(reply) {
-    const text = String(reply ?? '');
+    const whole = String(reply ?? '');
+    const cut = whole.search(FAKE_RESULT);
+    const fabricated = cut >= 0;
+    const text = (fabricated ? whole.slice(0, cut) : whole).replace(BROKEN_CONTINUE, '');
     let plan;
     for (const match of text.matchAll(PLAN)) plan = match[1].trim().slice(0, MAX_PLAN_CHARS);
     const more = /<continue\s*\/?>/i.test(text.replace(THINK, ''));
-    return { visible: text.replace(THINK, '').replace(PLAN, '').replace(CONTINUE, '').replace(/\n{3,}/g, '\n\n').trim(), plan, more };
+    return { visible: text.replace(THINK, '').replace(PLAN, '').replace(CONTINUE, '').replace(/\n{3,}/g, '\n\n').trim(), plan, more, fabricated };
 }
 
 /** Сообщение с планом для модели (`null`, если плана нет). */
@@ -42,6 +55,8 @@ export function insertPlan(turns, plan, depth = PLAN_DEPTH) {
     return [...turns.slice(0, at), message, ...turns.slice(at)];
 }
 
+// Обрывок рамки результата в конце стримингового ответа (`(res`, `[ENGINE RE`) не мелькает на экране, пока не станет ясно, что это.
+const PARTIAL_RESULT = /(?:\(r(?:e(?:s(?:u(?:l(?:t)?)?)?)?)?|\[E[A-Z ]{0,12})$/;
 const PARTIAL_TAG = /<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|p(?:l(?:a(?:n)?)?)?|n(?:o(?:t(?:e(?:s)?)?)?)?|c(?:o(?:n(?:t(?:i(?:n(?:u(?:e)?)?)?)?)?)?)?)?$/i;
 
 /**
@@ -50,7 +65,7 @@ const PARTIAL_TAG = /<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|p(?:l(?:a(?:n)?)?)?|n(?:o(?:t
  * на экране недопустим. Текст ДО блока показывается сразу.
  */
 export function streamingText(raw) {
-    let visible = splitThinking(raw).visible.replace(PARTIAL_TAG, '');
+    let visible = splitThinking(raw).visible.replace(PARTIAL_TAG, '').replace(PARTIAL_RESULT, '');
     const fence = visible.indexOf('```');
     if (fence >= 0) visible = visible.slice(0, fence);
     return visible.trimEnd();

@@ -40,7 +40,7 @@ test('a button that needs her answer (search, page, check) gives her another tur
     assert.ok(note.detail.includes('Result 6 about Faputa tails'), 'the long listing is kept for the model');
     assert.ok(!note.text.includes('Result 1'), 'the long listing is NOT in the chat line');
     assert.equal(calls.length, 1, 'one automatic turn');
-    assert.ok(lastTurns(calls).some(turn => turn.startsWith('(result: Search results for “Faputa tails”') && turn.includes('Result 6')), 'the model sees the whole result');
+    assert.ok(lastTurns(calls).some(turn => turn.startsWith('[ENGINE RESULT') && turn.includes('Search results for “Faputa tails”') && turn.includes('Result 6')), 'the model sees the whole result');
     assert.match(lastTurns(calls).at(-1), /^\(automatic — the user did not type this\) The result of the action you ran is in the last note/);
     assert.equal(guide.messages.peek().at(-1).text, 'Found it: five tails.');
     const before = calls.length;
@@ -57,7 +57,7 @@ test('a search she runs by herself inside her reply is read in the same go: the 
     await guide.load();
     await guide.ask('How many tails does Faputa have?');
     assert.equal(calls.length, 2, 'the search result got its own turn without the user typing');
-    assert.ok(lastTurns(calls).some(turn => turn.startsWith('(result: Search results for')));
+    assert.ok(lastTurns(calls).some(turn => turn.startsWith('[ENGINE RESULT') && turn.includes('Search results for')));
     const texts = guide.messages.peek().map(message => `${message.role}: ${message.text}`);
     assert.deepEqual(texts, [
         'user: How many tails does Faputa have?',
@@ -111,4 +111,39 @@ test('outside card work the history keeps the old 10 thousand token cut and noth
     guide.messages.set(Array.from({ length: 7 }, (_, index) => ({ id: `m${index}`, at: index, role: index % 2 ? 'assistant' : 'user', text: `${index}: ${big}` })));
     await guide.ask('What does the summary module do?');
     assert.ok(!calls.some(call => String(call.prompt).startsWith('You keep the memory')));
+});
+
+const FAKE_REPLY = 'Let me read her Appearance section first.<continue(result: web.page result for p1, section 1 (Appearance):\n"Emilia has long silver hair…"\n(text continues.)\nNow I have enough canon material.';
+
+test('when she writes tool results herself, the invention is thrown away with everything after it, never shown, and she is told to send the real action instead', async () => {
+    const { guide, calls } = build({ generate: count => (count === 1 ? FAKE_REPLY : 'Sending the real action.') });
+    await guide.load();
+    await guide.ask('Make a card for Emilia.');
+    const texts = guide.messages.peek().map(message => message.text);
+    assert.ok(texts.includes('Let me read her Appearance section first.'), 'only what came before the invention is shown');
+    assert.ok(!texts.some(text => /silver hair|text continues|<continue/.test(text ?? '')), 'nothing invented reaches the chat');
+    assert.equal(calls.length, 2, 'she got a turn to correct herself');
+    assert.match(lastTurns(calls).at(-1), /looked like a tool result — it was thrown away/);
+});
+
+test('an invented result next to a real action does not stop the real action: it runs, and she reads its real result', async () => {
+    const reply = `Reading it.\n${'```action\n{"label":"Read","action":"web.search","params":{"query":"Emilia"}}\n```'}\n[ENGINE RESULT — made up]\nFake page text.`;
+    const { guide, calls } = build({ generate: count => (count === 1 ? reply : 'Done reading.') });
+    await guide.load();
+    await guide.ask('Look up Emilia.');
+    assert.equal(calls.length, 2);
+    const turns = lastTurns(calls);
+    assert.ok(turns.some(turn => turn.startsWith('[ENGINE RESULT') && turn.includes('Search results for “Emilia”')), 'the real result is in the history');
+    assert.ok(!turns.some(turn => turn.includes('Fake page text')), 'the invention is not');
+});
+
+test('results sit in her history as engine frames from the user side, not as her own words, so she has nothing of hers to imitate', async () => {
+    const { guide, calls } = build({ generate: () => 'Found it.' });
+    await guide.load();
+    await guide.runAction('web.search', { query: 'Faputa tails' });
+    await settle();
+    const resultTurn = calls.at(-1).messages.slice(1).find(message => message.content.startsWith('[ENGINE RESULT'));
+    assert.equal(resultTurn.role, 'user');
+    assert.match(resultTurn.content, /you never write these\]\nSearch results for/);
+    assert.match(calls.at(-1).messages[0].content, /You never write tool results/);
 });

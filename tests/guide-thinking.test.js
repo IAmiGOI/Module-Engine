@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createEngine } from '../libraries/shared/engine.js';
-import { splitThinking, planMessage, insertPlan, MAX_PLAN_CHARS, PLAN_DEPTH } from '../libraries/core/guide-thinking.js';
+import { splitThinking, planMessage, insertPlan, formatEngineResult, MAX_PLAN_CHARS, PLAN_DEPTH } from '../libraries/core/guide-thinking.js';
 import { normalizePassParams } from '../libraries/core/guide-edit.js';
 import { describeProposal } from '../libraries/core/guide-proposals.js';
 import { detectFocus } from '../libraries/core/guide-relevance.js';
@@ -496,4 +496,15 @@ test('the plan is placed before the last four messages (depth 4, like an @4 inje
     assert.deepEqual(insertPlan(turns.slice(0, 2), 'p').map(turn => turn.role), ['system', 'user', 'assistant']);
     assert.equal(insertPlan(turns, ''), turns);
     assert.equal(turns.length, 7, 'the history itself is not touched');
+});
+
+test('invented tool results are cut from the reply (the engine frame, the old "(result: …)" form, a broken <continue), reported, and never flash on screen while streaming', () => {
+    const split = splitThinking('Reading now.<continue(result: web.page result for p1:\n"made up"');
+    assert.deepEqual([split.visible, split.fabricated, split.more], ['Reading now.', true, false]);
+    assert.equal(splitThinking('A real answer.').fabricated, false);
+    assert.equal(splitThinking('Ok.\n[ENGINE RESULT — x]\nfake').visible, 'Ok.');
+    assert.equal(splitThinking('Ok. (result for page) fake').visible, 'Ok.');
+    assert.equal(streamingText('Reading now. (res'), 'Reading now.');
+    assert.equal(streamingText('Reading now. [ENGINE RE'), 'Reading now.');
+    assert.match(formatEngineResult(' text '), /^\[ENGINE RESULT[^\]]*\]\ntext\n\[END ENGINE RESULT\]$/);
 });
