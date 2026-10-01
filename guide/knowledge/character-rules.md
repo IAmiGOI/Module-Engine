@@ -64,6 +64,12 @@ Show what Mira does; do not explain why she does it.
 …
 ```
 
+## No Self-Echo
+What is it? A card says each rule ONCE. `description` is the one place where the character is written in full (goal, traits, behaviour, awareness, speech, appearance, backstory). `post_history_instructions` is a second reading position near the end of the chat, so it carries only what the description does not already say, or what a test showed the model dropping, and then under the SAME name as the rule it reinforces. Writing the same habit, ability or gate in both places in different words doubles the tokens sent on every turn and makes the model weigh it twice.
+- Wrong: the description's Behaviour says she wears the mask in public and the three rings do X; `post_history_instructions` has `**Mask on**` and `**Ring-dependent**` saying the same.
+- Right: `post_history_instructions` has only a rule the description lacks (for example a switch the description does not state: "**Dawn count** — once the first light shows, Mira stops counting aloud and answers in single words until the caravan moves."), or is empty until a test.
+- Before sending any field, compare it with the others; a fact lives in one field only.
+
 ## Name Literal
 What is it? The character's own name is written out everywhere in the card: in `description`, in `post_history_instructions`, in the examples. `{{user}}` is used only for the player; there is no `{{char}}` in the text of a card.
 
