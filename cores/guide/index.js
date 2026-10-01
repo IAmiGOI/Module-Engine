@@ -14,7 +14,7 @@ import { createGuideContext } from './context.js';
 import { createGuideAvatar } from './avatar.js';
 import { NEUTRAL, nextFocus, detectFocus, isClosing, isTaskRequest, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
 import { cutAfterDigest, planHistoryFold, buildDigestPrompt, clampDigest, DIGEST_MAX_TOKENS } from '../../libraries/core/guide-digest.js';
-import { splitThinking, streamingText, insertPlan, MAX_PLAN_CHARS } from '../../libraries/core/guide-thinking.js';
+import { splitThinking, streamingText, insertPlan, formatEngineResult, MAX_PLAN_CHARS } from '../../libraries/core/guide-thinking.js';
 
 /**
  * Ядро гида — маскот движка и его отдельный чат (замена старого окна онбординга). Чат НЕ чат SillyTavern: история лежит в настройках
@@ -73,6 +73,7 @@ const REVEAL_SETTLE_MS = 800;
 const MAX_ACTION_CONTINUES = 4;
 /** Полный текст результата для модели хранится вместе с заметкой, но не бесконечно: он живёт в сохранённом чате. */
 const MAX_NOTE_DETAIL_CHARS = 14000;
+const FABRICATION_FOLLOW_UP = 'Your last reply contained text that looked like a tool result — it was thrown away, you never see results that way. If you still need information, send the action block now (web.page, web.find, web.read…) and stop right after it; the engine will give you the real result. If you already have what you need, continue from the real results above.';
 const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 
@@ -285,7 +286,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             // План к задаче ведёт сама модель (пустой <plan> = закончено): завершение одного шага — не конец длинной задачи. Стираем только когда человек закрыл разговор.
             if (isClosing(question) && !detectFocus({ query: question, modules: known })) plan = '';
             let history = cutAfterDigest(messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note'), digest.upTo);
-            const toTurn = message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.detail ?? message.text})` : message.text });
+            // Результат действия — рамка движка от лица «пользователя», не её реплика (см. formatEngineResult): иначе она подражает формату и выдумывает результаты сама.
+            const toTurn = message => ({ role: message.role === 'user' || message.role === 'note' ? 'user' : 'assistant', content: message.role === 'note' ? formatEngineResult(message.detail ?? message.text) : message.text });
             if (focus.characters) history = await foldLongHistory(history, toTurn);
             const query = history.slice(-4).map(message => message.text).join(' ');
             const system = buildGuideSystemPrompt({
@@ -321,7 +323,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
             const opening = openLinked(shown).catch(() => {});
-            let autoFollowUp = null;
+            let autoFollowUp = thought.fabricated && !autoRuns.length ? FABRICATION_FOLLOW_UP : null;
             for (const run of autoRuns) {
                 const done = await runAction(run.action, run.params);
                 if (done.ok && ACTIONS[run.action]?.thenContinue) autoFollowUp = ACTIONS[run.action].followUp ?? ACTION_FOLLOW_UP;
