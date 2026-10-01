@@ -74,3 +74,30 @@ test('the JSON end finder respects strings and nesting', () => {
     assert.equal(text.slice(0, findJsonEnd(text, 0)), '{"a": {"b": "}"}, "c": [1, 2]}');
     assert.equal(findJsonEnd('{"a": 1', 0), -1);
 });
+
+test('a bare JSON call that the model printed without the ```action fence (as in a real chat) is run as an action instead of littering the chat; JSON inside a fence, or without a dotted action, is left alone', () => {
+    const pasted = 'Let me read the main wiki page and the appearance page together\n{"label": "Read Nanahoshi wiki page", "action": "web.read", "params": {"url": "https://mushokutensei.fandom.com/wiki/Nanahoshi_Shizuka"}}\n\n{"label": "Read Nanahoshi appearance page", "action": "web.read", "params": {"url": "https://mushokutensei.fandom.com/wiki/Nanahoshi_Shizuka/Appearance"}}';
+    assert.deepEqual(actionsOf(pasted), [
+        { action: 'web.read', params: { url: 'https://mushokutensei.fandom.com/wiki/Nanahoshi_Shizuka' } },
+        { action: 'web.read', params: { url: 'https://mushokutensei.fandom.com/wiki/Nanahoshi_Shizuka/Appearance' } },
+    ]);
+    assert.equal(textOf(pasted), 'Let me read the main wiki page and the appearance page together');
+    const fenced = 'Here.\n```json\n{"label": "x", "action": "web.read", "params": {"url": "https://x.org"}}\n```';
+    assert.equal(normalizeToolCalls(fenced), fenced, 'an example inside a fence is not a call');
+    const other = 'The config is {"action": "start", "params": {"a": 1}} and {"name": "x"}.';
+    assert.equal(normalizeToolCalls(other), other, 'no dotted action name — not ours');
+    assert.match(normalizeToolCalls('Ok. {"action": "character.update", "params": {"avatar": "E.png", "description": "d"}}'), /```proposal\n\{"action":"character\.update","params":\{"avatar":"E\.png","description":"d"\}\}\n```/);
+    assert.equal(streamingText('Let me read it.\n{"label": "Read", "action": "web.re'), 'Let me read it.', 'the half-written JSON is not shown');
+});
+
+test('a call whose fence was lost or never closed (the word "action" left in the text, or ```action with no closing ```) still runs, and the same sentence printed twice in a row is shown once', () => {
+    const lost = 'Let me grab the last bit of trivia.Let me grab the last bit of trivia.action\n{"label": "Read remaining trivia", "action": "web.page", "params": {"id": "p2", "offset": 8398, "chars": 700}}';
+    assert.deepEqual(actionsOf(lost), [{ action: 'web.page', params: { id: 'p2', offset: 8398, chars: 700 } }]);
+    assert.equal(textOf(lost), 'Let me grab the last bit of trivia.');
+    const unclosed = 'Reading it now.\n```action\n{"label": "Read", "action": "web.read", "params": {"url": "https://x.org/a"}}';
+    assert.deepEqual(actionsOf(unclosed), [{ action: 'web.read', params: { url: 'https://x.org/a' } }]);
+    assert.equal(textOf(unclosed), 'Reading it now.');
+    const twice = 'Let me read the remaining sections of the page.Let me read the remaining sections of the page.';
+    assert.equal(textOf(twice), 'Let me read the remaining sections of the page.');
+    assert.equal(textOf('First line is here. Second line is here.'), 'First line is here. Second line is here.', 'different sentences are untouched');
+});

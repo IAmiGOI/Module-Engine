@@ -1,3 +1,5 @@
+import { PROPOSAL_ACTIONS } from './guide-proposals.js';
+
 /**
  * Вызовы инструментов «на языке модели». Мы читаем только блоки ```action```, но многие модели вызывают инструменты своим форматом, и без разбора вся эта разметка
  * вылезает в чат, а действие не выполняется. Здесь чистые функции: родные форматы переписываются в обычные блоки ```action``` (дальше всё как у остальных действий), а
@@ -156,6 +158,49 @@ function convertPythonTag(text) {
     });
 }
 
+/**
+ * Голый JSON-вызов: модель иногда пишет сам объект `{"label": …, "action": "web.read", "params": {…}}` без ограды ```action```, и он печатался в чат, а действие не выполнялось. Объект
+ * с `action` вида `пространство.имя` и объектом `params` (вне блоков ```…```) переписывается в обычный блок: предложение карточки или настройки — в ```proposal```, остальное — в ```action```.
+ */
+function convertBareActionJson(text) {
+    if (!text.includes('"action"')) return text;
+    const segments = text.split('```');
+    for (let part = 0; part < segments.length; part += 2) {
+        let segment = segments[part];
+        let from = 0;
+        for (;;) {
+            const open = segment.indexOf('{', from);
+            if (open < 0) break;
+            const end = findJsonEnd(segment, open);
+            const call = end > 0 ? tryParse(segment.slice(open, end)) : undefined;
+            if (isPlainObject(call) && typeof call.action === 'string' && /^\w+\.[\w.]+$/.test(call.action) && (call.params === undefined || isPlainObject(call.params))) {
+                const kind = PROPOSAL_ACTIONS.includes(call.action) ? 'proposal' : 'action';
+                const body = kind === 'proposal' ? { action: call.action, params: call.params ?? {} } : { label: call.label || call.action, action: call.action, params: call.params ?? {} };
+                const block = `\n\`\`\`${kind}\n${JSON.stringify(body)}\n\`\`\`\n`;
+                // Слово-метка перед объектом («…trivia.action\n{…}») — остаток потерянной ограды: вырезается вместе с ней.
+                const label = /(?:^|[\s.!?])(?:action|proposal)[ \t]*\n?\s*$/i.exec(segment.slice(0, open));
+                const cutAt = label ? open - label[0].length + (/^[\s.!?]/.test(label[0]) ? 1 : 0) : open;
+                segment = segment.slice(0, cutAt) + block + segment.slice(end);
+                from = open + block.length;
+            } else from = open + 1;
+        }
+        segments[part] = segment;
+    }
+    return segments.join('```');
+}
+/**
+ * Ограда ```action / ```proposal без закрывающей (модель оборвалась или забыла): если после неё идёт целый JSON-объект, ограда закрывается сразу за ним, и блок распознаётся как обычный.
+ */
+function closeDanglingFence(text) {
+    const fences = [...text.matchAll(/```/g)];
+    if (fences.length % 2 === 0) return text;
+    const open = fences.at(-1).index;
+    const head = /^```(?:action|proposal)[ \t]*\n?\s*/.exec(text.slice(open));
+    if (!head || text[open + head[0].length] !== '{') return text;
+    const end = findJsonEnd(text, open + head[0].length);
+    return end > 0 ? `${text.slice(0, end)}\n\`\`\`${text.slice(end)}` : text;
+}
+
 /** Остатки служебной разметки: закрывающие теги вызовов, метки `$0$`, специальные токены вида `<｜end▁of▁sentence｜>` и `<|im_end|>`. */
 const LEFTOVERS = /<\/?(?:tool_call|function_call|arg_key|arg_value|tool_response|function|parameter(?:=[\w.-]+)?)>|<function=[\w.]+>|\$\d+\$|<[｜|][^<>]{1,40}[｜|]>/gi;
 
@@ -169,8 +214,23 @@ export function normalizeToolCalls(reply) {
     text = convertTagToolCalls(text);
     text = convertQwenAgent(text);
     text = convertPythonTag(text);
+    text = closeDanglingFence(text);
+    text = convertBareActionJson(text);
     return text.replace(LEFTOVERS, '');
 }
 
 /** Есть ли в тексте начало чужого вызова (в том числе ещё недописанное): для стриминга — это не текст для человека. */
 export const STARTS_FOREIGN_CALL = /<(?:tool_call|function_call)>|<\s*[｜|]\s*(?:DSML|tool[▁_ ]calls?[▁_ ]begin)|<\|python_tag\|>|✿FUNCTION✿/i;
+
+const BARE_JSON_CALL_START = /\{\s*"(?:label|action)"\s*:/g;
+
+/** Где в стриминговом тексте начинается чужой вызов (в том числе голый JSON-вызов вне блока ```): индекс или `-1`. Внутри оград ``` JSON — это настоящая карточка, она не считается. */
+export function findForeignCallStart(text) {
+    const source = String(text ?? '');
+    const found = [source.search(STARTS_FOREIGN_CALL)];
+    for (const match of source.matchAll(BARE_JSON_CALL_START)) {
+        if (((source.slice(0, match.index).match(/```/g) ?? []).length % 2) === 0) { found.push(match.index); break; }
+    }
+    const starts = found.filter(index => index >= 0);
+    return starts.length ? Math.min(...starts) : -1;
+}
