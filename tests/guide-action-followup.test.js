@@ -5,7 +5,7 @@ import { createGuideCore } from '../cores/guide/index.js';
 
 const SEARCH_ACTION = '```action\n{"label":"Search","action":"web.search","params":{"query":"Faputa tails"},"auto":true}\n```';
 
-function build({ generate }) {
+function build({ generate, noDone = false }) {
     const engine = createEngine();
     const settings = new Map();
     const calls = [];
@@ -15,7 +15,12 @@ function build({ generate }) {
     bus.register('model.workers.get', () => [{ id: 'w', state: 'up' }]);
     bus.register('model.workers.status', () => [{ workerId: 'w', state: 'up' }]);
     bus.register('model.workers.probe', () => [{ workerId: 'w', state: 'up' }]);
-    bus.register('model.generate', params => { calls.push(params); return generate(calls.length, params); });
+    // A final answer ends with <done/> (the end-of-turn rule); tests of the "forgot it" nudge pass `keepDone: true` replies through unchanged by writing <done/> themselves or by opting out here.
+    bus.register('model.generate', params => {
+        calls.push(params);
+        const reply = generate(calls.length, params);
+        return typeof reply === 'string' && !noDone && !reply.includes('```') && !/<done/.test(reply) ? `${reply}<done/>` : reply;
+    });
     bus.register('ui.anchors.list', () => []);
     bus.register('tracking.trackers', () => []);
     bus.register('macros.programs', () => []);
@@ -337,4 +342,31 @@ test('the debug log of the guide shows, for every turn, what the model said, wha
     assert.equal(first.raw.finishReasons[0], 'stop', 'the raw answer is attached to its turn');
     assert.deepEqual([second.kind, second.because, second.next], ['automatic', 'action-result', 'ended: the reply is final (no action, no nudge needed)']);
     assert.equal(log.meta.focus, 'general');
+});
+
+test('a promise with any verb ("Let me hit the wiki for the real details") is caught, while "let me know" and a finished answer are not', async () => {
+    const { isUnkeptPromise } = await import('../libraries/core/guide-markup.js');
+    assert.equal(isUnkeptPromise('AniList gives me the basics but not much depth. Let me hit the Mushoku Tensei wiki for the real details — appearance, personality, speech, her whole deal.'), true);
+    assert.equal(isUnkeptPromise("I'll visit the wiki next."), true);
+    assert.equal(isUnkeptPromise('Done. Let me know if you want changes.'), false);
+    assert.equal(isUnkeptPromise('The card is ready.'), false);
+    assert.equal(isUnkeptPromise('Should I let me search the wiki?'), false);
+});
+
+test('a working chain goes on by itself until she says <done/>: a silent stop after a result gets one nudge (with the rule as the LAST message), the tag is hidden, and a question to the user or <done/> ends it at once', async () => {
+    const silent = build({ noDone: true, generate: count => (count === 1 ? `Reading.\n${READ_ACTION}` : (count === 2 ? 'AniList gives me the basics. Let me hit the wiki for the details.' : (count === 3 ? `Now the wiki.\n${READ_ACTION}` : 'The card is ready.<done/>'))) });
+    await silent.guide.load();
+    await silent.guide.ask('Make a card.');
+    assert.equal(silent.calls.length, 4, 'action, silent stop, nudge → action, final');
+    assert.match(lastTurns(silent.calls.slice(0, 3)).at(-1), /<done\/>/, 'the end-of-turn rule is the last message of the automatic turn');
+    assert.equal(silent.guide.messages.peek().at(-1).text, 'The card is ready.', 'the tag is not shown');
+    const forgetful = build({ noDone: true, generate: count => (count === 1 ? `Reading.\n${READ_ACTION}` : 'Here is what I found.') });
+    await forgetful.guide.load();
+    await forgetful.guide.ask('Look it up.');
+    assert.equal(forgetful.calls.length, 3, 'one nudge only, then the chain ends without a scolding note');
+    assert.ok(!forgetful.guide.messages.peek().some(message => message.role === 'note' && /stuck/.test(message.text)));
+    const asking = build({ noDone: true, generate: count => (count === 1 ? `Reading.\n${READ_ACTION}` : 'Which Nanahoshi do you mean?') });
+    await asking.guide.load();
+    await asking.guide.ask('Look it up.');
+    assert.equal(asking.calls.length, 2, 'a question waits for the user');
 });

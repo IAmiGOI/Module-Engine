@@ -31,6 +31,7 @@ const THINK = /<think>[\s\S]*?(?:<\/think>|$)/gi;
 // `<notes>` — прежнее имя тега: старые чаты и модели, привыкшие к нему, продолжают работать.
 const PLAN = /<(?:plan|notes)>([\s\S]*?)(?:<\/(?:plan|notes)>|$)/gi;
 const CONTINUE = /<continue\s*\/?>(?:\s*<\/continue>)?/gi;
+const DONE = /<done\s*\/?>(?:\s*<\/done>)?/gi;
 
 /**
  * Ответ модели → `{ visible, plan, more, fabricated }` (`fabricated` — в ответе были выдуманные «результаты» действий: они отброшены вместе со всем, что после них). `visible` — то, что увидит человек. `plan`: `undefined` — план в ответе не менялся (прежний остаётся; подтверждения человека он не требует и ему не показывается), строка — новый
@@ -44,7 +45,8 @@ export function splitThinking(reply) {
     let plan;
     for (const match of text.matchAll(PLAN)) plan = match[1].trim().slice(0, MAX_PLAN_CHARS);
     const more = /<continue\s*\/?>/i.test(text.replace(THINK, ''));
-    return { visible: text.replace(THINK, '').replace(PLAN, '').replace(CONTINUE, '').replace(/\n{3,}/g, '\n\n').trim(), plan, more, fabricated };
+    const done = /<done\s*\/?>/i.test(text.replace(THINK, ''));
+    return { visible: text.replace(THINK, '').replace(PLAN, '').replace(CONTINUE, '').replace(DONE, '').replace(/\n{3,}/g, '\n\n').trim(), plan, more, fabricated, done };
 }
 
 /** Сообщение с планом для модели (`null`, если плана нет). */
@@ -62,7 +64,7 @@ export function insertPlan(turns, plan, depth = PLAN_DEPTH) {
 
 // Обрывок рамки результата в конце стримингового ответа (`(res`, `[ENGINE RE`) не мелькает на экране, пока не станет ясно, что это.
 const PARTIAL_RESULT = /(?:\(r(?:e(?:s(?:u(?:l(?:t)?)?)?)?)?|\[E[A-Z ]{0,12})$/;
-const PARTIAL_TAG = /<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|p(?:l(?:a(?:n)?)?)?|n(?:o(?:t(?:e(?:s)?)?)?)?|c(?:o(?:n(?:t(?:i(?:n(?:u(?:e)?)?)?)?)?)?)?)?$/i;
+const PARTIAL_TAG = /<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|p(?:l(?:a(?:n)?)?)?|n(?:o(?:t(?:e(?:s)?)?)?)?|c(?:o(?:n(?:t(?:i(?:n(?:u(?:e)?)?)?)?)?)?)?|d(?:o(?:n(?:e)?)?)?)?$/i;
 
 const CARD_FIELD_LABELS = Object.freeze({ name: 'name', description: 'description', personality: 'personality', scenario: 'scenario', first_mes: 'first message', mes_example: 'examples', creator_notes: 'notes', system_prompt: 'system prompt', post_history_instructions: 'post-history rules', alternate_greetings: 'greetings', tags: 'tags', character_book: 'lorebook', depth_prompt: 'depth prompt' });
 const CARD_FIELD_KEY = new RegExp(`"(${Object.keys(CARD_FIELD_LABELS).join('|')})"\\s*:`, 'g');

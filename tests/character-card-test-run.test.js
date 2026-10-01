@@ -118,7 +118,7 @@ function buildGuideWithTest({ generate }) {
 
 test('after a card test the guide gets one more turn by herself to read the transcript; a review is safe and runs without a button, a test is not safe and does not', async () => {
     const systems = [];
-    const { guide, tests } = buildGuideWithTest({ generate: params => { systems.push(params.messages.at(-1).content); return 'The five tails held.'; } });
+    const { guide, tests } = buildGuideWithTest({ generate: params => { systems.push(params.messages.at(-1).content); return 'The five tails held.<done/>'; } });
     await guide.load();
     const result = await guide.runAction('character.test', { avatar: 'Aria.png', probes: ['hi'] });
     assert.equal(result.ok, true);
