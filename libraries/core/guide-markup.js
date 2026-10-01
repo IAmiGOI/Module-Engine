@@ -33,6 +33,8 @@ function normalizeBlock(kind, data) {
         const items = (Array.isArray(data.items) ? data.items : []).map(item => (typeof item === 'string' ? { text: item.trim() } : { text: text(item?.text), anchor: text(item?.anchor) || undefined })).filter(item => item.text);
         return items.length ? { kind, title: text(data.title), items: items.slice(0, 12) } : null;
     }
+    // Модель иногда пишет в блоке ТОЛЬКО параметры аватара ({"avatar": …, "url": …}) без поля action: действие однозначно по набору ключей.
+    if ((kind === 'action' || kind === 'proposal') && !text(data.action) && text(data.avatar) && text(data.url) && !data.params) data = { action: 'character.avatar', params: { avatar: data.avatar, url: data.url, ...(data.focus ? { focus: data.focus } : {}) } };
     if (kind === 'action') {
         const action = text(data.action);
         return action ? { kind, label: text(data.label) || action, action, params: data.params && typeof data.params === 'object' ? data.params : {}, auto: data.auto === true } : null;

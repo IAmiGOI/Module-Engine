@@ -101,3 +101,10 @@ test('a call whose fence was lost or never closed (the word "action" left in the
     assert.equal(textOf(twice), 'Let me read the remaining sections of the page.');
     assert.equal(textOf('First line is here. Second line is here.'), 'First line is here. Second line is here.', 'different sentences are untouched');
 });
+
+test('a block that holds only the avatar parameters (no "action" key, no closing fence) is read as character.avatar and applied, instead of being printed in the chat', () => {
+    const reply = 'Setting the picture.\n```proposal\n{"avatar": "Nanahoshi Shizuka.png", "url": "https://s4.anilist.co/file/anilistcdn/character/large/b137816-x.png", "focus": "center"}';
+    const split = splitAutoActions(normalizeToolCalls(reply), () => false, id => id === 'character.avatar');
+    assert.deepEqual(split.actions, [{ action: 'character.avatar', params: { avatar: 'Nanahoshi Shizuka.png', url: 'https://s4.anilist.co/file/anilistcdn/character/large/b137816-x.png', focus: 'center' } }]);
+    assert.equal(split.text, 'Setting the picture.');
+});

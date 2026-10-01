@@ -40,6 +40,9 @@
 }
 .stme-guide-note { align-self: center; font-size: 12px; opacity: .8; }
 .stme-guide-note-error { color: var(--stme-danger, #e66); opacity: 1; }
+/* Окно гида без размытия фона: пока она пишет, внутри окна постоянно что-то перерисовывается (стриминг, индикатор), и backdrop-filter пересчитывал бы блюр на каждый кадр
+   (GPU до 100 %). То же сделано в окне Prompt Manager; фон — почти непрозрачная поверхность. */
+.stme-floating-panel.stme-guide-window { backdrop-filter: none; -webkit-backdrop-filter: none; background: color-mix(in srgb, var(--stme-surface) 94%, transparent); }
 .stme-guide-typing { font-size: 13px; opacity: .7; }
 .stme-guide-stage { display: flex; align-items: center; margin-top: 4px; }
 /* Индикатор работы: три точки, мигают одной прозрачностью (композитор, без перерасчёта вёрстки). */
