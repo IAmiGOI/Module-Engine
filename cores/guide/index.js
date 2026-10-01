@@ -1,7 +1,7 @@
 import { signal, effect } from '../ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { parseArticle, selectArticles, buildGuideSystemPrompt, trimHistory } from '../../libraries/core/guide-knowledge.js';
-import { plainText, splitAutoActions, extractAnchors, hasChoice, stripChoices, stripBlocks } from '../../libraries/core/guide-markup.js';
+import { plainText, splitAutoActions, isUnkeptPromise, extractAnchors, hasChoice, stripChoices, stripBlocks } from '../../libraries/core/guide-markup.js';
 import { describeProposal } from '../../libraries/core/guide-proposals.js';
 import { createGuideWindow } from './window.js';
 import { createGuideActions } from './actions.js';
@@ -14,7 +14,7 @@ import { createGuideContext } from './context.js';
 import { createGuideAvatar } from './avatar.js';
 import { NEUTRAL, nextFocus, detectFocus, isClosing, isTaskRequest, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
 import { cutAfterDigest, planHistoryFold, buildDigestPrompt, clampDigest, DIGEST_MAX_TOKENS } from '../../libraries/core/guide-digest.js';
-import { splitThinking, streamingText, insertPlan, formatEngineResult, MAX_PLAN_CHARS } from '../../libraries/core/guide-thinking.js';
+import { splitThinking, streamingText, streamingStage, insertPlan, formatEngineResult, MAX_PLAN_CHARS } from '../../libraries/core/guide-thinking.js';
 
 /**
  * Ядро гида — маскот движка и его отдельный чат (замена старого окна онбординга). Чат НЕ чат SillyTavern: история лежит в настройках
@@ -75,6 +75,7 @@ const MAX_ACTION_CONTINUES = 4;
 const MAX_NOTE_DETAIL_CHARS = 14000;
 const FABRICATION_FOLLOW_UP = 'Your last reply contained text that looked like a tool result — it was thrown away, you never see results that way. If you still need information, send the action block now (web.page, web.find, web.read…) and stop right after it; the engine will give you the real result. If you already have what you need, continue from the real results above.';
 const FAILED_CHANGE_FOLLOW_UP = 'The change you sent could not be applied; the reason is in the last note. Fix it (a different value, a field that exists, the right avatar) and send the corrected change, or ask the user if you need something from them.';
+const UNKEPT_PROMISE_FOLLOW_UP = 'You said you would look something up or read something, but your reply has no action block, so nothing happened. Send the action block now (web.page, web.find, web.read…) and stop right after it.';
 const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 
@@ -86,6 +87,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const messages = signal([]);
     const mode = signal('scenario');      // 'scenario' | 'chat'
     const busy = signal(false);
+    const streamStage = signal(null);   // что она делает сейчас, пока ответ идёт: `{ label }` или `null` (см. streamingStage)
     const streamDraft = signal(null);   // текст ответа, который ещё идёт (стриминг): строка — показываем, `null` — ничего не идёт
     const visible = signal(false);
     const view = signal('chat');          // 'chat' | 'settings'
@@ -249,6 +251,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         if (at - streaming.painted < STREAM_PAINT_MS) return;
         streaming.painted = at;
         streamDraft.set(streamingText(payload.text));
+        streamStage.set(streamingStage(payload.text));
     });
 
     let continues = 0;
@@ -325,6 +328,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
             const opening = openLinked(shown).catch(() => {});
             let autoFollowUp = thought.fabricated && !autoRuns.length ? FABRICATION_FOLLOW_UP : null;
+            // Пообещала посмотреть, а блока действия нет: без этого она замирала на словах, и человек писал «ну?».
+            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && isUnkeptPromise(shown)) autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP;
             for (const run of autoRuns) {
                 const done = await runAction(run.action, run.params);
                 if (done.ok && ACTIONS[run.action]?.thenContinue) autoFollowUp = ACTIONS[run.action].followUp ?? ACTION_FOLLOW_UP;
@@ -350,6 +355,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         } finally {
             streaming = null;
             streamDraft.set(null);
+            streamStage.set(null);
             busy.set(false);
             changed();
         }
@@ -442,7 +448,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         };
     }
 
-    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
+    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, streamStage, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
 
     const unregisters = [
         host.own.register('guide.open', () => open()),
@@ -455,7 +461,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
 
     return {
         load, open, close, ask, chooseOption, pick, runAction, saveSettings, resetChat, status, checklistState,
-        persona, messages, mode, visible, streamDraft,
+        persona, messages, mode, visible, streamDraft, streamStage,
         mountWindow: async () => { const finalUi = mount(ui.tree()); await finalUi.settled?.(); return finalUi; },
         unregister: () => { unsubscribeChunks?.(); unsubscribeAvatar?.(); avatar.unregister(); for (const unregister of unregisters) unregister(); },
     };

@@ -59,6 +59,35 @@ export function insertPlan(turns, plan, depth = PLAN_DEPTH) {
 const PARTIAL_RESULT = /(?:\(r(?:e(?:s(?:u(?:l(?:t)?)?)?)?)?|\[E[A-Z ]{0,12})$/;
 const PARTIAL_TAG = /<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|p(?:l(?:a(?:n)?)?)?|n(?:o(?:t(?:e(?:s)?)?)?)?|c(?:o(?:n(?:t(?:i(?:n(?:u(?:e)?)?)?)?)?)?)?)?$/i;
 
+const CARD_FIELD_LABELS = Object.freeze({ name: 'name', description: 'description', personality: 'personality', scenario: 'scenario', first_mes: 'first message', mes_example: 'examples', creator_notes: 'notes', system_prompt: 'system prompt', post_history_instructions: 'post-history rules', alternate_greetings: 'greetings', tags: 'tags', character_book: 'lorebook', depth_prompt: 'depth prompt' });
+const CARD_FIELD_KEY = new RegExp(`"(${Object.keys(CARD_FIELD_LABELS).join('|')})"\\s*:`, 'g');
+
+/**
+ * Что она делает сейчас, пока ответ ещё идёт: `{ label }` или `null`. Нужна, потому что текст стриминга обрывается на первой ограде ``` (карточки и предложения появляются
+ * готовыми), и пока она пишет длинную карточку, окно молчит и выглядит зависшим. Стадия: думает (`<think>`), пишет план (`<plan>`), пишет карточку персонажа (с названием
+ * поля, которое пишется сейчас), готовит предложение или действие. Закрытые блоки не считаются.
+ */
+export function streamingStage(raw) {
+    const text = String(raw ?? '');
+    if (/<think>(?![\s\S]*<\/think>)/i.test(text)) return { label: 'Thinking' };
+    if (/<(?:plan|notes)>(?![\s\S]*<\/(?:plan|notes)>)/i.test(text)) return { label: 'Writing the plan' };
+    const fences = text.split('```');
+    if (fences.length % 2 === 1) return null;
+    const open = fences.at(-1);
+    const kind = /^\s*(\w+)/.exec(open)?.[1] ?? '';
+    if (kind === 'proposal') {
+        const action = /"action"\s*:\s*"([\w.]+)"/.exec(open)?.[1] ?? '';
+        if (action.startsWith('character.')) {
+            if (action === 'character.avatar') return { label: 'Choosing a picture' };
+            const keys = [...open.matchAll(CARD_FIELD_KEY)].map(match => match[1]);
+            return { label: keys.length ? `Writing the card · ${CARD_FIELD_LABELS[keys.at(-1)]}` : 'Writing the card' };
+        }
+        return { label: 'Preparing a proposal' };
+    }
+    if (kind === 'action') return { label: 'Preparing an action' };
+    return { label: 'Preparing the reply' };
+}
+
 /**
  * Что показывать, пока ответ ещё идёт (стриминг): то же, что `splitThinking().visible`, но (1) обрывок открывающего тега в конце (`<thi`) не показывается; (2) всё от первой
  * ограды ``` не показывается — карточки, предложения и кнопки появятся, когда придёт финальная реплика (их ещё может вырезать предохранитель «сначала посмотри»), а сырой JSON
