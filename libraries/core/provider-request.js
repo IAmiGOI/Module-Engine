@@ -143,6 +143,8 @@ function buildOpenAiRequest(worker, request, stream) {
             temperature: request.temperature, top_p: request.topP, max_tokens: request.maxTokens,
             ...(request.topK ? { top_k: request.topK } : {}),
             ...(request.seed ? { seed: request.seed } : {}),
+            ...(request.frequencyPenalty ? { frequency_penalty: request.frequencyPenalty } : {}),
+            ...(request.presencePenalty ? { presence_penalty: request.presencePenalty } : {}),
             ...buildOpenAiReasoning(worker, request),
             ...(stream ? { stream: true } : {}),
         }),

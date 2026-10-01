@@ -86,10 +86,11 @@ const DEAD_LINK_FOLLOW_UP = 'The link you wrote does not open anything: [Label](
 const FAILED_ACTION_FOLLOW_UP = 'The action you sent failed; the reason and the right way to send it are in the last result. Send it again correctly, or take another route, or tell the user plainly what is not working.';
 /** Подсказки без шага работы: считаются подряд (MAX_IDLE_NUDGES). */
 const NUDGE_FOLLOW_UPS = new Set([FABRICATION_FOLLOW_UP, FAILED_CHANGE_FOLLOW_UP, PLAN_OPEN_FOLLOW_UP, UNKEPT_PROMISE_FOLLOW_UP, DEAD_LINK_FOLLOW_UP, FAILED_ACTION_FOLLOW_UP]);
-const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
+const REPEAT_FOLLOW_UP = 'Your previous reply got stuck repeating one sentence, so it was cut off. Do NOT write any introduction or announcement. Reply with ONLY the action block for the next step (or, if the task is finished, the final answer in a few lines).';
+const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong. If the next step is an action, begin your reply with its action block — no introduction, no announcement.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 /** Имена автоходов для журнала отладки. */
-const FOLLOW_UP_NAMES = new Map([[FABRICATION_FOLLOW_UP, 'fabricated-result'], [FAILED_CHANGE_FOLLOW_UP, 'failed-change'], [PLAN_OPEN_FOLLOW_UP, 'plan-open'], [UNKEPT_PROMISE_FOLLOW_UP, 'unkept-promise'], [DEAD_LINK_FOLLOW_UP, 'dead-link'], [FAILED_ACTION_FOLLOW_UP, 'failed-action'], [ACTION_FOLLOW_UP, 'action-result'], [FOLLOW_UP, 'block-opened']]);
+const FOLLOW_UP_NAMES = new Map([[FABRICATION_FOLLOW_UP, 'fabricated-result'], [FAILED_CHANGE_FOLLOW_UP, 'failed-change'], [PLAN_OPEN_FOLLOW_UP, 'plan-open'], [UNKEPT_PROMISE_FOLLOW_UP, 'unkept-promise'], [DEAD_LINK_FOLLOW_UP, 'dead-link'], [FAILED_ACTION_FOLLOW_UP, 'failed-action'], [ACTION_FOLLOW_UP, 'action-result'], [FOLLOW_UP, 'block-opened'], [REPEAT_FOLLOW_UP, 'repeat-recovery']]);
 
 export function createGuideCore(host, { publish, mount, loadText = async () => null, modules = null, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
     const emit = publish ?? ((event, payload) => host.events.emit(event, payload));
@@ -294,13 +295,14 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     let actionContinues = 0;
     const actionLimit = () => MAX_ACTION_CONTINUES;
     let idleNudges = 0;
+    let repeatRetries = 0;
 
     /** `internal` — автоматический ход после того, как гид открыла блок и попросила `<continue/>`: без реплики человека, в разгар её же запроса. */
     async function ask(text, { echo = true, internal = false, followUp = FOLLOW_UP } = {}) {
         const question = internal ? '' : String(text ?? '').trim();
         if (internal ? false : (!question || busy.peek())) return false;
         if (internal && chainStopped) return false;
-        if (!internal) { continues = 0; actionContinues = 0; idleNudges = 0; chainStopped = false; stopReason = null; }
+        if (!internal) { continues = 0; actionContinues = 0; idleNudges = 0; repeatRetries = 0; chainStopped = false; stopReason = null; }
         if (echo && !internal) push({ role: 'user', text: question });
         if (!(await hasModel())) {
             mode.set('scenario');
@@ -313,6 +315,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         streamDraft.set('');
         changed();
         let trail = null;
+        let retryAfterRepeat = false;
         try {
             const anchorsResult = await call('ui.anchors.list');
             let screen = await context.screen();
@@ -351,7 +354,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const reply = await call('model.generate', {
                 messages: [{ role: 'system', content: system }, ...sent],
                 systemPrompt: system, prompt: sent.map(turn => `${turn.role === 'user' ? 'User' : turn.role === 'system' ? 'Plan' : nameOf()}: ${turn.content}`).join('\n\n'),
-                temperature: 0.7, maxTokens: COMPLETION_TOKEN_LIMIT, stream: true, requestId,
+                temperature: internal ? 0.4 : 0.7, ...(internal ? { frequencyPenalty: 0.3 } : {}), maxTokens: COMPLETION_TOKEN_LIMIT, stream: true, requestId,
                 ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}),
             });
             if (!reply.ok) throw new Error(reply.error.message);
@@ -410,15 +413,23 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             return true;
         } catch (error) {
             if (trail) { trail.error = error.message; trail.stopReason = stopReason; trail.partial = (streaming?.lastText ?? '').slice(-1500); }
-            if (stopReason) {
+            // Модель зациклилась на одной фразе: повтор не показываем, а просим заново — только блок действия, без вступления (не больше двух раз на запрос).
+            if (stopReason === 'repeat' && repeatRetries < 2) {
+                repeatRetries += 1;
+                chainStopped = false;
+                stopReason = null;
+                if (trail) trail.next = 'retry after repeat';
+                retryAfterRepeat = true;
+            } else if (stopReason) {
                 // Оборвано нами: то, что успело прийти (без блоков и мыслей), остаётся в чате, дальше — короткая пометка.
                 const kept = streamingText(stopReason === 'repeat' ? repeatKeep : (streaming?.lastText ?? '')).trim();
                 if (kept) push({ role: 'assistant', text: kept });
                 push({ role: 'note', text: stopReason === 'repeat' ? 'The model started repeating itself, so I stopped it. Rephrase or ask again.' : 'Stopped.', ok: stopReason !== 'repeat' });
                 return false;
+            } else {
+                push({ role: 'note', text: `I couldn't answer: ${error.message}`, ok: false });
+                return false;
             }
-            push({ role: 'note', text: `I couldn't answer: ${error.message}`, ok: false });
-            return false;
         } finally {
             stopReason = null;
             streaming = null;
@@ -427,6 +438,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             busy.set(false);
             changed();
         }
+        // Повтор — уже после того, как этот ход полностью закрыт (не из блока catch): новый ход чистый.
+        return retryAfterRepeat ? await ask(null, { internal: true, followUp: REPEAT_FOLLOW_UP }) : false;
     }
 
     /**

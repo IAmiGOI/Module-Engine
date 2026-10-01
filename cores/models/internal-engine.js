@@ -54,7 +54,12 @@ export {
  * даёт любому открытому экрану (карточке трекера, «RP Time») узнать о новом
  * пресете, сохранённом СОСЕДНИМ, без ручной перезагрузки страницы.
  */
-export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3000, now = () => Date.now(), probeIntervalMs, timers } = {}) {
+/** Провайдер просит подождать (HTTP 429/503, например «OpenRouter could not verify available credits… Retry-After: 10»): ждём и повторяем тот же запрос, а не отдаём отказ человеку. */
+const RATE_LIMIT_RETRIES = 2;
+const RATE_LIMIT_MAX_WAIT_MS = 20000;
+const readRetryAfterMs = (text, fallbackMs) => { const seconds = Number(/"Retry-After"\s*:\s*"?(\d+)/i.exec(String(text ?? ''))?.[1]); return Math.min(RATE_LIMIT_MAX_WAIT_MS, Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : fallbackMs); };
+
+export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3000, rateLimitWaitMs = 8000, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => Date.now(), probeIntervalMs, timers } = {}) {
     // Вес воркера в очереди — его здоровье (worker-status.js): менее стабильный выбирается реже, лежащий — только если живых нет.
     const dispatchQueue = createDispatchQueue({ weightOf: worker => status.weightOf(worker) });
     let workers = [];
@@ -135,7 +140,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
         if (worker.format === ST_MAIN_FORMAT) return dispatchToMainConnection(worker, generateRequest, { onChunk, stallMs, signal });
         const providerRequest = buildProviderRequest(worker, generateRequest, { stream });
         let accumulated = '';
-        const result = await request(host.network, 'http.request', {
+        const send = () => request(host.network, 'http.request', {
             params: {
                 ...providerRequest, stream, stallMs, signal,
                 onChunk: stream ? frame => {
@@ -148,6 +153,13 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             // Нестриминговый путь ждёт ответ целиком тем же сроком; сам fetch обрывает `signal` очереди (стрим — ещё и watchdog в http.js).
             timeoutMs: stream ? undefined : stallMs,
         });
+        let result = await send();
+        for (let tries = 0; tries < RATE_LIMIT_RETRIES && result.ok && [429, 503].includes(result.value.status) && !signal?.aborted; tries += 1) {
+            publishEvent('model.generate.rateLimited', { workerId: worker.id, status: result.value.status, retry: tries + 1 });
+            await sleep(readRetryAfterMs(result.value.text, rateLimitWaitMs));
+            accumulated = '';
+            result = await send();
+        }
         if (!result.ok) throw new Error(result.error.message);
         // Сырое тело ответа (для журнала отладки гида): текст — это лишь то, что мы из него прочли, а tool_calls, ризонинг и finish_reason остаются только здесь.
         onRaw?.({ status: result.value.status, format: worker.format, body: String(result.value.text ?? ''), content: accumulated });
