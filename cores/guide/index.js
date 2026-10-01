@@ -74,6 +74,7 @@ const MAX_ACTION_CONTINUES = 4;
 /** Полный текст результата для модели хранится вместе с заметкой, но не бесконечно: он живёт в сохранённом чате. */
 const MAX_NOTE_DETAIL_CHARS = 14000;
 const FABRICATION_FOLLOW_UP = 'Your last reply contained text that looked like a tool result — it was thrown away, you never see results that way. If you still need information, send the action block now (web.page, web.find, web.read…) and stop right after it; the engine will give you the real result. If you already have what you need, continue from the real results above.';
+const FAILED_CHANGE_FOLLOW_UP = 'The change you sent could not be applied; the reason is in the last note. Fix it (a different value, a field that exists, the right avatar) and send the corrected change, or ask the user if you need something from them.';
 const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
 
@@ -320,13 +321,15 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             // «Сначала посмотри, потом отвечай»: реплика, которая уходит смотреть блок (`<continue/>` + ссылка), не несёт готовой карточки и вариантов — настоящий ответ будет на следующем ходу.
             const looking = thought.more && extractAnchors(quiet).length > 0 && continues < MAX_CONTINUES;
             const calm = looking ? stripBlocks(quiet, ['proposal', 'choice']) : quiet;
-            const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true);
+            const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true, id => ACTIONS[id]?.autoApply === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
             const opening = openLinked(shown).catch(() => {});
             let autoFollowUp = thought.fabricated && !autoRuns.length ? FABRICATION_FOLLOW_UP : null;
             for (const run of autoRuns) {
                 const done = await runAction(run.action, run.params);
                 if (done.ok && ACTIONS[run.action]?.thenContinue) autoFollowUp = ACTIONS[run.action].followUp ?? ACTION_FOLLOW_UP;
+                // Правка, которую не удалось применить (поле не подошло, нет карточки), — тоже повод для хода: ошибка в заметке, она исправляет.
+                else if (!done.ok && ACTIONS[run.action]?.autoApply) autoFollowUp = FAILED_CHANGE_FOLLOW_UP;
             }
             // Ей нужно посмотреть блок, чтобы продолжить: ждём, пока он раскроется, и даём ещё один ход без участия человека (не больше MAX_CONTINUES подряд).
             if (looking) {

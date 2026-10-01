@@ -3,19 +3,30 @@
  * реально запишется (libraries/core/guide-character.js), и записывается это нажатием «Apply». Вся проверка и запись — в Ядре `characterCard`; здесь только
  * перевод предложения в вызов его контрактов.
  */
+/** После применённой правки карточки она сама идёт дальше: следующий шаг плана или короткий отчёт — без того, чтобы человек писал «продолжай». */
+const CHANGE_FOLLOW_UP = 'The card change was applied (see the last result). Continue the task: if your plan has a next step, do it now; if the card is finished, tell the user in one or two lines what is written and what is still open. Do not repeat the text you just wrote, and do not ask whether to apply — it is already applied.';
+
 export function createCharacterActions({ call }) {
     const buildFailure = message => ({ ok: false, message });
     const splitTarget = ({ avatar, label, ...fields }) => ({ avatar, label, fields });
 
     return {
         'character.create': {
+            autoApply: true, // без кнопки «Apply»: человек просил карточку, а каждая правка сохраняет прежнюю версию
+            thenContinue: true,
+            followUp: CHANGE_FOLLOW_UP,
             description: 'Create a new character card. Params are the card fields, all optional except name: {"name", "description", "personality", "scenario", "first_mes", "mes_example", "creator_notes", "system_prompt", "post_history_instructions", "alternate_greetings": [..], "tags": [..], "creator", "character_version", "talkativeness": 0-1, "fav", "world", "depth_prompt": {"prompt", "depth", "role"}, "character_book": {"name", "entries": [{"name", "keys": [..], "content", "constant"}]}, "extensions": {}}. Follow "Writing character cards". A name that is already taken is refused. Send it in a ```proposal``` block.',
             async run(params = {}) {
-                const created = await call('characterCard.create', { fields: params });
+                // `label` и `avatar` — параметры правки (character.update): модель переносит их и сюда, а карточка при создании их не знает. Они не поля — отбрасываются, не ошибка.
+                const { label: _label, avatar: _avatar, ...fields } = params;
+                const created = await call('characterCard.create', { fields });
                 return created.ok ? { ok: true, message: `Character “${created.value.name}” is created (${created.value.avatar}).` } : buildFailure(created.error.message);
             },
         },
         'character.update': {
+            autoApply: true,
+            thenContinue: true,
+            followUp: CHANGE_FOLLOW_UP,
             description: 'Change an existing character card. Params: {"avatar": "<file from the state>", "label": "optional note for the version list", plus ONLY the fields that change, same names as in character.create}. A list field (tags, alternate_greetings) is replaced as a whole; for character_book use {"entries": [{"id": 3, ...changes}, {"name", "keys", "content"} (no id = new)], "removeEntries": [ids]} — entries you do not mention stay. The previous version is saved automatically and can be restored. Send it in a ```proposal``` block.',
             async run(params = {}) {
                 const { avatar, label, fields } = splitTarget(params);
@@ -25,6 +36,9 @@ export function createCharacterActions({ call }) {
             },
         },
         'character.restore': {
+            autoApply: true,
+            thenContinue: true,
+            followUp: CHANGE_FOLLOW_UP,
             description: 'Put a character card back to an earlier saved version. Params: {"avatar": "<file>", "key": "<version key from the state>"}. The current state is saved first, so a restore can be undone too. Send it in a ```proposal``` block.',
             async run(params = {}) {
                 const restored = await call('characterCard.restore', { avatar: params.avatar, key: params.key });

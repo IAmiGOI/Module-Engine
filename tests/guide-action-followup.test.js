@@ -23,7 +23,7 @@ function build({ generate }) {
     engine.buses.services.register('stWebSearch.search', ({ query }) => ({ source: 'web', results: Array.from({ length: 6 }, (_, index) => ({ title: `Result ${index + 1} about ${query}`, url: `https://x.org/${index}`, snippet: 'A long snippet of the page. '.repeat(10) })) }));
     const modules = { list: () => [{ id: 'm', title: 'M' }], enabled: () => [], enable: async () => {}, disable: async () => {} };
     const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official', networkAccess: true }), { publish: () => {}, mount: () => ({}), modules, loadText: async () => '' });
-    return { guide, calls };
+    return { guide, calls, bus };
 }
 
 const lastTurns = calls => calls.at(-1).messages.slice(1).map(message => message.content);
@@ -146,4 +146,50 @@ test('results sit in her history as engine frames from the user side, not as her
     assert.equal(resultTurn.role, 'user');
     assert.match(resultTurn.content, /you never write these\]\nSearch results for/);
     assert.match(calls.at(-1).messages[0].content, /You never write tool results/);
+});
+
+const CREATE_PROPOSAL = '```proposal\n{"action":"character.create","params":{"name":"Emilia","description":"A half-elf."}}\n```';
+
+function buildCards({ generate, create }) {
+    const made = build({ generate });
+    made.bus.register('characterCard.create', params => create(params));
+    made.bus.register('characterCard.update', params => ({ name: 'Emilia', changed: Object.keys(params.fields) }));
+    return made;
+}
+
+test('a card change she proposes is applied at once with no card and no button, and she goes on by herself with the next step', async () => {
+    const created = [];
+    const { guide, calls } = buildCards({ generate: count => (count === 1 ? `Writing the description.\n${CREATE_PROPOSAL}` : 'Done. Next: the first message.'), create: params => { created.push(params.fields.name); return { name: 'Emilia', avatar: 'Emilia.png' }; } });
+    await guide.load();
+    await guide.ask('Make a card for Emilia.');
+    assert.deepEqual(created, ['Emilia'], 'created without anyone pressing Apply');
+    const texts = guide.messages.peek();
+    assert.ok(!texts.some(message => /```proposal/.test(message.text ?? '')), 'no proposal card is left in the chat');
+    assert.ok(texts.some(message => message.role === 'note' && /Character “Emilia” is created/.test(message.text)), 'the chat gets a one-line note');
+    assert.equal(calls.length, 2, 'she got her turn right after the change');
+    assert.match(lastTurns(calls).at(-1), /The card change was applied[^]*do not ask whether to apply/);
+    assert.equal(texts.at(-1).text, 'Done. Next: the first message.');
+});
+
+test('a change that cannot be applied gives her a turn too, with the reason, so she fixes it instead of stalling; and a proposal for something else is still a card to approve', async () => {
+    const { guide, calls } = buildCards({ generate: count => (count === 1 ? CREATE_PROPOSAL : 'Fixed.'), create: () => { throw new Error('The name is taken.'); } });
+    await guide.load();
+    await guide.ask('Make a card for Emilia.');
+    assert.equal(calls.length, 2);
+    assert.ok(lastTurns(calls).some(turn => turn.includes('The name is taken.')), 'she sees the reason');
+    assert.match(lastTurns(calls).at(-1), /could not be applied/);
+    const other = buildCards({ generate: () => 'Here you go.\n```proposal\n{"action":"tracker.create","params":{"title":"Health","fields":[{"name":"health","prompt":"hp","default":1}]}}\n```', create: () => ({}) });
+    await other.guide.load();
+    await other.guide.ask('Make a health tracker.');
+    assert.ok(other.guide.messages.peek().some(message => /```proposal/.test(message.text ?? '')), 'other proposals still wait for the user');
+    assert.equal(other.calls.length, 1);
+});
+
+test('creating a card ignores "label" and "avatar" that models copy over from the update action, instead of failing with "Unknown character field"', async () => {
+    const seen = [];
+    const { guide } = buildCards({ generate: () => 'ok', create: params => { seen.push(params.fields); return { name: 'Emilia', avatar: 'Emilia.png' }; } });
+    await guide.load();
+    const result = await guide.runAction('character.create', { name: 'Emilia', first_mes: 'Hi.', label: 'First message', avatar: 'x.png' });
+    assert.equal(result.ok, true);
+    assert.deepEqual(seen, [{ name: 'Emilia', first_mes: 'Hi.' }]);
 });
