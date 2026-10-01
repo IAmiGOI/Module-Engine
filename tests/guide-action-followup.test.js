@@ -23,7 +23,7 @@ function build({ generate }) {
     engine.buses.services.register('stWebSearch.search', ({ query }) => ({ source: 'web', results: Array.from({ length: 6 }, (_, index) => ({ title: `Result ${index + 1} about ${query}`, url: `https://x.org/${index}`, snippet: 'A long snippet of the page. '.repeat(10) })) }));
     const modules = { list: () => [{ id: 'm', title: 'M' }], enabled: () => [], enable: async () => {}, disable: async () => {} };
     const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official', networkAccess: true }), { publish: () => {}, mount: () => ({}), modules, loadText: async () => '' });
-    return { guide, calls, bus };
+    return { guide, calls, bus, engine };
 }
 
 const lastTurns = calls => calls.at(-1).messages.slice(1).map(message => message.content);
@@ -261,4 +261,55 @@ test('a GLM-style tool call in her reply runs as a real action and leaves no mar
     assert.ok(!texts.some(text => /tool_call|arg_key|arg_value|\$\d\$/.test(text)), 'no foreign markup in the chat');
     assert.ok(texts.some(text => text.startsWith('Searched the web for “Emilia Re:Zero”')), 'the real search ran');
     assert.equal(calls.length, 2);
+});
+
+test('a safe action that fails gives her a turn with the reason and the right way to send it, instead of leaving her stalled', async () => {
+    const { guide, calls } = build({ generate: count => (count === 1 ? 'Looking.\n```action\n{"label":"x","action":"web.character","params":{}}\n```' : 'Sending it again.') });
+    await guide.load();
+    await guide.ask('Make a card.');
+    assert.equal(calls.length, 2);
+    assert.ok(calls[1].messages.some(message => message.content.includes('Send it as {"name": "Emilia"')), 'the usage is in the result she reads');
+    assert.ok(calls[1].messages.at(-1).content.includes('The action you sent failed'));
+});
+
+test('the Stop button cuts the answer that is being written, keeps what had arrived, and ends the whole chain of automatic turns', async () => {
+    const world = build({ generate: () => new Promise((_, reject) => { world.reject = reject; }) });
+    const cancelled = [];
+    world.bus.register('model.generate.cancel', params => { cancelled.push(params.requestId); world.reject(new Error('The request was stopped.')); return true; });
+    await world.guide.load();
+    assert.equal(world.guide.stop(), false, 'nothing to stop while idle');
+    const asking = world.guide.ask('Make a card.');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    world.engine.events.emit('model.generate.chunk', { requestId: cancelled[0] ?? world.calls[0].requestId, delta: 'x', text: 'Let me start with her appearance' });
+    assert.equal(world.guide.stop(), true);
+    await asking;
+    assert.equal(cancelled.length, 1);
+    const texts = world.guide.messages.peek();
+    assert.equal(texts.at(-2).text, 'Let me start with her appearance', 'the part that had arrived is kept');
+    assert.equal(texts.at(-1).text, 'Stopped.');
+    assert.equal(world.guide.streamDraft.peek(), null);
+    assert.equal(world.calls.length, 1, 'no automatic turn follows a stop');
+});
+
+test('a model that starts repeating itself is cut off at once: the request is cancelled, one copy of the phrase stays, nothing is run, and a short note says why', async () => {
+    const phrase = 'Let me pull up the Personality, Background, and Quotes sections from the main wiki page.';
+    const world = build({ generate: () => new Promise((_, reject) => { world.reject = reject; }) });
+    const cancelled = [];
+    world.bus.register('model.generate.cancel', params => { cancelled.push(params.requestId); world.reject(new Error('The request was stopped.')); return true; });
+    await world.guide.load();
+    const asking = world.guide.ask('Go on.');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const requestId = world.calls[0].requestId;
+    let text = 'Good, I have the infobox. ';
+    for (let index = 0; index < 8 && !cancelled.length; index += 1) {
+        text += phrase;
+        world.engine.events.emit('model.generate.chunk', { requestId, delta: phrase, text });
+        await new Promise(resolve => setTimeout(resolve, 70));
+    }
+    await asking;
+    assert.equal(cancelled.length, 1, 'cancelled while it was still looping');
+    const shown = world.guide.messages.peek();
+    assert.ok((shown.find(message => message.role === 'assistant' && message.text.startsWith('Good'))?.text.match(/Quotes sections/g) ?? []).length <= 2, 'about one copy is kept');
+    assert.match(shown.at(-1).text, /started repeating itself/);
+    assert.equal(world.calls.length, 1);
 });

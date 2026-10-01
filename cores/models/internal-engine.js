@@ -232,9 +232,19 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
         });
     }
 
+    const cancellers = new Map(); // requestId → AbortController активных запросов (model.generate.cancel)
     const unregisters = [
+        // Отмена по `requestId`: гид обрывает ответ (кнопка «Стоп», зацикливание модели). Запрос завершается ошибкой, провайдеру уходит обрыв соединения.
+        host.own.register('model.generate.cancel', params => {
+            const controller = cancellers.get(params?.requestId);
+            if (!controller) return false;
+            controller.abort(new Error('The request was stopped.'));
+            return true;
+        }),
         host.own.register('model.generate', async (params, meta) => {
             const requestId = params?.requestId ?? generateRequestId();
+            const controller = new AbortController();
+            cancellers.set(requestId, controller);
             // Пулы — функции: очередь читает их в момент запуска, и воркер, удалённый из настроек, пока запрос ждал, его уже не получит.
             const resolvePrimaryPool = () => (params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers);
             let primaryPool = resolvePrimaryPool();
@@ -272,6 +282,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     // critical path) — anything else (including undefined, the
                     // normal case) is background, same as before this field existed.
                     priority: meta?.priority === 'pipeline',
+                    signal: controller.signal,
                     onAttemptFailed: ({ tierIndex, error }) => publishEvent('model.generate.retrying', {
                         requestId, failedWorkerId: lastWorkerId, reason: error.message,
                         nextWorkerId: tiers[tierIndex + 1]?.workers()?.[0]?.id,
@@ -280,7 +291,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             ).then(
                 text => { publishEvent('model.generate.finished', { requestId, workerId: lastWorkerId, text }); return text; },
                 error => { publishEvent('model.generate.failed', { requestId, error: { message: error.message } }); throw error; },
-            );
+            ).finally(() => { cancellers.delete(requestId); });
         }),
         // Настройка — настоящими контрактами: UI движка — Модуль, и правка ключей API в обход Гейта обошла бы всю систему прав.
         // Простые методы (`configureWorkers()` и т. п.) остаются сборщику движка.

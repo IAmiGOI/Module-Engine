@@ -13,7 +13,7 @@ import { CREATOR } from '../../libraries/core/guide-creator.js';
  */
 const CLEAR_CONFIRM_MS = 4000;
 
-export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, streamStage = signal(null), runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
+export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', avatarFallback = () => null, persona, messages, busy, visible, view, ask, chooseOption, pick, preview, streamDraft, streamStage = signal(null), stop = () => false, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList }) {
     const position = signal({ right: 24, bottom: 96 });
     const size = signal({ width: 540, height: 680 });
     const collapsed = signal(false);
@@ -174,8 +174,9 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
             title: computed(() => (confirmingClear() ? 'Press again to clear the chat history' : 'Clear the chat history')), 'aria-label': 'Clear the chat history', 'on:click': clearHistory,
         }, h('i', { class: computed(() => `fa-solid ${confirmingClear() ? 'fa-check' : 'fa-broom'}`), 'aria-hidden': 'true' }));
         return h('div', { class: 'stme-guide-composer' }, clear, field,
-            h('button', { type: 'button', class: computed(() => `stme-input-circle stme-input-send${busy() ? ' stme-guide-send-busy' : ''}`), title: 'Send', 'aria-label': 'Send', 'on:click': send },
-                h('i', { class: 'fa-solid fa-paper-plane', 'aria-hidden': 'true' })));
+            // Пока она отвечает, вместо «Отправить» — «Стоп»: обрывает ответ и все автоматические ходы после него.
+            h('button', { type: 'button', class: computed(() => `stme-input-circle stme-input-send${busy() ? ' stme-input-send-stop' : ''}`), title: computed(() => (busy() ? 'Stop' : 'Send')), 'aria-label': computed(() => (busy() ? 'Stop' : 'Send')), 'on:click': () => (busy.peek() ? stop() : send()) },
+                h('i', { class: computed(() => `fa-solid ${busy() ? 'fa-stop' : 'fa-paper-plane'}`), 'aria-hidden': 'true' })));
     }
 
     function chatView() {
