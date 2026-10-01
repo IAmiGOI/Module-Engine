@@ -187,7 +187,7 @@ export function createGuideWindow({ defaultAvatar = '', avatarUrl = () => '', av
     function chatView() {
         return h('div', { class: 'stme-guide-chat' },
             h('div', { class: 'stme-guide-list' }, computed(() => {
-                const list = messages();
+                const list = messages().filter(message => !message.hidden);
                 const lastAssistant = [...list].reverse().find(message => message.role === 'assistant');
                 const rendered = list.map((message, index) => messageView(message, message === lastAssistant, list[index - 1]?.role !== message.role));
                 const draft = streamDraft();

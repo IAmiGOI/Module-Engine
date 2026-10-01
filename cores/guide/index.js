@@ -118,6 +118,10 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     let focus = { ...NEUTRAL };
     // Рабочие заметки гида к длинной задаче (guide-thinking.js): живут, пока задача не закончена или тема не сменилась.
     let plan = '';
+    // Строка `[fix]` — долг по отрицаниям в карточке (character-actions.js): живёт в плане первой строкой и не пропадает, когда она переписывает план сама.
+    let fixLine = '';
+    const FIX_MARK = '[fix] ';
+    const withFix = text => [fixLine, String(text ?? '').split('\n').filter(line => !line.startsWith(FIX_MARK)).join('\n').trim()].filter(Boolean).join('\n').slice(0, MAX_PLAN_CHARS);
     // Выжимка свёрнутой старой истории: `text` и id последнего свёрнутого сообщения (`upTo`). Живёт вместе с чатом.
     let digest = { text: '', upTo: '' };
     const saveChat = () => saveSetting('chat', { messages: messages.peek().slice(-HISTORY_LIMIT), mode: mode.peek(), focus, plan, digest });
@@ -167,7 +171,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         let result;
         try { result = await entry.run(params ?? {}); } catch (error) { result = { ok: false, message: error.message }; }
         // В чат — короткая заметка; полный текст (страница, найденное, переписка теста) идёт только модели: `detail`.
-        if (result.message) push({ role: 'note', text: result.message, ok: result.ok, ...(result.detail ? { detail: String(result.detail).slice(0, MAX_NOTE_DETAIL_CHARS) } : {}) });
+        // Сбой, который она сама исправит следующим ходом (правка карточки, безопасное действие), человеку не показывается: модель читает причину из истории, а в чате остаётся только итог.
+        if (typeof result.planFix === 'string') { fixLine = result.planFix; plan = withFix(plan); void saveChat(); }
+        if (result.message) push({ role: 'note', text: result.message, ok: result.ok, ...(!result.ok && (entry.autoApply || entry.safe) ? { hidden: true } : {}), ...(result.detail ? { detail: String(result.detail).slice(0, MAX_NOTE_DETAIL_CHARS) } : {}) });
         // Действие, чей результат гид должна прочитать сразу (поиск, чтение, проверка, тест карточки), даёт ей ещё один ход без участия человека.
         // Внутри её же ответа (`busy`) продолжение ставит сам `ask`, после того как выполнит все действия реплики.
         if (result.ok && entry.thenContinue && !busy.peek() && actionContinues < actionLimit()) { actionContinues += 1; void ask(null, { internal: true, followUp: entry.followUp ?? ACTION_FOLLOW_UP }); }
@@ -333,7 +339,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 focus = { ...focus, anchors: screen.anchors };
             }
             // План к задаче ведёт сама модель (пустой <plan> = закончено): завершение одного шага — не конец длинной задачи. Стираем только когда человек закрыл разговор.
-            if (isClosing(question) && !detectFocus({ query: question, modules: known })) plan = '';
+            if (isClosing(question) && !detectFocus({ query: question, modules: known })) { plan = ''; fixLine = ''; }
             let history = cutAfterDigest(messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note'), digest.upTo);
             // Результат действия — рамка движка от лица «пользователя», не её реплика (см. formatEngineResult): иначе она подражает формату и выдумывает результаты сама.
             const toTurn = message => ({ role: message.role === 'user' || message.role === 'note' ? 'user' : 'assistant', content: message.role === 'note' ? formatEngineResult(message.detail ?? message.text) : message.text });
@@ -364,7 +370,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             avatar.noteReply(reply.value); // её чиби-поза смотрит на СЫРОЙ текст этого ответа целиком (think + видимое) — не на историю и не на реплику юзера
             // Безопасные действия, которые модель пометила «auto», выполняются сразу; результат — заметкой в чате.
             const thought = splitThinking(reply.value);
-            if (thought.plan !== undefined) { plan = thought.plan.slice(0, MAX_PLAN_CHARS); void saveChat(); }
+            if (thought.plan !== undefined) { plan = withFix(thought.plan.slice(0, MAX_PLAN_CHARS)); void saveChat(); }
             // Предохранитель: варианты ответа — не на каждом ходу. Была ли в прошлой реплике гида кнопка выбора — в этой её нет.
             const lastReply = [...messages.peek()].reverse().find(message => message.role === 'assistant');
             const quiet = lastReply && hasChoice(lastReply.text) ? stripChoices(thought.visible) : thought.visible;
@@ -483,6 +489,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         focus = sanitizeFocus(chat.focus);
         const savedPlan = chat.plan ?? chat.notes; // `notes` — прежнее имя поля
         plan = typeof savedPlan === 'string' ? savedPlan.slice(0, MAX_PLAN_CHARS) : '';
+        fixLine = plan.split('\n').find(line => line.startsWith(FIX_MARK)) ?? '';
         digest = typeof chat.digest?.text === 'string' ? { text: clampDigest(chat.digest.text), upTo: String(chat.digest.upTo ?? '') } : { text: '', upTo: '' };
         manualDone.set(new Set(await read('checklist', [])));
         try { scenario = JSON.parse(await loadText('setup-scenario.json')) ?? scenario; } catch { /* сценарий не загрузился — чат всё равно работает */ }
@@ -519,7 +526,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         messages.set([]);
         mode.set('scenario');
         focus = { ...NEUTRAL };
-        plan = '';
+        plan = ''; fixLine = '';
         digest = { text: '', upTo: '' };
         await saveChat();
         if (withScenario) sayNode(scenario.start); else await open();

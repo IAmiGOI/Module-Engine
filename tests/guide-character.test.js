@@ -72,8 +72,8 @@ test('applying a proposal goes through the characterCard contracts: create by fi
     assert.equal((await guide.runAction('character.create', { name: 'Cleo', description: 'd' })).ok, true);
     assert.equal((await guide.runAction('character.update', { avatar: 'Aria.png', label: 'tone', first_mes: 'Hi.' })).ok, true);
     assert.equal((await guide.runAction('character.restore', { avatar: 'Aria.png', key: 'Aria.png:5000' })).ok, true);
-    assert.deepEqual(calls[0], ['create', { fields: { name: 'Cleo', description: 'd' } }]);
-    assert.deepEqual(calls[1], ['update', { avatar: 'Aria.png', label: 'tone', fields: { first_mes: 'Hi.' } }]);
+    assert.deepEqual(calls[0], ['create', { fields: { name: 'Cleo', description: 'd' }, negationsOk: true }]);
+    assert.deepEqual(calls[1], ['update', { avatar: 'Aria.png', label: 'tone', fields: { first_mes: 'Hi.' }, negationsOk: true }]);
     assert.deepEqual(calls[2], ['restore', { avatar: 'Aria.png', key: 'Aria.png:5000' }]);
     assert.equal((await guide.runAction('character.update', { first_mes: 'no target' })).ok, false);
 });
