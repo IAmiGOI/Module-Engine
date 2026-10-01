@@ -32,7 +32,7 @@ const CONTINUE = /<continue\s*\/?>(?:\s*<\/continue>)?/gi;
  * (пустая — «задача закончена, план стереть»). `more` — модель просит продолжить сама, когда откроются блоки, на которые сослалась.
  */
 export function splitThinking(reply) {
-    const whole = String(reply ?? '');
+    const whole = normalizeToolCalls(reply);
     const cut = whole.search(FAKE_RESULT);
     const fabricated = cut >= 0;
     const text = (fabricated ? whole.slice(0, cut) : whole).replace(BROKEN_CONTINUE, '');
@@ -57,6 +57,71 @@ export function insertPlan(turns, plan, depth = PLAN_DEPTH) {
 
 // Обрывок рамки результата в конце стримингового ответа (`(res`, `[ENGINE RE`) не мелькает на экране, пока не станет ясно, что это.
 const PARTIAL_RESULT = /(?:\(r(?:e(?:s(?:u(?:l(?:t)?)?)?)?)?|\[E[A-Z ]{0,12})$/;
+const TOOL_CALL_OPEN = /<(?:tool_call|function_call)>/gi;
+// Обрывки чужой разметки вызовов: закрывающие теги и метки вида $0$, которыми такие модели заканчивают аргументы.
+const TOOL_CALL_JUNK = /<\/?(?:tool_call|function_call|arg_key|arg_value|tool_response)>|\$\d+\$/gi;
+
+/** Конец JSON-объекта, начинающегося в `from` (учитывает строки и вложенность); `-1` — не закрыт. */
+function findJsonEnd(text, from) {
+    let depth = 0;
+    let inString = false;
+    for (let index = from; index < text.length; index += 1) {
+        const char = text[index];
+        if (inString) { if (char === '\\') index += 1; else if (char === '"') inString = false; continue; }
+        if (char === '"') inString = true;
+        else if (char === '{') depth += 1;
+        else if (char === '}') { depth -= 1; if (!depth) return index + 1; }
+    }
+    return -1;
+}
+
+/**
+ * Некоторые модели вызывают инструменты на своём языке: `<tool_call>web.read: {"ref": "anilist:1"}$0$</arg_value>` (имя, двоеточие или перенос, JSON, обрывки тегов). Такой вызов
+ * переписывается в обычный блок ```action``` (дальше всё как у остальных действий), а оборванная разметка вырезается и в чат не попадает. Вызов, который не разобрать, просто
+ * вырезается вместе с остатком строки.
+ */
+export function normalizeToolCalls(reply) {
+    let text = String(reply ?? '');
+    let from = 0;
+    for (;;) {
+        TOOL_CALL_OPEN.lastIndex = from;
+        const open = TOOL_CALL_OPEN.exec(text);
+        if (!open) break;
+        const afterTag = open.index + open[0].length;
+        const head = /^\s*([\w.]+)\s*[:\n ]\s*/.exec(text.slice(afterTag));
+        const braceAt = head ? afterTag + head[0].length : -1;
+        const end = head && text[braceAt] === '{' ? findJsonEnd(text, braceAt) : -1;
+        let params = null;
+        let callEnd = end;
+        if (end > 0) { try { params = JSON.parse(text.slice(braceAt, end)); } catch { params = null; } }
+        // Родной формат GLM: имя, затем пары `<arg_key>ключ</arg_key><arg_value>значение</arg_value>`; значение — JSON, если разбирается, иначе строка.
+        if (!params && head) {
+            const pairs = /^(?:\s*<arg_key>([^<]+)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>)+/.exec(text.slice(braceAt));
+            if (pairs) {
+                params = {};
+                for (const [, key, value] of pairs[0].matchAll(/<arg_key>([^<]+)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/g)) {
+                    let parsed = value.trim();
+                    try { parsed = JSON.parse(parsed); } catch { /* строка */ }
+                    params[key.trim()] = parsed;
+                }
+                callEnd = braceAt + pairs[0].length;
+            }
+        }
+        if (params && head[1].includes('.')) {
+            // Хвост вызова — только ЗАКРЫВАЮЩИЕ теги и метки `$0$`: открывающий `<tool_call>` следующего вызова забирать нельзя.
+            const junk = /^(?:\s*(?:<\/(?:arg_key|arg_value|tool_call|function_call)>|\$\d+\$))*/.exec(text.slice(callEnd))[0].length;
+            const block = `\n\`\`\`action\n${JSON.stringify({ label: head[1], action: head[1], params })}\n\`\`\`\n`;
+            text = text.slice(0, open.index) + block + text.slice(callEnd + junk);
+            from = open.index + block.length;
+        } else {
+            const lineEnd = text.indexOf('\n', afterTag);
+            text = text.slice(0, open.index) + (lineEnd < 0 ? '' : text.slice(lineEnd));
+            from = open.index;
+        }
+    }
+    return text.replace(TOOL_CALL_JUNK, '');
+}
+
 const PARTIAL_TAG = /<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|p(?:l(?:a(?:n)?)?)?|n(?:o(?:t(?:e(?:s)?)?)?)?|c(?:o(?:n(?:t(?:i(?:n(?:u(?:e)?)?)?)?)?)?)?)?$/i;
 
 const CARD_FIELD_LABELS = Object.freeze({ name: 'name', description: 'description', personality: 'personality', scenario: 'scenario', first_mes: 'first message', mes_example: 'examples', creator_notes: 'notes', system_prompt: 'system prompt', post_history_instructions: 'post-history rules', alternate_greetings: 'greetings', tags: 'tags', character_book: 'lorebook', depth_prompt: 'depth prompt' });
@@ -69,6 +134,7 @@ const CARD_FIELD_KEY = new RegExp(`"(${Object.keys(CARD_FIELD_LABELS).join('|')}
  */
 export function streamingStage(raw) {
     const text = String(raw ?? '');
+    if (/<(?:tool_call|function_call)>(?![\s\S]*<\/(?:tool_call|function_call)>)/i.test(text) || /<(?:tool_call|function_call)>/i.test(text)) return { label: 'Preparing an action' };
     if (/<think>(?![\s\S]*<\/think>)/i.test(text)) return { label: 'Thinking' };
     if (/<(?:plan|notes)>(?![\s\S]*<\/(?:plan|notes)>)/i.test(text)) return { label: 'Writing the plan' };
     const fences = text.split('```');
@@ -94,7 +160,9 @@ export function streamingStage(raw) {
  * на экране недопустим. Текст ДО блока показывается сразу.
  */
 export function streamingText(raw) {
-    let visible = splitThinking(raw).visible.replace(PARTIAL_TAG, '').replace(PARTIAL_RESULT, '');
+    // Чужая разметка вызова, пока она ещё пишется, не показывается: всё от `<tool_call>` — не текст для человека.
+    const toolAt = String(raw ?? '').search(/<(?:tool_call|function_call)>/i);
+    let visible = splitThinking(toolAt >= 0 ? String(raw).slice(0, toolAt) : raw).visible.replace(PARTIAL_TAG, '').replace(PARTIAL_RESULT, '');
     const fence = visible.indexOf('```');
     if (fence >= 0) visible = visible.slice(0, fence);
     return visible.trimEnd();
