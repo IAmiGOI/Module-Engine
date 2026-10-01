@@ -191,8 +191,10 @@ export function dropRepeatedLines(input) {
  */
 export function isUnkeptPromise(visible) {
     const text = String(visible ?? '').trim();
-    if (!text || text.length > 600 || text.includes('```') || /\?\s*$/.test(text)) return false;
-    return /\b(?:let me|i(?:'ll| will)|i'm going to|let's|going to)\b[^.!?\n]{0,70}\b(?:read|grab|pull(?: up)?|check|look(?: up| at| into| for)?|search|open|fetch|find|get|review|go through|dig)\b/i.test(text);
+    if (!text || text.length > 600 || text.includes('```') || text.includes('](stme:') || /\?\s*$/.test(text)) return false;
+    // «Let me …» почти всегда значит «сейчас сделаю» (кроме «let me know»), поэтому глагол не проверяется: список глаголов вечно отставал («Let me hit the wiki»).
+    if (/\blet me(?! know\b)\s+\w+/i.test(text)) return true;
+    return /\b(?:i(?:'ll| will)|i'm going to|let's|going to)\b[^.!?\n]{0,70}\b(?:read|grab|pull(?: up)?|check|look(?: up| at| into| for)?|search|open|fetch|find|get|review|go through|dig|hit|visit|browse|load|scan|query|consult|see|start with|head to|jump to)\b/i.test(text);
 }
 
 /**

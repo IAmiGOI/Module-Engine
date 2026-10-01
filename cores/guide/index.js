@@ -81,7 +81,8 @@ const MAX_NOTE_DETAIL_CHARS = 14000;
 const FABRICATION_FOLLOW_UP = 'Your last reply contained text that looked like a tool result — it was thrown away, you never see results that way. If you still need information, send the action block now (web.page, web.find, web.read…) and stop right after it; the engine will give you the real result. If you already have what you need, continue from the real results above.';
 const FAILED_CHANGE_FOLLOW_UP = 'The change you sent could not be applied; the reason is in the last note. Fix it (a different value, a field that exists, the right avatar) and send the corrected change, or ask the user if you need something from them.';
 const PLAN_OPEN_FOLLOW_UP = 'Your plan still has open steps, and your last reply ended with no action and no question to the user, so the work stopped. Do the next step of the plan now (send its action block and stop right after it). Only if you truly need something from the user, ask them plainly with a question.';
-const UNKEPT_PROMISE_FOLLOW_UP = 'You said you would look something up or read something, but your reply has no action block, so nothing happened. Send the action block now (web.page, web.find, web.read…) and stop right after it.';
+const END_OF_TURN_RULE = ' Keep working through the task step by step on your own: after each result send the next action block. Stop only when the whole task is finished or you need the user\'s answer — then end your reply with <done/>. A reply with no action block and no <done/> is treated as unfinished.';
+const UNKEPT_PROMISE_FOLLOW_UP ='You said you would look something up or read something, but your reply has no action block, so nothing happened. Send the action block now (web.page, web.find, web.read…) and stop right after it.';
 const DEAD_LINK_FOLLOW_UP = 'The link you wrote does not open anything: [Label](stme:…) is only for blocks of the interface from the anchor list, and <continue/> only waits for such a block. A web page is read with an action block: web.read {"url": …} (or {"ref": …}), then web.page / web.find. Send the action block now and stop right after it.';
 const FAILED_ACTION_FOLLOW_UP = 'The action you sent failed; the reason and the right way to send it are in the last result. Send it again correctly, or take another route, or tell the user plainly what is not working.';
 /** Подсказки без шага работы: считаются подряд (MAX_IDLE_NUDGES). */
@@ -296,13 +297,14 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const actionLimit = () => MAX_ACTION_CONTINUES;
     let idleNudges = 0;
     let repeatRetries = 0;
+    let doneNudged = false;
 
     /** `internal` — автоматический ход после того, как гид открыла блок и попросила `<continue/>`: без реплики человека, в разгар её же запроса. */
     async function ask(text, { echo = true, internal = false, followUp = FOLLOW_UP } = {}) {
         const question = internal ? '' : String(text ?? '').trim();
         if (internal ? false : (!question || busy.peek())) return false;
         if (internal && chainStopped) return false;
-        if (!internal) { continues = 0; actionContinues = 0; idleNudges = 0; repeatRetries = 0; chainStopped = false; stopReason = null; }
+        if (!internal) { continues = 0; actionContinues = 0; idleNudges = 0; repeatRetries = 0; doneNudged = false; chainStopped = false; stopReason = null; }
         if (echo && !internal) push({ role: 'user', text: question });
         if (!(await hasModel())) {
             mode.set('scenario');
@@ -345,7 +347,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: focus.characters ? ['characters'] : [] }),
             });
             const turns = trimHistory(history.map(toTurn), focus.characters ? CHARACTER_HISTORY_TOKEN_LIMIT : HISTORY_TOKEN_LIMIT);
-            if (internal) turns.push({ role: 'user', content: `(automatic — the user did not type this) ${followUp.replace(/^\(automatic[^)]*\)\s*/, '')}` });
+            if (internal) turns.push({ role: 'user', content: `(automatic — the user did not type this) ${followUp.replace(/^\(automatic[^)]*\)\s*/, '')}${END_OF_TURN_RULE}` });
             // Её план (guide-thinking.js) — всегда четвёртым сообщением с конца, считая вместе с автоматическим ходом, если он есть.
             const sent = insertPlan(turns, plan);
             const requestId = `guide-${now()}-${(counter += 1)}`;
@@ -378,6 +380,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             let autoFollowUp = thought.fabricated && !autoRuns.length ? FABRICATION_FOLLOW_UP : null;
             // Пообещала посмотреть, а блока действия нет: без этого она замирала на словах, и человек писал «ну?».
             if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && isUnkeptPromise(shown)) autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP;
+            // Рабочая цепочка (после действия или с открытым планом) идёт, пока она сама не скажет `<done/>` (готово или нужен ответ человека) и не задаст вопрос; один пинок на безмолвную остановку, дальше — конец без шума.
+            if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && !thought.done && !doneNudged && (actionContinues > 0 || plan.trim()) && !/\?\s*$/.test(shown.trim()) && !calm.includes('```')) { autoFollowUp = UNKEPT_PROMISE_FOLLOW_UP; doneNudged = true; }
+            if (autoRuns.length) doneNudged = false;
             // `<continue/>` без единой настоящей ссылки на блок: ждать нечего — чаще всего это попытка «открыть» веб-страницу ссылкой.
             if (!autoFollowUp && !autoRuns.length && thought.more && !extractAnchors(quiet).length && !calm.includes('```')) autoFollowUp = DEAD_LINK_FOLLOW_UP;
             // Пока открыт её план (она стирает его, когда закончила), реплика без действия и без вопроса человеку — это остановка на полпути, а не конец работы.
