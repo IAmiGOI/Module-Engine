@@ -1,9 +1,9 @@
 import path from 'node:path';
-import { createApp } from './app.js';
+import { createApp, DEFAULT_LIMITS } from './app.js';
 import { embedPassage } from './embed.js';
 
 /**
- * Запуск: `ADMIN_TOKEN=... [READ_KEY=...] [PORT=8787] [DATA_DIR=./data] node server.js`.
+ * Запуск: `ADMIN_TOKEN=... [READ_KEY=...] [PORT=8787] [LIMIT_CATALOG_PER_MIN=60 LIMIT_AUDIO_PER_MIN=90 LIMIT_AUDIO_BYTES_PER_SEC=2097152] [DATA_DIR=./data] node server.js`.
  * Модель эмбеддингов (~50 МБ) скачивается один раз при первой загрузке трека с тегом и кэшируется в `DATA_DIR/models`.
  */
 
@@ -14,6 +14,11 @@ const server = await createApp({
     dir,
     adminToken: process.env.ADMIN_TOKEN,
     readKey: process.env.READ_KEY ?? '',
+    limits: {
+        catalogPerMinute: Number(process.env.LIMIT_CATALOG_PER_MIN ?? DEFAULT_LIMITS.catalogPerMinute),
+        audioPerMinute: Number(process.env.LIMIT_AUDIO_PER_MIN ?? DEFAULT_LIMITS.audioPerMinute),
+        audioBytesPerSecond: Number(process.env.LIMIT_AUDIO_BYTES_PER_SEC ?? DEFAULT_LIMITS.audioBytesPerSecond),
+    },
     embed: text => embedPassage(text, { cacheDir: path.join(dir, 'models') }),
 });
 // Слушаем только локальный адрес: наружу сервер смотрит через Caddy с HTTPS (`HOST=0.0.0.0`, если прокси не нужен).
