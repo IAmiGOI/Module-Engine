@@ -167,7 +167,9 @@ export function splitAutoActions(reply, isSafe, isAutoProposal = () => false) {
 }
 
 /** Одинаковые строки обычного текста (не внутри блоков ```…```) повторяются только по сбою модели: остаётся первая. */
-export function dropRepeatedLines(text) {
+export function dropRepeatedLines(input) {
+    // Одна и та же фраза подряд в одной строке («Let me grab it.Let me grab it.») — сбой модели: остаётся одна.
+    const text = String(input ?? '').replace(/([^\n]{20,}?[.!?])\1+/g, '$1');
     let inFence = false;
     const seen = new Set();
     return String(text ?? '').split('\n').filter(line => {

@@ -8,7 +8,7 @@
  * недостающими сведениями ей нужно сослаться на блок (он откроется сам) и получить ещё один ход без участия человека. Тег вырезается из видимого текста.
  */
 
-import { normalizeToolCalls, STARTS_FOREIGN_CALL } from './guide-toolcalls.js';
+import { normalizeToolCalls, findForeignCallStart } from './guide-toolcalls.js';
 
 // Вызовы инструментов на языке модели (GLM, Qwen, DeepSeek…) переписываются в блоки действий: см. guide-toolcalls.js.
 export { normalizeToolCalls };
@@ -74,7 +74,7 @@ const CARD_FIELD_KEY = new RegExp(`"(${Object.keys(CARD_FIELD_LABELS).join('|')}
  */
 export function streamingStage(raw) {
     const text = String(raw ?? '');
-    if (STARTS_FOREIGN_CALL.test(text)) return { label: 'Preparing an action' };
+    if (findForeignCallStart(text) >= 0) return { label: 'Preparing an action' };
     if (/<think>(?![\s\S]*<\/think>)/i.test(text)) return { label: 'Thinking' };
     if (/<(?:plan|notes)>(?![\s\S]*<\/(?:plan|notes)>)/i.test(text)) return { label: 'Writing the plan' };
     const fences = text.split('```');
@@ -101,7 +101,7 @@ export function streamingStage(raw) {
  */
 export function streamingText(raw) {
     // Чужая разметка вызова, пока она ещё пишется, не показывается: всё от `<tool_call>` — не текст для человека.
-    const toolAt = String(raw ?? '').search(STARTS_FOREIGN_CALL);
+    const toolAt = findForeignCallStart(raw);
     let visible = splitThinking(toolAt >= 0 ? String(raw).slice(0, toolAt) : raw).visible.replace(PARTIAL_TAG, '').replace(PARTIAL_RESULT, '');
     const fence = visible.indexOf('```');
     if (fence >= 0) visible = visible.slice(0, fence);
