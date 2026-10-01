@@ -15,6 +15,7 @@ import { createGuideAvatar } from './avatar.js';
 import { NEUTRAL, nextFocus, detectFocus, isClosing, isTaskRequest, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
 import { cutAfterDigest, planHistoryFold, buildDigestPrompt, clampDigest, DIGEST_MAX_TOKENS } from '../../libraries/core/guide-digest.js';
 import { computeRepetitionCut } from '../../libraries/core/guide-repetition.js';
+import { createDebugLog } from '../../libraries/core/guide-debug.js';
 import { splitThinking, streamingText, streamingStage, insertPlan, formatEngineResult, MAX_PLAN_CHARS } from '../../libraries/core/guide-thinking.js';
 
 /**
@@ -87,6 +88,8 @@ const FAILED_ACTION_FOLLOW_UP = 'The action you sent failed; the reason and the 
 const NUDGE_FOLLOW_UPS = new Set([FABRICATION_FOLLOW_UP, FAILED_CHANGE_FOLLOW_UP, PLAN_OPEN_FOLLOW_UP, UNKEPT_PROMISE_FOLLOW_UP, DEAD_LINK_FOLLOW_UP, FAILED_ACTION_FOLLOW_UP]);
 const ACTION_FOLLOW_UP = 'The result of the action you ran is in the last note. Continue the task: use it to answer the user or to take the next step. Do not run the same action again unless the result was empty or wrong.';
 const FOLLOW_UP = '(automatic — the user did not type this) The block(s) you opened are on screen now; their fields and current values are in the state below. Continue the task.';
+/** Имена автоходов для журнала отладки. */
+const FOLLOW_UP_NAMES = new Map([[FABRICATION_FOLLOW_UP, 'fabricated-result'], [FAILED_CHANGE_FOLLOW_UP, 'failed-change'], [PLAN_OPEN_FOLLOW_UP, 'plan-open'], [UNKEPT_PROMISE_FOLLOW_UP, 'unkept-promise'], [DEAD_LINK_FOLLOW_UP, 'dead-link'], [FAILED_ACTION_FOLLOW_UP, 'failed-action'], [ACTION_FOLLOW_UP, 'action-result'], [FOLLOW_UP, 'block-opened']]);
 
 export function createGuideCore(host, { publish, mount, loadText = async () => null, modules = null, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
     const emit = publish ?? ((event, payload) => host.events.emit(event, payload));
@@ -96,6 +99,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     const messages = signal([]);
     const mode = signal('scenario');      // 'scenario' | 'chat'
     const busy = signal(false);
+    const debugLog = createDebugLog({ now });   // последние ходы с сырым ответом провайдера: кнопка «Copy debug log» в настройках окна
     const streamStage = signal(null);   // что она делает сейчас, пока ответ идёт: `{ label }` или `null` (см. streamingStage)
     const streamDraft = signal(null);   // текст ответа, который ещё идёт (стриминг): строка — показываем, `null` — ничего не идёт
     const visible = signal(false);
@@ -270,6 +274,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         cancelStreaming();
         return true;
     }
+    const unsubscribeRaw = host.events?.subscribe?.('model.generate.raw', payload => { if (String(payload?.requestId ?? '').startsWith('guide-')) debugLog.attachRaw(payload.requestId, payload); });
     const unsubscribeChunks = host.events?.subscribe?.('model.generate.chunk', payload => {
         if (!streaming || payload?.requestId !== streaming.requestId) return;
         streaming.lastText = payload.text;
@@ -307,6 +312,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         busy.set(true);
         streamDraft.set('');
         changed();
+        let trail = null;
         try {
             const anchorsResult = await call('ui.anchors.list');
             let screen = await context.screen();
@@ -341,6 +347,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const sent = insertPlan(turns, plan);
             const requestId = `guide-${now()}-${(counter += 1)}`;
             streaming = { requestId, painted: 0 };
+            trail = debugLog.begin({ requestId, kind: internal ? 'automatic' : 'user', because: internal ? (FOLLOW_UP_NAMES.get(followUp) ?? 'custom') : 'user message', question: question.slice(0, 200), plan: plan.slice(0, 600), focus: focus.characters ? 'characters' : 'general', actionContinues, idleNudges });
             const reply = await call('model.generate', {
                 messages: [{ role: 'system', content: system }, ...sent],
                 systemPrompt: system, prompt: sent.map(turn => `${turn.role === 'user' ? 'User' : turn.role === 'system' ? 'Plan' : nameOf()}: ${turn.content}`).join('\n\n'),
@@ -348,6 +355,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}),
             });
             if (!reply.ok) throw new Error(reply.error.message);
+            trail.reply = reply.value;
             avatar.noteReply(reply.value); // её чиби-поза смотрит на СЫРОЙ текст этого ответа целиком (think + видимое) — не на историю и не на реплику юзера
             // Безопасные действия, которые модель пометила «auto», выполняются сразу; результат — заметкой в чате.
             const thought = splitThinking(reply.value);
@@ -360,6 +368,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const calm = looking ? stripBlocks(quiet, ['proposal', 'choice']) : quiet;
             const { text: shown, actions: autoRuns } = splitAutoActions(calm, id => ACTIONS[id]?.safe === true, id => ACTIONS[id]?.autoApply === true);
             if (shown || !autoRuns.length) push({ role: 'assistant', text: shown || '…' });
+            trail.visible = shown;
+            trail.flags = { fabricated: thought.fabricated, more: thought.more, looking, openPlan: Boolean(plan.trim()) };
+            trail.actions = autoRuns.map(run => ({ action: run.action, params: JSON.stringify(run.params).slice(0, 240) }));
             const opening = openLinked(shown).catch(() => 0);
             let autoFollowUp = thought.fabricated && !autoRuns.length ? FABRICATION_FOLLOW_UP : null;
             // Пообещала посмотреть, а блока действия нет: без этого она замирала на словах, и человек писал «ну?».
@@ -370,6 +381,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             if (!autoFollowUp && !autoRuns.length && !looking && !thought.more && plan.trim() && !/\?\s*$/.test(shown.trim()) && !calm.includes('```')) autoFollowUp = PLAN_OPEN_FOLLOW_UP;
             for (const run of autoRuns) {
                 const done = await runAction(run.action, run.params);
+                trail.results = [...(trail.results ?? []), { action: run.action, ok: done.ok }];
                 if (done.ok && ACTIONS[run.action]?.thenContinue) autoFollowUp = ACTIONS[run.action].followUp ?? ACTION_FOLLOW_UP;
                 // Правка, которую не удалось применить (поле не подошло, нет карточки), — тоже повод для хода: ошибка в заметке, она исправляет.
                 else if (!done.ok && ACTIONS[run.action]?.autoApply) autoFollowUp = FAILED_CHANGE_FOLLOW_UP;
@@ -380,20 +392,24 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             if (looking) {
                 continues += 1;
                 // Ссылка ни на что не вела (не якорь интерфейса — например, адрес вики): это не «смотрю блок», и повторять тот же ход бессмысленно; она узнаёт, чем читать страницу.
-                if (!(await opening) && actionContinues < actionLimit()) { actionContinues += 1; return await ask(null, { internal: true, followUp: DEAD_LINK_FOLLOW_UP }); }
+                if (!(await opening) && actionContinues < actionLimit()) { actionContinues += 1; trail.next = 'follow-up: dead-link'; return await ask(null, { internal: true, followUp: DEAD_LINK_FOLLOW_UP }); }
                 await sleep(REVEAL_SETTLE_MS);
+                trail.next = 'continue: block opened';
                 return await ask(null, { internal: true });
             }
             // Результат поиска или проверки, который она сама запустила, она читает сразу же, а не ждёт, пока человек напишет ещё раз.
             if (autoFollowUp && actionContinues < actionLimit()) {
                 // Подсказка («пришли действие», «исправь вызов») — не шаг работы: подряд без единого удавшегося действия они считаются, а удавшееся действие счёт обнуляет.
                 idleNudges = NUDGE_FOLLOW_UPS.has(autoFollowUp) ? idleNudges + 1 : 0;
-                if (idleNudges > MAX_IDLE_NUDGES) { push({ role: 'note', text: 'I keep getting stuck without making progress, so I stopped. Tell me how to go on.', ok: false }); return true; }
+                if (idleNudges > MAX_IDLE_NUDGES) { trail.next = 'stopped: no progress'; push({ role: 'note', text: 'I keep getting stuck without making progress, so I stopped. Tell me how to go on.', ok: false }); return true; }
                 actionContinues += 1;
+                trail.next = `follow-up: ${FOLLOW_UP_NAMES.get(autoFollowUp) ?? 'custom'}`;
                 return await ask(null, { internal: true, followUp: autoFollowUp });
             }
+            trail.next = autoFollowUp ? 'ended: follow-up skipped' : 'ended: the reply is final (no action, no nudge needed)';
             return true;
         } catch (error) {
+            if (trail) { trail.error = error.message; trail.stopReason = stopReason; trail.partial = (streaming?.lastText ?? '').slice(-1500); }
             if (stopReason) {
                 // Оборвано нами: то, что успело прийти (без блоков и мыслей), остаётся в чате, дальше — короткая пометка.
                 const kept = streamingText(stopReason === 'repeat' ? repeatKeep : (streaming?.lastText ?? '')).trim();
@@ -500,7 +516,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         };
     }
 
-    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, streamStage, stop, runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
+    const ui = createGuideWindow({ defaultAvatar: DEFAULT_AVATAR_URL, avatarUrl: avatar.url, avatarFallback: avatar.normalFallbackFor, persona, messages, busy, visible, view, mode, ask, chooseOption, pick, preview, streamDraft, streamStage, stop, debugText: () => debugLog.toText({ worker: persona.peek().workerId || 'any', focus: focus.characters ? 'characters' : 'general', planOpen: Boolean(plan.trim()), plan: plan.slice(0, 600), actionContinues, idleNudges, chainStopped }), runAction, reveal, close, saveSettings, resetChat, checklistState, workersList: async () => ((await call('model.workers.get')).value ?? []) });
 
     const unregisters = [
         host.own.register('guide.open', () => open()),
@@ -514,7 +530,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     return {
         load, open, close, ask, stop, chooseOption, pick, runAction, saveSettings, resetChat, status, checklistState,
         persona, messages, mode, visible, streamDraft, streamStage,
+        debugText: () => debugLog.toText({ worker: persona.peek().workerId || 'any', focus: focus.characters ? 'characters' : 'general', planOpen: Boolean(plan.trim()), plan: plan.slice(0, 600), actionContinues, idleNudges, chainStopped }),
         mountWindow: async () => { const finalUi = mount(ui.tree()); await finalUi.settled?.(); return finalUi; },
-        unregister: () => { unsubscribeChunks?.(); unsubscribeAvatar?.(); avatar.unregister(); for (const unregister of unregisters) unregister(); },
+        unregister: () => { unsubscribeRaw?.(); unsubscribeChunks?.(); unsubscribeAvatar?.(); avatar.unregister(); for (const unregister of unregisters) unregister(); },
     };
 }

@@ -131,7 +131,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
      * такой эндпоинт молча отвечал бы пустой строкой — silent regression
      * ровно там, где аддитивность контракта была обещана.
      */
-    async function dispatchToWorker(worker, generateRequest, { onChunk, stallMs, stream = true, signal } = {}) {
+    async function dispatchToWorker(worker, generateRequest, { onChunk, onRaw, stallMs, stream = true, signal } = {}) {
         if (worker.format === ST_MAIN_FORMAT) return dispatchToMainConnection(worker, generateRequest, { onChunk, stallMs, signal });
         const providerRequest = buildProviderRequest(worker, generateRequest, { stream });
         let accumulated = '';
@@ -149,6 +149,8 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             timeoutMs: stream ? undefined : stallMs,
         });
         if (!result.ok) throw new Error(result.error.message);
+        // Сырое тело ответа (для журнала отладки гида): текст — это лишь то, что мы из него прочли, а tool_calls, ризонинг и finish_reason остаются только здесь.
+        onRaw?.({ status: result.value.status, format: worker.format, body: String(result.value.text ?? ''), content: accumulated });
         if (!result.value.ok) throw httpError(worker, result.value.status);
         if (accumulated) return accumulated;
         return resolveProviderResponseText(worker.format, result.value.text);
@@ -273,6 +275,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                         stream: params?.stream !== false,
                         stallMs, signal,
                         onChunk: (delta, text) => publishEvent('model.generate.chunk', { requestId, workerId: worker.id, delta, text }),
+                        onRaw: raw => publishEvent('model.generate.raw', { requestId, workerId: worker.id, ...raw }),
                     });
                 },
                 {
