@@ -402,3 +402,37 @@ test('a Module without the right to lorebook.* contracts is refused before the �
 
     assert.equal(result.ok, false);
 });
+
+// --- read() / names() / createBook(): книги, которые не обязательно активны ---
+
+test('lorebook.read gives the entries of ANY named book (even one that is not active), tagged with the book, and fails clearly for an unknown name; nothing is written', async () => {
+    const { engine, fake } = buildEngine({ world: { Elsewhere: { entries: { 3: { uid: 3, comment: 'Mill', key: ['mill'], content: 'It grinds at night.' } } } } });
+
+    const found = await callAs(engine, 'lorebook.read', { name: 'Elsewhere' });
+    const missing = await callAs(engine, 'lorebook.read', { name: 'Nope' });
+    const empty = await callAs(engine, 'lorebook.read', {});
+
+    assert.equal(found.ok, true);
+    assert.deepEqual(found.value.map(entry => [entry.uid, entry.comment, entry.book]), [[3, 'Mill', 'Elsewhere']]);
+    assert.equal(missing.ok, false);
+    assert.match(missing.error.message, /There is no lorebook named “Nope”/);
+    assert.equal(empty.ok, false);
+    assert.equal(fake.saveCalls.length, 0, 'reading writes nothing');
+});
+
+test('lorebook.names lists every book SillyTavern has (from the raw state), and lorebook.createBook makes a new empty one through the Service and refreshes the index; a Service refusal comes back as the error', async () => {
+    const { engine } = buildEngine({ rawState: { allNames: ['A', 'B'], selectedWorldInfo: [] } });
+    const created = [];
+    const extra = engine.registerCaller('service.stLorebook.create', 'services', { tier: 'official' });
+    extra.own.register('stLorebook.create', ({ name }) => { if (name === 'A') throw new Error('A lorebook named “A” already exists.'); created.push(name); return { name }; });
+
+    const names = await callAs(engine, 'lorebook.names', {});
+    const made = await callAs(engine, 'lorebook.createBook', { name: 'Fresh' });
+    const taken = await callAs(engine, 'lorebook.createBook', { name: 'A' });
+
+    assert.deepEqual(names.value, ['A', 'B']);
+    assert.equal(made.ok, true);
+    assert.deepEqual(created, ['Fresh']);
+    assert.equal(taken.ok, false);
+    assert.match(taken.error.message, /already exists/);
+});

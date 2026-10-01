@@ -44,9 +44,9 @@ function build({ books, active = Object.keys(books), generate, writes = [] }) {
     bus.register('lorebook.books', () => active);
     bus.register('lorebook.createEntry', params => { writes.push(['entry', params.book ?? active[0], params.patch.comment]); return { uid: writes.length, book: params.book ?? active[0] }; });
     bus.register('characterCard.update', params => { writes.push(['attach', params.avatar, params.fields.world]); return { name: 'Mira', changed: ['world'] }; });
-    engine.buses.services.register('stLorebook.create', ({ name }) => { if (books[name]) throw new Error(`A lorebook named “${name}” already exists.`); writes.push(['book', name]); books[name] = { entries: {} }; return { name }; });
-    engine.buses.services.register('stLorebook.load', ({ name }) => books[name] ?? null);
-    engine.buses.services.register('stLorebook.rawState', () => ({ allNames: Object.keys(books) }));
+    bus.register('lorebook.createBook', ({ name }) => { if (books[name]) throw new Error(`A lorebook named “${name}” already exists.`); writes.push(['book', name]); books[name] = { entries: {} }; return { name }; });
+    bus.register('lorebook.read', ({ name }) => { if (!books[name]) throw new Error(`There is no lorebook named “${name}”.`); return Object.values(books[name].entries).map(item => ({ ...item, book: name })); });
+    bus.register('lorebook.names', () => Object.keys(books));
     registerStWebSearchService(engine.buses.services, { getContext: () => ({}), fetch: async () => { throw new Error('no network in this test'); } });
     const modules = { list: () => [{ id: 'm', title: 'M' }], enabled: () => [], enable: async () => {}, disable: async () => {} };
     const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official', networkAccess: true }), { publish: () => {}, mount: () => ({}), modules, loadText: async () => '' });
