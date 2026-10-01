@@ -31,10 +31,12 @@ export function registerStLorebookService(bus, { getContext, loadWorldInfoModule
     async function rawState() {
         const context = getContext() ?? {};
         let selectedWorldInfo = [];
+        let allNames = [];
         let charLore = [];
         try {
             const worldInfo = await loadWorldInfoModule();
             selectedWorldInfo = worldInfo?.selected_world_info ?? [];
+            allNames = worldInfo?.world_names ?? [];
             charLore = worldInfo?.world_info?.charLore ?? [];
         } catch {
             // Не тот билд ST, другая раскладка, нет настоящего дерева на
@@ -44,6 +46,7 @@ export function registerStLorebookService(bus, { getContext, loadWorldInfoModule
         }
         return {
             selectedWorldInfo,
+            allNames,
             charLore,
             chatBook: context.chatMetadata?.world_info ?? null,
             personaBook: context.powerUserSettings?.persona_description_lorebook ?? null,
@@ -52,6 +55,17 @@ export function registerStLorebookService(bus, { getContext, loadWorldInfoModule
             groupId: context.groupId ?? null,
             groups: context.groups ?? [],
         };
+    }
+
+    /** Новая пустая книга: имя без служебных знаков и не занятое; ST узнаёт о ней через `updateWorldInfoList()`. */
+    async function create(name) {
+        const clean = String(name ?? '').trim();
+        if (!/^[p{L}p{N} _.()'-]{1,80}$/u.test(clean)) throw new Error('A lorebook name is 1 to 80 letters, digits, spaces or _ . ( ) - characters.');
+        const worldInfo = await loadWorldInfoModule();
+        if ((worldInfo?.world_names ?? []).some(existing => String(existing).toLowerCase() === clean.toLowerCase())) throw new Error(`A lorebook named “${clean}” already exists.`);
+        await getContext()?.saveWorldInfo?.(clean, { entries: {} }, true);
+        await worldInfo?.updateWorldInfoList?.();
+        return { name: clean };
     }
 
     function load(name) {
@@ -65,6 +79,7 @@ export function registerStLorebookService(bus, { getContext, loadWorldInfoModule
     const unregisters = [
         bus.register('stLorebook.rawState', () => rawState(), { loadMetric: () => 0 }),
         bus.register('stLorebook.load', params => load(params?.name), { loadMetric: () => 0 }),
+        bus.register('stLorebook.create', params => create(params?.name), { loadMetric: () => 0 }),
         bus.register('stLorebook.save', params => save(params?.name, params?.data, params?.immediately), { loadMetric: () => 0 }),
     ];
 

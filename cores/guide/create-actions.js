@@ -43,15 +43,18 @@ export function createCreateActions({ call, modules }) {
             },
         },
         'lorebook.addEntry': {
-            description: 'Add an entry to the lorebook of the current chat or character. Params: {"title": "Old Mill", "keys": ["mill", "miller"], "content": "The abandoned mill north of town…", "always": false}. Send it in a ```proposal``` block.',
+            autoApply: true, // добавление ничего не затирает (убрать запись — одним удалением): без кнопки, как правки карточек
+            thenContinue: true,
+            description: 'Add an entry to a lorebook; it is applied at once. Params: {"title": "Old Mill", "keys": ["mill", "miller"], "content": "The abandoned mill north of town…", "always": false, "book": "optional book name; without it the first book active for this chat or character"}. Several entries at once: lorebook.addEntries. Send it in a ```proposal``` block.',
             async run(params = {}) {
                 const made = normalizeLorebookEntry(params);
                 if (!made.ok) return failure(made.error);
+                const book = typeof params.book === 'string' && params.book.trim() ? params.book.trim() : undefined;
                 const books = await call('lorebook.books');
-                if (!books.ok || !(books.value ?? []).length) return failure('There is no lorebook for this chat or character yet — attach one in SillyTavern first.');
-                const created = await call('lorebook.createEntry', { patch: made.value });
+                if (!book && (!books.ok || !(books.value ?? []).length)) return failure('There is no lorebook for this chat or character yet — create one with lorebook.createBook, or name an existing book in "book".');
+                const created = await call('lorebook.createEntry', { patch: made.value, ...(book ? { book } : {}) });
                 if (!created.ok) return failure(created.error.message);
-                return { ok: true, message: `Entry “${made.value.comment}” is added to “${created.value?.book ?? books.value[0]}”.` };
+                return { ok: true, message: `Entry “${made.value.comment}” is added to “${created.value?.book ?? book ?? books.value[0]}”.` };
             },
         },
     };
