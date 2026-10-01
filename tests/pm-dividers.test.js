@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDividerPair, applyDividers, computeBrokenPairs, collectDividerConditions, pickDividerColor, DIVIDER_PALETTE } from '../libraries/core/pm-dividers.js';
+import { createDividerPair, applyDividers, computeBrokenPairs, computeValidPairs, collectDividerConditions, pickDividerColor, DIVIDER_PALETTE } from '../libraries/core/pm-dividers.js';
 import { evaluateCondition } from '../libraries/core/pm-conditions.js';
 import { assemblePrompt } from '../libraries/core/pm-assemble.js';
 import { stToPreset } from '../libraries/core/pm-st-import.js';
@@ -130,4 +130,23 @@ test('a condition can name its classifier connection: the name is part of the qu
     const calls = groupJevCalls(leaves, [{ is_user: true, mes: 'hi' }]);
     assert.equal(calls.length, 2);
     assert.deepEqual(calls.map(call => call.connectionId), [undefined, 'second']);
+});
+
+test('a region may start inside one group and end outside it, across sibling groups: the order of the document decides, nothing is "broken", and the wrapper of a group that still has blocks stays', () => {
+    const [begin, end] = createDividerPair({ color: '#f5a524' });
+    const item = id => ({ type: 'item', block: id, enabled: true });
+    const tree = [
+        { type: 'group', id: 'g1', enabled: true, children: [item('a'), begin, item('b')] },
+        { type: 'group', id: 'g2', enabled: true, children: [item('c')] },
+        item('d'),
+        end,
+        item('e'),
+    ];
+    assert.deepEqual([...computeValidPairs(tree)], [begin.pair]);
+    assert.deepEqual(computeBrokenPairs(tree), []);
+    const ids = nodes => nodes.flatMap(node => (node.type === 'group' ? [node.id, ...ids(node.children)] : [node.block]));
+    const hidden = applyDividers(tree, { passes: () => false });
+    assert.deepEqual(ids(hidden.nodes), ['g1', 'a', 'e']);
+    assert.deepEqual([hidden.skipped[0].blocks], [4]);
+    assert.deepEqual(ids(applyDividers(tree, { passes: () => true }).nodes), ['g1', 'a', 'b', 'g2', 'c', 'd', 'e']);
 });

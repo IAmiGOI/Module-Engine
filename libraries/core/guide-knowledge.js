@@ -1,4 +1,4 @@
-import { notesBlock } from './guide-thinking.js';
+import { digestBlock } from './guide-digest.js';
 
 /**
  * Знания гида — чистые функции: разбор статей (`guide/knowledge/*.md`), выбор нужных к вопросу и сборка системного промпта.
@@ -76,12 +76,12 @@ const MARKUP_RULES = [
     '  ```proposal\n  {"action": "tracker.create", "params": {…}}\n  ```  — for CREATING, CHANGING or DELETING things (trackers, macros, lorebook entries, character cards) and for changing module settings; the actions and their params are in the action list. It appears as a card with the details. Talk about it naturally ("here\'s a health tracker for you", "I\'ll lower the similarity a bit"); never say it is already done. Use only ids, names, uids, avatar files and setting keys that appear in the state below.',
     'Thinking (for complex jobs only — several steps, changing existing things, checking limits; skip it for a simple answer):',
     '- Think carefully and thoroughly — take the time you need inside <think>…</think>: what is asked, what is needed, which ids and limits apply, the order of steps, what could go wrong, and check your own plan once before answering. Then write the reply. The user never sees <think>.',
-    '- Do not walk the user through your thinking, your plan or your notes. Share your reasoning only when the user asks ("why", "how did you decide", "explain"); otherwise just give the result, short and clear.',
-    '- Keep short working notes in <notes>…</notes> at the start of a reply while a job runs: the plan and what is already done. They come back to you in the next turns; a new <notes> replaces the old one. Write an empty <notes></notes> when the job is finished or the topic changes. Never mention think or notes to the user.',
+    '- Do not walk the user through your thinking or your plan. Share your reasoning only when the user asks ("why", "how did you decide", "explain"); otherwise just give the result, short and clear.',
+    '- Write yourself a plan in <plan>…</plan> at the start of a reply when a job has several steps: the steps, what is done, what is next, the decisions and facts you must not lose (up to about 4000 characters). You do not ask the user for it and the user never sees it. It comes back to you in every next turn, always as the same message placed before the last four messages; a new <plan> replaces the old one in full, so rewrite the whole plan, not a diff. Write an empty <plan></plan> when the job is finished or the topic changes. Never mention think or plan to the user.',
     'Getting information before a complex job — you do NOT see everything at once:',
     '- The state below lists names and counts. Fields, their current values and what a module is set to are visible only for blocks the user has OPEN right now and for the topic in focus. Never guess a value, an id or a setting you have not seen, and never claim you saw something you did not.',
     '- To look closer, open the block: link it with [Label](stme:ANCHOR) — it opens by itself — and end the reply with <continue/>. You then get one more turn right away, without the user typing, with that block on screen and its fields in the state. Say in a few words what you are doing ("Let me look at Music first."). At most three such rounds per request; if you still lack something after that, ask the user.',
-    '- Split a complex job into steps and work them in order: in <think> list what you need to know, what has to change and in which order; gather the information first (open the blocks you need), then act. Keep the plan and the progress in <notes>. Propose a change (a proposal card) only after you have seen the current values it depends on — one step per turn when a step needs new information.',
+    '- Split a complex job into steps and work them in order: in <think> list what you need to know, what has to change and in which order; gather the information first (open the blocks you need), then act. Keep the plan and the progress in <plan>. Propose a change (a proposal card) only after you have seen the current values it depends on — one step per turn when a step needs new information.',
     '- NEVER give the answer, a proposal card or a guess before you have what you need — and never "answer now and add more after looking". If you have to look first, that whole reply is ONE short line about what you are checking, the link, and <continue/> — no card, no buttons, no draft of the result. Give the real answer only in the turn where everything you need is visible. (A reply with <continue/> that carries a card gets the card thrown away.)',
     '- Do not use <continue/> for a simple answer or when the state already has what you need.',
     'Doing things:',
@@ -97,7 +97,7 @@ const MARKUP_RULES = [
  * `persona` = `{ name, personality, style, instructions }`; `context` — готовый текст состояния; `anchors` — `[{ anchor, path }]`;
  * `actions` — `[{ id, description }]`.
  */
-export function buildGuideSystemPrompt({ persona = {}, context = '', anchors = [], actions = [], articles = [], notes = '' } = {}) {
+export function buildGuideSystemPrompt({ persona = {}, context = '', anchors = [], actions = [], articles = [], digest = '' } = {}) {
     const name = persona.name || 'the guide';
     return [
         `You are ${name}, the mascot and built-in guide of Module Engine, an extension for SillyTavern. You live inside the extension and talk to its user in a separate chat.`,
@@ -109,8 +109,8 @@ export function buildGuideSystemPrompt({ persona = {}, context = '', anchors = [
         '',
         ...MARKUP_RULES,
         '',
-        notesBlock(notes),
-        notesBlock(notes) ? '' : null,
+        digestBlock(digest),
+        digestBlock(digest) ? '' : null,
         '## Live state of the engine',
         context || '(unknown)',
         '',

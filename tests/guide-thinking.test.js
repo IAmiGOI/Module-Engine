@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createEngine } from '../libraries/shared/engine.js';
-import { splitThinking, notesBlock, MAX_NOTES_CHARS } from '../libraries/core/guide-thinking.js';
+import { splitThinking, planMessage, insertPlan, MAX_PLAN_CHARS, PLAN_DEPTH } from '../libraries/core/guide-thinking.js';
 import { normalizePassParams } from '../libraries/core/guide-edit.js';
 import { describeProposal } from '../libraries/core/guide-proposals.js';
 import { detectFocus } from '../libraries/core/guide-relevance.js';
@@ -11,20 +11,21 @@ import { createGuideCore, TOKEN_BUDGET, HISTORY_TOKEN_LIMIT, COMPLETION_TOKEN_LI
 
 // --- Внутренние рассуждения ---
 
-test('thinking and notes are cut out of what the user sees; notes are reported separately, an empty <notes> means "finished", no tag means "unchanged"', () => {
-    const reply = '<think>Need a tracker, then a macro. Check ids.</think>\n<notes>Plan: 1 tracker (done) 2 macro (next)</notes>\nHere is the tracker.\n```proposal\n{"action":"tracker.create","params":{}}\n```';
+test('thinking and the plan are cut out of what the user sees; the plan is reported separately, an empty <plan> means "finished", no tag means "unchanged", and the old <notes> tag still works', () => {
+    const reply = '<think>Need a tracker, then a macro. Check ids.</think>\n<plan>Plan: 1 tracker (done) 2 macro (next)</plan>\nHere is the tracker.\n```proposal\n{"action":"tracker.create","params":{}}\n```';
     const split = splitThinking(reply);
     assert.ok(!split.visible.includes('think') && !split.visible.includes('Plan:'));
     assert.match(split.visible, /^Here is the tracker\./);
     assert.match(split.visible, /```proposal/);
-    assert.equal(split.notes, 'Plan: 1 tracker (done) 2 macro (next)');
-    assert.equal(splitThinking('Hi.<notes></notes>').notes, '');
-    assert.equal(splitThinking('Just an answer.').notes, undefined);
+    assert.equal(split.plan, 'Plan: 1 tracker (done) 2 macro (next)');
+    assert.equal(splitThinking('<notes>old name</notes>Hi.').plan, 'old name');
+    assert.equal(splitThinking('Hi.<plan></plan>').plan, '');
+    assert.equal(splitThinking('Just an answer.').plan, undefined);
     assert.equal(splitThinking('<think>cut off mid-thought').visible, '', 'an unfinished thought never leaks');
-    assert.equal(splitThinking(`<notes>${'x'.repeat(5000)}</notes>ok`).notes.length, MAX_NOTES_CHARS);
-    assert.equal(notesBlock('  '), '');
-    assert.match(notesBlock('step 2 next'), /## Your working notes from earlier in this task \(private[^\n]*\nstep 2 next/);
-    assert.match(buildGuideSystemPrompt({ notes: 'plan A' }), /plan A/);
+    assert.equal(splitThinking(`<plan>${'x'.repeat(9000)}</plan>ok`).plan.length, MAX_PLAN_CHARS);
+    assert.equal(planMessage('  '), null);
+    assert.match(planMessage('step 2 next').content, /## Your plan for this task \(private[^\n]*\nstep 2 next/);
+    assert.ok(!buildGuideSystemPrompt({ plan: 'plan A' }).includes('plan A'), 'the plan is not part of the system prompt: it lives in the history');
     const prompt = buildGuideSystemPrompt({});
     assert.ok(prompt.includes('Think carefully and thoroughly'), 'the prompt teaches the habit');
     assert.match(prompt, /Do not walk the user through your thinking[^\n]*only when the user asks/, 'and keeps the user out of it unless they ask');
@@ -60,34 +61,37 @@ function build({ replies = ['ok'], passes = null } = {}) {
     return { guide, sent, calls, settings };
 }
 
-test('her notes are hidden from the chat, kept, and handed back on the next turns until the job is finished, the user closes the talk, or she clears them', async () => {
-    const { guide, sent, settings } = build({ replies: ['<think>hard job</think><notes>1. tracker — done\n2. macro — next</notes>First part is ready.', 'Second part is ready.', '<notes></notes>All finished.', 'Sure.'] });
+test('her plan is hidden from the chat, needs no confirmation, is kept, and is handed back on the next turns until the job is finished, the user closes the talk, or she clears it', async () => {
+    const { guide, sent, settings } = build({ replies: ['<think>hard job</think><plan>1. tracker — done\n2. macro — next</plan>First part is ready.', 'Second part is ready.', '<plan></plan>All finished.', 'Sure.'] });
     await guide.load();
     await guide.ask('help me set up a health tracker and a macro for it');
-    assert.equal(guide.messages.peek().at(-1).text, 'First part is ready.', 'no think, no notes in the chat');
-    assert.match(settings.get('core.guide/chat').notes, /2\. macro — next/, 'saved with the chat');
+    assert.equal(guide.messages.peek().at(-1).text, 'First part is ready.', 'no think, no plan in the chat');
+    assert.match(settings.get('core.guide/chat').plan, /2\. macro — next/, 'saved with the chat');
     await guide.ask('go on');
-    assert.match(sent[1].messages[0].content, /## Your working notes[^\n]*\n1\. tracker — done\n2\. macro — next/);
+    const planAt = messages => messages.findIndex(message => message.role === 'system' && message.content.startsWith('## Your plan'));
+    assert.match(sent[1].messages[planAt(sent[1].messages)].content, /## Your plan[^\n]*\n1\. tracker — done\n2\. macro — next/);
+    assert.equal(sent[1].messages.length - planAt(sent[1].messages) - 1, 3, 'a short talk (three messages): the plan goes before all of them'); // глубина больше длины — в самое начало
     await guide.ask('and finish it');
-    assert.match(sent[2].messages[0].content, /2\. macro — next/, 'still there while the job runs');
+    assert.ok(planAt(sent[2].messages) > 0, 'still there while the job runs');
+    assert.equal(sent[2].messages.length - planAt(sent[2].messages) - 1, PLAN_DEPTH, 'depth 4: exactly four messages come after it');
     await guide.ask('anything else?');
-    assert.ok(!sent[3].messages[0].content.includes('## Your working notes'), 'she cleared them with an empty <notes>');
+    assert.equal(planAt(sent[3].messages), -1, 'she cleared it with an empty <plan>');
     assert.equal(sent[0].maxTokens, 5000, 'room for thinking and a long answer');
     assert.deepEqual([TOKEN_BUDGET, HISTORY_TOKEN_LIMIT, COMPLETION_TOKEN_LIMIT], [15000, 10000, 5000], '15k in all: 10k of history, 5k for the answer with its thinking');
 });
 
-test('the user closing the talk wipes the notes; clearing the chat wipes them too', async () => {
-    const first = build({ replies: ['<notes>plan X</notes>Started.', 'ok'] });
+test('the user closing the talk wipes the plan; clearing the chat wipes it too', async () => {
+    const first = build({ replies: ['<plan>plan X</plan>Started.', 'ok'] });
     await first.guide.load();
     await first.guide.ask('start the big job');
-    assert.match(first.settings.get('core.guide/chat').notes, /plan X/);
+    assert.match(first.settings.get('core.guide/chat').plan, /plan X/);
     await first.guide.ask('thanks, that is all');
-    assert.ok(!first.sent[1].messages[0].content.includes('plan X'), 'closed by the user');
-    const second = build({ replies: ['<notes>plan Y</notes>Started.', 'ok'] });
+    assert.ok(!first.sent[1].messages.some(message => message.content.includes('plan X')), 'closed by the user');
+    const second = build({ replies: ['<plan>plan Y</plan>Started.', 'ok'] });
     await second.guide.load();
     await second.guide.ask('start the big job');
     await second.guide.resetChat();
-    assert.equal(second.settings.get('core.guide/chat').notes, '', 'a fresh chat starts without old plans');
+    assert.equal(second.settings.get('core.guide/chat').plan, '', 'a fresh chat starts without old plans');
 });
 
 // --- Проходы Post-Turn Processor как инструменты ---
@@ -135,7 +139,7 @@ test('while the reply is still arriving the user sees only finished text: no tho
     assert.equal(streamingText('a < b is fine'), 'a < b is fine', 'a lone comparison sign in the middle is text');
     assert.equal(streamingText('Here it is.\n```proposal\n{"action":"tracker.cre'), 'Here it is.', 'the unfinished card waits');
     assert.equal(streamingText('Here it is.\n```proposal\n{"action":"tracker.create","params":{}}\n```\nDone'), 'Here it is.', 'blocks appear with the final reply, never as raw JSON while streaming');
-    assert.equal(streamingText('<notes>plan</notes>Answer<notes>next'), 'Answer');
+    assert.equal(streamingText('<plan>plan</plan>Answer<plan>next'), 'Answer');
 });
 
 test('the reply streams into a draft (throttled, thinking hidden) and is replaced by the final message; no draft is left behind, also after an error', async () => {
@@ -269,14 +273,14 @@ function buildLoop(replies) {
 }
 
 test('she opens a block to look and gets the next turn by herself: the block is revealed, the second call sees it on screen with an automatic hint, the user typed once', async () => {
-    const { guide, sent, revealed, pauses } = buildLoop(['<think>need the values</think><notes>1. look at Music 2. propose</notes>Let me look at [Music](stme:module:module.music) first.<continue/>', 'Min similarity is 0.55 — lower it to 0.4?']);
+    const { guide, sent, revealed, pauses } = buildLoop(['<think>need the values</think><plan>1. look at Music 2. propose</plan>Let me look at [Music](stme:module:module.music) first.<continue/>', 'Min similarity is 0.55 — lower it to 0.4?']);
     await guide.load();
     await guide.ask('make the music less picky');
     assert.equal(sent.length, 2, 'two model calls for one question');
     assert.deepEqual(revealed, ['module:module.music']);
     assert.ok(!sent[0].messages[0].content.includes('Min similarity: 0.55'), 'the first turn could not see it');
     assert.match(sent[1].messages[0].content, /Panel › Music\n {2}· Min similarity: 0\.55/, 'the second turn sees the opened block');
-    assert.match(sent[1].messages[0].content, /1\. look at Music 2\. propose/, 'and her own plan');
+    assert.ok(sent[1].messages.some(message => /1. look at Music 2. propose/.test(message.content) && message.role === 'system' && message !== sent[1].messages[0]), 'and her own plan, as a separate message');
     assert.match(sent[1].messages.at(-1).content, /^\(automatic — the user did not type this\)/);
     assert.ok(pauses.includes(800), 'she waited for the block to open');
     assert.deepEqual(guide.messages.peek().map(message => message.role), ['user', 'assistant', 'assistant'], 'no invented user message in the chat');
@@ -482,4 +486,14 @@ test('opening a block for a task does not close anything by itself when the topi
     assert.equal(revealed.length, 1);
     await guide.ask('now help me with the tracker instead');
     assert.equal(revealed.length, 1, 'the engine never calls ui.hide on its own');
+});
+
+test('the plan is placed before the last four messages (depth 4, like an @4 injection), at the very start of a short talk, and nothing is added without a plan', () => {
+    const turns = Array.from({ length: 7 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `m${index}` }));
+    const placed = insertPlan(turns, 'step 1');
+    assert.deepEqual(placed.map(turn => turn.content.slice(0, 2)), ['m0', 'm1', 'm2', '##', 'm3', 'm4', 'm5', 'm6']);
+    assert.equal(placed[3].role, 'system');
+    assert.deepEqual(insertPlan(turns.slice(0, 2), 'p').map(turn => turn.role), ['system', 'user', 'assistant']);
+    assert.equal(insertPlan(turns, ''), turns);
+    assert.equal(turns.length, 7, 'the history itself is not touched');
 });

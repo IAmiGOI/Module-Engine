@@ -13,7 +13,8 @@ import { createWhatsNew } from './whats-new.js';
 import { createGuideContext } from './context.js';
 import { createGuideAvatar } from './avatar.js';
 import { NEUTRAL, nextFocus, detectFocus, isClosing, isTaskRequest, sanitizeFocus, COMPLETING_ACTIONS } from '../../libraries/core/guide-relevance.js';
-import { splitThinking, streamingText, MAX_NOTES_CHARS } from '../../libraries/core/guide-thinking.js';
+import { cutAfterDigest, planHistoryFold, buildDigestPrompt, clampDigest, DIGEST_MAX_TOKENS } from '../../libraries/core/guide-digest.js';
+import { splitThinking, streamingText, insertPlan, MAX_PLAN_CHARS } from '../../libraries/core/guide-thinking.js';
 
 /**
  * Ядро гида — маскот движка и его отдельный чат (замена старого окна онбординга). Чат НЕ чат SillyTavern: история лежит в настройках
@@ -31,7 +32,7 @@ import { splitThinking, streamingText, MAX_NOTES_CHARS } from '../../libraries/c
 const NAMESPACE = 'core.guide';
 /** Аватар по умолчанию — картинка, выбранная владельцем (`assets/guide-avatar.png`); своя в настройках заменяет её. */
 export const DEFAULT_AVATAR_URL = new URL('../../assets/guide-avatar.png', import.meta.url).href;
-const HISTORY_LIMIT = 80;
+const HISTORY_LIMIT = 150;
 /**
  * Бюджет токенов гида: 15 тысяч на историю и ответ вместе. История режется до 10 тысяч (верх просто отрезается, в самом чате всё остаётся), остальные 5 тысяч — под ответ
  * с рассуждением (`<think>` + видимый текст + карточки): 1800 не хватало, длинный ответ обрывался на полуслове. Системный промпт (правила, состояние, статьи) — сверх этого.
@@ -39,6 +40,9 @@ const HISTORY_LIMIT = 80;
 export const TOKEN_BUDGET = 15000;
 export const HISTORY_TOKEN_LIMIT = 10000;
 export const COMPLETION_TOKEN_LIMIT = TOKEN_BUDGET - HISTORY_TOKEN_LIMIT;
+/** Работа над карточкой персонажа: канон из сети, правки, пробы — история длиннее. Выше порога старое сворачивается в выжимку (guide-digest.js), свежие ~25 тысяч остаются дословно. */
+export const CHARACTER_HISTORY_TOKEN_LIMIT = 50000;
+const CHARACTER_KEEP_TOKENS = 25000;
 
 export const DEFAULT_PERSONA = Object.freeze({
     name: 'Mea',
@@ -94,8 +98,10 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     // Липкий фокус разговора (guide-relevance.js): какие списки и настройки идут в промпт полностью. Живёт вместе с чатом.
     let focus = { ...NEUTRAL };
     // Рабочие заметки гида к длинной задаче (guide-thinking.js): живут, пока задача не закончена или тема не сменилась.
-    let notes = '';
-    const saveChat = () => saveSetting('chat', { messages: messages.peek().slice(-HISTORY_LIMIT), mode: mode.peek(), focus, notes });
+    let plan = '';
+    // Выжимка свёрнутой старой истории: `text` и id последнего свёрнутого сообщения (`upTo`). Живёт вместе с чатом.
+    let digest = { text: '', upTo: '' };
+    const saveChat = () => saveSetting('chat', { messages: messages.peek().slice(-HISTORY_LIMIT), mode: mode.peek(), focus, plan, digest });
     const changed = () => emit('guide.changed', status());
     const nameOf = () => persona.peek().name || DEFAULT_PERSONA.name;
 
@@ -276,23 +282,28 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
                 screen = await context.screen();
                 focus = { ...focus, anchors: screen.anchors };
             }
-            // Заметки к задаче ведёт сама модель (пустой <notes> = закончено): завершение одного шага — не конец длинной задачи. Стираем только когда человек закрыл разговор.
-            if (isClosing(question) && !detectFocus({ query: question, modules: known })) notes = '';
-            const history = messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note');
+            // План к задаче ведёт сама модель (пустой <plan> = закончено): завершение одного шага — не конец длинной задачи. Стираем только когда человек закрыл разговор.
+            if (isClosing(question) && !detectFocus({ query: question, modules: known })) plan = '';
+            let history = cutAfterDigest(messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note'), digest.upTo);
+            const toTurn = message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.detail ?? message.text})` : message.text });
+            if (focus.characters) history = await foldLongHistory(history, toTurn);
             const query = history.slice(-4).map(message => message.text).join(' ');
             const system = buildGuideSystemPrompt({
                 persona: persona.peek(), context: await liveContext(screen.text, { focus, query }),
                 anchors: anchorsResult.ok ? anchorsResult.value ?? [] : [],
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
-                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: focus.characters ? ['characters'] : [] }), notes,
+                digest: digest.text,
+                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: focus.characters ? ['characters'] : [] }),
             });
-            const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.detail ?? message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
+            const turns = trimHistory(history.map(toTurn), focus.characters ? CHARACTER_HISTORY_TOKEN_LIMIT : HISTORY_TOKEN_LIMIT);
             if (internal) turns.push({ role: 'user', content: `(automatic — the user did not type this) ${followUp.replace(/^\(automatic[^)]*\)\s*/, '')}` });
+            // Её план (guide-thinking.js) — всегда четвёртым сообщением с конца, считая вместе с автоматическим ходом, если он есть.
+            const sent = insertPlan(turns, plan);
             const requestId = `guide-${now()}-${(counter += 1)}`;
             streaming = { requestId, painted: 0 };
             const reply = await call('model.generate', {
-                messages: [{ role: 'system', content: system }, ...turns],
-                systemPrompt: system, prompt: turns.map(turn => `${turn.role === 'user' ? 'User' : nameOf()}: ${turn.content}`).join('\n\n'),
+                messages: [{ role: 'system', content: system }, ...sent],
+                systemPrompt: system, prompt: sent.map(turn => `${turn.role === 'user' ? 'User' : turn.role === 'system' ? 'Plan' : nameOf()}: ${turn.content}`).join('\n\n'),
                 temperature: 0.7, maxTokens: COMPLETION_TOKEN_LIMIT, stream: true, requestId,
                 ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}),
             });
@@ -300,7 +311,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             avatar.noteReply(reply.value); // её чиби-поза смотрит на СЫРОЙ текст этого ответа целиком (think + видимое) — не на историю и не на реплику юзера
             // Безопасные действия, которые модель пометила «auto», выполняются сразу; результат — заметкой в чате.
             const thought = splitThinking(reply.value);
-            if (thought.notes !== undefined) { notes = thought.notes.slice(0, MAX_NOTES_CHARS); void saveChat(); }
+            if (thought.plan !== undefined) { plan = thought.plan.slice(0, MAX_PLAN_CHARS); void saveChat(); }
             // Предохранитель: варианты ответа — не на каждом ходу. Была ли в прошлой реплике гида кнопка выбора — в этой её нет.
             const lastReply = [...messages.peek()].reverse().find(message => message.role === 'assistant');
             const quiet = lastReply && hasChoice(lastReply.text) ? stripChoices(thought.visible) : thought.visible;
@@ -339,6 +350,25 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         }
     }
 
+    /**
+     * Работа над карточкой: когда история перевалила за порог, самые старые ходы сворачиваются в выжимку (одним вызовом модели), свежее окно остаётся дословно.
+     * Сбой сворачивания не страшен: история просто обрежется по бюджету, как раньше, и в следующий раз попробуем снова.
+     */
+    async function foldLongHistory(history, toTurn) {
+        const turns = history.map(toTurn);
+        const count = planHistoryFold(turns, { limitTokens: CHARACTER_HISTORY_TOKEN_LIMIT, keepTokens: CHARACTER_KEEP_TOKENS });
+        if (!count) return history;
+        try {
+            const prompt = buildDigestPrompt(digest.text, turns.slice(0, count));
+            const result = await call('model.generate', { prompt, messages: [{ role: 'user', content: prompt }], maxTokens: DIGEST_MAX_TOKENS, temperature: 0.3, ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}) });
+            const text = result.ok ? clampDigest(splitThinking(result.value).visible) : '';
+            if (!text) return history;
+            digest = { text, upTo: history[count - 1].id };
+            void saveChat();
+            return history.slice(count);
+        } catch { return history; }
+    }
+
     function customArticles() {
         return String(persona.peek().knowledge ?? '').split(/\n-{3,}\n/).map((text, index) => text.trim() && parseArticle(text.startsWith('---') ? text : `---\ntitle: Note ${index + 1}\nalways: true\n---\n${text}`, `custom-${index}`)).filter(Boolean);
     }
@@ -354,7 +384,9 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         messages.set(Array.isArray(chat.messages) ? chat.messages : []);
         mode.set(chat.mode === 'chat' ? 'chat' : 'scenario');
         focus = sanitizeFocus(chat.focus);
-        notes = typeof chat.notes === 'string' ? chat.notes.slice(0, MAX_NOTES_CHARS) : '';
+        const savedPlan = chat.plan ?? chat.notes; // `notes` — прежнее имя поля
+        plan = typeof savedPlan === 'string' ? savedPlan.slice(0, MAX_PLAN_CHARS) : '';
+        digest = typeof chat.digest?.text === 'string' ? { text: clampDigest(chat.digest.text), upTo: String(chat.digest.upTo ?? '') } : { text: '', upTo: '' };
         manualDone.set(new Set(await read('checklist', [])));
         try { scenario = JSON.parse(await loadText('setup-scenario.json')) ?? scenario; } catch { /* сценарий не загрузился — чат всё равно работает */ }
         try {
@@ -390,7 +422,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         messages.set([]);
         mode.set('scenario');
         focus = { ...NEUTRAL };
-        notes = '';
+        plan = '';
+        digest = { text: '', upTo: '' };
         await saveChat();
         if (withScenario) sayNode(scenario.start); else await open();
     }

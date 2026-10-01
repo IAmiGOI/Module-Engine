@@ -55,13 +55,12 @@ function describeDivider(node) {
 
 /**
  * Плоский список строк для отрисовки; свёрнутые группы прячут детей. Каждая строка несёт `rails` — цвета областей-разделителей, внутри которых она стоит
- * (внешние первыми): по ним окно рисует цветные рейки слева. Сами полосы стоят на рейках внешних областей, свой цвет у полосы — фоном. Область не пересекает
- * уровни дерева: пара действует только в одном списке (pm-dividers.js), поэтому и рейки считаются по каждому списку отдельно.
+ * (внешние первыми): по ним окно рисует цветные рейки слева. Сами полосы стоят на рейках внешних областей, свой цвет у полосы — фоном. Область идёт по порядку
+ * документа и пересекает группы (pm-dividers.js), поэтому открытые рейки переходят из группы наружу и обратно.
  */
-export function flattenRows(tree, blocks, collapsed = new Set(), path = [], depth = 0) {
+export function flattenRows(tree, blocks, collapsed = new Set(), path = [], depth = 0, scope = { valid: computeValidPairs(tree), open: [] }) {
     const rows = [];
-    const valid = computeValidPairs(tree);
-    const open = [];
+    const { valid, open } = scope;
     tree.forEach((node, index) => {
         const nodePath = [...path, index];
         const key = nodePath.join('.');
@@ -71,7 +70,7 @@ export function flattenRows(tree, blocks, collapsed = new Set(), path = [], dept
         if (divider && node.edge === 'begin') open.push({ pair: node.pair, color: node.color });
         if (divider && node.edge === 'end') { const at = open.map(frame => frame.pair).lastIndexOf(node.pair); if (at >= 0) open.splice(at); }
         rows.push({ path: nodePath, key, depth, node, ...describeNode(node, blocks), hasChildren: Boolean(children), collapsed: collapsed.has(key), rails, divider: isDivider(node) ? { edge: node.edge, color: node.color, broken: !valid.has(node.pair) } : null });
-        if (children && !collapsed.has(key)) rows.push(...flattenRows(children, blocks, collapsed, nodePath, depth + 1));
+        if (children && !collapsed.has(key)) rows.push(...flattenRows(children, blocks, collapsed, nodePath, depth + 1, scope));
     });
     return rows;
 }
@@ -99,7 +98,18 @@ export function insertAt(tree, path, node) {
  * Перенос узла. `target` — путь узла-цели, `where`: 'before' | 'after' | 'inside' (в конец группы-цели).
  * Нельзя переносить узел в самого себя или в свою же ветку; такой запрос ничего не меняет.
  */
+/** Перенос не должен ставить нижнюю полосу выше верхней: такой ход (и перетаскиванием, и кнопкой) отклоняется, дерево остаётся прежним. */
+function keepPairsValid(before, after) {
+    const was = computeValidPairs(before);
+    const now = computeValidPairs(after);
+    return [...was].every(pair => now.has(pair)) ? after : before;
+}
+
 export function moveNode(tree, from, target, where) {
+    return keepPairsValid(tree, moveNodeUnchecked(tree, from, target, where));
+}
+
+function moveNodeUnchecked(tree, from, target, where) {
     if (samePath(from, target) || isPrefix(from, target)) return tree;
     const next = clone(tree);
     const targetNode = getAt(next, target);
@@ -129,7 +139,7 @@ export function stepNode(tree, path, delta) {
     const next = clone(tree);
     const target = parentList(next, path);
     [target[path.at(-1)], target[to]] = [target[to], target[path.at(-1)]];
-    return next;
+    return keepPairsValid(tree, next);
 }
 
 let counter = 0;

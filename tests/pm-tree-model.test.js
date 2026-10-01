@@ -129,3 +129,26 @@ test('the Jev rule is offered in the condition builder with its five fields, and
     assert.deepEqual(newLeaf('jev'), { type: 'jev', question: '', minChance: 70, user: 1, assistant: 1, connection: '' });
     assert.equal(describeCondition({ type: 'not', item: { type: 'jev', question: 'calm?', minChance: 50, user: 0, assistant: 2 } }), 'NOT Jev finds “calm?” at least 50% likely (reads 0 of your messages and 2 replies)');
 });
+
+test('the coloured rails of a region follow it out of a group and into the next ones, and the pair is drawn as valid', () => {
+    const [begin, end] = createDividerPair({ color: '#f5a524' });
+    const text = id => ({ type: 'item', block: id, enabled: true });
+    const tree = [{ type: 'group', id: 'g1', name: 'one', enabled: true, wrap: { open: 'o', close: 'c' }, children: [begin, text('a')] }, { type: 'group', id: 'g2', name: 'two', enabled: true, wrap: { open: 'o', close: 'c' }, children: [text('b')] }, end, text('z')];
+    const rows = flattenRows(tree, [{ id: 'a' }, { id: 'b' }, { id: 'z' }, { id: 'o' }, { id: 'c' }]);
+    assert.deepEqual(rows.map(row => row.rails.length), [0, 0, 1, 1, 1, 1, 0]);
+    assert.equal(rows.find(row => row.divider?.edge === 'begin').divider.broken, false);
+});
+
+test('the bottom strip of a region cannot be moved above its top strip, by drag or by the step buttons; moves that keep the order are allowed, also across groups', () => {
+    const [begin, end] = createDividerPair({ color: '#f5a524' });
+    const text = id => ({ type: 'item', block: id, enabled: true });
+    const names = tree => tree.map(node => node.edge ?? node.block ?? node.id);
+    const tree = [begin, text('a'), end, text('z')];
+    assert.deepEqual(names(moveNode(tree, [2], [0], 'before')), ['begin', 'a', 'end', 'z']);
+    assert.deepEqual(names(stepNode([begin, end, text('a')], [1], -1)), ['begin', 'end', 'a']);
+    assert.deepEqual(names(moveNode(tree, [0], [3], 'after')), ['begin', 'a', 'end', 'z']);
+    assert.deepEqual(names(stepNode(tree, [3], -1)), ['begin', 'a', 'z', 'end']);
+    assert.deepEqual(names(moveNode(tree, [3], [0], 'before')), ['z', 'begin', 'a', 'end']);
+    const grouped = [{ type: 'group', id: 'g', enabled: true, children: [begin, text('a')] }, end];
+    assert.deepEqual(names(moveNode(grouped, [1], [0, 0], 'before')), ['g', 'end'], 'the bottom strip cannot enter the group above the top one');
+});

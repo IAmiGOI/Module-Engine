@@ -3,6 +3,8 @@
  * текст — из любой HTML-страницы. Сервис (`services/st-web-search.js`) только достаёт страницы; здесь решается, что из них считать ответом.
  */
 
+import { computeInfoboxText } from './web-infobox.js';
+
 const HTML_ENTITIES = Object.freeze({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': '\'', '&#x27;': '\'', '&nbsp;': ' ', '&apos;': '\'', '&ndash;': '–', '&mdash;': '—', '&hellip;': '…' });
 const decodeEntities = text => text.replace(/&(?:amp|lt|gt|quot|#39|#x27|nbsp|apos|ndash|mdash|hellip);/g, entity => HTML_ENTITIES[entity]).replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)));
 const stripTags = html => decodeEntities(html.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
@@ -39,15 +41,23 @@ export function computeWikipediaResults(json, { host = 'en.wikipedia.org' } = {}
     }));
 }
 
-/** Читаемый текст страницы: без скриптов, стилей, навигации и подвала; абзацы остаются строками. Обрезка помечена, чтобы гид знала, что видела не всё. */
-export function computeReadableText(html, maxChars = DEFAULT_READ_CHARS) {
+/** Полный читаемый текст страницы: без скриптов, стилей, навигации и подвала; абзацы — строки, заголовки — отдельные строки `## Название` (по ним web-pages.js строит оглавление). */
+export function computePageText(html) {
+    const infobox = computeInfoboxText(html);
     const body = /<body[^>]*>([\s\S]*)<\/body>/i.exec(String(html ?? ''))?.[1] ?? String(html ?? '');
     const cleaned = body
+        .replace(infobox ? /<table[^>]*class="[^"]*\binfobox\b[\s\S]*?<\/table>/i : /^$/, ' ') // инфобокс уже разобран в пары «поле: значение» и идёт первым разделом
         .replace(/<(script|style|noscript|svg|nav|footer|header|form|aside)[\s\S]*?<\/\1>/gi, ' ')
         .replace(/<!--[\s\S]*?-->/g, ' ')
-        .replace(/<\/(p|div|li|h[1-6]|tr|br|section|article)>|<br\s*\/?>/gi, '\n');
+        .replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_, inner) => `\n## ${stripTags(inner)}\n`)
+        .replace(/<\/(p|div|li|tr|br|section|article)>|<br\s*\/?>/gi, '\n');
     const lines = decodeEntities(cleaned.replace(/<[^>]*>/g, '')).split('\n').map(line => line.replace(/\s+/g, ' ').trim()).filter(line => line.length > 1);
-    const text = lines.join('\n');
+    return [infobox, lines.join('\n')].filter(Boolean).join('\n');
+}
+
+/** Читаемый текст страницы, обрезанный до `maxChars`; обрезка помечена, чтобы гид знала, что видела не всё. */
+export function computeReadableText(html, maxChars = DEFAULT_READ_CHARS) {
+    const text = computePageText(html);
     return text.length > maxChars ? `${text.slice(0, maxChars)}\n[cut: the page has ${text.length} characters, this is the first ${maxChars}]` : text;
 }
 
@@ -67,7 +77,8 @@ export function computeMediaWikiParseUrls(pageUrl) {
 /** Ответ `action=parse` → читаемый текст страницы (пусто, если в ответе нет страницы). */
 export function computeMediaWikiText(json, maxChars = DEFAULT_READ_CHARS) {
     const html = json?.parse?.text?.['*'];
-    return typeof html === 'string' ? computeReadableText(html, maxChars) : '';
+    if (typeof html !== 'string') return '';
+    return maxChars === Infinity ? computePageText(html) : computeReadableText(html, maxChars);
 }
 
 /** Адрес, который можно открыть: только http(s) и без адресов-литералов (как и сам ST на `/api/search/visit`). */
