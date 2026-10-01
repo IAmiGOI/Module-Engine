@@ -62,10 +62,10 @@ function build({ replies = ['ok'], passes = null } = {}) {
 }
 
 test('her plan is hidden from the chat, needs no confirmation, is kept, and is handed back on the next turns until the job is finished, the user closes the talk, or she clears it', async () => {
-    const { guide, sent, settings } = build({ replies: ['<think>hard job</think><plan>1. tracker — done\n2. macro — next</plan>First part is ready.', 'Second part is ready.', '<plan></plan>All finished.', 'Sure.'] });
+    const { guide, sent, settings } = build({ replies: ['<think>hard job</think><plan>1. tracker — done\n2. macro — next</plan>First part is ready. Shall I go on?', 'Second part is ready. Anything else?', '<plan></plan>All finished.', 'Sure.'] });
     await guide.load();
     await guide.ask('help me set up a health tracker and a macro for it');
-    assert.equal(guide.messages.peek().at(-1).text, 'First part is ready.', 'no think, no plan in the chat');
+    assert.equal(guide.messages.peek().at(-1).text, 'First part is ready. Shall I go on?', 'no think, no plan in the chat');
     assert.match(settings.get('core.guide/chat').plan, /2\. macro — next/, 'saved with the chat');
     await guide.ask('go on');
     const planAt = messages => messages.findIndex(message => message.role === 'system' && message.content.startsWith('## Your plan'));
@@ -81,13 +81,13 @@ test('her plan is hidden from the chat, needs no confirmation, is kept, and is h
 });
 
 test('the user closing the talk wipes the plan; clearing the chat wipes it too', async () => {
-    const first = build({ replies: ['<plan>plan X</plan>Started.', 'ok'] });
+    const first = build({ replies: ['<plan>plan X</plan>Started. Ready?', 'ok'] });
     await first.guide.load();
     await first.guide.ask('start the big job');
     assert.match(first.settings.get('core.guide/chat').plan, /plan X/);
     await first.guide.ask('thanks, that is all');
     assert.ok(!first.sent[1].messages.some(message => message.content.includes('plan X')), 'closed by the user');
-    const second = build({ replies: ['<plan>plan Y</plan>Started.', 'ok'] });
+    const second = build({ replies: ['<plan>plan Y</plan>Started. Ready?', 'ok'] });
     await second.guide.load();
     await second.guide.ask('start the big job');
     await second.guide.resetChat();
@@ -296,7 +296,8 @@ test('automatic rounds are capped at three per request; a <continue/> with nothi
     const nothing = buildLoop(['I already know it.<continue/>']);
     await nothing.guide.load();
     await nothing.guide.ask('hello');
-    assert.equal(nothing.sent.length, 1, 'no link, nothing new to see — no extra turn');
+    assert.equal(nothing.sent.length, 1 + 4, 'a <continue/> with no real link is told once per turn that nothing opens, and the automatic turns are capped');
+    assert.ok(nothing.sent[1].messages.at(-1).content.includes('does not open anything'));
     const again = buildLoop(['Looking: [Music](stme:module:module.music).<continue/>', 'Done looking.', 'Looking again: [Music](stme:module:module.music).<continue/>', 'Done again.']);
     await again.guide.load();
     await again.guide.ask('first');
