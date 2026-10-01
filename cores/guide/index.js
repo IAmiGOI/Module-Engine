@@ -7,6 +7,8 @@ import { createGuideWindow } from './window.js';
 import { createGuideActions } from './actions.js';
 import { createCreateActions } from './create-actions.js';
 import { createEditActions } from './edit-actions.js';
+import { createCharacterActions } from './character-actions.js';
+import { createWebActions } from './web-actions.js';
 import { createWhatsNew } from './whats-new.js';
 import { createGuideContext } from './context.js';
 import { createGuideAvatar } from './avatar.js';
@@ -125,6 +127,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         ...createGuideActions({ host, call, modules, reveal: anchor => reveal(anchor), hide: anchor => hide(anchor), checklist: CHECKLIST, markDone: async id => { manualDone.set(new Set([...manualDone.peek(), id])); await saveSetting('checklist', [...manualDone.peek()]); } }),
         ...createCreateActions({ call, modules }),
         ...createEditActions({ call, modules }),
+        ...createCharacterActions({ call }),
+        ...createWebActions({ callService }),
     };
 
     async function runAction(action, params) {
@@ -133,6 +137,8 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         let result;
         try { result = await entry.run(params ?? {}); } catch (error) { result = { ok: false, message: error.message }; }
         if (result.message) push({ role: 'note', text: result.message, ok: result.ok });
+        // Действие, чей результат гид должна прочитать сразу (тест карточки), даёт ей ещё один ход без участия человека.
+        if (result.ok && entry.thenContinue && !busy.peek()) void ask(null, { internal: true, followUp: entry.followUp });
         if (result.ok && COMPLETING_ACTIONS.has(action)) { focus = { ...focus, done: true }; void saveChat(); }   // факт завершения: на следующей реплике — нейтральный режим, если не назовут новую тему
         changed();
         return result;
@@ -205,7 +211,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     let avatarLoaded = false;
     const unsubscribeAvatar = effect(() => { avatar.url(); if (avatarLoaded) changed(); }); // первый прогон effect() — ещё не загружено, событие не нужно
 
-    async function liveContext(screenText = '', focus = {}) {
+    async function liveContext(screenText = '', { focus, query = '' } = {}) {
         const workers = await workerStatus();
         const list = modules?.list?.() ?? [];
         const enabled = new Set(modules?.enabled?.() ?? []);
@@ -214,7 +220,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             `Model connections: ${workers.length ? workers.map(worker => `${worker.workerId} — ${worker.state}${worker.lastError ? ` (last error: ${worker.lastError.message})` : ''}`).join('; ') : 'none configured'}.`,
             `Modules: ${list.map(item => `${item.title} (${item.id}) — ${enabled.has(item.id) ? 'on' : 'off'}`).join('; ') || 'none'}.`,
             `First-start checklist: ${checklist.map(item => `${item.title} — ${item.done ? 'done' : 'not yet'}`).join('; ')}.`,
-            await context.editable(focus),
+            await context.editable({ focus, query }),
             screenText,
         ].filter(Boolean).join('\n');
     }
@@ -233,7 +239,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
     let continues = 0;
 
     /** `internal` — автоматический ход после того, как гид открыла блок и попросила `<continue/>`: без реплики человека, в разгар её же запроса. */
-    async function ask(text, { echo = true, internal = false } = {}) {
+    async function ask(text, { echo = true, internal = false, followUp = FOLLOW_UP } = {}) {
         const question = internal ? '' : String(text ?? '').trim();
         if (internal ? false : (!question || busy.peek())) return false;
         if (!internal) continues = 0;
@@ -267,13 +273,13 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const history = messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note');
             const query = history.slice(-4).map(message => message.text).join(' ');
             const system = buildGuideSystemPrompt({
-                persona: persona.peek(), context: await liveContext(screen.text, { focus }),
+                persona: persona.peek(), context: await liveContext(screen.text, { focus, query }),
                 anchors: anchorsResult.ok ? anchorsResult.value ?? [] : [],
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
-                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)] }), notes,
+                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: focus.characters ? ['characters'] : [] }), notes,
             });
             const turns = trimHistory(history.map(message => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.role === 'note' ? `(result: ${message.text})` : message.text })), HISTORY_TOKEN_LIMIT);
-            if (internal) turns.push({ role: 'user', content: FOLLOW_UP });
+            if (internal) turns.push({ role: 'user', content: `(automatic — the user did not type this) ${followUp.replace(/^\(automatic[^)]*\)\s*/, '')}` });
             const requestId = `guide-${now()}-${(counter += 1)}`;
             streaming = { requestId, painted: 0 };
             const reply = await call('model.generate', {

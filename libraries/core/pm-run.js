@@ -24,6 +24,8 @@ const textOf = entry => String(entry?.mes ?? '');
  *   loreEntries — записи лорбука активных книг; tracker(id, field) — значения трекеров
  * options: { contributions, globals, seed (заморозка random), timed, prevCut, headroom, budgetOverride }
  */
+const isBlankText = value => typeof value !== 'string' || value.trim() === '';
+
 export function buildRequest(preset, materials, options = {}) {
     const chat = materials.chat ?? [];
     const lastOf = predicate => textOf([...chat].reverse().find(predicate));
@@ -56,8 +58,11 @@ export function buildRequest(preset, materials, options = {}) {
         random: options.random, plugins: options.plugins, onPluginError: options.onPluginError,
     };
     const injections = lore.depth.map(item => ({ ...item, block: `lore:${item.uid}` }));
+    // Промпт на глубине карточки ST кладёт вставкой в чат; порядок 100 — как у вставок по умолчанию, роль и глубину задаёт сама карточка.
+    if (!isBlankText(materials.depthPrompt?.prompt)) injections.push({ depth: materials.depthPrompt.depth ?? 4, order: 100, role: materials.depthPrompt.role ?? 'system', content: materials.depthPrompt.prompt, block: 'depthPrompt' });
     const assembled = assemblePrompt(preset, {
         markers, history, substitute: engine.substitute, contributions: options.contributions ?? {}, facts, injections,
+        cardOverrides: { main: materials.systemPrompt, jailbreak: materials.postHistoryInstructions },
         setVariable: (name, value) => engine.vars.set(name, value),
     });
 

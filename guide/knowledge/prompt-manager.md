@@ -17,6 +17,7 @@ All your ST Chat Completion presets are copied into PM automatically (the ST fil
 - **Settings** — sampler and other generation values of the preset, trimming headroom, overrides per model, character or chat (off by default), plugins, versions with rollback.
 
 ## Good to know
+- **Character prompts.** The character card's own system prompt, post-history instructions and depth prompt are applied the way SillyTavern's manager applies them: the card's system prompt fills the preset's `main` block, the post-history text fills `jailbreak` (a block set to forbid overrides is left alone; `{{original}}` inserts the block's own text), and the depth prompt is injected at the depth and role the card names. Turn "Prefer Char. Prompt/Jailbreak" off in SillyTavern to ignore them.
 - **Trimming** cuts the oldest history first and cuts a little extra at once, so the start of the history does not move every turn (that would break the provider cache).
 - **Random macros** break the cache; "Freeze random" (Settings) keeps one value per chat.
 - **Streaming** from the preset is applied by switching ST's own setting for the generation and switching it back afterwards.
