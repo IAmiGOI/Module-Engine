@@ -6,15 +6,16 @@ import { promises as fs } from 'node:fs';
 import { createApp } from '../tools/music-server/app.js';
 import { MODEL_ID } from '../tools/music-server/embed.js';
 import { EMBEDDING_MODEL_ID } from '../libraries/core/embedding.js';
+import { createRateLimiter, clientAddress } from '../tools/music-server/rate-limit.js';
 import { parseSections, parseSectionTracks } from '../libraries/shared/music-catalog.js';
 
 const DIM = 384;
 // Фейк эмбеддинга: детерминированный вектор из длины текста — реальная модель (~50 МБ) в тестах не нужна, проверяется сам сервер.
 const fakeEmbed = async text => Array.from({ length: DIM }, (_, i) => (i === String(text).length % DIM ? 1 : 0));
 
-async function start({ readKey = '', maxUpload } = {}) {
+async function start({ readKey = '', maxUpload, limits } = {}) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'me-music-'));
-    const app = await createApp({ dir, embed: fakeEmbed, adminToken: 'owner-secret', readKey, ...(maxUpload ? { maxUpload } : {}) });
+    const app = await createApp({ dir, embed: fakeEmbed, adminToken: 'owner-secret', readKey, ...(maxUpload ? { maxUpload } : {}), ...(limits ? { limits } : {}) });
     await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${app.address().port}`;
     const admin = { Authorization: 'Bearer owner-secret' };
@@ -149,4 +150,59 @@ test('the catalog survives a restart', async () => {
         const catalog = await (await fetch(`${base}/api/admin/catalog`, { headers: { Authorization: 'Bearer t' } })).json();
         assert.deepEqual(catalog.sections.map(item => item.name), ['Keep']);
     } finally { await close(app); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+// --- Лимиты ---------------------------------------------------------------------
+
+test('the limiter allows N hits a minute per address, then says how long to wait, and forgets after the window', () => {
+    let time = 1_000_000;
+    const limiter = createRateLimiter({ perMinute: 3, now: () => time });
+    assert.deepEqual([1, 2, 3].map(() => limiter.take('a').ok), [true, true, true]);
+    const refused = limiter.take('a');
+    assert.equal(refused.ok, false);
+    assert.equal(refused.retryAfter, 60);
+    assert.equal(limiter.take('b').ok, true, 'another address has its own allowance');
+    time += 61_000;
+    assert.equal(limiter.take('a').ok, true, 'the window slides');
+});
+
+test('the client address is trusted from X-Forwarded-For only when the request comes from our own proxy', () => {
+    const request = (remoteAddress, forwarded) => ({ socket: { remoteAddress }, headers: forwarded ? { 'x-forwarded-for': forwarded } : {} });
+    assert.equal(clientAddress(request('127.0.0.1', '5.6.7.8, 9.9.9.9')), '5.6.7.8');
+    assert.equal(clientAddress(request('::ffff:127.0.0.1', '5.6.7.8')), '5.6.7.8');
+    assert.equal(clientAddress(request('203.0.113.9', '5.6.7.8')), '203.0.113.9', 'a stranger cannot pick his own address');
+});
+
+test('too many catalog or audio requests get 429 with Retry-After; the owner is never limited', async () => {
+    const ctx = await start({ limits: { catalogPerMinute: 3, audioPerMinute: 2, audioBytesPerSecond: 0 } });
+    try {
+        const { id } = await (await ctx.json('/api/admin/sections', { method: 'POST', body: { name: 'A' } })).json();
+        const track = await (await upload(ctx, id)).json();
+        const statuses = [];
+        for (let i = 0; i < 5; i += 1) statuses.push((await fetch(`${ctx.base}/api/sections`)).status);
+        assert.deepEqual(statuses, [200, 200, 200, 429, 429]);
+        const refused = await fetch(`${ctx.base}/api/sections`);
+        assert.ok(Number(refused.headers.get('retry-after')) >= 1);
+        const audio = [];
+        for (let i = 0; i < 3; i += 1) audio.push((await fetch(`${ctx.base}/audio/${track.id}.mp3`)).status);
+        assert.deepEqual(audio, [200, 200, 429], 'audio has its own allowance');
+        for (let i = 0; i < 6; i += 1) assert.equal((await fetch(`${ctx.base}/api/admin/catalog`, { headers: ctx.admin })).status, 200);
+        assert.equal((await fetch(`${ctx.base}/audio/${track.id}.mp3`, { headers: ctx.admin })).status, 200, 'the owner auditions freely');
+    } finally { await ctx.stop(); }
+});
+
+test('audio is sent no faster than the speed limit; the owner gets full speed', async () => {
+    const ctx = await start({ limits: { catalogPerMinute: 0, audioPerMinute: 0, audioBytesPerSecond: 100 } });   // 100 байт/с = порции по 10 байт каждые 100 мс
+    try {
+        const { id } = await (await ctx.json('/api/admin/sections', { method: 'POST', body: { name: 'A' } })).json();
+        const track = await (await upload(ctx, id, { bytes: Buffer.alloc(100, 7) })).json();
+        let started = Date.now();
+        const slow = await (await fetch(`${ctx.base}/audio/${track.id}.mp3`)).arrayBuffer();
+        const slowMs = Date.now() - started;
+        assert.equal(slow.byteLength, 100, 'the whole file still arrives');
+        assert.ok(slowMs >= 800, `100 bytes at 100 B/s take about a second, took ${slowMs} ms`);
+        started = Date.now();
+        await (await fetch(`${ctx.base}/audio/${track.id}.mp3`, { headers: ctx.admin })).arrayBuffer();
+        assert.ok(Date.now() - started < 400, 'the owner is not throttled');
+    } finally { await ctx.stop(); }
 });

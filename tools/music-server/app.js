@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { openStore, HttpError, AUDIO_EXT } from './store.js';
 import { MODEL_ID, DIM } from './embed.js';
 import { CORS, sendJson, sendFile, readJson, sameSecret } from './http-utils.js';
+import { createRateLimiter, clientAddress } from './rate-limit.js';
 
 /**
  * HTTP-приложение музыкального сервера. Публичное (по ключу чтения, если задан): `/api/sections`, `/api/sections/:id`, `/audio/:id.:ext` — то, что читает ME.
@@ -18,11 +19,26 @@ import { CORS, sendJson, sendFile, readJson, sameSecret } from './http-utils.js'
 const CONSOLE_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'console.html');
 const DEFAULT_MAX_UPLOAD = 200 * 1024 * 1024;
 
-export async function createApp({ dir, embed, adminToken, readKey = '', maxUpload = DEFAULT_MAX_UPLOAD }) {
+/** Лимиты по умолчанию: каталог 60 запросов/мин, аудио 90 запросов/мин (плеер на одну смену трека делает несколько Range-запросов) и 2 МБ/с на поток; на адрес. 0 — без ограничения. */
+export const DEFAULT_LIMITS = Object.freeze({ catalogPerMinute: 60, audioPerMinute: 90, audioBytesPerSecond: 2 * 1024 * 1024 });
+
+export async function createApp({ dir, embed, adminToken, readKey = '', maxUpload = DEFAULT_MAX_UPLOAD, limits = DEFAULT_LIMITS }) {
     if (!adminToken) throw new Error('ADMIN_TOKEN обязателен: без него консоль была бы открыта всем');
     const store = await openStore({ dir, embed });
     const tmpDir = path.join(dir, 'tmp');
     await fsp.mkdir(tmpDir, { recursive: true });
+
+    const catalogLimiter = limits.catalogPerMinute > 0 ? createRateLimiter({ perMinute: limits.catalogPerMinute }) : null;
+    const audioLimiter = limits.audioPerMinute > 0 ? createRateLimiter({ perMinute: limits.audioPerMinute }) : null;
+    /** Владелец не ограничивается. Ответ 429 несёт `Retry-After`. */
+    function limited(req, res, limiter) {
+        if (!limiter || adminAllowed(req)) return false;
+        const verdict = limiter.take(clientAddress(req));
+        if (verdict.ok) return false;
+        res.writeHead(429, { ...CORS, 'Retry-After': String(verdict.retryAfter), 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'слишком много запросов' }));
+        return true;
+    }
 
     const readAllowed = url => !readKey || sameSecret(url.searchParams.get('k'), readKey);
     const adminAllowed = req => sameSecret(/^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1], adminToken);
@@ -62,15 +78,17 @@ export async function createApp({ dir, embed, adminToken, readKey = '', maxUploa
         }
 
         if ((method === 'GET' || method === 'HEAD') && parts[0] === 'audio' && parts.length === 2) {
+            if (limited(req, res, audioLimiter)) return;
             const owner = adminAllowed(req);   // владелец слушает и неразмеченные треки (консоль передаёт токен заголовком)
             if (!owner && !readAllowed(url)) return sendJson(res, 401, { error: 'нет доступа' });
             const match = /^([\w-]+)\.([a-z0-9]+)$/i.exec(parts[1]);
             const item = match && store.track(match[1]);
             if (!item || (!owner && !Array.isArray(item.vector)) || item.ext !== match[2].toLowerCase()) return sendJson(res, 404, { error: 'нет такого трека' });
-            return sendFile(req, res, store.audioPath(item), item.ext);
+            return sendFile(req, res, store.audioPath(item), item.ext, { bytesPerSecond: owner ? 0 : limits.audioBytesPerSecond });
         }
 
         if (method === 'GET' && parts[0] === 'api' && parts[1] === 'sections') {
+            if (limited(req, res, catalogLimiter)) return;
             if (!readAllowed(url)) return sendJson(res, 401, { error: 'нет доступа' });
             if (parts.length === 2) return sendJson(res, 200, { model: MODEL_ID, dim: DIM, sections: store.publicSections() });
             const found = store.publicSection(decodeURIComponent(parts[2]));
