@@ -665,3 +665,41 @@ test('model.generate with stream:false explicitly still works end to end, unchan
     assert.equal(result.value, 'non-streamed reply');
     assert.equal(calls.length, 1);
 });
+
+test('a provider rate limit (HTTP 429 with Retry-After) is waited out and the same request is sent again, instead of failing the caller; after the allowed retries the 429 is reported as before', async () => {
+    const run = async replies => {
+        const engine = createEngine();
+        const sent = [];
+        registerHttpService(engine.buses.network, {
+            fetch: async () => {
+                sent.push(1);
+                const status = replies[Math.min(sent.length - 1, replies.length - 1)];
+                return { status, ok: status < 300, headers: { entries: () => [] }, text: async () => (status === 429 ? '{"error":{"message":"slow down","metadata":{"headers":{"Retry-After":"10"}}}}' : JSON.stringify({ choices: [{ message: { content: 'Hello.' } }] })) };
+            },
+        });
+        const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
+        registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
+        createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
+        const waits = [];
+        const modelsCore = createInternalEngineModelsCore(engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true }), { sleep: async ms => { waits.push(ms); } });
+        modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com', model: 'gpt-test', format: 'openai' }]);
+        const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+        const result = await new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hi' } }, resolve));
+        return { result, sent: sent.length, waits };
+    };
+    const recovered = await run([429, 429, 200]);
+    assert.equal(recovered.result.ok, true);
+    assert.equal(recovered.result.value, 'Hello.');
+    assert.equal(recovered.sent, 3);
+    assert.deepEqual(recovered.waits, [10000, 10000], 'waited as long as the provider asked');
+    const stuck = await run([429]);
+    assert.equal(stuck.result.ok, false);
+    assert.match(stuck.result.error.message, /429/);
+    assert.equal(stuck.sent, 3, 'one try and two retries, no more');
+});
+
+test('the repeat and presence penalties reach an OpenAI-style provider only when they are set', () => {
+    const base = { prompt: 'hi' };
+    assert.equal(resolveGenerateRequest(base, {}).frequencyPenalty, 0);
+    assert.equal(resolveGenerateRequest({ ...base, frequencyPenalty: 0.3 }, {}).frequencyPenalty, 0.3);
+});

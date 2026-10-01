@@ -280,7 +280,7 @@ test('a safe action that fails gives her a turn with the reason and the right wa
 });
 
 test('the Stop button cuts the answer that is being written, keeps what had arrived, and ends the whole chain of automatic turns', async () => {
-    const world = build({ generate: () => new Promise((_, reject) => { world.reject = reject; }) });
+    const world = build({ generate: count => (count === 1 ? new Promise((_, reject) => { world.reject = reject; }) : 'Here is the card.') });
     const cancelled = [];
     world.bus.register('model.generate.cancel', params => { cancelled.push(params.requestId); world.reject(new Error('The request was stopped.')); return true; });
     await world.guide.load();
@@ -298,9 +298,9 @@ test('the Stop button cuts the answer that is being written, keeps what had arri
     assert.equal(world.calls.length, 1, 'no automatic turn follows a stop');
 });
 
-test('a model that starts repeating itself is cut off at once: the request is cancelled, one copy of the phrase stays, nothing is run, and a short note says why', async () => {
+test('a model that starts repeating itself is cut off at once (one copy of the phrase stays) and is then asked again for the action block only, so the chain goes on instead of dying', async () => {
     const phrase = 'Let me pull up the Personality, Background, and Quotes sections from the main wiki page.';
-    const world = build({ generate: () => new Promise((_, reject) => { world.reject = reject; }) });
+    const world = build({ generate: count => (count === 1 ? new Promise((_, reject) => { world.reject = reject; }) : 'Here is the card.') });
     const cancelled = [];
     world.bus.register('model.generate.cancel', params => { cancelled.push(params.requestId); world.reject(new Error('The request was stopped.')); return true; });
     await world.guide.load();
@@ -317,8 +317,9 @@ test('a model that starts repeating itself is cut off at once: the request is ca
     assert.equal(cancelled.length, 1, 'cancelled while it was still looping');
     const shown = world.guide.messages.peek();
     assert.ok((shown.find(message => message.role === 'assistant' && message.text.startsWith('Good'))?.text.match(/Quotes sections/g) ?? []).length <= 2, 'about one copy is kept');
-    assert.match(shown.at(-1).text, /started repeating itself/);
-    assert.equal(world.calls.length, 1);
+    assert.equal(world.calls.length, 2, 'asked again');
+    assert.match(JSON.stringify(world.calls[1].messages ?? world.calls[1]), /stuck repeating one sentence/);
+    assert.equal(shown.at(-1).text, 'Here is the card.');
 });
 
 test('the debug log of the guide shows, for every turn, what the model said, what the engine did with it and why the chain went on or ended, with the raw provider answer attached', async () => {

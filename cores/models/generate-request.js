@@ -147,6 +147,8 @@ export function resolveGenerateRequest(params, worker) {
         topP: Number.isFinite(source.topP) ? source.topP : samplerDefaults.topP,
         topK: Number.isFinite(source.topK) ? source.topK : samplerDefaults.topK,
         seed: Number.isFinite(source.seed) ? source.seed : REQUEST_DEFAULTS.seed,
+        frequencyPenalty: Number.isFinite(source.frequencyPenalty) ? source.frequencyPenalty : 0,
+        presencePenalty: Number.isFinite(source.presencePenalty) ? source.presencePenalty : 0,
         reasoningMode: REASONING_MODES.includes(source.reasoningMode) ? source.reasoningMode : reasoningDefaults.reasoningMode,
         reasoningEffort: REASONING_EFFORTS.includes(source.reasoningEffort) ? source.reasoningEffort : reasoningDefaults.reasoningEffort,
         reasoningBudget: Number.isFinite(source.reasoningBudget) ? source.reasoningBudget : reasoningDefaults.reasoningBudget,
