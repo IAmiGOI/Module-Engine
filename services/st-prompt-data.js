@@ -21,6 +21,10 @@ export function registerStPromptDataService(bus, { getContext, fetchImpl = (...a
             personality: character?.personality ?? data.personality ?? '',
             scenario: character?.scenario ?? data.scenario ?? '',
             mesExamples: character?.mes_example ?? data.mes_example ?? '',
+            // Как у ST: карточный промпт действует, пока включены «Prefer Char. Prompt / Jailbreak» (по умолчанию включены); у чата может быть свой системный промпт.
+            systemPrompt: power.prefer_character_prompt === false ? '' : (context.chatMetadata?.system_prompt || data.system_prompt || ''),
+            postHistoryInstructions: power.prefer_character_jailbreak === false ? '' : (data.post_history_instructions ?? ''),
+            depthPrompt: { prompt: data.extensions?.depth_prompt?.prompt ?? '', depth: Number(data.extensions?.depth_prompt?.depth ?? 4), role: data.extensions?.depth_prompt?.role ?? 'system' },
             persona: power.persona_description ?? '',
             chatLength: context.chat?.length ?? 0,
             chatId: context.getCurrentChatId?.() ?? null,

@@ -1,6 +1,7 @@
 import { describeSpecs } from '../../libraries/core/guide-settings.js';
 import { describeWorldInfo, describePreset } from '../../libraries/core/guide-st-settings.js';
 import { NEUTRAL, countsLine } from '../../libraries/core/guide-relevance.js';
+import { createCharacterContext } from './character-context.js';
 
 /**
  * Что гид знает о происходящем помимо состояния подключений (cores/guide/index.js): что раскрыто на экране (`ui.context`) и что уже есть и можно править —
@@ -9,6 +10,7 @@ import { NEUTRAL, countsLine } from '../../libraries/core/guide-relevance.js';
  * иначе одна строка с количеством. Данные в фокусе читаются заново при каждом запросе.
  */
 export function createGuideContext({ call, callService, modules }) {
+    const characterContext = createCharacterContext({ call, callService });
     /** Раскрытое сейчас: текст для промпта и адреса для подбора статей. Нет ответа — как будто ничего не открыто. */
     async function screen() {
         const result = await call('ui.context');
@@ -19,7 +21,7 @@ export function createGuideContext({ call, callService, modules }) {
      * Свои трекеры (не системные и не чужих Модулей), макросы, записи лорбука (до 30) и объявленные настройки включённых Модулей. `query` — недавняя переписка,
      * `focus` — текущий фокус разговора: что показать списком, а что — только числом.
      */
-    async function editable({ focus = NEUTRAL } = {}) {
+    async function editable({ focus = NEUTRAL, query = '' } = {}) {
         const [trackers, macros, entries] = await Promise.all([call('tracking.trackers'), call('macros.programs'), call('lorebook.find', {})]);
         const mine = (trackers.ok ? trackers.value ?? [] : []).filter(tracker => tracker.kind !== 'system' && !tracker.ownerId);
         const programs = macros.ok ? macros.value ?? [] : [];
@@ -28,7 +30,9 @@ export function createGuideContext({ call, callService, modules }) {
         if (mine.length && focus.trackers) lines.push(`Your trackers: ${mine.map(tracker => `${tracker.id} (fields: ${(tracker.fields ?? []).map(field => field.name).join(', ')})`).join('; ')}.`);
         if (programs.length && focus.macros) lines.push(`Macros: ${programs.map(program => `{{${program.macroName}}}`).join(', ')}.`);
         if (found.length && focus.lorebook) lines.push(`Lorebook entries (uid, book): ${found.slice(0, 30).map(entry => `#${entry.uid} “${entry.name}” (${entry.book})`).join('; ')}${found.length > 30 ? `; …and ${found.length - 30} more` : ''}.`);
-        const counts = countsLine({ trackers: mine.length, macros: programs.length, entries: found.length }, focus);
+        const characters = await characterContext.describe({ focus, query });
+        lines.push(...characters.lines);
+        const counts = countsLine({ trackers: mine.length, macros: programs.length, entries: found.length, characters: characters.count }, focus);
         if (counts) lines.push(counts);
         // World Info и пресет генерации — настройки самой ST, не движка: только для анализа, действий на их правку у гида нет (см. Сервисы).
         // Явно НЕ card:lorebook / card:preset — те карточки движка про другое (записи лорбука; экспорт-импорт настроек), у самих

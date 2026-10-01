@@ -344,3 +344,37 @@ test('the log tells whether the shared start is enough for the cache of the prov
     assert.equal(advice.cachedTokens, 1234);
     assert.match(advice.verdict.text, /OpenAI|shared/);
 });
+
+test('with the Prompt Manager active, the open character\'s own prompts (system prompt, post-history instructions, depth prompt) reach the model like they do in SillyTavern\'s manager — the preset leaves those blocks empty for the card to fill', async () => {
+    const { pm, send, context } = await build();
+    await pm.autoPrepare();
+    context.characters[0].data = { system_prompt: 'LENA SYSTEM', post_history_instructions: 'LENA PHI', extensions: { depth_prompt: { prompt: 'LENA DEPTH', depth: 0, role: 'system' } } };
+    const texts = (await send()).messages.map(message => message.content);
+    assert.ok(texts.some(text => text.includes('LENA SYSTEM')), 'the card\'s system prompt fills the empty main block');
+    assert.ok(texts.some(text => text.startsWith('<char instructions>') && text.includes('LENA PHI')), 'the card\'s post-history text lands inside the <char instructions> group');
+    assert.ok(texts.includes('LENA DEPTH'), 'the depth prompt is injected as the card says');
+    context.characters[0].data = {};
+    assert.ok(!(await send()).messages.some(message => /LENA (SYSTEM|PHI|DEPTH)/.test(message.content)), 'a card without them adds nothing');
+});
+
+test('a card test is assembled in isolation: the named card and the given turns only — no lorebook entry and no history of the open chat — with the same preset and the card\'s own prompts', async () => {
+    const { pm, call } = await build();
+    await pm.autoPrepare();
+    const card = { name: 'Aria', description: 'Aria is a scout.', personality: '', scenario: '', mes_example: '', system_prompt: 'ARIA SYSTEM', post_history_instructions: 'ARIA PHI', depth_prompt: { prompt: '', depth: 4, role: 'system' } };
+    const chat = [{ name: 'Aria', is_user: false, mes: 'Who goes there?' }, { name: 'Sasha', is_user: true, mes: 'A dragon, tell me about the dragon.' }];
+    const assembled = (await call('promptManager.assembleForCard', { card, chat })).value;
+    const text = assembled.messages.map(message => message.content).join('\n');
+    assert.ok(text.includes('Aria is a scout.') && text.includes('ARIA SYSTEM') && text.includes('ARIA PHI'));
+    assert.ok(text.includes('Who goes there?') && text.includes('A dragon, tell me about the dragon.'));
+    assert.ok(!text.includes('Lena is a Handler.'), 'the open character\'s card is not mixed in');
+    assert.ok(!text.includes('Dragons guard castles.'), 'the lorebook of the open chat is not mixed in');
+    assert.ok(!text.includes('Tell me about the dragon.') && !text.includes('Greetings.'), 'the history of the open chat is not mixed in');
+    assert.ok(assembled.tokens > 0 && assembled.presetName);
+});
+
+test('a card test with no active preset says so instead of building something else', async () => {
+    const { pm, call } = await build();
+    await pm.autoPrepare();
+    await pm.configure({ activePresetId: null });
+    assert.deepEqual((await call('promptManager.assembleForCard', { card: { name: 'Aria' }, chat: [] })).value, { skipped: 'no active preset' });
+});

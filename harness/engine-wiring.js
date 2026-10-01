@@ -35,6 +35,9 @@ import { registerFileService } from '../services/file.js';
 import { registerStMacrosService } from '../services/st-macros.js';
 import { registerStLorebookService } from '../services/st-lorebook.js';
 import { registerStCharacterService } from '../services/st-character.js';
+import { registerStCharacterCardsService } from '../services/st-character-cards.js';
+import { registerCharacterCardVersionsService } from '../services/character-card-versions.js';
+import { registerStWebSearchService } from '../services/st-web-search.js';
 import { registerStEventsService } from '../services/st-events.js';
 import { registerStToolsService } from '../services/st-tools.js';
 import { registerStGenerationService } from '../services/st-generation.js';
@@ -63,6 +66,7 @@ import { createSpeakerCore } from '../cores/speaker/index.js';
 import { createMapCore } from '../cores/map/index.js';
 import { createMapNarrationCore } from '../cores/map-narration/index.js';
 import { createLorebookCore } from '../cores/lorebook/index.js';
+import { createCharacterCardsCore } from '../cores/character-cards/index.js';
 import { createBasicSummaryCore } from '../cores/summary/index.js';
 import { createMemoryGraphCore } from '../cores/memory-graph/index.js';
 import { createUiEngineCore } from '../cores/ui/ui-engine.js';
@@ -539,6 +543,9 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerStMacrosService(engine.buses.services, { getContext });
     registerStLorebookService(engine.buses.services, { getContext });
     registerStCharacterService(engine.buses.services, { getContext });
+    registerStCharacterCardsService(engine.buses.services, { getContext, fetch });
+    registerCharacterCardVersionsService(engine.buses.services);
+    registerStWebSearchService(engine.buses.services, { getContext, fetch });
     registerStEventsService(engine.buses.services, { getContext });
     registerStToolsService(engine.buses.services, { getContext });
     // Только для чтения — гид анализирует их, править остаётся за родными экранами ST (см. doc-comment обоих Сервисов).
@@ -655,6 +662,11 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
 
     const lorebookCore = createLorebookCore(engine.registerCaller('core.lorebook', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.lorebook' }),
+    });
+
+    // Карточки персонажей ST: чтение, создание и правка всех полей (гид и любые Модули — через контракты `characterCards.*`).
+    const characterCardsCore = createCharacterCardsCore(engine.registerCaller('core.characterCard', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.characterCard' }),
     });
 
     // Свёртка старой истории в иерархию саммари — регистрирует свои же этапы
@@ -954,5 +966,5 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { engine, promptManagerCore, promptManagerPanel, modelsCore, trackingCore, macrosCore, lorebookCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
+    return { engine, promptManagerCore, promptManagerPanel, modelsCore, trackingCore, macrosCore, lorebookCore, characterCardsCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, eventsCore, generationCore, pipelineCore, uiEngine, uiModules, notifications, activityLight, glAnimations, backgrounds, syncCore, startup, messageFooter, chatViewport, inputBar, home, hub, selfUpdate, updateOverlay, modules, enginePanel, panelUi, firstLoad, firstLoadResult, FIRST_LAUNCH_EVENT, guide };
 }

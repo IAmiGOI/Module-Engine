@@ -116,8 +116,8 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         return created;
     }
 
-    async function gatherMaterials(chat, info) {
-        const [entries, macros] = await Promise.all([own('lorebook.entries', {}), own('macros.snapshot', {})]);
+    async function gatherMaterials(chat, info, { isolated = false } = {}) {
+        const [entries, macros] = await Promise.all([isolated ? [] : own('lorebook.entries', {}), own('macros.snapshot', {})]);
         return {
             ...info, chat, macros: macros ?? {}, loreEntries: entries ?? [],
             tracker: (id, field) => (macros ?? {})[`${id}_${field}`],
@@ -129,24 +129,26 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
     }
 
     /** Одна сборка: и для настоящей отправки, и для превью. Ничего не отправляет. */
-    async function assemble(chat, { commit = false, model } = {}) {
+    async function assemble(chat, { commit = false, model, infoOverride = null, isolated = false } = {}) {
         const record = settings.activePresetId ? await store.get(settings.activePresetId) : null;
         if (!record) return { skipped: 'no active preset' };
-        const info = await service('stPromptData.read', {});
-        if (!info) return { skipped: 'no ST data' };
-        const chatState = await loadChatState();
+        const live = await service('stPromptData.read', {});
+        if (!live) return { skipped: 'no ST data' };
+        const info = { ...live, ...(infoOverride ?? {}) };
+        // Состояние открытого чата (обрезка, таймеры лорбука) к изолированной сборке не относится: оно сдвинуло бы тест по чужой истории.
+        const chatState = isolated ? {} : await loadChatState();
         const timed = { ...(chatState.timed ?? {}) };
-        const materials = await gatherMaterials(chat, info);
+        const materials = await gatherMaterials(chat, info, { isolated });
         materials.macros = { ...plugins.macros(), ...materials.macros }; // наши макросы (rp-time…) важнее одноимённых из плагинов
         // Пресеты, подготовленные до 5.140: пары-обёртки на глубине досклеиваются в группы (одно сообщение, пустая — не уходит).
         const regrouped = regroupTree(record.preset.tree, new Map(record.preset.blocks.map(block => [block.id, block])));
         if (regrouped.changed) { record.preset.tree = regrouped.tree; await store.save(record, { label: 'wrapper tags grouped' }); }
         let changed = false;
-        for (const contribution of contributions.list()) changed = placeContribution(record.preset.tree, contribution) || changed;
+        for (const contribution of isolated ? [] : contributions.list()) changed = placeContribution(record.preset.tree, contribution) || changed;
         if (changed) await store.save(record, { label: 'new module contribution' });
         const { params, sources } = resolveParams(record.preset.params, settings.overrides, { model: model ?? info.model, char: info.char, chatId: info.chatId });
         const result = buildRequest({ ...record.preset, params }, materials, {
-            contributions: contributions.asContext(), globals, timed, plugins: plugins.conditions(), transform: (messages, env) => plugins.transform(messages, env),
+            contributions: isolated ? {} : contributions.asContext(), globals, timed, plugins: plugins.conditions(), transform: (messages, env) => plugins.transform(messages, env),
             onPluginError: () => {}, prevCut: chatState.cut ?? 0, headroom: settings.headroom,
             seed: settings.freezeRandom ? (info.chatId ?? 'chat') : undefined,
         });
@@ -315,6 +317,24 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         return { messages: assembled.result.messages, report: assembled.result.report, tokens: { total: assembled.result.tokens.total, byBlock: [...assembled.result.tokens.byBlock].map(([id, tokens]) => [nameOfBlock(assembled.record.preset, id), tokens]) }, dropped: assembled.result.dropped, budget: assembled.result.budget, macros: assembled.result.macros };
     }
 
+    /**
+     * Запрос, каким он ушёл бы модели, если бы чат шёл с ЭТОЙ карточкой: активный пресет, её текст и её собственные промпты, а история — данная (для теста карточки).
+     * Изолированно: без лорбука и вкладов Модулей открытого чата, иначе чужая память попадала бы в проверку карточки; ничего не сохраняет и не отправляет.
+     */
+    async function assembleForCard({ card, chat = [], model } = {}) {
+        if (!card) throw new Error('promptManager.assembleForCard: "card" is required.');
+        const assembled = await assemble(chat, {
+            model, isolated: true,
+            infoOverride: {
+                char: card.name, description: card.description, personality: card.personality, scenario: card.scenario, mesExamples: card.mes_example,
+                systemPrompt: card.system_prompt, postHistoryInstructions: card.post_history_instructions, depthPrompt: card.depth_prompt,
+                chatLength: chat.length, chatId: 'card-test', isGroup: false,
+            },
+        });
+        if (assembled.skipped) return { skipped: assembled.skipped };
+        return { messages: assembled.result.messages, tokens: assembled.result.tokens.total, presetName: assembled.record.name };
+    }
+
     const registrations = [
         host.own.register('promptManager.settings', () => ({ ...settings })),
         host.own.register('promptManager.configure', params => saveSettings(params?.patch ?? {})),
@@ -357,6 +377,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         /** Ответ провайдера с `usage` (например, от расширения-наблюдателя): запоминаем, сколько токенов взял кеш, у последнего запроса. */
         host.own.register('promptManager.reportUsage', params => { const last = log.at(-1); if (last) last.usageCached = extractCachedTokens(params?.usage); return last?.usageCached ?? null; }),
         host.own.register('promptManager.preview', () => preview()),
+        host.own.register('promptManager.assembleForCard', params => assembleForCard(params)),
     ];
 
     const logView = () => log.map(({ withMarkers, messages, ...rest }) => rest);

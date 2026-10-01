@@ -20,6 +20,7 @@ export function registerStCharacterService(bus, { getContext } = {}) {
         if (!character) return null;
         const data = character.data ?? {};
         return {
+            avatar: character.avatar ?? null,
             name: character.name ?? data.name ?? null,
             description: character.description ?? data.description ?? '',
             personality: character.personality ?? data.personality ?? '',

@@ -30,6 +30,7 @@ export function parseArticle(markdown, fallbackId = '') {
         tags: list(meta.tags).map(tag => tag.toLowerCase()),
         anchors: list(meta.anchors),
         always: /^(true|yes)$/i.test(meta.always ?? ''),
+        topic: (meta.topic ?? '').trim().toLowerCase(),
         text: (match ? source.slice(match[0].length) : source).trim(),
     };
 }
@@ -41,10 +42,12 @@ const words = text => String(text ?? '').toLowerCase().match(/[a-z0-9]+/g)?.filt
  * Статьи к запросу: все `always`, затем статьи РАСКРЫТЫХ сейчас блоков (`openAnchors` — адреса из `ui.context`; статья привязана к блоку полем `anchors`; не больше
  * двух — это глоссарий полей того, на что человек смотрит), затем до `limit` лучших по совпадению слов.
  */
-export function selectArticles(articles, query, { limit = 3, openAnchors = [] } = {}) {
+export function selectArticles(articles, query, { limit = 3, openAnchors = [], topics = [] } = {}) {
     const wanted = new Set(words(query));
     const open = new Set(openAnchors);
-    const pool = (articles ?? []).filter(article => !article.always);
+    // Тема — набор статей, которые работают вместе (правила карточек, примеры, проверка): пока разговор о ней, идут ВСЕ, а не лучшие три по словам.
+    const ofTopic = (articles ?? []).filter(article => !article.always && article.topic && topics.includes(article.topic));
+    const pool = (articles ?? []).filter(article => !article.always && !ofTopic.includes(article));
     const forOpen = pool.filter(article => article.anchors.some(anchor => open.has(anchor))).slice(0, 2);
     const scored = pool.filter(article => !forOpen.includes(article)).map(article => {
         let score = 0;
@@ -54,7 +57,7 @@ export function selectArticles(articles, query, { limit = 3, openAnchors = [] } 
         for (const word of wanted) score += (tagWords.has(word) ? 3 : 0) + (titleWords.has(word) ? 2 : 0) + (textWords.has(word) ? 0.5 : 0);
         return { article, score };
     }).filter(item => item.score >= 2).sort((a, b) => b.score - a.score).slice(0, limit).map(item => item.article);
-    return [...(articles ?? []).filter(article => article.always), ...forOpen, ...scored];
+    return [...(articles ?? []).filter(article => article.always), ...ofTopic, ...forOpen, ...scored];
 }
 
 const MARKUP_RULES = [
@@ -70,7 +73,7 @@ const MARKUP_RULES = [
     '  ```action\n  {"label": "Enable Tracker", "action": "modules.enable", "params": {"id": "module.tracker"}}\n  ```  — a button under your words that does it. Speak as if you are simply taking care of it ("I\'ll turn Tracker on"); the button is just there. Never claim it is already done.',
     '  ```checklist\n  {}\n  ```  — the live first-start checklist.',
     '  ```creator\n  {}\n  ```  — a ready contact card for the creator of Module Engine (name and Discord button); the text around it is yours.',
-    '  ```proposal\n  {"action": "tracker.create", "params": {…}}\n  ```  — for CREATING, CHANGING or DELETING things (trackers, macros, lorebook entries) and for changing module settings; the actions and their params are in the action list. It appears as a card with the details. Talk about it naturally ("here\'s a health tracker for you", "I\'ll lower the similarity a bit"); never say it is already done. Use only ids, names, uids and setting keys that appear in the state below.',
+    '  ```proposal\n  {"action": "tracker.create", "params": {…}}\n  ```  — for CREATING, CHANGING or DELETING things (trackers, macros, lorebook entries, character cards) and for changing module settings; the actions and their params are in the action list. It appears as a card with the details. Talk about it naturally ("here\'s a health tracker for you", "I\'ll lower the similarity a bit"); never say it is already done. Use only ids, names, uids, avatar files and setting keys that appear in the state below.',
     'Thinking (for complex jobs only — several steps, changing existing things, checking limits; skip it for a simple answer):',
     '- Think carefully and thoroughly — take the time you need inside <think>…</think>: what is asked, what is needed, which ids and limits apply, the order of steps, what could go wrong, and check your own plan once before answering. Then write the reply. The user never sees <think>.',
     '- Do not walk the user through your thinking, your plan or your notes. Share your reasoning only when the user asks ("why", "how did you decide", "explain"); otherwise just give the result, short and clear.',

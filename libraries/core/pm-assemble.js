@@ -85,6 +85,19 @@ function spliceDepth(history, injections) {
     return [...lead, ...out];
 }
 
+/**
+ * Карточка персонажа подменяет текст встроенных блоков `main` (её `system_prompt`) и `jailbreak` (её `post_history_instructions`) — ровно как родной
+ * менеджер ST (`openai.js`, «Apply character-specific main prompt / jailbreak»): блок остаётся на своём месте и со своей ролью, меняется только текст, а
+ * `{{original}}` в тексте карточки подставляет прежнее содержимое блока. Блок с `forbidOverrides` карточка не трогает. Без этого пресеты, у которых эти
+ * блоки пусты ради карточки, теряли её поведенческие правила целиком.
+ */
+export function applyCardOverride(block, cardOverrides) {
+    const original = block.content ?? '';
+    const override = cardOverrides?.[block.id];
+    if (isBlank(override) || block.forbidOverrides === true) return original;
+    return String(override).split(/\{\{original\}\}/i).join(original);
+}
+
 export function assemblePrompt(preset, context) {
     const ctx = { markers: {}, history: [], ...context };
     const substitute = ctx.substitute ?? (text => text);
@@ -153,7 +166,7 @@ export function assemblePrompt(preset, context) {
                 for (const message of messages) pushMessage(sink, message, block.id, report, block.name);
                 continue;
             }
-            const content = substitute(block.content ?? '');
+            const content = substitute(applyCardOverride(block, ctx.cardOverrides));
             if (isBlank(content)) { report.push({ blockId: block.id, name: block.name, included: false, reason: 'empty' }); continue; }
             const message = { role: block.role ?? 'system', content };
             if (block.position === 'depth') {
