@@ -1,5 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
-import { normalizeProbes, buildTestChat, describeTestResult, describeChatExcerpt, CHAT_EXCERPT_MAX_MESSAGES } from '../../libraries/core/character-test.js';
+import { normalizeProbes, buildTestChat, describeTestResult, describeChatExcerpt, selectExcerptMessages, CHAT_EXCERPT_MAX_MESSAGES } from '../../libraries/core/character-test.js';
 
 /**
  * Проверка карточки: серия ходов в изолированном чате (запрос собирает Prompt Manager тем же путём, что настоящую отправку, но с текстом ЭТОЙ карточки) и разбор
@@ -47,7 +47,7 @@ export function createCardTestRunner(host, { readCard }) {
         const open = await requireValue(await callService('stCharacter.current'), 'the open character is not available');
         if (open?.avatar !== avatar) throw new Error(`characterCard: the open chat is not with ${fields.name} — open a chat with this character first.`);
         const messages = await requireValue(await callOwn('chatHistory.messages', { limit: Math.min(Math.max(Number(params.last) || CHAT_EXCERPT_MAX_MESSAGES, 2), CHAT_EXCERPT_MAX_MESSAGES) }), 'the chat could not be read');
-        return { name: fields.name, text: describeChatExcerpt({ name: fields.name, messages }) };
+        return { name: fields.name, count: selectExcerptMessages(messages).length, text: describeChatExcerpt({ name: fields.name, messages }) };
     }
 
     return { runTest, readChatExcerpt };

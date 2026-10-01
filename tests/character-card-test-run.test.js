@@ -108,8 +108,9 @@ function buildGuideWithTest({ generate }) {
     bus.register('macros.programs', () => []);
     bus.register('lorebook.find', () => []);
     bus.register('characterCard.list', () => []);
-    bus.register('characterCard.test', params => { tests.push(params); return { text: 'TRANSCRIPT of the test' }; });
-    bus.register('characterCard.chatExcerpt', () => ({ text: 'EXCERPT of the chat' }));
+    bus.register('characterCard.test', params => { tests.push(params); return { name: 'Aria', results: [{}, {}], text: 'TRANSCRIPT of the test' }; });
+    bus.register('characterCard.chatExcerpt', () => ({ name: 'Aria', count: 3, text: 'EXCERPT of the chat' }));
+    engine.buses.services.register('stWebSearch.search', ({ query }) => ({ source: 'web', results: [{ title: `About ${query}`, url: 'https://x.org/page', snippet: 'Five tails.' }] }));
     const modules = { list: () => [], enabled: () => [], enable: async () => {}, disable: async () => {} };
     const guide = createGuideCore(engine.registerCaller('core.guide', 'cores', { tier: 'official', networkAccess: true }), { publish: () => {}, mount: () => ({}), modules, loadText: async path => readArticle(path) });
     return { guide, tests };
@@ -123,7 +124,9 @@ test('after a card test the guide gets one more turn by herself to read the tran
     assert.equal(result.ok, true);
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.deepEqual(tests, [{ avatar: 'Aria.png', probes: ['hi'], workerId: undefined }]);
-    assert.match(guide.messages.peek().find(message => message.role === 'note').text, /TRANSCRIPT of the test/);
+    const note = guide.messages.peek().find(message => message.role === 'note');
+    assert.equal(note.text, 'Tested “Aria”: 2 probes answered.', 'the chat gets one short line');
+    assert.match(note.detail, /TRANSCRIPT of the test/, 'the long text is kept for the model');
     assert.equal(systems.length, 1);
     assert.match(systems[0], /^\(automatic — the user did not type this\) The test has finished; its transcript is in the last result/);
     assert.equal(guide.messages.peek().at(-1).text, 'The five tails held.');

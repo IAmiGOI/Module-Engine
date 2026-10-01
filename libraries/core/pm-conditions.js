@@ -10,9 +10,11 @@
  *   chance         { percent }                            — зерно random даёт воспроизводимость
  *   everyN         { n }                                  — каждое N-е сообщение чата
  *   cooldown       { key, turns }                         — после срабатывания молчит N сообщений (состояние в facts.timed)
+ *   jev            { question, minChance, user, assistant } — Jev (классификатор) оценивает вероятность утверждения; ответ приходит заранее через facts.jev(leaf).
+ *                    Нет ответа (сбой, тайм-аут, нет ключа) — условие ИСТИННО: блок отправляется, как если бы условия не было.
  *   плагин         { type: '<имя>' } → facts.plugins[имя](leaf, facts); ошибка плагина = условие ложно (PM отключает плагин)
  *
- * facts: { messages (новые первыми, {role, text}), chatLength, vars (Map), tracker(id, field), random, timed, plugins }
+ * facts: { messages (новые первыми, {role, text}), chatLength, vars (Map), tracker(id, field), jev(leaf), random, timed, plugins }
  */
 const OPS = {
     '<': (a, b) => a < b, '>': (a, b) => a > b, '=': (a, b) => a === b, '!=': (a, b) => a !== b,
@@ -50,6 +52,12 @@ const LEAVES = {
     variable: (leaf, facts) => compare(facts.vars?.get(leaf.name), leaf.op, leaf.value),
     chance: (leaf, facts) => (facts.random ?? Math.random)() * 100 < (leaf.percent ?? 100),
     everyN: (leaf, facts) => leaf.n > 0 && facts.chatLength % leaf.n === 0,
+    jev(leaf, facts) {
+        const chance = facts.jev?.(leaf);
+        // Нет ответа Jev — условие истинно (решение владельца): сбой классификатора не должен выключать блоки молча.
+        if (typeof chance !== 'number') return true;
+        return chance * 100 >= (Number.isFinite(Number(leaf.minChance)) ? Number(leaf.minChance) : 70);
+    },
     cooldown(leaf, facts) {
         const timed = facts.timed ?? {};
         const until = timed[leaf.key];

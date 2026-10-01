@@ -54,7 +54,7 @@ export function buildRequest(preset, materials, options = {}) {
     };
     const facts = {
         messages: [...chat].reverse().filter(entry => textOf(entry).trim()).map(entry => ({ role: entry.is_user ? 'user' : 'assistant', text: textOf(entry) })),
-        chatLength: chat.length, vars: engine.vars, tracker: materials.tracker, timed: options.timed ?? {},
+        chatLength: chat.length, vars: engine.vars, tracker: materials.tracker, jev: options.jev, timed: options.timed ?? {},
         random: options.random, plugins: options.plugins, onPluginError: options.onPluginError,
     };
     const injections = lore.depth.map(item => ({ ...item, block: `lore:${item.uid}` }));

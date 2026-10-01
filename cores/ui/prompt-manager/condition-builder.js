@@ -20,6 +20,7 @@ export function ConditionBuilder({ getCondition, setCondition, plugins = [] }) {
             return Select(bound(value, onChange), spec.options.map(([optionValue, text]) => ({ value: optionValue, label: text })));
         }
         if (spec.kind === 'number') return h('input', { class: 'text_pole stme-number', type: 'number', min: spec.min, max: spec.max, value: String(value ?? ''), 'on:change': event => onChange(Number(event.target.value)) });
+        if (spec.kind === 'textarea') return h('textarea', { class: 'text_pole', rows: '3', 'on:change': event => onChange(event.target.value) }, String(value ?? ''));
         if (spec.kind === 'words') return h('input', { class: 'text_pole', type: 'text', value: (value ?? []).join(', '), 'on:change': event => onChange(event.target.value.split(',').map(word => word.trim()).filter(Boolean)) });
         return h('input', { class: 'text_pole', type: 'text', value: String(value ?? ''), 'on:change': event => onChange(event.target.value) });
     }

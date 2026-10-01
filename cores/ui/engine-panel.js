@@ -141,7 +141,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         await (enable ? moduleRegistry.enable(entry.id) : moduleRegistry.disable(entry.id));
     }
 
-    const { loadWorkers, modelsCard, applyStatus: applyWorkerStatus } = createModelsCard({ call, callService, workers, notify, flash, collapse });
+    const { loadWorkers, modelsCard, classifiersCard, applyStatus: applyWorkerStatus } = createModelsCard({ call, callService, workers, notify, flash, collapse });
     const { loadMacros, loadTrackerFields, macrosCard } = createMacrosCard({ call, macros, trackerFields, notify, flash, collapse });
     const { loadLorebook, lorebookCard } = createLorebookCard({ call, lorebookEntries, lorebookBooks, flash, notify, collapse });
     const { loadSummaries, loadMemoryGraphCount, loadMemoryGraphSettings, saveMemoryGraphThresholdK, loadSummarySettings, summaryCard } = createSummaryCard({ call, summaries, memoryGraphNodeCount, memoryGraphThresholdK, notify, summaryLevels, summaryProtectedWindow, summaryWorkerId, summaryVerifyEnabled, summaryVerifyWorkerId, flash, collapse, workers });
@@ -252,7 +252,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     }
 
     const { watch } = createPanelWatch({ host, eventCount, generationStage, loadTrackerFields, loadLorebook, syncCard, loadSummaries, notify, loadMemoryGraphCount, memoryGraphFlash, memoryGraphProgress, flash });
-    const { tree, settingsTree } = createPanelTrees({ modelsCard, macrosCard, lorebookCard, summaryCard, modulesCard, statusCard, chatViewportCard, presetCard, updatesCard, syncCard, backgroundsCard, promptManagerCard });
+    const { tree, settingsTree } = createPanelTrees({ modelsCard, classifiersCard, macrosCard, lorebookCard, summaryCard, modulesCard, statusCard, chatViewportCard, presetCard, updatesCard, syncCard, backgroundsCard, promptManagerCard });
 
     const subscriptions = watch();
     subscriptions.push(host.events.subscribe('model.workers.status.changed', payload => applyWorkerStatus(payload?.workers)));

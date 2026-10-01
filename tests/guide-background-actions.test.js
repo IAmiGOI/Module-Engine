@@ -14,12 +14,13 @@ function build({ names = ['forest.jpg', 'beach.jpg'], setResult = { ok: true, ap
     return { actions, setActiveCalls };
 }
 
-test('background.list is safe (auto-runnable) and reports the real names from the service', async () => {
+test('background.list is safe (auto-runnable); the chat gets a short note, and the real names from the service go to the model as the detail', async () => {
     const { actions } = build({ names: ['forest.jpg', 'beach.jpg'] });
     assert.equal(actions['background.list'].safe, true);
     const result = await actions['background.list'].run();
     assert.equal(result.ok, true);
-    assert.match(result.message, /forest\.jpg, beach\.jpg/);
+    assert.equal(result.message, 'Looked at the backgrounds: 2 available.');
+    assert.match(result.detail, /forest\.jpg, beach\.jpg/);
 });
 
 test('background.list says so plainly when nothing is installed, instead of an empty or confusing message', async () => {

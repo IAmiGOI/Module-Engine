@@ -3,6 +3,7 @@ import { h } from '../tree.js';
 import { Button, TextInput, NumberInput, Select, Field, Row, Card, Section, EditableList, Badge } from '../../../libraries/shared/widgets.js';
 import { ST_MAIN_FORMAT, ST_MAIN_WORKER_ID } from '../../../libraries/core/st-main-request.js';
 import { nextUid } from './uid.js';
+import { JEV_DEFAULT_ENDPOINT, JEV_DEFAULT_MODEL, JEV_DEFAULT_TIMEOUT_MS } from '../../../libraries/core/jev-request.js';
 
 const FORMATS = Object.freeze([
     { value: 'openai', label: 'OpenAI-compatible' },
@@ -42,6 +43,23 @@ function fromRecord(record) {
     };
 }
 
+/** Подключение к классификатору (Jev и подобные): отдельная категория моделей, у неё нет генерации текста, поэтому своего формата и очереди нет. */
+function toClassifierRecord(connection = {}) {
+    return {
+        key: `classifier_${nextUid()}`,
+        id: signal(connection.id ?? ''),
+        endpoint: signal(connection.endpoint ?? ''),
+        apiKey: signal(connection.apiKey ?? ''),
+        model: signal(connection.model ?? ''),
+        timeoutMs: signal(connection.timeoutMs ?? JEV_DEFAULT_TIMEOUT_MS),
+        flash: signal(''),
+    };
+}
+
+function fromClassifierRecord(record) {
+    return { id: record.id.peek().trim(), endpoint: record.endpoint.peek().trim(), apiKey: record.apiKey.peek(), model: record.model.peek().trim(), timeoutMs: Number(record.timeoutMs.peek()) || JEV_DEFAULT_TIMEOUT_MS };
+}
+
 function formatAgo(at) {
     if (!at) return 'never';
     const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
@@ -74,6 +92,7 @@ export function createModelsCard(deps) {
     const { call, callService, workers, notify, flash, collapse } = deps;
     const statusById = signal({});
     const mainConnection = signal(null);
+    const classifiers = signal([]);
 
     function applyStatus(list) {
         statusById.set(Object.fromEntries((list ?? []).map(entry => [entry.workerId, entry])));
@@ -86,6 +105,62 @@ export function createModelsCard(deps) {
         if (status.ok) applyStatus(status.value);
         const main = callService ? await callService('stGeneration.mainConnection') : null;
         mainConnection.set(main?.ok ? main.value : null);
+        await loadClassifiers();
+    }
+
+    async function loadClassifiers() {
+        const result = await call('classifier.connections.get');
+        classifiers.set((result.ok ? result.value ?? [] : []).map(toClassifierRecord));
+    }
+
+    async function saveClassifiers() {
+        const list = classifiers.peek().map(fromClassifierRecord).filter(connection => connection.id);
+        const result = await call('classifier.connections.set', { connections: list });
+        await notify(result.ok ? 'ok' : 'error', result.ok ? `Saved ${list.length} classifier${list.length === 1 ? '' : 's'}` : result.error.message);
+        return result.ok;
+    }
+
+    async function testClassifier(record) {
+        const id = record.id.peek().trim();
+        if (!id) { await notify('error', 'Give the classifier a name first'); flash(record.flash, 'error'); return; }
+        // Как и у текстовых моделей: тест идёт по СОХРАНЁННОЙ конфигурации.
+        await saveClassifiers();
+        record.flash.set('testing');
+        const result = await call('classifier.test', { connectionId: id });
+        const ok = result.ok && result.value.ok;
+        flash(record.flash, ok ? 'ok' : 'error');
+        await notify(ok ? 'ok' : 'error', ok ? `${id}: works — ${Math.round(result.value.chance * 100)}% in ${result.value.ms}ms` : `${id}: ${result.ok ? result.value.error : result.error.message}`);
+    }
+
+    function addClassifier() {
+        classifiers.set([...classifiers.peek(), toClassifierRecord({ id: classifiers.peek().length ? `classifier_${classifiers.peek().length + 1}` : 'jev', endpoint: JEV_DEFAULT_ENDPOINT, model: JEV_DEFAULT_MODEL })]);
+    }
+
+    function classifierRow(record) {
+        return Section(record.id, {
+            key: record.key,
+            className: computed(() => (record.flash() ? `stme-flash stme-flash-${record.flash()}` : '')),
+            ...collapse.bind(`classifier:${record.key}`),
+            actions: [Button('Test', () => testClassifier(record)), Button('Remove', () => classifiers.set(classifiers.peek().filter(item => item !== record)), { variant: 'danger' })],
+        },
+        Row(Field('Name', TextInput(record.id, { placeholder: 'jev' })), Field('Timeout, ms', NumberInput(record.timeoutMs, { min: 500, max: 20000, step: 100 }))),
+        Field('Endpoint', TextInput(record.endpoint, { placeholder: JEV_DEFAULT_ENDPOINT })),
+        Row(Field('API key', TextInput(record.apiKey, { type: 'password', placeholder: 'required' })), Field('Model', TextInput(record.model, { placeholder: JEV_DEFAULT_MODEL }))));
+    }
+
+    function classifiersCard() {
+        return Card('Classifiers', {
+            ...collapse.bind('card:classifiers'),
+            subtitle: 'Small models that rate how likely a statement about the chat is (for example Jev). A Prompt Manager block can be sent only when one of them finds a statement likely enough. If the classifier does not answer in time, the block is sent.',
+        },
+        EditableList({
+            items: classifiers,
+            renderItem: classifierRow,
+            onAdd: addClassifier,
+            addLabel: '+ Add classifier',
+            empty: 'No classifiers yet. Add Jev (OpenRouter or NanoGPT) to let prompt blocks depend on the chat.',
+            actions: [Button('Save', saveClassifiers)],
+        }));
     }
 
     async function checkNow(record) {
@@ -192,5 +267,5 @@ export function createModelsCard(deps) {
         );
     }
 
-    return { loadWorkers, modelsCard, applyStatus };
+    return { loadWorkers, modelsCard, classifiersCard, applyStatus };
 }

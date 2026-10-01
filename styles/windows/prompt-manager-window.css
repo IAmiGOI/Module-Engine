@@ -34,6 +34,15 @@
 .stme-pm-kind-marker .stme-pm-label { color: var(--stme-accent); }
 .stme-pm-kind-module .stme-pm-label { color: var(--stme-ok-bright); }
 .stme-pm-kind-note { font-style: italic; opacity: .8; }
+/* Разделители: цветная полоса, цвет задаёт окно в style строки (рейки областей слева — там же, inset box-shadow). Нижняя полоса тоньше и без условия. */
+.stme-pm-kind-divider { font-weight: 700; font-size: .8em; letter-spacing: .03em; border-width: 2px; cursor: grab; }
+.stme-pm-kind-divider .stme-pm-detail { font-weight: 400; opacity: .85; }
+.stme-pm-divider-end { padding-top: 1px; padding-bottom: 1px; min-height: 18px; }
+.stme-pm-divider-broken { border-style: dashed; opacity: .75; }
+.stme-pm-kind-divider.stme-pm-selected { outline: 2px solid var(--stme-accent); outline-offset: 1px; }
+.stme-pm-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.stme-pm-swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+.stme-pm-swatch-on { border-color: var(--stme-text, #fff); box-shadow: 0 0 0 2px var(--stme-accent); }
 .stme-pm-kind-missing .stme-pm-label { color: var(--stme-danger-bright); }
 .stme-pm-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stme-pm-detail { font-size: .8em; opacity: .65; white-space: nowrap; }

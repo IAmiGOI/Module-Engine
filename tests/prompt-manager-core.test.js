@@ -114,7 +114,7 @@ async function build({ mainApi = 'openai', groupId = null, stDoc = makeStDocumen
     };
     const fire = name => { for (const handler of listeners.get(name) ?? []) handler(); };
     const call = (contract, params) => request(lore.own, contract, { params });
-    return { pm, send, warnings, chat, context, backendCalls, contribute, stepCalls, stepBehavior, fire, call, stDoc };
+    return { pm, send, warnings, chat, context, backendCalls, contribute, stepCalls, stepBehavior, fire, call, stDoc, lore };
 }
 
 test('loading the core by itself turns every ST preset into an internal copy and activates the one selected in ST — without anyone opening the Prompt Manager window (live ST 1.18: "on by default" without an active preset silently left the assembly to ST)', async () => {
@@ -377,4 +377,64 @@ test('a card test with no active preset says so instead of building something el
     await pm.autoPrepare();
     await pm.configure({ activePresetId: null });
     assert.deepEqual((await call('promptManager.assembleForCard', { card: { name: 'Aria' }, chat: [] })).value, { skipped: 'no active preset' });
+});
+
+async function withJevRegion(world, { question = 'The player is in danger.', minChance = 70 } = {}) {
+    const { createTextBlock } = await import('../cores/ui/prompt-manager/tree-model.js');
+    const { createDividerPair } = await import('../libraries/core/pm-dividers.js');
+    await world.pm.autoPrepare();
+    const record = (await world.call('promptManager.preset', { id: world.pm.settings().activePresetId })).value;
+    const { block, node } = createTextBlock({ name: 'Danger rules', content: 'DANGER RULES TEXT' });
+    const [begin, end] = createDividerPair({ name: 'danger' });
+    record.preset.blocks.push(block);
+    record.preset.tree.push({ ...begin, condition: { type: 'jev', question, minChance, user: 1, assistant: 0 } }, node, end);
+    await world.call('promptManager.savePreset', { record });
+    return world;
+}
+const outgoing = body => body.messages.map(message => message.content).join('\n');
+const answering = (chance, seen = []) => params => {
+    seen.push(params);
+    return { answers: Object.fromEntries(params.calls.flatMap(call => Object.keys(call.questions)).map(key => [key, chance])), failed: [] };
+};
+
+test('a Jev-conditioned region between two dividers is sent when the chance reaches the threshold and dropped below it, and the question carries the player’s newest message', async () => {
+    const world = await withJevRegion(await build());
+    const seen = [];
+    let unregister = world.lore.own.register('classifier.decide', answering(0.7, seen));
+    assert.ok(outgoing(await world.send()).includes('DANGER RULES TEXT'), 'exactly at the threshold: sent');
+    assert.equal(seen[0].calls[0].state.player_message, 'Tell me about the dragon.');
+    assert.equal(Object.keys(seen[0].calls[0].questions).length, 1);
+    unregister();
+    unregister = world.lore.own.register('classifier.decide', answering(0.69));
+    world.chat.push({ is_user: true, name: 'Sasha', mes: 'Another message, so the answer is asked again.' });
+    assert.ok(!outgoing(await world.send()).includes('DANGER RULES TEXT'), 'below the threshold: dropped');
+    unregister();
+});
+
+test('when there is no classifier, it fails, or it is too slow, the Jev condition counts as true and the region is sent — and a slow classifier never holds the generation longer than the wait setting', async () => {
+    const world = await withJevRegion(await build());
+    assert.ok(outgoing(await world.send()).includes('DANGER RULES TEXT'), 'no classifier registered at all');
+    const unregister = world.lore.own.register('classifier.decide', () => { throw new Error('boom'); });
+    assert.ok(outgoing(await world.send()).includes('DANGER RULES TEXT'), 'a failing classifier');
+    unregister();
+    await world.pm.configure({ jevWaitMs: 500 });
+    world.lore.own.register('classifier.decide', () => new Promise(() => {}));
+    const started = Date.now();
+    assert.ok(outgoing(await world.send()).includes('DANGER RULES TEXT'), 'a classifier that never answers');
+    assert.ok(Date.now() - started < 3000, 'the wait is bounded');
+});
+
+test('a card test never calls the classifier (its Jev conditions count as true), and a preset without Jev conditions never asks anything', async () => {
+    const world = await withJevRegion(await build());
+    const seen = [];
+    world.lore.own.register('classifier.decide', answering(0, seen));
+    const assembled = (await world.call('promptManager.assembleForCard', { card: { name: 'Aria', description: 'Aria is a scout.' }, chat: [{ is_user: true, name: 'Sasha', mes: 'Hello' }] })).value;
+    assert.equal(seen.length, 0);
+    assert.ok(assembled.messages.some(message => message.content === 'DANGER RULES TEXT'));
+    const plain = await build();
+    const asked = [];
+    plain.lore.own.register('classifier.decide', answering(0, asked));
+    await plain.pm.autoPrepare();
+    await plain.send();
+    assert.equal(asked.length, 0);
 });

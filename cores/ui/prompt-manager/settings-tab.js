@@ -63,6 +63,10 @@ export function createSettingsTab({ state, actions, call }) {
         if (fresh.ok) await actions.configure({ overrides: fresh.value.overrides });
         if (clear) for (const [key] of OVERRIDE_KEYS) layer[key].set('');
     }
+    // Подключения к классификатору (Jev) — не здесь: это отдельная категория моделей, карточка «Classifiers» в основной панели. Здесь только то, что касается сборки запроса.
+    const jevWait = signal(Math.round((state.settings().jevWaitMs ?? 4000) / 100) / 10);
+    const setJevWait = jevWait.set;
+    jevWait.set = next => { setJevWait(next); actions.configure({ jevWaitMs: Math.round(Number(next) * 1000) }); };
     const headroom = signal(Math.round((state.settings().headroom ?? 0.1) * 100));
     const setHeadroom = headroom.set;
     headroom.set = next => { setHeadroom(next); actions.configure({ headroom: next / 100 }); };
@@ -81,6 +85,9 @@ export function createSettingsTab({ state, actions, call }) {
                 Toggle('Function calling', flagSignal('function_calling')), Toggle('Squash system messages', flagSignal('squash_system_messages')),
                 Toggle('Unlocked context', flagSignal('max_context_unlocked')),
             ) : EmptyState('Select a preset first.'))),
+            h('h4', {}, 'Jev conditions'),
+            h('p', { class: 'stme-pm-help' }, 'A block or a divider can be sent only when a classifier (Jev) finds a statement likely enough. The connections are in the Classifiers card of the main panel. If the classifier does not answer in time, the block is sent.'),
+            Field('Longest wait for the classifier before sending, s', NumberInput(jevWait, { min: 0.5, max: 20, step: 0.5 })),
             h('h4', {}, 'Overrides (off by default)'),
             Toggle('Use overrides for this model, character or chat', overrideOn),
             Row(Select(scope, [{ value: 'character', label: 'this character' }, { value: 'chat', label: 'this chat' }, { value: 'model', label: 'this model' }], { onChange: () => loadOverrideContext() }), Button('Load current', loadOverrideContext),

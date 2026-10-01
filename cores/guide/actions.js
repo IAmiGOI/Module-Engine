@@ -9,6 +9,7 @@ import { stMainWorkerRecord, ST_MAIN_FORMAT } from '../../libraries/core/st-main
 export function createGuideActions({ host, call, modules, reveal, hide, checklist, markDone }) {
     return {
         'models.addSillyTavern': {
+            thenContinue: true,
             description: 'Add SillyTavern\'s current connection as a model worker and check it. No params.',
             async run() {
                 const main = await request(host.services, 'stGeneration.mainConnection');
@@ -24,6 +25,7 @@ export function createGuideActions({ host, call, modules, reveal, hide, checklis
         },
         'models.check': {
             safe: true,
+            thenContinue: true,
             description: 'Check all model connections now. No params.',
             async run() {
                 const probe = await call('model.workers.probe', {});
@@ -69,11 +71,14 @@ export function createGuideActions({ host, call, modules, reveal, hide, checklis
         },
         'background.list': {
             safe: true,
+            thenContinue: true,
             description: 'List the chat background filenames currently available in SillyTavern. No params. Check this before background.set if you do not already know a real name from this chat.',
             async run() {
                 const result = await request(host.services, 'stBackgrounds.list');
                 if (!result.ok) return { ok: false, message: result.error.message };
-                return { ok: true, message: result.value.length ? `Available backgrounds: ${result.value.join(', ')}.` : 'No backgrounds are installed.' };
+                return result.value.length
+                    ? { ok: true, message: `Looked at the backgrounds: ${result.value.length} available.`, detail: `Available backgrounds: ${result.value.join(', ')}.` }
+                    : { ok: true, message: 'No backgrounds are installed.' };
             },
         },
         'background.set': {

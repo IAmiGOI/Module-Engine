@@ -1,6 +1,7 @@
 import { blockById } from './pm-preset-format.js';
 import { evaluateCondition } from './pm-conditions.js';
 import { mergeWrapped } from './pm-wrap-join.js';
+import { applyDividers, computeBrokenPairs } from './pm-dividers.js';
 
 /**
  * Чистая сборка промпта из пресета PM (PROMPT_MANAGER_PLAN.md, этап 2). Без ввода-вывода:
@@ -108,7 +109,12 @@ export function assemblePrompt(preset, context) {
     let captureDepth = null; // внутри группы на глубине: её вставки собираются в группу
     const toDepth = (depth, order, message) => (captureDepth ? captureDepth.push(message) : injections.push({ depth, order, message }));
 
-    const emit = (nodes, sink) => {
+    const emit = (list, sink) => {
+        // Разделители (pm-dividers.js) снимаются здесь, на каждом уровне списка: блоки закрытой области не доходят до остального разбора.
+        for (const broken of computeBrokenPairs(list)) report.push({ blockId: broken.pair, name: broken.name || 'Divider pair', included: false, reason: 'divider pair is not closed' });
+        const divided = applyDividers(list, { passes: begin => evaluateCondition(begin.condition, ctx.facts ?? {}) });
+        for (const gone of divided.skipped) report.push({ blockId: gone.pair, name: gone.name || 'Divider region', included: false, reason: gone.reason, blocks: gone.blocks });
+        const nodes = divided.nodes;
         for (const node of nodes) {
             if (node.condition && node.enabled !== false && !evaluateCondition(node.condition, ctx.facts ?? {})) {
                 report.push({ blockId: node.id ?? node.block ?? node.contribution, name: node.name, included: false, reason: 'condition' });

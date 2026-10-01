@@ -25,6 +25,13 @@ export const LEAF_TYPES = {
     variable: { label: 'Prompt variable', defaults: { name: '', op: '=', value: '' }, fields: [
         { key: 'name', label: 'Variable name', kind: 'text' }, { key: 'op', label: 'Value', kind: 'select', options: OPS }, { key: 'value', label: 'Compare with', kind: 'text' },
     ] },
+    jev: { label: 'Jev answers a question', defaults: { question: '', minChance: 70, user: 1, assistant: 1, connection: '' }, fields: [
+        { key: 'question', label: 'Statement (Jev says how likely it is true). You may refer to `player_message`, `latest_turn` and `history`', kind: 'textarea' },
+        { key: 'minChance', label: 'Send when the chance is at least, %', kind: 'number', min: 0, max: 100 },
+        { key: 'user', label: 'Your messages Jev reads', kind: 'number', min: 0, max: 50 },
+        { key: 'assistant', label: 'Replies Jev reads', kind: 'number', min: 0, max: 50 },
+        { key: 'connection', label: 'Classifier connection (its name in the Classifiers card; empty = the first one)', kind: 'text' },
+    ] },
     chance: { label: 'Random chance', defaults: { percent: 50 }, fields: [{ key: 'percent', label: 'Chance, %', kind: 'number', min: 0, max: 100 }] },
     everyN: { label: 'Every N-th message', defaults: { n: 5 }, fields: [{ key: 'n', label: 'Every N messages', kind: 'number', min: 1, max: 1000 }] },
     cooldown: { label: 'Cooldown after firing', defaults: { key: 'cooldown', turns: 5 }, fields: [
@@ -48,6 +55,7 @@ export function describeCondition(cond) {
         case 'messageLength': return `${label(LEAF_TYPES.messageLength.fields[0].options, cond.source)} length ${label(OPS, cond.op)} ${cond.value}`;
         case 'tracker': return `tracker ${cond.trackerId || '…'}.${cond.field || '…'} ${label(OPS, cond.op)} ${cond.value}`;
         case 'variable': return `variable ${cond.name || '…'} ${label(OPS, cond.op)} ${cond.value}`;
+        case 'jev': return `Jev finds “${cond.question || '…'}” at least ${cond.minChance ?? 70}% likely (reads ${cond.user ?? 1} of your messages and ${cond.assistant ?? 1} replies)`;
         case 'chance': return `${cond.percent}% chance`;
         case 'everyN': return `every ${cond.n}th message`;
         case 'cooldown': return `not within ${cond.turns} messages of the last time`;

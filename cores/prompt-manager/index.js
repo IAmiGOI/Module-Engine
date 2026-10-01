@@ -6,6 +6,7 @@ import { joinWrappers } from '../../libraries/core/pm-wrap-join.js';
 import { regroupTree } from '../../libraries/core/pm-wrapper-groups.js';
 import { shouldRunCot, runCot, buildCotInjection, cotRecord, normalizeCot, CotStepError } from '../../libraries/core/pm-cot.js';
 import { resolveParams, setOverride, DEFAULT_OVERRIDES } from '../../libraries/core/pm-overrides.js';
+import { collectJevLeaves, groupJevCalls, computeJevQuestionKey } from '../../libraries/core/jev-question.js';
 import { createPluginRegistry } from '../../libraries/core/pm-plugins.js';
 import { cacheVerdict, extractCachedTokens } from '../../libraries/core/pm-cache-hints.js';
 import { createPresetStore } from './presets.js';
@@ -17,7 +18,7 @@ const PAYLOAD_PIPELINE = 'generation.payload';
 const CAPTURE_CONTRACT = 'promptManager.capture';
 const REWRITE_CONTRACT = 'promptManager.rewrite';
 const CAPTURE_TTL_MS = 60_000;
-const DEFAULT_SETTINGS = { enabled: true, activePresetId: null, headroom: 0.1, freezeRandom: true, applyParams: true, applyStreaming: true, logSize: 20, autoPrepared: false, overrides: DEFAULT_OVERRIDES };
+const DEFAULT_SETTINGS = { enabled: true, activePresetId: null, headroom: 0.1, freezeRandom: true, applyParams: true, applyStreaming: true, logSize: 20, autoPrepared: false, jevWaitMs: 4000, overrides: DEFAULT_OVERRIDES };
 
 /**
  * Ядро Prompt Manager (PROMPT_MANAGER_PLAN.md). Заменяет сборку промпта ST, когда включено и есть активный пресет:
@@ -128,6 +129,24 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         return (await own('storage.chatMemory.get', { namespace: NAMESPACE, key: 'state', fallback: {} })) ?? {};
     }
 
+    /**
+     * Ответы Jev на вопросы из условий дерева, добытые ДО сборки: условия считаются синхронно, а ответ классификатора — сетевой вызов. Один запрос на срез чата;
+     * ждём не дольше `jevWaitMs` — потом отправляется без ответа (условие без ответа истинно, см. pm-conditions.js). Нет классификатора, нет вопросов, сбой — `undefined`.
+     */
+    async function prefetchJev(tree, chat) {
+        const calls = groupJevCalls(collectJevLeaves(tree), chat);
+        if (!calls.length) return undefined;
+        let timer = null;
+        const deadline = new Promise(resolve => { timer = setTimeout(() => resolve(null), Math.max(500, Number(settings.jevWaitMs) || 4000)); });
+        try {
+            const answered = await Promise.race([request(host.own, 'classifier.decide', { params: { calls } }).catch(() => null), deadline]);
+            const answers = answered?.ok ? answered.value?.answers ?? {} : {};
+            return leaf => answers[computeJevQuestionKey(leaf)];
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
     /** Одна сборка: и для настоящей отправки, и для превью. Ничего не отправляет. */
     async function assemble(chat, { commit = false, model, infoOverride = null, isolated = false } = {}) {
         const record = settings.activePresetId ? await store.get(settings.activePresetId) : null;
@@ -147,8 +166,9 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         for (const contribution of isolated ? [] : contributions.list()) changed = placeContribution(record.preset.tree, contribution) || changed;
         if (changed) await store.save(record, { label: 'new module contribution' });
         const { params, sources } = resolveParams(record.preset.params, settings.overrides, { model: model ?? info.model, char: info.char, chatId: info.chatId });
+        const jev = isolated ? undefined : await prefetchJev(record.preset.tree, chat);
         const result = buildRequest({ ...record.preset, params }, materials, {
-            contributions: isolated ? {} : contributions.asContext(), globals, timed, plugins: plugins.conditions(), transform: (messages, env) => plugins.transform(messages, env),
+            jev, contributions: isolated ? {} : contributions.asContext(), globals, timed, plugins: plugins.conditions(), transform: (messages, env) => plugins.transform(messages, env),
             onPluginError: () => {}, prevCut: chatState.cut ?? 0, headroom: settings.headroom,
             seed: settings.freezeRandom ? (info.chatId ?? 'chat') : undefined,
         });

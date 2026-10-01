@@ -39,16 +39,19 @@ export function createCharacterActions({ call }) {
             async run(params = {}) {
                 if (!params.avatar) return buildFailure('Which character? Its avatar file is needed.');
                 const tested = await call('characterCard.test', { avatar: params.avatar, probes: params.probes, workerId: params.workerId });
-                return tested.ok ? { ok: true, message: tested.value.text } : buildFailure(tested.error.message);
+                // В чат — одна строка; сами ответы модели на пробы (много текста) видит только гид: `detail`.
+                return tested.ok ? { ok: true, message: `Tested “${tested.value.name}”: ${tested.value.results.length} probe${tested.value.results.length === 1 ? '' : 's'} answered.`, detail: tested.value.text } : buildFailure(tested.error.message);
             },
         },
         'character.review': {
             safe: true,
+            thenContinue: true,
+            followUp: 'The chat excerpt is in the last result. Find where the character broke or forgot a rule of the card, quote the lines briefly, name the rule, and propose the smallest fix as a proposal. If nothing broke, say so.',
             description: 'Read the last messages of the OPEN chat with a character, to find where the model forgot or broke the card’s rules (when the user says "she keeps forgetting X"). Params: {"avatar": "<file>", "last": 12 (optional, up to 12)}. The chat must be open in SillyTavern.',
             async run(params = {}) {
                 if (!params.avatar) return buildFailure('Which character? Its avatar file is needed.');
                 const excerpt = await call('characterCard.chatExcerpt', { avatar: params.avatar, last: params.last });
-                return excerpt.ok ? { ok: true, message: excerpt.value.text } : buildFailure(excerpt.error.message);
+                return excerpt.ok ? { ok: true, message: `Read the last ${excerpt.value.count} message${excerpt.value.count === 1 ? '' : 's'} of the open chat with “${excerpt.value.name}”.`, detail: excerpt.value.text } : buildFailure(excerpt.error.message);
             },
         },
     };
