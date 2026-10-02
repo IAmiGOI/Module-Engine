@@ -116,7 +116,7 @@ test('without WebGL the tiles still show their text as plain DOM (the panel is n
     h.hub.refresh();
     await tick(); await tick();
     const tiles = hubRoot.querySelectorAll('.stme-hub-tile');
-    assert.equal(tiles.length, 5, 'one tile per card of the work group');
+    assert.equal(tiles.length, 6, 'one tile per card of the work group');
     const models = tiles.find(tile => tile.dataset.tile === 'models');
     assert.equal(models.dataset.status, 'ok');
     assert.equal(models.querySelector('.stme-hub-text').children[1].textContent, '2 connections');

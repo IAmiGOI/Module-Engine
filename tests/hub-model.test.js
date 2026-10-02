@@ -4,7 +4,7 @@ import { HUB_GROUPS, HUB_TILES, tilesForGroup, tileById, tileForCard, tileStatus
 import { tileBodyHtml } from '../libraries/shared/hub-html.js';
 
 test('the hub covers every card of the main panel and of the settings screen, each tile pointing at a real card title', () => {
-    assert.deepEqual(tilesForGroup(HUB_GROUPS.WORK).map(tile => tile.card), ['Model connections', 'Modules', 'Macros', 'Lorebook', 'Chat Summary']);
+    assert.deepEqual(tilesForGroup(HUB_GROUPS.WORK).map(tile => tile.card), ['Model connections', 'Classifiers', 'Modules', 'Macros', 'Lorebook', 'Chat Summary']);
     assert.deepEqual(tilesForGroup(HUB_GROUPS.SETTINGS).map(tile => tile.card), ['Engine', 'Chat Viewport (experimental)', 'Preset', 'Updates', 'Sync', 'Backgrounds']);
     assert.equal(new Set(HUB_TILES.map(tile => tile.id)).size, HUB_TILES.length, 'ids are unique');
     assert.equal(tileById('models').card, 'Model connections');
