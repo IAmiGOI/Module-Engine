@@ -55,6 +55,7 @@ export function createMusicModule(host) {
     const volume = signal(DEFAULTS.volume);
     const muted = signal(false);
     const autoTag = signal(DEFAULTS.autoTag);
+    const smart = signal(DEFAULTS.smart);   // «умное» определение сцены через Jev; сколько и когда спрашивать, решает сервер
     const server = createServerSection(host);   // раздел сервера владельца: треки не показываются и не сохраняются
     const progress = signal({ time: 0, duration: 0 }); // секунды; обновляется опросом Сервиса, пока трек играет
 
@@ -72,11 +73,34 @@ export function createMusicModule(host) {
     let remoteTrack = null;
     const remote = () => server.mode.peek() === 'server' && Boolean(server.selected.peek());
 
+    let lastIntensity = null;   // накал прошлой сцены (его вернул сервер): нужен ему для сглаживания
+    let lastSceneText = '';
+
+    /**
+     * Спросить Jev пользователя про категории сцены. Вопросы пришли от сервера; уходят они в подключение Jev самого пользователя вместе с текстом сцены, а серверу
+     * возвращаются только вероятности. Нет подключения / сбой / тайм-аут — пустой ответ, и сервер выбирает по вектору.
+     */
+    async function askJev(questions) {
+        if (!lastSceneText) return {};
+        const result = await call('classifier.decide', { calls: [{ state: { latest_turn: lastSceneText }, questions }] });
+        return result.ok && result.value?.answers && typeof result.value.answers === 'object' ? result.value.answers : {};
+    }
+
     async function pickRemote({ vector, ended = false, force = false } = {}) {
-        const result = await request(host.cores, 'musicServer.pick', {
-            params: { section: server.selected.peek(), vector, current: remoteTrack?.rawId ?? null, ended, force, minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek() },
-        });
-        const value = result.ok ? result.value : null;
+        const state = nowPlaying.peek().playing ? progress.peek() : { time: null, duration: 0 };
+        const params = {
+            section: server.selected.peek(), vector, current: remoteTrack?.rawId ?? null, ended, force, minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(),
+            smart: smart.peek() && !force, lastIntensity,
+            elapsed: state.time, remaining: state.duration ? Math.max(0, state.duration - state.time) : null,
+        };
+        let result = await request(host.cores, 'musicServer.pick', { params });
+        let value = result.ok ? result.value : null;
+        if (value?.action === 'ask') {   // смена назрела — сервер просит Jev оценить сцену (один раз, только сейчас)
+            const answers = await askJev(value.questions);
+            result = await request(host.cores, 'musicServer.pick', { params: { ...params, answers } });
+            value = result.ok ? result.value : null;
+        }
+        if (Number.isFinite(value?.intensity)) lastIntensity = value.intensity;
         if (value?.action !== 'play') return;   // «оставь» и «ничего не подходит» — играющее продолжается
         remoteTrack = value.track;
         await playTrack(value.track, value.similarity);
@@ -102,7 +126,7 @@ export function createMusicModule(host) {
             namespace: SETTINGS_NAMESPACE,
             key: PLAYER_KEY,
             value: {
-                section: server.selected.peek(), serverSelection: server.mode.peek(), volume: volume.peek(), muted: muted.peek(), autoTag: autoTag.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
+                section: server.selected.peek(), smart: smart.peek(), serverSelection: server.mode.peek(), volume: volume.peek(), muted: muted.peek(), autoTag: autoTag.peek(), autoSwitch: autoSwitch.peek(), contextMessages: contextMessages.peek(),
                 minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(), player: {
                     collapsed: hudCollapsed.peek(), visible: hudVisible.peek(), position: hudPosition.peek(),
                 },
@@ -250,7 +274,10 @@ export function createMusicModule(host) {
      * В группе один трек — повторяется он.
      */
     function replayCurrent() {
-        if (remote() && remoteTrack?.id === currentTrackId) { void pickRemote({ ended: true }); return; }   // сервер сам решает, какой трек группы следующий
+        if (remote() && remoteTrack?.id === currentTrackId) {   // трек доиграл: следующий выбирается по сцене СЕЙЧАС; нет вектора — другой трек той же группы
+            void computeSceneVector().then(vector => pickRemote({ vector, ended: true })).catch(() => {});
+            return;
+        }
         const all = pool();
         const track = all.find(item => item.id === currentTrackId);
         if (!track) return;
@@ -264,6 +291,7 @@ export function createMusicModule(host) {
         if (!messagesResult.ok) return null;
         const sceneText = buildSceneText(messagesResult.value, contextMessages.peek());
         if (!sceneText) return null;
+        lastSceneText = sceneText;
         const embeddingResult = await request(host.services, 'embedding.compute', { params: { text: sceneText, kind: 'query' } });
         return embeddingResult.ok ? embeddingResult.value : null;
     }
@@ -457,7 +485,7 @@ export function createMusicModule(host) {
 
     function tree() {
         return createMusicCard({
-            tracks, autoSwitch, contextMessages, minSimilarity, switchMargin, autoTag,
+            tracks, autoSwitch, contextMessages, minSimilarity, switchMargin, autoTag, smart,
             server,
             actions: { chooseSection, saveSettings, savePlayer, importFiles, importLinkText, tagTracks, updateDescription, removeTrack },
         });
@@ -487,6 +515,7 @@ export function createMusicModule(host) {
             volume.set(Number.isFinite(player.value.volume) ? player.value.volume : DEFAULTS.volume);
             muted.set(Boolean(player.value.muted));
             autoTag.set(player.value.autoTag !== false);
+            smart.set(player.value.smart !== false);
             server.mode.set(player.value.serverSelection === 'local' ? 'local' : 'server');
             server.selected.set(typeof player.value.section === 'string' ? player.value.section : '');
             hudCollapsed.set(Boolean(player.value.player?.collapsed));
@@ -544,6 +573,7 @@ export function createMusicModule(host) {
         importLinkText,
         tagTracks,
         autoTag,
+        smart,
         updateDescription,
         removeTrack,
         saveSettings,
@@ -555,6 +585,7 @@ export function createMusicModule(host) {
                 numberSetting('minSimilarity', 'Min similarity', minSimilarity, { min: 0, max: 1, step: 0.05 }),
                 numberSetting('switchMargin', 'Switch margin', switchMargin, { min: 0, max: 0.5, step: 0.01 }),
                 booleanSetting('autoTag', 'Describe new tracks with the model', autoTag),
+                booleanSetting('smart', 'Smart scene detection (Jev)', smart),
             ],
             save: saveSettings,
         }),

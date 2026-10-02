@@ -72,12 +72,24 @@ export const serverTrackFrom = ({ server, sectionId, id, ext }) => ({
     source: { kind: SOURCE_KINDS.URL, ref: audioUrl(server, id, ext) }, artist: '', tagged: 'manual', server: true,
 });
 
-/** Ответ сервера на выбор → `{ action: 'play' | 'keep' | 'none', track?, similarity? }`; мусор и недопустимые id — `none`. */
+const MAX_QUESTIONS = 12, MAX_QUESTION_LENGTH = 400;
+
+/**
+ * Ответ сервера на выбор → `{ action: 'play' | 'keep' | 'none' | 'ask', track?, similarity?, intensity?, questions? }`; мусор и недопустимые id — `none`.
+ * `ask` — сервер просит спросить Jev: `questions` = `{ id: утверждение }` (чужой текст ограничен по числу и длине — это данные, не команды).
+ */
 export function parsePick(text, { server, sectionId }) {
     const data = parseJson(text);
-    if (data?.action === 'keep') return { action: 'keep' };
+    const intensity = Number.isFinite(data?.intensity) ? data.intensity : null;
+    if (data?.action === 'keep') return { action: 'keep', intensity };
+    if (data?.action === 'ask' && data.questions && typeof data.questions === 'object') {
+        const questions = Object.fromEntries(Object.entries(data.questions)
+            .filter(([id, statement]) => /^[ci]\d{1,2}$/.test(id) && typeof statement === 'string' && statement.trim())
+            .slice(0, MAX_QUESTIONS).map(([id, statement]) => [id, statement.slice(0, MAX_QUESTION_LENGTH)]));
+        return Object.keys(questions).length ? { action: 'ask', questions } : { action: 'none' };
+    }
     if (data?.action === 'play' && /^[\w-]+$/.test(String(data.id)) && /^[a-z0-9]{2,5}$/i.test(String(data.ext))) {
-        return { action: 'play', similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
+        return { action: 'play', intensity, similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
     }
     return { action: 'none' };
 }

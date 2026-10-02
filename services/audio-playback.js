@@ -20,22 +20,52 @@
 
 const clamp01 = value => Math.min(1, Math.max(0, value));
 
-export function registerAudioPlaybackService(bus, { createAudio = () => new Audio() } = {}) {
+/**
+ * `crossfadeMs` > 0 — смена трека на лету идёт плавно: новый <audio> наращивает громкость, старый затихает (как в кино), потом старый останавливается. 0 — резко, как раньше
+ * (по умолчанию: тесты и всё, что не просило плавности). Таймер и часы подменяются для тестов.
+ */
+export function registerAudioPlaybackService(bus, { createAudio = () => new Audio(), crossfadeMs = 0, setTimer = (callback, ms) => setInterval(callback, ms), clearTimer = id => clearInterval(id), now = () => Date.now() } = {}) {
     let element = null;      // ленивый <audio>; до первого play DOM не трогаем
     let currentUrl = null;   // объектный URL своего файла (на прямую ссылку не заводится)
     let currentId = null;
     let endedListener = null;
     let volume = 1;          // громкость, заданная до появления элемента
+    let fade = null;         // идущий кроссфейд: { previous, previousUrl, timer }
 
-    function ensureElement() {
-        if (element) return element;
-        element = createAudio();
-        element.volume = volume;
+    function newElement() {
+        const el = createAudio();
+        el.volume = volume;
         // Один постоянный слушатель, который зовёт актуальный колбэк: раньше
         // колбэк вешался только при создании элемента, и `onEnded` следующих
-        // `play()` в живой элемент уже не попадал.
-        element.addEventListener('ended', () => { endedListener?.(); });
+        // `play()` в живой элемент уже не попадал. Затихающий старый элемент колбэк не зовёт.
+        el.addEventListener('ended', () => { if (el === element) endedListener?.(); });
+        return el;
+    }
+
+    function ensureElement() {
+        if (!element) element = newElement();
         return element;
+    }
+
+    /** Кроссфейд закончен (или прерван): старый элемент останавливается, его объектный URL отзывается, громкость нового — полная. */
+    function finishFade() {
+        if (!fade) return;
+        clearTimer(fade.timer);
+        fade.previous.pause();
+        if (fade.previousUrl) URL.revokeObjectURL(fade.previousUrl);
+        if (element) element.volume = volume;
+        fade = null;
+    }
+
+    function startFade(previous, previousUrl, next) {
+        const startedAt = now();
+        fade = { previous, previousUrl, timer: null };
+        fade.timer = setTimer(() => {
+            const progress = clamp01((now() - startedAt) / crossfadeMs);
+            previous.volume = clamp01(volume * (1 - progress));
+            next.volume = clamp01(volume * progress);
+            if (progress >= 1) finishFade();
+        }, 50);
     }
 
     function releaseUrl() {
@@ -51,6 +81,29 @@ export function registerAudioPlaybackService(bus, { createAudio = () => new Audi
         bus.register('audio.playback.play', async ({ id, blob, source, onEnded, volume: requested } = {}) => {
             const stream = source?.kind === 'url';
             if (stream ? !source.ref : !blob) return { ok: false };
+            const fading = crossfadeMs > 0 && element && !element.paused && !element.ended && id && id !== currentId;
+            if (fading) {
+                // Плавная смена: старый элемент доигрывает, новый начинает с тишины.
+                finishFade();
+                const previous = element, previousUrl = currentUrl;
+                currentUrl = null;
+                element = newElement();
+                currentId = id;
+                if (stream) element.src = source.ref;
+                else { currentUrl = URL.createObjectURL(blob); element.src = currentUrl; }
+                endedListener = typeof onEnded === 'function' ? onEnded : null;
+                if (Number.isFinite(requested)) volume = clamp01(requested);
+                element.volume = 0;
+                try {
+                    await element.play();
+                } catch {
+                    fade = { previous, previousUrl, timer: null };   // автозапуск отклонён — не оставляем тишину из двух затихших треков
+                    finishFade();
+                    return { ok: true, started: false };
+                }
+                startFade(previous, previousUrl, element);
+                return { ok: true, started: true };
+            }
             const el = ensureElement();
             if (!id || id !== currentId) {
                 releaseUrl();
@@ -73,6 +126,7 @@ export function registerAudioPlaybackService(bus, { createAudio = () => new Audi
             }
         }, { loadMetric: () => 1 }),
         bus.register('audio.playback.pause', () => {
+            finishFade();
             element?.pause();
             return { ok: true };
         }, { loadMetric: () => 0 }),
@@ -83,7 +137,7 @@ export function registerAudioPlaybackService(bus, { createAudio = () => new Audi
         bus.register('audio.playback.volume', ({ value } = {}) => {
             if (Number.isFinite(value)) {
                 volume = clamp01(value);
-                if (element) element.volume = volume;
+                if (element && !fade) element.volume = volume;   // во время кроссфейда громкость ведёт сам переход (и придёт к новому уровню)
             }
             return { ok: true };
         }, { loadMetric: () => 0 }),
@@ -106,6 +160,7 @@ export function registerAudioPlaybackService(bus, { createAudio = () => new Audi
     ];
 
     return () => {
+        finishFade();
         releaseUrl();
         element?.pause();
         element = null;

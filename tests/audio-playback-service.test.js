@@ -87,3 +87,50 @@ test('a direct link plays through the same element without an object URL; a link
     await bus.call('audio.playback.play', { id: 'u1', source: { kind: 'url', ref: 'https://example.com/other.mp3' } });
     assert.equal(audio.src, 'https://example.com/a.mp3', 'the same track id is not reloaded');
 });
+
+test('crossfade: a track switched on the fly fades in while the old one fades out, then the old one stops; without crossfade nothing changes', async () => {
+    const bus = makeBus();
+    const made = [];
+    let clock = 0, tick = null;
+    registerAudioPlaybackService(bus, {
+        createAudio: () => { const el = makeAudio(); made.push(el); return el; }, crossfadeMs: 1000,
+        setTimer: callback => { tick = callback; return 1; }, clearTimer: () => { tick = null; }, now: () => clock,
+    });
+    await bus.call('audio.playback.volume', { value: 0.8 });
+    await bus.call('audio.playback.play', { id: 'a', source: { kind: 'url', ref: 'https://x/a.mp3' } });
+    assert.equal(made.length, 1);
+    await bus.call('audio.playback.play', { id: 'b', source: { kind: 'url', ref: 'https://x/b.mp3' } });
+    assert.equal(made.length, 2, 'the next track gets its own element');
+    const [oldEl, newEl] = made;
+    assert.equal(newEl.volume, 0, 'it starts silent');
+    clock = 500; tick();
+    assert.ok(Math.abs(oldEl.volume - 0.4) < 1e-9 && Math.abs(newEl.volume - 0.4) < 1e-9, 'halfway: both at half');
+    assert.equal(oldEl.paused, false);
+    clock = 1000; tick();
+    assert.equal(oldEl.paused, true, 'the old track is stopped when the fade ends');
+    assert.ok(Math.abs(newEl.volume - 0.8) < 1e-9, 'the new one reaches the set volume');
+    assert.equal((await bus.call('audio.playback.state')).id, 'b');
+    oldEl.emit('ended');   // старый элемент о конце не сообщает
+    let ended = 0;
+    await bus.call('audio.playback.play', { id: 'b', source: { kind: 'url', ref: 'https://x/b.mp3' }, onEnded: () => { ended += 1; } });
+    oldEl.emit('ended');
+    assert.equal(ended, 0);
+    newEl.emit('ended');
+    assert.equal(ended, 1);
+});
+
+test('crossfade: the first track and the same track again start at once (nothing to fade from); crossfade 0 keeps the old hard switch', async () => {
+    const bus = makeBus();
+    const made = [];
+    registerAudioPlaybackService(bus, { createAudio: () => { const el = makeAudio(); made.push(el); return el; }, crossfadeMs: 1000, setTimer: () => 1, clearTimer: () => {} });
+    await bus.call('audio.playback.play', { id: 'a', source: { kind: 'url', ref: 'https://x/a.mp3' } });
+    await bus.call('audio.playback.play', { id: 'a', source: { kind: 'url', ref: 'https://x/a.mp3' } });
+    assert.equal(made.length, 1);
+
+    const hard = [];
+    const bus2 = makeBus();
+    registerAudioPlaybackService(bus2, { createAudio: () => { const el = makeAudio(); hard.push(el); return el; } });
+    await bus2.call('audio.playback.play', { id: 'a', source: { kind: 'url', ref: 'https://x/a.mp3' } });
+    await bus2.call('audio.playback.play', { id: 'b', source: { kind: 'url', ref: 'https://x/b.mp3' } });
+    assert.equal(hard.length, 1, 'one element, switched at once');
+});
