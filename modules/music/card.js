@@ -6,7 +6,7 @@ import { Button, TextInput, TextArea, Select, Slider, Toggle, Field, Row, EmptyS
  * Карточка Модуля Music в панели движка: настройки, добавление треков (файлы, прямая ссылка), кнопка разметки моделью и список треков с описаниями. Дерево `h()`;
  * состояние и действия приходят из Модуля (`index.js`) — здесь своего поведения нет.
  */
-export function createMusicCard({ tracks, autoSwitch, contextMessages, minSimilarity, switchMargin, autoTag, server, actions }) {
+export function createMusicCard({ tracks, autoSwitch, contextMessages, minSimilarity, switchMargin, autoTag, smart, server, actions }) {
     const { saveSettings, savePlayer, importFiles, importLinkText, tagTracks, updateDescription, removeTrack, chooseSection } = actions;
 
     function trackRow(track) {
@@ -47,8 +47,13 @@ export function createMusicCard({ tracks, autoSwitch, contextMessages, minSimila
         const sectionPicker = computed(() => (server.configured() && server.sections().length
             ? Field('Music library', Select(server.selected, sectionOptions, { onChange: id => { void chooseSection(id); } }), { hint: 'Ready-made music from the server. Pick a section — tracks start on their own to match the scene.' })
             : null));
+        // Умное определение сцены: только вкл/выкл. Когда и о чём спрашивать Jev, решает сервер.
+        const smartToggle = computed(() => (server.configured() && server.sections().length
+            ? Toggle('Smart scene detection (Jev)', smart, { onChange: savePlayer, hint: 'When the music is about to change, your Jev connection (Models → Classifiers) rates the scene so the track fits it better. Without a Jev connection it is simply skipped.' })
+            : null));
         return h('div', { class: 'stme-module-body' },
             sectionPicker,
+            smartToggle,
             Row(
                 h('small', { class: 'stme-module-hint' }, 'Picks background music that matches the scene — locally, by meaning, with no model calls. Describe each track in words; the closer its description to what is happening in the chat, the more likely it plays.'),
                 Button('Save settings', saveSettings),

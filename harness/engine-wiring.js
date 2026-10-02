@@ -233,6 +233,8 @@ const DEFINITIONS = [{
             'embedding.compute', 'embedding.similarity',
             // Разделы музыкального сервера владельца (сеть — только у Ядра).
             'musicServer.sections', 'musicServer.section', 'musicServer.pick',
+            // Умный выбор: Jev пользователя оценивает категории сцены (запрос от сервера, ответ идёт только как номер категории).
+            'classifier.decide',
         ],
     },
     create: host => createMusicModule(host),
@@ -545,7 +547,7 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
     registerPmPresetsService(engine.buses.services);
     registerStPromptDataService(engine.buses.services, { getContext });
     registerStPmUiService(engine.buses.services);
-    registerAudioPlaybackService(engine.buses.services);
+    registerAudioPlaybackService(engine.buses.services, { crossfadeMs: 2500 });   // смена трека плавная, как в кино
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
     registerStMacrosService(engine.buses.services, { getContext });
