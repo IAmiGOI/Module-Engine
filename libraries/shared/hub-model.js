@@ -15,6 +15,7 @@ export const HUB_GROUPS = Object.freeze({ WORK: 'work', SETTINGS: 'settings' });
  */
 export const HUB_TILES = Object.freeze([
     Object.freeze({ id: 'models', title: 'Models', card: 'Model connections', group: HUB_GROUPS.WORK, description: 'Where the engine gets its own generations from', live: true }),
+    Object.freeze({ id: 'classifiers', title: 'Classifiers', card: 'Classifiers', group: HUB_GROUPS.WORK, description: 'Small models (Jev) that rate statements about the chat' }),
     Object.freeze({ id: 'modules', title: 'Modules', card: 'Modules', group: HUB_GROUPS.WORK, description: 'What you plug in yourself', live: true }),
     Object.freeze({ id: 'macros', title: 'Macros', card: 'Macros', group: HUB_GROUPS.WORK, description: 'Your own {{macro}} — fixed text or a small program' }),
     Object.freeze({ id: 'lorebook', title: 'Lorebook', card: 'Lorebook', group: HUB_GROUPS.WORK, description: 'Entries of the active lorebooks, editable here' }),
