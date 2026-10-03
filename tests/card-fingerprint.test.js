@@ -85,3 +85,12 @@ test('computeCardFingerprint(): a chara chunk whose base64 does not decode to JS
 test('CARD_VOLATILE_FIELDS lists exactly the fields ST rewrites unconditionally on every PNG import (see the file doc-comment for the source citations)', () => {
     assert.deepEqual([...CARD_VOLATILE_FIELDS], ['create_date', 'chat', 'avatar', 'json_data', 'fav', 'data.extensions.fav']);
 });
+
+test('computeCardFingerprint(): a card with a huge embedded text chunk (hundreds of KB — lorebook, assets) still gets a fingerprint instead of null, so two copies of it are recognised as the same character', async () => {
+    const big = 'lorem ipsum '.repeat(40000);   // ~480 KB of card JSON: far past the spread-arguments limit that used to throw a RangeError
+    const a = buildCardPng(fakeCard({ description: big, chat: 'Alice - 1', create_date: '2026-01-01T00:00:00.000Z' }));
+    const b = buildCardPng(fakeCard({ description: big, chat: 'Alice - 2', create_date: '2026-03-14T09:22:10.000Z' }));
+    const fpA = await computeCardFingerprint(a, { hash });
+    assert.ok(fpA?.startsWith(FINGERPRINT_PREFIX));
+    assert.equal(fpA, await computeCardFingerprint(b, { hash }));
+});

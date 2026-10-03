@@ -67,7 +67,14 @@ export function extractPngChunks(content) {
     return chunks.length && chunks.at(-1).type === 'IEND' ? chunks : null;
 }
 
-const latin1Decode = bytes => String.fromCharCode(...bytes);
+/** По кускам: `String.fromCharCode(...bytes)` на текстовом чанке карточки с вшитым лорбуком/ассетами (сотни КБ) падает с RangeError
+ *  («Maximum call stack size exceeded»), отпечаток становился `null`, и ровно такие карточки давали ложный конфликт и копию на каждом проходе. */
+const LATIN1_STEP = 8192;
+const latin1Decode = bytes => {
+    let text = '';
+    for (let offset = 0; offset < bytes.length; offset += LATIN1_STEP) text += String.fromCharCode(...bytes.subarray(offset, offset + LATIN1_STEP));
+    return text;
+};
 
 /** `tEXt`-чанк → `{keyword, text}` (как `PNGtext.decode` у самой ST) или `null`, если в данных нет разделителя `\0`. */
 function decodeTextChunk(data) {
