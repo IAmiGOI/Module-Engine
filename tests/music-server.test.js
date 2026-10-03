@@ -562,3 +562,15 @@ test('reference scenes pull the choice toward the group whose examples look like
     const few = new Map([['g0', [hot(0)]], ['g1', [hot(5)]], ['g2', [near]], ['g3', [hot(8)]]]);   // по одному эталону — мало
     assert.equal(pickTrack({ items, vector: scene, dim: DIM_P, minSimilarity: 0, prototypes: few }).id, 'G1', 'groups with fewer than three examples do not count');
 });
+
+test('a big group of broad examples does not win only because it is big: closeness is judged against how close other groups\' scenes usually are to it', () => {
+    const DIM_P = 12;
+    const hot = n => Array.from({ length: DIM_P }, (_, i) => (i === n ? 1 : 0.3));
+    const broad = k => Array.from({ length: DIM_P }, (_, i) => 1 + 0.002 * ((i * 7 + k) % 5));   // 12 «средних» эталонов, похожих на всё
+    const mixed = hot(1).map((x, i) => 0.2 * x + 0.8 * hot(8)[i]);
+    const items = [0, 1, 2, 3].map(n => ({ id: `G${n}`, ext: 'mp3', vector: hot(n), group: `g${n}` }));
+    const prototypes = new Map([['g0', Array.from({ length: 12 }, (_, k) => broad(k))], ['g1', [mixed, mixed, mixed]], ['g2', [hot(5), hot(6), hot(7)]], ['g3', [hot(9), hot(10), hot(11)]]]);
+    const rows = scoreItems({ items, vector: hot(1), prototypes }).rows;
+    const proto = group => rows.find(row => row.item.group === group).proto;
+    assert.ok(proto('g1') > proto('g0'), 'the specific small group outranks the broad big one although its raw closeness is lower');
+});

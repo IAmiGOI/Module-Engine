@@ -530,6 +530,83 @@ test('with a section on, ME sends only the scene vector; the server answers with
     assert.equal(audio.lastSource.ref, 'https://music.example/audio/k2.mp3');
 });
 
+test('the next server track is requested BEFORE the current one ends and started in its last seconds (smooth crossfade); the end event then asks nothing', async () => {
+    const asked = [];
+    const answers = [{ action: 'play', id: 'k1', ext: 'mp3' }, { action: 'play', id: 'k2', ext: 'mp3' }];
+    const { module, audio, engine } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], serverTracks: [] });
+    engine.buses.cores.register('musicServer.pick', params => {
+        asked.push(params);
+        const answer = answers.shift() ?? { action: 'none' };
+        return answer.action === 'play' ? { action: 'play', similarity: 0.9, track: { id: `srv_fantasy_${answer.id}`, rawId: answer.id, name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: `https://music.example/audio/${answer.id}.mp3` } } } : answer;
+    });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await module.chooseSection('fantasy');
+    await module.onGenerationCompleted();
+    assert.equal(audio.lastSource.ref, 'https://music.example/audio/k1.mp3');
+    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    audio.duration = 120; audio.time = 30;   // далеко от конца — ничего не просим
+    await wait(650);
+    assert.equal(asked.length, 1);
+
+    audio.time = 105;   // 15 с до конца: просим следующий, но пока не включаем
+    await wait(650);
+    assert.equal(asked.length, 2);
+    assert.equal(asked[1].ended, true);
+    assert.equal(asked[1].current, 'k1');
+    assert.equal(audio.lastSource.ref, 'https://music.example/audio/k1.mp3', 'the current track keeps playing');
+
+    audio.time = 117;   // 3 с до конца: пора менять (плавно)
+    await wait(650);
+    assert.equal(audio.lastSource.ref, 'https://music.example/audio/k2.mp3');
+    assert.equal(module.nowPlaying.peek().trackId, 'srv_fantasy_k2');
+    assert.equal(asked.length, 2, 'one request per track change');
+});
+
+test('if the track ends before the early switch, the prefetched next track is used — no second request', async () => {
+    const asked = [];
+    const answers = [{ action: 'play', id: 'k1', ext: 'mp3' }, { action: 'play', id: 'k2', ext: 'mp3' }, { action: 'play', id: 'k3', ext: 'mp3' }];
+    const { module, audio, engine } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], serverTracks: [] });
+    engine.buses.cores.register('musicServer.pick', params => {
+        asked.push(params);
+        const answer = answers.shift() ?? { action: 'none' };
+        return answer.action === 'play' ? { action: 'play', similarity: 0.9, track: { id: `srv_fantasy_${answer.id}`, rawId: answer.id, name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: `https://music.example/audio/${answer.id}.mp3` } } } : answer;
+    });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await module.chooseSection('fantasy');
+    await module.onGenerationCompleted();
+    audio.duration = 120; audio.time = 105;
+    await new Promise(resolve => setTimeout(resolve, 650));
+    assert.equal(asked.length, 2);
+    audio.onEnded();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(audio.lastSource.ref, 'https://music.example/audio/k2.mp3');
+    assert.equal(asked.length, 2, 'the answer already in hand is used');
+});
+
+test('a group with a single track: the early request returns the same track, it is NOT "switched" to itself mid-play and restarts when it ends', async () => {
+    const asked = [];
+    const { module, audio, engine } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], serverTracks: [] });
+    engine.buses.cores.register('musicServer.pick', params => {
+        asked.push(params);
+        return { action: 'play', similarity: 0.9, track: { id: 'srv_fantasy_k1', rawId: 'k1', name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: 'https://music.example/audio/k1.mp3' } } };
+    });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await module.chooseSection('fantasy');
+    await module.onGenerationCompleted();
+    const calls = audio.playCalls;
+    audio.duration = 120; audio.time = 118;
+    await new Promise(resolve => setTimeout(resolve, 1300));
+    assert.equal(asked.length, 2, 'asked once ahead of time, not again and again');
+    assert.equal(audio.playCalls, calls, 'no restart while it still plays');
+    audio.onEnded();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(audio.playCalls, calls + 1, 'it plays again once it ends');
+});
+
 // --- Умный выбор: сервер просит Jev -----------------------------------------------------
 
 test('parsePick: an "ask" answer carries only well-formed statements, capped in number and length', () => {

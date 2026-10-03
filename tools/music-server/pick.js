@@ -81,13 +81,35 @@ function gapBaseline(item, items) {
 }
 
 /** Группа → z-оценка близости сцены к её эталонным сценам; `null`, если словарь слишком мал для шкалы (меньше трёх групп с эталонами). */
+const topMean = (list, vector) => {
+    const top = list.map(example => similarity(vector, example)).sort((a, b) => b - a).slice(0, TOP_EXAMPLES);
+    return top.reduce((sum, x) => sum + x, 0) / top.length;
+};
+/**
+ * Большая группа с разнородными эталонами «в среднем» ближе к любой сцене (больше шансов найти похожую) — так 98 эталонов «шуток» перетягивали настороженную сцену.
+ * Поправка: близость к группе сравниваем с тем, как к ней обычно близки сцены ДРУГИХ групп (до `PROBES` эталонов из чужих групп); оценка — на сколько эта сцена необычно близка именно к ней.
+ */
+const PROBES = 80, MIN_PROBES = 6, MIN_PROBE_SPREAD = 0.005;
+function groupBaseline(key, usable) {
+    const foreign = [];
+    for (const [other, list] of usable) if (other !== key) foreign.push(...list);
+    if (foreign.length < MIN_PROBES) return null;
+    const step = Math.max(1, Math.floor(foreign.length / PROBES));
+    const own = usable.get(key);
+    const values = [];
+    for (let i = 0; i < foreign.length; i += step) values.push(topMean(own, foreign[i]));
+    const mean = values.reduce((sum, x) => sum + x, 0) / values.length;
+    const spread = Math.sqrt(values.reduce((sum, x) => sum + (x - mean) ** 2, 0) / values.length);
+    return { mean, spread: Math.max(spread, MIN_PROBE_SPREAD) };
+}
 function prototypeZ(prototypes, vector) {
     if (!(prototypes instanceof Map)) return null;
+    const usable = new Map([...prototypes].filter(([, list]) => Array.isArray(list) && list.length >= MIN_EXAMPLES));
     const raw = new Map();
-    for (const [key, list] of prototypes) {
-        if (!Array.isArray(list) || list.length < MIN_EXAMPLES) continue;
-        const top = list.map(example => similarity(vector, example)).sort((a, b) => b - a).slice(0, TOP_EXAMPLES);
-        raw.set(key, top.reduce((sum, x) => sum + x, 0) / top.length);
+    for (const [key, list] of usable) {
+        const score = topMean(list, vector);
+        const base = groupBaseline(key, usable);
+        raw.set(key, base ? (score - base.mean) / base.spread : score);
     }
     if (raw.size < MIN_FOR_CENTERING) return null;
     const values = [...raw.values()];
