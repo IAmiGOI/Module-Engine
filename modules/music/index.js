@@ -111,7 +111,13 @@ export function createMusicModule(host) {
         return result.ok && result.value?.answers && typeof result.value.answers === 'object' ? result.value.answers : {};
     }
 
-    async function pickRemote({ vector, ended = false, force = false } = {}) {
+    // Следующий трек просим у сервера заранее (за PREFETCH_S до конца), держим ответ и запускаем за SWITCH_LEAD_S — с кроссфейдом, без тишины на запрос и вопрос к Jev.
+    const PREFETCH_S = 20, SWITCH_LEAD_S = 3.5;
+    let queuedNext = null;       // { track, similarity } — ответ сервера, ждущий своего часа
+    let prefetchFor = null;      // id трека, для которого запрос уже ушёл
+    let prefetching = null;      // идущий запрос (Promise)
+
+    async function pickRemote({ vector, ended = false, force = false, queue = false } = {}) {
         const state = nowPlaying.peek().playing ? progress.peek() : { time: null, duration: 0 };
         const params = {
             section: server.selected.peek(), vector, current: remoteTrack?.rawId ?? null, ended, force, minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(),
@@ -127,8 +133,29 @@ export function createMusicModule(host) {
         }
         if (Number.isFinite(value?.intensity)) lastIntensity = value.intensity;
         if (value?.action !== 'play') return;   // «оставь» и «ничего не подходит» — играющее продолжается
+        if (queue) { queuedNext = { track: value.track, similarity: value.similarity }; return; }
         remoteTrack = value.track;
         await playTrack(value.track, value.similarity);
+    }
+
+    function playQueued() {
+        const next = queuedNext;
+        queuedNext = null;
+        if (!next) return false;
+        remoteTrack = next.track;
+        void playTrack(next.track, next.similarity).catch(() => {});
+        return true;
+    }
+
+    /** Звучащий серверный трек подходит к концу: сначала просим следующий, потом (в последние секунды) запускаем его — раньше ME спрашивал только после «ended», и на запрос уходила тишина. */
+    function advanceRemote(time, duration) {
+        if (!remote() || userPaused || !nowPlaying.peek().playing || remoteTrack?.id !== currentTrackId || !(duration > 0)) return;
+        const remaining = duration - time;
+        // Тот же трек (в группе он один) заранее не «переключаем»: он перезапустится сам, когда доиграет (событие ended).
+        if (queuedNext) { if (remaining <= SWITCH_LEAD_S && queuedNext.track.id !== currentTrackId) playQueued(); return; }
+        if (prefetching || prefetchFor === currentTrackId || remaining > PREFETCH_S || time < 1) return;
+        prefetchFor = currentTrackId;
+        prefetching = computeSceneVector().then(vector => pickRemote({ vector, ended: true, queue: true })).catch(() => {}).finally(() => { prefetching = null; });
     }
 
     /** Всё, из чего подбираем: свои треки и треки выбранного раздела сервера. */
@@ -202,6 +229,7 @@ export function createMusicModule(host) {
             const { currentTime = 0, duration = 0 } = result.value ?? {};
             const prev = progress.peek();
             if (prev.time !== currentTime || prev.duration !== duration) progress.set({ time: currentTime, duration });
+            advanceRemote(currentTime, duration);
         }
         if (!nowPlaying.peek().playing) stopPolling();
     }
@@ -243,6 +271,7 @@ export function createMusicModule(host) {
             blob = blobResult.value;
         }
         const isNew = nowPlaying.peek().trackId !== track.id;
+        queuedNext = null; prefetchFor = null;   // что-то начинает играть — ожидавший следующий трек больше не актуален
         const started = await servicePlay(blob, track, similarity);
         if (!started) return;
         if (isNew) {
@@ -253,7 +282,7 @@ export function createMusicModule(host) {
         }
         userPaused = false;
         setNowPlaying({ trackId: track.id, name: isServerTrack(track) ? (server.sectionName.peek() || 'Music') : track.name, playing: true, blocked: false, similarity });
-        if (isNew || !progress.peek().duration) progress.set({ time: 0, duration: 0 });
+        progress.set({ time: 0, duration: isNew ? 0 : progress.peek().duration });   // время всегда с нуля: иначе повтор того же трека сразу счёл бы себя «концом»
         startPolling();
         await refreshPlayingState();
     }
@@ -299,8 +328,13 @@ export function createMusicModule(host) {
      * В группе один трек — повторяется он.
      */
     function replayCurrent() {
-        if (remote() && remoteTrack?.id === currentTrackId) {   // трек доиграл: следующий выбирается по сцене СЕЙЧАС; нет вектора — другой трек той же группы
-            void computeSceneVector().then(vector => pickRemote({ vector, ended: true })).catch(() => {});
+        if (remote() && remoteTrack?.id === currentTrackId) {   // трек доиграл: заранее запрошенный следующий уже ждёт — иначе выбирается по сцене СЕЙЧАС; нет вектора — другой трек той же группы
+            void (async () => {
+                if (prefetching) await prefetching;
+                if (playQueued()) return;
+                const vector = await computeSceneVector();
+                await pickRemote({ vector, ended: true });
+            })().catch(() => {});
             return;
         }
         const all = pool();
