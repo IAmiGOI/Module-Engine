@@ -35,6 +35,17 @@ function describeStopped(stopped) {
     return `Stopped after the first refusal${stopped.remaining ? ` — ${plural(stopped.remaining, 'file')} not tried` : ''}. Fix the problem and sync again; what was already sent is kept.`;
 }
 
+/** Заблокированные защитой удаления (`needsConfirmation` последнего прохода GitHub/облака) → что показать и что предложить. */
+export function describeBlockedDeletions(status) {
+    const items = [];
+    for (const [target, last, name] of [['github', status?.githubLast, 'GitHub'], ['cloud', status?.cloudLast, status?.cloudLast?.provider === 'dropbox' ? 'Dropbox' : 'Google Drive']]) {
+        for (const category of last?.needsConfirmation ?? []) {
+            items.push({ target, category, text: `${name}: the "${category}" files are gone there, so the sync paused instead of deleting them here.` });
+        }
+    }
+    return items;
+}
+
 /** Итог последнего прохода → строки для показа и тон (`ok` / `warn` / `error` / `muted`). */
 export function describeLastRun(last, now) {
     if (!last) return { tone: 'muted', lines: ['Not synced yet in this session.'] };

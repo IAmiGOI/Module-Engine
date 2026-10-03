@@ -14,7 +14,7 @@ import {
     buildDropboxAuthUrl, computeCodeChallenge, createTokenManager, exchangeDropboxCode, generateCodeVerifier, pollGoogleDeviceFlow, startGoogleDeviceFlow,
 } from '../../libraries/core/sync-oauth.js';
 import { CLOUD_PROVIDER_LABELS, resolveCloudApp } from '../../libraries/core/sync-cloud-apps.js';
-import { buildIceServers, relayToIceServers, categoryOfPath, conflictPolicyFor, noCopyFor, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeSyncConfig } from '../../libraries/core/sync-config.js';
+import { buildIceServers, relayToIceServers, SYNC_CATEGORY_IDS, categoryOfPath, conflictPolicyFor, noCopyFor, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeSyncConfig } from '../../libraries/core/sync-config.js';
 
 /**
  * Ядро синхронизации — держит пользовательские файлы ST одинаковыми на нескольких устройствах: напрямую между устройствами
@@ -257,7 +257,7 @@ export function createSyncCore(host, {
         return { base: next, journal };
     }
 
-    async function runAgainst({ target, baseKey, remote, categories, isEnabled, extraInclude }) {
+    async function runAgainst({ target, baseKey, remote, categories, isEnabled, extraInclude, confirmedCategories }) {
         const local = createLocalSide(categories, state => setProgress(target, { phase: 'scanning', ...state }));
         const replayed = await replayJournal(baseKey, (await readState(`base:${baseKey}`)) ?? {});
         const base = replayed.base;
@@ -289,6 +289,7 @@ export function createSyncCore(host, {
             conflictPolicy: conflictPolicyFor,
             sameContent,
             noCopy: noCopyFor,
+            confirmedCategories: new Set(confirmedCategories ?? []),
             categoryOf: categoryOfPath,
             onProgress: state => setProgress(target, { phase: 'syncing', ...state }),
             onCheckpoint,
@@ -314,7 +315,7 @@ export function createSyncCore(host, {
 
     // ── GitHub ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-    async function runGithub() {
+    async function runGithub({ confirmedCategories } = {}) {
         const settings = config.github;
         if (!isGithubConfigured(settings)) return { outcome: 'unconfigured' };
         const remote = createGithubRemote({
@@ -324,7 +325,7 @@ export function createSyncCore(host, {
         });
         try {
             const result = await runAgainst({
-                target: 'github', baseKey: 'github', remote, categories: config.categories,
+                target: 'github', baseKey: 'github', remote, categories: config.categories, confirmedCategories,
                 isEnabled: () => createCategoryFilter(config.categories),
                 extraInclude: (path, { local }) => !(local && local.size > settings.maxFileBytes),
             });
@@ -368,13 +369,13 @@ export function createSyncCore(host, {
         return createCloudHttp()(params);
     }
 
-    async function runCloud() {
+    async function runCloud({ confirmedCategories } = {}) {
         if (!config.cloud.enabled || !config.cloud.tokens) return { outcome: 'unconfigured' };
         const provider = config.cloud.provider;
         try {
             const remote = createCloudRemote({ store: createCloudStore(), now });
             const result = await runAgainst({
-                target: 'cloud', baseKey: `cloud:${provider}`, remote, categories: config.categories,
+                target: 'cloud', baseKey: `cloud:${provider}`, remote, categories: config.categories, confirmedCategories,
                 isEnabled: () => createCloudFilter(),
                 extraInclude: (file, { local }) => !(local && local.size > CLOUD_MAX_FILE_BYTES),
             });
@@ -920,6 +921,32 @@ export function createSyncCore(host, {
         });
     }
 
+    /**
+     * Что делать с категорией, чьё удаление защита заблокировала (`needsConfirmation` в итоге прохода) — два осознанных выбора человека:
+     *  - `reupload`: другая сторона потеряла файлы (стёрли папку/репозиторий), а здесь они нужны — забыть их в базе этой цели; тогда это
+     *    обычные новые файлы, и проход зальёт их заново (а то, что есть только на другой стороне, скачает);
+     *  - `accept`: удаление настоящее — подтвердить его для этой категории, и проход выполнит его.
+     * Только GitHub и облако: у устройства-пары свой путь (там вторая сторона — живой ST, а не папка, которую можно стереть).
+     */
+    async function resolveBlocked({ target, category, mode } = {}) {
+        await loadConfig();
+        if (!['github', 'cloud'].includes(target)) return { outcome: 'failed', error: 'Only GitHub and the cloud drive can be resolved this way.' };
+        if (!SYNC_CATEGORY_IDS.includes(category)) return { outcome: 'failed', error: `Unknown category "${category}".` };
+        if (!['reupload', 'accept'].includes(mode)) return { outcome: 'failed', error: 'mode must be "reupload" or "accept".' };
+        return runExclusive(target, async outcome => {
+            const baseKey = target === 'github' ? 'github' : `cloud:${config.cloud.provider}`;
+            if (mode === 'reupload') {
+                const base = (await readState(`base:${baseKey}`)) ?? {};
+                const kept = Object.fromEntries(Object.entries(base).filter(([path]) => categoryOfPath(path) !== category));
+                await writeState(`base:${baseKey}`, kept);
+                await writeState(`journal:${baseKey}`, []);
+            }
+            const options = { confirmedCategories: mode === 'accept' ? [category] : [] };
+            if (target === 'github') outcome.github = await runGithub(options);
+            else outcome.cloud = await runCloud(options);
+        });
+    }
+
     async function configure(patch = {}) {
         await loadConfig();
         const next = { ...config };
@@ -1048,6 +1075,7 @@ export function createSyncCore(host, {
         host.own.register('sync.runOnLoad', () => runOnLoad()),
         host.own.register('sync.configure', params => configure(params)),
         host.own.register('sync.run', params => run(params)),
+        host.own.register('sync.resolveBlocked', params => resolveBlocked(params)),
         host.own.register('sync.abort', () => { abortRequested = true; return true; }),
         host.own.register('sync.pair.start', () => startPairing()),
         host.own.register('sync.pair.join', params => joinPairing(params)),

@@ -4,7 +4,7 @@ import { request } from '../../libraries/shared/request.js';
 import {
     Button, TextInput, NumberInput, Toggle, Field, Row, Card, Section, Badge, EmptyState, ProgressBar, HoldButton, Select,
 } from '../../libraries/shared/widgets.js';
-import { describeConnection, describeLastRun, describeProgress, describeSummary } from '../../libraries/shared/sync-panel-model.js';
+import { describeBlockedDeletions, describeConnection, describeLastRun, describeProgress, describeSummary } from '../../libraries/shared/sync-panel-model.js';
 
 /**
  * Карточка «Sync» панели движка: сопряжение устройств, что синхронизировать, расписание, прогресс и результат, необязательный
@@ -164,6 +164,7 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
         const result = await call('sync.cloud.test');
         cloud.message.set(result.ok ? result.value.message : result.error.message);
     });
+    const resolveBlocked = (item, mode) => { call('sync.resolveBlocked', { target: item.target, category: item.category, mode }).then(refresh); };
     const syncCloudNow = () => { call('sync.run', { target: 'cloud' }).then(refresh); };
 
     // ── Разметка ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -303,6 +304,17 @@ export function createSyncCard({ host, collapse, notify = () => {}, now = () => 
             computed(() => {
                 const progress = progressView();
                 return progress ? h('div', { class: 'stme-sync-progress' }, ProgressBar(progress.percent, progress.label), Button('Stop', abort, { variant: 'danger' })) : null;
+            }),
+            computed(() => {
+                const blocked = describeBlockedDeletions(status());
+                if (!blocked.length) return null;
+                return h('div', { class: 'stme-sync-blocked' }, blocked.map(item => h('div', { key: `${item.target}:${item.category}` },
+                    h('p', { class: 'stme-update-status stme-update-warn' }, item.text),
+                    Row(
+                        Button('Upload them again', () => resolveBlocked(item, 'reupload'), { disabled: running }),
+                        Button('Delete them here too', () => resolveBlocked(item, 'accept'), { variant: 'danger', disabled: running }),
+                    ),
+                )));
             }),
             computed(() => {
                 const view = lastView();

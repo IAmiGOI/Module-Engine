@@ -250,3 +250,12 @@ test('detectMassDeletion(): only the tripped category is reported — an untouch
     const actions = deletionPlan(local, remote, base);
     assert.deepEqual(detectMassDeletion({ actions, local, remote, base, categoryOf }), new Set(['characters']));
 });
+
+test('detectMassDeletion(): the other side wiped completely trips the guard even with a few files — a deleted cloud folder must not delete the local copies', () => {
+    const base = { 'characters/0.png': 'h0', 'characters/1.png': 'h1', 'characters/2.png': 'h2' };
+    const local = { 'characters/0.png': file('h0'), 'characters/1.png': file('h1'), 'characters/2.png': file('h2'), 'characters/3.png': file('h3') };
+    const remote = {};
+    const actions = deletionPlan(local, remote, base);
+    assert.equal(actions.filter(a => a.op === 'deleteLocal').length, 3);
+    assert.deepEqual(detectMassDeletion({ actions, local, remote, base, categoryOf }), new Set(['characters']));
+});

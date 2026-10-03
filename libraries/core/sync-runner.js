@@ -43,6 +43,7 @@ export async function runSync({
     categoryOf = () => null,
     sameContent = null,
     noCopy = () => false,
+    confirmedCategories = new Set(),   // категории, чьё массовое удаление человек уже подтвердил — защита их не блокирует
     cleanupCopies = true,
     onProgress = () => {},
     onCheckpoint = () => {},
@@ -60,7 +61,7 @@ export async function runSync({
     // молча ни на одном проходе — её deleteLocal/deleteRemote просто не входят в исполнение, путь остаётся как есть до подтверждения
     // человеком (панель — отдельная задача); если следующий скан снова покажет файлы (временная пустота листинга ST) — удалять
     // будет уже нечего, план сам сойдёт на нет.
-    const blockedCategories = detectMassDeletion({ actions: plan.actions, local: localEntries, remote: remoteEntries, base, categoryOf });
+    const blockedCategories = new Set([...detectMassDeletion({ actions: plan.actions, local: localEntries, remote: remoteEntries, base, categoryOf })].filter(category => !confirmedCategories.has(category)));
     const isBlockedDeletion = action => (action.op === SYNC_ACTIONS.deleteLocal || action.op === SYNC_ACTIONS.deleteRemote) && blockedCategories.has(categoryOf(action.path));
     const actions = plan.actions.filter(action => !isBlockedDeletion(action)).sort((a, b) => TRANSFER_ORDER[a.op] - TRANSFER_ORDER[b.op]);
     const nextBase = { ...base };

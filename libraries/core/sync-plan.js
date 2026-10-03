@@ -241,15 +241,18 @@ export function detectMassDeletion({ actions = [], local = {}, remote = {}, base
     const baseCountIn = category => Object.keys(base).filter(path => categoryOf(path) === category).length;
     const suspicious = new Set();
     for (const [category, { deleteLocal, deleteRemote }] of byCategory) {
-        const check = (deletions, sideEntries) => {
+        const check = (deletions, sideEntries, otherEntries) => {
             if (!deletions.length) return false;
             const totalBefore = countIn(sideEntries, category);
             const remainingAfter = totalBefore - deletions.length;
             const ratioTripped = deletions.length > MASS_DELETE_MIN_COUNT && deletions.length > totalBefore * MASS_DELETE_RATIO;
             const emptiedTripped = remainingAfter === 0 && baseCountIn(category) > 0;
-            return ratioTripped || emptiedTripped;
+            // Другая сторона пуста целиком, хотя база помнит файлы категории: стёрта папка/репозиторий/диск, а не отдельные файлы —
+            // блокируем даже при малом числе файлов (иначе в маленькой категории синхронизация молча повторила бы стирание у нас).
+            const otherWipedTripped = countIn(otherEntries, category) === 0 && baseCountIn(category) > 0;
+            return ratioTripped || emptiedTripped || otherWipedTripped;
         };
-        if (check(deleteLocal, local) || check(deleteRemote, remote)) suspicious.add(category);
+        if (check(deleteLocal, local, remote) || check(deleteRemote, remote, local)) suspicious.add(category);
     }
     return suspicious;
 }

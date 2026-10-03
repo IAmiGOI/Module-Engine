@@ -393,3 +393,23 @@ test('a failing checkpoint commit does not lose the changes: they stay pending a
     assert.equal(result.counts.failed, 1, 'the failed checkpoint is reported once');
     assert.equal(Object.keys(result.base).length, 3, 'the final commit succeeded, so all three are remembered');
 });
+
+test('runSync(): a category listed in confirmedCategories is no longer blocked — the confirmed deletion runs', async () => {
+    const { local, remote, base } = await massDeletionSetup();
+    const result = await runSync({ local, remote, base, categoryOf, confirmedCategories: new Set(['characters']) });
+    assert.equal(result.needsConfirmation, null);
+    assert.equal(result.counts.deletedRemote, 25);
+});
+
+test('runSync(): after the base forgets a wiped category, the local files are uploaded again instead of deleted', async () => {
+    const local = memorySide({ 'characters/a.png': 'A', 'characters/b.png': 'B' });
+    const remote = memorySide({});
+    const base = { 'characters/a.png': await hashOf('A'), 'characters/b.png': await hashOf('B') };
+    const blocked = await runSync({ local, remote, base, categoryOf });
+    assert.deepEqual(blocked.needsConfirmation, ['characters']);
+    assert.equal(remote.files.size, 0);
+    const result = await runSync({ local, remote, base: {}, categoryOf });
+    assert.equal(result.counts.pushed, 2);
+    assert.equal(remote.files.size, 2);
+    assert.equal(local.files.size, 2);
+});

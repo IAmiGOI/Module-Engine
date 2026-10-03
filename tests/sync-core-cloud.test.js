@@ -191,3 +191,37 @@ test('the connection test reports how many synced files the cloud holds', async 
     assert.match(tested.message, /Dropbox.*2 synced file/);
     await device.core.stop();
 });
+
+test('a wiped cloud folder is not copied back as a deletion; "Upload them again" restores it, "Delete them here too" confirms it', async () => {
+    const files = { 'characters/a.png': 'A', 'characters/b.png': 'B' };
+    for (const mode of ['reupload', 'accept']) {
+        const world = createCloudWorld();
+        const device = makeDevice({ id: '0000000000000001', name: 'PC', world, clock: createFakeClock(), network: createFakeNetwork(), cloud: connectedDropbox, files });
+        await device.call('sync.run', { target: 'cloud' });
+        const cards = source => source.filter(path => path.includes('characters/'));
+        const uploaded = () => world.dropbox.names().filter(name => name.startsWith('/b-')).length;   // the drive keeps content blobs plus an index
+        assert.equal(uploaded(), 2);
+        world.dropbox.files.clear();   // the owner deleted the folder on the drive
+        const blocked = await device.call('sync.run', { target: 'cloud' });
+        assert.deepEqual(blocked.cloud.needsConfirmation, ['characters']);
+        assert.equal(cards(device.paths()).length, 2, 'nothing deleted locally');
+        assert.equal(uploaded(), 0, 'nothing re-uploaded silently');
+        const result = await device.call('sync.resolveBlocked', { target: 'cloud', category: 'characters', mode });
+        if (mode === 'reupload') {
+            assert.equal(uploaded(), 2);
+            assert.equal(cards(device.paths()).length, 2);
+        } else {
+            assert.equal(result.cloud.counts.deletedLocal, 2);
+            assert.equal(cards(device.paths()).length, 0);
+        }
+        await device.core.stop();
+    }
+});
+
+test('sync.resolveBlocked rejects unknown targets, categories and modes', async () => {
+    const device = makeDevice({ id: '0000000000000001', name: 'PC', world: createCloudWorld(), clock: createFakeClock(), network: createFakeNetwork(), cloud: connectedDropbox });
+    assert.equal((await device.call('sync.resolveBlocked', { target: 'peers', category: 'characters', mode: 'accept' })).outcome, 'failed');
+    assert.equal((await device.call('sync.resolveBlocked', { target: 'cloud', category: 'nope', mode: 'accept' })).outcome, 'failed');
+    assert.equal((await device.call('sync.resolveBlocked', { target: 'cloud', category: 'characters', mode: 'x' })).outcome, 'failed');
+    await device.core.stop();
+});
