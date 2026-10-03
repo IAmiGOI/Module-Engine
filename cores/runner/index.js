@@ -1,7 +1,38 @@
+// @ts-check
 import { parseModuleHeader } from '../../libraries/core/module-header.js';
 import { resolveLoadOrder } from '../../libraries/core/module-order.js';
 import { rewriteImports } from '../../libraries/core/module-scan.js';
 import { analyzeExternalModule } from '../../libraries/core/module-analyze.js';
+
+/** @typedef {import('../../libraries/core/module-types.js').ModuleMeta} ModuleMeta */
+/** @typedef {import('../../libraries/core/module-types.js').ModuleDefinition} ModuleDefinition */
+/** @typedef {import('../../libraries/core/module-types.js').RunnerEntry} RunnerEntry */
+/** @typedef {import('../../libraries/core/module-types.js').RunnerProblem} RunnerProblem */
+/** @typedef {import('../../libraries/core/module-types.js').RunnerOptions} RunnerOptions */
+/** @typedef {import('../../libraries/core/module-types.js').RunnerCore} RunnerCore */
+/** @typedef {import('../../libraries/core/module-types.js').ScanFinding} ScanFinding */
+/** @typedef {import('../../libraries/shared/bus-types.js').RightsConfig} RightsConfig */
+/** @typedef {import('../../libraries/shared/bus-types.js').TrustTier} TrustTier */
+
+/**
+ * Разобранный и допущенный Модуль — всё, что нужно, чтобы собрать из него определение.
+ * @typedef {Object} PreparedModule
+ * @property {ModuleMeta} meta
+ * @property {RunnerEntry} entry
+ * @property {RightsConfig} rights
+ * @property {TrustTier} tier
+ * @property {string | null} hash
+ * @property {ScanFinding[]} findings
+ * @property {() => Promise<any>} loadExports  Загружает код Модуля и отдаёт его экспорты.
+ */
+
+/** `stme:<путь>` → путь внутри движка. Единственное, что внешний Модуль вправе импортировать. */
+export const STME_PATHS = Object.freeze({
+    'ui/tree': 'cores/ui/tree.js',
+    'ui/reactive': 'cores/ui/reactive.js',
+    'widgets': 'libraries/shared/widgets.js',
+    'request': 'libraries/shared/request.js',
+});
 
 /**
  * Ядро Раннера (RUNTIME.md, фаза 2): превращает ИСТОЧНИКИ Модулей (встроенные из папки, установленные из репозиториев) в
@@ -17,33 +48,41 @@ import { analyzeExternalModule } from '../../libraries/core/module-analyze.js';
  *    исполняется ровно проверенный текст (Blob URL). Права — по результату скана; сеть шапкой только ЗАПРАШИВАЕТСЯ, а не даётся.
  *
  * Сбой одного Модуля (плохая шапка, отказ скана, нет зависимости) не мешает остальным: он попадает в `problems()` с причиной.
+ *
+ * @param {RunnerOptions} options
+ * @returns {RunnerCore}
  */
-
-/** `stme:<путь>` → путь внутри движка. Единственное, что внешний Модуль вправе импортировать. */
-export const STME_PATHS = Object.freeze({
-    'ui/tree': 'cores/ui/tree.js',
-    'ui/reactive': 'cores/ui/reactive.js',
-    'widgets': 'libraries/shared/widgets.js',
-    'request': 'libraries/shared/request.js',
-});
-
 export function createRunnerCore({
     engineVersion,
     readSource,
-    resolveStme = path => null,
+    resolveStme = () => null,
     importBlob = async source => import(URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))),
     isQuarantined = () => false,
     available = new Map(),
 }) {
-    const definitions = [];   // в порядке загрузки; ту же ссылку держит реестр
-    const problemList = [];   // [{ id, path, origin, state, reason, findings }]
-    const known = new Map();  // id -> описание для статуса (и годные, и нет)
+    /** @type {ModuleDefinition[]} В порядке загрузки; ту же ссылку держит реестр. */
+    const definitions = [];
+    /** @type {RunnerProblem[]} */
+    const problemList = [];
+    /** @type {Map<string, { id: string, version: string, origin: string, tier: TrustTier, hash: string | null }>} Описание для статуса. */
+    const known = new Map();
+    /** @type {Set<string>} */
     const builtinIds = new Set();
 
+    /**
+     * @param {{ path: string, origin: string }} entry
+     * @param {RunnerProblem['state']} state
+     * @param {string} reason
+     * @param {{ id?: string | null, findings?: ScanFinding[] }} [extra]
+     */
     function problem(entry, state, reason, extra = {}) {
         problemList.push({ id: extra.id ?? null, path: entry.path, origin: entry.origin, state, reason, findings: extra.findings ?? [] });
     }
 
+    /**
+     * @param {RunnerEntry} entry
+     * @returns {Promise<PreparedModule | null>}  `null` — Модуль не допущен (причина уже в `problems()`).
+     */
     async function prepare(entry) {
         const source = entry.source ?? await readSource(entry.path);
 
@@ -52,11 +91,13 @@ export function createRunnerCore({
             if (!header.ok) { problem(entry, 'invalid', header.errors.join('; ')); return null; }
             const { meta } = header;
             builtinIds.add(meta.id);
+            const load = entry.load;
+            if (!load) { problem(entry, 'invalid', 'a built-in module needs a load() function', { id: meta.id }); return null; }
             return {
                 meta, entry,
                 rights: { tier: 'community', allowedContracts: meta.rights, networkAccess: meta.network },
                 tier: 'community', hash: null, findings: [],
-                loadExports: () => entry.load(),
+                loadExports: () => load(),
             };
         }
 
@@ -77,12 +118,17 @@ export function createRunnerCore({
         };
     }
 
-    /** Разобрать источники и заполнить `definitions` (на месте — ссылку уже держит реестр). */
+    /**
+     * Разобрать источники и заполнить `definitions` (на месте — ссылку уже держит реестр).
+     * @param {RunnerEntry[]} entries
+     * @returns {Promise<{ definitions: ModuleDefinition[], problems: RunnerProblem[] }>}
+     */
     async function discover(entries) {
         definitions.length = 0;
         problemList.length = 0;
         known.clear();
 
+        /** @type {PreparedModule[]} */
         const prepared = [];
         builtinIds.clear();
         // Встроенные разбираются первыми: их id нужны, чтобы внешний Модуль не мог выдать себя за встроенный.
@@ -92,11 +138,12 @@ export function createRunnerCore({
                 const item = await prepare(entry);
                 if (item) prepared.push(item);
             } catch (error) {
-                problem(entry, 'invalid', `could not read: ${error?.message ?? error}`);
+                problem(entry, 'invalid', `could not read: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
 
         const { order, blocked } = resolveLoadOrder(prepared.map(p => p.meta), { engineVersion, available });
+        /** @type {Map<string, PreparedModule>} */
         const byId = new Map();
         for (const item of prepared) if (!byId.has(item.meta.id)) byId.set(item.meta.id, item);
         for (const { id, reason } of blocked) {
@@ -105,7 +152,9 @@ export function createRunnerCore({
         }
 
         for (const id of order) {
-            const { meta, entry, rights, tier, hash, findings, loadExports } = byId.get(id);
+            const item = byId.get(id);
+            if (!item) continue;
+            const { meta, entry, rights, tier, hash, findings, loadExports } = item;
             known.set(id, { id, version: meta.version, origin: entry.origin, tier, hash });
             definitions.push({
                 id, title: meta.title, description: meta.description, folder: meta.folder ?? undefined,
@@ -122,6 +171,7 @@ export function createRunnerCore({
         return { definitions, problems: problems() };
     }
 
+    /** @returns {RunnerProblem[]} */
     function problems() { return problemList.map(item => ({ ...item })); }
 
     return { discover, definitions, problems, info: id => known.get(id) ?? null };

@@ -213,7 +213,7 @@ export function buildSecretsPrompt(secrets) {
 
 /**
  * Фабрика Tool'а. `host` — moduleHost реестра (со своими правами, см.
- * DEFINITIONS в engine-wiring.js), как у любого самостоятельного Модуля:
+ * шапка `@module` в начале файла), как у любого самостоятельного Модуля:
  * «Tools» — только папка в UI (`folder: 'Tools'`), не контейнер.
  */
 export function createSecretsModule(host) {

@@ -1,17 +1,22 @@
+// @ts-check
 import { parseVersion, satisfies } from './semver.js';
+
+/** @typedef {import('./module-types.js').ModuleMeta} ModuleMeta */
 
 /**
  * Порядок загрузки Модулей по `requires` + проверка совместимости с версией движка (RUNTIME.md). Чистая функция.
  * Модуль, которому чего-то не хватает, НЕ роняет остальных: он попадает в `blocked` с причиной, а всё, что от него зависит,
  * блокируется транзитивно.
  *
- * @param {Array<{id, version, engine, requires: Array<{id, range}>}>} metas
- * @param {{ engineVersion: string, available?: Map<string,string> }} options
+ * @param {Array<Pick<ModuleMeta, 'id' | 'version' | 'engine' | 'requires'>>} metas
+ * @param {{ engineVersion: string, available?: Map<string, string> }} options
  *   `available` — уже существующие НЕ-Модули (Ядра), которые можно требовать: id → версия.
  * @returns {{ order: string[], blocked: Array<{id: string, reason: string}> }}
  */
-export function resolveLoadOrder(metas, { engineVersion, available = new Map() } = {}) {
+export function resolveLoadOrder(metas, { engineVersion, available = new Map() }) {
+    /** @type {Map<string, Pick<ModuleMeta, 'id' | 'version' | 'engine' | 'requires'>>} */
     const byId = new Map();
+    /** @type {Map<string, string>} */
     const blocked = new Map();
     for (const meta of metas) {
         if (byId.has(meta.id)) { blocked.set(meta.id, `duplicate module id "${meta.id}"`); continue; }

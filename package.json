@@ -1,5 +1,9 @@
 {
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test tests/**/*.test.js" }
+  "scripts": {
+    "test": "node --test tests/**/*.test.js",
+    "typecheck": "npx -y -p typescript tsc -p jsconfig.json",
+    "typecheck:progress": "node tools/typecheck-progress.mjs"
+  }
 }

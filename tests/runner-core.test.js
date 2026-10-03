@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRunnerCore } from '../cores/runner/index.js';
 import { createBuiltinRunner, BUILTIN_MODULES, ENGINE_VERSION } from '../harness/engine-wiring.js';
+import { resolveStme } from '../harness/module-runtime.js';
 import { createEngine } from '../libraries/shared/engine.js';
 
 const header = (id, extra = '') => `/*@module\nid: ${id}\nversion: 1.0.0\nengine: ^0.2\n${extra}\n*/\n`;
@@ -147,4 +148,10 @@ test('an installed Module can require a built-in one, and is blocked if that one
     ]);
     assert.deepEqual(definitions, []);
     assert.equal(problems.length, 2);
+});
+
+test('resolveStme() knows only the engine paths it lists, never an inherited property like `constructor` (found while typing the Runner)', () => {
+    assert.match(resolveStme('ui/tree'), /\/cores\/ui\/tree\.js$/);
+    assert.match(resolveStme('widgets'), /\/libraries\/shared\/widgets\.js$/);
+    for (const inherited of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'nope']) assert.equal(resolveStme(inherited), null, inherited);
 });

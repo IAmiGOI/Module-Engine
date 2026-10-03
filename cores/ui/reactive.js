@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Ядро UI — реактивные примитивы (CORES.md: "Ядро UI = примитивы:
  * реактивность, h()/DOM-диффинг"). Platform-agnostic — no DOM, no ST, no
@@ -11,17 +12,28 @@
  * current dependent synchronously, no batching, no scheduler.
  */
 
+/** @template [T=any] @typedef {import('./ui-types.js').Signal<T>} Signal */
+
+/** @type {(() => void) | null} */
 let activeTracker = null;
 
-/** A reactive value. `sig()` reads (and tracks, if called during a computed()/effect()); `sig.set(v)` / `sig.update(fn)` write; `sig.peek()` reads without tracking. */
+/**
+ * A reactive value. `sig()` reads (and tracks, if called during a computed()/effect()); `sig.set(v)` / `sig.update(fn)` write; `sig.peek()` reads without tracking.
+ *
+ * @template T
+ * @param {T} initialValue
+ * @returns {Signal<T>}
+ */
 export function signal(initialValue) {
     let value = initialValue;
+    /** @type {Set<() => void>} */
     const dependents = new Set();
 
     function read() {
         if (activeTracker) dependents.add(activeTracker);
         return value;
     }
+    /** @param {T} next */
     read.set = next => {
         if (Object.is(value, next)) return;
         value = next;
@@ -31,15 +43,23 @@ export function signal(initialValue) {
         // while iterating it would either skip or double-visit an entry.
         for (const dependent of [...dependents]) dependent();
     };
+    /** @param {(current: T) => T} fn */
     read.update = fn => read.set(fn(value));
     read.peek = () => value;
     read.isSignal = true;
-    return read;
+    return /** @type {Signal<T>} */ (read);
 }
 
-/** A signal derived from other signals — re-evaluates only when a signal it actually read last time changes. */
+/**
+ * A signal derived from other signals — re-evaluates only when a signal it actually read last time changes.
+ *
+ * @template T
+ * @param {() => T} fn
+ * @returns {Signal<T>}
+ */
 export function computed(fn) {
-    const result = signal(undefined);
+    // До первого вычисления значения нет; сразу ниже `recompute()` кладёт настоящее — снаружи `undefined` не виден.
+    const result = /** @type {Signal<T>} */ (/** @type {unknown} */ (signal(undefined)));
     const recompute = () => {
         const previousTracker = activeTracker;
         activeTracker = recompute;
@@ -54,6 +74,9 @@ export function computed(fn) {
  * Runs `fn` immediately, then again every time a signal it read changes.
  * Returns a dispose function — after calling it, `fn` never runs again
  * (a stale effect from a torn-down UI subtree must not keep firing).
+ *
+ * @param {() => void} fn
+ * @returns {() => void}  Dispose.
  */
 export function effect(fn) {
     let disposed = false;

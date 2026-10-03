@@ -1,6 +1,6 @@
 /**
  * Prompt-injection depth math — extracted at the 4th real consumer
- * (modules/notebook/index.js, modules/tools/notebook.js,
+ * (modules/tools/notebook.js,
  * modules/tools/secrets.js all defined an identical copy; cores/map-narration
  * needed a 4th — LIBRARIES.md's own "extract on the second real consumer"
  * rule was already overdue here). Pure, no DOM/ST/network.

@@ -488,7 +488,7 @@ test('the beforeSend stage CUTS hidden ToolCall messages covered by a summary �
 
 test('st.chatChanged re-reads summaries so a stale-empty core does not OVERWRITE old records with a new fold — real complaint: summaries of the previous session vanished, not just the freshly folded one', async () => {
     // Гонка как в жизни: `load()` движка стартует ДО того, как ST подгрузил
-    // chatMetadata текущего чата (см. modules/notebook/index.js, doc-comment
+    // chatMetadata текущего чата (см. modules/tools/notebook.js, doc-comment
     // на st.chatChanged). Симуляция: chatMetadata пуст на момент load(),
     // «диск» догружается только потом.
     const chat = makeChat(4); // protectedWindow(2)+batchSize(3) = 5 -> сам по себе фолд не случится

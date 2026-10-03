@@ -1,3 +1,22 @@
+// @ts-check
+/** @typedef {import('../../libraries/shared/bus-types.js').RightsConfig} RightsConfig */
+/** @typedef {import('../../libraries/shared/bus-types.js').RightsCore} RightsCore */
+/** @typedef {import('../../libraries/shared/bus-types.js').AccessDecision} AccessDecision */
+/** @typedef {import('../../libraries/shared/bus-types.js').ViolationEvent} ViolationEvent */
+/** @typedef {import('../../libraries/shared/bus-types.js').TrustTier} TrustTier */
+
+/**
+ * Запись о вызывающем в реестре прав.
+ * @typedef {Object} RightsEntry
+ * @property {TrustTier} tier
+ * @property {Set<string> | null} allowedContracts  Только у `community`.
+ * @property {Set<string>} deniedContracts  Только у `scanned-*`.
+ * @property {boolean} networkAccess
+ * @property {boolean} quarantined
+ * @property {boolean} quarantineOnViolation
+ */
+
+/** @type {ReadonlyArray<TrustTier>} */
 const TIERS = Object.freeze(['official', 'community', 'scanned-safe', 'scanned-unsafe']);
 
 /**
@@ -13,17 +32,28 @@ const TIERS = Object.freeze(['official', 'community', 'scanned-safe', 'scanned-u
  * sounding contract name) is a SEPARATE mechanism — the namespace-prefix
  * rule in NAMING_PHILOSOPHY.md — not re-implemented here; this Core is only
  * about a caller's own outgoing requests.
+ *
+ * @returns {RightsCore}
  */
 export function createRightsCore() {
-    const registry = new Map(); // callerId -> { tier, allowedContracts: Set|null, deniedContracts: Set, quarantined, quarantineOnViolation }
+    /** @type {Map<string, RightsEntry>} callerId -> запись */
+    const registry = new Map();
+    /** @type {Set<(violation: ViolationEvent) => void>} */
     const violationListeners = new Set();
+
+    /** Запрос о правах от неизвестного (`undefined`) вызывающего — не ошибка, а отказ «не зарегистрирован». @param {string | undefined} callerId */
+    const lookup = callerId => (callerId === undefined ? undefined : registry.get(callerId));
 
     /**
      * Нарушение — Модуль попросил то, что ему не положено (ARCHITECTURE.md: «Модуль отключается насовсем»). Карантин применяется
      * ТОЛЬКО тем, у кого при регистрации стоит `quarantineOnViolation` (внешние Модули): встроенные иногда нащупывают чужие
      * контракты и получают молчаливый отказ — это прежнее поведение, карать его нельзя. Слушатели (Раннер) сохраняют карантин на диск.
+     *
+     * @param {string | undefined} callerId
+     * @param {string} contract
      */
     function reportViolation(callerId, contract) {
+        if (callerId === undefined) return;
         const entry = registry.get(callerId);
         if (!entry?.quarantineOnViolation || entry.quarantined) return;
         entry.quarantined = true;
@@ -32,6 +62,7 @@ export function createRightsCore() {
         }
     }
 
+    /** @type {RightsCore['onViolation']} */
     function onViolation(listener) {
         violationListeners.add(listener);
         return () => violationListeners.delete(listener);
@@ -52,8 +83,11 @@ export function createRightsCore() {
      * `official` tier gets no automatic "all network allowed". Checked by
      * the dedicated network Gate (libraries/shared/network-gate.js), never
      * the regular one.
+     *
+     * @param {string} callerId
+     * @param {RightsConfig} config
      */
-    function register(callerId, { tier, allowedContracts, deniedContracts, networkAccess = false, quarantineOnViolation = false } = {}) {
+    function register(callerId, { tier, allowedContracts, deniedContracts, networkAccess = false, quarantineOnViolation = false }) {
         if (!TIERS.includes(tier)) throw new Error(`Unknown trust tier "${tier}" for "${callerId}".`);
         const existing = registry.get(callerId);
         registry.set(callerId, {
@@ -66,29 +100,37 @@ export function createRightsCore() {
         });
     }
 
+    /** @param {string | undefined} callerId */
     function isQuarantined(callerId) {
-        return Boolean(registry.get(callerId)?.quarantined);
+        return Boolean(lookup(callerId)?.quarantined);
     }
 
-    /** Permanent — never lifts, not even by a fresh register() call for the same id (see register()'s own doc comment). */
+    /**
+     * Permanent — never lifts, not even by a fresh register() call for the same id (see register()'s own doc comment).
+     * @param {string} callerId
+     */
     function quarantine(callerId) {
         const entry = registry.get(callerId);
         if (entry) entry.quarantined = true;
-        else registry.set(callerId, { tier: 'scanned-unsafe', allowedContracts: null, deniedContracts: new Set(), networkAccess: false, quarantined: true });
+        else registry.set(callerId, { tier: 'scanned-unsafe', allowedContracts: null, deniedContracts: new Set(), networkAccess: false, quarantined: true, quarantineOnViolation: false });
     }
 
     /**
      * Снять карантин — ЕДИНСТВЕННЫЙ путь назад, и он не для Модулей: ссылка на Ядро прав есть только у сборщика движка, который
      * зовёт это по явному решению пользователя. Повторная регистрация карантин НЕ снимает (см. register()).
+     *
+     * @param {string} callerId
      */
     function unquarantine(callerId) {
         const entry = registry.get(callerId);
         if (entry) entry.quarantined = false;
     }
 
-    /** Network access — a separate grant from checkAccess(), see register()'s own doc comment. Quarantine denies it too, same as everything else. */
+    /** Network access — a separate grant from checkAccess(), see register()'s own doc comment. Quarantine denies it too, same as everything else.
+     * @param {string | undefined} callerId
+     */
     function hasNetworkAccess(callerId) {
-        const entry = registry.get(callerId);
+        const entry = lookup(callerId);
         if (!entry || entry.quarantined) return false;
         if (!entry.networkAccess) reportViolation(callerId, 'http.request');
         return entry.networkAccess;
@@ -103,9 +145,13 @@ export function createRightsCore() {
      *  - scanned-safe / scanned-unsafe: default-allow — deny only what the
      *    scan explicitly flagged (see ARCHITECTURE.md's own noted tradeoff:
      *    deliberately softer than deny-by-default).
+     *
+     * @param {string | undefined} callerId
+     * @param {string} contract
+     * @returns {AccessDecision}
      */
     function checkAccess(callerId, contract) {
-        const entry = registry.get(callerId);
+        const entry = lookup(callerId);
         if (!entry) return { allowed: false, reason: `"${callerId}" is not a registered caller.` };
         if (entry.quarantined) return { allowed: false, reason: `"${callerId}" is quarantined.` };
         if (entry.tier === 'official') return { allowed: true };

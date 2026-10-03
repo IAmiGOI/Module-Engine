@@ -72,6 +72,28 @@ export function disambiguateConflictPath(candidate, taken) {
 }
 
 /**
+ * Копия конфликта, уже созданная РАНЬШЕ для этого пути с тем же содержимым проигравшей версии (хоть на одной из сторон). Проход, оборванный
+ * посреди разбора конфликта, оставляет такую копию, а сам путь так и остаётся «конфликтным»: без этой проверки каждый повтор делал бы
+ * НОВУЮ копию (метка времени другая → имя другое) — отсюда по 4–5 копий одного персонажа. Копия с тем же содержимым — это и есть нужная копия.
+ * @returns {{path:string, local:boolean, remote:boolean}|null}
+ */
+export function findExistingConflictCopy(path, loserHash, { local = {}, remote = {} } = {}) {
+    if (!loserHash) return null;
+    const text = String(path);
+    const slash = text.lastIndexOf('/');
+    const dir = slash < 0 ? '' : text.slice(0, slash + 1);
+    const name = slash < 0 ? text : text.slice(slash + 1);
+    const dot = name.lastIndexOf('.');
+    const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+    const prefix = `${dir}${stem} (conflict `;
+    const matches = candidate => candidate.startsWith(prefix) && candidate.endsWith(ext) && isConflictCopy(candidate);
+    const found = [...new Set([...Object.keys(local), ...Object.keys(remote)])].filter(candidate => matches(candidate) && (hashOf(local[candidate]) === loserHash || hashOf(remote[candidate]) === loserHash)).sort();
+    if (!found.length) return null;
+    const best = found[0];
+    return { path: best, local: hashOf(local[best]) === loserHash, remote: hashOf(remote[best]) === loserHash };
+}
+
+/**
  * @param {object} input
  * @param {Record<string,{hash:string,size?:number,modified?:number}>} input.local
  * @param {Record<string,{hash:string,size?:number,modified?:number}>} input.remote
@@ -123,9 +145,16 @@ export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLa
         // `firstMeet` — этот путь ни разу не синхронизировался (`b === null`), а не «изменили оба после общей истории»: разные вещи,
         // случайно попавшие в одну ветку сравнения. Пара только что встретилась — попытка резолвера (`sync-runner.js`) увести проигравшую
         // версию в карантин, а не плодить файл-копию в самой ST, применяется именно к этому случаю (см. `sync-config.js`'s `CONFLICT_POLICY`).
-        const conflictPath = disambiguateConflictPath(computeConflictPath(path, conflictLabel), takenPaths);
+        const loserHash = hashOf(winner === 'local' ? remote[path] : local[path]);
+        // Сама копия конфликта не плодит копий копий («log (conflict A) (conflict B)»): побеждает более свежая, без нового файла.
+        if (isConflictCopy(path)) {
+            actions.push({ op: SYNC_ACTIONS.conflict, path, winner, firstMeet: false, noCopy: true, localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
+            continue;
+        }
+        const existing = findExistingConflictCopy(path, loserHash, { local, remote });
+        const conflictPath = existing ? existing.path : disambiguateConflictPath(computeConflictPath(path, conflictLabel), takenPaths);
         takenPaths.add(conflictPath);   // тот же путь дважды в одном проходе исключён (пути в цикле не повторяются), но чужой конфликт мог занять это же имя первым
-        actions.push({ op: SYNC_ACTIONS.conflict, path, winner, firstMeet: b === null, conflictPath, localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
+        actions.push({ op: SYNC_ACTIONS.conflict, path, winner, firstMeet: b === null, conflictPath, copyOn: existing ? { local: existing.local, remote: existing.remote } : { local: false, remote: false }, localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
     }
 
     const counts = { push: 0, pull: 0, deleteLocal: 0, deleteRemote: 0, conflict: 0, settle: 0 };

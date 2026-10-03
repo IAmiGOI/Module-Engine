@@ -132,7 +132,7 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
             // Вектор сцены обязан быть посчитан той же моделью, что и теги. Старые версии ME модель не присылали (и считали мультиязычной) — им молча «подобрать» нельзя.
             if (body.model !== MODEL_ID) return sendJson(res, 200, { action: 'none', reason: 'model mismatch' });
             if (!store.hasSection(String(body.section))) return sendJson(res, 404, { error: 'нет такого раздела' });
-            const result = pickTrack({ prototypes: store.prototypesFor(body.section), items: store.pickItems(body.section), vector: body.vector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, plays, smart: body.smart === true, answers: body.answers && typeof body.answers === 'object' ? body.answers : null, elapsed: Number.isFinite(body.elapsed) ? body.elapsed : null, remaining: Number.isFinite(body.remaining) ? body.remaining : null, lastIntensity: Number.isFinite(body.lastIntensity) ? body.lastIntensity : null });
+            const result = pickTrack({ prototypes: store.prototypesFor(body.section), graph: store.graphOf(body.section), items: store.pickItems(body.section), vector: body.vector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, plays, smart: body.smart === true, answers: body.answers && typeof body.answers === 'object' ? body.answers : null, elapsed: Number.isFinite(body.elapsed) ? body.elapsed : null, remaining: Number.isFinite(body.remaining) ? body.remaining : null, lastIntensity: Number.isFinite(body.lastIntensity) ? body.lastIntensity : null });
             if (result.action === 'play') plays.set(result.id, (plays.get(result.id) ?? 0) + 1);
             return sendJson(res, 200, result);
         }
@@ -144,7 +144,11 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
             if (what === 'catalog' && method === 'GET') return sendJson(res, 200, store.adminCatalog());
             if (what === 'sections') {
                 if (method === 'POST') { const body = await readJson(req); return sendJson(res, 201, await store.addSection(body.name, body.mode)); }
-                if (method === 'PATCH' && id) return sendJson(res, 200, await store.renameSection(id, (await readJson(req)).name));
+                if (method === 'PATCH' && id) {
+                    const body = await readJson(req, 256 * 1024);
+                    if (body.graph !== undefined) return sendJson(res, 200, await store.setGraph(id, body.graph));
+                    return sendJson(res, 200, await store.renameSection(id, body.name));
+                }
                 if (method === 'DELETE' && id) { await store.deleteSection(id); return sendJson(res, 200, { ok: true }); }
             }
             if (what === 'examples') {

@@ -1,9 +1,18 @@
+// @ts-check
 import { createEventBus } from './event-bus.js';
 import { createContractBus } from './contract-bus.js';
 import { createGate } from './gate.js';
 import { createNetworkGate } from './network-gate.js';
 import { createRightsCore } from '../../cores/rights/index.js';
 import { request } from './request.js';
+
+/** @typedef {import('./bus-types.js').Engine} Engine */
+/** @typedef {import('./bus-types.js').Host} Host */
+/** @typedef {import('./bus-types.js').Domain} Domain */
+/** @typedef {import('./bus-types.js').HomeDomain} HomeDomain */
+/** @typedef {import('./bus-types.js').GateAccessor} GateAccessor */
+/** @typedef {import('./bus-types.js').RightsConfig} RightsConfig */
+/** @typedef {import('./bus-types.js').Envelope} Envelope */
 
 /**
  * Assembles the real connectivity skeleton (ARCHITECTURE.md) into one
@@ -25,9 +34,12 @@ import { request } from './request.js';
  * reach `http.request` through the ordinary (non-network-checked) Gate,
  * bypassing `hasNetworkAccess()` entirely — seeing this once and closing it
  * was the whole reason this is a separate bus, not a separate label.
+ *
+ * @returns {Engine}
  */
 export function createEngine() {
     const events = createEventBus();
+    /** @type {Record<Domain, import('./bus-types.js').ContractBus>} */
     const buses = {
         modules: createContractBus(events),
         cores: createContractBus(events),
@@ -44,6 +56,7 @@ export function createEngine() {
     // Services/network suppliers don't originate cross-domain requests of
     // their own in this design (see ARCHITECTURE.md: "просто логический
     // адаптер").
+    /** @type {Partial<Record<HomeDomain, Partial<Record<Domain, GateAccessor>>>>} */
     const gates = {
         modules: {
             services: createGate(rights, buses.services),
@@ -57,6 +70,9 @@ export function createEngine() {
         },
     };
 
+    /** @type {Map<string, { homeDomain: HomeDomain, host: Host }>} callerId -> личность и хост — нужна для resolveAs() ниже */
+    const callers = new Map();
+
     /**
      * Registers a caller's identity/rights (see cores/rights/index.js —
      * `rightsConfig` is `{ tier, allowedContracts?, deniedContracts?,
@@ -65,34 +81,48 @@ export function createEngine() {
      * others to reach always happens here) plus one gated accessor per
      * OTHER reachable domain (`host.network` included, for `homeDomain`s
      * that have it).
+     *
+     * @param {string} callerId
+     * @param {HomeDomain} homeDomain
+     * @param {RightsConfig} rightsConfig
+     * @returns {Host}
      */
-    const callers = new Map(); // callerId -> { homeDomain, host } — нужна для resolveAs() ниже
-
     function registerCaller(callerId, homeDomain, rightsConfig) {
         rights.register(callerId, rightsConfig);
         // `own` остаётся БЕЗ Гейта (домашняя шина — ничего не пересекает
         // границу домена), но личность несёт: иначе поставщик на своей же
         // шине не может отличить, кто из Ядер к нему пришёл.
+        /** @type {import('./bus-types.js').OwnAccessor} */
         const own = {
             subscribe: (contract, options, callback) => buses[homeDomain].subscribe(contract, { ...options, callerId }, callback),
             register: (contract, handler, opts) => buses[homeDomain].register(contract, handler, opts),
             contracts: () => buses[homeDomain].contracts(),
         };
+        /** @type {Host} */
         const host = { events, own };
-        for (const [targetDomain, gate] of Object.entries(gates[homeDomain] ?? {})) {
-            host[targetDomain] = {
+        // У вызывающего без Гейтов (Сервис на своей Шине) других доменов просто нет — не ошибка.
+        const homeGates = gates[homeDomain] ?? {};
+        for (const targetDomain of /** @type {Domain[]} */ (Object.keys(homeGates))) {
+            const gate = /** @type {GateAccessor} */ (homeGates[targetDomain]);
+            /** @type {GateAccessor} */
+            const accessor = {
                 subscribe: (contract, options, callback) => gate.subscribe(contract, { ...options, callerId }, callback),
                 register: (contract, handler, opts) => gate.register(contract, handler, opts),
             };
+            host[targetDomain] = accessor;
         }
         callers.set(callerId, { homeDomain, host });
         return host;
     }
 
-    /** В какой шине этот контракт вообще зарегистрирован. Никакой карты вручную — спрашиваем сами Шины (интроспекция Директора). */
+    /**
+     * В какой шине этот контракт вообще зарегистрирован. Никакой карты вручную — спрашиваем сами Шины (интроспекция Директора).
+     * @param {string} contract
+     * @returns {Domain | null}
+     */
     function locateDomain(contract) {
-        for (const [domain, bus] of Object.entries(buses)) {
-            if (bus.contracts().some(entry => entry.contract === contract)) return domain;
+        for (const domain of /** @type {Domain[]} */ (Object.keys(buses))) {
+            if (buses[domain].contracts().some(entry => entry.contract === contract)) return domain;
         }
         return null;
     }
@@ -109,9 +139,16 @@ export function createEngine() {
      * для прав. Ровно та же ошибка, что была бы с общей Шиной для сети,
      * закрытая тем же способом: не «структурно один путь», а физическая
      * невозможность обойти проверку.
+     *
+     * `priority` — тот же флаг места вызова, что у `request()`: пайплайн генерации помечает им свои этапы, чтобы запросы к моделям
+     * из них шли вперёд фоновых (dispatch-queue.js).
+     *
+     * @param {string} callerId
+     * @param {string} contract
+     * @param {any} [params]
+     * @param {{ priority?: string }} [options]
+     * @returns {Promise<Envelope>}
      */
-    // `priority` — тот же флаг места вызова, что у `request()`: пайплайн генерации помечает им свои этапы, чтобы запросы к моделям
-    // из них шли вперёд фоновых (dispatch-queue.js).
     function resolveAs(callerId, contract, params, { priority } = {}) {
         const caller = callers.get(callerId);
         if (!caller) return Promise.resolve({ ok: false, error: { message: `Unknown caller "${callerId}" — an unregistered caller has no rights at all.` } });
