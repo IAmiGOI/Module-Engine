@@ -1,14 +1,38 @@
+/*@module
+id: module.music
+title: Music
+description: Plays background music that matches the scene — chosen locally by embedding meaning, with no model calls.
+version: 0.2.1
+engine: ^0.2
+factory: createMusicModule
+rights: storage.settings.get, storage.settings.set, ui.notify,
+# Текст сцены — через общее Ядро истории чата, не напрямую в ST.
+chatHistory.messages,
+# Аудио-байты — только через Сервис хранилища (indexedDB).
+audio.put, audio.get, audio.delete,
+# Звук — только через Сервис воспроизведения (единственный владелец <audio>).
+audio.playback.play, audio.playback.pause, audio.playback.state, audio.playback.volume, audio.playback.seek,
+# Разметка треков моделью пользователя (описания настроения → эмбединг).
+model.generate,
+# Вектор сцены и вектора треков — локальный эмбединг.
+embedding.compute, embedding.similarity,
+# Разделы музыкального сервера владельца (сеть — только у Ядра).
+musicServer.sections, musicServer.section, musicServer.pick,
+# Умный выбор: Jev пользователя оценивает категории сцены (запрос от сервера, ответ идёт только как номер категории).
+classifier.decide
+*/
 import { numberSetting, booleanSetting } from '../../libraries/core/guide-settings.js';
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed, effect } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
+import { EMBEDDING_MODEL_ID } from '../../libraries/core/embedding.js';
 import { selectTrack, shouldSwitch, pickWeighted } from '../../libraries/core/track-selection.js';
 import { clampToViewport, createDragHandlers } from '../../libraries/shared/draggable.js';
 import { FloatingPanel } from '../../libraries/shared/widgets.js';
 import { MusicPlayerBody } from '../../libraries/shared/music-player-view.js';
 import { sanitizeSource, isRemoteSource } from '../../libraries/shared/music-source.js';
 import { importLink } from './link-import.js';
-import { DEFAULTS, sanitizeTracks, buildSceneText } from './tracks.js';
+import { DEFAULTS, sanitizeTracks, buildSceneText, sceneMessages, blendSceneVectors } from './tracks.js';
 import { createMusicCard } from './card.js';
 import { createServerSection } from './server-section.js';
 import { isServerTrack } from '../../libraries/shared/music-catalog.js';
@@ -43,6 +67,7 @@ export const MODULE_ID = 'module.music';
 const SETTINGS_NAMESPACE = MODULE_ID;
 const TRACKS_KEY = 'tracks';
 const PLAYER_KEY = 'player';
+const EMBEDDING_MODEL_KEY = 'embeddingModel';   // какой моделью посчитаны векторы своих треков
 /** Размер плавающего окна плеера — по CSS (`styles/modules/music-player.css`); нужен только для удержания окна в пределах экрана при перетаскивании. */
 const WINDOW_SIZE = Object.freeze({ width: 336, height: 300 });
 
@@ -289,11 +314,16 @@ export function createMusicModule(host) {
     async function computeSceneVector() {
         const messagesResult = await call('chatHistory.messages', { limit: Math.max(1, contextMessages.peek()) });
         if (!messagesResult.ok) return null;
-        const sceneText = buildSceneText(messagesResult.value, contextMessages.peek());
-        if (!sceneText) return null;
-        lastSceneText = sceneText;
-        const embeddingResult = await request(host.services, 'embedding.compute', { params: { text: sceneText, kind: 'query' } });
-        return embeddingResult.ok ? embeddingResult.value : null;
+        const parts = sceneMessages(messagesResult.value, contextMessages.peek());
+        if (!parts.length) return null;
+        lastSceneText = buildSceneText(messagesResult.value, contextMessages.peek());
+        // Каждая реплика — своим вектором, свежие весят больше (см. blendSceneVectors): длинное старое сообщение не заглушает свежую реплику.
+        const vectors = [];
+        for (const part of parts) {
+            const embedded = await request(host.services, 'embedding.compute', { params: { text: part, kind: 'query' } });
+            vectors.push(embedded.ok ? embedded.value : null);
+        }
+        return blendSceneVectors(vectors);
     }
 
     /**
@@ -503,9 +533,31 @@ export function createMusicModule(host) {
         }),
     ];
 
+    /**
+     * Векторы своих треков посчитаны конкретной моделью; после смены модели (5.147: мультиязычная → английская e5) они несравнимы с векторами сцен, поэтому пересчитываются
+     * один раз по тексту визитки. Модель недоступна — ничего не трогаем и повторим при следующей загрузке.
+     */
+    async function migrateVectorsIfNeeded() {
+        const stored = await call('storage.settings.get', { namespace: SETTINGS_NAMESPACE, key: EMBEDDING_MODEL_KEY, fallback: null });
+        if (stored.ok && stored.value === EMBEDDING_MODEL_ID) return;
+        const list = tracks.peek();
+        if (list.length) {
+            const fresh = [];
+            for (const track of list) {
+                const embedded = await request(host.services, 'embedding.compute', { params: { text: track.description || track.name, kind: 'passage' } });
+                if (!embedded.ok || !Array.isArray(embedded.value)) return;
+                fresh.push(embedded.value);
+            }
+            tracks.set(list.map((track, index) => ({ ...track, vector: fresh[index] })));
+            await saveTracks();
+        }
+        await call('storage.settings.set', { namespace: SETTINGS_NAMESPACE, key: EMBEDDING_MODEL_KEY, value: EMBEDDING_MODEL_ID });
+    }
+
     async function load() {
         const saved = await call('storage.settings.get', { namespace: SETTINGS_NAMESPACE, key: TRACKS_KEY, fallback: null });
         tracks.set(sanitizeTracks(saved.ok ? saved.value : []));
+        await migrateVectorsIfNeeded();
         const player = await call('storage.settings.get', { namespace: SETTINGS_NAMESPACE, key: PLAYER_KEY, fallback: null });
         if (player.ok && player.value) {
             autoSwitch.set(player.value.autoSwitch !== false);

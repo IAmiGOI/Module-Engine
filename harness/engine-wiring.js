@@ -88,220 +88,110 @@ import { createHubCore } from '../cores/ui/hub/index.js';
 import { createUpdateOverlayCore } from '../cores/ui/update-overlay.js';
 import { createMemoryGraphPanelCore } from '../cores/ui/memory-graph-panel.js';
 import { createPicturePanelCore } from '../cores/ui/picture-panel.js';
-import { createTrackerModule, MODULE_ID as TRACKER_MODULE_ID } from '../modules/tracker/index.js';
-import { createTimeModule, MODULE_ID as TIME_MODULE_ID } from '../modules/time/index.js';
-import { createNotebookModule, MODULE_ID as NOTEBOOK_MODULE_ID } from '../modules/tools/index.js';
-import { createSecretsModule, SECRETS_MODULE_ID as SECRETS_MODULE_ID } from '../modules/tools/index.js';
-import { createPostprocessModule, MODULE_ID as POSTPROCESS_MODULE_ID } from '../modules/postprocess/index.js';
-import { createMusicModule, MODULE_ID as MUSIC_MODULE_ID } from '../modules/music/index.js';
-import { createScenePainterModule, MODULE_ID as SCENE_PAINTER_MODULE_ID } from '../modules/scene-painter/index.js';
-import { createSpeakerColorsModule, MODULE_ID as SPEAKER_COLORS_MODULE_ID } from '../modules/speaker-colors/index.js';
-import { createMapModule, MODULE_ID as MAP_MODULE_ID } from '../modules/map/index.js';
+import { createRunnerCore, STME_PATHS } from '../cores/runner/index.js';
+import { createModuleInstaller } from '../cores/runner/installer.js';
 
 /**
- * Реестр Модулей — временная замена настоящему Раннеру (ARCHITECTURE.md,
- * ROADMAP шаг 6): тот будет грузить Модули с диска и проверять
- * совместимость по semver. Здесь список захардкожен, но ВСЁ остальное
- * настоящее: у Модуля своя личность на Шине модулей, свои объявленные права,
- * свой независимый Final UI, и до Ядер он дотягивается только через Гейт.
- *
- * Права намеренно `community` с явным списком контрактов, а не `official`:
- * Модуль, который едет вместе с движком, всё равно обязан ходить тем же
- * путём, что и чужой, — иначе Гейт на этом пути никогда бы не проверялся.
+ * Версия движка для проверки `engine:` в шапках Модулей (RUNTIME.md). Совпадает с версией в manifest.json (без хвоста «Beta»).
  */
-const DEFINITIONS = [{
-    id: TRACKER_MODULE_ID,
-    title: 'Tracker',
-    description: 'Keeps named values up to date by asking a model, and exposes them as macros.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'tracking.trackers', 'tracking.configure', 'tracking.fields', 'tracking.poll', 'tracking.reset',
-            'model.workers.get', 'model.presets.get', 'model.presets.set', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
-            // «Обновиться до ответа» регистрируется этапом пайплайна
-            // `generation.prepare` — значит Модулю нужно право трогать его состав.
-            'pipeline.stages', 'pipeline.stages.add', 'pipeline.stages.remove',
-        ],
-    },
-    create: host => createTrackerModule(host),
-}, {
-    id: TIME_MODULE_ID,
-    title: 'RP Time',
-    description: 'Works out in-world time from the conversation and keeps it as a macro.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'tracking.trackers', 'tracking.configure', 'tracking.poll', 'tracking.reset',
-            'storage.settings.get', 'storage.settings.set',
-            // Сообщения с их `mesid` и привязка отметок времени к КОНКРЕТНОМУ
-            // сообщению — через общее Ядро истории чата, не напрямую в
-            // `storage.chatMemory` (Модулю туда и нет прямого пути).
-            'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations',
-            // Этап инъекции текущего времени на `generation.beforeSend` —
-            // исполняется под ПРАВАМИ ЭТОГО Модуля (см. cores/pipeline/index.js
-            // про `resolveAs`), регистрирует и снимает этап сам Модуль.
-            'pipeline.stages.add', 'pipeline.stages.remove',
-            // Вклад в Prompt Manager (deliverToPrompt) — без этих двух прав Гейт молча отклонял оба вызова,
-            // deliverToPrompt читал это как «PM не берёт сборку» и тихо уходил в `legacy` ВСЕГДА, даже когда PM
-            // реально включён (найдено по факту: владелец пожаловался, что вклад не появляется в окне PM).
-            'promptManager.takesOver', 'promptManager.contribute',
-            'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
-            'ui.messageFooter.liveMesid',
-        ],
-    },
-    create: host => createTimeModule(host),
-}, {
-    // «Tools» — НЕ Модуль, а ПАПКА в UI: инструменты, которыми модель
-    // пользуется сама, включаются КАЖДЫЙ СВОИМ тумблером. Папка — свойство
-    // `folder` определения; реестр и панель знают только это свойство,
-    // никакого «Модуля Tools» в живом составе нет.
-    id: NOTEBOOK_MODULE_ID,
-    title: 'Notebook',
-    folder: 'Tools',
-    description: 'A private notebook the AI writes to and reads back — working memory for plans, secrets and goals.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
-            'generation.registerTool', 'generation.unregisterTool',
-            // Этап на `generation.beforeSend` исполняется под ЕГО правами
-            // (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
-            // и снимает этап сам Модуль, отсюда — эти два права.
-            'pipeline.stages.add', 'pipeline.stages.remove',
-            // Вклад в Prompt Manager (deliverToPrompt) — без них Гейт молча отклонял вызов, и вклад блокнота
-            // никогда не доходил до PM, даже когда тот включён (владелец: «почему [эти модули] не публикуют»).
-            'promptManager.takesOver', 'promptManager.contribute',
-            'ui.notify',
-        ],
-    },
-    create: host => createNotebookModule(host),
-}, {
-    // Второй Tool папки «Tools» — устройство одно в один с блокнотом
-    // (см. modules/tools/secrets.js): структурированные секреты с
-    // обязательными «кто знает / название / содержимое» и действиями
-    // create/update/remove.
-    id: SECRETS_MODULE_ID,
-    title: 'Secrets',
-    folder: 'Tools',
-    description: 'A private list of the AI\'s secrets — hidden story facts, each tagged with who knows it.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'storage.settings.get', 'storage.settings.set', 'storage.chatMemory.get', 'storage.chatMemory.set',
-            'generation.registerTool', 'generation.unregisterTool',
-            // Этап на `generation.beforeSend` исполняется под ЕГО правами
-            // (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
-            // и снимает этап сам Модуль, отсюда — эти два права.
-            'pipeline.stages.add', 'pipeline.stages.remove',
-            // Вклад в Prompt Manager (deliverToPrompt) — без них Гейт молча отклонял вызов (см. Notebook выше).
-            'promptManager.takesOver', 'promptManager.contribute',
-            'ui.notify',
-        ],
-    },
-    create: host => createSecretsModule(host),
-}, {
-    id: POSTPROCESS_MODULE_ID,
-    title: 'Post-Turn Processor',
-    description: 'Rewrites each fresh reply through a chain of independent model passes and replaces it with the final result.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'chatHistory.messages', 'chatHistory.replaceText', 'chatHistory.annotate', 'chatHistory.annotations',
-            'model.generate',
-            'model.workers.get', 'model.presets.get', 'model.presets.set', 'storage.settings.get', 'storage.settings.set', 'ui.notify',
-            'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.liveMesid', 'ui.messageFooter.attach',
-        ],
-    },
-    create: host => createPostprocessModule(host),
-}, {
-    id: MUSIC_MODULE_ID,
-    title: 'Music',
-    description: 'Plays background music that matches the scene — chosen locally by embedding meaning, with no model calls.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'storage.settings.get', 'storage.settings.set', 'ui.notify',
-            // Текст сцены — через общее Ядро истории чата, не напрямую в ST.
-            'chatHistory.messages',
-            // Аудио-байты — только через Сервис хранилища (indexedDB).
-            'audio.put', 'audio.get', 'audio.delete',
-            // Звук — только через Сервис воспроизведения (единственный владелец <audio>).
-            'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek',
-            // Разметка треков моделью пользователя (описания настроения → эмбединг).
-            'model.generate',
-            // Вектор сцены и вектора треков — локальный эмбединг.
-            'embedding.compute', 'embedding.similarity',
-            // Разделы музыкального сервера владельца (сеть — только у Ядра).
-            'musicServer.sections', 'musicServer.section', 'musicServer.pick',
-            // Умный выбор: Jev пользователя оценивает категории сцены (запрос от сервера, ответ идёт только как номер категории).
-            'classifier.decide',
-        ],
-    },
-    create: host => createMusicModule(host),
-}, {
-    id: SCENE_PAINTER_MODULE_ID,
-    title: 'Scene Painter',
-    description: 'Paints a picture of the current scene into the Picture window: a model writes the image prompt from the chat, an image backend draws it.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'storage.settings.get', 'storage.settings.set', 'ui.notify',
-            // Отрывок чата для промпта и привязка картинки к сообщению — через Ядро истории чата; текст сообщения не трогается.
-            'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations',
-            // Промпт пишет текстовая модель, рисует Ядро diffusion; сети у Модуля нет вовсе.
-            'model.generate', 'model.workers.get', 'image.generate', 'image.workers.get', 'image.workers.set',
-            // Картинка выводится в окно «Картинка» движка; старые — убираются из хранилища.
-            'ui.picture.show', 'image.delete',
-            // Аватары персонажей и персоны — референсы для бэкендов, которые их принимают (только адреса, байты читает Ядро diffusion).
-            'stCharacter.avatars',
-            'ui.messageFooter.claim', 'ui.messageFooter.release', 'ui.messageFooter.attach',
-        ],
-    },
-    create: host => createScenePainterModule(host),
-}, {
-    id: SPEAKER_COLORS_MODULE_ID,
-    title: 'Speaker Colors',
-    description: 'Colors each character\'s dialogue by speaker, detected locally — never touches the message text sent to the model.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'speaker.resolve', 'speaker.cast.list', 'speaker.cast.add', 'speaker.cast.remove', 'speaker.cast.update',
-            'speaker.presets.get', 'speaker.presets.save', 'speaker.presets.delete', 'speaker.presets.apply',
-            'stChat.rendered', 'stChat.messageTextElement', 'stChat.messages',
-            'dom.textContent', 'dom.paintTextRuns', 'dom.clearPaintedRuns', 'dom.readCssVariable',
-        ],
-    },
-    create: host => createSpeakerColorsModule(host),
-}, {
-    id: MAP_MODULE_ID,
-    title: 'Map',
-    description: 'A floating, full-screen map window with a settings drawer — opened from its own draggable button on screen, not from a tab.',
-    rights: {
-        tier: 'community',
-        allowedContracts: [
-            'storage.settings.get', 'storage.settings.set', 'ui.notify',
-            'map.settings.get', 'map.settings.update',
-            'map.rootImage.get', 'map.rootImage.set', 'map.rootImage.clear',
-            'image.put', 'image.get', 'image.delete',
-            'map.nodes.list', 'map.nodes.create', 'map.nodes.update', 'map.nodes.remove',
-            'map.edges.list', 'map.pathfind',
-            'map.position.get', 'map.position.set', 'map.position.move',
-            'map.movementLog.list', 'map.movementLog.clear',
-        ],
-    },
-    create: host => createMapModule(host),
-}];
+export const ENGINE_VERSION = '0.2.1';
+
+/**
+ * Встроенные Модули — только ГДЕ они лежат. Всё остальное (id, название, права, зависимости) живёт в шапке самого файла и читается
+ * Раннером ([cores/runner/index.js](../cores/runner/index.js)) как текст. Списка путей не избежать: у браузера нет «прочитать папку»,
+ * а динамический `import()` нужен литералом, чтобы сборщик/ST его вообще нашёл.
+ *
+ * Права встроенных намеренно `community` с явным списком контрактов, а не `official`: Модуль, который едет вместе с движком, всё равно
+ * обязан ходить тем же путём, что и чужой, — иначе Гейт на этом пути никогда бы не проверялся.
+ */
+export const BUILTIN_MODULES = [
+    { origin: 'builtin', path: 'modules/tracker/index.js', load: () => import('../modules/tracker/index.js') },
+    { origin: 'builtin', path: 'modules/time/index.js', load: () => import('../modules/time/index.js') },
+    { origin: 'builtin', path: 'modules/tools/notebook.js', load: () => import('../modules/tools/notebook.js') },
+    { origin: 'builtin', path: 'modules/tools/secrets.js', load: () => import('../modules/tools/secrets.js') },
+    { origin: 'builtin', path: 'modules/postprocess/index.js', load: () => import('../modules/postprocess/index.js') },
+    { origin: 'builtin', path: 'modules/music/index.js', load: () => import('../modules/music/index.js') },
+    { origin: 'builtin', path: 'modules/scene-painter/index.js', load: () => import('../modules/scene-painter/index.js') },
+    { origin: 'builtin', path: 'modules/speaker-colors/index.js', load: () => import('../modules/speaker-colors/index.js') },
+    { origin: 'builtin', path: 'modules/map/index.js', load: () => import('../modules/map/index.js') },
+];
+
+/** Текст встроенного Модуля — ради шапки. В браузере это fetch того же файла; в Node (тесты) — файловая система. */
+async function readBuiltinSource(path) {
+    const url = new URL(`../${path}`, import.meta.url);
+    if (url.protocol === 'file:') return (await import('node:fs/promises')).readFile(url, 'utf8');
+    const response = await globalThis.fetch(url, { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`HTTP ${response.status} for ${path}`);
+    return response.text();
+}
+
+/** Раннер со встроенными Модулями; `ready` — когда определения готовы (реестр ждёт его в `restore()`). */
+export function createBuiltinRunner({ engine, entries = BUILTIN_MODULES } = {}) {
+    const runner = createRunnerCore({
+        engineVersion: ENGINE_VERSION,
+        readSource: readBuiltinSource,
+        resolveStme: path => (STME_PATHS[path] ? new URL(`../${STME_PATHS[path]}`, import.meta.url).href : null),
+        isQuarantined: id => Boolean(engine?.rights?.isQuarantined?.(id)),
+    });
+    const ready = runner.discover(entries);
+    return { runner, ready };
+}
+
+const RUNNER_NAMESPACE_KEY = 'core.runner';
+/** Резерв на случай, если вызвали до первой сборки: id встроенных известны заранее. */
+const BUILTIN_IDS_FALLBACK = ['module.tracker', 'module.time', 'module.notebook', 'module.secrets', 'module.postprocess', 'module.music', 'module.scenePainter', 'module.speakerColors', 'module.map'];
+
+/**
+ * Полный рантайм: Раннер + установщик внешних Модулей. Список установленных и карантин лежат в `storage.settings` под неймспейсом
+ * Раннера; сеть для скачивания идёт через сетевую Шину от ОТДЕЛЬНОГО Ядра с `networkAccess` — самим Модулям сеть для этого не нужна.
+ * Нарушение прав внешним Модулем (карантин) сохраняется сразу и действует и после перезапуска.
+ */
+export function createModuleRuntime({ engine, storageHost, entries = BUILTIN_MODULES, importBlob } = {}) {
+    const networkHost = engine.registerCaller('core.runner.installer', 'cores', { tier: 'official', networkAccess: true });
+    const store = {
+        read: async (key, fallback) => {
+            const result = await request(storageHost.own, 'storage.settings.get', { params: { namespace: RUNNER_NAMESPACE_KEY, key, fallback } });
+            return result.ok ? result.value ?? fallback : fallback;
+        },
+        write: (key, value) => request(storageHost.own, 'storage.settings.set', { params: { namespace: RUNNER_NAMESPACE_KEY, key, value } }),
+    };
+
+    const fetchText = async url => {
+        const result = await request(networkHost.network, 'http.request', { params: { url, method: 'GET' }, timeoutMs: 20000 });
+        return result.ok ? { ok: Boolean(result.value?.ok), status: result.value?.status, text: result.value?.text ?? '' } : { ok: false, status: 0, text: '' };
+    };
+
+    let runner = null;
+    const resolveStme = path => (STME_PATHS[path] ? new URL(`../${STME_PATHS[path]}`, import.meta.url).href : null);
+    const installer = createModuleInstaller({
+        fetchText, store, resolveStme,
+        reservedIds: () => (runner?.definitions ?? []).filter(item => item.origin === 'builtin').map(item => item.id).concat(BUILTIN_IDS_FALLBACK),
+    });
+    runner = createRunnerCore({
+        engineVersion: ENGINE_VERSION,
+        readSource: readBuiltinSource,
+        ...(importBlob ? { importBlob } : {}),
+        resolveStme: path => (STME_PATHS[path] ? new URL(`../${STME_PATHS[path]}`, import.meta.url).href : null),
+        isQuarantined: id => installer.isQuarantined(id) || Boolean(engine.rights.isQuarantined(id)),
+    });
+    engine.rights.onViolation(violation => { void installer.recordQuarantine(violation); });
+
+    const rediscover = () => runner.discover([...entries, ...installer.sources()]);
+    const ready = installer.load().then(rediscover);
+    return { runner, installer, ready, rediscover };
+}
 
 /** Где реестр помнит, что было включено. Неймспейс Раннера, а не Модуля: это состояние ЗАПУСКА, а не настройка кого-то из них. */
 const RUNNER_NAMESPACE = 'core.runner';
 const ENABLED_KEY = 'enabledModules';
 
-export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, storageHost, onChanged = () => {}, definitions = DEFINITIONS }) {
+export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoot, storageHost, onChanged = () => {}, definitions, ready = Promise.resolve(), problems = () => [], installer = null, rediscover = async () => {} }) {
     const live = new Map(); // id -> { instance, finalUi }
+    const lastErrors = new Map(); // id -> текст последней неудачной попытки включить
     // Локальная ссылка на состав: тестам (и только им) можно подсунуть свой
-    // список лёгких Модулей вместо настоящих DEFINITIONS — реестру нужен
+    // список лёгких Модулей вместо настоящих определений Раннера — реестру нужен
     // интерфейс Модуля (`create`/`load`/`tree`), не его начинка.
-    const DEFS = definitions;
+    const DEFS = definitions ?? [];
 
     /**
      * Кладёт корни включённых Модулей в выделенные им слоты. Отдельным шагом и
@@ -348,6 +238,8 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
      * возможных поведений при старте.
      */
     async function restore() {
+        // Состав Модулей приходит от Раннера асинхронно (шапки читаются как текст) — без этого `DEFS` ещё пуст.
+        await ready;
         const result = await request(storageHost.own, 'storage.settings.get', {
             params: { namespace: RUNNER_NAMESPACE, key: ENABLED_KEY, fallback: [] },
         });
@@ -364,11 +256,25 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
         const definition = DEFS.find(item => item.id === id);
         if (!definition) throw new Error(`module "${id}" is not installed.`);
 
+        // Карантин (нарушил права) действует и на включение: «не включится обратно в рамках установки».
+        if (engine.rights?.isQuarantined?.(definition.id)) throw new Error(`module "${id}" is quarantined.`);
+
         const moduleHost = engine.registerCaller(definition.id, 'modules', definition.rights);
-        const instance = definition.create(moduleHost);
-        await instance.load();
-        const finalUi = uiModules.enable(definition.id, instance.tree());
-        await finalUi.settled();
+        let instance = null;
+        let finalUi = null;
+        try {
+            instance = await definition.create(moduleHost);
+            await instance.load();
+            finalUi = uiModules.enable(definition.id, instance.tree());
+            await finalUi.settled();
+        } catch (error) {
+            // Сбой при включении не оставляет половину Модуля: подписки и дерево снимаются, остальные Модули не затронуты.
+            try { instance?.stop?.(); } catch { /* уже сломан — важнее доложить исходную ошибку */ }
+            if (finalUi) uiModules.disable(definition.id);
+            lastErrors.set(id, error?.message ?? String(error));
+            throw error;
+        }
+        lastErrors.delete(id);
         live.set(id, { instance, finalUi });
 
         // Модуль вправе иметь ВТОРОЕ дерево — плавающее окно поверх страницы
@@ -457,8 +363,44 @@ export function createModuleRegistry({ engine, uiModules, panelSettled, panelRoo
         return { enabled: [...live.keys()] };
     }
 
+    /**
+     * Установить Модуль, показанный `installer.preview()`: сохранить, пересобрать состав и (если он уже был включён) подменить живой
+     * экземпляр на новую версию. Само ВКЛЮЧЕНИЕ остаётся отдельным решением пользователя.
+     */
+    async function installModule(previewResult) {
+        if (!installer) throw new Error('no installer is wired.');
+        const record = await installer.install(previewResult);
+        const wasLive = live.has(record.id);
+        if (wasLive) await disable(record.id);
+        await rediscover();
+        onChanged();
+        if (wasLive && DEFS.some(item => item.id === record.id)) await enable(record.id);
+        return record;
+    }
+
+    async function uninstallModule(id) {
+        if (!installer) throw new Error('no installer is wired.');
+        if (live.has(id)) await disable(id);
+        const removed = await installer.uninstall(id);
+        await rediscover();
+        onChanged();
+        return removed;
+    }
+
+    /** Снять карантин — только явным решением пользователя; потом состав пересобирается, и Модуль снова можно включить. */
+    async function releaseQuarantine(id) {
+        if (!installer) throw new Error('no installer is wired.');
+        const released = await installer.releaseQuarantine(id);
+        if (released) { engine.rights.unquarantine(id); await rediscover(); onChanged(); }
+        return released;
+    }
+
     return {
-        list: () => DEFS.map(({ id, title, description, folder }) => ({ id, title, description, folder })),
+        installModule, uninstallModule, releaseQuarantine,
+        installer,
+        list: () => DEFS.map(({ id, title, description, folder, version, origin, tier }) => ({ id, title, description, folder, version, origin, tier, error: lastErrors.get(id) ?? null })),
+        /** Источники, которые Раннер не смог превратить в Модуль, — с причиной (плохая шапка, отказ скана, нет зависимости). */
+        problems,
         enabled: () => [...live.keys()],
         instance: id => live.get(id)?.instance,
         /** Настройки, которые Модуль разрешил менять гиду (`guideSettings()` → `{ specs, save }`); `null` — Модуль выключен или ничего не объявил. */
@@ -850,14 +792,22 @@ export async function wireEngine({ getContext, fetch = globalThis.fetch?.bind(gl
 
     let enginePanelRef = null;
     let hubRef = null;
+    const moduleStorageHost = engine.registerCaller('core.runner', 'cores', { tier: 'official' });
+    const { runner: moduleRunner, installer: moduleInstaller, ready: moduleRunnerReady, rediscover: rediscoverModules } = createModuleRuntime({ engine, storageHost: moduleStorageHost });
+    void moduleRunnerReady.then(() => { enginePanelRef?.refreshModules(); void hubRef?.refresh(); });
     const modules = createModuleRegistry({
         engine,
         uiModules,
+        definitions: moduleRunner.definitions,
+        ready: moduleRunnerReady,
+        problems: moduleRunner.problems,
+        installer: moduleInstaller,
+        rediscover: rediscoverModules,
         panelSettled: () => panelUi?.settled() ?? Promise.resolve(),
         panelRoot: () => panelUi?.getRoot() ?? null,
         // Своя личность на Шине ядер: состав помнится через то же Ядро
         // сохранения, что и всё остальное, а не отдельным ходом в обход.
-        storageHost: engine.registerCaller('core.runner', 'cores', { tier: 'official' }),
+        storageHost: moduleStorageHost,
         onChanged: () => { enginePanelRef?.refreshModules(); void hubRef?.refresh(); },
     });
 

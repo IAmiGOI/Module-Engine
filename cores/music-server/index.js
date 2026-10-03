@@ -9,7 +9,7 @@ import { isServerConfigured, sectionsUrl, sectionUrl, pickUrl, parseSections, pa
  */
 
 const TIMEOUT_MS = 20000;
-const VECTOR_DIM = 384;   // multilingual-e5-small
+const VECTOR_DIM = 384;   // e5-small-v2
 
 export function createMusicServerCore(host, { server = {}, timeoutMs = TIMEOUT_MS, dim = VECTOR_DIM } = {}) {
     const model = EMBEDDING_MODEL_ID;
@@ -54,7 +54,7 @@ export function createMusicServerCore(host, { server = {}, timeoutMs = TIMEOUT_M
     async function pick({ section: id, vector, current = null, ended = false, force = false, minSimilarity, switchMargin, smart = false, answers = null, elapsed = null, remaining = null, lastIntensity = null } = {}) {
         const sectionId = String(id ?? '');
         if (!isServerConfigured(server) || !sectionId) return { action: 'none' };
-        const body = JSON.stringify({ section: sectionId, vector, current, ended, force, minSimilarity, switchMargin, smart, answers, elapsed, remaining, lastIntensity });
+        const body = JSON.stringify({ model, section: sectionId, vector, current, ended, force, minSimilarity, switchMargin, smart, answers, elapsed, remaining, lastIntensity });
         const result = await request(host.network, 'http.request', { params: { url: pickUrl(server), method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, timeoutMs });
         return result.ok && result.value?.ok ? parsePick(result.value.text, { server, sectionId }) : { action: 'none' };
     }

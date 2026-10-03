@@ -109,3 +109,13 @@ test('the core never throws: no server, a down server and an incompatible catalo
     const foreign = buildCore({ responses: { '/api/sections': okJson({ model: 'other', dim: 4, sections: [{ id: 'a', name: 'A', tracks: 1 }] }) } });
     assert.equal((await foreign.core.sections()).ok, false);
 });
+
+test('the core tells the server which embedding model produced the scene vector (the server refuses vectors of another model)', async () => {
+    const engine = createEngine();
+    const bodies = [];
+    engine.buses.network.register('http.request', ({ url, body }) => { bodies.push({ url, body: JSON.parse(body) }); return { ok: true, status: 200, text: JSON.stringify({ action: 'keep' }) }; });
+    const core = createMusicServerCore(engine.registerCaller('core.musicServer', 'cores', { tier: 'official', networkAccess: true }), { server, dim: 4 });
+    assert.deepEqual(await core.pick({ section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4] }), { action: 'keep', intensity: null });
+    assert.equal(bodies[0].body.model, MODEL);
+    assert.ok(bodies[0].url.includes('/api/pick'));
+});

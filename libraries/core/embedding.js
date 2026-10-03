@@ -4,8 +4,9 @@
  * полным разбором альтернатив). Ни DOM, ни Шины здесь нет — чистая обёртка
  * над одной внешней библиотекой, тот же принцип, что у `macro-language.js`.
  *
- * Модель — `Xenova/multilingual-e5-small` (ONNX-порт `intfloat/multilingual-e5-small`,
- * MEMORY_GRAPH.md — сравнение с альтернативами и почему не Qwen3-Embedding).
+ * Модель — `Xenova/e5-small-v2` (ONNX-порт `intfloat/e5-small-v2`, английская). Раньше была `multilingual-e5-small`; заменена решением владельца 2026-10-03: ME работает
+ * с английским текстом, а на проверке подбора музыки (современные сцены, 18 примеров) английская e5 дала 15 верных из 18 против 12 у мультиязычной (ROADMAP 5.147).
+ * Сравнение с другими вариантами — MEMORY_GRAPH.md (там разбор до замены).
  * E5-семейство асимметрично: документ и запрос эмбедятся РАЗНЫМИ префиксами
  * (`passage: `/`query: `) — это часть самого протокола модели, не наша
  * прихоть (см. `intfloat/multilingual-e5-small` card). Без префикса модель
@@ -17,7 +18,7 @@
  * бандлера, ни `node_modules` тут нет).
  */
 
-const MODEL_ID = 'Xenova/multilingual-e5-small';
+const MODEL_ID = 'Xenova/e5-small-v2';
 /** Нужна музыкальному серверу: его векторы сравнимы с векторами ME, только если модель та же (`libraries/shared/music-catalog.js`). */
 export const EMBEDDING_MODEL_ID = MODEL_ID;
 const TRANSFORMERS_CDN_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6';

@@ -1,0 +1,7 @@
+/* Установка внешних Модулей (cores/ui/panel-cards/modules-install.js). Только раскладка — цвета и поля берутся из общих токенов. */
+.stme-install-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; }
+.stme-install-row > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.stme-install-catalog, .stme-install-preview { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.stme-install-preview { padding: 8px; border-radius: var(--stme-radius, 6px); background: color-mix(in srgb, var(--stme-level-2, transparent) 60%, transparent); }
+.stme-finding, .stme-install-preview .stme-error { overflow-wrap: anywhere; }
+.stme-install-preview .stme-error, .stme-install-catalog .stme-error { color: #e5645f; margin: 0; }

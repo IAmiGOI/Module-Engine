@@ -1,3 +1,27 @@
+/*@module
+id: module.time
+title: RP Time
+description: Works out in-world time from the conversation and keeps it as a macro.
+version: 0.2.1
+engine: ^0.2
+factory: createTimeModule
+rights: tracking.trackers, tracking.configure, tracking.poll, tracking.reset,
+storage.settings.get, storage.settings.set,
+# Сообщения с их `mesid` и привязка отметок времени к КОНКРЕТНОМУ
+# сообщению — через общее Ядро истории чата, не напрямую в
+# `storage.chatMemory` (Модулю туда и нет прямого пути).
+chatHistory.messages, chatHistory.annotate, chatHistory.annotations, chatHistory.clearAnnotations,
+# Этап инъекции текущего времени на `generation.beforeSend` —
+# исполняется под ПРАВАМИ ЭТОГО Модуля (см. cores/pipeline/index.js
+# про `resolveAs`), регистрирует и снимает этап сам Модуль.
+pipeline.stages.add, pipeline.stages.remove,
+# Вклад в Prompt Manager (deliverToPrompt) — без этих двух прав Гейт молча отклонял оба вызова,
+# deliverToPrompt читал это как «PM не берёт сборку» и тихо уходил в `legacy` ВСЕГДА, даже когда PM
+# реально включён (найдено по факту: владелец пожаловался, что вклад не появляется в окне PM).
+promptManager.takesOver, promptManager.contribute,
+model.workers.get, model.presets.get, model.presets.set, ui.notify, ui.messageFooter.claim, ui.messageFooter.release,
+ui.messageFooter.liveMesid
+*/
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';

@@ -1,3 +1,22 @@
+/*@module
+id: module.notebook
+title: Notebook
+folder: Tools
+description: A private notebook the AI writes to and reads back — working memory for plans, secrets and goals.
+version: 0.2.1
+engine: ^0.2
+factory: createNotebookModule
+rights: storage.settings.get, storage.settings.set, storage.chatMemory.get, storage.chatMemory.set,
+generation.registerTool, generation.unregisterTool,
+# Этап на `generation.beforeSend` исполняется под ЕГО правами
+# (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
+# и снимает этап сам Модуль, отсюда — эти два права.
+pipeline.stages.add, pipeline.stages.remove,
+# Вклад в Prompt Manager (deliverToPrompt) — без них Гейт молча отклонял вызов, и вклад блокнота
+# никогда не доходил до PM, даже когда тот включён (владелец: «почему [эти модули] не публикуют»).
+promptManager.takesOver, promptManager.contribute,
+ui.notify
+*/
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { Button, TextInput, TextArea, Slider, Details, Row, Field, EmptyState } from '../../libraries/shared/widgets.js';

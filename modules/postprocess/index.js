@@ -1,3 +1,15 @@
+/*@module
+id: module.postprocess
+title: Post-Turn Processor
+description: Rewrites each fresh reply through a chain of independent model passes and replaces it with the final result.
+version: 0.2.1
+engine: ^0.2
+factory: createPostprocessModule
+rights: chatHistory.messages, chatHistory.replaceText, chatHistory.annotate, chatHistory.annotations,
+model.generate,
+model.workers.get, model.presets.get, model.presets.set, storage.settings.get, storage.settings.set, ui.notify,
+ui.messageFooter.claim, ui.messageFooter.release, ui.messageFooter.liveMesid, ui.messageFooter.attach
+*/
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { booleanSetting } from '../../libraries/core/guide-settings.js';

@@ -212,7 +212,10 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     const { refreshBackgrounds, backgroundsCard } = createBackgroundsCard({ host, collapse });
     const { statusCard } = createStatusCard({ collapse, contracts, generationStage, eventCount });
     const { presetCard } = createPresetCard({ call, flash, notify, callService, collapse });
-    const { modulesCard } = createModulesCard({ enabledSignal, collapse, toggleModule, modules });
+    const { modulesCard, loadModulesInstall, reloadModuleProblems } = createModulesCard({
+        enabledSignal, collapse, toggleModule, modules, registry: moduleRegistry, notify,
+        refresh: () => { modules.set(moduleRegistry?.list() ?? []); syncEnabled(moduleRegistry?.enabled() ?? []); },
+    });
     const { promptManagerCard, loadEnabled: loadPromptManagerEnabled } = createPromptManagerCard({ call, collapse });
 
     async function open() {
@@ -240,6 +243,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         if (repo.ok) repository.set({ owner: '', repo: '', extensionName: '', ...repo.value });
         modules.set(moduleRegistry?.list() ?? []);
         syncEnabled(moduleRegistry?.enabled() ?? []);
+        await loadModulesInstall();
         const ui = await mount(tree());
         // Второе дерево — экран настроек — монтируется СВОИМ ключом рядом
         // (см. settingsTree()): корень забирает index.js в body своего
@@ -263,7 +267,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     return {
         open,
         refresh: loadWorkers,
-        refreshModules: () => { modules.set(moduleRegistry?.list() ?? []); syncEnabled(moduleRegistry?.enabled() ?? []); },
+        refreshModules: () => { modules.set(moduleRegistry?.list() ?? []); syncEnabled(moduleRegistry?.enabled() ?? []); reloadModuleProblems(); },
         /** Корень дерева экрана настроек — null, если экран не поднимался. */
         settingsRoot: () => settingsUi?.getRoot() ?? null,
         settingsSettled: () => settingsUi?.settled() ?? Promise.resolve(),

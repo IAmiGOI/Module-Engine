@@ -1,10 +1,12 @@
 import { h } from '../tree.js';
 import { computed } from '../reactive.js';
 import { Toggle, Card, Section, EmptyState } from '../../../libraries/shared/widgets.js';
+import { createModulesInstall } from './modules-install.js';
 
 /** Карточка «Modules»: то, что пользователь подключает сам. */
 export function createModulesCard(deps) {
-    const { enabledSignal, collapse, toggleModule, modules } = deps;
+    const { enabledSignal, collapse, toggleModule, modules, registry = null, notify = () => {}, refresh = () => {} } = deps;
+    const install = createModulesInstall({ registry, notify, refresh });
 
     /**
      * Правая половина — то, что подключает пользователь. Панель НЕ рисует
@@ -26,6 +28,8 @@ export function createModulesCard(deps) {
             // текущее положение или то, что случится по нажатию. Так же в Alpha.
             actions: [Toggle('Enabled', enabled, { onChange: value => toggleModule(entry, value) })],
         },
+            // Версия, уровень доверия и «Remove» — только у установленных (у встроенных нечего показывать).
+            install.installedBadges(entry),
             // Место под собственное дерево Модуля. Его Final UI монтируется
             // сюда тем, кто собирал движок — панель только выделяет слот.
             computed(() => (enabled()
@@ -71,8 +75,11 @@ export function createModulesCard(deps) {
                     ? Section(group.name, { key: `folder:${group.name}`, subtitle: 'Tools the AI operates itself — each one enabled separately.' }, group.entries.map(moduleCard))
                     : moduleCard(group.entry)));
             }),
+            // Отдельными аргументами, а не элементами массива: computed внутри массива другого computed не разворачивается.
+            install.problemsSection(),
+            install.installSection(),
         );
     }
 
-    return { modulesCard };
+    return { modulesCard, loadModulesInstall: install.loadSavedRepository, reloadModuleProblems: install.reloadProblems };
 }
