@@ -129,6 +129,36 @@ for (const [name, createFake, createStore] of providers) {
     });
 }
 
+for (const [name, createFake, createStore] of providers) {
+    test(`[${name}] an old index entry without a fingerprint: a rewritten but identical card is NOT uploaded over the one in the cloud, only the fingerprint is added`, async () => {
+        const fake = createFake();
+        const make = () => createCloudRemote({ store: createStore({ http: createAuthedHttp({ http: fake.http, tokens: passthrough }) }) });
+        // Another (older) device put the card there: the index entry has a hash but no fingerprint.
+        const other = localSide({ 'characters/a.png': 'CARD original' });
+        const first = await runSync({ local: other, remote: make(), base: {} });
+        assert.equal(first.counts.pushed, 1);
+        const cloudBytes = async () => (await make().read('characters/a.png')).text();
+        // This device has the same character, but ST rewrote the bytes on import.
+        const here = localSide({ 'characters/a.png': 'CARD original (ST rewrote it)' });
+        const manifest = await here.manifest();
+        manifest['characters/a.png'].key = 'card1:same-character';
+        let uploads = 0;
+        const remote = make();
+        const write = remote.write;
+        remote.write = async (...args) => { uploads += 1; return write(...args); };
+        const sameContent = async (path, a, b) => (await a.text()).startsWith('CARD original') && (await b.text()).startsWith('CARD original');
+        sameContent.appliesTo = () => true;
+        const second = await runSync({ local: here, remote, base: first.base, localManifest: manifest, sameContent });
+        assert.equal(second.ok, true, JSON.stringify(second.errors));
+        assert.equal(uploads, 0, 'nothing is uploaded');
+        assert.equal(await cloudBytes(), 'CARD original', 'the card in the cloud is untouched');
+        assert.equal((await make().manifest())['characters/a.png'].key, 'card1:same-character', 'the fingerprint is now in the index');
+        // And the next pass has nothing to do at all.
+        const third = await runSync({ local: here, remote: make(), base: second.base, localManifest: manifest, sameContent });
+        assert.equal(third.counts.pushed + third.counts.pulled + third.counts.conflicts, 0);
+    });
+}
+
 test('an expired token is refreshed once and the request is repeated', async () => {
     let good = 'NEW';
     const fake = createFakeDropbox({ validToken: token => token === good });

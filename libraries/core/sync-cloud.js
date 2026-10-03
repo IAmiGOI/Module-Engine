@@ -197,6 +197,7 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
     const writes = new Map();     // путь -> { h, s, m }
     const deletes = new Set();
     let index = null;
+    let listed = {};   // что индекс говорил о каждом пути при последнем `manifest()` (для `annotate`, пока `index` может быть уже сброшен коммитом)
 
     async function loadIndex() {
         await store.refresh?.();
@@ -211,6 +212,7 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
 
         async manifest() {
             index = await loadIndex();
+            listed = index.files;
             return Object.fromEntries(Object.entries(index.files).map(([path, entry]) => [path, { hash: entry.h, size: entry.s ?? 0, modified: entry.m ?? 0, ...(entry.k ? { key: entry.k } : {}) }]));
         },
 
@@ -226,6 +228,14 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
             // `k` — смысловой отпечаток (карточка персонажа): ST переписывает карточку при каждом импорте, байты меняются, а содержимое нет —
             // без отпечатка в индексе каждое такое переписывание выглядело бы правкой и перезаливало файл целиком.
             writes.set(path, { h: meta.hash, s: blob.size, m: meta.modified || now(), ...(meta.key ? { k: meta.key } : {}) });
+            deletes.delete(path);
+        },
+
+        /** Дописать в индексе отпечаток, НЕ трогая сами данные: карточка в облаке та же по содержимому, байты лежат как лежали. */
+        async annotate(path, { key } = {}) {
+            const current = writes.get(path) ?? listed[path];
+            if (!current || !key) return;
+            writes.set(path, { ...current, k: key });
             deletes.delete(path);
         },
 

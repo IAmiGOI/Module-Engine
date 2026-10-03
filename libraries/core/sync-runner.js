@@ -141,6 +141,17 @@ export async function runSync({
                     applyBase({ [action.path]: action.hash });
                     break;
                 case SYNC_ACTIONS.push: {
+                    // Облако не знало отпечатка карточки (старая запись индекса), и ST переписал файл: байты разошлись, а персонаж тот же. Ничего
+                    // не заливаем и не перезаписываем — сверяем по содержимому и только дописываем отпечаток в индекс.
+                    const listedRemote = remoteEntries[action.path];
+                    if (action.key && listedRemote && !listedRemote.key && remote.annotate && sameContent && (sameContent.appliesTo?.(action.path) ?? true)) {
+                        const [localBlob, remoteBlob] = [await local.read(action.path), await remote.read(action.path)];
+                        if (await Promise.resolve(sameContent(action.path, localBlob, remoteBlob)).catch(() => false)) {
+                            await remote.annotate(action.path, { key: action.key });
+                            finishOne({ [action.path]: listedRemote.hash }, true);
+                            break;
+                        }
+                    }
                     // `meta.hash` — ВСЕГДА настоящий байтовый хеш отправляемых байт (получатель кэширует его как хеш реальных байт на диске);
                     // `meta.key` — отпечаток ИСТОЧНИКА, безопасно доверять сразу (см. doc-comment `writeLocal` в cores/sync/index.js); то, что идёт
                     // в базу (`action.baseValue`), может быть тем же `key` — см. doc-comment sync-plan.js.
