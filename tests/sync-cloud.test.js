@@ -108,6 +108,27 @@ for (const [name, createFake, createStore] of providers) {
     });
 }
 
+for (const [name, createFake, createStore] of providers) {
+    test(`[${name}] the card fingerprint travels in the index, so a card ST rewrote (other bytes, same character) is not uploaded again`, async () => {
+        const fake = createFake();
+        const make = () => createCloudRemote({ store: createStore({ http: createAuthedHttp({ http: fake.http, tokens: passthrough }) }) });
+        // The first device uploads a card together with its fingerprint.
+        const one = localSide({ 'characters/a.png': 'CARD v1' });
+        const oneManifest = await one.manifest();
+        oneManifest['characters/a.png'].key = 'card1:same-character';
+        const first = await runSync({ local: one, remote: make(), base: {}, localManifest: oneManifest });
+        assert.equal(first.counts.pushed, 1);
+        assert.equal((await make().manifest())['characters/a.png'].key, 'card1:same-character', 'the index returns the fingerprint');
+        // Later ST rewrites the file: the bytes (hash) change, the fingerprint does not.
+        one.files.set('characters/a.png', 'CARD v1 rewritten by ST');
+        const rewritten = await one.manifest();
+        rewritten['characters/a.png'].key = 'card1:same-character';
+        const second = await runSync({ local: one, remote: make(), base: first.base, localManifest: rewritten });
+        assert.equal(second.counts.pushed, 0, 'nothing is uploaded: same character');
+        assert.equal(second.counts.conflicts, 0);
+    });
+}
+
 test('an expired token is refreshed once and the request is repeated', async () => {
     let good = 'NEW';
     const fake = createFakeDropbox({ validToken: token => token === good });

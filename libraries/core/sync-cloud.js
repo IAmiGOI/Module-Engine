@@ -211,7 +211,7 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
 
         async manifest() {
             index = await loadIndex();
-            return Object.fromEntries(Object.entries(index.files).map(([path, entry]) => [path, { hash: entry.h, size: entry.s ?? 0, modified: entry.m ?? 0 }]));
+            return Object.fromEntries(Object.entries(index.files).map(([path, entry]) => [path, { hash: entry.h, size: entry.s ?? 0, modified: entry.m ?? 0, ...(entry.k ? { key: entry.k } : {}) }]));
         },
 
         async read(path) {
@@ -223,7 +223,9 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
         async write(path, blob, meta = {}) {
             if (blob.size > maxFileBytes) throw new Error(`"${path}" is larger than the ${Math.round(maxFileBytes / 1048576)} MB limit for the cloud.`);
             await store.writeBlob(await blobNameFor(path), blob);
-            writes.set(path, { h: meta.hash, s: blob.size, m: meta.modified || now() });
+            // `k` — смысловой отпечаток (карточка персонажа): ST переписывает карточку при каждом импорте, байты меняются, а содержимое нет —
+            // без отпечатка в индексе каждое такое переписывание выглядело бы правкой и перезаливало файл целиком.
+            writes.set(path, { h: meta.hash, s: blob.size, m: meta.modified || now(), ...(meta.key ? { k: meta.key } : {}) });
             deletes.delete(path);
         },
 
