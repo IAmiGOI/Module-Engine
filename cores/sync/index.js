@@ -14,7 +14,7 @@ import {
     buildDropboxAuthUrl, computeCodeChallenge, createTokenManager, exchangeDropboxCode, generateCodeVerifier, pollGoogleDeviceFlow, startGoogleDeviceFlow,
 } from '../../libraries/core/sync-oauth.js';
 import { CLOUD_PROVIDER_LABELS, resolveCloudApp } from '../../libraries/core/sync-cloud-apps.js';
-import { buildIceServers, relayToIceServers, categoryOfPath, conflictPolicyFor, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeSyncConfig } from '../../libraries/core/sync-config.js';
+import { buildIceServers, relayToIceServers, categoryOfPath, conflictPolicyFor, noCopyFor, createCategoryFilter, describeConfigForUi, intersectCategories, sanitizeSyncConfig } from '../../libraries/core/sync-config.js';
 
 /**
  * Ядро синхронизации — держит пользовательские файлы ST одинаковыми на нескольких устройствах: напрямую между устройствами
@@ -218,10 +218,14 @@ export function createSyncCore(host, {
     /** Обновить то, что ST держит в памяти: список персонажей и фонов. */
     async function refreshStInterface() {
         const sections = new Set([...touchedPaths].map(path => path.slice(0, path.indexOf('/'))));
+        // Какие разделы настроек движка принесла синхронизация: Ядра/Модули, умеющие перечитать свои настройки на лету, подписываются на
+        // `settings.applied`; остальным достаточно подсказки «перезагрузите страницу» (`sync.reloadHint`) ниже.
+        const settingsNamespaces = [...new Set([...touchedPaths].filter(path => path.startsWith('stmeSettings/')).map(path => { try { return decodeURIComponent(path.split('/')[1]); } catch { return null; } }).filter(Boolean))];
         touchedPaths.clear();
+        if (settingsNamespaces.length) publishEvent('settings.applied', { namespaces: settingsNamespaces });
         if (sections.has('characters')) await service('stUserData.refresh', { categories: ['characters'] }).catch(() => {});
         if (sections.has('backgrounds')) await service('stBackgrounds.refresh', {}).catch(() => {});
-        if (['presets', 'themes', 'quickReplies'].some(section => sections.has(section)) && !reloadHint) {
+        if (['presets', 'themes', 'quickReplies', 'stmeSettings'].some(section => sections.has(section)) && !reloadHint) {
             reloadHint = true;
             publishEvent('sync.reloadHint', {});
         }
@@ -234,9 +238,30 @@ export function createSyncCore(host, {
         publishEvent('sync.progress', { progress });
     }
 
+    /**
+     * Журнал между проходами (`journal:<baseKey>`): база и кэш хешей пишутся целиком только в контрольных точках, а журнал — после КАЖДОГО
+     * файла, и содержит лишь то, что накопилось с последней точки (небольшой список). Проход, оборванный между точками (закрыли вкладку,
+     * упала сеть, разрядился телефон), оставляет журнал — следующий проход сначала доигрывает его в базу и кэш, поэтому уже переданные
+     * файлы не выглядят «изменёнными с обеих сторон». Запись кэша проверяется штампом файла при скане: если файл с тех пор менялся,
+     * старый хеш просто не подойдёт — журнал не может «подсунуть» устаревшее.
+     */
+    async function replayJournal(baseKey, base) {
+        const journal = (await readState(`journal:${baseKey}`)) ?? [];
+        if (!journal.length) return { base, journal };
+        const cache = await loadCache();
+        const next = { ...base };
+        for (const item of journal) {
+            if (item.base === null) delete next[item.path]; else next[item.path] = item.base;
+            if (item.cache) cache[item.path] = item.cache; else delete cache[item.path];
+        }
+        return { base: next, journal };
+    }
+
     async function runAgainst({ target, baseKey, remote, categories, isEnabled, extraInclude }) {
         const local = createLocalSide(categories, state => setProgress(target, { phase: 'scanning', ...state }));
-        const base = (await readState(`base:${baseKey}`)) ?? {};
+        const replayed = await replayJournal(baseKey, (await readState(`base:${baseKey}`)) ?? {});
+        const base = replayed.base;
+        let journal = replayed.journal;   // доигранное остаётся в журнале до первой контрольной точки: повторный обрыв его не теряет
         const localManifest = await local.manifest();
         const skip = local.failedPaths();
         const include = (path, entries) => isEnabled()(path) && !skip.has(path) && (extraInclude?.(path, entries) ?? true);
@@ -244,9 +269,18 @@ export function createSyncCore(host, {
         // из виду уже переданные файлы — база/кэш писались только здесь, в самом конце. Теперь runSync сам зовёт это по расписанию
         // (каждые ~50 действий или ~10с — см. sync-runner.js), а не только один раз после return. `remote.checkpoint` — опционально:
         // есть только у реального устройства-пары (`createPeerRemote`), GitHub/облако обходятся своим checkpointEvery+commit().
+        const onApplied = async changes => {
+            const cache = await loadCache();
+            const byPath = new Map(journal.map(item => [item.path, item]));
+            for (const [path, value] of changes) byPath.set(path, { path, base: value, cache: cache[path] ?? null });
+            journal = [...byPath.values()];
+            await writeState(`journal:${baseKey}`, journal);
+        };
         const onCheckpoint = async nextBase => {
             await writeState(`base:${baseKey}`, nextBase);
             await flushCache();
+            journal = [];
+            await writeState(`journal:${baseKey}`, journal);
             if (remote.checkpoint) await remote.checkpoint(nextBase).catch(() => {});   // не критично — при неудаче ведомый просто останется на прежней базе до самого finish()
         };
         const result = await runSync({
@@ -254,21 +288,24 @@ export function createSyncCore(host, {
             conflictLabel: `${config.deviceName} ${stampLabel(now())}`,
             conflictPolicy: conflictPolicyFor,
             sameContent,
+            noCopy: noCopyFor,
             categoryOf: categoryOfPath,
             onProgress: state => setProgress(target, { phase: 'syncing', ...state }),
             onCheckpoint,
+            onApplied,
             now,
             isAborted: () => abortRequested,
         });
         await writeState(`base:${baseKey}`, result.base);
         await flushCache();
+        if (journal.length) { journal = []; await writeState(`journal:${baseKey}`, journal); }
         await refreshStInterface();
         if (result.needsConfirmation) log.warn?.(`[ST Module Engine (Beta)] Sync: mass deletion blocked against ${target}, nothing deleted —`, result.needsConfirmation.join(', '));
         return result;
     }
 
     const summarize = result => ({
-        ok: result.ok, aborted: result.aborted, stopped: result.stopped ?? null, counts: result.counts,
+        ok: result.ok, aborted: result.aborted, stopped: result.stopped ?? null, counts: result.counts, cleanedCopies: result.cleanedCopies?.length ?? 0,
         errors: result.errors.slice(0, 5).map(error => (error.path === '*' ? error.message : `${error.path}: ${error.message}`)),
         // Категории, где удаление подозрительно массовое — ничего не удалено, но и не скрыто (панель для подтверждения — отдельная
         // задача, ROADMAP 5.106в); видно уже сейчас через `sync.status`, даже без неё.
@@ -304,7 +341,7 @@ export function createSyncCore(host, {
     const authHttp = params => network('http.request', params, { timeoutMs: networkTimeoutMs });
     const cloudLabel = () => CLOUD_PROVIDER_LABELS[config.cloud.provider];
 
-    function createCloudStore() {
+    function createCloudHttp() {
         const provider = config.cloud.provider;
         const app = resolveCloudApp(provider, config.cloud);
         const tokens = createTokenManager({
@@ -312,8 +349,23 @@ export function createSyncCore(host, {
             getTokens: () => config.cloud.tokens,
             save: async next => { config.cloud = { ...config.cloud, tokens: next }; await saveConfig(); },
         });
-        const http = createAuthedHttp({ http: params => network('http.request', params, { timeoutMs: networkTimeoutMs * 6 }), tokens });
-        return provider === 'google' ? createDriveStore({ http }) : createDropboxStore({ http });
+        return createAuthedHttp({ http: params => network('http.request', params, { timeoutMs: networkTimeoutMs * 6 }), tokens });
+    }
+
+    function createCloudStore() {
+        const http = createCloudHttp();
+        return config.cloud.provider === 'google' ? createDriveStore({ http }) : createDropboxStore({ http });
+    }
+
+    /**
+     * Запрос к Google Drive с авторизацией для Ядра облачных бэкапов: токены остаются у этого Ядра и наружу не выходят, а адрес ограничен
+     * api Google — контракт нельзя использовать, чтобы отправить токен куда-то ещё.
+     */
+    async function cloudRequest(params) {
+        await loadConfig();
+        if (!/^https:\/\/www\.googleapis\.com\//.test(String(params?.url ?? ''))) throw new Error('sync.cloud.request: only Google Drive addresses are allowed.');
+        if (config.cloud.provider !== 'google' || !config.cloud.tokens) throw new Error('Google Drive is not connected. Connect it in the sync settings first.');
+        return createCloudHttp()(params);
     }
 
     async function runCloud() {
@@ -990,6 +1042,7 @@ export function createSyncCore(host, {
 
     const unregisters = [
         host.own.register('sync.status', () => status()),
+        host.own.register('sync.cloud.request', params => cloudRequest(params)),
         host.own.register('sync.start', () => start()),
         host.own.register('sync.planLoad', () => planLoadSync()),
         host.own.register('sync.runOnLoad', () => runOnLoad()),

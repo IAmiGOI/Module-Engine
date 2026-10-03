@@ -20,6 +20,7 @@
 import { DEFERRED_PREFIX } from '../libraries/core/sync-runner.js';
 import { createIndexedDbGraphStore } from './graph-library.js';
 import { createIndexedDbPresetStore } from './pm-presets.js';
+import { applySetting, collectSettings, parseSettingFile, parseSettingFileName, removeSetting, settingFileName } from '../libraries/core/sync-settings.js';
 
 export const SYNC_CATEGORIES = Object.freeze([
     { id: 'characters', label: 'Characters' },
@@ -30,6 +31,7 @@ export const SYNC_CATEGORIES = Object.freeze([
     { id: 'personas', label: 'Persona avatars' },
     { id: 'graphs', label: 'Memory graph library (saved graphs)' },
     { id: 'pmPresets', label: 'Prompt Manager presets (own format)' },
+    { id: 'engineSettings', label: 'Engine settings (all modules; AI-model API keys stay on each device)' },
 ]);
 
 /** Наши собственные фоны из репозитория фонов ставятся на каждом устройстве сами — синхронизировать их незачем. */
@@ -65,6 +67,7 @@ export function registerStUserDataService(bus, {
     refreshCharacters = () => getContext()?.getCharacters?.(),
     graphStore = typeof indexedDB === 'undefined' ? null : createIndexedDbGraphStore(),
     pmStore = typeof indexedDB === 'undefined' ? null : createIndexedDbPresetStore(),
+    settingsKey = 'stme_settings',
 } = {}) {
     const headers = (options = {}) => getContext()?.getRequestHeaders?.(options) ?? {};
 
@@ -432,7 +435,49 @@ export function registerStUserDataService(bus, {
         async remove(name) { if (pmStore) await pmStore.delete('presets', stripExt(name, '.json')); },
     };
 
-    const providers = [characters, chats, groups, groupChats, worlds, presets, themes, quickReplies, backgrounds, personas, graphs, pmPresets];
+    // Настройки самого движка (`extensionSettings.<settingsKey>`: раздел → ключ → значение) — раздел без эндпоинтов ST. Один файл на пару
+    // «раздел + ключ»: `stmeSettings/<раздел>/<ключ>.json` (см. libraries/core/sync-settings.js: что вырезается, что остаётся на устройстве,
+    // откуда берётся время правки). Копии конфликтов сюда не пишутся вовсе — побеждает более свежая версия (`NO_COPY_CATEGORIES`).
+    const settingsRaw = () => {
+        const context = getContext() ?? {};
+        context.extensionSettings ??= {};
+        context.extensionSettings[settingsKey] ??= {};
+        return { context, raw: context.extensionSettings[settingsKey] };
+    };
+    const saveSettings = context => { context.saveSettingsDebounced?.(); context.saveSettings?.(); };
+    const settingStamp = entry => `${entry.updatedAt}|${entry.size}`;
+    const engineSettings = {
+        id: 'stmeSettings', category: 'engineSettings',
+        async list() {
+            return collectSettings(settingsRaw().raw).map(entry => ({ path: `stmeSettings/${settingFileName(entry.namespace, entry.key)}`, stamp: settingStamp(entry), size: entry.size, modified: entry.updatedAt }));
+        },
+        async read(name) {
+            const target = parseSettingFileName(name);
+            const entry = target ? collectSettings(settingsRaw().raw).find(item => item.namespace === target.namespace && item.key === target.key) : null;
+            if (!entry) throw new Error(`setting "${name}" was not found`);
+            return new BlobCtor([entry.text], { type: 'application/json' });
+        },
+        async write(name, blob) {
+            const target = parseSettingFileName(name);
+            if (!target) return { stamp: null };   // копия конфликта или чужое имя — настройкой не становится
+            const incoming = parseSettingFile(await blob.text());
+            if (incoming.namespace !== target.namespace || incoming.key !== target.key) throw new Error(`"${name}" does not match its own contents`);
+            const { context, raw } = settingsRaw();
+            if (!applySetting(raw, incoming)) return { stamp: null };
+            saveSettings(context);
+            const entry = collectSettings(raw).find(item => item.namespace === target.namespace && item.key === target.key);
+            return entry ? { stamp: settingStamp(entry), size: entry.size, modified: entry.updatedAt } : { stamp: null };
+        },
+        async remove(name) {
+            const target = parseSettingFileName(name);
+            if (!target) return;
+            const { context, raw } = settingsRaw();
+            removeSetting(raw, target.namespace, target.key);
+            saveSettings(context);
+        },
+    };
+
+    const providers = [characters, chats, groups, groupChats, worlds, presets, themes, quickReplies, backgrounds, personas, graphs, pmPresets, engineSettings];
     const byId = new Map(providers.map(provider => [provider.id, provider]));
 
     function resolve(path) {

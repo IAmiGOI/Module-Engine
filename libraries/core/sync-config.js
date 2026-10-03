@@ -7,12 +7,12 @@ import { DEFAULT_GITHUB_MAX_FILE_BYTES, sanitizeGithubSettings } from './sync-gi
  * (`groupChats/…`). Несколько разделов могут принадлежать одной категории (все виды чатов — одна галочка).
  */
 
-export const SYNC_CATEGORY_IDS = Object.freeze(['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas', 'graphs', 'pmPresets']);
+export const SYNC_CATEGORY_IDS = Object.freeze(['characters', 'chats', 'worlds', 'presets', 'backgrounds', 'personas', 'graphs', 'pmPresets', 'engineSettings']);
 
 /** Версия набора категорий: у настроек, сохранённых до появления «presets», новая категория включается один раз сама. */
-const CATEGORY_VERSION = 4;
+const CATEGORY_VERSION = 5;
 /** В какой версии набора появилась категория (у первых пяти — с самого начала): при обновлении она включается ОДИН раз. */
-const CATEGORY_ADDED_IN = Object.freeze({ presets: 2, graphs: 3, pmPresets: 4 });
+const CATEGORY_ADDED_IN = Object.freeze({ presets: 2, graphs: 3, pmPresets: 4, engineSettings: 5 });
 
 const SECTION_TO_CATEGORY = Object.freeze({
     characters: 'characters',
@@ -27,6 +27,7 @@ const SECTION_TO_CATEGORY = Object.freeze({
     personas: 'personas',
     stmeGraphs: 'graphs', // библиотека графов памяти (сервис graphLibrary), не файлы ST
     stmePmPresets: 'pmPresets', // пресеты Prompt Manager (сервис pmPresets), не файлы ST
+    stmeSettings: 'engineSettings', // настройки самого движка (extensionSettings.stme_settings), без API-ключей — sync-settings.js
 });
 
 export function categoryOfPath(path) {
@@ -57,6 +58,10 @@ export function intersectCategories(a = [], b = []) {
  *    сущностями под одним именем.
  * Путь без записи в этой таблице (чаты, миры, пресеты, фоны) — `copy`: там первая встреча обычно и есть две разные, обе ценные вещи.
  */
+/** Категории, где копия конфликта бессмысленна (настройка — не документ): побеждает более свежая версия, без файла-копии. */
+export const NO_COPY_CATEGORIES = Object.freeze(['engineSettings']);
+export const noCopyFor = path => NO_COPY_CATEGORIES.includes(categoryOfPath(path));
+
 export const CONFLICT_POLICY = Object.freeze({ characters: 'quarantine', personas: 'quarantine' });
 
 /** Политика конфликта первой встречи для этого пути — `copy`, если категория не значится в `CONFLICT_POLICY` явно. */
