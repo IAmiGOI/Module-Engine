@@ -50,9 +50,9 @@ const QUARANTINE_INDEX_KEY = 'quarantineIndex';
 const QUARANTINE_LIMIT = 200;
 const NETWORK_TIMEOUT_MS = 20000;
 /** Файлов одновременно к облаку/GitHub: время уходит на задержку каждого запроса, а не на канал, — по одному 400 файлов шли бы десятки минут. */
-const TRANSFER_CONCURRENCY = 4;
+const TRANSFER_CONCURRENCY = 12;
 /** Чтений и хеширований файлов одновременно при скане (первый проход читает все чаты целиком). */
-const SCAN_CONCURRENCY = 6;
+const SCAN_CONCURRENCY = 12;
 const PRESENCE_INTERVAL_MS = 60000;
 const CONNECT_TIMEOUT_MS = 30000;
 /** При загрузке страницы второе устройство ждём недолго: его может просто не быть в сети, а экран загрузки не должен из-за этого висеть. */
@@ -163,19 +163,21 @@ export function createSyncCore(host, {
     }
 
     async function writeLocal(path, blob, meta) {
+        // Проверка целостности (ROADMAP 5.106е, Этап 4.3) — покрывает ОБА направления сразу, одним местом: сюда стекаются и
+        // `pull` ведущего (получает байты от `remote.read()`), и `write`-обработчик ведомого (получает байты по проводу от
+        // push'а ведущего) — оба зовут именно `writeLocal`. Сверяем ВСЕГДА настоящий байтовый хеш (`meta.hash`), НИКОГДА
+        // `meta.key` — тот сознательно игнорирует часть байт (см. `card-fingerprint.js`), сверять по нему целостность передачи
+        // бессмысленно. Несовпадение — не фатальная ошибка: файл просто не пишется, попадает в `errors`/`failed` этого прохода
+        // и не закрепляется в базе — следующий проход попробует заново, как отказ любого другого файла.
+        if (meta?.hash) {
+            const actual = await computeGitBlobSha(blob);
+            if (actual !== meta.hash) throw new Error(`writeLocal: integrity check failed for "${path}" — expected hash ${meta.hash}, got ${actual}. The file was not written; it will be retried on the next pass.`);
+        }
+        // Запрос к ST (импорт карточки, сохранение чата) идёт ВНЕ очереди — иначе все записи шли бы строго по одной, сколько бы файлов
+        // облако ни отдавало параллельно. В очереди остаётся только то, что трогает общий кэш (скан в это время не идёт: проход один).
+        const { stamp } = await service('stUserData.write', { path, blob });
         return exclusive(async () => {
-            // Проверка целостности (ROADMAP 5.106е, Этап 4.3) — покрывает ОБА направления сразу, одним местом: сюда стекаются и
-            // `pull` ведущего (получает байты от `remote.read()`), и `write`-обработчик ведомого (получает байты по проводу от
-            // push'а ведущего) — оба зовут именно `writeLocal`. Сверяем ВСЕГДА настоящий байтовый хеш (`meta.hash`), НИКОГДА
-            // `meta.key` — тот сознательно игнорирует часть байт (см. `card-fingerprint.js`), сверять по нему целостность передачи
-            // бессмысленно. Несовпадение — не фатальная ошибка: файл просто не пишется, попадает в `errors`/`failed` этого прохода
-            // и не закрепляется в базе — следующий проход попробует заново, как отказ любого другого файла.
-            if (meta?.hash) {
-                const actual = await computeGitBlobSha(blob);
-                if (actual !== meta.hash) throw new Error(`writeLocal: integrity check failed for "${path}" — expected hash ${meta.hash}, got ${actual}. The file was not written; it will be retried on the next pass.`);
-            }
             const cache = await loadCache();
-            const { stamp } = await service('stUserData.write', { path, blob });
             // `meta.key` — отпечаток ИСТОЧНИКА (см. sync-plan.js): доверять ему безопасно, в отличие от байтового хеша ПОСЛЕ записи
             // (ST могла его изменить своим импортом — см. `card-fingerprint.js`), отпечаток намеренно игнорирует ровно это.
             if (stamp != null && meta?.hash) cache[path] = { stamp, hash: meta.hash, ...(meta.key ? { key: meta.key } : {}) }; else delete cache[path];
@@ -184,9 +186,9 @@ export function createSyncCore(host, {
     }
 
     async function removeLocal(path) {
+        await service('stUserData.remove', { path });
         return exclusive(async () => {
             const cache = await loadCache();
-            await service('stUserData.remove', { path });
             delete cache[path];
             touchedPaths.add(path);
         });

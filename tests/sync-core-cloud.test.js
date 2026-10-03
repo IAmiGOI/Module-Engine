@@ -163,7 +163,7 @@ test('"Sync now" includes the cloud only when it is switched on, and the backgro
     assert.equal(scheduled.events.filter(([event]) => event === 'sync.finished').length, before, 'auto is off: the schedule does nothing');
     await scheduled.call('sync.configure', { cloud: { auto: true } });
     await clock.advance(11 * 60000);
-    await settle(20);
+    await settle(200);
     assert.ok(scheduled.events.filter(([event]) => event === 'sync.finished').length > before, 'auto is on: the schedule syncs the cloud');
     await off.core.stop(); await scheduled.core.stop();
 });

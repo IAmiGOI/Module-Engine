@@ -246,3 +246,23 @@ test('when the drive fills up mid-pass, the other device still sees everything u
     assert.equal(phonePass.counts.pulled, 120);
     assert.equal(phone.files.get('f119'), 'data 119');
 });
+
+test('a rate-limit answer (429, or 403 "rateLimitExceeded") is waited out and repeated, not treated as fatal; a plain 403 or an exhausted wait is returned as it is', async () => {
+    const sleeps = [];
+    const answers = [{ status: 429, ok: false, text: '', headers: { 'retry-after': '2' } }, { status: 403, ok: false, text: '{"error":{"errors":[{"reason":"userRateLimitExceeded"}]}}' }, { status: 200, ok: true, text: '{}' }];
+    const calls = [];
+    const http = createAuthedHttp({ http: async request => { calls.push(request); return answers[calls.length - 1]; }, tokens: passthrough, sleep: async ms => { sleeps.push(ms); } });
+    const response = await http({ url: 'https://example.test/x', method: 'GET' });
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 3);
+    assert.ok(sleeps[0] >= 2000 && sleeps[0] < 2500, 'honours Retry-After');
+    assert.ok(sleeps[1] >= 1500);
+
+    const plain = createAuthedHttp({ http: async () => ({ status: 403, ok: false, text: '{"error":{"errors":[{"reason":"forbidden"}]}}' }), tokens: passthrough, sleep: async () => { throw new Error('must not wait for a plain 403'); } });
+    assert.equal((await plain({ url: 'https://example.test/x' })).status, 403);
+
+    let attempts = 0;
+    const stubborn = createAuthedHttp({ http: async () => { attempts += 1; return { status: 429, ok: false, text: '' }; }, tokens: passthrough, sleep: async () => {} });
+    assert.equal((await stubborn({ url: 'https://example.test/x' })).status, 429);
+    assert.equal(attempts, 5, 'one try plus four repeats, then the answer goes to the caller');
+});

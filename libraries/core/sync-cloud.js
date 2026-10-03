@@ -43,12 +43,29 @@ export function describeCloudFailure(provider, status, text = '') {
     return `${name} answered HTTP ${status}${detail ? `: ${detail}` : ''}`;
 }
 
-/** Добавляет токен к запросу и один раз повторяет его после 401 с принудительно обновлённым токеном. */
-export function createAuthedHttp({ http, tokens }) {
+/** Паузы перед повторами, когда облако просит притормозить (лимит запросов) или на секунду споткнулось. Параллельная передача упирается
+ *  именно в лимиты, поэтому «притормози» — не фатальная ошибка: подождать и повторить, а остановка прохода — только если не помогло. */
+export const RETRY_DELAYS_MS = Object.freeze([500, 1500, 4000, 9000]);
+const isRetryable = response => response.status === 429
+    || [500, 502, 503, 504].includes(response.status)
+    || (response.status === 403 && /rateLimitExceeded|too_many_requests|too_many_write_operations/i.test(response.text ?? ''));
+const retryAfterMs = response => {
+    const seconds = Number(response.headers?.['retry-after']);
+    return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 30) * 1000 : null;
+};
+
+/** Добавляет токен к запросу, один раз повторяет его после 401 с принудительно обновлённым токеном и повторяет с паузой при лимите запросов. */
+export function createAuthedHttp({ http, tokens, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), retryDelays = RETRY_DELAYS_MS }) {
     return async request => {
         const send = token => http({ ...request, headers: { ...request.headers, Authorization: `Bearer ${token}` } });
-        const response = await send(await tokens.accessToken());
-        return response.status === 401 ? send(await tokens.forceRefresh()) : response;
+        let response = await send(await tokens.accessToken());
+        if (response.status === 401) response = await send(await tokens.forceRefresh());
+        for (const delay of retryDelays) {
+            if (!isRetryable(response)) break;
+            await sleep((retryAfterMs(response) ?? delay) + Math.floor(Math.random() * 250));   // разброс, чтобы параллельные запросы не ударили все разом
+            response = await send(await tokens.accessToken());
+        }
+        return response;
     };
 }
 
