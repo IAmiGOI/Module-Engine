@@ -1,5 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { readNamespacedValue, writeNamespacedValue, removeNamespacedValue, listNamespacedKeys } from '../../libraries/core/namespaced-store.js';
+import { healValue, seedEntry, splitVaultKey, updateEntry, vaultKey } from '../../libraries/core/secret-vault.js';
 import { SETTINGS_EXCLUDED_NAMESPACES, SETTINGS_META_NAMESPACE, forgetSetting, policyOf, sanitizePolicy, setPolicy, touchSetting, updatedAtOf } from '../../libraries/core/sync-settings.js';
 
 /** Defensive reader — a missing/blank namespace or key fails loudly (caught by the bus's own error envelope), never silently reads/writes the wrong bucket. */
@@ -53,6 +54,55 @@ export function createSettingsCore(host, { now = () => Date.now() } = {}) {
         if (!result.ok) throw new Error(result.error.message);
     }
 
+    // ── Запасная копия API-ключей (libraries/core/secret-vault.js) ──────────────────────────────────────────────────
+    // `settings.json` ST пишет целиком из памяти ЛЮБОЙ открытой страницы: вторая вкладка с устаревшей копией, откат файла или приём
+    // настроек стирают ключ. Копия лежит в хранилище браузера (сервис `syncState`), переживает это и возвращает ключ при следующем запуске.
+    const VAULT_STATE_KEY = 'secretVault';
+    let vaultQueue = Promise.resolve();
+    const inVault = task => { const run = vaultQueue.then(task, task); vaultQueue = run.catch(() => {}); return run; };
+    async function readVault() {
+        const result = await request(host.services, 'syncState.get', { params: { key: VAULT_STATE_KEY } });
+        return result.ok && result.value && typeof result.value === 'object' ? result.value : {};
+    }
+    const writeVault = vault => request(host.services, 'syncState.set', { params: { key: VAULT_STATE_KEY, value: vault } });
+    const rememberSecrets = (namespace, key, value) => inVault(async () => {
+        const vault = await readVault();
+        const name = vaultKey(namespace, key);
+        const next = updateEntry(vault[name], value);
+        if (JSON.stringify(next) === JSON.stringify(vault[name] ?? {})) return;
+        if (Object.keys(next).length) vault[name] = next; else delete vault[name];
+        await writeVault(vault);
+    }).catch(() => {});
+    const forgetSecrets = (namespace, key) => inVault(async () => {
+        const vault = await readVault();
+        if (vault[vaultKey(namespace, key)] === undefined) return;
+        delete vault[vaultKey(namespace, key)];
+        await writeVault(vault);
+    }).catch(() => {});
+
+    /** Вернуть пропавшие ключи из копии и сохранить в копию те, что уже лежат в настройках (первый запуск). @returns {Promise<number>} сколько ключей возвращено */
+    const healSecrets = () => inVault(async () => {
+        const raw = await readRaw();
+        const vault = await readVault();
+        let restored = 0;
+        let vaultChanged = false;
+        const touched = [];
+        for (const [namespace, bucket] of Object.entries(raw)) {
+            if (SETTINGS_EXCLUDED_NAMESPACES.includes(namespace) || !bucket || typeof bucket !== 'object') continue;
+            for (const [key, value] of Object.entries(bucket)) {
+                const name = vaultKey(namespace, key);
+                const back = healValue(value, vault[name]);
+                if (back) { restored += back; touched.push([namespace, key]); }
+                const seeded = seedEntry(vault[name], value);
+                if (JSON.stringify(seeded) !== JSON.stringify(vault[name] ?? {})) { vault[name] = seeded; vaultChanged = true; }
+            }
+        }
+        if (restored) await writeRaw(raw);
+        if (vaultChanged) await writeVault(vault);
+        for (const [namespace, key] of touched) publishEvent('settings.changed', { namespace, key });
+        return restored;
+    }).catch(() => 0);
+
     const unregisterGet = host.own.register('storage.settings.get', async params => {
         const { namespace, key } = requireLocation(params);
         const raw = await readRaw();
@@ -67,6 +117,7 @@ export function createSettingsCore(host, { now = () => Date.now() } = {}) {
         writeNamespacedValue(raw, namespace, key, params?.value);
         touchSetting(raw, namespace, key, previous, params?.value, now());   // время правки для синхронизации — только если значение изменилось
         await writeRaw(raw);
+        await rememberSecrets(namespace, key, params?.value);
         publishEvent('settings.changed', { namespace, key });
         if (isNewNamespace) publishEvent('settings.namespaces.changed', { namespace });
         return true;
@@ -78,7 +129,7 @@ export function createSettingsCore(host, { now = () => Date.now() } = {}) {
         const { namespace, key } = requireLocation(params);
         const raw = await readRaw();
         const removed = removeNamespacedValue(raw, namespace, key);
-        if (removed) { forgetSetting(raw, namespace, key); await writeRaw(raw); publishEvent('settings.changed', { namespace, key }); }
+        if (removed) { forgetSetting(raw, namespace, key); await writeRaw(raw); await forgetSecrets(namespace, key); publishEvent('settings.changed', { namespace, key }); }
         return removed;
     });
 
@@ -127,6 +178,8 @@ export function createSettingsCore(host, { now = () => Date.now() } = {}) {
             for (const key of listNamespacedKeys(raw, namespace)) if (!(key in values)) { removeNamespacedValue(raw, namespace, key); forgetSetting(raw, namespace, key); removed.push(key); }
         }
         if (written.length || removed.length || isNewNamespace) await writeRaw(raw);
+        for (const [key, value] of Object.entries(values)) if (value !== undefined) await rememberSecrets(namespace, key, value);
+        for (const key of removed) await forgetSecrets(namespace, key);
         for (const key of [...written, ...removed]) publishEvent('settings.changed', { namespace, key });
         if (isNewNamespace) publishEvent('settings.namespaces.changed', { namespace });
         return { namespace, written, unchanged, removed };
@@ -151,7 +204,12 @@ export function createSettingsCore(host, { now = () => Date.now() } = {}) {
         });
     });
 
+    const unregisterHeal = host.own.register('settings.secrets.heal', () => healSecrets());
+    // Синк принял настройки (или запуск): вернуть пропавшие ключи. Без подписчика ключ, стёртый перезаписью `settings.json`, жил бы без копии до перезагрузки.
+    const unsubscribeApplied = host.events?.subscribe?.('settings.applied', () => { void healSecrets(); });
+    void healSecrets();
+
     return {
-        unregister: () => { unregisterGet(); unregisterSet(); unregisterRemove(); unregisterKeys(); unregisterSend(); unregisterDeclare(); unregisterNamespaces(); },
+        unregister: () => { unregisterHeal(); unsubscribeApplied?.(); unregisterGet(); unregisterSet(); unregisterRemove(); unregisterKeys(); unregisterSend(); unregisterDeclare(); unregisterNamespaces(); },
     };
 }
