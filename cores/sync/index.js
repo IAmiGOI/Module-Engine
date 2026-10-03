@@ -137,6 +137,14 @@ export function createSyncCore(host, {
         try { return await computeCardFingerprint(await blob.arrayBuffer(), { hash: computeGitBlobSha }); } catch { return null; }
     }
 
+    /** Один и тот же персонаж по содержимому (байты могли разойтись из-за импорта ST) — тогда конфликта нет, копия не нужна. Для остальных категорий всегда `false`. */
+    async function sameContent(path, blobA, blobB) {
+        const [a, b] = await Promise.all([fingerprintOf(path, blobA), fingerprintOf(path, blobB)]);
+        return Boolean(a && b && a === b);
+    }
+
+    sameContent.appliesTo = path => categoryOfPath(path) === 'characters';   // чаты и прочее не читаем зря: сравнивать нечего
+
     async function scanLocal(categories, onProgress) {
         return exclusive(async () => {
             const cache = await loadCache();
@@ -245,6 +253,7 @@ export function createSyncCore(host, {
             local, remote, base, include, localManifest,
             conflictLabel: `${config.deviceName} ${stampLabel(now())}`,
             conflictPolicy: conflictPolicyFor,
+            sameContent,
             categoryOf: categoryOfPath,
             onProgress: state => setProgress(target, { phase: 'syncing', ...state }),
             onCheckpoint,

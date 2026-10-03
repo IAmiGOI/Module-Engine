@@ -156,6 +156,38 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             return found;
         }),
 
+        /**
+         * Граф переходов раздела (рисует владелец на холсте): `nodes` — положения групп и пометка «резкая» (в неё можно прыгнуть откуда угодно), `edges` — пары групп,
+         * между которыми музыка переходит свободно. Чужие id, петли и повторы отбрасываются; пустой граф стирается.
+         */
+        setGraph: (id, graph) => exclusive(async () => {
+            const found = needSection(id);
+            const ids = new Set(data.groups.filter(item => item.section === id).map(item => item.id));
+            const coord = value => (Number.isFinite(value) ? Math.max(0, Math.min(1000, value)) : 0);
+            const nodes = {};
+            for (const [key, node] of Object.entries(graph?.nodes ?? {})) if (ids.has(key)) nodes[key] = { x: coord(node?.x), y: coord(node?.y), sharp: node?.sharp === true };
+            const seen = new Set(), edges = [];
+            for (const pair of Array.isArray(graph?.edges) ? graph.edges : []) {
+                const [a, b] = Array.isArray(pair) ? pair.map(String) : [];
+                if (!ids.has(a) || !ids.has(b) || a === b) continue;
+                const key = [a, b].sort().join('|');
+                if (!seen.has(key)) { seen.add(key); edges.push([a, b]); }
+            }
+            if (edges.length || Object.values(nodes).some(node => node.sharp)) found.graph = { nodes, edges }; else delete found.graph;
+            await save();
+            return found;
+        }),
+
+        /** Для подбора: `{ edges: Set('a|b' по возрастанию), sharp: Set, linked: Set }`; `null` — графа нет. */
+        graphOf: id => {
+            const graph = section(id)?.graph;
+            if (!graph) return null;
+            const edges = new Set(graph.edges.map(([a, b]) => [a, b].sort().join('|')));
+            const linked = new Set(graph.edges.flat());
+            const sharp = new Set(Object.entries(graph.nodes).filter(([, node]) => node.sharp).map(([key]) => key));
+            return { edges, sharp, linked };
+        },
+
         /** Непустой раздел не удаляется: случайно потерять десятки размеченных треков слишком дорого. Пустые группы уходят вместе с ним. */
         deleteSection: id => exclusive(async () => {
             needSection(id);

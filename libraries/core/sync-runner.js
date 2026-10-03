@@ -41,6 +41,7 @@ export async function runSync({
     conflictLabel,
     conflictPolicy = () => 'copy',
     categoryOf = () => null,
+    sameContent = null,
     onProgress = () => {},
     onCheckpoint = () => {},
     checkpointEvery = CHECKPOINT_EVERY,
@@ -118,12 +119,13 @@ export async function runSync({
                 case SYNC_ACTIONS.conflict: {
                     const winnerHash = action.winner === 'local' ? action.localHash : action.remoteHash;
                     const loserHash = action.winner === 'local' ? action.remoteHash : action.localHash;
-                    const outcome = await resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy });
+                    const outcome = await resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy, sameContent });
+                    if (outcome.reconciled) { counts.pushed += 1; finishOne({ [action.path]: action.localHash }, true); break; }
                     counts.conflicts += 1;
                     if (outcome.quarantined) counts.quarantined += 1;
                     // В карантине копии-файла нет вовсе — базе просто нечего запоминать про conflictPath, только про сам путь (обе
                     // стороны сошлись на версии победителя).
-                    finishOne(outcome.quarantined ? { [action.path]: winnerHash } : { [action.path]: winnerHash, [action.conflictPath]: loserHash }, true);
+                    finishOne(outcome.quarantined || action.noCopy ? { [action.path]: winnerHash } : { [action.path]: winnerHash, [action.conflictPath]: loserHash }, true);
                     break;
                 }
                 default:
@@ -185,7 +187,18 @@ async function applyWinner(action, { local, remote, localEntries, remoteEntries 
  *    поведение остаётся `copy` (см. doc-comment файла и `CONFLICT_POLICY`: «для пакетных сторон — copy, если проиграла удалённая»;
  *    если проиграла ЛОКАЛЬНАЯ, `local` эту функцию имеет всегда, и карантин у себя не требует сети вовсе).
  */
-async function resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy = () => 'copy' }) {
+async function resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy = () => 'copy', sameContent = null }) {
+    // Не настоящий конфликт: обе стороны хранят ОДНО И ТО ЖЕ содержимое, а байты разошлись (ST переписывает карточку персонажа при
+    // импорте; у GitHub/облака нет семантического `key`, и после обрыва прохода — база и кэш хешей не успели записаться — разницу
+    // байтов не отличить от правки). Никакой копии: выравниваем байты (удалённая сторона получает локальные) и считаем путь сошедшимся.
+    if (sameContent && (sameContent.appliesTo?.(action.path) ?? true)) {
+        const [localBlob, remoteBlob] = [await local.read(action.path), await remote.read(action.path)];
+        if (await Promise.resolve(sameContent(action.path, localBlob, remoteBlob)).catch(() => false)) {
+            await remote.write(action.path, localBlob, { hash: action.localHash, key: localEntries[action.path]?.key, modified: localEntries[action.path]?.modified });
+            return { reconciled: true };
+        }
+    }
+    if (action.noCopy) { await applyWinner(action, { local, remote, localEntries, remoteEntries }); return { quarantined: false }; }
     const winnerIsLocal = action.winner === 'local';
     const loserSide = winnerIsLocal ? remote : local;
     const loserEntry = winnerIsLocal ? remoteEntries[action.path] : localEntries[action.path];
@@ -201,8 +214,8 @@ async function resolveConflict(action, { local, remote, localEntries, remoteEntr
 
     const loserBlob = await loserSide.read(action.path);
     const meta = { hash: loserHash, modified: loserEntry?.modified };
-    await local.write(action.conflictPath, loserBlob, meta);
-    await remote.write(action.conflictPath, loserBlob, meta);
+    if (!action.copyOn?.local) await local.write(action.conflictPath, loserBlob, meta);
+    if (!action.copyOn?.remote) await remote.write(action.conflictPath, loserBlob, meta);
     await applyWinner(action, { local, remote, localEntries, remoteEntries });
     return { quarantined: false };
 }

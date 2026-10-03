@@ -1,4 +1,10 @@
+// @ts-check
 import { request } from './request.js';
+
+/** @typedef {import('./bus-types.js').Host} Host */
+/** @typedef {import('./bus-types.js').Envelope} Envelope */
+/** @typedef {import('./bus-types.js').Unsubscribe} Unsubscribe */
+/** @template [T=any] @typedef {import('../../cores/ui/ui-types.js').Signal<T>} Signal */
 
 /**
  * Типовая обвязка Модуля — то, что каждый из пяти существующих Модулей
@@ -21,9 +27,18 @@ import { request } from './request.js';
  *
  * `notify` отдельным объектом намеренно: не всякий Модуль хочет тосты,
  * а отдельный кусок можно просто не деструктурировать.
+ *
+ * @param {Host} host  Хост Модуля (нужен `host.cores`).
+ * @returns {{ call: (contract: string, params?: any) => Promise<Envelope>, notify: { ok: (text: string) => Promise<Envelope>, error: (text: string) => Promise<Envelope> } }}
  */
 export function createModuleHost(host) {
+    /**
+     * @param {string} contract
+     * @param {any} [params]
+     * @returns {Promise<Envelope>}
+     */
     async function call(contract, params) {
+        if (!host.cores) throw new Error(`createModuleHost: this host has no "cores" accessor (call "${contract}" needs a Module host).`);
         return request(host.cores, contract, { params });
     }
     return {
@@ -52,10 +67,16 @@ export function createModuleHost(host) {
  *
  * `clamp` опционален: Модуль без границ не передаёт его, и значение с
  * диска применяется как есть.
+ *
+ * @template T  Форма настроек Модуля.
+ * @param {Host} host
+ * @param {{ namespace: string, key?: string, clamp?: (value: any) => T }} options
+ * @returns {{ restore: (apply: (settings: T) => void) => Promise<T | null>, save: (current: T, apply?: (settings: T) => void) => Promise<true> }}
  */
-export function persistedSettings(host, { namespace, key = 'settings', clamp } = {}) {
+export function persistedSettings(host, { namespace, key = 'settings', clamp }) {
     const { call } = createModuleHost(host);
 
+    /** @param {(settings: T) => void} apply */
     async function restore(apply) {
         const result = await call('storage.settings.get', { namespace, key, fallback: null });
         if (!(result.ok && result.value)) return null;
@@ -66,6 +87,11 @@ export function persistedSettings(host, { namespace, key = 'settings', clamp } =
         return clamped;
     }
 
+    /**
+     * @param {T} current
+     * @param {(settings: T) => void} [apply]
+     * @returns {Promise<true>}
+     */
     async function save(current, apply) {
         const clamped = clamp ? clamp(current) : current;
         if (apply) apply(clamped);
@@ -98,8 +124,13 @@ export function persistedSettings(host, { namespace, key = 'settings', clamp } =
  *
  * Возвращаемое значение из `chatChanged`-колбэка Модуля (если он его дал)
  * подставляется в сигнал — типовой случай «перечитал и показал».
+ *
+ * @template [T=any[]]  Форма хранимого значения (обычно массив записей).
+ * @param {Host} host
+ * @param {{ namespace: string, key: string, fallback?: T, signal?: Signal<T>, onChange?: (value: T) => (void | Promise<void>) }} options
+ * @returns {{ load: () => Promise<T>, persist: (next: T) => Promise<T>, stop: Unsubscribe }}
  */
-export function chatCollection(host, { namespace, key, fallback = [], signal, onChange } = {}) {
+export function chatCollection(host, { namespace, key, fallback = /** @type {T} */ (/** @type {unknown} */ ([])), signal, onChange }) {
     const { call } = createModuleHost(host);
 
     async function load() {
@@ -110,6 +141,7 @@ export function chatCollection(host, { namespace, key, fallback = [], signal, on
         return value;
     }
 
+    /** @param {T} next */
     async function persist(next) {
         if (signal) signal.set(next);
         await call('storage.chatMemory.set', { namespace, key, value: next });
@@ -134,6 +166,10 @@ export function chatCollection(host, { namespace, key, fallback = [], signal, on
  * (этап исполняется под ПРАВАМИ Модуля, см. doc-comment NoteBook про
  * `community.notebook.inject`), и рассинхрон при частичном снятии —
  * реальный класс ошибки: этап остался, контракта нет → `onExhausted`.
+ *
+ * @param {Host} host
+ * @param {{ pipelineId: string, stageId: string, contract: string, params?: any, onExhausted?: any, execute: (params: any) => any }} options
+ * @returns {{ add: (stageParams?: any) => Promise<Unsubscribe>, remove: () => Promise<void> }}
  */
 export function pipelineStage(host, { pipelineId, stageId, contract, params, onExhausted, execute }) {
     const { call } = createModuleHost(host);
@@ -142,6 +178,7 @@ export function pipelineStage(host, { pipelineId, stageId, contract, params, onE
         throw new Error(`pipelineStage "${stageId}": "execute" handler is required — the stage runs under the module's own rights, someone must do the work.`);
     }
 
+    /** @param {any} [stageParams] */
     async function add(stageParams) {
         // Контракт регистрируется на `host.own`: исполнять его обязан именно
         // этот Модуль, под своими правами — чужой вызов контракта напрямую
@@ -171,21 +208,26 @@ export function pipelineStage(host, { pipelineId, stageId, contract, params, onE
  * генерацию), но типовой случай «обернуть и вернуть текстом» настолько
  * частый, что хелпер даёт его сразу: `onError: 'returnText'` оборачивает
  * `action`, любой брошенный `Error` становится возвращаемой строкой.
+ *
+ * @param {Host} host
+ * @param {{ schema?: { name: string, [key: string]: any }, action?: (args: any) => any, formatMessage?: (...args: any[]) => any, onError?: 'returnText' }} [options]
+ *   Поля помечены необязательными только ради понятной ошибки ниже, если Модуль забыл схему или действие.
+ * @returns {{ register: () => Promise<void>, unregister: () => Promise<void> }}
  */
 export function stTool(host, { schema, action, formatMessage, onError } = {}) {
     const { call } = createModuleHost(host);
     const name = schema?.name;
 
-    if (!name || typeof action !== 'function') {
+    if (!schema || !name || typeof action !== 'function') {
         throw new Error('stTool: both "schema" (with a name) and "action" are required.');
     }
 
     const wrapped = onError === 'returnText'
-        ? async args => {
+        ? /** @param {any} args */ async args => {
             try {
                 return await action(args);
             } catch (error) {
-                return error?.message ?? String(error);
+                return error instanceof Error ? error.message : String(error);
             }
         }
         : action;

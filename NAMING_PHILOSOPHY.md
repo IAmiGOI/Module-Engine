@@ -85,7 +85,7 @@ a mix-up"`. Каждый новый регрессионный тест обяз
    **Правило пока не проверяется кодом** (Директор не отказывает в
    регистрации без префикса — см. ROADMAP про настоящий Раннер с проверкой
    прав), но уже применяется на практике: Модуль «Notebook»
-   ([modules/notebook/index.js](modules/notebook/index.js)) — первый
+   ([modules/tools/notebook.js](modules/tools/notebook.js)) — первый
    community-уровня, регистрирующий СВОЙ контракт (для этапа пайплайна,
    исполнять который обязан именно он) — использует
    `community.notebook.inject`, а не голое `notebook.inject`.

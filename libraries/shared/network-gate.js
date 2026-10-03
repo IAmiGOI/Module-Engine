@@ -1,4 +1,10 @@
+// @ts-check
 import { createGate } from './gate.js';
+
+/** @typedef {import('./bus-types.js').RightsCore} RightsCore */
+/** @typedef {import('./bus-types.js').ContractBus} ContractBus */
+/** @typedef {import('./bus-types.js').GateAccessor} GateAccessor */
+/** @typedef {import('./bus-types.js').DeliveryCallback} DeliveryCallback */
 
 /**
  * Гейт для внешних запросов в интернет — a SEPARATE Gate from the regular
@@ -21,20 +27,30 @@ import { createGate } from './gate.js';
  * instead, bypassing this check entirely. This Gate enforces the network
  * grant; keeping `http.*` off any OTHER bus is what makes that enforcement
  * actually mean something.
+ *
+ * @param {RightsCore} rightsCore
+ * @param {ContractBus} targetBus  Только `buses.network`.
+ * @returns {GateAccessor}
  */
 export function createNetworkGate(rightsCore, targetBus) {
     const baseGate = createGate(rightsCore, targetBus);
 
+    /**
+     * @param {string | undefined} callerId
+     * @returns {{ ok: false, error: { message: string } }}
+     */
     function denial(callerId) {
         return { ok: false, error: { message: `Access denied: "${callerId}" has no network access.` } };
     }
 
+    /** @type {GateAccessor['subscribe']} */
     function subscribe(contract, options, callback) {
         const callerId = options?.callerId;
         if (!rightsCore.hasNetworkAccess(callerId)) {
             callback(denial(callerId));
             return () => {};
         }
+        /** @type {DeliveryCallback} */
         const guardedCallback = result => {
             if (!rightsCore.hasNetworkAccess(callerId)) { callback(denial(callerId)); return; }
             callback(result);

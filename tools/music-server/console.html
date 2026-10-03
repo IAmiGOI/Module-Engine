@@ -32,6 +32,10 @@
     .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--dim); margin-bottom: 12px; }
     .drop.over { border-color: var(--accent); color: var(--text); }
     #login { max-width: 360px; margin: 80px auto; }
+    #graph { width: 100%; height: 420px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); touch-action: none; user-select: none; }
+    #graph .edge { stroke: var(--dim); stroke-width: 2; } #graph .edge:hover { stroke: var(--bad); stroke-width: 4; cursor: pointer; }
+    #graph .node { cursor: grab; } #graph .node circle { stroke-width: 3; } #graph .node.sel circle { stroke: var(--accent); stroke-width: 5; } #graph .node.sharp circle { stroke-dasharray: 4 3; stroke: var(--warn); }
+    #graph text { font-size: 12px; fill: var(--text); pointer-events: none; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -57,6 +61,10 @@
                 <h3>Группы</h3>
                 <div id="groups"></div>
                 <div class="row"><input id="newGroup" class="grow" placeholder="Новая группа (например, «Любовные сцены»)"><button class="primary" id="addGroup">Добавить группу</button></div>
+                <details id="graphBox" class="examples" style="margin-top:14px"><summary>Граф переходов</summary>
+                    <p class="dim">Тяните группы, чтобы расставить. Клик по группе, затем клик по другой — между ними появляется связь (по ней музыка переходит свободно, причём и в «соседа соседа» — через одну группу — тоже без штрафа); клик по линии — убирает её. Shift + клик по группе — «резкая» (оранжевый пунктир): в неё можно перейти откуда угодно (разоблачение, срыв, паника). Дальше двух шагов по линиям переход не запрещён, но требует заметно более сильной сцены. Группы без линий не ограничены. Сохраняется само.</p>
+                    <svg id="graph"></svg>
+                </details>
             </div>
             <div class="drop" id="drop">Перетащите аудиофайлы сюда или <input type="file" id="files" accept="audio/*" multiple></div>
             <textarea id="uploadTag" placeholder="Тег для загружаемых файлов (необязательно — можно вписать потом у каждого трека). Например: тихий ночной лагерь, акустическая гитара, грусть и покой"></textarea>
@@ -114,6 +122,7 @@ function render() {
     if (grouped) {
         const groups = catalog.groups.filter(group => group.section === current);
         $('groups').replaceChildren(...(groups.length ? groups.map(groupRow) : [el('p', { className: 'dim' }, 'Групп пока нет — добавьте первую.')]));
+        renderGraph();
     }
     // В групповом разделе треки лежат внутри своих групп; здесь остаются только те, что ни в одной группе (они не играют).
     const tracks = catalog.tracks.filter(track => track.section === current && (!grouped || !track.group)).sort((a, b) => b.createdAt - a.createdAt);
@@ -220,6 +229,56 @@ async function upload(files, groupId = '') {
     }
     $('progress').textContent = '';
     await load();
+}
+
+/** Граф переходов: SVG-холст. Данные — `section.graph { nodes: {id: {x,y,sharp}}, edges: [[a,b]] }`; любое изменение сразу сохраняется. */
+let graphSelected = '';
+function renderGraph() {
+    const svg = $('graph'), section = catalog.sections.find(item => item.id === current);
+    const groups = section?.mode === 'groups' ? catalog.groups.filter(group => group.section === current) : [];
+    const saved = section?.graph || { nodes: {}, edges: [] };
+    const nodes = {};
+    groups.forEach((group, index) => {   // нет сохранённого места — по кругу
+        const angle = (index / Math.max(1, groups.length)) * Math.PI * 2;
+        nodes[group.id] = saved.nodes[group.id] ? { ...saved.nodes[group.id] } : { x: 500 + 380 * Math.cos(angle), y: 300 + 240 * Math.sin(angle), sharp: false };
+    });
+    const edges = (saved.edges || []).filter(([a, b]) => nodes[a] && nodes[b]).map(pair => [...pair]);
+    svg.setAttribute('viewBox', '0 0 1000 600');
+    const persist = () => { section.graph = { nodes, edges }; api(`/api/admin/sections/${current}`, { method: 'PATCH', body: { graph: { nodes, edges } } }).catch(fail); };
+    const hue = id => [...id].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 7);
+    const draw = () => {
+        svg.replaceChildren();
+        const ns = 'http://www.w3.org/2000/svg', make = (tag, attrs, parent = svg) => { const node = document.createElementNS(ns, tag); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); parent.append(node); return node; };
+        edges.forEach(([a, b], index) => {
+            const line = make('line', { class: 'edge', x1: nodes[a].x, y1: nodes[a].y, x2: nodes[b].x, y2: nodes[b].y });
+            line.onclick = () => { edges.splice(index, 1); persist(); draw(); };
+        });
+        for (const group of groups) {
+            const node = nodes[group.id];
+            const g = make('g', { class: `node${graphSelected === group.id ? ' sel' : ''}${node.sharp ? ' sharp' : ''}`, transform: `translate(${node.x},${node.y})` });
+            make('circle', { r: 20, fill: `hsl(${hue(group.id)} 70% 60%)`, stroke: 'transparent' }, g);
+            const label = make('text', { y: 36 }, g); label.textContent = group.name.length > 22 ? group.name.slice(0, 21) + '…' : group.name;
+            let moved = false;
+            g.onpointerdown = event => {
+                event.preventDefault(); g.setPointerCapture(event.pointerId); moved = false;
+                const box = svg.getBoundingClientRect(), scale = 1000 / box.width;
+                g.onpointermove = move => { moved = true; node.x = Math.max(20, Math.min(980, (move.clientX - box.left) * scale)); node.y = Math.max(20, Math.min(570, (move.clientY - box.top) * scale)); g.setAttribute('transform', `translate(${node.x},${node.y})`); edgesFollow(); };
+                g.onpointerup = up => {
+                    g.onpointermove = g.onpointerup = null;
+                    if (moved) { persist(); draw(); return; }
+                    if (event.shiftKey || up.shiftKey) { node.sharp = !node.sharp; graphSelected = ''; persist(); draw(); return; }
+                    if (graphSelected && graphSelected !== group.id) {   // вторая точка: связь есть — убрать, нет — добавить
+                        const at = edges.findIndex(([a, b]) => (a === graphSelected && b === group.id) || (b === graphSelected && a === group.id));
+                        if (at >= 0) edges.splice(at, 1); else edges.push([graphSelected, group.id]);
+                        graphSelected = ''; persist();
+                    } else graphSelected = graphSelected === group.id ? '' : group.id;
+                    draw();
+                };
+            };
+        }
+    };
+    const edgesFollow = () => { svg.querySelectorAll('.edge').forEach((line, index) => { const [a, b] = edges[index]; line.setAttribute('x1', nodes[a].x); line.setAttribute('y1', nodes[a].y); line.setAttribute('x2', nodes[b].x); line.setAttribute('y2', nodes[b].y); }); };
+    draw();
 }
 
 $('enter').onclick = async () => { token = $('token').value.trim(); localStorage.setItem('musicToken', token); try { await load(); $('login').hidden = true; $('app').hidden = false; } catch (error) { $('loginError').textContent = error.message; } };

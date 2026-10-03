@@ -1,9 +1,32 @@
+// @ts-check
 import { h } from '../tree.js';
 import { computed } from '../reactive.js';
 import { Toggle, Card, Section, EmptyState } from '../../../libraries/shared/widgets.js';
 import { createModulesInstall } from './modules-install.js';
 
-/** Карточка «Modules»: то, что пользователь подключает сам. */
+/** @typedef {import('../../../libraries/core/module-types.js').RegistryListItem} RegistryListItem */
+/** @typedef {import('../../../libraries/core/module-types.js').ModuleRegistry} ModuleRegistry */
+/** @typedef {import('../ui-types.js').UiNode} UiNode */
+/** @template [T=any] @typedef {import('../ui-types.js').Signal<T>} Signal */
+
+/**
+ * Элемент списка карточки: отдельный Модуль либо папка с несколькими.
+ * @typedef {{ kind: 'module', entry: RegistryListItem } | { kind: 'folder', name: string, entries: RegistryListItem[] }} ModuleGroup
+ */
+
+/**
+ * Карточка «Modules»: то, что пользователь подключает сам.
+ *
+ * @param {{
+ *   enabledSignal: (id: string) => Signal<boolean>,
+ *   collapse: { bind: (key: string, options?: { open?: boolean }) => Record<string, unknown> },
+ *   toggleModule: (entry: RegistryListItem, enable: boolean) => unknown,
+ *   modules: () => RegistryListItem[],
+ *   registry?: ModuleRegistry | null,
+ *   notify?: (tone: string, text: string) => unknown,
+ *   refresh?: () => void }} deps
+ * @returns {{ modulesCard: () => UiNode, loadModulesInstall: () => Promise<void>, reloadModuleProblems: () => void }}
+ */
 export function createModulesCard(deps) {
     const { enabledSignal, collapse, toggleModule, modules, registry = null, notify = () => {}, refresh = () => {} } = deps;
     const install = createModulesInstall({ registry, notify, refresh });
@@ -15,6 +38,9 @@ export function createModulesCard(deps) {
      * карточка-переключатель и пустое место под него. Иначе панель знала бы
      * про внутренности каждого Модуля — ровно то, чего вся эта конструкция и
      * избегает.
+     *
+     * @param {RegistryListItem} entry
+     * @returns {UiNode}
      */
     function moduleCard(entry) {
         const enabled = enabledSignal(entry.id);
@@ -46,10 +72,14 @@ export function createModulesCard(deps) {
      * Порядок: папки в порядке первого появления их Модулей в реестре,
      * внутри папки — порядок реестра.
      */
+    /** @returns {ModuleGroup[]} */
     function groupedModuleEntries() {
         const entries = modules();
+        /** @type {string[]} */
         const folders = [];
+        /** @type {Map<string, RegistryListItem[]>} */
         const byFolder = new Map();
+        /** @type {RegistryListItem[]} */
         const loose = [];
         for (const entry of entries) {
             if (entry.folder) {
@@ -57,12 +87,15 @@ export function createModulesCard(deps) {
                     byFolder.set(entry.folder, []);
                     folders.push(entry.folder);
                 }
-                byFolder.get(entry.folder).push(entry);
+                byFolder.get(entry.folder)?.push(entry);
             } else {
                 loose.push(entry);
             }
         }
-        return [...loose.map(entry => ({ kind: 'module', entry })), ...folders.map(name => ({ kind: 'folder', name, entries: byFolder.get(name) }))];
+        return [
+            ...loose.map(entry => /** @type {ModuleGroup} */ ({ kind: 'module', entry })),
+            ...folders.map(name => /** @type {ModuleGroup} */ ({ kind: 'folder', name, entries: byFolder.get(name) ?? [] })),
+        ];
     }
 
     // Список Модулей раскрыт по умолчанию: это единственное место, где

@@ -1,4 +1,9 @@
+// @ts-check
 import { parseVersion, isValidRange } from './semver.js';
+
+/** @typedef {import('./module-types.js').ModuleMeta} ModuleMeta */
+/** @typedef {import('./module-types.js').Requirement} Requirement */
+/** @typedef {import('./module-types.js').HeaderResult} HeaderResult */
 
 /**
  * Шапка Модуля (RUNTIME.md): блок-комментарий `@module` в самом начале файла, строки `ключ: значение`. Читается КАК ТЕКСТ, без
@@ -10,11 +15,19 @@ const ID_RE = /^[a-z][a-zA-Z0-9]*(?:[.-][a-zA-Z0-9]+)+$/;
 const KNOWN_KEYS = new Set(['id', 'title', 'description', 'version', 'engine', 'requires', 'rights', 'network', 'folder', 'factory']);
 const FACTORY_RE = /^[A-Za-z_$][\w$]*$/;
 
+/**
+ * @param {string} value
+ * @returns {string[]}
+ */
 function splitList(value) {
     return value.split(',').map(item => item.trim()).filter(Boolean);
 }
 
-/** `module.tracker@^1.0` → { id, range }; без `@` — любая версия. */
+/**
+ * `module.tracker@^1.0` → { id, range }; без `@` — любая версия.
+ * @param {string} text
+ * @returns {Requirement}
+ */
 function parseRequirement(text) {
     const at = text.indexOf('@');
     const id = (at === -1 ? text : text.slice(0, at)).trim();
@@ -22,19 +35,27 @@ function parseRequirement(text) {
     return { id, range };
 }
 
+/**
+ * @param {unknown} source  Исходник Модуля целиком (нестроковое значение читается как пустое).
+ * @returns {HeaderResult}
+ */
 export function parseModuleHeader(source) {
+    /** @type {string[]} */
     const errors = [];
     const match = HEADER_RE.exec(String(source ?? ''));
     if (!match) return { ok: false, meta: null, errors: ['no /*@module ... */ header at the top of the file'] };
 
+    /** @type {Map<string, string>} */
     const fields = new Map();
+    /** @type {string | null} */
     let lastKey = null;
     for (const rawLine of match[1].split(/\r?\n/)) {
         const line = rawLine.trim();
         // Пустая строка и `#`-комментарий пропускаются: длинному списку прав нужно объяснять, зачем каждое.
         if (!line || line.startsWith('#')) continue;
         // Список, оборванный запятой в конце строки, продолжается на следующей.
-        if (lastKey && fields.get(lastKey).endsWith(',')) { fields.set(lastKey, `${fields.get(lastKey)} ${line}`); continue; }
+        const previous = lastKey === null ? undefined : fields.get(lastKey);
+        if (lastKey !== null && previous?.endsWith(',')) { fields.set(lastKey, `${previous} ${line}`); continue; }
         const colon = line.indexOf(':');
         if (colon <= 0) { errors.push(`malformed header line: "${line}"`); continue; }
         const key = line.slice(0, colon).trim();

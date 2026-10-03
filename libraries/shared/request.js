@@ -1,3 +1,12 @@
+// @ts-check
+/** @typedef {import('./bus-types.js').Subscribable} Subscribable */
+/** @typedef {import('./bus-types.js').WhenCondition} WhenCondition */
+
+/**
+ * @template [T=any]
+ * @typedef {import('./bus-types.js').Envelope<T>} Envelope
+ */
+
 /**
  * `request()` — the library sugar over `subscribe()` (ARCHITECTURE.md's
  * "Заказчик API"): subscribe once, resolve on the first delivery, always
@@ -16,10 +25,17 @@
  * behind an unrelated background verify call on the same model worker (see
  * ARCHITECTURE.md's "Приоритет запросов" for why this is a call-site flag,
  * not a contract-registration property, here).
+ *
+ * @template [T=any]
+ * @param {Subscribable} bus  Шина, Гейт или домашний аксессор хоста.
+ * @param {string} contract
+ * @param {{ params?: any, when?: WhenCondition, timeoutMs?: number, priority?: string }} [options]
+ * @returns {Promise<Envelope<T>>}  Никогда не отклоняется: сбой — `{ ok: false, error }`.
  */
 export function request(bus, contract, { params, when, timeoutMs, priority } = {}) {
     return new Promise(resolve => {
         let done = false;
+        /** @type {ReturnType<typeof setTimeout> | null} */
         let timer = null;
         // `unsubscribe` starts as a no-op, not the real function bus.subscribe()
         // is about to return — a Гейт-denied call (or any bus that resolves
@@ -27,6 +43,7 @@ export function request(bus, contract, { params, when, timeoutMs, priority } = {
         // returns, so referencing the real `unsubscribe` at that point would
         // hit it mid-initialization. The temporary no-op is harmless there —
         // nothing real is subscribed yet to tear down.
+        /** @type {() => void} */
         let unsubscribe = () => {};
         unsubscribe = bus.subscribe(contract, { params, when, priority }, result => {
             if (done) return;

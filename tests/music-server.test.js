@@ -563,6 +563,56 @@ test('reference scenes pull the choice toward the group whose examples look like
     assert.equal(pickTrack({ items, vector: scene, dim: DIM_P, minSimilarity: 0, prototypes: few }).id, 'G1', 'groups with fewer than three examples do not count');
 });
 
+test('graph: a switch away from the playing group along no edge costs extra; sharp groups and the skip button are free; no graph — no effect', () => {
+    const D = 12;
+    const hot = n => Array.from({ length: D }, (_, i) => (i === n ? 1 : 0.3));
+    const items = [0, 1, 2, 3].map(n => ({ id: `G${n}`, ext: 'mp3', vector: hot(n), group: `g${n}` }));
+    const scene = hot(2).map((x, i) => 0.55 * x + 0.45 * hot(1)[i]);   // по тегам с небольшим отрывом впереди g2, чуть позади — g1
+    const base = { items, vector: scene, dim: D, currentId: 'G0', minSimilarity: 0, switchMargin: 0, elapsed: 500, remaining: 5 };
+    assert.equal(pickTrack(base).id, 'G2', 'no graph: the scene decides');
+    const graph = { edges: new Set(['g0|g1', 'g2|g3']), sharp: new Set(), linked: new Set(['g0', 'g1', 'g2', 'g3']) };
+    assert.notEqual(pickTrack({ ...base, graph }).id, 'G2', 'g2 is not a neighbour of g0 — the jump is held back');
+    assert.equal(pickTrack({ ...base, graph: { ...graph, sharp: new Set(['g2']) } }).id, 'G2', 'a sharp group can be reached from anywhere');
+    assert.equal(pickTrack({ ...base, graph, force: true }).id, 'G2', 'the skip button ignores the graph');
+    const chain = { edges: new Set(['g0|g1', 'g1|g2', 'g2|g3']), sharp: new Set(), linked: new Set(['g0', 'g1', 'g2', 'g3']) };
+    assert.equal(pickTrack({ ...base, graph: chain }).id, 'G2', 'a neighbour of a neighbour (two steps) is free');
+    const far = { edges: new Set(['g0|g1', 'g1|g3', 'g3|g2']), sharp: new Set(), linked: new Set(['g0', 'g1', 'g2', 'g3']) };
+    assert.notEqual(pickTrack({ ...base, graph: far }).id, 'G2', 'three steps away is held back again');
+    const unlinked = { edges: new Set(['g0|g1']), sharp: new Set(), linked: new Set(['g0', 'g1']) };
+    assert.equal(pickTrack({ ...base, graph: unlinked }).id, 'G2', 'a group that is on no edge yet is not penalised');
+});
+
+test('graph: saved from the console per section — only real groups, no loops or repeats; an empty graph is erased; readers never see it', async () => {
+    const ctx = await start({ readKey: 'readers' });
+    try {
+        const section = await (await post(ctx, '/api/admin/sections', { name: 'Moods', mode: 'groups' })).json();
+        const a = await (await post(ctx, '/api/admin/groups', { section: section.id, name: 'A', description: 'a' })).json();
+        const b = await (await post(ctx, '/api/admin/groups', { section: section.id, name: 'B', description: 'b' })).json();
+        const saved = await (await post(ctx, `/api/admin/sections/${section.id}`, { graph: { nodes: { [a.id]: { x: 10, y: 20, sharp: true }, nope: { x: 1, y: 1 } }, edges: [[a.id, b.id], [b.id, a.id], [a.id, a.id], [a.id, 'nope']] } }, 'PATCH')).json();
+        assert.deepEqual(saved.graph.edges, [[a.id, b.id]]);
+        assert.deepEqual(Object.keys(saved.graph.nodes), [a.id]);
+        const catalog = await (await ctx.json('/api/admin/catalog')).json();
+        assert.ok(catalog.sections.find(item => item.id === section.id).graph);
+        const publicText = await (await fetch(`${ctx.base}/api/sections?k=readers`)).text();
+        assert.equal(publicText.includes('edges'), false, 'the graph never leaves the server');
+        const cleared = await (await post(ctx, `/api/admin/sections/${section.id}`, { graph: { nodes: {}, edges: [] } }, 'PATCH')).json();
+        assert.equal(cleared.graph, undefined);
+    } finally { await ctx.stop(); }
+});
+
+test('a group without examples is not inflated against groups with them: its tag-only score is brought to the scale of the tag+dictionary blend', () => {
+    const DIM_P = 12;
+    const hot = n => Array.from({ length: DIM_P }, (_, i) => (i === n ? 1 : 0.3));
+    const items = [0, 1, 2, 3].map(n => ({ id: `G${n}`, ext: 'mp3', vector: hot(n), group: `g${n}` }));
+    const scene = hot(3).map((x, i) => x + (i === 2 ? 0.2 : 0));
+    const valueOf = (rows, group) => rows.find(row => row.item.group === group).value;
+    const tagsOnly = scoreItems({ items, vector: scene });
+    const withDictionary = scoreItems({ items, vector: scene, prototypes: new Map([['g0', [hot(0), hot(1), hot(2)]], ['g1', [hot(4), hot(5), hot(6)]], ['g2', [hot(7), hot(8), hot(9)]]]) });
+    assert.ok(valueOf(tagsOnly.rows, 'g3') > 0.5, 'by its tag g3 is the clear favourite');
+    assert.ok(valueOf(withDictionary.rows, 'g3') < valueOf(tagsOnly.rows, 'g3'), 'a group without examples loses a little scale next to groups with a blended score');
+    assert.ok(valueOf(withDictionary.rows, 'g3') > 0, 'but a clear tag match is not erased');
+});
+
 test('a big group of broad examples does not win only because it is big: closeness is judged against how close other groups\' scenes usually are to it', () => {
     const DIM_P = 12;
     const hot = n => Array.from({ length: DIM_P }, (_, i) => (i === n ? 1 : 0.3));

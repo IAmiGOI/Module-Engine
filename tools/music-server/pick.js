@@ -118,6 +118,39 @@ function prototypeZ(prototypes, vector) {
     return deviation > 1e-9 ? new Map([...raw].map(([key, score]) => [key, (score - average) / deviation])) : null;
 }
 
+/**
+ * Граф переходов: музыка свободно идёт в группы не дальше `GRAPH_FREE_HOPS` шагов по рёбрам (сосед и сосед соседа). Дальше — не запрет, но «дороже» на `GRAPH_PENALTY`
+ * (в единицах z): резкая смена сцены всё равно пробьёт, а мелкое колебание не бросит тихую грусть в вечеринку. Свободно также: та же группа, «резкие» группы (в них
+ * прыгают откуда угодно) и группы, которых на графе пока нет ни на одном ребре. Если играющая группа сама без рёбер — ограничений нет.
+ */
+export const GRAPH_PENALTY = 1.0, GRAPH_FREE_HOPS = 2;
+function reachable(from, graph) {
+    const neighbours = new Map();
+    for (const edge of graph.edges) {
+        const [a, b] = edge.split('|');
+        (neighbours.get(a) ?? neighbours.set(a, []).get(a)).push(b);
+        (neighbours.get(b) ?? neighbours.set(b, []).get(b)).push(a);
+    }
+    const seen = new Set([from]);
+    let frontier = [from];
+    for (let hop = 0; hop < GRAPH_FREE_HOPS; hop += 1) {
+        frontier = frontier.flatMap(key => neighbours.get(key) ?? []).filter(key => !seen.has(key));
+        for (const key of frontier) seen.add(key);
+    }
+    return seen;
+}
+function withGraph(rows, current, graph) {
+    if (!graph || !current) return rows;
+    const from = current.group ?? current.id;
+    if (!graph.linked.has(from)) return rows;
+    const near = reachable(from, graph);
+    return rows.map(row => {
+        const to = row.item.group ?? row.item.id;
+        const free = near.has(to) || graph.sharp.has(to) || !graph.linked.has(to);
+        return free || row.vetoed ? row : { ...row, value: row.value - GRAPH_PENALTY, offGraph: true };
+    });
+}
+
 export function scoreItems({ items, vector, prototypes = null }) {
     const unique = new Map(items.map(item => [item.group ?? item.id, item.vector]));
     const relative = unique.size >= MIN_FOR_CENTERING;
@@ -141,6 +174,17 @@ export function scoreItems({ items, vector, prototypes = null }) {
     const zOf = score => (deviation > 1e-9 ? (score - average) / deviation : 0);
     const protoZ = prototypeZ(prototypes, vector);
 
+    // Смесь «тег + словарь» имеет меньший разброс, чем чистый тег. Группе без эталонов (новой) оценку по одному тегу приводим к той же шкале, иначе она завышена против остальных.
+    let soloScale = 1;
+    if (protoZ) {
+        const mixed = [...unique.keys()].filter(key => protoZ.has(key)).map(key => (1 - PROTO_WEIGHT) * zOf(centeredOf.get(key)) + PROTO_WEIGHT * protoZ.get(key));
+        if (mixed.length >= MIN_FOR_CENTERING) {
+            const mixedMean = mixed.reduce((sum, x) => sum + x, 0) / mixed.length;
+            const mixedSpread = Math.sqrt(mixed.reduce((sum, x) => sum + (x - mixedMean) ** 2, 0) / mixed.length);
+            soloScale = Math.max(0.3, Math.min(1, mixedSpread));
+        }
+    }
+
     return {
         relative,
         rows: items.map(item => {
@@ -151,7 +195,7 @@ export function scoreItems({ items, vector, prototypes = null }) {
             const vetoed = gap !== null && gap > 0 && unusual(item, gap);
             const tagZ = zOf(centeredOf.get(item.group ?? item.id));
             const proto = protoZ?.get(item.group ?? item.id) ?? null;   // у группы без эталонов решает один тег
-            const blended = proto === null ? tagZ : (1 - PROTO_WEIGHT) * tagZ + PROTO_WEIGHT * proto;
+            const blended = proto === null ? tagZ * soloScale : (1 - PROTO_WEIGHT) * tagZ + PROTO_WEIGHT * proto;
             return { item, cosine, gap, proto, value: vetoed ? VETOED : blended, penalty: 0, vetoed };
         }),
     };
@@ -201,7 +245,7 @@ export function buildQuestions(shortlist) {
  *  - `answers` — ответы Jev (`c0…` вероятности категорий, `i0…` накал); `lastIntensity` — прежний накал для сглаживания.
  * `similarity` в ответе — сырой косинус (для показа), решения принимаются по `value` из `scoreItems`.
  */
-export function pickTrack({ prototypes = null, minPlausibleCosine = MIN_PLAUSIBLE_COSINE, items, vector, dim, currentId = null, ended = false, force = false, minSimilarity, switchMargin, plays = new Map(), randomFn = Math.random, smart = false, answers = null, elapsed = null, remaining = null, lastIntensity = null }) {
+export function pickTrack({ graph = null, prototypes = null, minPlausibleCosine = MIN_PLAUSIBLE_COSINE, items, vector, dim, currentId = null, ended = false, force = false, minSimilarity, switchMargin, plays = new Map(), randomFn = Math.random, smart = false, answers = null, elapsed = null, remaining = null, lastIntensity = null }) {
     const current = items.find(item => item.id === currentId) ?? null;
     const asPlay = (item, score = null, extra = {}) => ({ action: 'play', id: item.id, ext: item.ext, similarity: score, ...extra });
     const others = list => (current && list.some(item => item.id !== current.id) ? list.filter(item => item.id !== current.id) : list);
@@ -213,7 +257,9 @@ export function pickTrack({ prototypes = null, minPlausibleCosine = MIN_PLAUSIBL
     }
     if (!validVector(vector, dim) || !items.length) return { action: 'none', reason: items.length ? 'bad vector' : 'empty' };
 
-    const { relative, rows } = scoreItems({ items, vector, prototypes });
+    const scored = scoreItems({ items, vector, prototypes });
+    const relative = scored.relative;
+    const rows = force ? scored.rows : withGraph(scored.rows, current, graph);   // «следующий» по кнопке графу не подчиняется
     // Относительная шкала всегда находит «лучшую» группу, даже для мусора; настоящий текст на E5 никогда не бывает так далёк от всех тегов сразу.
     if (Math.max(...rows.map(row => row.cosine)) < minPlausibleCosine) return { action: 'none', reason: 'implausible vector' };
     const free = force || ended;   // нечего удерживать: пользователь попросил или трек закончился

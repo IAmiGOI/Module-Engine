@@ -1,5 +1,33 @@
+// @ts-check
 import { h } from '../../cores/ui/tree.js';
 import { computed } from '../../cores/ui/reactive.js';
+
+/** @typedef {import('../../cores/ui/ui-types.js').UiNode} UiNode */
+/** @typedef {import('../../cores/ui/ui-types.js').UiChild} UiChild */
+/** @template [T=any] @typedef {import('../../cores/ui/ui-types.js').Signal<T>} Signal */
+
+/** @typedef {{ left?: number, top?: number }} PanelPosition */
+/** @typedef {{ width?: number, height?: number }} PanelSize */
+/** @typedef {Record<string, (event: any) => void>} DragHandlers  Готовый набор обработчиков из draggable.js. */
+/** @typedef {{ value: string, label?: string }} SelectOption */
+/** @typedef {{ id: string | number, text: string, tone?: string }} ToastItem */
+
+/**
+ * Общие настройки Card и Section.
+ * @typedef {Object} CollapsibleOptions
+ * @property {UiChild} [subtitle]
+ * @property {UiChild} [actions]  Кнопки в шапке (клик по ним не сворачивает карточку).
+ * @property {string | number} [key]
+ * @property {boolean | (() => boolean)} [open]  Булево или сигнал (память о состоянии — collapse-state.js).
+ * @property {(open: boolean) => void} [onToggle]
+ * @property {string | (() => string)} [className]  Может быть сигналом — для временного состояния.
+ * @property {string} [anchor]
+ */
+
+/** Значение поля ввода из события (`target` у события — общий EventTarget). @param {Event} event @returns {string} */
+const inputValue = event => /** @type {HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement} */ (event.target).value;
+/** @param {Event} event @returns {boolean} */
+const inputChecked = event => /** @type {HTMLInputElement} */ (event.target).checked;
 
 /**
  * Готовые виджеты — ровно тот слой, который ARCHITECTURE.md закладывала с
@@ -19,6 +47,12 @@ import { computed } from '../../cores/ui/reactive.js';
  * см. защиту от лишней записи в services/dom.js.
  */
 
+/**
+ * @param {UiChild} label
+ * @param {((event: MouseEvent) => void) | undefined} onClick
+ * @param {{ variant?: 'default' | 'danger', disabled?: boolean }} [options]
+ * @returns {UiNode}
+ */
 export function Button(label, onClick, { variant = 'default', disabled = false } = {}) {
     return h('button', {
         type: 'button',
@@ -28,6 +62,11 @@ export function Button(label, onClick, { variant = 'default', disabled = false }
     }, label);
 }
 
+/**
+ * @param {Signal<string>} valueSignal
+ * @param {{ placeholder?: string, type?: string, onInput?: (value: string) => void }} [options]
+ * @returns {UiNode}
+ */
 export function TextInput(valueSignal, { placeholder = '', type = 'text', onInput } = {}) {
     return h('input', {
         class: 'text_pole',
@@ -35,27 +74,38 @@ export function TextInput(valueSignal, { placeholder = '', type = 'text', onInpu
         placeholder,
         value: valueSignal,
         'on:input': event => {
-            valueSignal.set(event.target.value);
+            valueSignal.set(inputValue(event));
             // `onInput` — для случая, когда правка обязана дойти ещё куда-то
             // (запись в общий список, например). Без него такому вызывающему
             // пришлось бы держать значение в том же сигнале, что и структуру
             // списка, и перерисовывать список на каждую букву.
-            onInput?.(event.target.value);
+            onInput?.(inputValue(event));
         },
     });
 }
 
+/**
+ * @param {Signal<string>} valueSignal
+ * @param {{ placeholder?: string, rows?: number }} [options]
+ * @returns {UiNode}
+ */
 export function TextArea(valueSignal, { placeholder = '', rows = 3 } = {}) {
     return h('textarea', {
         class: 'text_pole',
         rows,
         placeholder,
         value: valueSignal,
-        'on:input': event => valueSignal.set(event.target.value),
+        'on:input': event => valueSignal.set(inputValue(event)),
     });
 }
 
-/** Число — отдельным виджетом, а не `TextInput type="number"`: сигнал должен получать ЧИСЛО, иначе `every: "5"` уедет в Директора строкой. */
+/**
+ * Число — отдельным виджетом, а не `TextInput type="number"`: сигнал должен получать ЧИСЛО, иначе `every: "5"` уедет в Директора строкой.
+ *
+ * @param {Signal<number | null>} valueSignal  Пустое поле → `null`.
+ * @param {{ min?: number, max?: number, step?: number }} [options]
+ * @returns {UiNode}
+ */
 export function NumberInput(valueSignal, { min, max, step = 1 } = {}) {
     return h('input', {
         class: 'text_pole stme-number',
@@ -64,7 +114,7 @@ export function NumberInput(valueSignal, { min, max, step = 1 } = {}) {
         max,
         step,
         value: valueSignal,
-        'on:input': event => valueSignal.set(event.target.value === '' ? null : Number(event.target.value)),
+        'on:input': event => valueSignal.set(inputValue(event) === '' ? null : Number(inputValue(event))),
     });
 }
 
@@ -82,25 +132,33 @@ export function NumberInput(valueSignal, { min, max, step = 1 } = {}) {
  * трёхзначного сигнала (например ещё не назначенный цвет говорящего),
  * подставляя нейтральный дефолт, а не давая браузеру молча откатиться на
  * произвольное собственное значение.
+ *
+ * @param {unknown} raw
+ * @returns {string}
  */
 function resolveColorValue(raw) {
     return typeof raw === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : '#888888';
 }
 
+/**
+ * @param {Signal<string | null | undefined>} valueSignal
+ * @param {{ onChange?: (value: string) => void }} [options]
+ * @returns {UiNode}
+ */
 export function ColorPicker(valueSignal, { onChange } = {}) {
     return h('span', { class: 'stme-color-picker' },
         h('input', {
             type: 'color',
             class: 'stme-color-swatch',
             value: computed(() => resolveColorValue(valueSignal())),
-            'on:input': event => { valueSignal.set(event.target.value); onChange?.(event.target.value); },
+            'on:input': event => { valueSignal.set(inputValue(event)); onChange?.(inputValue(event)); },
         }),
         h('input', {
             type: 'text',
             class: 'text_pole stme-color-hex',
             value: valueSignal,
             placeholder: '#rrggbb',
-            'on:input': event => { valueSignal.set(event.target.value); onChange?.(event.target.value); },
+            'on:input': event => { valueSignal.set(inputValue(event)); onChange?.(inputValue(event)); },
         }),
     );
 }
@@ -113,6 +171,11 @@ export function ColorPicker(valueSignal, { onChange } = {}) {
  *
  * Сигнал остаётся ЧИСЛОВЫМ: `<input type=range>` отдаёт строку, и без явного
  * `Number()` в условие Директора уехало бы `every: "5"`.
+ *
+ * @param {UiChild} label
+ * @param {Signal<number>} valueSignal
+ * @param {{ min?: number, max?: number, step?: number }} [options]
+ * @returns {UiNode}
  */
 export function Slider(label, valueSignal, { min = 0, max = 100, step = 1 } = {}) {
     return h('label', { class: 'stme-slider' },
@@ -126,7 +189,7 @@ export function Slider(label, valueSignal, { min = 0, max = 100, step = 1 } = {}
             max,
             step,
             value: valueSignal,
-            'on:input': event => valueSignal.set(Number(event.target.value)),
+            'on:input': event => valueSignal.set(Number(inputValue(event))),
         }),
     );
 }
@@ -138,6 +201,11 @@ export function Slider(label, valueSignal, { min = 0, max = 100, step = 1 } = {}
  * соседний селектор `input:checked + .stme-switch-track` — состояние берётся
  * из настоящего чекбокса, а не дублируется классом, так что клавиатура и
  * фокус работают сами.
+ *
+ * @param {UiChild} label
+ * @param {Signal<boolean>} checkedSignal
+ * @param {{ hint?: string, onChange?: (checked: boolean) => void }} [options]
+ * @returns {UiNode}
  */
 export function Toggle(label, checkedSignal, { hint, onChange } = {}) {
     return h('label', { class: 'stme-switch' },
@@ -145,8 +213,8 @@ export function Toggle(label, checkedSignal, { hint, onChange } = {}) {
             type: 'checkbox',
             checked: checkedSignal,
             'on:change': event => {
-                checkedSignal.set(event.target.checked);
-                onChange?.(event.target.checked);
+                checkedSignal.set(inputChecked(event));
+                onChange?.(inputChecked(event));
             },
         }),
         h('span', { class: 'stme-switch-track' }),
@@ -159,6 +227,10 @@ export function Toggle(label, checkedSignal, { hint, onChange } = {}) {
  * (`FloatingStack`), поэтому длинный текст не растягивает ничего вокруг —
  * ровно та беда, из-за которой она и появилась: результат проверки
  * подключения раньше был плашкой во всю ширину карточки.
+ *
+ * @param {UiChild} text
+ * @param {{ tone?: string, onDismiss?: (event: MouseEvent) => void, key?: string | number }} [options]
+ * @returns {UiNode}
  */
 export function Toast(text, { tone = 'muted', onDismiss, key } = {}) {
     return h('div', { class: `stme-toast stme-toast-${tone}`, key },
@@ -171,6 +243,10 @@ export function Toast(text, { tone = 'muted', onDismiss, key } = {}) {
  * Плавающий стек плашек в углу ЭКРАНА. Сам ничего не знает про их появление и
  * исчезновение — только рисует то, что сейчас в сигнале; жизненный цикл ведёт
  * [Ядро уведомлений](../../cores/ui/notifications.js).
+ *
+ * @param {Signal<ToastItem[]>} itemsSignal
+ * @param {{ corner?: string, renderItem?: (item: ToastItem) => UiNode }} [options]
+ * @returns {UiNode}
  */
 export function FloatingStack(itemsSignal, { corner = 'top-left', renderItem } = {}) {
     return h('div', { class: `stme-floating stme-floating-${corner}` },
@@ -185,6 +261,23 @@ export function FloatingStack(itemsSignal, { corner = 'top-left', renderItem } =
  * Отличается от `FloatingStack` назначением: стек — поток временных
  * сообщений, панель — ПОСТОЯННОЕ окно с содержимым. Общее у них только то,
  * что оба плавают.
+ *
+ * @param {UiChild} title
+ * @param {{
+ *   position?: PanelPosition | (() => PanelPosition | undefined),
+ *   size?: PanelSize | (() => PanelSize | undefined),
+ *   collapsed?: () => boolean,
+ *   onToggle?: (collapsed: boolean) => void,
+ *   onClose?: (event: MouseEvent) => void,
+ *   onResize?: (size: { width: number, height: number }) => void,
+ *   resizable?: boolean,
+ *   drag?: DragHandlers,
+ *   actions?: UiNode[],
+ *   className?: string,
+ *   minWidth?: number,
+ *   minHeight?: number }} [options]
+ * @param {...UiChild} children
+ * @returns {UiNode}
  */
 export function FloatingPanel(title, {
     position, size, collapsed, onToggle, onClose, onResize, resizable = Boolean(onResize), drag,
@@ -204,6 +297,7 @@ export function FloatingPanel(title, {
     const style = computed(() => {
         const { left, top } = (typeof position === 'function' ? position() : position) ?? {};
         const { width, height } = (typeof size === 'function' ? size() : size) ?? {};
+        /** @type {Record<string, string>} */
         const next = {};
         if (left !== undefined) next.left = `${left}px`;
         if (top !== undefined) next.top = `${top}px`;
@@ -241,7 +335,7 @@ export function FloatingPanel(title, {
         'on:pointerup': onResize && resizable
             ? event => {
                 if (collapsed?.()) return;
-                const box = event.currentTarget?.getBoundingClientRect?.();
+                const box = /** @type {HTMLElement | null} */ (event.currentTarget)?.getBoundingClientRect?.();
                 if (box) onResize({ width: Math.round(box.width), height: Math.round(box.height) });
             }
             : undefined,
@@ -277,6 +371,11 @@ export function FloatingPanel(title, {
  * видно, что показание ещё готовится, и при этом на экран не лезет ни
  * «(not established yet)», ни прочерк, ни прошлое значение, выдающее себя за
  * свежее.
+ *
+ * @param {string} label
+ * @param {Signal<any> | (() => any) | string | null | undefined} valueSignal  Сигнал или готовое значение.
+ * @param {{ icon?: string, onClick?: (event: MouseEvent) => void, title?: string, showLabel?: boolean, showValue?: boolean }} [options]
+ * @returns {UiNode}
  */
 export function StatBlock(label, valueSignal, { icon = '◷', onClick, title, showLabel = true, showValue = true } = {}) {
     const read = () => (typeof valueSignal === 'function' ? valueSignal() : valueSignal);
@@ -290,7 +389,8 @@ export function StatBlock(label, valueSignal, { icon = '◷', onClick, title, sh
         ),
         // Скрытое значение — не «ничего»: невидимый `&nbsp;` держит высоту строки,
         // поэтому компактные варианты остаются в высоту обычного StatBlock'а.
-        showValue
+        // `pending` есть тогда и только тогда, когда `showValue` — проверяем его, чтобы тип подтвердил, что вызов безопасен.
+        pending
             ? h('div', { class: 'stme-stat-value' }, computed(() => (pending() ? '' : read())))
             : h('div', { class: 'stme-stat-value stme-stat-value-ghost' }, '\u00a0'),
     ];
@@ -301,7 +401,13 @@ export function StatBlock(label, valueSignal, { icon = '◷', onClick, title, sh
     }, parts);
 }
 
-/** Маленькая кликабельная метка. У Alpha ими вставлялись токены полей в шаблон — приём хороший, поэтому переехал в общую библиотеку, а не остался внутри одного модуля. */
+/**
+ * Маленькая кликабельная метка. У Alpha ими вставлялись токены полей в шаблон — приём хороший, поэтому переехал в общую библиотеку, а не остался внутри одного модуля.
+ *
+ * @param {UiChild} label
+ * @param {{ title?: string, onClick?: (event: MouseEvent) => void }} [options]
+ * @returns {UiNode}
+ */
 export function Chip(label, { title, onClick } = {}) {
     return h('button', {
         type: 'button',
@@ -311,12 +417,25 @@ export function Chip(label, { title, onClick } = {}) {
     }, label);
 }
 
-/** Свёрнутая по умолчанию секция для продвинутого — чтобы редкое не занимало место у частого. */
+/**
+ * Свёрнутая по умолчанию секция для продвинутого — чтобы редкое не занимало место у частого.
+ *
+ * @param {UiChild} summary
+ * @param {...UiChild} children
+ * @returns {UiNode}
+ */
 export function Details(summary, ...children) {
     return h('details', { class: 'stme-details' }, h('summary', {}, summary), ...children);
 }
 
-/** `options` — массив `{ value, label }` или сигнал на него. */
+/**
+ * `options` — массив `{ value, label }` или сигнал на него.
+ *
+ * @param {Signal<string>} valueSignal
+ * @param {SelectOption[] | (() => SelectOption[])} options
+ * @param {{ onChange?: (value: string) => void }} [config]
+ * @returns {UiNode}
+ */
 export function Select(valueSignal, options, { onChange } = {}) {
     const read = typeof options === 'function' ? options : () => options;
     return h('select', {
@@ -325,7 +444,7 @@ export function Select(valueSignal, options, { onChange } = {}) {
         // `applyPreset()`, теперь и у сэмплера воркера): выбор обязан не
         // только запомниться сам, но и заполнить СОСЕДНИЕ поля — то же
         // разделение, что `onChange` у `Toggle()` уже даёт переключателю.
-        'on:change': event => { valueSignal.set(event.target.value); onChange?.(event.target.value); },
+        'on:change': event => { valueSignal.set(inputValue(event)); onChange?.(inputValue(event)); },
     }, computed(() => read().map(option => h('option', {
         key: option.value,
         value: option.value,
@@ -336,6 +455,12 @@ export function Select(valueSignal, options, { onChange } = {}) {
     }, option.label ?? option.value))));
 }
 
+/**
+ * @param {UiChild} label
+ * @param {UiChild} control
+ * @param {{ hint?: string | (() => string) }} [options]  Подсказка — строка или функция/сигнал, если она следит за чужим состоянием.
+ * @returns {UiNode}
+ */
 export function Field(label, control, { hint } = {}) {
     // `hint` — обычно голая строка (подсказка не меняется, пока карта не
     // перерисуется заново), но иногда обязана следить за чужим состоянием
@@ -356,6 +481,10 @@ export function Field(label, control, { hint } = {}) {
     );
 }
 
+/**
+ * @param {...UiChild} children
+ * @returns {UiNode}
+ */
 export function Row(...children) {
     return h('div', { class: 'stme-row' }, children);
 }
@@ -370,8 +499,16 @@ export function Row(...children) {
  * `<summary>` переключается от любого клика по себе.
  */
 /** Адрес блока без ключа сворачивания — по заголовку (`t:model-connections`): так ссылаться можно и на секции внутри Модулей. */
+/** @param {unknown} title @returns {string | undefined} */
 export const titleAnchor = title => (typeof title === 'string' && title.trim() ? `t:${title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}` : undefined);
 
+/**
+ * @param {{ root: string, head: string, body: string }} classes
+ * @param {UiChild} title
+ * @param {CollapsibleOptions} options
+ * @param {UiChild[]} children
+ * @returns {UiNode}
+ */
 function collapsible({ root, head, body }, title, { subtitle, actions, key, open = false, onToggle, className, anchor } = {}, children) {
     return h('details', {
         'data-stme-anchor': anchor ?? titleAnchor(title),
@@ -385,7 +522,7 @@ function collapsible({ root, head, body }, title, { subtitle, actions, key, open
         // СВЁРНУТО: экран целиком на страницу не помещается, и раскрытым
         // должно быть то, что пользователь раскрыл сам.
         open,
-        'on:toggle': onToggle ? event => onToggle(event.target.open) : undefined,
+        'on:toggle': onToggle ? event => onToggle(/** @type {HTMLDetailsElement} */ (event.target).open) : undefined,
     },
         h('summary', { class: head },
             h('div', { class: 'stme-card-title' },
@@ -405,21 +542,43 @@ function collapsible({ root, head, body }, title, { subtitle, actions, key, open
  * «Модули» → «Трекер» → «Трекер» → «status» — четыре вложенных обрамления, и
  * взгляду не за что зацепиться. Рамку рисует ТОЛЬКО верхний уровень (Card), а
  * вложенность внутри него видна по фону (шкала глубины в styles/).
+ *
+ * @param {UiChild} title
+ * @param {CollapsibleOptions} [options]
+ * @param {...UiChild} children
+ * @returns {UiNode}
  */
 export function Section(title, options = {}, ...children) {
     return collapsible({ root: 'stme-section', head: 'stme-section-head', body: 'stme-section-body' }, title, options, children);
 }
 
-/** Обрамлённая карточка — ТОЛЬКО верхний уровень. Внутри неё вкладывается Section, а не другая Card. */
+/**
+ * Обрамлённая карточка — ТОЛЬКО верхний уровень. Внутри неё вкладывается Section, а не другая Card.
+ *
+ * @param {UiChild} title
+ * @param {CollapsibleOptions} [options]
+ * @param {...UiChild} children
+ * @returns {UiNode}
+ */
 export function Card(title, options = {}, ...children) {
     return collapsible({ root: 'stme-card', head: 'stme-card-head', body: 'stme-card-body' }, title, options, children);
 }
 
-/** `tone`: 'ok' | 'error' | 'muted' — цвет берётся из CSS, не отсюда. */
+/**
+ * `tone`: 'ok' | 'error' | 'muted' — цвет берётся из CSS, не отсюда.
+ *
+ * @param {UiChild} text
+ * @param {{ tone?: 'ok' | 'error' | 'muted' | string }} [options]
+ * @returns {UiNode}
+ */
 export function Badge(text, { tone = 'muted' } = {}) {
     return h('span', { class: `stme-badge stme-badge-${tone}` }, text);
 }
 
+/**
+ * @param {UiChild} text
+ * @returns {UiNode}
+ */
 export function EmptyState(text) {
     return h('p', { class: 'stme-empty' }, text);
 }
@@ -433,6 +592,10 @@ export function EmptyState(text) {
  * человекочитаемый текст ("Building… 42%"), эта функция сама ничего не
  * форматирует и не знает о процентах в тексте — вызывающий решает
  * формулировку, здесь только геометрия полосы.
+ *
+ * @param {number} percent  Зажимается в [0, 100] и округляется.
+ * @param {string} [label]
+ * @returns {UiNode}
  */
 export function ProgressBar(percent, label) {
     const clamped = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
@@ -460,8 +623,14 @@ export function ProgressBar(percent, label) {
  * `holdMs`, чтобы поймать момент, когда удержание длилось достаточно;
  * отпускание раньше (`pointerup`/`pointerleave`/`pointercancel`) чистит его
  * и снимает класс — заливка мгновенно откатывается, ничего не срабатывает.
+ *
+ * @param {UiChild} label
+ * @param {() => void} onConfirm  Срабатывает, только если кнопку продержали `holdMs`.
+ * @param {{ holdMs?: number, variant?: 'default' | 'danger', disabled?: boolean }} [options]
+ * @returns {UiNode}
  */
 export function HoldButton(label, onConfirm, { holdMs = 1200, variant = 'danger', disabled = false } = {}) {
+    /** @type {ReturnType<typeof setTimeout> | null} */
     let timer = null;
     // `event.currentTarget` — ТОЛЬКО на время диспетчеризации самого события,
     // браузер сбрасывает его в `null` сразу после выхода из обработчика
@@ -473,8 +642,9 @@ export function HoldButton(label, onConfirm, { holdMs = 1200, variant = 'danger'
     // после неё тоже никогда не доходил до вызова. Фикс — брать элемент
     // из `currentTarget` СРАЗУ, в момент самого `pointerdown`, и держать
     // ссылку в замыкании, а не перечитывать её из события позже.
+    /** @param {HTMLElement} element */
     const release = element => {
-        clearTimeout(timer);
+        if (timer !== null) clearTimeout(timer);
         timer = null;
         element.classList.remove('stme-holding');
     };
@@ -485,16 +655,16 @@ export function HoldButton(label, onConfirm, { holdMs = 1200, variant = 'danger'
         style: { '--stme-hold-ms': `${holdMs}ms` },
         'on:pointerdown': event => {
             if (disabled) return;
-            const element = event.currentTarget;
+            const element = /** @type {HTMLElement} */ (event.currentTarget);
             element.classList.add('stme-holding');
             timer = setTimeout(() => {
                 element.classList.remove('stme-holding');
                 onConfirm();
             }, holdMs);
         },
-        'on:pointerup': event => release(event.currentTarget),
-        'on:pointerleave': event => release(event.currentTarget),
-        'on:pointercancel': event => release(event.currentTarget),
+        'on:pointerup': event => release(/** @type {HTMLElement} */ (event.currentTarget)),
+        'on:pointerleave': event => release(/** @type {HTMLElement} */ (event.currentTarget)),
+        'on:pointercancel': event => release(/** @type {HTMLElement} */ (event.currentTarget)),
     },
         h('span', { class: 'stme-hold-button-fill' }),
         h('span', { class: 'stme-hold-button-label' }, label),
@@ -508,6 +678,11 @@ export function HoldButton(label, onConfirm, { holdMs = 1200, variant = 'danger'
  * with an `active` state for toggle-style tool palettes (ROADMAP.md 5.47 —
  * the map module's marker/region tool picker, floating over the canvas
  * rather than sitting in a text-labelled top toolbar).
+ *
+ * @param {UiChild} icon  Узел SVG или (в крайнем случае) строка-эмодзи.
+ * @param {((event: MouseEvent) => void) | undefined} onClick
+ * @param {{ active?: boolean, title?: string, disabled?: boolean }} [options]
+ * @returns {UiNode}
  */
 export function IconButton(icon, onClick, { active = false, title, disabled = false } = {}) {
     return h('button', {
@@ -519,7 +694,14 @@ export function IconButton(icon, onClick, { active = false, title, disabled = fa
     }, icon);
 }
 
-/** Ключёванный список: `renderItem` обязан проставить `key` — по нему diff.js и опознаёт элементы при перестановке. */
+/**
+ * Ключёванный список: `renderItem` обязан проставить `key` — по нему diff.js и опознаёт элементы при перестановке.
+ *
+ * @template T
+ * @param {() => T[]} itemsSignal
+ * @param {(item: T, index: number) => UiNode} renderItem
+ * @returns {Signal<UiNode[]>}
+ */
 export function List(itemsSignal, renderItem) {
     return computed(() => itemsSignal().map(renderItem));
 }
@@ -528,6 +710,9 @@ export function List(itemsSignal, renderItem) {
  * Две колонки, схлопывающиеся в одну на узком месте (см. CSS). Разделение
  * «слева своё, справа подключаемое» — не частный случай одной панели, а
  * форма, которая понадобится любому экрану с тем же делением.
+ *
+ * @param {{ left: UiChild, right: UiChild }} columns
+ * @returns {UiNode}
  */
 export function TwoColumn({ left, right }) {
     return h('div', { class: 'stme-two-column' },
@@ -542,6 +727,10 @@ export function TwoColumn({ left, right }) {
  * рисует строку, `onAdd` добавляет. Ровно тот повторяющийся кусок, который
  * нужен и менеджеру моделей, и трекерам, и макросам, и любому модулю со
  * списком чего угодно.
+ *
+ * @template T
+ * @param {{ items: () => T[], renderItem: (item: T, index: number) => UiNode, onAdd?: (event: MouseEvent) => void, addLabel?: string, empty?: string, actions?: UiChild }} config
+ * @returns {UiNode}
  */
 export function EditableList({ items, renderItem, onAdd, addLabel = '+ Add', empty = 'Nothing here yet.', actions }) {
     return h('div', { class: 'stme-editable-list' },
@@ -557,6 +746,9 @@ export function EditableList({ items, renderItem, onAdd, addLabel = '+ Add', emp
  * Крутящийся индикатор. Отдельным виджетом, а не разметкой внутри `Overlay`:
  * ожидание бывает не только у обновления, и второй раз рисовать то же кольцо
  * руками не придётся.
+ *
+ * @param {{ size?: 'sm' | 'md' | 'lg' | string }} [options]
+ * @returns {UiNode}
  */
 export function Spinner({ size = 'md' } = {}) {
     return h('div', { class: `stme-spinner stme-spinner-${size}` });
@@ -573,6 +765,10 @@ export function Spinner({ size = 'md' } = {}) {
  *
  * `visible` — сигнал: виджет ничего не решает сам, он только рисует то
  * состояние, которое ему дали.
+ *
+ * @param {() => boolean} visibleSignal
+ * @param {{ title?: UiChild, description?: UiChild, children?: UiChild }} [options]
+ * @returns {UiNode}
  */
 export function Overlay(visibleSignal, { title, description, children } = {}) {
     return h('div', { class: 'stme-overlay-root' },
@@ -596,6 +792,10 @@ export function Overlay(visibleSignal, { title, description, children } = {}) {
  * Живёт вне разметки расширения намеренно: у Alpha она была прибита к верху
  * окна ровно потому, что свёрнутая панель не должна прятать сообщение о том,
  * что движок не обновился.
+ *
+ * @param {UiChild} textSignal  Текст или сигнал с текстом.
+ * @param {{ tone?: string, icon?: string, action?: (event: MouseEvent) => void, actionLabel?: string, busy?: () => boolean }} [options]
+ * @returns {UiNode}
  */
 export function Banner(textSignal, { tone = 'warn', icon = '⚠', action, actionLabel = 'Retry', busy } = {}) {
     return h('div', { class: `stme-banner stme-banner-${tone}` },
@@ -616,10 +816,15 @@ export function Banner(textSignal, { tone = 'warn', icon = '⚠', action, action
  * `createDragHandlers(positionSignal, { onDrop, onClick })` — `onClick`
  * (not a plain `on:click`) is what tells a near-stationary release apart
  * from an actual drag, since the same pointer handlers serve both.
+ *
+ * @param {UiChild} icon
+ * @param {{ position?: PanelPosition | (() => PanelPosition | undefined), drag?: DragHandlers, title?: string }} [options]
+ * @returns {UiNode}
  */
 export function DockButton(icon, { position, drag, title } = {}) {
     const style = computed(() => {
         const { left, top } = (typeof position === 'function' ? position() : position) ?? {};
+        /** @type {Record<string, string>} */
         const next = {};
         if (left !== undefined) next.left = `${left}px`;
         if (top !== undefined) next.top = `${top}px`;
@@ -646,6 +851,11 @@ export function DockButton(icon, { position, drag, title } = {}) {
  * EXACT class strings it always has (`tests/widgets.test.js`'s `EdgeDrawer()` test asserts the literal string
  * `'stme-edge-drawer'`/`'stme-edge-drawer stme-edge-drawer-open'`, no modifier) — a modifier class is only added
  * for a non-default side, never for `'right'`. The tab's arrow flips to match which way the body actually slides.
+ *
+ * @param {() => boolean} open  Сигнал, которым владеет ВЫЗЫВАЮЩИЙ.
+ * @param {{ onToggle?: (open: boolean) => void, title?: string, side?: 'left' | 'right' | 'bottom' }} [options]
+ * @param {...UiChild} children
+ * @returns {UiNode}
  */
 export function EdgeDrawer(open, { onToggle, title = 'Settings', side = 'right' } = {}, ...children) {
     const sideClass = side === 'right' ? '' : ` stme-edge-drawer-${side}`;
@@ -680,8 +890,13 @@ export function EdgeDrawer(open, { onToggle, title = 'Settings', side = 'right' 
  * 102×136 — owner: "увеличь аватарку в 1.5 раза в ширину" (68 × 1.5 = 102)
  * "и так, чтобы она была 3x4 в портретном варианте" (102 / 3 × 4 = 136).
  * `border-radius: 14px` — см. `.stme-avatar` в styles/.
+ *
+ * `onError` — the image 404'd; caller decides what to do (swap `event.target.src`, etc.). Generic: knows nothing about WHY an avatar might be missing.
+ *
+ * @param {string | null | undefined} url
+ * @param {{ width?: number, height?: number, name?: string, onError?: (event: Event) => void }} [options]
+ * @returns {UiNode}
  */
-/** `onError` — the image 404'd; caller decides what to do (swap `event.target.src`, etc.). Generic: knows nothing about WHY an avatar might be missing. */
 export function Avatar(url, { width = 102, height = 136, name = '', onError } = {}) {
     const style = { width: `${width}px`, height: `${height}px` };
     if (!url) {
@@ -697,32 +912,41 @@ export function Avatar(url, { width = 102, height = 136, name = '', onError } = 
  * означало бы держать знание о чужом формате в общем виджете. Вызывающий
  * (Ядро/Модуль) решает, как отформатировать; `title` — полное значение по
  * наведению, когда `text` — сокращённое ("2 min ago").
+ *
+ * @param {string} text
+ * @param {{ title?: string }} [options]
+ * @returns {UiNode}
  */
 export function Timestamp(text, { title } = {}) {
     return h('time', { class: 'stme-timestamp', title }, text);
 }
 
 /** Реальный SVG-глиф, не эмодзи — та же причина, что у иконок инструментов карты (ROADMAP.md 5.5x): эмодзи рендерится непредсказуемо/по-детски между платформами. */
+/** @returns {UiNode} */
 function editIcon() {
     return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
         h('path', { d: 'M3 21v-3.75L14.81 5.44l3.75 3.75L6.75 21H3zM18.71 4.04a1 1 0 0 1 1.41 0l1.84 1.84a1 1 0 0 1 0 1.41l-1.79 1.79-3.25-3.25 1.79-1.79z' }),
     );
 }
+/** @returns {UiNode} */
 function deleteIcon() {
     return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
         h('path', { d: 'M6 7h12l-1 14H7L6 7zm3-4h6l1 2h4v2H2V5h4l1-2z' }),
     );
 }
+/** @returns {UiNode} */
 function swipeLeftIcon() {
     return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
         h('path', { d: 'M15 6l-6 6 6 6', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
     );
 }
+/** @returns {UiNode} */
 function swipeRightIcon() {
     return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
         h('path', { d: 'M9 6l6 6-6 6', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
     );
 }
+/** @returns {UiNode} */
 function regenerateIcon() {
     return h('svg', { viewBox: '0 0 24 24', class: 'stme-icon-svg', 'aria-hidden': 'true' },
         h('path', { d: 'M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z' }),
@@ -742,6 +966,9 @@ function regenerateIcon() {
  * готовым; см. `genStatus` в chat-viewport.js). В ОТЛИЧИЕ от Activity
  * Light — НЕ гаснет обратно в нейтральный по таймеру, держит цвет
  * НАВСЕГДА (сам чат — история, а не живая консоль).
+ *
+ * @param {string | null | undefined} status  `working` | `success` | `error`; прочее — нейтральная полоска.
+ * @returns {UiNode}
  */
 export function GenStripe(status) {
     const known = status === 'working' || status === 'success' || status === 'error';
@@ -754,8 +981,7 @@ export function GenStripe(status) {
  * смысл), время сообщения. `genDurationMs`/`timestampText` — уже готовые
  * строки/числа от вызывающего; виджет ничего не вычисляет сам, только
  * раскладывает.
- */
-/**
+ *
  * `actions` — уже готовое дерево (обычно `MessageActionsRow(...)`), кладётся
  * в ТОТ ЖЕ ряд, что имя и бейджи, а не отдельной строкой ниже (владелец: "Любые
  * кнопки должны быть в ряд с именем") — `margin-left: auto` в CSS прижимает
@@ -767,8 +993,7 @@ export function GenStripe(status) {
  * персонажа не выровнены по верху фото": аватар вырос до портрета 102×136
  * (был квадрат 72×72, до этого 56×56) — центрирование стало заметно
  * сдвигать имя вниз от видимого верхнего края аватарки.
- */
-/**
+ *
  * ТОЛЬКО имя/бейджи/время — БЕЗ аватарки и полоски-светофора. Владелец
  * (после "мимо" на первую версию — "Оно должно быть СПРАВА от аватарки.
  * Блоки ризонинга тоже. И только после заполнения той зоны спускаться
@@ -787,6 +1012,9 @@ export function GenStripe(status) {
  * внутри и БЕЗ обёртки `.stme-message-header` (та задавала `display:
  * flex` на паре "аватар+инфо" — сейчас аватар снаружи, инфо просто
  * блочный элемент, обтекающий чужой float естественно).
+ *
+ * @param {{ name?: string, turnIndex?: number | null, genDurationMs?: number | null, timestampText?: string, isUser?: boolean, hidden?: boolean, actions?: UiChild }} [options]
+ * @returns {UiNode}
  */
 export function MessageHeader({ name = '', turnIndex, genDurationMs, timestampText, isUser = false, hidden = false, actions } = {}) {
     return h('div', { class: 'stme-message-header-info' },
@@ -807,9 +1035,12 @@ export function MessageHeader({ name = '', turnIndex, genDurationMs, timestampTe
  * регенерация показываются, только если вызывающий вообще дал счётчик
  * свайпов (`swipeCount`) — у сообщения пользователя свайпов не бывает, и
  * рисовать нерабочие стрелки хуже, чем не рисовать ничего.
+ *
+ * @param {{ onEdit?: (event: MouseEvent) => void, onDelete?: (event: MouseEvent) => void, onSwipeLeft?: (event: MouseEvent) => void, onSwipeRight?: (event: MouseEvent) => void, onRegenerate?: (event: MouseEvent) => void, swipeIndex?: number, swipeCount?: number }} [options]
+ * @returns {UiNode}
  */
 export function MessageActionsRow({ onEdit, onDelete, onSwipeLeft, onSwipeRight, onRegenerate, swipeIndex, swipeCount } = {}) {
-    const canSwipe = Number.isFinite(swipeCount) && swipeCount > 1;
+    const canSwipe = swipeCount !== undefined && Number.isFinite(swipeCount) && swipeCount > 1;
     return h('div', { class: 'stme-message-actions' },
         onEdit ? IconButton(editIcon(), onEdit, { title: 'Edit' }) : null,
         onDelete ? IconButton(deleteIcon(), onDelete, { title: 'Delete' }) : null,
@@ -835,6 +1066,10 @@ export function MessageActionsRow({ onEdit, onDelete, onSwipeLeft, onSwipeRight,
  * накладывались. `'on:toggle'` — родное DOM-событие `<details>`, дёшево
  * подписаться, дальше вызывающий (`cores/ui/chat-viewport.js`) решает, что
  * с этим делать (обычно — `render()` заново).
+ *
+ * @param {string | null | undefined} text
+ * @param {{ onToggle?: (event: Event) => void }} [options]
+ * @returns {UiNode | null}
  */
 export function ReasoningBlock(text, { onToggle } = {}) {
     if (!text) return null;
