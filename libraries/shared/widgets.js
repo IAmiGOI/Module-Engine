@@ -794,14 +794,19 @@ export function Overlay(visibleSignal, { title, description, children } = {}) {
  * что движок не обновился.
  *
  * @param {UiChild} textSignal  Текст или сигнал с текстом.
- * @param {{ tone?: string, icon?: string, action?: (event: MouseEvent) => void, actionLabel?: string, busy?: () => boolean }} [options]
+ * @param {{ tone?: string, icon?: string, action?: (event: MouseEvent) => void, actionLabel?: string, busy?: () => boolean, detail?: UiChild, onDismiss?: (event: MouseEvent) => void }} [options]
+ * `detail` — второй ряд под текстом (например, команда для копирования); `onDismiss` рисует крестик закрытия.
  * @returns {UiNode}
  */
-export function Banner(textSignal, { tone = 'warn', icon = '⚠', action, actionLabel = 'Retry', busy } = {}) {
+export function Banner(textSignal, { tone = 'warn', icon = '⚠', action, actionLabel = 'Retry', busy, detail, onDismiss } = {}) {
     return h('div', { class: `stme-banner stme-banner-${tone}` },
         h('span', { class: 'stme-banner-icon' }, icon),
-        h('span', { class: 'stme-banner-text' }, textSignal),
+        h('span', { class: 'stme-banner-body' },
+            h('span', { class: 'stme-banner-text' }, textSignal),
+            detail ?? null,
+        ),
         action ? computed(() => Button(busy && busy() ? 'Working…' : actionLabel, action, { disabled: Boolean(busy && busy()) })) : null,
+        onDismiss ? h('button', { type: 'button', class: 'stme-banner-close', title: 'Hide', 'aria-label': 'Hide', 'on:click': onDismiss }, '×') : null,
     );
 }
 

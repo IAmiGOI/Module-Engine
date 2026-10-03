@@ -1,5 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
-import { commitsMatch, describeUpdateDiagnosis, parseCommitSha } from '../../libraries/core/update-check.js';
+import { commitsMatch, describeHistoryRewrite, describeUpdateDiagnosis, parseCommitSha, parseCompareStatus } from '../../libraries/core/update-check.js';
 
 /**
  * Ядро самообновления — движок сам подтягивает себя из своего репозитория.
@@ -167,6 +167,29 @@ export function createSelfUpdateCore(host, {
         };
     }
 
+    /**
+     * После СБОЯ pull спрашиваем GitHub, не переписана ли история ветки. Наблюдатель, как и `diagnose`:
+     * любой его сбой — просто «причина неизвестна», и пользователь видит обычное сообщение.
+     */
+    async function diagnoseFailure({ currentCommitHash, currentBranchName } = {}, remoteSha) {
+        if (!currentCommitHash || !remoteSha) return null;
+        const result = await request(host.network, 'http.request', {
+            params: {
+                url: `${GITHUB_API}/repos/${owner}/${repo}/compare/${currentCommitHash}...${remoteSha}`,
+                method: 'GET',
+                headers: { Accept: 'application/vnd.github+json' },
+            },
+            timeoutMs: networkTimeoutMs,
+        });
+        if (!result.ok || !result.value) return null;
+        const notFound = Number(result.value.status) === 404 || Number(result.value.status) === 422;
+        return describeHistoryRewrite({
+            compareStatus: result.value.ok ? parseCompareStatus(result.value.text) : null,
+            notFound,
+            branch: currentBranchName,
+        });
+    }
+
     async function apply({ global = false } = {}) {
         if (!extensionName) return { applied: false, error: 'Could not determine this extension\'s folder name.' };
         const result = await service('stExtensions.update', { extensionName, global }, { timeoutMs: applyTimeoutMs });
@@ -244,7 +267,7 @@ export function createSelfUpdateCore(host, {
             // чего перезагрузка выглядела так, будто вообще ничего не
             // происходит.
             const last = await lastAttempt();
-            if (last?.outcome === 'failed') publishEvent('selfUpdate.failed', { reason: last.reason ?? null });
+            if (last?.outcome === 'failed') publishEvent('selfUpdate.failed', { reason: last.reason ?? null, kind: last.kind, message: last.message, fix: last.fix });
             return { outcome: 'cooling-down', lastOutcome: last?.outcome ?? null };
         }
 
@@ -277,9 +300,11 @@ export function createSelfUpdateCore(host, {
         await recordAttempt('pending');
         const applied = await apply({ global: status.global });
         if (!applied.applied) {
-            await recordAttempt('failed', { reason: applied.error ?? null });
-            publishEvent('selfUpdate.failed', { reason: applied.error ?? null });
-            return { outcome: 'failed', error: applied.error, diagnosis };
+            const rewrite = await diagnoseFailure(status, diagnosis?.remoteSha ?? await fetchRemoteSha(status.currentBranchName));
+            const failure = { reason: applied.error ?? null, ...(rewrite ? { kind: rewrite.kind, message: rewrite.message, fix: rewrite.fix } : {}) };
+            await recordAttempt('failed', failure);
+            publishEvent('selfUpdate.failed', failure);
+            return { outcome: 'failed', error: applied.error, diagnosis, ...(rewrite ? { kind: rewrite.kind, fix: rewrite.fix } : {}) };
         }
 
         await recordAttempt('updated');

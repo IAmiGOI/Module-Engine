@@ -64,7 +64,7 @@ test('describeUpdateDiagnosis() stays quiet-toned when ST already knows it is be
 const SHA_LOCAL = '1111111111111111111111111111111111111111';
 const SHA_REMOTE = '2222222222222222222222222222222222222222';
 
-function buildEngine({ discover, version, update, remoteSha = SHA_LOCAL, sessionAt = '0', githubOk = true } = {}) {
+function buildEngine({ discover, version, update, remoteSha = SHA_LOCAL, sessionAt = '0', githubOk = true, compare } = {}) {
     const engine = createEngine();
     const calls = { version: [], update: [], reloads: 0, session: {} };
 
@@ -94,7 +94,10 @@ function buildEngine({ discover, version, update, remoteSha = SHA_LOCAL, session
     });
 
     registerHttpService(engine.buses.network, {
-        fetch: async () => ({ status: githubOk ? 200 : 500, ok: githubOk, headers: { entries: () => [] }, text: async () => remoteSha }),
+        fetch: async url => {
+            if (String(url).includes('/compare/') && compare) return { status: compare.status, ok: compare.status < 400, headers: { entries: () => [] }, text: async () => JSON.stringify(compare.body ?? {}) };
+            return { status: githubOk ? 200 : 500, ok: githubOk, headers: { entries: () => [] }, text: async () => remoteSha };
+        },
     });
 
     const logs = [];
@@ -430,4 +433,52 @@ test('a stale record from BEFORE this shape existed (a bare timestamp, not JSON)
     calls.session['stme.beta.updateAttempt'] = '999999'; // старый формат — голое время
 
     await assert.doesNotReject(core.run());
+});
+
+test('a failed pull on a REWRITTEN history says so and hands over the exact fix — a timeout alone tells the user nothing', async () => {
+    const { engine, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Testing' },
+        remoteSha: SHA_REMOTE,
+        compare: { status: 200, body: { status: 'diverged' } },
+    });
+    const seen = [];
+    engine.events.subscribe('selfUpdate.failed', payload => seen.push(payload));
+
+    const result = await core.run({ force: true });
+
+    assert.equal(result.kind, 'diverged');
+    assert.equal(seen[0].kind, 'diverged');
+    assert.equal(seen[0].fix, 'git fetch origin && git reset --hard origin/Main-Testing');
+});
+
+test('a local commit GitHub no longer knows (compare 404) is the same rewritten-history case', async () => {
+    const { engine, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Testing' },
+        remoteSha: SHA_REMOTE,
+        compare: { status: 404 },
+    });
+    const seen = [];
+    engine.events.subscribe('selfUpdate.failed', payload => seen.push(payload));
+
+    await core.run({ force: true });
+
+    assert.equal(seen[0].kind, 'diverged');
+});
+
+test('an ordinary failed pull (history intact) gets NO fix — we never claim a cause we have not shown', async () => {
+    const { engine, core } = buildEngine({
+        discover: [],
+        version: { isUpToDate: false, currentCommitHash: SHA_LOCAL, currentBranchName: 'Main-Testing' },
+        remoteSha: SHA_REMOTE,
+        compare: { status: 200, body: { status: 'behind' } },
+    });
+    const seen = [];
+    engine.events.subscribe('selfUpdate.failed', payload => seen.push(payload));
+
+    await core.run({ force: true });
+
+    assert.equal(seen[0].kind, undefined);
+    assert.equal(seen[0].fix, undefined);
 });

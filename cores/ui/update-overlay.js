@@ -1,7 +1,7 @@
 import { h } from './tree.js';
 import { signal, computed } from './reactive.js';
 import { request } from '../../libraries/shared/request.js';
-import { Overlay, Banner } from '../../libraries/shared/widgets.js';
+import { Overlay, Banner, Button } from '../../libraries/shared/widgets.js';
 
 /**
  * Ядро экрана обновления — то, что видит пользователь, пока движок обновляет
@@ -37,11 +37,40 @@ import { Overlay, Banner } from '../../libraries/shared/widgets.js';
  */
 
 const BANNER_TEXT = 'ST Module Engine couldn\'t update itself — it is still running the previous version.';
+/** Закрытый крестиком баннер не возвращается до перезагрузки вкладки ЗАНОВО-попытки — иначе сообщение из окна остывания всплывало бы после каждой перезагрузки. */
+const DISMISSED_KEY = 'stme.beta.updateBannerDismissed';
 
 export function createUpdateOverlayCore(host, { mount } = {}) {
     const updating = signal(false);
     const failure = signal('');
     const retrying = signal(false);
+    const dismissed = signal(false);
+    /** Известная причина (например, переписанная история) — с готовым решением; `null` для обычной ошибки. */
+    const known = signal(null);
+    const copied = signal(false);
+
+    // Сессия может быть недоступна (тесты, узлы) — тогда крестик действует до перезагрузки, и только.
+    request(host.services, 'session.get', { params: { key: DISMISSED_KEY, fallback: '' }, timeoutMs: 1000 })
+        .then(result => { if (result.ok && result.value === '1') dismissed.set(true); })
+        .catch(() => {});
+
+    function dismiss() {
+        dismissed.set(true);
+        request(host.services, 'session.set', { params: { key: DISMISSED_KEY, value: '1' } }).catch(() => {});
+    }
+
+    async function copyFix() {
+        const command = known.peek()?.fix;
+        if (!command) return false;
+        try {
+            await globalThis.navigator?.clipboard?.writeText(command);
+            copied.set(true);
+            setTimeout(() => copied.set(false), 2000);
+            return true;
+        } catch {
+            return false;
+        }
+    }
 
     async function retry() {
         if (retrying.peek()) return false;
@@ -62,7 +91,17 @@ export function createUpdateOverlayCore(host, { mount } = {}) {
      * причины — ровно то, из-за чего сломанное самообновление невозможно было
      * отличить от нечего-обновлять.
      */
-    const bannerText = computed(() => (failure() && failure() !== BANNER_TEXT ? `${BANNER_TEXT} (${failure()})` : BANNER_TEXT));
+    const bannerText = computed(() => {
+        if (known()) return `${BANNER_TEXT} ${known().message}`;
+        return failure() && failure() !== BANNER_TEXT ? `${BANNER_TEXT} (${failure()})` : BANNER_TEXT;
+    });
+
+    /** Готовая команда и кнопка «Copy» — только для известной причины. */
+    const bannerDetail = computed(() => (known()?.fix
+        ? h('span', { class: 'stme-banner-fix' },
+            h('code', { class: 'stme-banner-code' }, known().fix),
+            Button(copied() ? 'Copied' : 'Copy', copyFix))
+        : null));
 
     function tree() {
         return h('div', { class: 'stme-update-ui' },
@@ -70,28 +109,32 @@ export function createUpdateOverlayCore(host, { mount } = {}) {
                 title: 'ST Module Engine is updating…',
                 description: 'A newer version was found. The page will reload automatically once it is applied.',
             }),
-            computed(() => (failure() ? Banner(bannerText, { action: retry, busy: retrying }) : null)),
+            computed(() => (failure() && !dismissed() ? Banner(bannerText, { action: retry, busy: retrying, detail: bannerDetail, onDismiss: dismiss }) : null)),
         );
     }
 
     const subscriptions = [
         // Обновление НАЧАЛОСЬ — перекрываем экран и убираем прошлую жалобу:
         // повторная попытка не должна идти под полосой от предыдущей.
-        host.events.subscribe('selfUpdate.started', () => { failure.set(''); updating.set(true); }),
+        host.events.subscribe('selfUpdate.started', () => { failure.set(''); known.set(null); dismissed.set(false); request(host.services, 'session.set', { params: { key: DISMISSED_KEY, value: '' } }).catch(() => {}); updating.set(true); }),
         // Применилось — перекрытие не снимаем: сразу за этим идёт перезагрузка
         // страницы, и мигание «всё пропало → всё вернулось» было бы враньём.
         host.events.subscribe('selfUpdate.applied', () => { updating.set(true); }),
         host.events.subscribe('selfUpdate.failed', payload => {
             updating.set(false);
-            failure.set(String(payload?.reason ?? '').trim());
+            known.set(payload?.kind && payload?.fix ? { message: String(payload.message ?? ''), fix: String(payload.fix) } : null);
+            failure.set(String(payload?.reason ?? '').trim() || (payload?.kind ? String(payload.kind) : ''));
         }),
         // Обновляться нечего — это НЕ повод что-то показывать.
-        host.events.subscribe('selfUpdate.upToDate', () => { updating.set(false); failure.set(''); }),
+        host.events.subscribe('selfUpdate.upToDate', () => { updating.set(false); failure.set(''); known.set(null); }),
     ];
 
     return {
         tree,
         retry,
+        dismiss,
+        dismissed: () => dismissed.peek(),
+        known: () => known.peek(),
         updating: () => updating.peek(),
         failure: () => failure.peek(),
         open: () => mount(tree()),

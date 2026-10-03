@@ -870,7 +870,7 @@ export function createTimeModule(host) {
         if (!Array.isArray(chat)) return true;
         const text = buildTimeInjectText();
         await deliverToPrompt({
-            call, contribution: { id: 'time', name: 'RP Time', role: 'system', content: text, defaultPlacement: 'before-history' },
+            call, contribution: { id: 'time', name: 'RP Time', role: 'system', content: text, defaultPlacement: { mode: 'depth', depth: 0, order: 100 } },
             legacy: () => { if (text) chat.unshift({ is_user: false, is_system: true, name: 'System', mes: text }); },
         });
         return true;

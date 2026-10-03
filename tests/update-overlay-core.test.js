@@ -124,3 +124,42 @@ test('the Ядро knows NOTHING about git or GitHub — it only listens', () =>
     const surface = Object.keys(core);
     assert.deepEqual(surface.filter(name => /git|github|commit|branch|apply|pull/i.test(name)), []);
 });
+
+test('the banner can be HIDDEN right after the first failed attempt, and a new attempt brings it back only if it fails again', async () => {
+    const { engine, core } = buildEngine();
+    const tree = core.tree();
+    engine.events.emit('selfUpdate.failed', { reason: 'HTTP 500' });
+    await settle();
+    assert.ok(find(tree, 'stme-banner stme-banner-warn'));
+    assert.ok(find(tree, 'stme-banner-close'), 'крестик есть');
+
+    core.dismiss();
+    await settle();
+    assert.equal(find(tree, 'stme-banner stme-banner-warn'), null, 'скрыта');
+
+    engine.events.emit('selfUpdate.started', {});
+    engine.events.emit('selfUpdate.failed', { reason: 'HTTP 500' });
+    await settle();
+    assert.ok(find(tree, 'stme-banner stme-banner-warn'), 'новая неудачная попытка — снова видна');
+});
+
+test('a rewritten-history failure shows the ready command with a Copy button', async () => {
+    const { engine, core } = buildEngine();
+    const tree = core.tree();
+
+    engine.events.emit('selfUpdate.failed', { reason: 'timed out', kind: 'diverged', message: 'History was rewritten.', fix: 'git fetch origin && git reset --hard origin/Main-Testing' });
+    await settle();
+
+    const code = find(tree, 'stme-banner-code');
+    assert.ok(code, 'команда показана');
+    assert.equal(code.children[0], 'git fetch origin && git reset --hard origin/Main-Testing');
+    assert.equal(core.known().fix, 'git fetch origin && git reset --hard origin/Main-Testing');
+});
+
+test('an ordinary failure shows no command block', async () => {
+    const { engine, core } = buildEngine();
+    const tree = core.tree();
+    engine.events.emit('selfUpdate.failed', { reason: 'HTTP 403' });
+    await settle();
+    assert.equal(find(tree, 'stme-banner-code'), null);
+});

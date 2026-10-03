@@ -70,3 +70,32 @@ export function describeUpdateDiagnosis({ applicable, matches, localSha, remoteS
     }
     return { level: 'info', text: `local commit ${local} is behind GitHub's latest ${remote} on "${branch}" — an update is about to be applied.` };
 }
+
+/**
+ * Ответ GitHub на `compare/<local>...<remote>` → статус сравнения (`diverged`, `behind`, …) или `null`.
+ * Тело, которое не JSON или без `status`, — не ответ, а страница ошибки.
+ */
+export function parseCompareStatus(text) {
+    try {
+        const status = JSON.parse(String(text ?? '')).status;
+        return typeof status === 'string' ? status : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Расхождение истории: у владельца репозитория история ветки переписана (force-push), и `git pull`
+ * в установке не может дойти до её начала. Признак — GitHub называет наши коммиты `diverged` либо
+ * вовсе не знает локальный коммит (compare → 404). В обоих случаях лечится одним сбросом ветки.
+ * Ничего не угадываем, если сравнить не удалось, — тогда `null` и остаётся обычная причина.
+ */
+export function describeHistoryRewrite({ compareStatus, notFound, branch } = {}) {
+    if (compareStatus !== 'diverged' && !notFound) return null;
+    const ref = branch || 'Main-Testing';
+    return {
+        kind: 'diverged',
+        message: 'The repository history was rewritten, so the normal update (git pull) cannot apply. Run this once in the extension folder, then reload the page:',
+        fix: `git fetch origin && git reset --hard origin/${ref}`,
+    };
+}

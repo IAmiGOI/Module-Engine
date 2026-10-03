@@ -76,7 +76,28 @@
     box-shadow: 0 3px 12px rgba(0, 0, 0, .32);
 }
 .stme-banner-warn { background: var(--stme-warn); color: var(--stme-warn-ink); }
+.stme-banner-body { display: flex; flex-direction: column; gap: 6px; }
 .stme-banner-text { max-width: 70ch; }
+.stme-banner-fix { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stme-banner-code {
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--stme-warn-ink) 14%, transparent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .92em;
+    user-select: all;
+    word-break: break-all;
+}
+.stme-banner-close {
+    border: 0;
+    background: transparent;
+    color: var(--stme-warn-ink);
+    font-size: 1.4em;
+    line-height: 1;
+    cursor: pointer;
+    opacity: .7;
+}
+.stme-banner-close:hover { opacity: 1; }
 
 /* Кнопка на полосе — тот же контурный стиль, что и везде в движке (UI.md:
    кнопка не заливается), только на жёлтом фоне: контур и текст тёмные. */
