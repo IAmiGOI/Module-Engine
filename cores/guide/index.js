@@ -8,6 +8,7 @@ import { createGuideActions } from './actions.js';
 import { createCreateActions } from './create-actions.js';
 import { createEditActions } from './edit-actions.js';
 import { createCharacterActions } from './character-actions.js';
+import { createPresetActions } from './preset-actions.js';
 import { createWebActions } from './web-actions.js';
 import { createLorebookActions } from './lorebook-actions.js';
 import { createWhatsNew } from './whats-new.js';
@@ -164,6 +165,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         ...createCreateActions({ call, modules }),
         ...createEditActions({ call, modules }),
         ...createCharacterActions({ call }),
+        ...createPresetActions({ call, modules }),
         ...createWebActions({ callService }),
         ...createLorebookActions({ call, callService }),
     };
@@ -346,16 +348,16 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             let history = cutAfterDigest(messages.peek().filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'note'), digest.upTo);
             // Результат действия — рамка движка от лица «пользователя», не её реплика (см. formatEngineResult): иначе она подражает формату и выдумывает результаты сама.
             const toTurn = message => ({ role: message.role === 'user' || message.role === 'note' ? 'user' : 'assistant', content: message.role === 'note' ? formatEngineResult(message.detail ?? message.text) : message.text });
-            if (focus.characters) history = await foldLongHistory(history, toTurn);
+            if (focus.characters || focus.presets) history = await foldLongHistory(history, toTurn);
             const query = history.slice(-4).map(message => message.text).join(' ');
             const system = buildGuideSystemPrompt({
                 persona: persona.peek(), context: await liveContext(screen.text, { focus, query }),
                 anchors: anchorsResult.ok ? anchorsResult.value ?? [] : [],
                 actions: Object.entries(ACTIONS).map(([id, entry]) => ({ id, description: entry.description })),
                 digest: digest.text,
-                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: [...(focus.characters ? ['characters'] : []), ...(focus.lorebook ? ['lorebook'] : [])] }),
+                articles: selectArticles([...articles, ...customArticles()], query, { openAnchors: [...screen.anchors, ...focus.modules.map(id => `module:${id}`)], topics: [...(focus.characters ? ['characters'] : []), ...(focus.presets ? ['presets'] : []), ...(focus.lorebook ? ['lorebook'] : [])] }),
             });
-            const turns = trimHistory(history.map(toTurn), focus.characters ? CHARACTER_HISTORY_TOKEN_LIMIT : HISTORY_TOKEN_LIMIT);
+            const turns = trimHistory(history.map(toTurn), focus.characters || focus.presets ? CHARACTER_HISTORY_TOKEN_LIMIT : HISTORY_TOKEN_LIMIT);
             if (internal) turns.push({ role: 'user', content: `(automatic — the user did not type this) ${followUp.replace(/^\(automatic[^)]*\)\s*/, '')}${END_OF_TURN_RULE}` });
             // Её план (guide-thinking.js) — всегда четвёртым сообщением с конца, считая вместе с автоматическим ходом, если он есть.
             const sent = insertPlan(turns, plan);

@@ -26,6 +26,11 @@
     "character-rules.md",
     "character-examples.md",
     "character-preset-fit.md",
-    "character-testing.md"
+    "character-testing.md",
+    "preset-workflow.md",
+    "preset-blocks.md",
+    "preset-order-cache.md",
+    "preset-modules-card.md",
+    "preset-testing.md"
   ]
 }

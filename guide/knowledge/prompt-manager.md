@@ -2,6 +2,7 @@
 title: Prompt Manager
 tags: prompt manager, preset, prompt, order, cot, chain of thought, regex, rules, cache, prefix cache, tokens, trim, overrides, sampler, temperature, streaming, plugins
 anchors: 
+topic: presets
 ---
 The **Prompt Manager (PM)** builds the request that goes to the model instead of SillyTavern's own prompt manager. It works with Chat Completion and single chats; in group chats and Text Completion it steps aside and the ordinary ST prompt is used. It opens with the **Prompt Manager button of ST** (the native window is hidden while PM is on).
 

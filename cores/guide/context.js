@@ -2,6 +2,7 @@ import { describeSpecs } from '../../libraries/core/guide-settings.js';
 import { describeWorldInfo, describePreset } from '../../libraries/core/guide-st-settings.js';
 import { NEUTRAL, countsLine } from '../../libraries/core/guide-relevance.js';
 import { createCharacterContext } from './character-context.js';
+import { createPresetContext } from './preset-context.js';
 
 /**
  * Что гид знает о происходящем помимо состояния подключений (cores/guide/index.js): что раскрыто на экране (`ui.context`) и что уже есть и можно править —
@@ -11,6 +12,7 @@ import { createCharacterContext } from './character-context.js';
  */
 export function createGuideContext({ call, callService, modules }) {
     const characterContext = createCharacterContext({ call, callService });
+    const presetContext = createPresetContext({ call });
     /** Раскрытое сейчас: текст для промпта и адреса для подбора статей. Нет ответа — как будто ничего не открыто. */
     async function screen() {
         const result = await call('ui.context');
@@ -32,7 +34,9 @@ export function createGuideContext({ call, callService, modules }) {
         if (found.length && focus.lorebook) lines.push(`Lorebook entries (uid, book): ${found.slice(0, 30).map(entry => `#${entry.uid} “${entry.name}” (${entry.book})`).join('; ')}${found.length > 30 ? `; …and ${found.length - 30} more` : ''}.`);
         const characters = await characterContext.describe({ focus, query });
         lines.push(...characters.lines);
-        const counts = countsLine({ trackers: mine.length, macros: programs.length, entries: found.length, characters: characters.count }, focus);
+        const presets = await presetContext.describe({ focus, query });
+        lines.push(...presets.lines);
+        const counts = countsLine({ trackers: mine.length, macros: programs.length, entries: found.length, characters: characters.count, presets: presets.count }, focus);
         if (counts) lines.push(counts);
         // World Info и пресет генерации — настройки самой ST, не движка: только для анализа, действий на их правку у гида нет (см. Сервисы).
         // Явно НЕ card:lorebook / card:preset — те карточки движка про другое (записи лорбука; экспорт-импорт настроек), у самих

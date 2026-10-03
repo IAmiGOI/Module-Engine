@@ -204,8 +204,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function deliverMemory(chat, plotText, memoryText) {
         const legacy = (name, mes) => () => chat.unshift({ is_user: false, is_system: true, name, mes });
-        await deliverToPrompt({ call, contribution: { id: 'memory-graph-plot', name: 'Plot core', role: 'assistant', content: plotText ?? '', defaultPlacement: 'before-history' }, legacy: plotText ? legacy('Plot core', plotText) : undefined });
-        await deliverToPrompt({ call, contribution: { id: 'memory-graph', name: 'Memory graph', role: 'assistant', content: memoryText ?? '', defaultPlacement: 'before-history' }, legacy: memoryText ? legacy('Memory', memoryText) : undefined });
+        await deliverToPrompt({ call, contribution: { id: 'memory-graph-plot', name: 'Plot core', role: 'assistant', content: plotText ?? '', defaultPlacement: { mode: 'depth', depth: 0, order: 100 } }, legacy: plotText ? legacy('Plot core', plotText) : undefined });
+        await deliverToPrompt({ call, contribution: { id: 'memory-graph', name: 'Memory graph', role: 'assistant', content: memoryText ?? '', defaultPlacement: { mode: 'depth', depth: 0, order: 101 } }, legacy: memoryText ? legacy('Memory', memoryText) : undefined });
     }
 
     let writeTail = Promise.resolve();
