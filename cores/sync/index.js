@@ -302,6 +302,7 @@ export function createSyncCore(host, {
             conflictPolicy: conflictPolicyFor,
             sameContent,
             hashBlob: computeGitBlobSha,
+            restoreBlocked: true,
             healLabels,
             concurrency,
             noCopy: noCopyFor,

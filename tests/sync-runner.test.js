@@ -491,3 +491,23 @@ test('a fatal error stops the pass even with concurrency, and files not yet star
     assert.match(result.stopped.reason, /Drive is full/);
     assert.ok(remote.files.size < 30);
 });
+
+test('restoreBlocked: a category the sync memory still lists but the local side lost (reinstalled ST) is refilled in the SAME pass — nothing is deleted from the other side and nothing waits for a second pass', async () => {
+    const chats = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`chats/Alex/c${index}.jsonl`, `line ${index}`]));
+    const remote = memorySide(chats);
+    const local = memorySide({ 'backgrounds/a.png': 'A', 'backgrounds/b.png': 'B' });
+    remote.files.set('backgrounds/a.png', { text: 'A', modified: 1 });
+    remote.files.set('backgrounds/b.png', { text: 'B', modified: 1 });
+    const base = {};
+    for (const [path, { text }] of remote.files) base[path] = await hashOf(text);   // the browser still remembers all of it as synced
+    const categoryOf = path => path.split('/')[0];
+    const stuck = await runSync({ local: memorySide({ 'backgrounds/a.png': 'A', 'backgrounds/b.png': 'B' }), remote: memorySide(Object.fromEntries([...remote.files].map(([path, { text }]) => [path, text]))), base, categoryOf });
+    assert.deepEqual(stuck.needsConfirmation, ['chats'], 'without the option the pass pauses, as before');
+    const result = await runSync({ local, remote, base, categoryOf, restoreBlocked: true });
+    assert.equal(result.needsConfirmation, null);
+    assert.deepEqual(result.restored, ['chats']);
+    assert.equal(result.counts.pulled, 30);
+    assert.equal(result.counts.deletedRemote, 0);
+    assert.equal(remote.files.size, 32, 'the other side loses nothing');
+    assert.equal([...local.files.keys()].filter(path => path.startsWith('chats/')).length, 30);
+});

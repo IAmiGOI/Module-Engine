@@ -52,6 +52,7 @@ export async function runSync({
     checkpointIntervalMs = CHECKPOINT_INTERVAL_MS,
     hashBlob = null,        // (blob) => хеш: честная метка отправляемых/принимаемых байт (см. `io` ниже); без неё — как раньше
     healLabels = false,     // облако: метка в индексе могла быть испорчена прежней версией — принять байты и починить метку
+    restoreBlocked = false, // защита от массового удаления сработала → забыть в базе эти категории и сразу планировать заново (пустое место заполняется оттуда, где файлы есть)
     concurrency = 1,        // сколько файлов передавать одновременно (облако/GitHub: задержка сети, а не канал, — выигрыш большой)
     now = () => Date.now(),
     isAborted = () => false,
@@ -59,12 +60,22 @@ export async function runSync({
     remoteManifest,
 } = {}) {
     const [localEntries, remoteEntries] = await Promise.all([localManifest ?? local.manifest(), remoteManifest ?? remote.manifest()]);
-    const plan = computeSyncPlan({ local: localEntries, remote: remoteEntries, base, conflictLabel, include, noCopy });
+    let plan = computeSyncPlan({ local: localEntries, remote: remoteEntries, base, conflictLabel, include, noCopy });
     // Защита от массового удаления (ROADMAP 5.106в): категория под подозрением (`detectMassDeletion` — sync-plan.js) не удаляется
     // молча ни на одном проходе — её deleteLocal/deleteRemote просто не входят в исполнение, путь остаётся как есть до подтверждения
-    // человеком (панель — отдельная задача); если следующий скан снова покажет файлы (временная пустота листинга ST) — удалять
-    // будет уже нечего, план сам сойдёт на нет.
-    const blockedCategories = new Set([...detectMassDeletion({ actions: plan.actions, local: localEntries, remote: remoteEntries, base, categoryOf })].filter(category => !confirmedCategories.has(category)));
+    // человеком; если следующий скан снова покажет файлы (временная пустота листинга ST) — удалять будет уже нечего, план сам сойдёт на нет.
+    const findSuspicious = () => new Set([...detectMassDeletion({ actions: plan.actions, local: localEntries, remote: remoteEntries, base, categoryOf })].filter(category => !confirmedCategories.has(category)));
+    let blockedCategories = findSuspicious();
+    // `restoreBlocked` (обычный пользователь ничего не решает): то же самое «подозрительно», но без остановки — база по этим категориям
+    // забывается и план строится заново ПРЯМО В ЭТОМ ЖЕ проходе: что есть только на одной стороне, переезжает на другую, ничего не удаляется.
+    // Типичный случай — ST поставили заново, а память синка в браузере осталась: чаты качаются сразу, а не после всего остального.
+    let restored = null;
+    if (restoreBlocked && blockedCategories.size) {
+        restored = [...blockedCategories];
+        base = Object.fromEntries(Object.entries(base).filter(([path]) => !blockedCategories.has(categoryOf(path))));
+        plan = computeSyncPlan({ local: localEntries, remote: remoteEntries, base, conflictLabel, include, noCopy });
+        blockedCategories = findSuspicious();
+    }
     const isBlockedDeletion = action => (action.op === SYNC_ACTIONS.deleteLocal || action.op === SYNC_ACTIONS.deleteRemote) && blockedCategories.has(categoryOf(action.path));
     const actions = plan.actions.filter(action => !isBlockedDeletion(action)).sort((a, b) => TRANSFER_ORDER[a.op] - TRANSFER_ORDER[b.op]);
     const nextBase = { ...base };
@@ -262,6 +273,7 @@ export async function runSync({
     return {
         ok: !commitError && counts.failed === 0 && !aborted, aborted, stopped, counts, cleanedCopies, errors, base: nextBase, plan: plan.counts,
         needsConfirmation: blockedCategories.size ? [...blockedCategories] : null,
+        restored,
     };
 }
 
