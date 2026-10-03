@@ -49,6 +49,10 @@ const CONFIG_KEY = 'config';
 const QUARANTINE_INDEX_KEY = 'quarantineIndex';
 const QUARANTINE_LIMIT = 200;
 const NETWORK_TIMEOUT_MS = 20000;
+/** Файлов одновременно к облаку/GitHub: время уходит на задержку каждого запроса, а не на канал, — по одному 400 файлов шли бы десятки минут. */
+const TRANSFER_CONCURRENCY = 4;
+/** Чтений и хеширований файлов одновременно при скане (первый проход читает все чаты целиком). */
+const SCAN_CONCURRENCY = 6;
 const PRESENCE_INTERVAL_MS = 60000;
 const CONNECT_TIMEOUT_MS = 30000;
 /** При загрузке страницы второе устройство ждём недолго: его может просто не быть в сети, а экран загрузки не должен из-за этого висеть. */
@@ -149,7 +153,7 @@ export function createSyncCore(host, {
         return exclusive(async () => {
             const cache = await loadCache();
             const listing = await service('stUserData.list', { categories });
-            const result = await buildManifest({ listing, cache, read: path => service('stUserData.read', { path }), hash: computeGitBlobSha, fingerprint: fingerprintOf, onProgress });
+            const result = await buildManifest({ listing, cache, read: path => service('stUserData.read', { path }), hash: computeGitBlobSha, fingerprint: fingerprintOf, onProgress, concurrency: SCAN_CONCURRENCY });
             const scanned = new Set(categories);
             const kept = Object.fromEntries(Object.entries(cache).filter(([path]) => !scanned.has(categoryOfPath(path))));
             cacheState = { ...kept, ...result.cache };
@@ -203,6 +207,14 @@ export function createSyncCore(host, {
         await writeState(QUARANTINE_INDEX_KEY, index);
     }
 
+    /** Кэш хранит хеш ИСТОЧНИКА записанной карточки (ST переписывает её при импорте); когда отправляются реальные байты с диска, кэш правится на их настоящий хеш. */
+    async function relabelLocal(path, hash) {
+        return exclusive(async () => {
+            const cache = await loadCache();
+            if (cache[path]) cache[path] = { ...cache[path], hash };
+        });
+    }
+
     function createLocalSide(categories, onProgress) {
         let failed = new Set();
         return {
@@ -212,6 +224,7 @@ export function createSyncCore(host, {
             write: writeLocal,
             remove: removeLocal,
             quarantine: quarantineLocal,
+            relabel: relabelLocal,
         };
     }
 
@@ -257,7 +270,7 @@ export function createSyncCore(host, {
         return { base: next, journal };
     }
 
-    async function runAgainst({ target, baseKey, remote, categories, isEnabled, extraInclude, confirmedCategories }) {
+    async function runPass({ target, baseKey, remote, categories, isEnabled, extraInclude, confirmedCategories, healLabels = false, concurrency = 1 }) {
         const local = createLocalSide(categories, state => setProgress(target, { phase: 'scanning', ...state }));
         const replayed = await replayJournal(baseKey, (await readState(`base:${baseKey}`)) ?? {});
         const base = replayed.base;
@@ -288,6 +301,9 @@ export function createSyncCore(host, {
             conflictLabel: `${config.deviceName} ${stampLabel(now())}`,
             conflictPolicy: conflictPolicyFor,
             sameContent,
+            hashBlob: computeGitBlobSha,
+            healLabels,
+            concurrency,
             noCopy: noCopyFor,
             confirmedCategories: new Set(confirmedCategories ?? []),
             categoryOf: categoryOfPath,
@@ -305,12 +321,35 @@ export function createSyncCore(host, {
         return result;
     }
 
+    /**
+     * Проход против одной стороны, который сам выбирает безопасный выход из «подозрительно массового удаления» — человеку не нужно ничего
+     * решать (обычный пользователь не знает, что такое база синка). Типичные причины: ST поставили заново (или стёрли папку данных), а память
+     * синка в браузере осталась; на другой стороне стёрли папку/репозиторий; ST на секунду отдал пустой список. Во всех случаях верное
+     * действие одно и то же и ничего не теряет: забыть в базе эту категорию и пройти ещё раз — тогда пустое место заполняется оттуда, где
+     * файлы есть, а общие файлы просто сходятся (разные — сохранятся копией, как обычно). Никакое удаление не распространяется молча;
+     * осознанно удалить всё по-прежнему можно вручную (`sync.resolveBlocked` с `accept`).
+     */
+    async function runAgainst(options) {
+        const first = await runPass(options);
+        if (!first.needsConfirmation || first.aborted || first.stopped) return first;
+        const restored = first.needsConfirmation;
+        const baseKey = options.baseKey;
+        const base = (await readState(`base:${baseKey}`)) ?? {};
+        await writeState(`base:${baseKey}`, Object.fromEntries(Object.entries(base).filter(([path]) => !restored.includes(categoryOfPath(path)))));
+        await writeState(`journal:${baseKey}`, []);
+        log.info?.(`[ST Module Engine (Beta)] Sync: ${restored.join(', ')} look wiped on one side — restoring them from the other side instead of deleting.`);
+        const second = await runPass({ ...options, confirmedCategories: [] });
+        const counts = Object.fromEntries(Object.keys(second.counts).map(key => [key, (first.counts[key] ?? 0) + second.counts[key]]));
+        return { ...second, ok: first.ok && second.ok, counts, cleanedCopies: [...(first.cleanedCopies ?? []), ...(second.cleanedCopies ?? [])], errors: [...first.errors, ...second.errors], restored };
+    }
+
     const summarize = result => ({
         ok: result.ok, aborted: result.aborted, stopped: result.stopped ?? null, counts: result.counts, cleanedCopies: result.cleanedCopies?.length ?? 0,
         errors: result.errors.slice(0, 5).map(error => (error.path === '*' ? error.message : `${error.path}: ${error.message}`)),
         // Категории, где удаление подозрительно массовое — ничего не удалено, но и не скрыто (панель для подтверждения — отдельная
         // задача, ROADMAP 5.106в); видно уже сейчас через `sync.status`, даже без неё.
         needsConfirmation: result.needsConfirmation ?? null,
+        restored: result.restored ?? null,
     });
 
     // ── GitHub ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -375,7 +414,7 @@ export function createSyncCore(host, {
         try {
             const remote = createCloudRemote({ store: createCloudStore(), now });
             const result = await runAgainst({
-                target: 'cloud', baseKey: `cloud:${provider}`, remote, categories: config.categories, confirmedCategories,
+                target: 'cloud', baseKey: `cloud:${provider}`, remote, categories: config.categories, confirmedCategories, healLabels: true, concurrency: TRANSFER_CONCURRENCY,
                 isEnabled: () => createCloudFilter(),
                 extraInclude: (file, { local }) => !(local && local.size > CLOUD_MAX_FILE_BYTES),
             });

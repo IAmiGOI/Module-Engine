@@ -192,30 +192,45 @@ test('the connection test reports how many synced files the cloud holds', async 
     await device.core.stop();
 });
 
-test('a wiped cloud folder is not copied back as a deletion; "Upload them again" restores it, "Delete them here too" confirms it', async () => {
-    const files = { 'characters/a.png': 'A', 'characters/b.png': 'B' };
-    for (const mode of ['reupload', 'accept']) {
-        const world = createCloudWorld();
-        const device = makeDevice({ id: '0000000000000001', name: 'PC', world, clock: createFakeClock(), network: createFakeNetwork(), cloud: connectedDropbox, files });
-        await device.call('sync.run', { target: 'cloud' });
-        const cards = source => source.filter(path => path.includes('characters/'));
-        const uploaded = () => world.dropbox.names().filter(name => name.startsWith('/b-')).length;   // the drive keeps content blobs plus an index
-        assert.equal(uploaded(), 2);
-        world.dropbox.files.clear();   // the owner deleted the folder on the drive
-        const blocked = await device.call('sync.run', { target: 'cloud' });
-        assert.deepEqual(blocked.cloud.needsConfirmation, ['characters']);
-        assert.equal(cards(device.paths()).length, 2, 'nothing deleted locally');
-        assert.equal(uploaded(), 0, 'nothing re-uploaded silently');
-        const result = await device.call('sync.resolveBlocked', { target: 'cloud', category: 'characters', mode });
-        if (mode === 'reupload') {
-            assert.equal(uploaded(), 2);
-            assert.equal(cards(device.paths()).length, 2);
-        } else {
-            assert.equal(result.cloud.counts.deletedLocal, 2);
-            assert.equal(cards(device.paths()).length, 0);
-        }
-        await device.core.stop();
-    }
+test('a wiped cloud folder is never copied back as a deletion: the next pass uploads the files again by itself', async () => {
+    const world = createCloudWorld();
+    const device = makeDevice({ id: '0000000000000001', name: 'PC', world, clock: createFakeClock(), network: createFakeNetwork(), cloud: connectedDropbox, files: { 'characters/a.png': 'A', 'characters/b.png': 'B' } });
+    await device.call('sync.run', { target: 'cloud' });
+    const uploaded = () => world.dropbox.names().filter(name => name.startsWith('/b-')).length;   // the drive keeps content blobs plus an index
+    assert.equal(uploaded(), 2);
+    world.dropbox.files.clear();   // the owner deleted the folder on the drive
+    const result = await device.call('sync.run', { target: 'cloud' });
+    assert.equal(result.cloud.needsConfirmation, null);
+    assert.deepEqual(result.cloud.restored, ['characters']);
+    assert.equal(device.paths().filter(path => path.includes('characters/')).length, 2, 'nothing deleted locally');
+    assert.equal(uploaded(), 2, 'both files are on the drive again');
+    await device.core.stop();
+});
+
+test('a reinstalled ST (empty locally, the sync memory still full) gets its files back from the drive instead of deleting them there', async () => {
+    const world = createCloudWorld();
+    const files = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`chats/Alex/chat${i}.jsonl`, `line ${i}`]));
+    const device = makeDevice({ id: '0000000000000001', name: 'PC', world, clock: createFakeClock(), network: createFakeNetwork(), cloud: connectedDropbox, files });
+    await device.call('sync.run', { target: 'cloud' });
+    const uploaded = () => world.dropbox.names().filter(name => name.startsWith('/b-')).length;
+    assert.equal(uploaded(), 30);
+    for (const path of Object.keys(files)) device.store.delete(path);   // fresh ST data folder; the browser still remembers the last sync
+    const result = await device.call('sync.run', { target: 'cloud' });
+    assert.deepEqual(result.cloud.restored, ['chats']);
+    assert.equal(uploaded(), 30, 'the drive keeps every chat');
+    assert.equal(device.paths().filter(path => path.startsWith('chats/')).length, 30, 'and the device has them again');
+    await device.core.stop();
+});
+
+test('an explicit "Delete them here too" still confirms a real deletion', async () => {
+    const world = createCloudWorld();
+    const device = makeDevice({ id: '0000000000000001', name: 'PC', world, clock: createFakeClock(), network: createFakeNetwork(), cloud: connectedDropbox, files: { 'characters/a.png': 'A', 'characters/b.png': 'B' } });
+    await device.call('sync.run', { target: 'cloud' });
+    world.dropbox.files.clear();
+    const result = await device.call('sync.resolveBlocked', { target: 'cloud', category: 'characters', mode: 'accept' });
+    assert.equal(result.cloud.counts.deletedLocal, 2);
+    assert.equal(device.paths().filter(path => path.includes('characters/')).length, 0);
+    await device.core.stop();
 });
 
 test('sync.resolveBlocked rejects unknown targets, categories and modes', async () => {

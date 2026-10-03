@@ -413,3 +413,81 @@ test('runSync(): after the base forgets a wiped category, the local files are up
     assert.equal(remote.files.size, 2);
     assert.equal(local.files.size, 2);
 });
+
+test('a push labels the bytes it really sends and tells the local side its cached hash was stale', async () => {
+    const local = memorySide({ 'characters/a.png': 'REWRITTEN' });
+    const staleManifest = await local.manifest();
+    staleManifest['characters/a.png'].hash = await hashOf('SOURCE');   // what the cache remembers: the hash of the source, not of what ST left on disk
+    const relabelled = [];
+    local.relabel = async (path, hash) => { relabelled.push([path, hash]); };
+    const labels = [];
+    const remote = memorySide({});
+    const write = remote.write;
+    remote.write = async (path, blob, meta) => { labels.push(meta.hash); return write(path, blob, meta); };
+    const result = await runSync({ local, remote, base: {}, localManifest: staleManifest, hashBlob: computeGitBlobSha });
+    assert.deepEqual(labels, [await hashOf('REWRITTEN')]);
+    assert.deepEqual(relabelled, [['characters/a.png', await hashOf('REWRITTEN')]]);
+    assert.equal(result.base['characters/a.png'], await hashOf('REWRITTEN'), 'the base remembers the real hash, so the next pass sees both sides equal');
+});
+
+test('with healLabels a pull whose index label does not match the downloaded bytes accepts the bytes and repairs the label', async () => {
+    const local = memorySide({});
+    const remote = memorySide({ 'characters/a.png': 'ACTUAL' });
+    const remoteManifest = await remote.manifest();
+    remoteManifest['characters/a.png'].hash = await hashOf('WRONG LABEL');
+    const localLabels = [];
+    const remoteLabels = [];
+    const [lw, rw] = [local.write, remote.write];
+    local.write = async (path, blob, meta) => { localLabels.push(meta.hash); return lw(path, blob, meta); };
+    remote.write = async (path, blob, meta) => { remoteLabels.push(meta.hash); return rw(path, blob, meta); };
+    const result = await runSync({ local, remote, base: {}, remoteManifest, hashBlob: computeGitBlobSha, healLabels: true });
+    assert.equal(textOf(local, 'characters/a.png'), 'ACTUAL');
+    assert.deepEqual(localLabels, [await hashOf('ACTUAL')]);
+    assert.deepEqual(remoteLabels, [await hashOf('ACTUAL')], 'the poisoned label in the remote index is replaced');
+    assert.equal(result.base['characters/a.png'], await hashOf('ACTUAL'));
+    assert.equal(result.counts.failed, 0);
+});
+
+test('without healLabels a label that does not match the downloaded bytes is still handed to the local side as claimed', async () => {
+    const local = memorySide({});
+    const remote = memorySide({ 'characters/a.png': 'ACTUAL' });
+    const remoteManifest = await remote.manifest();
+    remoteManifest['characters/a.png'].hash = await hashOf('WRONG LABEL');
+    const labels = [];
+    const lw = local.write;
+    local.write = async (path, blob, meta) => { labels.push(meta.hash); return lw(path, blob, meta); };
+    await runSync({ local, remote, base: {}, remoteManifest, hashBlob: computeGitBlobSha });
+    assert.deepEqual(labels, [await hashOf('WRONG LABEL')], 'the integrity check on the receiving side keeps its meaning for device-to-device transfers');
+});
+
+test('with concurrency the files move several at a time, the checkpoint commit happens only between waves, and everything still lands', async () => {
+    const names = Array.from({ length: 40 }, (_, index) => `backgrounds/f${index}.png`);
+    const local = memorySide(Object.fromEntries(names.map(name => [name, `data ${name}`])));
+    const remote = memorySide({}, { batched: true });
+    remote.checkpointEvery = 10;
+    let inFlight = 0;
+    let peak = 0;
+    let commitWhileBusy = 0;
+    const write = remote.write;
+    remote.write = async (path, blob, meta) => { inFlight += 1; peak = Math.max(peak, inFlight); await new Promise(resolve => setTimeout(resolve, 2)); await write(path, blob, meta); inFlight -= 1; };
+    remote.commit = async () => { if (inFlight) commitWhileBusy += 1; remote.commitCalls += 1; };
+    const result = await runSync({ local, remote, base: {}, concurrency: 4 });
+    assert.equal(result.ok, true);
+    assert.equal(remote.files.size, 40);
+    assert.ok(peak > 1 && peak <= 4, `up to 4 at once (saw ${peak})`);
+    assert.equal(commitWhileBusy, 0, 'a commit never overlaps a write');
+    assert.equal(Object.keys(result.base).length, 40);
+});
+
+test('a fatal error stops the pass even with concurrency, and files not yet started are left alone', async () => {
+    const names = Array.from({ length: 30 }, (_, index) => `backgrounds/f${index}.png`);
+    const local = memorySide(Object.fromEntries(names.map(name => [name, 'x'])));
+    const remote = memorySide({});
+    let started = 0;
+    const write = remote.write;
+    remote.write = async (path, blob, meta) => { started += 1; if (started === 3) throw Object.assign(new Error('Drive is full'), { fatal: true }); await new Promise(resolve => setTimeout(resolve, 1)); return write(path, blob, meta); };
+    const result = await runSync({ local, remote, base: {}, concurrency: 4 });
+    assert.ok(result.stopped);
+    assert.match(result.stopped.reason, /Drive is full/);
+    assert.ok(remote.files.size < 30);
+});

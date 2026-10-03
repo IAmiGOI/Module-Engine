@@ -24,7 +24,7 @@
  * @param {(state:{done:number,total:number,path:string})=>void} [input.onProgress]
  * @returns {Promise<{manifest:Record<string,object>, cache:Record<string,object>, hashed:number, failed:Array<{path:string,message:string}>}>}
  */
-export async function buildManifest({ listing = [], cache = {}, read, hash, fingerprint, onProgress = () => {} } = {}) {
+export async function buildManifest({ listing = [], cache = {}, read, hash, fingerprint, onProgress = () => {}, concurrency = 1 } = {}) {
     const manifest = {};
     const nextCache = {};
     const failed = [];
@@ -33,25 +33,38 @@ export async function buildManifest({ listing = [], cache = {}, read, hash, fing
     let done = 0;
 
     for (const item of listing) {
+        if (!isFresh(item)) continue;
         const cached = cache[item.path];
-        if (isFresh(item)) {
-            manifest[item.path] = { hash: cached.hash, size: item.size ?? 0, modified: item.modified ?? 0, ...(cached.key ? { key: cached.key } : {}) };
-            nextCache[item.path] = cached;
-            continue;
-        }
-        onProgress({ done, total: stale.length, path: item.path });
-        try {
-            const blob = await read(item.path);
-            const value = await hash(blob);
-            const key = (await fingerprint?.(item.path, blob)) ?? null;
-            manifest[item.path] = { hash: value, size: blob.size ?? item.size ?? 0, modified: item.modified ?? 0, ...(key ? { key } : {}) };
-            if (item.stamp != null) nextCache[item.path] = { stamp: item.stamp, hash: value, ...(key ? { key } : {}) };
-        } catch (error) {
-            failed.push({ path: item.path, message: error?.message ?? String(error) });
-        }
-        done += 1;
+        manifest[item.path] = { hash: cached.hash, size: item.size ?? 0, modified: item.modified ?? 0, ...(cached.key ? { key: cached.key } : {}) };
+        nextCache[item.path] = cached;
     }
-    return { manifest, cache: nextCache, hashed: stale.length - failed.length, failed };
+    // Устаревшие читаются и хешируются по несколько штук одновременно (на первом проходе это ВСЕ файлы); порядок ключей манифеста
+    // восстанавливается по порядку листинга ниже, чтобы результат не зависел от того, какое чтение закончилось раньше.
+    const results = new Map();
+    let next = 0;
+    const worker = async () => {
+        while (next < stale.length) {
+            const item = stale[next]; next += 1;
+            onProgress({ done, total: stale.length, path: item.path });
+            try {
+                const blob = await read(item.path);
+                const value = await hash(blob);
+                const key = (await fingerprint?.(item.path, blob)) ?? null;
+                results.set(item.path, { entry: { hash: value, size: blob.size ?? item.size ?? 0, modified: item.modified ?? 0, ...(key ? { key } : {}) }, cache: item.stamp != null ? { stamp: item.stamp, hash: value, ...(key ? { key } : {}) } : null });
+            } catch (error) {
+                results.set(item.path, { error: error?.message ?? String(error) });
+            }
+            done += 1;
+        }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, stale.length)) }, worker));
+    for (const item of stale) {
+        const result = results.get(item.path);
+        if (result.error !== undefined) { failed.push({ path: item.path, message: result.error }); continue; }
+        manifest[item.path] = result.entry;
+        if (result.cache) nextCache[item.path] = result.cache;
+    }
+    return { manifest: Object.fromEntries(listing.filter(item => manifest[item.path]).map(item => [item.path, manifest[item.path]])), cache: nextCache, hashed: stale.length - failed.length, failed };
 }
 
 /** Запомнить хеш только что записанного файла под ЕГО новым штампом, чтобы следующий проход не читал его заново. */

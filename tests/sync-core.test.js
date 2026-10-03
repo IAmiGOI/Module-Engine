@@ -282,20 +282,22 @@ test('a first-meeting conflict on chats (copy policy, unaffected by 5.106б) sti
     await stopAll(pair.a, pair.b);
 });
 
-test('a mass character deletion (simulating a temporary empty ST listing) is blocked and reported, not propagated to the other device (ROADMAP 5.106в)', async () => {
+test('a mass character deletion (an empty ST listing, a reinstalled ST) is never propagated: the empty side is refilled from the other device, with nothing for the person to decide (ROADMAP 5.106в)', async () => {
     const aFiles = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`characters/c${i}.png`, `card${i}`]));
     const pair = await createPair({ aFiles });
     await connect(pair);
     assert.equal(pair.b.paths().length, 30, 'first pass copied everything over normally');
-    // Simulate ST's /api/characters/all returning empty on A for one pass — indistinguishable from "the user deleted everything".
+    // ST's /api/characters/all returns empty on A (or A's ST was reinstalled while the sync memory stayed) — indistinguishable from "the user deleted everything".
     for (const path of Object.keys(aFiles)) pair.a.store.delete(path);
     const before = finishedRuns(pair.a);
     await pair.a.call('sync.run');
     await waitFor(() => finishedRuns(pair.a) > before);
     const status = await pair.a.call('sync.status');
-    assert.deepEqual(status.last.peers[0].needsConfirmation, ['characters']);
+    assert.equal(status.last.peers[0].needsConfirmation, null, 'nothing is left waiting for a confirmation');
+    assert.deepEqual(status.last.peers[0].restored, ['characters']);
     assert.equal(pair.b.paths().length, 30, 'B keeps every character — nothing was deleted from it');
     assert.deepEqual(pair.b.log.filter(line => line.startsWith('remove:')), []);
+    assert.equal(pair.a.paths().length, 30, 'A got its characters back from B');
     await stopAll(pair.a, pair.b);
 });
 
@@ -329,18 +331,15 @@ test('when confirming the finished pass with the other device fails, lastSync is
     await stopAll(pair.a, pair.b);
 });
 
-test('a file whose claimed hash does not match its real bytes is refused on write, not silently corrupted (ROADMAP 5.106е, Этап 4.3)', async () => {
+test('a wrong hash cached for a file (ST rewrote the card after it was written) does not make the transfer fail: the sender labels the real bytes and corrects its own cache', async () => {
     const pair = await createPair({ aFiles: { 'characters/x.png': 'REAL BYTES' } });
-    // Poison A's hash cache BEFORE either core starts (its in-memory cache is loaded lazily on first use and then held for the
-    // session — poisoning stored state afterwards would be invisible to an already-running core). A wrong hash under the file's
-    // real, current stamp makes scanLocal trust it without rehashing — indistinguishable, from the receiving side, from bytes that
-    // got corrupted somewhere on the wire.
+    // The cache is poisoned BEFORE either core starts (its in-memory cache is loaded lazily on first use and then held for the session):
+    // a wrong hash under the file's real, current stamp is exactly what a pulled-then-rewritten card leaves behind.
     pair.a.state.set('cache', { 'characters/x.png': { stamp: 'v1', hash: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' } });
     await connect(pair);
     const status = await pair.a.call('sync.status');
-    assert.equal(status.last.peers[0].counts.failed, 1, 'the mismatch is a per-file failure, not silently accepted');
-    assert.equal(pair.b.text('characters/x.png'), undefined, 'B never wrote the bad bytes at all');
-    assert.ok(status.last.peers[0].errors.some(line => /integrity/i.test(line)), 'the error is legible, not a generic failure');
+    assert.equal(status.last.peers[0].counts.failed, 0, 'the label is the hash of the bytes actually sent, so the integrity check passes');
+    assert.equal(pair.b.text('characters/x.png'), 'REAL BYTES');
     await stopAll(pair.a, pair.b);
 });
 

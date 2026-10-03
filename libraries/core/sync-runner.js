@@ -50,6 +50,9 @@ export async function runSync({
     onApplied = () => {},
     checkpointEvery = CHECKPOINT_EVERY,
     checkpointIntervalMs = CHECKPOINT_INTERVAL_MS,
+    hashBlob = null,        // (blob) => хеш: честная метка отправляемых/принимаемых байт (см. `io` ниже); без неё — как раньше
+    healLabels = false,     // облако: метка в индексе могла быть испорчена прежней версией — принять байты и починить метку
+    concurrency = 1,        // сколько файлов передавать одновременно (облако/GitHub: задержка сети, а не канал, — выигрыш большой)
     now = () => Date.now(),
     isAborted = () => false,
     localManifest,
@@ -93,27 +96,65 @@ export async function runSync({
     let aborted = false;
     let stopped = null;   // { reason, remaining } — проход остановлен фатальной ошибкой (нет места, токен отклонён, лимит запросов)
 
-    for (const [index, action] of actions.entries()) {
-        if (isAborted()) { aborted = true; break; }
+    // Честный хеш того, что реально уходит/приходит. Кэш локального хеша хранит хеш ИСТОЧНИКА (ST переписывает карточку при импорте — см.
+    // `card-fingerprint.js`), а байты на диске уже другие: раньше такие байты уезжали с чужой меткой, индекс облака врал, и принимающее
+    // устройство отвечало «integrity check failed» на каждом проходе. Теперь метка = хеш отправляемых байт, а кэш правится на настоящий.
+    const io = {
+        async send(side, path, blob, claimed, meta, { fromLocal = false } = {}) {
+            let hash = claimed;
+            if (hashBlob) {
+                hash = await hashBlob(blob);
+                if (fromLocal && hash !== claimed) await local.relabel?.(path, hash);
+            }
+            await side.write(path, blob, { ...meta, hash });
+            return hash;
+        },
+        // Метка в индексе облака уже могла быть испорчена прежней версией — тогда принимаем байты как есть и ЧИНИМ метку заливкой обратно.
+        async receive(path, blob, claimed, meta) {
+            let hash = claimed;
+            let healed = false;
+            if (healLabels && hashBlob) {
+                const actual = await hashBlob(blob);
+                if (actual !== claimed) { hash = actual; healed = true; }
+            }
+            await local.write(path, blob, { ...meta, hash });
+            if (healed) await remote.write(path, blob, { ...meta, hash });
+            return { hash, healed };
+        },
+    };
+    const sameAs = (baseValue, claimed, hash) => (baseValue === claimed || baseValue == null ? hash : baseValue);   // база держит `key`, если сравнивали по нему
+
+    const onFailure = (action, index, error) => {
+        // Отложенное (например, открытый сейчас чат) — не сбой: файл остаётся в прежнем состоянии базы и доедет в следующий раз.
+        if (isDeferredError(error)) { counts.deferred += 1; return; }
+        counts.failed += 1;
+        errors.push({ path: action.path, op: action.op, message: error?.message ?? String(error) });
+        // Фатальная ошибка: те же слова получит каждый следующий файл — останавливаемся, вместо сотни одинаковых отказов.
+        if (isFatalError(error)) stopped = { reason: error.message, remaining: actions.slice(index + 1).filter(next => next.op !== SYNC_ACTIONS.settle).length };
+    };
+
+    const runAction = async (action, index) => {
         if (action.op !== SYNC_ACTIONS.settle) onProgress({ done, total, path: action.path, op: action.op });
         try {
             switch (action.op) {
                 case SYNC_ACTIONS.settle:
                     applyBase({ [action.path]: action.hash });
                     break;
-                case SYNC_ACTIONS.push:
-                    // `meta.hash` — ВСЕГДА настоящий байтовый хеш (получатель кэширует его как хеш реальных байт на диске); `meta.key` —
-                    // отпечаток ИСТОЧНИКА, безопасно доверять сразу (см. doc-comment `writeLocal` в cores/sync/index.js); то, что идёт
+                case SYNC_ACTIONS.push: {
+                    // `meta.hash` — ВСЕГДА настоящий байтовый хеш отправляемых байт (получатель кэширует его как хеш реальных байт на диске);
+                    // `meta.key` — отпечаток ИСТОЧНИКА, безопасно доверять сразу (см. doc-comment `writeLocal` в cores/sync/index.js); то, что идёт
                     // в базу (`action.baseValue`), может быть тем же `key` — см. doc-comment sync-plan.js.
-                    await remote.write(action.path, await local.read(action.path), { hash: action.hash, modified: action.modified, key: action.key });
+                    const hash = await io.send(remote, action.path, await local.read(action.path), action.hash, { modified: action.modified, key: action.key }, { fromLocal: true });
                     counts.pushed += 1;
-                    finishOne({ [action.path]: action.baseValue ?? action.hash }, true);
+                    finishOne({ [action.path]: sameAs(action.baseValue, action.hash, hash) }, true);
                     break;
-                case SYNC_ACTIONS.pull:
-                    await local.write(action.path, await remote.read(action.path), { hash: action.hash, modified: action.modified, key: action.key });
+                }
+                case SYNC_ACTIONS.pull: {
+                    const { hash, healed } = await io.receive(action.path, await remote.read(action.path), action.hash, { modified: action.modified, key: action.key });
                     counts.pulled += 1;
-                    finishOne({ [action.path]: action.baseValue ?? action.hash }, false);
+                    finishOne({ [action.path]: sameAs(action.baseValue, action.hash, hash) }, healed);
                     break;
+                }
                 case SYNC_ACTIONS.deleteLocal:
                     await local.remove(action.path);
                     counts.deletedLocal += 1;
@@ -125,12 +166,12 @@ export async function runSync({
                     finishOne({ [action.path]: null }, true);
                     break;
                 case SYNC_ACTIONS.conflict: {
-                    const winnerHash = action.winner === 'local' ? action.localHash : action.remoteHash;
-                    const loserHash = action.winner === 'local' ? action.remoteHash : action.localHash;
-                    const outcome = await resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy, sameContent });
-                    if (outcome.reconciled) { counts.pushed += 1; finishOne({ [action.path]: action.localHash }, true); break; }
+                    const outcome = await resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy, sameContent, io });
+                    if (outcome.reconciled) { counts.pushed += 1; finishOne({ [action.path]: outcome.hash ?? action.localHash }, true); break; }
                     counts.conflicts += 1;
                     if (outcome.quarantined) counts.quarantined += 1;
+                    const winnerHash = outcome.winnerHash ?? (action.winner === 'local' ? action.localHash : action.remoteHash);
+                    const loserHash = outcome.loserHash ?? (action.winner === 'local' ? action.remoteHash : action.localHash);
                     // В карантине копии-файла нет вовсе — базе просто нечего запоминать про conflictPath, только про сам путь (обе
                     // стороны сошлись на версии победителя).
                     finishOne(outcome.quarantined || action.noCopy ? { [action.path]: winnerHash } : { [action.path]: winnerHash, [action.conflictPath]: loserHash }, true);
@@ -139,22 +180,39 @@ export async function runSync({
                 default:
                     break;
             }
-            if (remote.batched && remote.checkpointEvery && deferred.length >= remote.checkpointEvery) await flushBatch();
         } catch (error) {
-            // Отложенное (например, открытый сейчас чат) — не сбой: файл остаётся в прежнем состоянии базы и доедет в следующий раз.
-            if (isDeferredError(error)) counts.deferred += 1;
-            else {
-                counts.failed += 1;
-                errors.push({ path: action.path, op: action.op, message: error?.message ?? String(error) });
-                // Фатальная ошибка: те же слова получит каждый следующий файл — останавливаемся, вместо сотни одинаковых отказов.
-                if (isFatalError(error)) {
-                    stopped = { reason: error.message, remaining: actions.slice(index + 1).filter(next => next.op !== SYNC_ACTIONS.settle).length };
-                    break;
-                }
-            }
+            onFailure(action, index, error);
         }
         await flushApplied().catch(() => {});   // журнал — страховка: его сбой не должен ронять проход
-        if (action.op !== SYNC_ACTIONS.settle) { done += 1; sinceCheckpoint += 1; await maybeCheckpoint(); }
+    };
+
+    // Пачками: внутри пачки до `concurrency` файлов одновременно, а контрольная точка (`commit()` пакетной стороны, запись базы) — только на
+    // границе пачки, когда ничего не летит: иначе `commit()` мог бы стереть запись, добавленную пока он ждал сеть. `concurrency` 1 — как раньше,
+    // строго по одному.
+    const waveSize = concurrency > 1 ? Math.max(concurrency, remote.checkpointEvery || checkpointEvery) : 1;
+    for (let waveStart = 0; waveStart < actions.length && !stopped && !aborted; waveStart += waveSize) {
+        const wave = actions.slice(waveStart, waveStart + waveSize);
+        let next = 0;
+        const worker = async () => {
+            while (next < wave.length && !stopped && !aborted) {
+                if (isAborted()) { aborted = true; return; }
+                const at = next; next += 1;
+                await runAction(wave[at], waveStart + at);
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, wave.length) }, worker));
+        if (stopped) break;
+        const last = wave.length - 1;
+        try {
+            if (remote.batched && remote.checkpointEvery && deferred.length >= remote.checkpointEvery) await flushBatch();
+        } catch (error) {
+            onFailure(wave[last], waveStart + last, error);
+            if (stopped) break;
+        }
+        await flushApplied().catch(() => {});
+        for (const action of wave) if (action.op !== SYNC_ACTIONS.settle) { done += 1; sinceCheckpoint += 1; }
+        await maybeCheckpoint();
+        if (aborted) break;
     }
 
     // Автоочистка копий конфликтов: только лишних (идентичных оригиналу или более ранней копии) — см. `planCopyCleanup`. Не при обрыве/остановке
@@ -196,10 +254,10 @@ export async function runSync({
     };
 }
 
-/** Победитель пишется в основной путь на обеих сторонах; что происходит с проигравшей версией, зависит от `outcome` ниже. */
-async function applyWinner(action, { local, remote, localEntries, remoteEntries }) {
-    if (action.winner === 'local') await remote.write(action.path, await local.read(action.path), { hash: action.localHash, key: localEntries[action.path]?.key, modified: localEntries[action.path]?.modified });
-    else await local.write(action.path, await remote.read(action.path), { hash: action.remoteHash, key: remoteEntries[action.path]?.key, modified: remoteEntries[action.path]?.modified });
+/** Победитель пишется в основной путь на обеих сторонах; что происходит с проигравшей версией, зависит от `outcome` ниже. Возвращает честный хеш победителя. */
+async function applyWinner(action, { local, remote, localEntries, remoteEntries, io }) {
+    if (action.winner === 'local') return io.send(remote, action.path, await local.read(action.path), action.localHash, { key: localEntries[action.path]?.key, modified: localEntries[action.path]?.modified }, { fromLocal: true });
+    return (await io.receive(action.path, await remote.read(action.path), action.remoteHash, { key: remoteEntries[action.path]?.key, modified: remoteEntries[action.path]?.modified })).hash;
 }
 
 /**
@@ -214,18 +272,18 @@ async function applyWinner(action, { local, remote, localEntries, remoteEntries 
  *    поведение остаётся `copy` (см. doc-comment файла и `CONFLICT_POLICY`: «для пакетных сторон — copy, если проиграла удалённая»;
  *    если проиграла ЛОКАЛЬНАЯ, `local` эту функцию имеет всегда, и карантин у себя не требует сети вовсе).
  */
-async function resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy = () => 'copy', sameContent = null }) {
+async function resolveConflict(action, { local, remote, localEntries, remoteEntries, conflictPolicy = () => 'copy', sameContent = null, io }) {
     // Не настоящий конфликт: обе стороны хранят ОДНО И ТО ЖЕ содержимое, а байты разошлись (ST переписывает карточку персонажа при
     // импорте; у GitHub/облака нет семантического `key`, и после обрыва прохода — база и кэш хешей не успели записаться — разницу
     // байтов не отличить от правки). Никакой копии: выравниваем байты (удалённая сторона получает локальные) и считаем путь сошедшимся.
     if (sameContent && (sameContent.appliesTo?.(action.path) ?? true)) {
         const [localBlob, remoteBlob] = [await local.read(action.path), await remote.read(action.path)];
         if (await Promise.resolve(sameContent(action.path, localBlob, remoteBlob)).catch(() => false)) {
-            await remote.write(action.path, localBlob, { hash: action.localHash, key: localEntries[action.path]?.key, modified: localEntries[action.path]?.modified });
-            return { reconciled: true };
+            const hash = await io.send(remote, action.path, localBlob, action.localHash, { key: localEntries[action.path]?.key, modified: localEntries[action.path]?.modified }, { fromLocal: true });
+            return { reconciled: true, hash };
         }
     }
-    if (action.noCopy) { await applyWinner(action, { local, remote, localEntries, remoteEntries }); return { quarantined: false }; }
+    if (action.noCopy) { const winnerHash = await applyWinner(action, { local, remote, localEntries, remoteEntries, io }); return { quarantined: false, winnerHash }; }
     const winnerIsLocal = action.winner === 'local';
     const loserSide = winnerIsLocal ? remote : local;
     const loserEntry = winnerIsLocal ? remoteEntries[action.path] : localEntries[action.path];
@@ -235,14 +293,16 @@ async function resolveConflict(action, { local, remote, localEntries, remoteEntr
     if (wantsQuarantine) {
         const loserBlob = await loserSide.read(action.path);
         await loserSide.quarantine(action.path, loserBlob, { hash: loserHash, key: loserEntry?.key, modified: loserEntry?.modified, from: winnerIsLocal ? 'remote' : 'local' });
-        await applyWinner(action, { local, remote, localEntries, remoteEntries });
-        return { quarantined: true };
+        const winnerHash = await applyWinner(action, { local, remote, localEntries, remoteEntries, io });
+        return { quarantined: true, winnerHash };
     }
 
     const loserBlob = await loserSide.read(action.path);
-    const meta = { hash: loserHash, modified: loserEntry?.modified };
-    if (!action.copyOn?.local) await local.write(action.conflictPath, loserBlob, meta);
-    if (!action.copyOn?.remote) await remote.write(action.conflictPath, loserBlob, meta);
-    await applyWinner(action, { local, remote, localEntries, remoteEntries });
-    return { quarantined: false };
+    const meta = { modified: loserEntry?.modified };
+    // Копия получает честную метку своих байт; обе стороны считают её одинаково, поэтому метка копии на них совпадёт.
+    let copyHash = loserHash;
+    if (!action.copyOn?.local) copyHash = await io.send(local, action.conflictPath, loserBlob, loserHash, meta);
+    if (!action.copyOn?.remote) copyHash = await io.send(remote, action.conflictPath, loserBlob, loserHash, meta);
+    const winnerHash = await applyWinner(action, { local, remote, localEntries, remoteEntries, io });
+    return { quarantined: false, winnerHash, loserHash: copyHash };
 }
