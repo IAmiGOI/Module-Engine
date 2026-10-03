@@ -212,12 +212,13 @@ test('a reinstalled ST (empty locally, the sync memory still full) gets its file
     const files = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`chats/Alex/chat${i}.jsonl`, `line ${i}`]));
     const device = makeDevice({ id: '0000000000000001', name: 'PC', world, clock: createFakeClock(), network: createFakeNetwork(), cloud: connectedDropbox, files });
     await device.call('sync.run', { target: 'cloud' });
-    const uploaded = () => world.dropbox.names().filter(name => name.startsWith('/b-')).length;
-    assert.equal(uploaded(), 30);
+    const dataBlobs = () => world.dropbox.names().filter(name => /^\/[bzk]-/.test(name)).length;   // 30 old chats of one character travel as ONE pack
+    assert.ok(dataBlobs() >= 1 && dataBlobs() < 30);
+    const blobsBefore = dataBlobs();
     for (const path of Object.keys(files)) device.store.delete(path);   // fresh ST data folder; the browser still remembers the last sync
     const result = await device.call('sync.run', { target: 'cloud' });
     assert.deepEqual(result.cloud.restored, ['chats']);
-    assert.equal(uploaded(), 30, 'the drive keeps every chat');
+    assert.equal(dataBlobs(), blobsBefore, 'the drive keeps every chat');
     assert.equal(device.paths().filter(path => path.startsWith('chats/')).length, 30, 'and the device has them again');
     await device.core.stop();
 });

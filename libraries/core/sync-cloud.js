@@ -1,5 +1,6 @@
 import { computeGitBlobSha } from './content-hash.js';
 import { FatalSyncError, isFatalHttpStatus } from './sync-errors.js';
+import { buildPack, COMPRESSED_PREFIX, gunzip, isPackable, maybeCompress, PACK_MAX_BYTES, PACK_MIN_MEMBERS, PACK_PREFIX, packGroupOf, parsePack, sliceFromPack } from './sync-pack.js';
 
 /**
  * Облачный диск как сторона синхронизации (Dropbox и Google Drive) — ДОПОЛНИТЕЛЬНЫЙ способ рядом с прямым обменом между
@@ -208,13 +209,26 @@ export function createDriveStore({ http }) {
 
 // ── Сторона для исполнителя прохода ─────────────────────────────────────────────────────────────────────────────────
 
-export const blobNameFor = async path => `b-${await computeGitBlobSha(new TextEncoder().encode(path))}`;
+const nameHash = async path => computeGitBlobSha(new TextEncoder().encode(path));
+export const blobNameFor = async path => `b-${await nameHash(path)}`;
+export const compressedNameFor = async path => `${COMPRESSED_PREFIX}${await nameHash(path)}`;
+const PACK_CACHE_SIZE = 3;
 
-export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, now = () => Date.now() } = {}) {
-    const writes = new Map();     // путь -> { h, s, m }
+/**
+ * Что ещё лежит в индексе на запись пути (поля сверх `h`/`s`/`m`/`k` старые устройства не знают и сохраняют как есть при слиянии индекса):
+ *  - `z: 1`            — данные сжаты gzip'ом и лежат под именем `z-<sha1 пути>` (а не `b-…`);
+ *  - `pk`, `po`, `pl`  — файл лежит внутри блока `k-<pk>` со смещением `po` и длиной `pl` (в несжатом теле блока).
+ * Хеш `h` ВСЕГДА хеш настоящих байт файла: трёхстороннее сравнение (`sync-plan.js`) о сжатии и блоках ничего не знает.
+ */
+export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, now = () => Date.now(), pack = {} } = {}) {
+    const { minMembers = PACK_MIN_MEMBERS, maxBytes = PACK_MAX_BYTES, enabled = true, compress = true } = pack;
+    const writes = new Map();     // путь -> запись индекса { h, s, m, k?, z?, pk?, po?, pl? }
     const deletes = new Set();
+    const pending = new Map();    // группа (папка персонажа) -> [{ path, bytes, entry }] — старые чаты ждут коммита, чтобы собраться в блок
+    let pendingBytes = 0;
     let index = null;
     let listed = {};   // что индекс говорил о каждом пути при последнем `manifest()` (для `annotate`, пока `index` может быть уже сброшен коммитом)
+    const packCache = new Map();  // имя блока -> Promise<разобранный блок>; общий для параллельных чтений: блок на 30 чатов качается один раз
 
     async function loadIndex() {
         await store.refresh?.();
@@ -222,6 +236,57 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
         const data = file ? parse(file.text) : null;
         return { files: data?.v === 1 && data.files && typeof data.files === 'object' ? data.files : {}, version: file?.version ?? null };
     }
+
+    const entryFor = (path, meta, size, extra = {}) => ({ h: meta.hash, s: size, m: meta.modified || now(), ...(meta.key ? { k: meta.key } : {}), ...extra });
+
+    /** Блок из накопленных старых чатов одной папки; если их мало — обычные сжатые файлы. */
+    async function flushGroup(members) {
+        if (!members.length) return;
+        if (members.length < minMembers) {
+            for (const member of members) await storeSingle(member.path, member.bytes, member.entry);
+            return;
+        }
+        const built = await buildPack(members.map(member => ({ path: member.path, bytes: member.bytes })));
+        const id = await computeGitBlobSha(built.bytes);
+        await store.writeBlob(`${PACK_PREFIX}${id}`, new Blob([built.bytes]));
+        for (const [position, member] of members.entries()) {
+            writes.set(member.path, { ...member.entry, pk: id, po: built.entries[position].offset, pl: built.entries[position].length });
+            deletes.delete(member.path);
+        }
+    }
+
+    /** Один файл: сжатый (`z-`), если это текст и выигрыш есть, иначе как есть (`b-`). */
+    async function storeSingle(path, bytes, entry) {
+        const packed = compress ? await maybeCompress(path, bytes) : { bytes, compressed: false };
+        await store.writeBlob(packed.compressed ? await compressedNameFor(path) : await blobNameFor(path), new Blob([packed.bytes]));
+        writes.set(path, packed.compressed ? { ...entry, z: 1 } : entry);
+        deletes.delete(path);
+    }
+
+    async function flushPending() {
+        if (!pending.size) return;
+        const groups = [...pending.values()];
+        pending.clear();
+        pendingBytes = 0;
+        for (const members of groups) await flushGroup(members);
+    }
+
+    function loadPack(id) {
+        const name = `${PACK_PREFIX}${id}`;
+        if (!packCache.has(name)) {
+            const loading = (async () => {
+                const blob = await store.readBlob(name);
+                if (!blob) throw new Error(`A pack of old chats (${id.slice(0, 8)}…) is listed in the cloud index but its data is missing.`);
+                return parsePack(new Uint8Array(await blob.arrayBuffer()));
+            })();
+            loading.catch(() => packCache.delete(name));
+            packCache.set(name, loading);
+            while (packCache.size > PACK_CACHE_SIZE) packCache.delete(packCache.keys().next().value);
+        }
+        return packCache.get(name);
+    }
+
+    const currentEntry = path => writes.get(path) ?? listed[path];
 
     return {
         batched: true,
@@ -234,6 +299,17 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
         },
 
         async read(path) {
+            for (const members of pending.values()) {
+                const waiting = members.find(member => member.path === path);
+                if (waiting) return new Blob([waiting.bytes]);
+            }
+            const entry = currentEntry(path);
+            if (entry?.pk) return new Blob([sliceFromPack(await loadPack(entry.pk), path)]);
+            if (entry?.z) {
+                const blob = await store.readBlob(await compressedNameFor(path));
+                if (!blob) throw new Error(`"${path}" is listed in the cloud index but its data is missing.`);
+                return new Blob([await gunzip(new Uint8Array(await blob.arrayBuffer()))]);
+            }
             const blob = await store.readBlob(await blobNameFor(path));
             if (!blob) throw new Error(`"${path}" is listed in the cloud index but its data is missing.`);
             return blob;
@@ -241,24 +317,42 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
 
         async write(path, blob, meta = {}) {
             if (blob.size > maxFileBytes) throw new Error(`"${path}" is larger than the ${Math.round(maxFileBytes / 1048576)} MB limit for the cloud.`);
-            await store.writeBlob(await blobNameFor(path), blob);
             // `k` — смысловой отпечаток (карточка персонажа): ST переписывает карточку при каждом импорте, байты меняются, а содержимое нет —
             // без отпечатка в индексе каждое такое переписывание выглядело бы правкой и перезаливало файл целиком.
-            writes.set(path, { h: meta.hash, s: blob.size, m: meta.modified || now(), ...(meta.key ? { k: meta.key } : {}) });
-            deletes.delete(path);
+            const entry = entryFor(path, meta, blob.size);
+            if (enabled && isPackable(path, { modified: entry.m, size: blob.size, now: now() })) {
+                const bytes = new Uint8Array(await blob.arrayBuffer());
+                const group = packGroupOf(path);
+                if (!pending.has(group)) pending.set(group, []);
+                pending.get(group).push({ path, bytes, entry });
+                writes.delete(path);
+                deletes.delete(path);
+                pendingBytes += bytes.length;
+                if (pendingBytes > maxBytes) await flushPending();   // слабому устройству не держать десятки мегабайт в памяти
+                return;
+            }
+            await storeSingle(path, new Uint8Array(await blob.arrayBuffer()), entry);
         },
 
         /** Дописать в индексе отпечаток, НЕ трогая сами данные: карточка в облаке та же по содержимому, байты лежат как лежали. */
         async annotate(path, { key } = {}) {
-            const current = writes.get(path) ?? listed[path];
+            const current = currentEntry(path);
             if (!current || !key) return;
             writes.set(path, { ...current, k: key });
             deletes.delete(path);
         },
 
-        async remove(path) { deletes.add(path); writes.delete(path); },
+        async remove(path) {
+            deletes.add(path);
+            writes.delete(path);
+            for (const [group, members] of pending) {
+                const kept = members.filter(member => member.path !== path);
+                if (kept.length) pending.set(group, kept); else pending.delete(group);
+            }
+        },
 
         async commit() {
+            await flushPending();
             if (!writes.size && !deletes.size) return null;
             let lastError = null;
             for (let attempt = 0; attempt < MAX_INDEX_ATTEMPTS; attempt += 1) {
@@ -268,7 +362,18 @@ export function createCloudRemote({ store, maxFileBytes = CLOUD_MAX_FILE_BYTES, 
                 for (const path of deletes) delete files[path];
                 try {
                     await store.writeText(INDEX_NAME, JSON.stringify({ v: 1, files }), { version: current.version, mustNotExist: current.version == null });
-                    for (const path of deletes) await store.remove(await blobNameFor(path)).catch(() => {});
+                    // Прибраться за собой (мелкие сбои не важны — это лишь мусор): старые данные под другим именем и блоки, на которые больше никто не ссылается.
+                    const touched = [...new Set([...writes.keys(), ...deletes])];
+                    const stillUsed = new Set(Object.values(files).map(entry => entry.pk).filter(Boolean));
+                    const orphanPacks = new Set(touched.map(path => current.files[path]?.pk).filter(id => id && !stillUsed.has(id)));
+                    for (const path of touched) {
+                        const before = current.files[path];
+                        const after = files[path];
+                        const wasName = before?.pk ? null : (before?.z ? await compressedNameFor(path) : await blobNameFor(path));
+                        const isName = !after || after.pk ? null : (after.z ? await compressedNameFor(path) : await blobNameFor(path));
+                        if (wasName && wasName !== isName) await store.remove(wasName).catch(() => {});
+                    }
+                    for (const id of orphanPacks) { packCache.delete(`${PACK_PREFIX}${id}`); await store.remove(`${PACK_PREFIX}${id}`).catch(() => {}); }
                     writes.clear();
                     deletes.clear();
                     index = null;

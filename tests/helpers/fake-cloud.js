@@ -74,11 +74,14 @@ export function createFakeDrive({ validToken = () => true } = {}) {
         if (method === 'DELETE' && media) { files.delete(media[1]); return reply(204, {}); }
         if (method === 'POST' && short === '/upload/drive/v3/files') {
             for (const hook of beforeUpload.splice(0)) await hook();
-            const text = await body.text();
+            // Байты, а не текст: тело может быть сжатым (gzip) — декодирование как UTF-8 испортило бы его. Латиница 1:1 — каждый байт один символ.
+            const text = Buffer.from(await body.arrayBuffer()).toString('latin1');
             const boundary = /boundary=(.+)$/.exec(headers['Content-Type'])[1];
-            const parts = text.split(`--${boundary}`).map(part => part.trim()).filter(part => part && part !== '--');
-            const metadata = JSON.parse(parts[0].split('\r\n\r\n')[1]);
-            const content = parts[1].split('\r\n\r\n').slice(1).join('\r\n\r\n');
+            const marker = `--${boundary}`;
+            const metadata = JSON.parse(text.slice(text.indexOf('\r\n\r\n') + 4, text.indexOf(`\r\n${marker}`)));
+            const start = text.indexOf('\r\n\r\n', text.indexOf(`\r\n${marker}`)) + 4;
+            const raw = text.slice(start, text.lastIndexOf(`\r\n${marker}--`));
+            const content = Buffer.from(raw, 'latin1');
             counter += 1;
             const id = `id${counter}`;
             assertParent(metadata);
