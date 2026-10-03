@@ -1,4 +1,6 @@
 import { createSyncCore } from '../../cores/sync/index.js';
+import { createCloudBackupCore } from '../../cores/cloud-backup/index.js';
+import { request } from '../../libraries/shared/request.js';
 import { createStartupCore } from '../../cores/startup/index.js';
 import { createBackgroundsCore } from '../../cores/backgrounds/index.js';
 import { createMusicServerCore } from '../../cores/music-server/index.js';
@@ -94,6 +96,14 @@ export async function wireUiCores(ctx) {
         engine.registerCaller('core.sync', 'cores', { tier: 'official', networkAccess: true }),
         { publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.sync' }) },
     );
+    // Облачные бэкапы (Google Drive): три слота — час / день / неделя. Доступ к Диску — только через авторизованный запрос Ядра синхронизации.
+    const cloudBackupHost = engine.registerCaller('core.cloudBackup', 'cores', { tier: 'official' });
+    const cloudBackup = createCloudBackupCore(cloudBackupHost, {
+        http: async params => { const result = await request(cloudBackupHost.own, 'sync.cloud.request', { params }); if (!result.ok) throw new Error(result.error.message); return result.value; },
+        isConnected: async () => { const result = await request(cloudBackupHost.own, 'sync.status', {}); const cloud = result.ok ? result.value?.config?.cloud : null; return Boolean(cloud?.connected) && cloud.provider === 'google'; },
+        getDeviceName: async () => { const result = await request(cloudBackupHost.own, 'sync.status', {}); return result.ok ? (result.value?.config?.deviceName ?? result.value?.deviceName ?? 'device') : 'device'; },
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.cloudBackup' }),
+    });
     // Порядок запуска (самообновление → фоны → синхронизация → экран загрузки) — контрактами, не ссылками; вызывается из index.js.
     const startup = createStartupCore(
         engine.registerCaller('core.startup', 'cores', { tier: 'official' }),
@@ -155,5 +165,5 @@ export async function wireUiCores(ctx) {
     });
 
 
-    return { uiHost, createFinalUi, uiEngine, memoryGraphPanel, promptManagerPanel, picturePanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home };
+    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, promptManagerPanel, picturePanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home };
 }

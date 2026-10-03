@@ -52,6 +52,8 @@ export function createStartupCore(host, { screen = null, wireBoot = wireBootScre
             const pass = await call('sync.runOnLoad');
             if (!pass.ok) log.warn?.('[ST Module Engine (Beta)] Sync skipped:', pass.error?.message);
         }
+        // Облачные бэкапы: расписание и (при необходимости) один проход — не задерживая экран загрузки.
+        call('cloudBackup.start').then(result => { if (!result.ok) log.info?.('[ST Module Engine (Beta)] Cloud backup skipped:', result.error?.message); });
         if (holdForSync) screen?.finish?.({ afterMs: 300 });
         return { outcome, holdForSync };
     }

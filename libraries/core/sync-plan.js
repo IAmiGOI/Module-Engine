@@ -110,7 +110,7 @@ function comparable(localEntry, remoteEntry) {
     };
 }
 
-export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLabel = 'conflict', include = () => true } = {}) {
+export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLabel = 'conflict', include = () => true, noCopy = () => false } = {}) {
     const paths = new Set([...Object.keys(local), ...Object.keys(remote), ...Object.keys(base)]);
     const actions = [];
     // Занятые пути для уникальности копии конфликта (Этап 4.5) — то, что реально есть хоть у одной стороны сейчас; конфликты,
@@ -147,7 +147,7 @@ export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLa
         // версию в карантин, а не плодить файл-копию в самой ST, применяется именно к этому случаю (см. `sync-config.js`'s `CONFLICT_POLICY`).
         const loserHash = hashOf(winner === 'local' ? remote[path] : local[path]);
         // Сама копия конфликта не плодит копий копий («log (conflict A) (conflict B)»): побеждает более свежая, без нового файла.
-        if (isConflictCopy(path)) {
+        if (isConflictCopy(path) || noCopy(path)) {
             actions.push({ op: SYNC_ACTIONS.conflict, path, winner, firstMeet: false, noCopy: true, localHash: hashOf(local[path]), remoteHash: hashOf(remote[path]) });
             continue;
         }
@@ -160,6 +160,50 @@ export function computeSyncPlan({ local = {}, remote = {}, base = {}, conflictLa
     const counts = { push: 0, pull: 0, deleteLocal: 0, deleteRemote: 0, conflict: 0, settle: 0 };
     for (const action of actions) counts[action.op] += 1;
     return { actions, counts };
+}
+
+const equivalent = (a, b) => Boolean(a && b && (a.hash === b.hash || (a.key && b.key && a.key === b.key)));
+
+/** `dir/stem (conflict …)[ n].ext` → путь оригинала `dir/stem.ext`; не копия → `null`. */
+export function conflictCopyOriginal(path) {
+    const match = String(path).match(/^(.*) \(conflict [^)]*\)(?: \d+)?(\.[^/.]*)?$/);
+    return match ? `${match[1]}${match[2] ?? ''}` : null;
+}
+
+/**
+ * Автоочистка копий конфликтов — только тех, удаление которых ничего не теряет. Чистое решение, ничего не трогает.
+ * Копия лишняя, если ЛОКАЛЬНО она эквивалентна своему оригиналу (тот же байтовый `hash` или тот же `key` — отпечаток карточки персонажа)
+ * либо повторяет более раннюю копию того же оригинала (после обрывов проходов их бывало по 4–5 штук). Копия с ОТЛИЧАЮЩИМСЯ содержимым —
+ * настоящая вторая версия, её не трогаем. Удалённая копия обязана совпадать с локальной (по хешу/ключу) или не меняться с прошлой
+ * синхронизации (`base`) — иначе там могла появиться новая правка, и мы её не видели. Оригинала нет — копию оставляем.
+ * @param {object} input
+ * @param {Record<string,object>} input.local
+ * @param {Record<string,object>} input.remote
+ * @param {Record<string,string>} input.base
+ * @param {Set<string>} [input.busy] — пути, которые этот проход и так меняет (оригиналы/копии в работе) — не трогаем
+ * @param {(path:string)=>boolean} [input.include]
+ * @returns {Array<{path:string, original:string, reason:'same-as-original'|'duplicate-copy', remote:boolean}>}
+ */
+export function planCopyCleanup({ local = {}, remote = {}, base = {}, busy = new Set(), include = () => true } = {}) {
+    const byOriginal = new Map();
+    for (const path of Object.keys(local)) {
+        const original = conflictCopyOriginal(path);
+        if (!original || !local[original] || busy.has(path) || busy.has(original) || !include(path, { local: local[path], remote: remote[path] })) continue;
+        if (!byOriginal.has(original)) byOriginal.set(original, []);
+        byOriginal.get(original).push(path);
+    }
+    const remoteSafe = path => !remote[path] || equivalent(local[path], remote[path]) || base[path] === remote[path].hash;
+    const result = [];
+    for (const [original, copies] of byOriginal) {
+        const kept = [];
+        for (const path of copies.sort()) {
+            if (!remoteSafe(path)) continue;
+            if (equivalent(local[path], local[original])) { result.push({ path, original, reason: 'same-as-original', remote: Boolean(remote[path]) }); continue; }
+            if (kept.some(other => equivalent(local[path], local[other]))) { result.push({ path, original, reason: 'duplicate-copy', remote: Boolean(remote[path]) }); continue; }
+            kept.push(path);
+        }
+    }
+    return result;
 }
 
 const MASS_DELETE_MIN_COUNT = 20;

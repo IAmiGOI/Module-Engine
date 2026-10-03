@@ -35,7 +35,7 @@ test('status() is null before load; reading alone never increments', async () =>
 
     await core.load();
     assert.equal(core.status(), 1);
-    assert.deepEqual(JSON.parse(JSON.stringify(raw)), { 'core.firstLoad': { launchCount: 1 } });
+    assert.deepEqual(JSON.parse(JSON.stringify(raw['core.firstLoad'])), { launchCount: 1 });   // служебный `_syncMeta` рядом — время правки для синхронизации, не предмет этого теста
 });
 
 test('repeated load() in the SAME session is idempotent: no re-count, no re-publish', async () => {
@@ -45,7 +45,7 @@ test('repeated load() in the SAME session is idempotent: no re-count, no re-publ
     await core.load();
     assert.equal(core.status(), 1);
     assert.equal(published.length, 1, 'firstLaunch event exactly once per session');
-    assert.deepEqual(JSON.parse(JSON.stringify(raw)), { 'core.firstLoad': { launchCount: 1 } });
+    assert.deepEqual(JSON.parse(JSON.stringify(raw['core.firstLoad'])), { launchCount: 1 });   // служебный `_syncMeta` рядом — время правки для синхронизации, не предмет этого теста
 });
 
 test('page reload: new core over the SAME storage counts to 2 and publishes nothing', async () => {

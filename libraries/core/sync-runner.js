@@ -1,4 +1,4 @@
-import { computeSyncPlan, detectMassDeletion, SYNC_ACTIONS } from './sync-plan.js';
+import { computeSyncPlan, detectMassDeletion, planCopyCleanup, SYNC_ACTIONS } from './sync-plan.js';
 import { isFatalError } from './sync-errors.js';
 
 /**
@@ -42,8 +42,11 @@ export async function runSync({
     conflictPolicy = () => 'copy',
     categoryOf = () => null,
     sameContent = null,
+    noCopy = () => false,
+    cleanupCopies = true,
     onProgress = () => {},
     onCheckpoint = () => {},
+    onApplied = () => {},
     checkpointEvery = CHECKPOINT_EVERY,
     checkpointIntervalMs = CHECKPOINT_INTERVAL_MS,
     now = () => Date.now(),
@@ -52,7 +55,7 @@ export async function runSync({
     remoteManifest,
 } = {}) {
     const [localEntries, remoteEntries] = await Promise.all([localManifest ?? local.manifest(), remoteManifest ?? remote.manifest()]);
-    const plan = computeSyncPlan({ local: localEntries, remote: remoteEntries, base, conflictLabel, include });
+    const plan = computeSyncPlan({ local: localEntries, remote: remoteEntries, base, conflictLabel, include, noCopy });
     // Защита от массового удаления (ROADMAP 5.106в): категория под подозрением (`detectMassDeletion` — sync-plan.js) не удаляется
     // молча ни на одном проходе — её deleteLocal/deleteRemote просто не входят в исполнение, путь остаётся как есть до подтверждения
     // человеком (панель — отдельная задача); если следующий скан снова покажет файлы (временная пустота листинга ST) — удалять
@@ -64,10 +67,14 @@ export async function runSync({
     const errors = [];
     const counts = { pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, quarantined: 0, failed: 0, deferred: 0 };
     const deferred = [];   // изменения базы, которые вступают в силу только после удачного commit() у пакетной стороны
-    const applyBase = changes => { for (const [path, hash] of Object.entries(changes)) { if (hash === null) delete nextBase[path]; else nextBase[path] = hash; } };
+    // Журнал состояния между проходами: каждое изменение базы, вступившее в силу, сразу отдаётся наружу (`onApplied`) и там пишется
+    // ДО следующего файла — а не раз в контрольную точку. Обрыв между точками больше не теряет уже переданные файлы из виду.
+    const appliedNow = [];
+    const applyBase = changes => { for (const [path, hash] of Object.entries(changes)) { if (hash === null) delete nextBase[path]; else nextBase[path] = hash; appliedNow.push([path, hash]); } };
+    const flushApplied = async () => { if (appliedNow.length) await onApplied(appliedNow.splice(0)); };
     const finishOne = (changes, remoteTouched) => (remote.batched && remoteTouched ? deferred.push(changes) : applyBase(changes));
     /** Контрольная точка ПАКЕТНОЙ стороны: записать накопленное у неё и только после успеха считать это синхронизированным. */
-    const flushBatch = async () => { await remote.commit(); for (const changes of deferred.splice(0)) applyBase(changes); await onCheckpoint({ ...nextBase }); };
+    const flushBatch = async () => { await remote.commit(); for (const changes of deferred.splice(0)) applyBase(changes); await flushApplied().catch(() => {}); await onCheckpoint({ ...nextBase }); };
     // Контрольная точка ОБЫЧНОЙ базы (ROADMAP 5.106г, Этап 4.1): каждые `checkpointEvery` реальных действий или `checkpointIntervalMs`
     // — раньше `base`/кэш писались только В КОНЦЕ прохода (`runAgainst`), и обрыв ровно посередине терял уже переданные файлы из
     // виду: следующий проход начинал бы с пустой/старой базы и гонял то, что уже доехало, заново (в лучшем случае) или путал бы это
@@ -145,7 +152,25 @@ export async function runSync({
                 }
             }
         }
+        await flushApplied().catch(() => {});   // журнал — страховка: его сбой не должен ронять проход
         if (action.op !== SYNC_ACTIONS.settle) { done += 1; sinceCheckpoint += 1; await maybeCheckpoint(); }
+    }
+
+    // Автоочистка копий конфликтов: только лишних (идентичных оригиналу или более ранней копии) — см. `planCopyCleanup`. Не при обрыве/остановке
+    // и не по путям, которые этот проход сам менял. Отдельное поле результата, а не `counts` — набор счётчиков не расширяем.
+    const cleanedCopies = [];
+    if (cleanupCopies && !aborted && !stopped) {
+        const busy = new Set(plan.actions.flatMap(action => (action.op === SYNC_ACTIONS.settle ? [] : [action.path, action.conflictPath].filter(Boolean))));
+        for (const item of planCopyCleanup({ local: localEntries, remote: remoteEntries, base: nextBase, busy, include })) {
+            try {
+                await local.remove(item.path);
+                if (item.remote) await remote.remove(item.path);
+                finishOne({ [item.path]: null }, item.remote);
+                cleanedCopies.push(item.path);
+            } catch (error) {
+                if (!isDeferredError(error)) errors.push({ path: item.path, op: 'cleanup', message: error?.message ?? String(error) });
+            }
+        }
     }
 
     let commitError = null;
@@ -153,6 +178,7 @@ export async function runSync({
         try {
             if (deferred.length) await remote.commit();
             for (const changes of deferred) applyBase(changes);
+            await flushApplied().catch(() => {});
         } catch (error) {
             // После фатальной ошибки запись индекса чаще всего упадёт по той же причине — второй раз о ней не сообщаем.
             if (!stopped) {
@@ -164,7 +190,7 @@ export async function runSync({
     }
     onProgress({ done: total, total, path: null, op: null });
     return {
-        ok: !commitError && counts.failed === 0 && !aborted, aborted, stopped, counts, errors, base: nextBase, plan: plan.counts,
+        ok: !commitError && counts.failed === 0 && !aborted, aborted, stopped, counts, cleanedCopies, errors, base: nextBase, plan: plan.counts,
         needsConfirmation: blockedCategories.size ? [...blockedCategories] : null,
     };
 }
