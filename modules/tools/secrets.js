@@ -1,3 +1,21 @@
+/*@module
+id: module.secrets
+title: Secrets
+folder: Tools
+description: A private list of the AI's secrets — hidden story facts, each tagged with who knows it.
+version: 0.2.1
+engine: ^0.2
+factory: createSecretsModule
+rights: storage.settings.get, storage.settings.set, storage.chatMemory.get, storage.chatMemory.set,
+generation.registerTool, generation.unregisterTool,
+# Этап на `generation.beforeSend` исполняется под ЕГО правами
+# (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
+# и снимает этап сам Модуль, отсюда — эти два права.
+pipeline.stages.add, pipeline.stages.remove,
+# Вклад в Prompt Manager (deliverToPrompt) — без них Гейт молча отклонял вызов (см. Notebook выше).
+promptManager.takesOver, promptManager.contribute,
+ui.notify
+*/
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { Button, TextInput, TextArea, Slider, Details, Row, Field, EmptyState } from '../../libraries/shared/widgets.js';

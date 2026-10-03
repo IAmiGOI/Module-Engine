@@ -20,6 +20,7 @@
 @import url('./chrome/top-bar.css');
 @import url('./widgets/message-footer-stat.css');
 @import url('./modules/sync-card.css');
+@import url('./modules/module-install.css');
 @import url('./screens/update-overlay.css');
 @import url('./modules/notebook-postprocess.css');
 @import url('./modules/music-preset.css');

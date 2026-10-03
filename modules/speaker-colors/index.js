@@ -1,3 +1,15 @@
+/*@module
+id: module.speakerColors
+title: Speaker Colors
+description: Colors each character's dialogue by speaker, detected locally — never touches the message text sent to the model.
+version: 0.2.1
+engine: ^0.2
+factory: createSpeakerColorsModule
+rights: speaker.resolve, speaker.cast.list, speaker.cast.add, speaker.cast.remove, speaker.cast.update,
+speaker.presets.get, speaker.presets.save, speaker.presets.delete, speaker.presets.apply,
+stChat.rendered, stChat.messageTextElement, stChat.messages,
+dom.textContent, dom.paintTextRuns, dom.clearPaintedRuns, dom.readCssVariable
+*/
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';

@@ -3715,3 +3715,37 @@ test('a chat with no character, or a legacy graph, gets no hero card on entering
     await legacy.graphCore.waitForBootstrap();
     assert.equal((await call(legacy.caller, 'memoryGraph.nodes')).value.length, 1);
 });
+
+// --- Смена модели эмбеддинга: векторы нод пересчитываются один раз -------------------------
+
+test('after the embedding model changes, a saved graph is re-embedded once with the current model; the stamp prevents a second pass', async () => {
+    const { engine, graphCore, caller } = buildEngine();
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+
+    const old = [7, 7, 7];
+    const node = {
+        id: 'node_old', label: 'Old Fact', content: 'saved when another embedding model was in use.', importance: 5, degree: 0, embedding: old,
+        createdAt: 0, createdTurn: 3, lastTouchedTurn: 3, protectedNode: false, regionId: null, edges: [], gameTime: null,
+    };
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'nodes', value: { [node.id]: node } });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'embeddingModel', value: 'Xenova/multilingual-e5-small' });
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'distanceStats', value: { count: 5, mean: 0.4 } });
+
+    const reloaded = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.reloaded', 'cores', { tier: 'official' }));
+    await reloaded.load();
+    await reloaded.waitForBootstrap();
+
+    const saved = (await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'nodes', fallback: {} })).value.node_old;
+    assert.notDeepEqual(saved.embedding, old, 'the node got a fresh vector');
+    assert.equal((await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'embeddingModel', fallback: null })).value, 'Xenova/e5-small-v2', 'the current model is remembered');
+    assert.equal((await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'distanceStats', fallback: 'gone' })).value, null, 'distance statistics calibrated for the old model are dropped');
+
+    // Второй проход не нужен: подложенный вектор не трогается, пока метка совпадает.
+    const marker = [1, 2, 3];
+    await call(caller, 'storage.chatMemory.set', { namespace: 'core.memoryGraph', key: 'nodes', value: { node_old: { ...saved, embedding: marker } } });
+    const again = createMemoryGraphCore(engine.registerCaller('core.memoryGraph.again', 'cores', { tier: 'official' }));
+    await again.load();
+    await again.waitForBootstrap();
+    assert.deepEqual((await call(caller, 'storage.chatMemory.get', { namespace: 'core.memoryGraph', key: 'nodes', fallback: {} })).value.node_old.embedding, marker, 'same model — vectors are left alone');
+});

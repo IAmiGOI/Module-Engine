@@ -8,6 +8,7 @@ import {
 } from '../modules/music/index.js';
 import { selectTrack, shouldSwitch } from '../libraries/core/track-selection.js';
 import { parsePick } from '../libraries/shared/music-catalog.js';
+import { blendSceneVectors, sceneMessages } from '../modules/music/tracks.js';
 
 // --- Чистые функции ---------------------------------------------------------
 
@@ -153,7 +154,7 @@ test('generation.completed picks the track whose description matches the fresh s
 
     assert.equal(audio.playing, true);
     assert.equal(module.nowPlaying.peek().trackId, module.tracks.peek()[0].id);
-    assert.ok(module.nowPlaying.peek().similarity > 0.99);
+    assert.ok(module.nowPlaying.peek().similarity > 0.85, 'the fresh fight message dominates the older, neutral one');
 });
 
 test('a track with no matching theme stays below the floor — music is NOT changed', async () => {
@@ -588,4 +589,53 @@ test('smart: no Jev connection (or switched off) never blocks the music — the 
     await off.module.onGenerationCompleted();
     assert.equal(off.calls.picks[0].smart, false, 'the user can only switch it off');
     assert.equal(off.calls.jev.length, 0);
+});
+
+test('the scene vector is a recency-weighted blend of the messages: a long old message does not drown the fresh one', () => {
+    const old = [1, 0], fresh = [0, 1];
+    const blend = blendSceneVectors([old, fresh]);
+    assert.ok(blend[1] > blend[0], 'the newer message weighs more');
+    assert.ok(Math.abs(Math.hypot(...blend) - 1) < 1e-9, 'normalised');
+    assert.deepEqual(blendSceneVectors([null, fresh]), [0, 1], 'a failed embedding is skipped');
+    assert.equal(blendSceneVectors([null, null]), null);
+    assert.deepEqual(sceneMessages([{ text: 'a' }, { text: 's', isSystem: true }, { text: 'b' }, { text: '' }], 3), ['a', 'b'], 'system and empty messages never count');
+});
+
+// --- Смена модели эмбеддинга: векторы своих треков пересчитываются один раз ----------------
+
+import { EMBEDDING_MODEL_ID } from '../libraries/core/embedding.js';
+
+test('after the embedding model changes, own tracks get fresh vectors once; the same model leaves them alone', async () => {
+    const first = buildEngine();
+    await first.module.load();
+    await first.module.importFiles([{ name: 'tense urban fight at night.mp3', blob: new Blob(['a']) }]);
+    const id = first.module.tracks.peek()[0].id;
+    const stored = first.settingsContext.extensionSettings;
+    const namespace = Object.keys(stored).find(key => JSON.stringify(stored[key]).includes(id));
+    assert.ok(namespace, 'the track is persisted');
+
+    // Старые данные: векторы от другой модели и без метки модели.
+    const tracksKey = Object.keys(stored[namespace]).find(key => JSON.stringify(stored[namespace][key]).includes(id));
+    const forgeOld = settings => {
+        const copy = JSON.parse(JSON.stringify(settings));
+        const holder = copy[namespace];
+        const tracksOf = holder[tracksKey];
+        (Array.isArray(tracksOf) ? tracksOf : tracksOf.value ?? []).forEach(track => { track.vector = [9, 9, 9, 9]; });
+        for (const key of Object.keys(holder)) if (key.includes('embeddingModel')) delete holder[key];
+        return copy;
+    };
+
+    const second = buildEngine();
+    Object.assign(second.settingsContext.extensionSettings, forgeOld(stored));
+    await second.module.load();
+    assert.deepEqual(second.module.tracks.peek()[0].vector, vec('fight'), 'recomputed from the description with the current model');
+
+    // Метка модели записана: повторная загрузка ничего не пересчитывает.
+    const third = buildEngine();
+    Object.assign(third.settingsContext.extensionSettings, JSON.parse(JSON.stringify(second.settingsContext.extensionSettings)));
+    third.module.tracks.set([]);
+    await third.module.load();
+    const stamped = JSON.stringify(third.settingsContext.extensionSettings);
+    assert.ok(stamped.includes(EMBEDDING_MODEL_ID), 'the current model id is remembered');
+    assert.deepEqual(third.module.tracks.peek()[0].vector, vec('fight'));
 });

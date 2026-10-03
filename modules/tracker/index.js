@@ -1,3 +1,16 @@
+/*@module
+id: module.tracker
+title: Tracker
+description: Keeps named values up to date by asking a model, and exposes them as macros.
+version: 0.2.1
+engine: ^0.2
+factory: createTrackerModule
+rights: tracking.trackers, tracking.configure, tracking.fields, tracking.poll, tracking.reset,
+model.workers.get, model.presets.get, model.presets.set, storage.settings.get, storage.settings.set, ui.notify,
+# «Обновиться до ответа» регистрируется этапом пайплайна
+# `generation.prepare` — значит Модулю нужно право трогать его состав.
+pipeline.stages, pipeline.stages.add, pipeline.stages.remove
+*/
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';

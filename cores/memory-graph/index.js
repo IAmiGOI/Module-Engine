@@ -1,5 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
-import { cosineSimilarity } from '../../libraries/core/embedding.js';
+import { cosineSimilarity, EMBEDDING_MODEL_ID } from '../../libraries/core/embedding.js';
 import { buildThematicSkeletonPrompt, buildThematicSkeletonPartPrompt, buildThematicSkeletonReducePrompt, normalizeThematicRegions } from './bootstrap-thematic.js';
 import { createCoreOps } from './structured/core-ops.js';
 import { createTimelineOps } from './structured/timeline-ops.js';
@@ -75,6 +75,7 @@ const STAGING_KEY = 'staging';
 const MERGE_QUEUE_KEY = 'mergeQueue';
 const RECONSOLIDATION_QUEUE_KEY = 'reconsolidationQueue';
 const STATS_KEY = 'distanceStats';
+const EMBEDDING_MODEL_KEY = 'embeddingModel';   // какой моделью посчитаны векторы нод этого чата (ROADMAP 5.147)
 const STICKY_KEY = 'stickyRetrieval';
 const NOVELTY_STATS_KEY = 'noveltyStats';
 const CLOCK_KEY = 'clock'; // MEMORY_GRAPH_FIX_PLAN.md, Этап 2 (ROADMAP 5.107б) — { value, version: 1 }; см. doc-comment у `turnCounter`.
@@ -294,6 +295,32 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             lastExtractionClock = 0;
             needsClockMigration = Object.keys(nodes).length > 0;
         }
+        await migrateEmbeddingsIfNeeded();
+    }
+
+    /**
+     * Векторы нод посчитаны конкретной моделью; векторы разных моделей несравнимы, поэтому после смены модели (5.147: мультиязычная → английская e5) граф пересчитывается:
+     * у каждой ноды заново `embedding` из `метка: содержание`, а накопленная статистика расстояний (она калибровалась под прежнюю модель) сбрасывается. Регионы хранят только id нод-центров,
+     * их пересчитывать не надо. Модель недоступна — ничего не трогаем и повторим при следующем открытии чата. Пустой граф только получает метку.
+     */
+    async function migrateEmbeddingsIfNeeded() {
+        const stored = await call('storage.chatMemory.get', { namespace: PERSISTENCE_NAMESPACE, key: EMBEDDING_MODEL_KEY, fallback: null });
+        if (stored.ok && stored.value === EMBEDDING_MODEL_ID) return;
+        const withText = Object.values(nodes).filter(node => node && (node.label || node.content));
+        if (withText.length) {
+            const fresh = new Map();
+            for (const node of withText) {
+                const result = await callService('embedding.compute', { text: `${node.label ?? ''}: ${node.content ?? ''}`, kind: 'passage' });
+                if (!result.ok || !Array.isArray(result.value)) return;   // модель недоступна: не оставляем граф наполовину пересчитанным
+                fresh.set(node.id ?? node, result.value);
+            }
+            for (const node of withText) node.embedding = fresh.get(node.id ?? node);
+            distanceStats = null; noveltyStats = null;
+            await persistNodes();
+            await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: STATS_KEY, value: null });
+            await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: NOVELTY_STATS_KEY, value: null });
+        }
+        await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: EMBEDDING_MODEL_KEY, value: EMBEDDING_MODEL_ID });
     }
 
     async function persistNodes() { await call('storage.chatMemory.set', { namespace: PERSISTENCE_NAMESPACE, key: NODES_KEY, value: nodes }); }

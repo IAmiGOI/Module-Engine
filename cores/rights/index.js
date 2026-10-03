@@ -15,7 +15,27 @@ const TIERS = Object.freeze(['official', 'community', 'scanned-safe', 'scanned-u
  * about a caller's own outgoing requests.
  */
 export function createRightsCore() {
-    const registry = new Map(); // callerId -> { tier, allowedContracts: Set|null, deniedContracts: Set, quarantined }
+    const registry = new Map(); // callerId -> { tier, allowedContracts: Set|null, deniedContracts: Set, quarantined, quarantineOnViolation }
+    const violationListeners = new Set();
+
+    /**
+     * Нарушение — Модуль попросил то, что ему не положено (ARCHITECTURE.md: «Модуль отключается насовсем»). Карантин применяется
+     * ТОЛЬКО тем, у кого при регистрации стоит `quarantineOnViolation` (внешние Модули): встроенные иногда нащупывают чужие
+     * контракты и получают молчаливый отказ — это прежнее поведение, карать его нельзя. Слушатели (Раннер) сохраняют карантин на диск.
+     */
+    function reportViolation(callerId, contract) {
+        const entry = registry.get(callerId);
+        if (!entry?.quarantineOnViolation || entry.quarantined) return;
+        entry.quarantined = true;
+        for (const listener of violationListeners) {
+            try { listener({ callerId, contract }); } catch { /* слушатель не должен ломать проверку прав */ }
+        }
+    }
+
+    function onViolation(listener) {
+        violationListeners.add(listener);
+        return () => violationListeners.delete(listener);
+    }
 
     /**
      * Registers a caller at a trust tier — `allowedContracts` (community
@@ -33,7 +53,7 @@ export function createRightsCore() {
      * the dedicated network Gate (libraries/shared/network-gate.js), never
      * the regular one.
      */
-    function register(callerId, { tier, allowedContracts, deniedContracts, networkAccess = false } = {}) {
+    function register(callerId, { tier, allowedContracts, deniedContracts, networkAccess = false, quarantineOnViolation = false } = {}) {
         if (!TIERS.includes(tier)) throw new Error(`Unknown trust tier "${tier}" for "${callerId}".`);
         const existing = registry.get(callerId);
         registry.set(callerId, {
@@ -42,6 +62,7 @@ export function createRightsCore() {
             deniedContracts: new Set(deniedContracts ?? []),
             networkAccess: Boolean(networkAccess),
             quarantined: Boolean(existing?.quarantined),
+            quarantineOnViolation: Boolean(quarantineOnViolation),
         });
     }
 
@@ -56,10 +77,20 @@ export function createRightsCore() {
         else registry.set(callerId, { tier: 'scanned-unsafe', allowedContracts: null, deniedContracts: new Set(), networkAccess: false, quarantined: true });
     }
 
+    /**
+     * Снять карантин — ЕДИНСТВЕННЫЙ путь назад, и он не для Модулей: ссылка на Ядро прав есть только у сборщика движка, который
+     * зовёт это по явному решению пользователя. Повторная регистрация карантин НЕ снимает (см. register()).
+     */
+    function unquarantine(callerId) {
+        const entry = registry.get(callerId);
+        if (entry) entry.quarantined = false;
+    }
+
     /** Network access — a separate grant from checkAccess(), see register()'s own doc comment. Quarantine denies it too, same as everything else. */
     function hasNetworkAccess(callerId) {
         const entry = registry.get(callerId);
         if (!entry || entry.quarantined) return false;
+        if (!entry.networkAccess) reportViolation(callerId, 'http.request');
         return entry.networkAccess;
     }
 
@@ -79,14 +110,16 @@ export function createRightsCore() {
         if (entry.quarantined) return { allowed: false, reason: `"${callerId}" is quarantined.` };
         if (entry.tier === 'official') return { allowed: true };
         if (entry.tier === 'community') {
-            return entry.allowedContracts?.has(contract)
-                ? { allowed: true }
-                : { allowed: false, reason: `"${callerId}" (community tier) has no declared right to "${contract}".` };
+            if (entry.allowedContracts?.has(contract)) return { allowed: true };
+            reportViolation(callerId, contract);
+            return { allowed: false, reason: `"${callerId}" (community tier) has no declared right to "${contract}".` };
         }
-        return entry.deniedContracts.has(contract)
-            ? { allowed: false, reason: `"${callerId}" is denied "${contract}" by scan result.` }
-            : { allowed: true };
+        if (entry.deniedContracts.has(contract)) {
+            reportViolation(callerId, contract);
+            return { allowed: false, reason: `"${callerId}" is denied "${contract}" by scan result.` };
+        }
+        return { allowed: true };
     }
 
-    return { register, isQuarantined, quarantine, checkAccess, hasNetworkAccess };
+    return { register, isQuarantined, quarantine, checkAccess, hasNetworkAccess, onViolation, unquarantine };
 }

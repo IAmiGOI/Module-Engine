@@ -1,3 +1,19 @@
+/*@module
+id: module.map
+title: Map
+description: A floating, full-screen map window with a settings drawer — opened from its own draggable button on screen, not from a tab.
+version: 0.2.1
+engine: ^0.2
+factory: createMapModule
+rights: storage.settings.get, storage.settings.set, ui.notify,
+map.settings.get, map.settings.update,
+map.rootImage.get, map.rootImage.set, map.rootImage.clear,
+image.put, image.get, image.delete,
+map.nodes.list, map.nodes.create, map.nodes.update, map.nodes.remove,
+map.edges.list, map.pathfind,
+map.position.get, map.position.set, map.position.move,
+map.movementLog.list, map.movementLog.clear
+*/
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed, effect } from '../../cores/ui/reactive.js';
 import { request } from '../../libraries/shared/request.js';
