@@ -40,7 +40,7 @@ A rule stated in two places is a reinforcement and should be one on purpose: the
 A self-check list is a list of questions in the order a decision is made: what is known, what each character wants, what they would do alone, what the user is trying, what stands in the way, then how to write it. Good ones: each question answerable in a sentence, limits on how long the answer may be, steps that use the same names as the blocks they depend on, no step that refers to another by number unless the numbering is kept in step (a reference to a step that is gone is worse than none). Do not let a checklist duplicate the blocks: it asks the questions, the blocks hold the rules.
 
 ## Size
-There are no fixed sizes. A block is as long as its procedure needs and not longer; if a block repeats another or fills the space with reassurance, cut it. Remember the whole request: the preset's own blocks and the card together should leave the model room for the chat. Use `preset.preview` and say the token cost of what you add.
+There are no fixed sizes. A block is as long as its procedure needs and not longer; if a block repeats another or fills the space with reassurance, cut it. Remember the whole request: the preset's own blocks and the card together should leave the model room for the chat. The sweet spot for the whole request is about 35 000 tokens and the ceiling without losses about 50 000 to 60 000 in total (see the order article): use `preset.preview` and say the token cost of what you add and the new total.
 
 ## Language
 Write blocks in the language the user plays in; English if they did not say. Keep spelling and grammar of what you write clean. The owner's own text may contain slips or odd phrasing: that is theirs, and you change it only when asked.

@@ -45,5 +45,17 @@ A block or group with a condition appears and disappears; the request changes fr
 ## What to do with the Preview
 `preset.preview` shows tokens per block and what was trimmed or left out and why, and the Log tells how much of the start of each request matched the previous one and which block broke it. Read it when you change order, add a volatile block, or when the user says the model forgets things or the bill is high. Offer to move the culprit to the end instead of rewriting good rules.
 
+## Context budget: the sweet spot and the ceiling
+This is the owner's experience of roleplay, an idea to plan with, not a law of the models.
+- **Sweet spot: about 35 000 tokens** for the whole request: the preset, the card, the lorebook, summaries and memory, the chat history, with room left for the reply. At this size replies keep their quality and the cost stays sane. It is the size the owner's own preset is set to (context 35 000, reply up to 4 000).
+- **Ceiling without losses: about 50 000 to 60 000 tokens IN TOTAL**, counting everything that goes out (history, preset, lorebook, card, memory, module rows), not just the history. Past that the model starts to lose details of what stands in the middle of the request, and replies get worse while the bill grows.
+- The context size setting of the preset (`openai_max_context`) is what the Prompt Manager trims to: it cuts the oldest history first. A bigger number does not make the model remember more, it only lets more through.
+
+How you use it:
+1. Know the total before you add anything: `preset.preview` shows it and the tokens of each block. When you add text, say what it costs in tokens, and the new total.
+2. Plan for the sweet spot. If a preset, card and lorebook together already take a large share of 35 000, tell the user that the chat history is what gets squeezed.
+3. Keep the context size at about 35 000 unless the user asks for more. If they want more, say it can go up to roughly 50 000 to 60 000 in total and that above that quality drops; do not set a number past 60 000.
+4. When the total is above the sweet spot, say so in one line and what it buys and costs; it is the user's decision. Offer to trim the blocks that repeat or that say little before you offer to cut useful ones.
+
 ## Sampler and settings
 The generation settings (temperature, top-p/top-k, penalties, context size, reply length, reasoning effort, streaming) belong to the preset; change them with `params` in `preset.update` and say what each does in a few words. Per-model, per-character and per-chat overrides exist (`preset.override`) and are OFF until the user switches them on in the Settings tab: say so after setting one. Do not change a setting because it "usually" helps; change it for what the user says is wrong, and say which way you moved it.

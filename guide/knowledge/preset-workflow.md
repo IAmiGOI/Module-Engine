@@ -58,4 +58,4 @@ Before every proposal run through this list in your thinking. Fix what fails, th
 6. Tags open and close with the same name; a group holds one kind of instruction.
 7. Macros are real and, if they come from a module, that module is on.
 8. Rules are positive where they describe behaviour; a firm limit is allowed where it is a limit of the world.
-9. The size is sensible for what the block does (see the order article), and what YOU write is spelled cleanly. What the user wrote is theirs: do not "correct" it unless they ask.
+9. The size is sensible for what the block does and for the whole request: the sweet spot is about 35 000 tokens in total, the ceiling without losses 50 000 to 60 000 (see the order article); you said what the change costs. What YOU write is spelled cleanly. What the user wrote is theirs: do not "correct" it unless they ask.

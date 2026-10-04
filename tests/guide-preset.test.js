@@ -362,3 +362,14 @@ test('the cache law is written into the articles and into the update action, wit
         assert.match(text, /the ONLY exception is the Summaries row/);
     });
 });
+
+test('the context budget idea is taught: a 35 000 token sweet spot, a 50 000 to 60 000 ceiling counted over the whole request, and it is in the update action', () => {
+    const order = readArticle('knowledge/preset-order-cache.md');
+    assert.match(order, /## Context budget: the sweet spot and the ceiling/);
+    assert.match(order, /Sweet spot: about 35 000 tokens/);
+    assert.match(order, /about 50 000 to 60 000 tokens IN TOTAL/);
+    assert.match(readArticle('knowledge/preset-blocks.md'), /about 35 000 tokens and the ceiling without losses about 50 000 to 60 000/);
+    assert.match(readArticle('knowledge/preset-workflow.md'), /the sweet spot is about 35 000 tokens in total/);
+    const actions = fs.readFileSync(new URL('../cores/guide/preset-actions.js', import.meta.url), 'utf8');
+    assert.equal((actions.match(/CONTEXT BUDGET: the sweet spot/g) ?? []).length, 2);
+});
