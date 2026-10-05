@@ -56,6 +56,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     const activeId = signal('');
     const preset = signal(null);
     const dirty = signal(false);
+    const saving = signal(false);
     const rev = signal(0);
     let pluginTypes = [];
     const enabled = signal(true);
@@ -89,7 +90,8 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
         pluginTypes = (await call('promptManager.conditionTypes')).value ?? [];
         await reloadList();
         if (!presets.peek().length && !settings.autoPrepared) { await call('promptManager.autoPrepare'); settings = (await call('promptManager.settings')).value ?? settings; await reloadList(); }
-        await loadPreset(settings.activePresetId ?? presets.peek()[0]?.id ?? '');
+        // Несохранённый черновик не выбрасывается молча при повторном открытии окна или событии «пресеты подготовлены»: правки в нём — работа человека.
+        if (!dirty.peek()) await loadPreset(settings.activePresetId ?? presets.peek()[0]?.id ?? '');
     }
 
     const actions = {
@@ -108,10 +110,20 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
         },
         async save() {
             const id = activeId.peek();
-            if (!id || !preset.peek()) return;
-            const record = (await call('promptManager.preset', { id })).value;
-            const saved = await call('promptManager.savePreset', { record: { ...record, preset: preset.peek() }, label: 'edit' });
-            if (saved.ok) { dirty.set(false); await reloadList(); flash('Saved.'); } else flash(`Save failed: ${saved.error.message}`);
+            if (!id || !preset.peek() || saving.peek()) return;
+            saving.set(true);
+            try {
+                const record = (await call('promptManager.preset', { id })).value;
+                const saved = await call('promptManager.savePreset', { record: { ...record, preset: preset.peek() }, label: 'edit' });
+                if (saved.ok) { dirty.set(false); await reloadList(); flash('Saved.'); } else flash(`Save failed: ${saved.error.message}`);
+            } finally { saving.set(false); }
+        },
+        /** Вернуть пресет к сохранённому состоянию (отбросить черновик). */
+        async discard() {
+            if (!dirty.peek()) return;
+            if (!globalThis.confirm?.('Throw away the unsaved changes of this preset?')) return;
+            await loadPreset(activeId.peek());
+            flash('Changes discarded.');
         },
         async remove() {
             const id = activeId.peek();
@@ -188,7 +200,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
             onToggle: value => entry.collapsed.set(value), onClose: () => closePopout(entry.id),
             drag: createDragHandlers(entry.position, { onDrop: dropped => entry.position.set(clampToViewport(dropped, { ...entry.size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })) }),
             onResize: next => entry.size.set(next),
-        }, h('div', { class: 'stme-panel stme-pm-body' }, tabs[entry.key].tree()));
+        }, h('div', { class: 'stme-panel stme-pm-window-body', 'on:keydown': saveShortcut }, h('div', { class: 'stme-pm-body' }, tabs[entry.key].tree()), saveBar()));
     }
 
     function selectTab(key) {
@@ -242,12 +254,26 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
     // Окно — только редактор; включение/выключение самой сборки живёт в настройках движка (владелец: «убери кнопку
     // включения PM из самого его окна и помести в настройки движка», `cores/ui/panel-cards/prompt-manager-card.js`).
     // Выключенный PM тут не прячет вкладки — правка пресета не зависит от того, использует ли его сборка прямо сейчас.
+    /**
+     * Панель сохранения — на ВСЕХ вкладках и в отдельных окнах вкладок: правка параметров на вкладке Settings (или правил, или CoT) раньше
+     * сохранялась только кнопкой на вкладке Order, и человек её не видел. Панель появляется, пока в пресете есть несохранённое, прилипает к
+     * нижней кромке окна и несёт крупную кнопку; Ctrl+S (⌘S) делает то же самое.
+     */
+    const saveBar = () => computed(() => (dirty() ? h('div', { class: 'stme-pm-savebar', role: 'status' },
+        h('span', { class: 'stme-pm-savebar-text' }, '● Unsaved changes in this preset'),
+        h('button', { type: 'button', class: 'menu_button stme-pm-savebar-discard', 'on:click': () => actions.discard() }, 'Discard'),
+        h('button', { type: 'button', class: 'menu_button stme-pm-savebar-save', disabled: computed(() => saving()), 'on:click': () => actions.save() }, computed(() => (saving() ? 'Saving…' : 'Save (Ctrl+S)'))),
+    ) : null));
+    const saveShortcut = event => {
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && String(event.key).toLowerCase() === 's') { event.preventDefault?.(); actions.save(); }
+    };
     const windowBody = [
         h('div', { class: 'stme-pm-tabs' }, TABS.map(tabButton),
             h('button', { type: 'button', class: 'menu_button stme-pm-tab stme-pm-popout', title: 'Open this tab in its own window', 'on:click': () => popOut(tab.peek()) }, '⧉'),
             computed(() => (status() ? h('span', { class: 'stme-pm-status' }, status()) : null))),
         computed(() => (enabled() ? null : h('p', { class: 'stme-pm-warning' }, 'Prompt Manager is off in engine settings — SillyTavern builds the request itself, edits here won\'t apply until it\'s turned back on.'))),
         h('div', { class: 'stme-pm-body' }, TABS.map(([key]) => h('div', { class: 'stme-pm-tabpage', style: computed(() => ({ display: tab() === key ? 'block' : 'none' })) }, tabViews[key]))),
+        saveBar(),
     ];
 
     function tree() {
@@ -261,7 +287,7 @@ export function createPromptManagerPanelCore(host, { mount, pickFile = pickFromD
             onClose: () => { visible.set(false); saveWindowState(); },
             drag: createDragHandlers(position, { onDrop: dropped => { position.set(clampToViewport(dropped, { ...size.peek(), viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 })); saveWindowState(); } }),
             onResize: next => { size.set(next); saveWindowState(); },
-        }, h('div', { class: 'stme-panel stme-pm-window-body' }, windowBody)) : null)));
+        }, h('div', { class: 'stme-panel stme-pm-window-body', 'on:keydown': saveShortcut }, windowBody)) : null)));
     }
 
     /** Открывается ИКОНКОЙ ST, перехваченной сервисом (`stPmUi.install`) — штатная панель ST под ней не появляется вообще. */

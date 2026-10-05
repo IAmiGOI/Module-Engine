@@ -423,3 +423,31 @@ test('uninstall() gives SillyTavern its own send back — removing the engine mu
     assert.notEqual(st.target.fetch, patched, 'fetch restored');
     assert.equal(st.target[INTERCEPTOR_NAME], undefined, 'interceptor global removed');
 });
+
+test('while the engine has a tool of its own, ST function calling is turned on before the request is built — the person never has to find the checkbox in ST\'s hidden panel', async () => {
+    const { engine, st, generationCore } = await buildEngine();
+    const settings = { function_calling: false };
+    const asked = [];
+    engine.buses.services.register('stPromptData.functionCalling', params => { asked.push(params); const previous = settings.function_calling; if (typeof params?.value === 'boolean') settings.function_calling = params.value; return { previous, current: settings.function_calling }; });
+    const announced = collect(engine, 'generation.functionCallingEnabled');
+
+    await st.generate();
+    assert.equal(asked.length, 0, 'no tool of the engine — ST\'s own setting is not touched');
+    assert.equal(settings.function_calling, false);
+
+    await generationCore.registerTool({ name: 'Notebook', description: 'x', parameters: { type: 'object', properties: {} }, action: () => 'ok' });
+    await st.generate();
+    assert.equal(settings.function_calling, true);
+    assert.deepEqual(announced.map(entry => entry.payload.tools), [['Notebook']]);
+
+    await st.generate();
+    assert.equal(announced.length, 1, 'announced once, when it actually changed');
+});
+
+test('a failing function-calling service does not stop the generation', async () => {
+    const { engine, st, generationCore } = await buildEngine();
+    engine.buses.services.register('stPromptData.functionCalling', () => { throw new Error('ST is not ready'); });
+    await generationCore.registerTool({ name: 'Notebook', description: 'x', parameters: { type: 'object', properties: {} }, action: () => 'ok' });
+    const result = await st.generate();
+    assert.equal(result.aborted, false);
+});

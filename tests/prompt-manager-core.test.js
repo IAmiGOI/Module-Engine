@@ -315,6 +315,20 @@ test('streaming from the preset is set in ST for the generation and given back a
     assert.equal(context.chatCompletionSettings.stream_openai, false, 'the user setting is restored');
 });
 
+test('"Function calling" in the preset turns ST function calling on for the request; an off flag never turns the ST setting off', async () => {
+    const { pm, send, context, call } = await build();
+    await pm.autoPrepare();
+    const record = (await call('promptManager.preset', { id: (await call('promptManager.presets', {})).value[0].id })).value;
+    const withFlag = value => call('promptManager.savePreset', { record: { ...record, preset: { ...record.preset, params: { ...record.preset.params, function_calling: value } } } });
+    context.chatCompletionSettings.function_calling = false;
+    await withFlag(true);
+    await send();
+    assert.equal(context.chatCompletionSettings.function_calling, true, 'the preset asks for tools');
+    await withFlag(false);
+    await send();
+    assert.equal(context.chatCompletionSettings.function_calling, true, 'an off flag in the preset leaves ST\'s own choice alone');
+});
+
 test('a plugin registered while running takes part in the very next request and a broken one is switched off without breaking it', async () => {
     const { pm, send, call } = await build();
     await pm.autoPrepare();
@@ -437,4 +451,27 @@ test('a card test never calls the classifier (its Jev conditions count as true),
     await plain.pm.autoPrepare();
     await plain.send();
     assert.equal(asked.length, 0);
+});
+
+test('the function-calling service reads and turns on the ST setting, keeps ST\'s own checkbox in step (ST re-reads every field from the page on any settings change) and saves', async () => {
+    const { createEngine } = await import('../libraries/shared/engine.js');
+    const { registerStPromptDataService } = await import('../services/st-prompt-data.js');
+    const engine = createEngine();
+    let saved = 0;
+    const box = { checked: false };
+    const context = { chatCompletionSettings: { function_calling: false }, saveSettingsDebounced: () => { saved += 1; } };
+    const originalDocument = globalThis.document;
+    globalThis.document = { getElementById: id => (id === 'openai_function_calling' ? box : null) };
+    try {
+        registerStPromptDataService(engine.buses.services, { getContext: () => context });
+        const ask = params => new Promise(resolve => engine.buses.services.subscribe('stPromptData.functionCalling', { params }, resolve));
+        assert.deepEqual((await ask({})).value, { previous: false, current: false }, 'a plain read changes nothing');
+        assert.equal(saved, 0);
+        assert.deepEqual((await ask({ value: true })).value, { previous: false, current: true });
+        assert.equal(context.chatCompletionSettings.function_calling, true);
+        assert.equal(box.checked, true, 'the checkbox of ST\'s panel follows');
+        assert.equal(saved, 1);
+        await ask({ value: true });
+        assert.equal(saved, 1, 'nothing is saved when nothing changed');
+    } finally { globalThis.document = originalDocument; }
 });

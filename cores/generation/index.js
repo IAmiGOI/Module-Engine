@@ -252,7 +252,20 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
      * перехвата), так что этап вправе её править: промпт изменится, сохранённый
      * чат — нет.
      */
+    /**
+     * Инструменты движка доходят до модели, только если в ST включён вызов функций (`oai_settings.function_calling`), а флажок для этого
+     * лежит в родной панели ST, закрытой нашим окном Prompt Manager. Поэтому, пока у движка есть хоть один свой инструмент, настройка
+     * включается здесь, до сборки запроса (ST собирает список инструментов позже), и человеку ничего нажимать не нужно. Выключить
+     * инструменты можно отключением самого Модуля. Отказ сервиса не мешает генерации.
+     */
+    async function ensureFunctionCalling() {
+        if (!registeredTools.size) return;
+        const answer = await request(host.services, 'stPromptData.functionCalling', { params: { value: true } }).catch(() => null);
+        if (answer?.ok && answer.value && answer.value.previous === false && answer.value.current === true) publishEvent('generation.functionCallingEnabled', { tools: [...registeredTools] });
+    }
+
     async function onIntercept({ chat, contextSize, abort, type }) {
+        await ensureFunctionCalling();
         // Обычно прогон уже открыт (`GENERATION_STARTED` приходит раньше), но
         // подключиться к ST мы могли и посреди генерации — тогда открываем сами,
         // иначе вкладам некуда было бы привязаться.

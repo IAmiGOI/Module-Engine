@@ -1,9 +1,12 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Button, Row, Field, NumberInput, Toggle, Slider, EmptyState, Badge } from '../../../libraries/shared/widgets.js';
+import { Button, Row, Field, NumberInput, TextArea, Toggle, Slider, EmptyState, Badge } from '../../../libraries/shared/widgets.js';
 import { Select } from './dropdown.js';
 
 const REASONING = [{ value: 'auto', label: 'auto' }, { value: 'min', label: 'min' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }, { value: 'max', label: 'max' }];
+const VERBOSITY = [{ value: 'auto', label: 'auto (not sent)' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }];
+/** Как подписывать реплики именем (`names_behavior` ST): значения — как в ST, подписи — по тому, что делает сборка PM (`pm-history.js`). */
+const NAMES_BEHAVIOR = [{ value: -1, label: 'none' }, { value: 0, label: 'default (no names)' }, { value: 1, label: 'name: prefix in the text' }, { value: 2, label: 'name field of the message' }];
 
 /** Числовые параметры генерации пресета: имя ST, подпись, границы. */
 const NUMBERS = [
@@ -23,24 +26,28 @@ export function createSettingsTab({ state, actions, call }) {
         versions.set(answer?.ok ? answer.value : []);
     }
 
-    const paramSignal = key => {
-        const value = signal(state.preset.peek()?.params?.[key] ?? '');
+    // Каждое поле берёт значение из пресета В МОМЕНТ построения: форма строится заново при каждой смене/загрузке пресета (`computed` ниже),
+    // иначе поле показывало бы значение, созданное при сборке окна, когда пресета ещё не было, — а не то, что в пресете записано.
+    const bound = (key, { fallback = '', read = value => value, write = value => value } = {}) => {
+        const stored = state.preset.peek()?.params?.[key];
+        const value = signal(stored === undefined || stored === null ? fallback : read(stored));
         const set = value.set;
-        value.set = next => { set(next); actions.patch(preset => { preset.params[key] = next === '' ? undefined : Number(next); }); };
+        value.set = next => {
+            set(next);
+            actions.patch(preset => {
+                preset.params ??= {};
+                const out = write(next);
+                if (out === undefined || out === '' || (typeof out === 'number' && Number.isNaN(out))) delete preset.params[key]; else preset.params[key] = out;
+            });
+        };
         return value;
     };
-    const flagSignal = key => {
-        const value = signal(Boolean(state.preset.peek()?.params?.[key]));
-        const set = value.set;
-        value.set = next => { set(next); actions.patch(preset => { preset.params[key] = next; }); };
-        return value;
-    };
-    const reasoning = (() => {
-        const value = signal(state.preset.peek()?.params?.reasoning_effort ?? 'auto');
-        const set = value.set;
-        value.set = next => { set(next); actions.patch(preset => { preset.params.reasoning_effort = next; }); };
-        return value;
-    })();
+    const paramSignal = key => bound(key, { write: next => (next === '' || next === null ? undefined : Number(next)) });
+    const flagSignal = key => bound(key, { fallback: false, read: Boolean, write: Boolean });
+    const reasoningSignal = () => bound('reasoning_effort', { fallback: 'auto' });   // 'auto' пишется буквально: это явное «не слать» поверх родной настройки ST
+    const verbositySignal = () => bound('verbosity', { fallback: 'auto', write: next => (next === 'auto' ? undefined : next) });
+    const namesSignal = () => bound('names_behavior', { fallback: 0, write: Number });
+    const textSignal = key => bound(key, { fallback: '', write: next => String(next) });
     // Переопределения: слой (модель / персонаж / чат) → пять самых нужных параметров. По умолчанию выключено.
     const OVERRIDE_KEYS = [['temperature', 'Temperature'], ['top_p', 'Top P'], ['top_k', 'Top K'], ['min_p', 'Min P'], ['openai_max_tokens', 'Max response']];
     const scope = signal('character');
@@ -80,9 +87,13 @@ export function createSettingsTab({ state, actions, call }) {
             h('h4', {}, 'Generation parameters of this preset'),
             computed(() => (state.preset() ? h('div', {},
                 h('div', { class: 'stme-pm-grid' }, NUMBERS.map(([key, label, min, max, step]) => Field(label, NumberInput(paramSignal(key), { min, max, step })))),
-                Field('Reasoning effort', Select(reasoning, REASONING)),
+                Field('Candidates (n)', NumberInput(paramSignal('n'), { min: 1, max: 16, step: 1 })),
+                Field('Reasoning effort', Select(reasoningSignal(), REASONING)),
+                Field('Verbosity', Select(verbositySignal(), VERBOSITY)),
+                Field('Speaker names in the history', Select(namesSignal(), NAMES_BEHAVIOR)),
+                Field('Assistant prefill (added as the last assistant message)', TextArea(textSignal('assistant_prefill'), { rows: 2, placeholder: 'empty = nothing is added' })),
                 Toggle('Streaming', flagSignal('stream_openai')), Toggle('Show reasoning', flagSignal('show_thoughts')),
-                Toggle('Function calling', flagSignal('function_calling')), Toggle('Squash system messages', flagSignal('squash_system_messages')),
+                Toggle('Function calling (also turned on automatically while an engine tool, e.g. Notebook, is enabled)', flagSignal('function_calling')), Toggle('Squash system messages', flagSignal('squash_system_messages')),
                 Toggle('Unlocked context', flagSignal('max_context_unlocked')),
             ) : EmptyState('Select a preset first.'))),
             h('h4', {}, 'Jev conditions'),

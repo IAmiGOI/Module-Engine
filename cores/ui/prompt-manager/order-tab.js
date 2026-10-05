@@ -137,9 +137,7 @@ export function createOrderTab({ state, actions }) {
         return h('div', { class: 'stme-pm-order' },
             h('div', { class: 'stme-pm-toolbar' },
                 Select(state.activeId, state.presetOptions, { onChange: id => actions.selectPreset(id) }),
-                computed(() => (state.dirty() ? Badge('unsaved', { tone: 'error' }) : null)),
-                Button('Save', () => actions.save(), { disabled: false }),
-            ),
+            ),   // сохранение — общая панель внизу окна (cores/ui/prompt-manager-panel.js), видна на всех вкладках
             h('div', { class: 'stme-pm-toolbar' },
                 Button('+ Prompt', addPrompt), Button('+ Group', addGroup), Button('+ Divider', addDivider), Button('+ Note', addNote),
                 Button('Import from ST file', () => actions.pickFile('st')), Button('Export for ST', () => actions.exportSt()),

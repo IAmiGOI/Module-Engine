@@ -290,6 +290,20 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         if (answer && answer.previous !== params.stream_openai) streamRestore = answer.previous;
     }
 
+    /**
+     * «Function calling» пресета: включено в пресете — значит, в ST включается вызов функций (без него инструменты не уходят в запрос).
+     * Выключенное значение настройку ST НЕ выключает: человек мог включить её в ST сам, а у импортированного пресета флаг ложный просто
+     * потому, что был таким в момент импорта. Инструменты движка включают её сами (cores/generation).
+     */
+    async function applyFunctionCalling() {
+        if (!settings.enabled || !settings.applyParams || !settings.activePresetId) return;
+        const info = await service('stPromptData.read', {});
+        if (!info || unsupported(info)) return;
+        const record = await store.get(settings.activePresetId);
+        const { params } = resolveParams(record?.preset?.params, settings.overrides, { model: info.model, char: info.char, chatId: info.chatId });
+        if (params.function_calling === true) await service('stPromptData.functionCalling', { value: true });
+    }
+
     async function restoreStreaming() {
         if (streamRestore === null) return;
         const value = streamRestore;
@@ -312,6 +326,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         host.own.register(CAPTURE_CONTRACT, async params => {
             captured = { chat: params?.chat ?? [], type: params?.type ?? 'normal', at: now() };
             await applyStreaming().catch(() => {});
+            await applyFunctionCalling().catch(() => {});
             return true;
         });
         for (const event of ['generation.completed', 'generation.aborted']) host.events.subscribe(event, () => { restoreStreaming().catch(() => {}); });

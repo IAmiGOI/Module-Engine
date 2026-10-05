@@ -115,3 +115,11 @@
    движка (владелец ограничил переделку одним окном). */
 .stme-pm-window-body input.stme-number::-webkit-outer-spin-button, .stme-pm-window-body input.stme-number::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .stme-pm-window-body input.stme-number { -moz-appearance: textfield; appearance: textfield; }
+
+/* Панель сохранения: прилипает к нижней кромке окна на любой вкладке, пока в пресете есть несохранённое. */
+.stme-pm-savebar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-top: 1px solid var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, var(--stme-surface)); }
+.stme-pm-savebar-text { flex: 1 1 160px; font-size: 13px; font-weight: 600; color: var(--stme-accent); }
+.stme-panel .menu_button.stme-pm-savebar-save { padding: 8px 22px; min-height: 36px; font-size: 14px; font-weight: 700; border-width: 2px; border-color: var(--stme-accent); background: var(--stme-accent); color: var(--stme-accent-contrast, #fff); }
+.stme-panel .menu_button.stme-pm-savebar-save:disabled { opacity: .6; }
+.stme-panel .menu_button.stme-pm-savebar-discard { padding: 6px 12px; min-height: 36px; font-size: 13px; opacity: .85; }
+@media (max-width: 520px) { .stme-pm-savebar-save, .stme-pm-savebar-discard { flex: 1 1 40%; } }

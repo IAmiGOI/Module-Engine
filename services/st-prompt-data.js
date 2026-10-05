@@ -61,6 +61,26 @@ export function registerStPromptDataService(bus, { getContext, fetchImpl = (...a
         return { previous, current: Boolean(settings.stream_openai) };
     }
 
-    const unregisters = [bus.register('stPromptData.streaming', params => streaming(params)), bus.register('stPromptData.chat', () => chat()), bus.register('stPromptData.read', () => read()), bus.register('stPromptData.presets', () => presets())];
+    /**
+     * Вызов функций ST (`function_calling`): читает и включает. ST отправляет инструменты в запрос, только когда эта настройка включена, а
+     * её флажок живёт ТОЛЬКО в родной панели ST «AI Response Configuration» — той, что закрыта окном PM. Поэтому движок включает её сам, когда
+     * у него есть свои инструменты (Notebook и др.), а не ждёт, что человек найдёт флажок, до которого ему больше не добраться.
+     * Флажок в панели ST обновляется тоже: ST перечитывает ВСЕ свои поля из разметки при любом изменении настроек, и без этого значение
+     * откатилось бы к старому состоянию флажка.
+     */
+    function functionCalling(params) {
+        const context = getContext();
+        const settings = context?.chatCompletionSettings;
+        if (!settings) return null;
+        const previous = Boolean(settings.function_calling);
+        if (params && typeof params.value === 'boolean' && params.value !== previous) {
+            settings.function_calling = params.value;
+            try { const box = globalThis.document?.getElementById?.('openai_function_calling'); if (box) box.checked = params.value; } catch { /* панели может не быть */ }
+            context.saveSettingsDebounced?.();
+        }
+        return { previous, current: Boolean(settings.function_calling) };
+    }
+
+    const unregisters = [bus.register('stPromptData.functionCalling', params => functionCalling(params)), bus.register('stPromptData.streaming', params => streaming(params)), bus.register('stPromptData.chat', () => chat()), bus.register('stPromptData.read', () => read()), bus.register('stPromptData.presets', () => presets())];
     return { read, presets, unregister: () => { for (const unregister of unregisters) unregister(); } };
 }

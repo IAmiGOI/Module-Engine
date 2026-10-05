@@ -109,3 +109,116 @@ test('a size saved on a wide screen is clamped to a narrow one on reopen — a p
         globalThis.innerWidth = previousWidth;
     }
 });
+
+// ── Сохранение параметров пресета ────────────────────────────────────────────────────────────────────────────────
+
+const walkAll = (node, match, out = []) => {
+    const value = resolve(node);
+    if (Array.isArray(value)) { value.forEach(item => walkAll(item, match, out)); return out; }
+    if (!value || typeof value !== 'object' || !value.tag) return out;
+    if (match(value)) out.push(value);
+    (value.children ?? []).forEach(child => walkAll(child, match, out));
+    return out;
+};
+const hasClass = (node, name) => String(resolve(node.props?.class) ?? '').split(/\s+/).includes(name);
+const textOfNode = node => { const value = resolve(node); if (Array.isArray(value)) return value.map(textOfNode).join(''); if (value == null || value === false) return ''; if (typeof value !== 'object') return String(value); return (value.children ?? []).map(textOfNode).join(''); };
+/** Поле окна по подписи (`Field`): первый `<label class="stme-field">`, чья подпись начинается с текста. */
+const fieldByLabel = (root, label) => walkAll(root, node => node.tag === 'label' && hasClass(node, 'stme-field') && textOfNode(node.children[0]).startsWith(label))[0];
+const dropdownLabel = field => textOfNode(walkAll(field, node => hasClass(node, 'stme-pm-dropdown-label'))[0]);
+const chooseOption = (field, optionText) => walkAll(field, node => hasClass(node, 'stme-pm-dropdown-option') && textOfNode(node) === optionText)[0]?.props['on:click']?.();
+const typeInto = (field, value) => { const input = walkAll(field, node => node.tag === 'input' || node.tag === 'textarea')[0]; input.props['on:input']({ target: { value: String(value) } }); };
+const tick = (ms = 30) => new Promise(done => setTimeout(done, ms));
+
+const presetWith = params => ({ formatVersion: 1, name: 'P', params, templates: {}, blocks: [], tree: [], orders: [], extensions: {}, opaque: {}, rules: [], cot: null });
+
+async function buildEditor(stored) {
+    const engine = createEngine();
+    const context = { extensionSettings: {}, saveSettingsDebounced: () => {} };
+    registerExtensionSettingsService(engine.buses.services, { getContext: () => context });
+    createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
+    const host = engine.registerCaller('core.ui.promptManager', 'cores', { tier: 'official' });
+    const saves = [];
+    host.own.register('promptManager.settings', () => ({ enabled: true, activePresetId: 'p1' }));
+    host.own.register('promptManager.presets', () => Object.values(stored).map(item => ({ id: item.id, name: item.name })));
+    host.own.register('promptManager.preset', params => stored[params?.id] ?? null);
+    host.own.register('promptManager.conditionTypes', () => []);
+    host.own.register('promptManager.autoPrepare', () => []);
+    host.own.register('promptManager.configure', ({ patch }) => ({ enabled: true, ...patch }));
+    host.own.register('promptManager.savePreset', ({ record }) => { saves.push(structuredClone(record.preset)); stored[record.id] = structuredClone(record); return record; });
+    const panel = createPromptManagerPanelCore(host, { mount: node => ({ settled: async () => {}, getRoot: () => node, unmount() {} }) });
+    await panel.open();
+    panel.show();
+    await tick();
+    return { panel, saves, stored };
+}
+const stored2 = () => ({ p1: { id: 'p1', name: 'One', preset: presetWith({ temperature: 0.7, reasoning_effort: 'high' }) }, p2: { id: 'p2', name: 'Two', preset: presetWith({ reasoning_effort: 'low' }) } });
+
+test('the Reasoning effort list shows what the preset stores, and follows the preset when another one is opened (it used to stay on "auto")', async () => {
+    const { panel } = await buildEditor(stored2());
+    assert.equal(dropdownLabel(fieldByLabel(panel.tree(), 'Reasoning effort')), 'high');
+    await panel.actions.selectPreset('p2');
+    await tick();
+    assert.equal(dropdownLabel(fieldByLabel(panel.tree(), 'Reasoning effort')), 'low');
+});
+
+test('a changed reasoning effort is written into the preset when saved, and is still there after the preset is loaded again', async () => {
+    const { panel, saves } = await buildEditor(stored2());
+    chooseOption(fieldByLabel(panel.tree(), 'Reasoning effort'), 'medium');
+    await panel.actions.save();
+    assert.equal(saves.at(-1).params.reasoning_effort, 'medium');
+    await panel.refresh();
+    await tick();
+    assert.equal(dropdownLabel(fieldByLabel(panel.tree(), 'Reasoning effort')), 'medium');
+});
+
+test('the parameters Prompt Manager really uses but had no field for can now be edited and saved: candidates, verbosity, names, prefill', async () => {
+    const { panel, saves } = await buildEditor(stored2());
+    typeInto(fieldByLabel(panel.tree(), 'Candidates'), 3);
+    chooseOption(fieldByLabel(panel.tree(), 'Verbosity'), 'high');
+    chooseOption(fieldByLabel(panel.tree(), 'Speaker names'), 'name field of the message');
+    typeInto(fieldByLabel(panel.tree(), 'Assistant prefill'), 'Understood. ');
+    await panel.actions.save();
+    const params = saves.at(-1).params;
+    assert.deepEqual([params.n, params.verbosity, params.names_behavior, params.assistant_prefill], [3, 'high', 2, 'Understood. ']);
+    // "auto" verbosity means "do not send": the key leaves the preset instead of being sent to the provider as "auto".
+    chooseOption(fieldByLabel(panel.tree(), 'Verbosity'), 'auto (not sent)');
+    typeInto(fieldByLabel(panel.tree(), 'Assistant prefill'), '');
+    await panel.actions.save();
+    assert.equal('verbosity' in saves.at(-1).params, false);
+    assert.equal('assistant_prefill' in saves.at(-1).params, false);
+});
+
+test('the save bar appears on any tab as soon as something is unsaved, saves with one click, and goes away', async () => {
+    const { panel, saves } = await buildEditor(stored2());
+    const bar = () => walkAll(panel.tree(), node => hasClass(node, 'stme-pm-savebar'))[0];
+    assert.equal(bar(), undefined, 'nothing to save yet');
+    panel.selectTab('settings');
+    chooseOption(fieldByLabel(panel.tree(), 'Reasoning effort'), 'min');
+    assert.ok(bar(), 'a change made on the Settings tab shows the bar (it used to need the small button on the Order tab)');
+    const save = walkAll(bar(), node => hasClass(node, 'stme-pm-savebar-save'))[0];
+    await save.props['on:click']();
+    assert.equal(saves.at(-1).params.reasoning_effort, 'min');
+    assert.equal(bar(), undefined, 'saved: the bar is gone');
+});
+
+test('opening the window again does not silently throw away unsaved changes', async () => {
+    const { panel, saves } = await buildEditor(stored2());
+    chooseOption(fieldByLabel(panel.tree(), 'Reasoning effort'), 'max');
+    panel.hide();
+    panel.show();
+    await tick();
+    assert.equal(dropdownLabel(fieldByLabel(panel.tree(), 'Reasoning effort')), 'max', 'the draft is still there');
+    await panel.actions.save();
+    assert.equal(saves.at(-1).params.reasoning_effort, 'max');
+});
+
+test('Discard returns the preset to what is saved, after a confirmation', async () => {
+    const { panel } = await buildEditor(stored2());
+    chooseOption(fieldByLabel(panel.tree(), 'Reasoning effort'), 'max');
+    const original = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try { await panel.actions.discard(); } finally { globalThis.confirm = original; }
+    await tick();
+    assert.equal(dropdownLabel(fieldByLabel(panel.tree(), 'Reasoning effort')), 'high');
+    assert.equal(walkAll(panel.tree(), node => hasClass(node, 'stme-pm-savebar')).length, 0);
+});
