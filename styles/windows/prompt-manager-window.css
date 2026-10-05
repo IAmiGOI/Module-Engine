@@ -123,3 +123,10 @@
 .stme-panel .menu_button.stme-pm-savebar-save:disabled { opacity: .6; }
 .stme-panel .menu_button.stme-pm-savebar-discard { padding: 6px 12px; min-height: 36px; font-size: 13px; opacity: .85; }
 @media (max-width: 520px) { .stme-pm-savebar-save, .stme-pm-savebar-discard { flex: 1 1 40%; } }
+
+/* Прокручивается ТОЛЬКО область вкладки (`.stme-pm-body`), а панель сохранения стоит на нижней кромке окна. Невидимые чекбоксы переключателей —
+   `position: absolute`, и без своей рамки отсчёта у прокручиваемой области они считали ближайшим «позиционированным» предком внешний контейнер окна,
+   выпадали за пределы области и растягивали ВНЕШНЮЮ прокрутку (до 1290px при окне в 640): стоило прокрутить чуть ниже, окно уезжало вверх и под
+   панелью сохранения оставалась пустота. */
+.stme-pm-body { position: relative; }
+.stme-pm-window > .stme-floating-panel-body { overflow: hidden; }
