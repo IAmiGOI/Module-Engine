@@ -13,6 +13,8 @@ import { createPipelineCore } from '../cores/pipeline/index.js';
 import {
     createBasicSummaryCore, DEFAULT_SETTINGS, clampSummarySettings,
     groupIntoUnits, shouldFold, sortByStart, activeSummaries,
+    inWorldTime, nearestMark, resolvePeriod, formatSummaryHeader,
+    parseStructuredFold, parsePinnedLines, mergePinned, collectCast, tailOf, buildStructuredLevel1Prompt, emptyLedger,
 } from '../cores/summary/index.js';
 
 // --- Unit level: pure logic, no Ядро/Сервис involved -----------------------
@@ -107,10 +109,12 @@ function buildEngine({ chat = [], fetchReply = 'A concise summary of the excerpt
 
     const caller = engine.registerCaller('module.probe', 'modules', {
         tier: 'community',
-        allowedContracts: ['summary.settings', 'summary.configure', 'summary.list', 'summary.update', 'summary.delete', 'summary.check'],
+        allowedContracts: ['summary.settings', 'summary.configure', 'summary.list', 'summary.update', 'summary.delete', 'summary.check', 'summary.ledger', 'summary.ledger.set'],
     });
+    // Как RP Time: пишет отметки игрового времени к сообщениям через Ядро истории чата.
+    const timeModule = engine.registerCaller('module.time', 'modules', { tier: 'community', allowedContracts: ['chatHistory.annotate'] });
 
-    return { engine, context, pipelineCore, summaryCore, caller };
+    return { engine, context, pipelineCore, summaryCore, caller, timeModule };
 }
 
 function call(caller, contract, params) {
@@ -411,7 +415,7 @@ test('the beforeSend stage inserts every ACTIVE summary as its OWN chat message,
 
     assert.equal(outgoing.length, 3);
     assert.equal(outgoing[0].is_system, true);
-    assert.match(outgoing[0].mes, /\[Summary of earlier messages #\d+–#\d+, covering .+ → .+\]\nS1$/, 'explicit Summary header with the replaced-messages period, then the text itself');
+    assert.match(outgoing[0].mes, /^\[Summary of earlier messages #\d+–#\d+\]\nS1$/, 'explicit Summary header with the replaced-messages range, then the text — and NO real send date when RP Time has no marks');
     assert.equal(outgoing[1].mes, 'line 3', 'the real tail must stay in place, right after the summary');
 });
 
@@ -550,3 +554,217 @@ test('st.chatChanged publishes summary.reloaded with the fresh active count — 
 // where none were expected) — confirming these tests really do pin the
 // `+ batchSize` behavior and are not vacuously true. Restored immediately
 // after, full suite re-confirmed green.
+
+// --- Заголовки: игровое время, а не реальные даты --------------------------------------------------------------------
+
+test('inWorldTime() accepts RP Time labels and rejects real send dates and empty values', () => {
+    assert.equal(inWorldTime('2026 March 5 09:27 AM (Morning)'), '2026 March 5 09:27 AM (Morning)');
+    assert.equal(inWorldTime('Day 3, 12:21'), 'Day 3, 12:21');
+    assert.equal(inWorldTime('2026-10-05T01:14:18.449Z'), null, 'a real sendDate is not in-world time');
+    assert.equal(inWorldTime(''), null);
+    assert.equal(inWorldTime(null), null);
+});
+
+test('nearestMark() walks from one message toward the other and takes the first RP Time mark on the way', () => {
+    const marks = { 3: 'Day 1, 10:00', 5: 'Day 1, 11:00' };
+    assert.equal(nearestMark(marks, 1, 6), 'Day 1, 10:00', 'forward from the start');
+    assert.equal(nearestMark(marks, 6, 1), 'Day 1, 11:00', 'backward from the end');
+    assert.equal(nearestMark(marks, 0, 2), null, 'no mark in that range');
+});
+
+test('formatSummaryHeader() prints the period only from in-world time, and no "covering" phrase without it', () => {
+    const record = { startIndex: 0, endIndex: 9 };
+    assert.equal(formatSummaryHeader(record), '[Summary of earlier messages #0–#9]');
+    assert.equal(formatSummaryHeader(record, { start: 'Day 1', end: 'Day 2' }), '[Summary of earlier messages #0–#9, covering Day 1 → Day 2]');
+    assert.equal(formatSummaryHeader(record, { start: 'Day 1', end: 'Day 1' }), '[Summary of earlier messages #0–#9, at Day 1]');
+    assert.equal(formatSummaryHeader(record, { start: 'Day 1', end: null }), '[Summary of earlier messages #0–#9, starting Day 1]');
+});
+
+test('resolvePeriod() ignores real dates stored in older records and finds the in-world marks instead', () => {
+    const record = { startIndex: 2, endIndex: 5, startTime: '2026-10-05T01:14:18.449Z', endTime: 'Day 9, 23:00' };
+    assert.deepEqual(resolvePeriod(record, { 2: 'Day 9, 20:00' }), { start: 'Day 9, 20:00', end: 'Day 9, 23:00' });
+    assert.deepEqual(resolvePeriod({ ...record, endTime: '2026-10-05T01:46:06.499Z' }, {}), { start: null, end: null });
+});
+
+test('the header time comes from RP Time marks AT INJECTION — marks that did not exist yet when the fold ran still reach the prompt', async () => {
+    const chat = makeChat(5);
+    const { caller, summaryCore, pipelineCore, timeModule } = buildEngine({ chat, fetchReply: 'S1' });
+    await summaryCore.load();
+    await call(caller, 'summary.configure', { levels: [{ batchSize: 3 }], protectedWindow: 2 });
+    await call(caller, 'summary.check'); // RP Time has not marked anything yet
+    const stored = (await call(caller, 'summary.list')).value[0];
+    assert.equal(stored.startTime, null, 'a real send date must not be stored as the period');
+    assert.equal(stored.endTime, null);
+
+    await call(timeModule, 'chatHistory.annotate', { namespace: 'module.time', mesid: '0', value: 'Day 1, 09:00' });
+    await call(timeModule, 'chatHistory.annotate', { namespace: 'module.time', mesid: '2', value: 'Day 1, 11:30' });
+    const outgoing = [{ mes: 'line 3' }, { mes: 'line 4' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+    assert.match(outgoing[0].mes, /^\[Summary of earlier messages #0–#2, covering Day 1, 09:00 → Day 1, 11:30\]\nS1$/);
+});
+
+// --- Структурированная свёртка: разбор ответа ---------------------------------------------------------------------------
+
+test('parseStructuredFold() reads STORY / PINNED / NOW, tolerating markdown wrappers and same-line content', () => {
+    const parsed = parseStructuredFold('**STORY:**\nThey met.\nThen they left.\n\n## PINNED:\n- Rule one\n* Rule two\n3. Promise\n\nNOW: At the gate, night.');
+    assert.equal(parsed.story, 'They met.\nThen they left.');
+    assert.deepEqual(parsed.pinned, ['Rule one', 'Rule two', 'Promise']);
+    assert.equal(parsed.now, 'At the gate, night.');
+    assert.equal(parsed.structured, true);
+});
+
+test('parseStructuredFold() on a reply with no STORY heading treats the whole reply as the story and leaves pinned/now untouched', () => {
+    const parsed = parseStructuredFold('Just a plain summary of the excerpt.');
+    assert.deepEqual(parsed, { story: 'Just a plain summary of the excerpt.', pinned: null, now: null, structured: false });
+});
+
+test('parseStructuredFold() reads an EMPTY pinned section as an empty list (not as "no section")', () => {
+    const parsed = parseStructuredFold('STORY:\nx\nPINNED:\n(none)\nNOW:\ny');
+    assert.deepEqual(parsed.pinned, []);
+});
+
+test('parsePinnedLines() drops bullets, numbers, duplicates (any case) and over-long items get cut', () => {
+    const items = parsePinnedLines(['- A rule', '* a rule', '2) Other', '', '  ', `- ${'x'.repeat(400)}`]);
+    assert.equal(items.length, 3);
+    assert.equal(items[0], 'A rule');
+    assert.ok(items[2].length <= 200 && items[2].endsWith('…'));
+});
+
+test('mergePinned() takes the model\'s updated list, but does not let a list collapse: a sudden loss of most items keeps the old ones', () => {
+    const old = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+    assert.deepEqual(mergePinned(old, ['a', 'b', 'c', 'd', 'x']), ['a', 'b', 'c', 'd', 'x'], 'a normal update replaces the list (e and f resolved)');
+    assert.deepEqual(mergePinned(old, ['z']), [...old, 'z'], 'losing most of the list is a failure, not "everything was resolved" — old items stay, new ones are added');
+    assert.deepEqual(mergePinned(['a', 'b'], ['z']), ['z'], 'a short list may legitimately shrink');
+    assert.deepEqual(mergePinned(old, null), old, 'no section — nothing changes');
+});
+
+test('mergePinned() keeps the list under the character budget, dropping from the end', () => {
+    const items = Array.from({ length: 30 }, (_, i) => `fact number ${i} `.padEnd(100, '.'));
+    const merged = mergePinned([], items, 500);
+    assert.ok(merged.join('').length + merged.length * 3 <= 500);
+    assert.equal(merged[0], items[0]);
+});
+
+test('collectCast() collects the speakers with the user persona marked, without duplicates, accumulating across batches', () => {
+    const first = collectCast([{ name: 'Echidna', isUser: false }, { name: 'Sasha', isUser: true }, { name: 'echidna', isUser: false }]);
+    assert.deepEqual(first, [{ name: 'Echidna', isUser: false }, { name: 'Sasha', isUser: true }]);
+    assert.equal(collectCast([{ name: 'Nyx', isUser: false }], first).length, 3);
+});
+
+test('tailOf() returns the last part of a summary, starting at a sentence boundary when there is one', () => {
+    const text = 'First sentence is long enough here. Second sentence follows right after. Third sentence closes the text.';
+    const tail = tailOf(text, 60);
+    assert.ok(tail.startsWith('Third') || tail.startsWith('Second'), tail);
+    assert.ok(text.endsWith(tail));
+    assert.equal(tailOf('short', 600), 'short');
+});
+
+test('buildStructuredLevel1Prompt() carries participants, the previous tail with its situation, the CURRENT pinned list and the excerpt', () => {
+    const prompt = buildStructuredLevel1Prompt({ excerpt: 'A: hi', cast: [{ name: 'Echidna', isUser: false }, { name: 'Sasha', isUser: true }], previousTail: 'Earlier tail.', previousNow: 'At the table.', pinned: ['Rule one'] });
+    assert.match(prompt, /Participants: Echidna, Sasha \(the user's persona\)/);
+    assert.match(prompt, /Earlier tail\.\nSituation at that point: At the table\./);
+    assert.match(prompt, /CURRENT PINNED:\n- Rule one/);
+    assert.match(prompt, /EXCERPT:\nA: hi$/);
+    assert.match(buildStructuredLevel1Prompt({ excerpt: 'x' }), /CURRENT PINNED:\n\(none\)/);
+});
+
+// --- Структурированная свёртка на настоящем движке ---------------------------------------------------------------------
+
+const STRUCTURED_A = 'STORY:\nThe first part happened.\n\nPINNED:\n- Rule: objects cannot be unmade\n- Promise: Echidna will build a bed\n\nNOW:\nAt the table, evening.';
+const STRUCTURED_B = 'STORY:\nThe second part happened.\n\nPINNED:\n- Rule: objects cannot be unmade\n- Relationship: they trust each other more\n\nNOW:\nIn the garden, night.';
+
+async function structuredEngine(replies, chatLength = 7, protectedWindow = 4) {
+    const fetch = fakeFetchScript(replies);
+    const built = buildEngine({ chat: makeChat(chatLength), fetch });
+    await built.summaryCore.load();
+    await call(built.caller, 'summary.configure', { levels: [{ batchSize: 3 }], protectedWindow });
+    return { ...built, fetch };
+}
+
+test('structured fold: the summary text is the STORY only, and the pinned facts and the "now" block go to the chat ledger', async () => {
+    const { caller, fetch } = await structuredEngine([STRUCTURED_A]);
+    await call(caller, 'summary.check');
+    assert.equal((await call(caller, 'summary.list')).value[0].text, 'The first part happened.');
+    const ledger = (await call(caller, 'summary.ledger')).value;
+    assert.deepEqual(ledger.pinned, ['Rule: objects cannot be unmade', 'Promise: Echidna will build a bed']);
+    assert.equal(ledger.now, 'At the table, evening.');
+    assert.equal(ledger.asOf, 2, 'the "now" block is true up to the last summarized message');
+    assert.deepEqual(ledger.cast.map(entry => entry.name).sort(), ['Character', 'Player']);
+    const sent = fetch.calls[0].body.messages;
+    assert.match(sent[0].content, /^You keep the long-term memory of a roleplay/);
+    assert.match(sent[1].content, /CURRENT PINNED:\n\(none\)/, 'the first fold starts from an empty list');
+});
+
+test('structured fold: the NEXT fold sees the previous pinned list, the previous summary tail with its situation, and the participants', async () => {
+    const { caller, fetch } = await structuredEngine([STRUCTURED_A, STRUCTURED_B], 7, 1);
+    await call(caller, 'summary.check');
+    const second = fetch.calls[1].body.messages[1].content;
+    assert.match(second, /Participants: /);
+    assert.match(second, /Summarized just before this excerpt[^]*The first part happened\.\nSituation at that point: At the table, evening\./);
+    assert.match(second, /CURRENT PINNED:\n- Rule: objects cannot be unmade\n- Promise: Echidna will build a bed/);
+    const ledger = (await call(caller, 'summary.ledger')).value;
+    assert.deepEqual(ledger.pinned, ['Rule: objects cannot be unmade', 'Relationship: they trust each other more'], 'the promise was resolved, a relationship was added');
+    assert.equal(ledger.now, 'In the garden, night.');
+});
+
+test('structured fold: a model that returns an empty pinned list after a long one does NOT wipe the ledger', async () => {
+    const long = `STORY:\nA.\nPINNED:\n${Array.from({ length: 7 }, (_, i) => `- fact ${i}`).join('\n')}\nNOW:\nHere.`;
+    const empty = 'STORY:\nB.\nPINNED:\n(none)\nNOW:\nThere.';
+    const { caller } = await structuredEngine([long, empty], 7, 1);
+    await call(caller, 'summary.check');
+    const ledger = (await call(caller, 'summary.ledger')).value;
+    assert.equal(ledger.pinned.length, 7);
+    assert.equal(ledger.now, 'There.', 'but the "now" block is updated');
+});
+
+test('structured fold: a model that ignores the format still produces a summary, and the ledger stays as it was', async () => {
+    const { caller } = await structuredEngine([STRUCTURED_A, 'Plain text, no headings at all.'], 7, 1);
+    await call(caller, 'summary.check');
+    const list = (await call(caller, 'summary.list')).value;
+    assert.deepEqual(list.map(record => record.text), ['The first part happened.', 'Plain text, no headings at all.']);
+    const ledger = (await call(caller, 'summary.ledger')).value;
+    assert.equal(ledger.now, 'At the table, evening.');
+    assert.equal(ledger.asOf, 2, 'the position moves only when the "now" block was actually refreshed');
+});
+
+test('injection: pinned facts and the "now" block follow the summaries as their own messages, ahead of the real tail', async () => {
+    const { caller, pipelineCore } = await structuredEngine([STRUCTURED_A]);
+    await call(caller, 'summary.check');
+    const outgoing = [{ mes: 'line 5' }, { mes: 'line 6' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+    assert.equal(outgoing.length, 5);
+    assert.match(outgoing[0].mes, /^\[Summary of earlier messages #0–#2\]\nThe first part happened\.$/);
+    assert.match(outgoing[1].mes, /^\[Pinned facts[^\]]*\]\n- Rule: objects cannot be unmade\n- Promise: Echidna will build a bed$/);
+    assert.match(outgoing[2].mes, /^\[Where the summarized part of the story ends \(up to message #2\)\]\nAt the table, evening\.$/);
+    assert.equal(outgoing[3].mes, 'line 5');
+});
+
+test('structuredFold: false restores the old behaviour — the plain prompt, no ledger, no extra messages', async () => {
+    const { caller, pipelineCore, fetch } = await structuredEngine(['Plain summary.']);
+    await call(caller, 'summary.configure', { structuredFold: false });
+    await call(caller, 'summary.check');
+    assert.match(fetch.calls[0].body.messages[0].content, /^Summarize the following conversation excerpt concisely/);
+    assert.deepEqual((await call(caller, 'summary.ledger')).value, emptyLedger());
+    const outgoing = [{ mes: 'line 5' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+    assert.equal(outgoing.length, 2, 'just the summary and the real tail');
+});
+
+test('summary.ledger.set lets a person correct the pinned facts and the "now" block by hand', async () => {
+    const { caller } = await structuredEngine([STRUCTURED_A]);
+    await call(caller, 'summary.check');
+    await call(caller, 'summary.ledger.set', { pinned: ['- Hand-written fact', '- Another one'], now: 'At the gate.' });
+    const ledger = (await call(caller, 'summary.ledger')).value;
+    assert.deepEqual(ledger.pinned, ['Hand-written fact', 'Another one']);
+    assert.equal(ledger.now, 'At the gate.');
+    assert.equal(ledger.asOf, 2, 'the position the block refers to is untouched');
+});
+
+test('structured fold: a stale "now" block is NOT passed on as the situation before the excerpt when the previous fold did not refresh it', async () => {
+    const { caller, fetch } = await structuredEngine([STRUCTURED_A, 'Plain text, no headings at all.', STRUCTURED_B], 10, 1);
+    await call(caller, 'summary.check');
+    assert.equal(fetch.calls.length, 3);
+    const third = fetch.calls[2].body.messages[1].content;
+    assert.match(third, /Plain text, no headings at all\./, 'the previous summary tail is there');
+    assert.doesNotMatch(third, /Situation at that point/, 'but the old "now" belongs to an earlier moment');
+});

@@ -6,6 +6,7 @@ const SETTINGS_NAMESPACE = 'core.summary';
 const MEMORY_NAMESPACE = 'core.summary';
 const SUMMARIES_KEY = 'summaries';
 const PENDING_KEY = 'pendingVerification';
+const LEDGER_KEY = 'ledger';
 const PREPARE_PIPELINE = 'generation.prepare';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const FOLD_CONTRACT = 'summary.check';
@@ -40,6 +41,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // быть таким же ПРЕДСКАЗУЕМЫМ по стоимости/поведению, как фолд, просто
     // отдельно перенастраиваемым.
     verifyWorkerId: null,
+    // Структурированная свёртка уровня 1: кроме пересказа модель ведёт СПИСОК ЗАКРЕПЛЁННЫХ ФАКТОВ (правила мира, обещания, отношения,
+    // нерешённые линии — не пересказываются при следующих свёртках, а обновляются) и блок «Сейчас» (где и на чём остановились).
+    // Выключено — прежнее поведение: один пересказ без списка и без блока.
+    structuredFold: true,
+    // Потолок списка закреплённых фактов в символах (≈ четверть в токенах): растущий список не должен съедать контекст.
+    pinnedMaxChars: 2400,
 });
 
 function clampInt(value, min, max, fallback) {
@@ -59,6 +66,8 @@ export function clampSummarySettings(values = {}) {
         workerId: values.workerId ?? null,
         verifyEnabled: Boolean(values.verifyEnabled),
         verifyWorkerId: values.verifyWorkerId ?? null,
+        structuredFold: values.structuredFold === undefined ? DEFAULT_SETTINGS.structuredFold : Boolean(values.structuredFold),
+        pinnedMaxChars: clampInt(values.pinnedMaxChars, 400, 20000, DEFAULT_SETTINGS.pinnedMaxChars),
     };
 }
 
@@ -79,6 +88,166 @@ const UNVERIFIED_RE = /^\[\[UNVERIFIED\]\][\s\S]*?\[\[\/UNVERIFIED\]\]\n\n/;
 
 function stripUnverifiedMarker(text) {
     return String(text ?? '').replace(UNVERIFIED_RE, '');
+}
+
+// --- Игровое время в заголовках --------------------------------------------------------------------------------------------
+
+/** Реальная дата сообщения (`sendDate`, ISO с миллисекундами и `Z`) — не игровое время: в заголовок саммари ей делать нечего. */
+const REAL_DATE_RE = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/;
+
+/** Игровое время записи (отметка RP Time) или `null`: пустое, не строка или реальная дата — «времени нет». */
+export function inWorldTime(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return text && !REAL_DATE_RE.test(text) ? text : null;
+}
+
+/** Ближайшая отметка RP Time от `from` к `to` по mesid (включительно), до 400 шагов; `null`, если отметок на пути нет. */
+export function nearestMark(marks, from, to) {
+    const step = to >= from ? 1 : -1;
+    for (let mesid = from, left = 400; left > 0; mesid += step, left -= 1) {
+        const mark = inWorldTime(marks?.[String(mesid)]);
+        if (mark) return mark;
+        if (mesid === to) break;
+    }
+    return null;
+}
+
+/**
+ * Период саммари для заголовка. Сохранённые `startTime`/`endTime` берутся, только если это игровое время; иначе (старые записи с
+ * реальными датами, или RP Time ещё не успел посчитать отметки в момент свёртки) недостающее ищется среди отметок RP Time
+ * по номерам сообщений ПРИ ВСТАВКЕ в промпт — к этому моменту отметки обычно уже есть. Нет ни одной — `{ start: null, end: null }`.
+ */
+export function resolvePeriod(record, marks) {
+    const start = inWorldTime(record.startTime) ?? nearestMark(marks, Number(record.startIndex), Number(record.endIndex));
+    const end = inWorldTime(record.endTime) ?? nearestMark(marks, Number(record.endIndex), Number(record.startIndex));
+    return { start, end };
+}
+
+/** Заголовок саммари: период — только игровое время, без подмеси реальных дат; нет времени — нет и фразы «covering». */
+export function formatSummaryHeader(record, period = { start: null, end: null }) {
+    const { start, end } = period;
+    let when = '';
+    if (start && end) when = start === end ? `, at ${start}` : `, covering ${start} → ${end}`;
+    else if (start) when = `, starting ${start}`;
+    else if (end) when = `, ending ${end}`;
+    return `[Summary of earlier messages #${record.startIndex}–#${record.endIndex}${when}]`;
+}
+
+// --- Структурированная свёртка: пересказ + закреплённые факты + «Сейчас» ----------------------------------------------------
+
+const SECTION_RE = /^[ \t]*[#*_> \t]*(STORY|PINNED|NOW)[*_ \t]*[:：]?[*_ \t]*(.*)$/i;
+const PINNED_ITEM_MAX = 200;
+
+/**
+ * Разбор ответа структурированной свёртки: разделы `STORY:` / `PINNED:` / `NOW:` (регистр и markdown-обёртки вроде `**STORY:**`
+ * терпимы). Нет раздела STORY — модель формат проигнорировала: весь ответ идёт как пересказ, закреплённые факты и «Сейчас» не
+ * тронуты (`pinned: null`, `now: null`). `pinned` — пустой список означает «раздел был, но пуст» (так модель говорит «ничего не осталось»).
+ */
+export function parseStructuredFold(raw) {
+    const text = String(raw ?? '').trim();
+    const found = { STORY: null, PINNED: null, NOW: null };
+    let current = null;
+    for (const line of text.split('\n')) {
+        const match = line.match(SECTION_RE);
+        if (match && found[match[1].toUpperCase()] === null) {
+            current = match[1].toUpperCase();
+            found[current] = [];
+            if (match[2].trim()) found[current].push(match[2].trim());
+        } else if (current) found[current].push(line);
+    }
+    if (found.STORY === null) return { story: text, pinned: null, now: null, structured: false };
+    const story = found.STORY.join('\n').trim();
+    const pinned = found.PINNED === null ? null : parsePinnedLines(found.PINNED);
+    const now = found.NOW === null ? null : found.NOW.join('\n').trim();
+    return { story: story || text, pinned, now: now || null, structured: true };
+}
+
+/** Строки раздела PINNED → список коротких пунктов без дублей (без учёта регистра); «(none)» и пустые строки отбрасываются. */
+export function parsePinnedLines(lines) {
+    const seen = new Set();
+    const items = [];
+    for (const line of lines) {
+        const clean = String(line).replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim();
+        if (!clean || /^\(?none\)?\.?$/i.test(clean)) continue;
+        const item = clean.length > PINNED_ITEM_MAX ? `${clean.slice(0, PINNED_ITEM_MAX - 1).trimEnd()}…` : clean;
+        const key = item.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push(item);
+    }
+    return items;
+}
+
+/**
+ * Новый список закреплённых фактов из старого и ответа модели. Модель просят вернуть ПОЛНЫЙ обновлённый список; если она вернула
+ * заметно меньше, чем было (больше половины пропало при списке от 6 пунктов) — это скорее сбой (потеряла список), чем «всё решилось»:
+ * старые пункты остаются, из ответа добавляются только новые. Результат обрезается по `maxChars` с конца.
+ */
+export function mergePinned(previous, proposed, maxChars = DEFAULT_SETTINGS.pinnedMaxChars) {
+    let next;
+    if (proposed === null) next = [...previous];
+    else if (previous.length >= 6 && proposed.length < previous.length / 2) {
+        const known = new Set(previous.map(item => item.toLowerCase()));
+        next = [...previous, ...proposed.filter(item => !known.has(item.toLowerCase()))];
+    } else next = [...proposed];
+    const result = [];
+    let total = 0;
+    for (const item of next) {
+        if (total + item.length + 3 > maxChars) break;
+        result.push(item);
+        total += item.length + 3;
+    }
+    return result;
+}
+
+/** Пустое состояние журнала чата: закреплённые факты, «Сейчас», до какого сообщения оно верно, участники. */
+export function emptyLedger() {
+    return { pinned: [], now: '', asOf: null, cast: [] };
+}
+
+/** Участники из сообщений батча: `{ name, isUser }` без дублей; список копится в журнале (до 12 имён). */
+export function collectCast(messages, previous = []) {
+    const seen = new Map(previous.map(entry => [entry.name.toLowerCase(), entry]));
+    for (const message of messages) {
+        const name = String(message?.name ?? '').trim();
+        if (name && !seen.has(name.toLowerCase())) seen.set(name.toLowerCase(), { name, isUser: Boolean(message.isUser) });
+    }
+    return [...seen.values()].slice(0, 12);
+}
+
+const castLine = cast => (cast.length ? `Participants: ${cast.map(entry => (entry.isUser ? `${entry.name} (the user's persona)` : entry.name)).join(', ')}` : '');
+
+const STRUCTURED_FOLD_SYSTEM_PROMPT = `You keep the long-term memory of a roleplay. Read the excerpt and answer in EXACTLY this format, with these three headings:
+
+STORY:
+A concise third-person summary of the excerpt: important facts, character goals and plot developments, with concrete details (who, what, where). Name people the way the text does and keep the pronouns the text uses for each of them.
+
+PINNED:
+The complete UPDATED list of lasting facts, one per line starting with "- ". Start from the CURRENT PINNED list given below: keep every item that is still true word for word, drop an item only if the excerpt resolved or contradicted it, merge duplicates, and add new lasting facts from the excerpt: world rules and limits, promises and commitments, relationships and what each character knows about the others, unresolved threads, key quotes. At most 20 items, each under 160 characters. Do NOT list events that merely happened; those belong in STORY.
+
+NOW:
+Two to four short sentences: where and when the excerpt ends, who is present, what each of them is doing or feeling, and what is about to happen.
+
+Output ONLY these three sections, no preamble.`;
+
+/** Пользовательская часть запроса структурированной свёртки: участники, что было сразу до отрывка, текущий список, сам отрывок. */
+export function buildStructuredLevel1Prompt({ excerpt, cast = [], previousTail = '', previousNow = '', pinned = [] }) {
+    const parts = [];
+    const participants = castLine(cast);
+    if (participants) parts.push(participants);
+    if (previousTail) parts.push(`Summarized just before this excerpt (for continuity only, do not repeat it):\n${previousTail}${previousNow ? `\nSituation at that point: ${previousNow}` : ''}`);
+    parts.push(`CURRENT PINNED:\n${pinned.length ? pinned.map(item => `- ${item}`).join('\n') : '(none)'}`);
+    parts.push(`EXCERPT:\n${excerpt}`);
+    return parts.join('\n\n');
+}
+
+/** Хвост пересказа для контекста следующей свёртки: последние ~`max` символов по границе предложения. */
+export function tailOf(text, max = 600) {
+    const clean = stripUnverifiedMarker(text).trim();
+    if (clean.length <= max) return clean;
+    const cut = clean.slice(clean.length - max);
+    const sentence = cut.search(/[.!?]\s+\S/);
+    return (sentence >= 0 && sentence < max / 2 ? cut.slice(sentence + 1) : cut).trim();
 }
 
 function makeSummaryId(now, random) {
@@ -144,6 +313,8 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     // `buildLevelNPrompt(batch)`, что породил `draft.text` (нужен дословно
     // тем же, чтобы `refoldWithFeedback()` мог продолжить тот же "разговор").
     let pending = [];
+    // Журнал чата (структурированная свёртка): закреплённые факты, «Сейчас», до какого сообщения оно верно, участники. Ключ `ledger` рядом с саммари.
+    let ledger = emptyLedger();
 
     /** `options` — сейчас только `{ priority }` (см. request.js) — форвардится как есть, необязателен. */
     async function call(contract, params, options) {
@@ -177,6 +348,21 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         const result = await call('storage.chatMemory.get', { namespace: MEMORY_NAMESPACE, key: SUMMARIES_KEY, fallback: [] });
         summaries = result.ok ? result.value ?? [] : [];
         return summaries;
+    }
+
+    async function loadLedger() {
+        const result = await call('storage.chatMemory.get', { namespace: MEMORY_NAMESPACE, key: LEDGER_KEY, fallback: null });
+        const stored = result.ok ? result.value : null;
+        ledger = stored && typeof stored === 'object'
+            ? { pinned: Array.isArray(stored.pinned) ? stored.pinned.map(String) : [], now: String(stored.now ?? ''), asOf: Number.isFinite(stored.asOf) ? stored.asOf : null, cast: Array.isArray(stored.cast) ? stored.cast.filter(entry => entry?.name) : [] }
+            : emptyLedger();
+        return ledger;
+    }
+
+    async function saveLedger(next) {
+        ledger = next;
+        await call('storage.chatMemory.set', { namespace: MEMORY_NAMESPACE, key: LEDGER_KEY, value: next });
+        await call('storage.chatMemory.flush');
     }
 
     /** Отдельный ключ, тот же неймспейс — переживает перезагрузку страницы посреди verify (см. `load()`/`reloadSummariesForChat()`, оба резюмируют оставшиеся записи). */
@@ -216,6 +402,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     function reloadSummariesForChat() {
         return enqueueWrite(async () => {
             await loadSummaries();
+            await loadLedger();
             await loadPending();
             publishEvent('summary.reloaded', { count: activeSummaries(summaries).length });
             // Резюмируем verify для того, что не успело промоутиться до
@@ -259,7 +446,9 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
 
     /** `stripUnverifiedMarker()` — чужой ребёнок мог сам быть принят "как есть" после исчерпанных попыток verify; сайдкару, читающему его как источник для СЛЕДУЮЩЕГО уровня, эта пометка — шум, не факт истории (см. doc-comment над `UNVERIFIED_PREFIX`). */
     function buildLevelNPrompt(children) {
-        return children.map(child => stripUnverifiedMarker(child.text)).join('\n\n');
+        const body = children.map(child => stripUnverifiedMarker(child.text)).join('\n\n');
+        const participants = settings.structuredFold ? castLine(ledger.cast) : '';
+        return participants ? `${participants}\n\n${body}` : body;
     }
 
     /**
@@ -286,13 +475,30 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     }
 
     /** Level-1: сворачивает `batchSize` старейших единиц СЫРЫХ сообщений в одно саммари и прячет их через chatHistory.hide (is_system=true — mesid не сдвигается, см. doc-comment services/st-chat.js). */
-    async function foldRawUnits(units) {
+    async function foldRawUnits(units, { previous = null } = {}) {
         const flat = units.flat();
         const mesids = flat.map(message => message.mesid);
-        const text = await askModelToFold(
-            'Summarize the following conversation excerpt concisely, in third person, preserving important facts, character goals, and plot developments. Output ONLY the summary text, no preamble.',
-            buildLevel1Prompt(units),
-        );
+        let text;
+        let update = null;
+        if (settings.structuredFold) {
+            // Структурированная свёртка: пересказ + обновлённый список закреплённых фактов + «Сейчас». Модель видит участников, хвост
+            // предыдущего пересказа (для непрерывности) и ТЕКУЩИЙ список — обновляет его, а не пересказывает заново.
+            const cast = collectCast(flat, ledger.cast);
+            const raw = await askModelToFold(STRUCTURED_FOLD_SYSTEM_PROMPT, buildStructuredLevel1Prompt({
+                excerpt: buildLevel1Prompt(units), cast,
+                previousTail: previous ? tailOf(previous.text) : '',
+                previousNow: previous && ledger.asOf === previous.endIndex ? ledger.now : '',
+                pinned: ledger.pinned,
+            }));
+            const parsed = parseStructuredFold(raw);
+            text = parsed.story;
+            update = { parsed, cast };
+        } else {
+            text = await askModelToFold(
+                'Summarize the following conversation excerpt concisely, in third person, preserving important facts, character goals, and plot developments. Output ONLY the summary text, no preamble.',
+                buildLevel1Prompt(units),
+            );
+        }
         // Период саммари — отметки RP Time (аннотации Ядра истории чата,
         // namespace `module.time`), а не реальные даты ST (решение
         // архитектора 11.09): заголовок саммари обязан говорить ВНУТРИГРОВОЕ
@@ -310,8 +516,10 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
             coveredIds: mesids,
             startIndex: Math.min(...mesids.map(Number)),
             endIndex: Math.max(...mesids.map(Number)),
-            startTime: inWorld.first ?? flat[0]?.sendDate ?? null,
-            endTime: inWorld.last ?? flat[flat.length - 1]?.sendDate ?? null,
+            // Только игровое время RP Time: реальная дата сообщения в заголовок не годится (смешивалась с игровым временем). Не посчитано
+            // на момент свёртки — `null`; заголовок при вставке в промпт найдёт отметки заново (`resolvePeriod`).
+            startTime: inWorldTime(inWorld.first),
+            endTime: inWorldTime(inWorld.last),
             text,
             createdAt: now(),
             edited: false,
@@ -321,7 +529,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
             const hidden = await call('chatHistory.hide', { mesid, hidden: true });
             if (!hidden.ok) throw new Error(hidden.error.message);
         }
-        return record;
+        return { record, update };
     }
 
     /** Level N>1: сворачивает `batchSize` старейших активных саммари уровня N-1 в одно саммари уровня N — без повторного чтения сырых сообщений, только тексты детей. */
@@ -336,8 +544,8 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
             coveredIds: children.map(child => child.id),
             startIndex: Math.min(...children.map(child => child.startIndex)),
             endIndex: Math.max(...children.map(child => child.endIndex)),
-            startTime: children[0]?.startTime ?? null,
-            endTime: children[children.length - 1]?.endTime ?? null,
+            startTime: inWorldTime(children[0]?.startTime),
+            endTime: inWorldTime(children[children.length - 1]?.endTime),
             text,
             createdAt: now(),
             edited: false,
@@ -540,9 +748,12 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
                     const units = groupIntoUnits(messages);
                     while (shouldFold(units.length, settings.protectedWindow, level1.batchSize)) {
                         const batch = units.splice(0, level1.batchSize);
-                        const record = await foldRawUnits(batch);
+                        const firstMesid = Math.min(...batch.flat().map(message => Number(message.mesid)));
+                        const previous = activeSummaries(list).filter(item => item.endIndex < firstMesid).at(-1) ?? null;
+                        const { record, update } = await foldRawUnits(batch, { previous });
                         list = [...list, record];
                         await saveSummaries(list);
+                        if (update) await applyLedgerUpdate(update, record);
                         publishEvent('summary.folded', { count: list.length });
                     }
                 }
@@ -595,6 +806,29 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
             publishEvent('summary.foldFailed', { message: error?.message ?? String(error) });
             throw error;
         }
+    }
+
+    /** Журнал после свёртки: закреплённые факты (с защитой от потери списка), «Сейчас» и участники. Формат проигнорирован — прежнее остаётся. */
+    async function applyLedgerUpdate({ parsed, cast }, record) {
+        await saveLedger({
+            pinned: parsed.pinned === null ? ledger.pinned : mergePinned(ledger.pinned, parsed.pinned, settings.pinnedMaxChars),
+            now: parsed.now ?? ledger.now,
+            asOf: parsed.now ? record.endIndex : ledger.asOf,
+            cast,
+        });
+    }
+
+    /** Ручная правка журнала (закреплённые факты и «Сейчас») — модель может ошибиться, а пользователь знает историю. */
+    async function setLedger({ pinned, now: nowText } = {}) {
+        return enqueueWrite(async () => {
+            const next = {
+                ...ledger,
+                pinned: Array.isArray(pinned) ? mergePinned([], parsePinnedLines(pinned), settings.pinnedMaxChars) : ledger.pinned,
+                now: nowText === undefined ? ledger.now : String(nowText ?? '').trim(),
+            };
+            await saveLedger(next);
+            return next;
+        });
     }
 
     async function updateSummary({ id, text } = {}) {
@@ -656,10 +890,21 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
      * слиянии слоёв период честно расширяется и остаётся привязанным к
      * реальным сообщениям, а не к моменту свёртки.
      */
-    function formatSummaryMessage(record) {
-        const from = record.startTime ? String(record.startTime) : 'unknown time';
-        const to = record.endTime ? String(record.endTime) : from;
-        return `[Summary of earlier messages #${record.startIndex}–#${record.endIndex}, covering ${from} → ${to}]\n${record.text}`;
+    function formatSummaryMessage(record, marks = {}) {
+        return `${formatSummaryHeader(record, resolvePeriod(record, marks))}\n${record.text}`;
+    }
+
+    /** Закреплённые факты и «Сейчас» — отдельными сообщениями после саммари: ST режет промпт от старых к новым, эти уходят последними. */
+    function ledgerMessages() {
+        const out = [];
+        if (ledger.pinned.length) {
+            out.push({ is_user: false, is_system: true, name: 'Summary', mes: `[Pinned facts — lasting rules, promises, relationships and open threads established so far; they hold until the story changes them]\n${ledger.pinned.map(item => `- ${item}`).join('\n')}` });
+        }
+        if (ledger.now) {
+            const upTo = ledger.asOf === null ? '' : ` (up to message #${ledger.asOf})`;
+            out.push({ is_user: false, is_system: true, name: 'Summary', mes: `[Where the summarized part of the story ends${upTo}]\n${ledger.now}` });
+        }
+        return out;
     }
 
     async function injectIntoPrompt({ chat } = {}) {
@@ -678,7 +923,8 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
                 return !(isToolCall && message.is_system && index < windowStart);
             });
             if (pruned.length !== chat.length) chat.splice(0, chat.length, ...pruned);
-            messages = active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: formatSummaryMessage(record) }));
+            const marks = await readTimeMarks(); // игровое время — по отметкам RP Time на момент вставки, не по сохранённому при свёртке
+            messages = [...active.map(record => ({ is_user: false, is_system: true, name: 'Summary', mes: formatSummaryMessage(record, marks) })), ...ledgerMessages()];
         }
         // Место публикуется ВСЕГДА, даже без активных саммари (владелец: «модуль должен публиковать своё место
         // даже если он пустой») — иначе до первой свёртки истории Summaries нигде не было видно в дереве PM.
@@ -692,6 +938,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     async function load() {
         await loadSettings();
         await loadSummaries();
+        await loadLedger();
         await loadPending();
         host.own.register(FOLD_CONTRACT, () => checkAndFold());
         host.own.register(INJECT_CONTRACT, params => injectIntoPrompt(params));
@@ -713,6 +960,8 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         host.own.register('summary.settings', () => settings),
         host.own.register('summary.configure', params => configure(params ?? {})),
         host.own.register('summary.list', () => activeSummaries(summaries)),
+        host.own.register('summary.ledger', () => ledger),
+        host.own.register('summary.ledger.set', params => setLedger(params)),
         host.own.register('summary.update', params => updateSummary(params)),
         host.own.register('summary.delete', params => deleteSummary(params)),
     ];
@@ -724,6 +973,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         checkAndFold,
         settings: () => settings,
         list: () => activeSummaries(summaries),
+        ledger: () => ledger,
         unregister: async () => {
             await call('pipeline.stages.remove', { pipelineId: PREPARE_PIPELINE, stageId: FOLD_STAGE_ID }).catch(() => {});
             await call('pipeline.stages.remove', { pipelineId: BEFORE_SEND_PIPELINE, stageId: INJECT_STAGE_ID }).catch(() => {});
