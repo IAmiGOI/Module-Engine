@@ -7,6 +7,10 @@ import { createExtractionOps } from './structured/extraction-ops.js';
 import { createModeOps } from './structured/mode-ops.js';
 import { createLibraryOps } from './structured/library-ops.js';
 import { createCardOps } from './structured/card-ops.js';
+import { createRegionOps } from './structured/region-ops.js';
+import { createEntityOps } from './structured/entity-ops.js';
+import { gameTimeLabel } from './game-time.js';
+import { planSupersession, isCurrentState, hasState, areStateVariants } from './states.js';
 import { createReclassifyOps } from './structured/reclassify-ops.js';
 import { addDirectedEdge } from './edges.js';
 import { checkEdge, normalizeKind, kindOf, isCore, isEvent } from './kinds.js';
@@ -32,7 +36,7 @@ import {
     SECTORS, RINGS, DEFAULT_SETTINGS, clampGraphSettings,
     regionKey, allRegionCoords, regionAdjacency, computeRegionLogits,
     updateDistanceStats, isStrongChange, nearestEmbeddingDistance,
-    computeNodeWeight, pickEvictionCandidate, wordsOf, findMergeCandidate,
+    computeNodeWeight, pickEvictionCandidate, wordsOf, findMergeCandidate, adaptiveMergeThresholds,
     scoreBeaconCandidate, pickBeacons, scoreBeaconSet, shouldReplaceStickySet, buildBeaconRoute,
     expandNoiseNodes, renderMemoryPrompt, decideFirstPlacement, decideStagingStep,
     makeId, extractCharacterNames, importanceFromLorebookEntry, applyConnectionBonus,
@@ -51,7 +55,7 @@ export {
     SECTORS, RINGS, RETRIEVAL_STABILITY_LEVELS, RETRIEVAL_STABILITY_MARGINS, DEFAULT_SETTINGS, clampGraphSettings,
     regionKey, allRegionCoords, regionAdjacency, computeRegionLogits,
     updateDistanceStats, stddevOf, isStrongChange, nearestEmbeddingDistance,
-    computeNodeWeight, pickEvictionCandidate, wordsOf, jaccardOverlap, findMergeCandidate,
+    computeNodeWeight, pickEvictionCandidate, wordsOf, jaccardOverlap, findMergeCandidate, adaptiveMergeThresholds,
     scoreBeaconCandidate, pickBeacons, scoreBeaconSet, shouldReplaceStickySet, findShortestPath, buildBeaconRoute,
     gaussianRandom, expandNoiseNodes, renderMemoryPrompt, pickConfidentRegion, decideFirstPlacement, decideStagingStep,
     importanceFromLorebookEntry, applyConnectionBonus,
@@ -541,7 +545,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     function tryQueueReconsolidation(key, members) {
         const alreadyQueued = new Set(Object.values(reconsolidationQueue).flatMap(entry => entry.nodeIds));
-        let eligible = members.filter(member => !member.protectedNode && !alreadyQueued.has(member.id));
+        // Действующее состояние (текущая одежда, место) не сжимается с другими нодами — теряется «как сейчас»; устаревшие значения можно.
+        let eligible = members.filter(member => !member.protectedNode && !alreadyQueued.has(member.id) && !(hasState(member) && isCurrentState(member)));
         // structured: сворачивать можно только ноды ОДНОГО вида (факты с фактами) — берём самую многочисленную группу.
         if (features.kinds) {
             const byKind = Map.groupBy(eligible, member => kindOf(member));
@@ -602,23 +607,57 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     function detectMergeCandidate(node, key) {
         const region = regions[key];
-        if (!region) return;
+        if (!region || !isCurrentState(node)) return; // устаревшее состояние — история, не кандидат на слияние
         const newNode = { id: node.id, embedding: node.embedding, words: wordsOf(node.content) };
         const members = region.nodeIds
             .filter(id => id !== node.id)
             .map(id => nodes[id])
             .filter(Boolean)
             .filter(member => !features.kinds || kindOf(member) === kindOf(node)) // structured: слияние только внутри одного вида
+            .filter(member => !(node.distinctFrom ?? []).includes(member.id) && !(member.distinctFrom ?? []).includes(node.id)) // SideCar уже решил: это разные факты
+            .filter(member => isCurrentState(member) && !areStateVariants(node, member)) // разные значения одного состояния (одежда, место) — не дубли
             .map(member => ({ id: member.id, embedding: member.embedding, words: wordsOf(member.content) }));
+        // Порог по самому графу (math.js `adaptiveMergeThresholds()`): статистика по нодам того же вида в регионе, вместе с новой.
+        const adaptive = adaptiveMergeThresholds([newNode.embedding, ...members.map(member => member.embedding)], {
+            z: settings.mergeAdaptiveZ, floor: settings.mergeAdaptiveFloor, ceiling: settings.mergeSimilarityThreshold, minNodes: settings.mergeAdaptiveMinNodes,
+        });
         const matchId = findMergeCandidate(newNode, members, {
             wordOverlapThreshold: settings.mergeWordOverlapThreshold,
-            similarityThreshold: settings.mergeSimilarityThreshold,
+            similarityThreshold: adaptive?.similarity ?? settings.mergeSimilarityThreshold,
+            strongSimilarity: adaptive?.strong ?? null,
         });
         if (!matchId) return;
         const pairKey = [node.id, matchId].sort().join('|');
         if (mergeQueue[pairKey]) return; // уже в очереди — не дублируем запись
         mergeQueue[pairKey] = { nodeIdA: node.id, nodeIdB: matchId, queuedTurn: turnCounter, regionId: key };
         if (capacityTracker) capacityTracker.queuedMerge = true; // Этап 6 (наблюдаемость) — см. doc-comment у `capacityTracker`
+    }
+
+    /**
+     * Поиск дублей среди УЖЕ лежащих нод: `detectMergeCandidate()` работает только на вставке новой ноды, поэтому пара, которая стала
+     * «похожей» позже (порог по графу сдвинулся, регион вырос, ноды переехали в новый регион) никогда бы не была проверена. Не чаще
+     * `mergeScanEveryTurns` ходов прогоняет каждую ноду региона через ту же проверку; найденные пары — в ту же очередь на SideCar.
+     */
+    let lastMergeScanTurn = -Infinity;
+    async function sweepDuplicateScan({ force = false } = {}) {
+        return enqueueWrite(async () => {
+            if (!force && turnCounter - lastMergeScanTurn < settings.mergeScanEveryTurns) return { queued: 0 };
+            lastMergeScanTurn = turnCounter;
+            const before = Object.keys(mergeQueue).length;
+            for (const [key, region] of Object.entries(regions)) {
+                for (const id of region.nodeIds) { const node = nodes[id]; if (node?.embedding) detectMergeCandidate(node, key); }
+            }
+            const queued = Object.keys(mergeQueue).length - before;
+            if (queued) await persistMergeQueue();
+            return { queued };
+        });
+    }
+
+    /** Замена состояний (states.js): прежние действующие значения того же `attribute` того же субъекта помечаются устаревшими; воспоминание о прошлом (игровое время раньше) устаревает само. */
+    function applySupersession(created) {
+        const plan = planSupersession(created, nodes);
+        for (const id of plan.supersede) Object.assign(nodes[id], { supersededBy: created.id, supersededTurn: turnCounter, supersededAt: created.timeLabel ?? null });
+        if (plan.supersededBy) Object.assign(created, { supersededBy: plan.supersededBy, supersededTurn: turnCounter });
     }
 
     /** Объединяет рёбра N сливаемых узлов в рёбра ОДНОГО: ребро на любого из партнёров по слиянию отбрасывается (иначе стало бы петлёй на себя), дубликаты по (to,type) схлопываются. Общая для объединения дублей (N=2) и реконсолидации (N=3+). */
@@ -1204,7 +1243,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         if (features.structuredExtraction) {
             const characterResult = await callService('stCharacter.current');
             const mainCharacters = characterResult.ok && characterResult.value?.name ? [String(characterResult.value.name)] : [];
-            prompt = buildStructuredExtractionPrompt({ contextText, nearestNodes, knownNames: knownSubjectNames(), mainCharacters, isFirstNode });
+            prompt = buildStructuredExtractionPrompt({ contextText, nearestNodes, knownNames: knownSubjectNames(), mainCharacters, isFirstNode, currentTime: gameTimeLabel(await readGameTime()) });
         } else prompt = buildExtractionPrompt({ contextText, nearestNodes, isFirstNode });
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) throw new Error(result.error.message);
@@ -1228,7 +1267,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * пару.
      */
     async function askSideCarForMerge(nodeA, nodeB) {
-        const prompt = `These two memories may describe the same underlying fact:\n\n1. ${nodeA.label}: ${nodeA.content}\n2. ${nodeB.label}: ${nodeB.content}\n\nIf they are genuinely duplicates or near-duplicates, reply with ONLY a JSON object: {"label": short combined name, "content": one combined fact covering everything both said, "importance": 0-10}. If they actually describe DIFFERENT facts that should stay separate, reply with ONLY: {"distinct": true}.`;
+        const prompt = `These two memories may describe the same underlying fact:\n\n1. ${nodeA.label}: ${nodeA.content}\n2. ${nodeB.label}: ${nodeB.content}\n\nIf they are genuinely duplicates or near-duplicates, reply with ONLY a JSON object: {"label": short combined name, "content": one combined fact covering everything both said, "importance": 0-10}. If they actually describe DIFFERENT facts that should stay separate, reply with ONLY: {\"distinct\": true}. Two memories that give DIFFERENT values of the same thing (a different outfit, place, mood or time) are different facts, not duplicates — reply {\"distinct\": true} for them.`;
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) return null;
         const parsed = parseModelJson(result.value);
@@ -1278,7 +1317,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      * passage) — это query-vs-passage, ожидаемое протоколом E5 сопоставление, тогда как самой ноде для БУДУЩИХ
      * сравнений (слияние/маяки/бэкбон) нужен passage-эмбединг её же содержимого, не сцены-триггера.
      */
-    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter, kind, subtype }, { placementEmbedding = embedding, source = 'chat', subjectRegion = null } = {}) {
+    function placeNewNode({ label, content, embedding, importance = 0, gameTime = null, createdTurn = turnCounter, kind, subtype, attribute, subjectIds, timeLabel }, { placementEmbedding = embedding, source = 'chat', subjectRegion = null } = {}) {
         const node = {
             id: makeId('node', now, random),
             label, content, embedding, importance,
@@ -1296,6 +1335,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             source,
         };
         if (features.kinds) Object.assign(node, normalizeKind(kind, subtype), { core: false }); // structured: вид от извлечения (по умолчанию факт)
+        // Состояние и субъекты — ДО размещения: проверка дублей внутри `attachToRegion()` должна уже знать, что это новое значение того же состояния.
+        if (features.kinds && subjectIds?.length) node.subjectIds = subjectIds;
+        if (features.kinds && attribute) Object.assign(node, { attribute, ...(timeLabel ? { timeLabel } : {}) });
         if (features.timeline && node.kind === 'event') {
             // structured: событие живёт без региона (не в ёмкости региона, не в накопителе) и показывается у якорной ноды — этап 3 плана типов.
             nodes[node.id] = node;
@@ -1431,7 +1473,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (fact.op === 'update') {
                     // `applyNodeUpdate()` — та же логика, что у ручного редактирования (`updateNodeManually()`), без
                     // повторного `enqueueWrite()` — мы уже внутри своего (П4 плана).
+                    const previous = nodes[fact.id] ? { content: nodes[fact.id].content, turn: turnCounter } : null;
                     const updateResult = await applyNodeUpdate({ id: fact.id, content: fact.content, importance: fact.importance });
+                    // Старое описание не пропадает: обновление заменяет `content`, прежний текст остаётся в короткой истории ноды (последние 5).
+                    if (updateResult.ok && previous && previous.content !== nodes[fact.id]?.content) {
+                        nodes[fact.id].history = [...(nodes[fact.id].history ?? []), { ...previous, time: gameTimeLabel(await readGameTime()) }].slice(-5);
+                    }
                     if (!stillSameChat(epoch)) return { status: 'chat-changed' }; // чат сменился, пока ждали эмбединг обновляемого узла — мутация (если случилась) осталась в памяти, но персиста ниже не будет
                     if (updateResult.ok) results.push({ status: 'updated', nodeId: fact.id, label: nodes[fact.id]?.label ?? fact.id });
                     continue; // update не зеркалится в WI — та же граница, что у правки через UI-редактор (см. doc-comment ниже)
@@ -1465,11 +1512,13 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // (см. doc-comment у самого трекера выше), но пишет в него только ЭТОТ вызов, не бутстрап/ручное создание/
                 // карточка персонажа — остаётся `null` у любого другого вызывающего `placeNewNode()`.
                 capacityTracker = { evicted: [], queuedMerge: false, queuedReconsolidation: false };
-                const placed = placeNewNode({ label: fact.label, content: fact.content, embedding: nodeEmbeddingResult.value, importance: fact.importance, gameTime, kind: fact.kind, subtype: fact.subtype }, { placementEmbedding: contextEmbedding, subjectRegion: regionDescriptorOf(nodes[subjectLinks?.subjectIds[0]]) });
+                const placed = placeNewNode({ label: fact.label, content: fact.content, embedding: nodeEmbeddingResult.value, importance: fact.importance, gameTime, kind: fact.kind, subtype: fact.subtype, attribute: kindOf({ kind: fact.kind }) === 'event' ? undefined : fact.attribute, subjectIds: subjectLinks?.subjectIds, timeLabel: gameTimeLabel(gameTime) ?? undefined }, { placementEmbedding: contextEmbedding, subjectRegion: regionDescriptorOf(nodes[subjectLinks?.subjectIds[0]]) });
                 if (subjectLinks) {
                     const created = nodes[placed.nodeId];
                     if (fact.time) created.timeText = fact.time;
                     if (fact.coreProposed) created.coreProposed = true; // предложение модели; само Core не делает — решает coreScore
+                    // Состояние, меняющееся со временем (одежда, место…): новое значение заменяет прежнее действующее — старое остаётся историей.
+                    if (created.attribute) applySupersession(created);
                     const edgeCount = linkStructuredNode(created, subjectLinks, sameBatchEvent);
                     if (kindOf(created) === 'event' && !sameBatchEvent) sameBatchEvent = created;
                     structuredInfo = { kind: kindOf(created), subjects: subjectLinks.subjectIds.map(id => nodes[id]?.label).filter(Boolean), edges: edgeCount };
@@ -2205,7 +2254,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
                 const verdict = await askSideCarForMerge(nodeA, nodeB);
                 if (!stillSameChat(epoch)) return; // чат сменился — оставшиеся пары и уже сделанные здесь удаления из очереди не персистим, они про старый граф
-                if (!verdict || verdict.distinct) continue; // SideCar не подтвердил — оба узла остаются как были
+                if (verdict?.distinct) {
+                    // Вердикт запоминается на самих нодах: иначе периодический поиск дублей (`sweepDuplicateScan`) ставил бы ту же пару снова и снова.
+                    for (const [self, other] of [[nodeA, nodeB], [nodeB, nodeA]]) self.distinctFrom = [...new Set([...(self.distinctFrom ?? []), other.id])].slice(-20);
+                    continue;
+                }
+                if (!verdict) continue; // SideCar не ответил внятно — оба узла остаются как были
 
                 const embeddingResult = await callService('embedding.compute', { text: `${verdict.label}: ${verdict.content}`, kind: 'passage' });
                 if (!stillSameChat(epoch)) return; // чат сменился, пока ждали эмбединг слитой ноды
@@ -2471,7 +2525,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             // результатам старого нельзя (в частности перед `persistStickyRetrieval()` ниже).
             const epoch = chatEpoch;
             // Маяки — лор: событие (не Core) в кандидаты не идёт, оно подтягивается через ноды (timeline-prompt.js); Core-событие с регионом — может быть маяком.
-            const candidates = Object.values(nodes).filter(node => node.regionId && !(features.eventsInRetrieval && isEvent(node) && !isCore(node)));
+            const candidates = Object.values(nodes).filter(node => node.regionId && isCurrentState(node) && !(features.eventsInRetrieval && isEvent(node) && !isCore(node)));
             if (!candidates.length) {
                 const total = Object.keys(nodes).length;
                 return skipRetrieval('no-placed-nodes', total ? `${total} node(s), none placed in a region (all unplaced)` : 'the graph is empty');
@@ -2525,7 +2579,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
             // Дерево с неявной связью «входит в регион» (beacons.js, ROADMAP 5.109а) — цепочка по порядку рвалась на нодах без рёбер.
             // structured: маршрут, шум и основной блок — по слою лора (события, не Core, вынесены в секцию таймлайна ниже, чтобы не дублироваться шумом).
-            const loreView = features.eventsInRetrieval ? Object.fromEntries(Object.entries(nodes).filter(([, node]) => !(isEvent(node) && !isCore(node)))) : nodes;
+            const loreView = Object.fromEntries(Object.entries(nodes).filter(([, node]) => isCurrentState(node) && !(features.eventsInRetrieval && isEvent(node) && !isCore(node)))); // устаревшие значения состояний в промпт не идут
             const route = buildBeaconTree(loreView, freshBeaconIds, {
                 maxHops: settings.routeMaxHops,
                 centerOf: id => { const regionId = nodes[id]?.regionId; return regionId ? regions[regionId]?.centerNodeId ?? null : null; },
@@ -2634,6 +2688,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         await sweepReconsolidationQueue();
         await sweepTimeline();
         await sweepCores();
+        await sweepEntities();
+        await sweepRegionSplits();
+        await sweepDuplicateScan();
         return placement;
     }
 
@@ -2648,6 +2705,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         call: (...args) => call(...args), callService: (...args) => callService(...args), parseModelJson: value => parseModelJson(value),
         publishEvent: (...args) => publishEvent(...args), enqueueWrite: task => enqueueWrite(task), stillSameChat: epoch => stillSameChat(epoch),
         persistNodes: () => persistNodes(), persistRegions: () => persistRegions(), persistGraphMeta: () => persistGraphMeta(),
+        persistMergeQueue: () => persistMergeQueue(), persistReconsolidationQueue: () => persistReconsolidationQueue(), persistStaging: () => persistStaging(),
         applyGraphMeta: raw => applyGraphMeta(raw), collectAnchors: () => collectAnchors(), edgeAllowed: (a, b) => edgeAllowed(a, b),
         mainCharacterImportance: MAIN_CHARACTER_IMPORTANCE, promoteToCore: (...args) => promoteToCore(...args),
         hasHeroCard: () => cardOps.hasHeroCard(), applyCharacterCard: options => cardOps.applyCharacterCard(options), characterName: () => cardOps.characterName(),
@@ -2666,6 +2724,10 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     };
     const coreOps = createCoreOps(structuredCtx);
     const cardOps = createCardOps(structuredCtx);
+    const entityOps = createEntityOps(structuredCtx);
+    const { sweepEntities } = entityOps;
+    const regionOps = createRegionOps(structuredCtx);
+    const { sweepRegionSplits } = regionOps;
     const timelineOps = createTimelineOps(structuredCtx);
     const extractionOps = createExtractionOps(structuredCtx);
     const { promoteToCore, runCoreSweep, sweepCores, plotCoreMessage, pinNode } = coreOps;
@@ -2726,6 +2788,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.library.import', params => library.importRecord(params ?? {})),
         host.own.register('memoryGraph.library.findByLorebook', () => library.findByLorebook()),
         host.own.register('memoryGraph.sweepCores', () => sweepCores()),
+        host.own.register('memoryGraph.sweepDuplicateScan', params => sweepDuplicateScan({ force: params?.force === true })),
+        host.own.register('memoryGraph.sweepEntities', params => sweepEntities({ force: params?.force === true })),
+        host.own.register('memoryGraph.sweepRegionSplits', params => sweepRegionSplits({ force: params?.force === true })),
         host.own.register('memoryGraph.sweepTimeline', () => sweepTimeline()),
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),
         host.own.register('memoryGraph.sweepReconsolidationQueue', () => sweepReconsolidationQueue()),

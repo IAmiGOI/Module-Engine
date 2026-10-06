@@ -7,6 +7,8 @@
  * создать новый факт или уточнить один из показанных рядом — и разрешает до 3 фактов за один ход вместо одного.
  */
 
+import { normalizeAttribute } from './states.js';
+
 /**
  * `nearestNodes` — до 6 ближайших к контексту узлов (`{id, label, content}`, ищет и сортирует вызывающий —
  * `cores/memory-graph/index.js`, по косинусу к contextEmbedding), показаны как готовые кандидаты на `"op":"update"`.
@@ -90,6 +92,7 @@ export function parseStructuredFields(raw) {
         subjects: cleanNames(raw.subjects),
         related,
         time: typeof raw.time === 'string' && raw.time.trim() ? raw.time.trim() : null,
+        attribute: raw.kind === 'event' ? '' : normalizeAttribute(raw.attribute),
         aliases,
     };
 }
@@ -98,20 +101,22 @@ export function parseStructuredFields(raw) {
  * Промпт structured-режима: вид ноды, субъекты, связи, время, псевдонимы. Списки известных имён и главных героев не дают модели
  * плодить «Кира» / «принцесса Кира» / «Kira» отдельными нодами. Legacy-промпт не тронут (`buildExtractionPrompt`).
  */
-export function buildStructuredExtractionPrompt({ contextText, nearestNodes = [], knownNames = [], mainCharacters = [], isFirstNode = false } = {}) {
+export function buildStructuredExtractionPrompt({ contextText, nearestNodes = [], knownNames = [], mainCharacters = [], isFirstNode = false, currentTime = null } = {}) {
+    const clock = currentTime ? `\nCurrent in-world time: ${currentTime}` : '';
     const nearest = nearestNodes.length ? `\n\nExisting nearby memories you may UPDATE instead of duplicating (use their id EXACTLY as given):\n${nearestNodes.map(node => `${node.id}: ${node.label} — ${node.content}`).join('\n')}` : '';
     const names = knownNames.length ? `\n\nKnown characters and objects in memory (use these names EXACTLY; invent a new name only if none fits): ${knownNames.join('; ')}` : '';
     const heroes = mainCharacters.length ? `\nMain characters of this chat: ${mainCharacters.join('; ')}` : '';
     const first = isFirstNode ? ' This is the very first memory of a fresh graph.' : '';
-    return `Recent story context:\n\n${contextText}\n\nExtract what is worth remembering LONG-TERM (dozens of turns from now); skip short-term plot mechanics and idle talk.${first}${names}${heroes}${nearest}
+    return `Recent story context:\n\n${contextText}${clock}\n\nExtract what is worth remembering LONG-TERM (dozens of turns from now); skip short-term plot mechanics and idle talk.${first}${names}${heroes}${nearest}
 
 Give every memory a "kind":
 - "fact": something true that stays true (a trait, a rule of the world, an established relationship).
 - "event": something that HAPPENED at a specific moment ("admitted", "left", "was killed") — a point on the timeline.
 - "entity": a living being taking part in the story; "object": a thing, place or group (set "subtype": "item" | "place" | "group").
+An "attribute" (optional): ONLY for a STATE of its subject that changes over time (outfit, location, mood, injury, relationship, possession) — a short lowercase key, the SAME key every time for the same kind of state. A new value of such a state is a NEW memory with the same "attribute" ("Nyx wears a black coat" after "Nyx wears a white dress"), never an "update" of the old one. Leave it out for anything that stays true.
 Also give "subjects" (names of who or what it is about; the main one first, names from the list above), optional "related" [{"name", "relation"}] for other participants, "time" (only if the text states when), and "aliases" {"Name": ["other way it is called"]} if the text shows another name for someone.
 An event and the facts it established are SEPARATE memories: "Kira admits she is the heir" gives the event "Kira reveals her heritage" AND the fact "Kira is the heir to the Varekh throne".
 
 Write every "content" so it reads on its OWN weeks later: full names instead of "he"/"she"/"it", concrete details. Importance 0-10 (0-3 minor, 4-7 meaningful, 8-10 defines the character or world).
-Reply with ONLY JSON: {"facts": [ {"op": "create", "kind": ..., "subtype": ..., "label": short name, "content": ..., "importance": ..., "subjects": [...], "related": [...], "time": ..., "aliases": {...}} or {"op": "update", "id": exact id from the list, "content": ..., "importance": ...} ]} with UP TO 4 entries, or {"facts": []} if nothing qualifies.`;
+Reply with ONLY JSON: {"facts": [ {"op": "create", "kind": ..., "subtype": ..., "label": short name, "content": ..., "importance": ..., "subjects": [...], "related": [...], "time": ..., "attribute": ..., "aliases": {...}} or {"op": "update", "id": exact id from the list, "content": ..., "importance": ...} (update ONLY to correct or enrich the same fact, never because something changed) ]} with UP TO 4 entries, or {"facts": []} if nothing qualifies.`;
 }

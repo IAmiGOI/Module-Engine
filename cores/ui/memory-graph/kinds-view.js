@@ -12,7 +12,7 @@ const kindOf = node => (KINDS.includes(node?.kind) ? node.kind : 'fact');
 /** Поля элемента Cytoscape для ноды structured-графа (`data(kind|core|subtype)`). */
 export function nodeKindData(node) {
     const kind = kindOf(node);
-    return { kind, core: Boolean(node.core), subtype: kind === 'object' ? (node.subtype ?? '') : '' };
+    return { kind, core: Boolean(node.core), subtype: kind === 'object' ? (node.subtype ?? '') : '', superseded: Boolean(node.supersededBy) };
 }
 
 /**
@@ -30,6 +30,7 @@ export function structuredStyleRules() {
     return [
         { selector: 'edge[?directed]', style: { 'target-arrow-shape': 'triangle', 'target-arrow-color': 'data(lineColor)', 'arrow-scale': 0.8, 'curve-style': 'bezier' } },
         { selector: 'edge[?chain]', style: { width: 1.6, 'line-opacity': 0.7 } },
+        { selector: 'node[?superseded]', style: { opacity: 0.4 } }, // устаревшее значение состояния — история, приглушена
     ];
 }
 

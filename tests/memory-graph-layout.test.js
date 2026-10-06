@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    NODE_RADIUS, nodeRadius, GAP, minCenterDistance, layoutRegion, layoutGraph, zoneAt, zonePath,
+    NODE_RADIUS, nodeRadius, GAP, minCenterDistance, layoutRegion, layoutGraph, zoneAt, zonePath, LAYOUT_MODES,
 } from '../cores/ui/memory-graph/layout.js';
 
 // --- 3.1 nodeRadius() ------------------------------------------------------
@@ -152,7 +152,7 @@ test('layoutGraph() keeps a node inside its own zone even when that zone is NARR
         nodes.push({ id, regionId: smallKey, degree: 0, protectedNode: true, createdAt: 1000 + i });
         regions[smallKey] = { centerNodeId: id, subCenterIds: [], nodeIds: [id], label: smallKey };
     }
-    const { positions, zones } = layoutGraph(nodes, regions, { innerHole: 0 });
+    const { positions, zones } = layoutGraph(nodes, regions, { innerHole: 0, mode: 'legacy' });
     const bigZone = zones.find(zone => zone.regionId === 'big');
     assert.ok(bigZone.a1 - bigZone.a0 < Math.PI / 15, 'sanity: the flooded floor must actually squeeze "big" into a narrow angle for this check to mean anything');
     for (const node of nodes.filter(n => n.regionId === 'big')) {
@@ -213,4 +213,113 @@ test('zonePath() returns a well-formed SVG path for both a wedge-from-center zon
         assert.match(path, /^M /, `zone ${zone.regionId}'s path must start with a moveto`);
         assert.match(path, /Z$/, `zone ${zone.regionId}'s path must close`);
     }
+});
+
+// --- Органическая раскладка (force-layout.js) ----------------------------------
+
+/** Регион из двух хабов-героев, `factCount` фактов (каждый связан с обоими хабами и со «своим» событием) и событий, как в живом чате. */
+function buildHeroGraph(factCount = 24) {
+    const nodes = [];
+    const link = (a, b, type = 'related') => { a.edges.push({ to: b.id, type }); b.edges.push({ to: a.id, type }); a.degree += 1; b.degree += 1; };
+    const make = (id, extra) => { const node = { id, regionId: 'r', degree: 0, edges: [], createdAt: nodes.length, ...extra }; nodes.push(node); return node; };
+    const echidna = make('echidna', { kind: 'entity', core: true, protectedNode: true });
+    const sasha = make('sasha', { kind: 'entity', core: true, protectedNode: true });
+    for (let i = 0; i < factCount; i += 1) {
+        const fact = make(`fact${i}`, { kind: 'fact' });
+        link(fact, echidna, 'mentions');
+        if (i % 3) link(fact, sasha);
+        if (i > 0 && i % 4 !== 0) link(fact, nodes.find(node => node.id === `fact${i - 1}`));
+        const event = make(`event${i}`, { kind: 'event', regionId: null });
+        link(event, fact, 'participates');
+        link(event, echidna, 'participates');
+    }
+    return { nodes, regions: { r: { centerNodeId: 'echidna', subCenterIds: ['sasha'], nodeIds: nodes.filter(n => n.regionId).map(n => n.id), label: 'r' } } };
+}
+
+test('LAYOUT_MODES lists both "organic" (the default) and the old spiral as "legacy"', () => {
+    assert.deepEqual([...LAYOUT_MODES].sort(), ['legacy', 'organic']);
+});
+
+test('layoutGraph() organic: no two nodes overlap, with events laid out in the region of the nodes they connect to', () => {
+    const { nodes, regions } = buildHeroGraph();
+    const { positions, radii, zones } = layoutGraph(nodes, regions);
+    assert.equal(positions.size, nodes.length, 'every node, events included, gets a position');
+    const ids = [...positions.keys()];
+    for (let i = 0; i < ids.length; i += 1) for (let j = i + 1; j < ids.length; j += 1) {
+        const a = positions.get(ids[i]);
+        const b = positions.get(ids[j]);
+        assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= radii.get(ids[i]) + radii.get(ids[j]), `${ids[i]} and ${ids[j]} overlap`);
+    }
+    assert.equal(zones.length, 1, 'events must not spawn a separate "Unplaced" zone');
+    assert.equal(zones[0].count, 2 + 24, 'the zone counts region members only — events do not eat region capacity');
+});
+
+test('layoutGraph() organic: is deterministic, and independent of the order nodes are passed in', () => {
+    const { nodes, regions } = buildHeroGraph();
+    const first = layoutGraph(nodes, regions);
+    const second = layoutGraph([...nodes].reverse(), regions);
+    for (const node of nodes) assert.deepEqual(second.positions.get(node.id), first.positions.get(node.id), node.id);
+});
+
+test('layoutGraph() organic: keeps every node inside its zone, and facts do not collapse onto one hollow ring around the heroes', () => {
+    const { nodes, regions } = buildHeroGraph();
+    const { positions, zones } = layoutGraph(nodes, regions);
+    for (const node of nodes.filter(n => n.regionId)) {
+        const at = positions.get(node.id);
+        assert.equal(zoneAt(at.x, at.y, zones)?.regionId, 'r', `${node.id} must stay inside its own zone`);
+    }
+    const center = positions.get('echidna');
+    const distances = nodes.filter(n => n.kind === 'fact').map(n => Math.hypot(positions.get(n.id).x - center.x, positions.get(n.id).y - center.y)).sort((a, b) => a - b);
+    assert.ok(distances.at(-1) - distances[0] > 40, 'facts must be spread across depths, not sit on a single ring');
+});
+
+test('layoutGraph() organic: an event ends up closer to the fact it is attached to than the average node is', () => {
+    const { nodes, regions } = buildHeroGraph();
+    const { positions } = layoutGraph(nodes, regions);
+    const dist = (a, b) => Math.hypot(positions.get(a).x - positions.get(b).x, positions.get(a).y - positions.get(b).y);
+    const own = nodes.filter(n => n.kind === 'event').map(n => dist(n.id, n.id.replace('event', 'fact')));
+    const others = [];
+    for (const e of nodes.filter(n => n.kind === 'event')) for (const f of nodes.filter(n => n.kind === 'fact' && n.id !== e.id.replace('event', 'fact'))) others.push(dist(e.id, f.id));
+    const mean = list => list.reduce((s, v) => s + v, 0) / list.length;
+    assert.ok(mean(own) < mean(others) * 0.6, `attached ${mean(own).toFixed(0)}px vs other ${mean(others).toFixed(0)}px`);
+});
+
+test('layoutGraph() legacy: still produces the old spiral — the center of a region sits exactly at the anchor', () => {
+    const { nodes, regions } = buildHeroGraph();
+    const real = nodes.filter(n => n.kind !== 'event');
+    const legacy = layoutGraph(real, regions, { mode: 'legacy' });
+    const center = legacy.positions.get('echidna');
+    const subCenter = legacy.positions.get('sasha');
+    assert.ok(Math.abs(center.y - subCenter.y) < 1, 'the legacy layout keeps sub-centers on the center row');
+});
+
+test('layoutGraph() organic: reports the EFFECTIVE region of an event (its neighbours\' region) in regionOf, so the window can colour it as part of the region', () => {
+    const { nodes, regions } = buildHeroGraph(6);
+    const { regionOf } = layoutGraph(nodes, regions);
+    for (const node of nodes) assert.equal(regionOf.get(node.id), 'r', `${node.id} belongs to region r in the layout, event or not`);
+});
+
+test('layoutGraph() organic: an event follows the region of ITS facts, not the region of the heroes it also links to', () => {
+    const { nodes, regions } = buildHeroGraph(6);
+    const away = { id: 'away', regionId: 'z-other', degree: 1, edges: [], kind: 'fact', createdAt: 99 };
+    const event = nodes.find(node => node.id === 'event0');
+    event.edges.push({ to: 'away', type: 'participates' });
+    away.edges.push({ to: 'event0', type: 'participates' });
+    event.edges = event.edges.filter(edge => edge.to !== 'fact0'); // единственный «свой» факт — в другом регионе; к героям (регион r) ребра остались
+    nodes.push(away);
+    const allRegions = { ...regions, 'z-other': { centerNodeId: 'away', subCenterIds: [], nodeIds: ['away'], label: 'other' } };
+    assert.equal(layoutGraph(nodes, allRegions).regionOf.get('event0'), 'z-other');
+});
+
+test('layoutGraph() organic: an event linked only to heroes goes to the region whose nodes are closest to it in meaning', () => {
+    const vec = (a, b) => [1, a, b, 0.5];
+    const { nodes, regions } = buildHeroGraph(4);
+    for (const node of nodes.filter(n => n.kind === 'fact')) node.embedding = vec(1, 0);
+    const away = [0, 1, 2].map(i => ({ id: `away${i}`, regionId: 'z-other', degree: 0, edges: [], kind: 'fact', createdAt: 90 + i, embedding: vec(0, 1) }));
+    nodes.push(...away);
+    const event = nodes.find(node => node.id === 'event0');
+    event.edges = event.edges.filter(edge => edge.to === 'echidna'); // только хаб
+    event.embedding = vec(0, 1);
+    const allRegions = { ...regions, 'z-other': { centerNodeId: 'away0', subCenterIds: [], nodeIds: away.map(n => n.id), label: 'other' } };
+    assert.equal(layoutGraph(nodes, allRegions).regionOf.get('event0'), 'z-other');
 });

@@ -34,7 +34,7 @@ export {
 // для интерпретации клика/драга (Б3-геометрия, привязанная к дартборду) — Этап 7 того же плана заменит их на
 // `zoneAt()` (layout.js); до тех пор клик/драг по канвасу решают регион по СТАРОЙ дартборд-сетке, а сам фон и
 // позиции нод уже рисуются по НОВЫМ зонам — известное временное расхождение, см. ROADMAP 5.108г.
-import { layoutGraph, nodeRadius, zoneAt } from './memory-graph/layout.js';
+import { layoutGraph, nodeRadius, zoneAt, LAYOUT_MODES } from './memory-graph/layout.js';
 import { diffElements } from './memory-graph/elements-diff.js';
 import { dropDecision, connectModeStep, edgeTypesInGraph } from './memory-graph/interactions.js';
 // `renderZonesSvg()`/`ZONES_SVG_ID`/`zonesSignature()` (zones-svg.js) БОЛЬШЕ НЕ ЗОВУТСЯ отсюда — реальная жалоба
@@ -128,7 +128,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
             value: {
                 visible: panelVisible.peek(), collapsed: panelCollapsed.peek(), position: panelPosition.peek(), size: panelSize.peek(),
                 retrievalOverlayEnabled: retrievalOverlayEnabled.peek(), zonesBackgroundEnabled: zonesBackgroundEnabled.peek(),
-                colorMetricId: colorMetricId.peek(), sizeMode: sizeMode.peek(), glowMode: glowMode.peek(),
+                colorMetricId: colorMetricId.peek(), sizeMode: sizeMode.peek(), glowMode: glowMode.peek(), layoutMode: layoutMode.peek(),
                 leftDrawerOpen: leftDrawerOpen.peek(), rightDrawerOpen: rightDrawerOpen.peek(), activeTab: library.activeTab.peek(),
             },
         });
@@ -149,6 +149,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         if (saved.colorMetricId) colorMetricId.set(saved.colorMetricId);
         if (saved.sizeMode) sizeMode.set(saved.sizeMode);
         if (saved.glowMode) glowMode.set(saved.glowMode);
+        if (LAYOUT_MODES.includes(saved.layoutMode)) layoutMode.set(saved.layoutMode);
         leftDrawerOpen.set(Boolean(saved.leftDrawerOpen));
         rightDrawerOpen.set(Boolean(saved.rightDrawerOpen));
         library.activeTab.set(normalizeTab(saved.activeTab));
@@ -587,6 +588,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // Последняя посчитанная раскладка (Map(id → {x,y})) — снапбэк после неудачного драга (Этап 7.1: "зона та же —
     // нода плавно возвращается на СВОЮ позицию из раскладки") анимирует ИМЕННО эту позицию, не перечитывает граф.
     let lastPositions = new Map();
+    let lastRegionOf = new Map(); // эффективный регион нод раскладки (у событий — регион их фактов), см. `layoutGraph()`
 
     // --- Перетаскивание/соединение (Этап 7) --------------------------------
 
@@ -633,6 +635,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     // --- Режимы карты (Этап 6.2) — три независимых канала, тот же принцип, что у звёздной карты EVE Online:
     // ОДНА карта, но выбор решает, что показывают цвет/размер/свечение. Persisted с окном (см. save/loadWindowState).
     const colorMetricId = signal('weight');
+    const layoutMode = signal('organic'); // 'organic' — по смыслу связей (force-layout.js) | 'legacy' — прежняя спираль Фогеля
     const sizeMode = signal('connections'); // 'connections' | 'importance' | 'retrieved' | 'uniform'
     const glowMode = signal('weight'); // 'none' | 'weight' | 'retrieved' | 'risk'
     const MAP_MODE_PRESETS = {
@@ -685,11 +688,12 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      */
     function computeGraphLayout() {
         const all = sizeMode() === 'connections' ? nodes() : nodes().map(node => ({ ...node, degree: sizeDrivingValue(node) }));
-        if (!isStructured()) return layoutGraph(all, regionsById());
+        const mode = layoutMode();
+        if (mode === 'organic' || !isStructured()) return layoutGraph(all, regionsById(), { mode });
         // structured: события с якорем — не в зонах, а по орбите вокруг якорной ноды (kinds-view.js); остальное — как обычно.
         const byId = Object.fromEntries(all.map(node => [node.id, node]));
         const orbit = all.filter(node => isOrbitEvent(node, byId));
-        const layout = layoutGraph(all.filter(node => !isOrbitEvent(node, byId)), regionsById());
+        const layout = layoutGraph(all.filter(node => !isOrbitEvent(node, byId)), regionsById(), { mode: 'legacy' });
         const placed = placeEventsNearAnchors(orbit, byId, layout.positions, layout.radii);
         for (const event of orbit) {
             layout.positions.set(event.id, placed.get(event.id) ?? { x: 0, y: 0 });
@@ -709,7 +713,9 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     let lastHueByRegionId = new Map();
 
     /** `Map(id → { group, data, position? })` для ВСЕХ элементов, что ДОЛЖНЫ быть на канвасе прямо сейчас — вход для `diffElements()`. `positions`/`radii` — уже посчитанная `layoutGraph()` (вызывающий, `syncCytoscape()`, считает её ОДИН раз и на элементы, и на зоны фона). */
-    function buildNextElements({ positions, radii, zones }) {
+    function buildNextElements({ positions, radii, zones, regionOf = new Map() }) {
+        // Событие без `regionId` в данных рисуется в регионе своих соседей (organic) — и цвет у него должен быть как у региона, а не «вне региона».
+        const shown = node => (node.regionId == null && regionOf.get(node.id) != null ? { ...node, regionId: regionOf.get(node.id) } : node);
         const byId = nodesById();
         const colorMetric = findMetric(colorMetricId());
         const hueByRegionId = new Map(zones.map(zone => [zone.regionId, zone.hue]));
@@ -729,7 +735,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                     // `colorMetric.value()` уже само знает, что делать с `protectedNode` для метрик, которым это
                     // важно (`weight`/`risk` — см. metrics.js); остальные метрики (region/source/age/…) красят
                     // защищённую ноду ТАК ЖЕ, как обычную — белая обводка (graphStylesheet()) и так отличает роль.
-                    color: metricColor(colorMetric, colorMetric.value(node, ctx), colorDomain),
+                    color: metricColor(colorMetric, colorMetric.value(shown(node), ctx), colorDomain),
                     glow: glowValue(node, glowMode(), ctx, retrievedDomain),
                 },
                 position: positions.get(node.id) ?? { x: 0, y: 0 },
@@ -766,7 +772,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
                 seen.add(key);
                 const other = byId.get(edge.to);
                 const backbone = Boolean(node.protectedNode && other?.protectedNode);
-                const regionStyle = showRegionEdgeColor ? regionEdgeStyle(node.regionId, other?.regionId) : null;
+                const regionStyle = showRegionEdgeColor ? regionEdgeStyle(shown(node).regionId, other ? shown(other).regionId : undefined) : null;
                 map.set(`edge:${key}`, {
                     group: 'edges',
                     data: {
@@ -885,9 +891,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // `nodePoints` — позиции берём из УЖЕ посчитанной раскладки (`lastPositions`, syncCytoscape()), не пересчитываем.
         const nodePoints = [];
         for (const node of nodes()) {
-            if (node.regionId == null) continue; // накопитель — не регион, полю красить нечего
+            const regionId = node.regionId ?? lastRegionOf.get(node.id) ?? null; // событие красит регион своих фактов, как и сама нода
+            if (regionId == null) continue; // накопитель — не регион, полю красить нечего
             const pos = lastPositions.get(node.id);
-            if (pos) nodePoints.push({ x: pos.x, y: pos.y, regionId: node.regionId });
+            if (pos) nodePoints.push({ x: pos.x, y: pos.y, regionId });
         }
 
         const fieldGrid = Math.max(FIELD_GRID_MIN, Math.min(FIELD_GRID_MAX, Math.ceil(size / FIELD_CELL_TARGET_PX)));
@@ -1379,9 +1386,10 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
      */
     function syncCytoscape() {
         if (!cy) return;
-        const { positions, radii, zones } = computeGraphLayout();
+        const { positions, radii, zones, regionOf } = computeGraphLayout();
         lastPositions = positions;
-        const next = buildNextElements({ positions, radii, zones });
+        lastRegionOf = regionOf ?? new Map();
+        const next = buildNextElements({ positions, radii, zones, regionOf });
         const { add, remove, update } = diffElements(currentElements(), next, { excludeId: draggingId });
         for (const id of remove) {
             const ele = cy.getElementById(id);
@@ -1744,6 +1752,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         { value: 'connections', label: 'Connections' }, { value: 'importance', label: 'Importance' },
         { value: 'retrieved', label: 'Retrieved' }, { value: 'uniform', label: 'Uniform' },
     ];
+    const LAYOUT_OPTIONS = [{ value: 'organic', label: 'Organic' }, { value: 'legacy', label: 'Legacy' }];
     const GLOW_OPTIONS = [
         { value: 'none', label: 'None' }, { value: 'weight', label: 'Weight' },
         { value: 'retrieved', label: 'Retrieved' }, { value: 'risk', label: 'Risk' },
@@ -1780,7 +1789,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
     /** "Map mode" (Этап 6.2) — три выпадающих списка + пять быстрых пресетов кнопками (тот же приём, что вкладки режимов карты в EVE). */
     function mapModeSection() {
         return h('div', { class: 'stme-mg-mapmode' },
-            computed(() => Row(Field('Color by', Select(colorMetricId, colorOptions())), Field('Size by', Select(sizeMode, SIZE_OPTIONS)), Field('Glow by', Select(glowMode, isStructured() ? [...GLOW_OPTIONS, { value: 'core', label: 'Core' }] : GLOW_OPTIONS)))),
+            computed(() => Row(Field('Color by', Select(colorMetricId, colorOptions())), Field('Size by', Select(sizeMode, SIZE_OPTIONS)), Field('Layout', Select(layoutMode, LAYOUT_OPTIONS, { onChange: () => saveWindowState() })), Field('Glow by', Select(glowMode, isStructured() ? [...GLOW_OPTIONS, { value: 'core', label: 'Core' }] : GLOW_OPTIONS)))),
             Row(Toggle('Region background', zonesBackgroundEnabled)),
             Row(
                 Button('Health', () => applyMapModePreset('health')),
@@ -2248,7 +2257,7 @@ export function createMemoryGraphPanelCore(host, { mount } = {}) {
         // подписало бы этот эффект, но не так наглядно): маркер должен
         // появляться/двигаться/переименовываться СРАЗУ, без ожидания
         // следующего изменения самого графа.
-        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); colorMetricId(); sizeMode(); glowMode(); graphMode(); zonesBackgroundEnabled(); syncCytoscape(); });
+        effect(() => { nodes(); regions(); isCreating(); previewPosition(); formLabel(); colorMetricId(); sizeMode(); glowMode(); layoutMode(); graphMode(); zonesBackgroundEnabled(); syncCytoscape(); });
         // Подсветка ретрива — отдельный эффект (не завязан на изменения самого графа): переключатель/история могут
         // поменяться без единого нового узла/региона, и наоборот — обычный `refresh()` не должен лишний раз дёргать
         // подсветку, если ни то ни другое не менялось (`syncCytoscape()` всё равно СНОВА применит её в конце, это

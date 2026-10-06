@@ -129,6 +129,20 @@ export const DEFAULT_SETTINGS = Object.freeze({
     reconsolidationMinCluster: 3,
     // structured: сворачивание старых событий в сводку (timeline-compact.js) — оставить свежих, сколько сворачивать за раз, как часто (в ходах).
     // structured: потолок автоповышения до Core — доля от числа нод, но не меньше `coreMinCap` (core-tier.js); ручное закрепление потолок обходит.
+    // structured: сущности по тексту нод (entity-candidates.js) — имя, которое модель не назвала в subjects, но которое повторяется.
+    entityMinMentions: 3, // в скольких РАЗНЫХ нодах имя должно встретиться
+    entityMaxPerSweep: 2,
+    entitySweepEveryTurns: 6,
+    // Слияние дублей: порог косинуса подбирается по графу (mean + z·σ по парам нод региона), но не выше `mergeSimilarityThreshold` и не ниже floor.
+    mergeAdaptiveZ: 1.8,
+    mergeAdaptiveFloor: 0.85,
+    mergeScanEveryTurns: 10, // как часто (в ходах) искать дубли среди уже лежащих нод, а не только при вставке
+    mergeAdaptiveMinNodes: 6, // меньше нод одного вида в регионе — статистики нет, остаётся абсолютный порог
+    // structured: формирование регионов из тем внутри региона (region-split.js) — не привязано к переполнению.
+    regionSplitMinNodes: 8, // меньше обычных нод в регионе — делить рано
+    regionSplitMinCluster: 3, // тема — не меньше стольких нод
+    regionSplitMergeZ: 0.4, // порог слияния групп: mean + z·σ по парам нод региона (меньше — крупнее темы)
+    regionSplitEveryTurns: 4, // как часто (в ходах) искать темы
     maxRegions: 24, // потолок числа регионов: и для тематического бутстрапа, и для рождения регионов вокруг Core (окно раскладки выдерживает ~30)
     retrievalEventsMax: 5, // structured: сколько последних событий якорных нод добавлять секцией «Recent events» в блок ретрива
     coreSweepEveryTurns: 10, // как часто (в ходах) искать кандидатов в Core помимо проверки после каждого размещения
@@ -309,6 +323,17 @@ export function clampGraphSettings(values = {}) {
         mergeSimilarityThreshold: clampInt(values.mergeSimilarityThreshold * 100, 0, 100, DEFAULT_SETTINGS.mergeSimilarityThreshold * 100) / 100,
         mergeQueueMaxTurns: clampInt(values.mergeQueueMaxTurns, 1, 200, DEFAULT_SETTINGS.mergeQueueMaxTurns),
         maxRegions: clampInt(values.maxRegions, 1, 60, DEFAULT_SETTINGS.maxRegions),
+        entityMinMentions: clampInt(values.entityMinMentions, 2, 50, DEFAULT_SETTINGS.entityMinMentions),
+        entityMaxPerSweep: clampInt(values.entityMaxPerSweep, 0, 10, DEFAULT_SETTINGS.entityMaxPerSweep),
+        entitySweepEveryTurns: clampInt(values.entitySweepEveryTurns, 1, 500, DEFAULT_SETTINGS.entitySweepEveryTurns),
+        mergeAdaptiveZ: clampInt(values.mergeAdaptiveZ * 10, 5, 50, DEFAULT_SETTINGS.mergeAdaptiveZ * 10) / 10,
+        mergeAdaptiveFloor: clampInt(values.mergeAdaptiveFloor * 100, 50, 99, DEFAULT_SETTINGS.mergeAdaptiveFloor * 100) / 100,
+        mergeScanEveryTurns: clampInt(values.mergeScanEveryTurns, 1, 500, DEFAULT_SETTINGS.mergeScanEveryTurns),
+        mergeAdaptiveMinNodes: clampInt(values.mergeAdaptiveMinNodes, 3, 100, DEFAULT_SETTINGS.mergeAdaptiveMinNodes),
+        regionSplitMinNodes: clampInt(values.regionSplitMinNodes, 4, 200, DEFAULT_SETTINGS.regionSplitMinNodes),
+        regionSplitMinCluster: clampInt(values.regionSplitMinCluster, 2, 50, DEFAULT_SETTINGS.regionSplitMinCluster),
+        regionSplitMergeZ: clampInt(values.regionSplitMergeZ * 100, 0, 300, DEFAULT_SETTINGS.regionSplitMergeZ * 100) / 100,
+        regionSplitEveryTurns: clampInt(values.regionSplitEveryTurns, 1, 500, DEFAULT_SETTINGS.regionSplitEveryTurns),
         retrievalEventsMax: clampInt(values.retrievalEventsMax, 0, 30, DEFAULT_SETTINGS.retrievalEventsMax),
         coreSweepEveryTurns: clampInt(values.coreSweepEveryTurns, 1, 500, DEFAULT_SETTINGS.coreSweepEveryTurns),
         plotSkeletonInPrompt: values.plotSkeletonInPrompt === true,
@@ -517,15 +542,38 @@ export function jaccardOverlap(wordsA, wordsB) {
  * попадает в дело только для прошедших первый фильтр. Возвращает id
  * ЛУЧШЕГО совпадения (наибольший косинус среди подтверждённых) или `null`.
  */
-export function findMergeCandidate(newNode, members, { wordOverlapThreshold = DEFAULT_SETTINGS.mergeWordOverlapThreshold, similarityThreshold = DEFAULT_SETTINGS.mergeSimilarityThreshold } = {}) {
+export function findMergeCandidate(newNode, members, { wordOverlapThreshold = DEFAULT_SETTINGS.mergeWordOverlapThreshold, similarityThreshold = DEFAULT_SETTINGS.mergeSimilarityThreshold, strongSimilarity = null } = {}) {
     let bestId = null;
     let bestSimilarity = -Infinity;
     for (const member of members) {
-        if (jaccardOverlap(newNode.words, member.words) < wordOverlapThreshold) continue;
+        const overlaps = jaccardOverlap(newNode.words, member.words) >= wordOverlapThreshold;
+        // Перефраз («Sasha desires a wife» / «Sasha's core desire is companionship») почти не делит слов, но по смыслу — дубль. Статистически
+        // исключительное сходство (`strongSimilarity`, считается по графу) снимает словарный фильтр; без него — прежнее поведение.
+        if (!overlaps && strongSimilarity === null) continue;
         const similarity = cosineSimilarity(newNode.embedding, member.embedding);
+        if (!overlaps && similarity < strongSimilarity) continue;
         if (similarity >= similarityThreshold && similarity > bestSimilarity) { bestSimilarity = similarity; bestId = member.id; }
     }
     return bestId;
+}
+
+/**
+ * Порог слияния по самому графу. Для E5 сходства сжаты в узкую полосу (у реального графа среднее 0.83, σ 0.03), абсолютный 0.92
+ * ловит только почти дословные повторы; здесь порог — `mean + z·σ` по парам нод ОДНОГО вида региона. `ceiling` (прежний абсолютный
+ * порог) — граница сверху: адаптивный порог только ОСЛАБЛЯЕТ требование, строже прежнего не бывает. `floor` — чтобы в графе, где
+ * всё похоже на всё, не сливалось случайное. Нод меньше `minNodes` или нулевой разброс — статистики нет, `null` (остаётся абсолютный).
+ * `strong` — «исключительное» сходство mean + 3σ (не ниже самого порога): выше него словарный фильтр не нужен.
+ */
+export function adaptiveMergeThresholds(embeddings, { z = DEFAULT_SETTINGS.mergeAdaptiveZ, floor = DEFAULT_SETTINGS.mergeAdaptiveFloor, ceiling = DEFAULT_SETTINGS.mergeSimilarityThreshold, minNodes = DEFAULT_SETTINGS.mergeAdaptiveMinNodes } = {}) {
+    const vectors = embeddings.filter(vector => Array.isArray(vector) && vector.length);
+    if (vectors.length < minNodes) return null;
+    const sims = [];
+    for (let i = 0; i < vectors.length; i += 1) for (let j = i + 1; j < vectors.length; j += 1) sims.push(cosineSimilarity(vectors[i], vectors[j]));
+    const mean = sims.reduce((sum, value) => sum + value, 0) / sims.length;
+    const std = Math.sqrt(sims.reduce((sum, value) => sum + (value - mean) ** 2, 0) / sims.length);
+    if (std < 1e-9) return null;
+    const similarity = Math.min(ceiling, Math.max(floor, mean + z * std));
+    return { similarity, strong: Math.max(similarity, mean + 3 * std), mean, std };
 }
 
 // --- Phase 2: отбор маяков и маршрут между ними ---------------------------
@@ -741,7 +789,8 @@ export function renderMemoryPrompt(route, nodesById) {
         const node = nodesById[id];
         if (!node) return null;
         const suffix = route.standalone.includes(id) ? ' (unconnected)' : noiseTargets.has(id) && !onMainRoute.has(id) ? ' (noise)' : '';
-        return `- ${node.label}${suffix}: ${node.content}`;
+        const since = node.attribute && node.timeLabel ? ` [since ${node.timeLabel}]` : ''; // действующее состояние: с какого момента верно
+        return `- ${node.label}${suffix}: ${node.content}${since}`;
     }).filter(Boolean);
     if (!detailLines.length) return null;
 

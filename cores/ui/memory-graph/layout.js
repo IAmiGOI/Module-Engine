@@ -6,6 +6,8 @@
  * окно (Этап 4) переключается на эту.
  */
 
+import { organicRegionLayout } from './force-layout.js';
+
 // --- 3.1 Радиус ноды ---------------------------------------------------------
 
 export const NODE_RADIUS = { min: 4, perSqrtDegree: 2.2, max: 16, protectedBonus: 2 };
@@ -180,7 +182,54 @@ function placeZone({ id, label, a0, a1, layout, pad, innerHole, capacity, hue, c
  * ширины `minAngle`, вычтенный из круга ДО распределения регионов — иначе регионы заняли бы весь круг целиком, не
  * оставив накопителю места, где не пересекаясь встать.
  */
-export function layoutGraph(allNodes, regions, { innerHole = 60, pad = 12, minAngle = Math.PI / 15, capacity = 23 } = {}) {
+export const LAYOUT_MODES = Object.freeze(['organic', 'legacy']);
+
+/**
+ * Регион события в органической раскладке: событие не лежит в зоне региона само (`regionId: null`), но рисуется РЯДОМ с нодами, с
+ * которыми связано, — значит, и считается частью раскладки региона большинства своих соседей (ничья — по порядку ключей). Событие
+ * без соседей в регионах остаётся в накопителе.
+ */
+function eventRegionFor(event, regionOf, nodesById, membersByRegion = new Map()) {
+    // Рёбра к Core-хабам почти ничего не говорят (хаб связан со всем регионом), поэтому голос такого ребра слабый: событие идёт за
+    // СВОИМИ фактами, а к хабам прибивается, только если других соседей нет.
+    const votes = new Map();
+    for (const edge of event.edges ?? []) {
+        const key = regionOf.get(edge.to);
+        if (key == null) continue;
+        const hub = Boolean(nodesById.get(edge.to)?.core || nodesById.get(edge.to)?.protectedNode);
+        votes.set(key, (votes.get(key) ?? 0) + (hub ? 0.1 : 1));
+    }
+    // Событие связано только с хабами (экстрактор не соединил его ни с одним фактом) — тогда регион по смыслу: где ноды ближе всего
+    // к эмбедингу события в среднем.
+    const plain = [...votes.entries()].filter(([, weight]) => weight >= 1);
+    if (!plain.length && Array.isArray(event.embedding)) {
+        let bestKey = null;
+        let bestScore = -Infinity;
+        for (const [key, list] of membersByRegion) {
+            const others = list.filter(node => node.kind !== 'event' && !node.core && !node.protectedNode && Array.isArray(node.embedding));
+            if (!others.length) continue;
+            const score = others.reduce((sum, node) => sum + dotCosine(event.embedding, node.embedding), 0) / others.length;
+            if (score > bestScore || (score === bestScore && String(key) < String(bestKey))) { bestScore = score; bestKey = key; }
+        }
+        if (bestKey !== null) return bestKey;
+    }
+    let best = null;
+    for (const [key, count] of votes) if (best === null || count > votes.get(best) || (count === votes.get(best) && String(key) < String(best))) best = key;
+    return best;
+}
+
+function dotCosine(a, b) {
+    let dot = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i += 1) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+    return na && nb ? dot / Math.sqrt(na * nb) : 0;
+}
+
+/**
+ * `mode`: `'organic'` (по умолчанию) — раскладка по смыслу связей и эмбедингов (`force-layout.js`), события входят в раскладку региона
+ * своих соседей; `'legacy'` — прежняя спираль Фогеля по порядку создания (`layoutRegion()`), события раскладывает вызывающий.
+ */
+export function layoutGraph(allNodes, regions, { innerHole = 60, pad = 12, minAngle = Math.PI / 15, capacity = 23, mode = 'organic' } = {}) {
+    const organic = mode !== 'legacy';
     const nodesById = new Map(allNodes.map(node => [node.id, node]));
     const membersByRegion = new Map();
     const stagingMembers = [];
@@ -189,13 +238,30 @@ export function layoutGraph(allNodes, regions, { innerHole = 60, pad = 12, minAn
         if (!membersByRegion.has(node.regionId)) membersByRegion.set(node.regionId, []);
         membersByRegion.get(node.regionId).push(node);
     }
+    // Нодам, не относящимся к ёмкости региона (события), считаем только «настоящих» членов: `count` зоны остаётся числом нод региона.
+    const countOf = new Map([...membersByRegion].map(([key, list]) => [key, list.length]));
+    if (organic) {
+        const regionOf = new Map(allNodes.filter(node => node.regionId != null).map(node => [node.id, node.regionId]));
+        for (let i = stagingMembers.length - 1; i >= 0; i -= 1) {
+            const node = stagingMembers[i];
+            if (node.kind !== 'event') continue;
+            const key = eventRegionFor(node, regionOf, nodesById, membersByRegion);
+            if (key == null || !regions[key]) continue;
+            membersByRegion.get(key)?.push(node);
+            if (!membersByRegion.has(key)) membersByRegion.set(key, [node]);
+            stagingMembers.splice(i, 1);
+        }
+    }
 
+    const arrange = (members, { centerId = null, subCenterIds = [] } = {}) => (organic
+        ? organicRegionLayout(members, { centerId, radiusOf: nodeRadius, minDistance: minCenterDistance })
+        : layoutRegion(members, { centerId, subCenterIds }));
     const regionKeys = sortRegionKeys(Object.keys(regions));
     const regionLayouts = regionKeys.map(key => {
         const region = regions[key];
-        return { key, region, layout: layoutRegion(membersByRegion.get(key) ?? [], { centerId: region.centerNodeId, subCenterIds: region.subCenterIds ?? [] }) };
+        return { key, region, layout: arrange(membersByRegion.get(key) ?? [], { centerId: region.centerNodeId, subCenterIds: region.subCenterIds ?? [] }) };
     });
-    const stagingLayout = stagingMembers.length ? layoutRegion(stagingMembers, { centerId: null, subCenterIds: [] }) : null;
+    const stagingLayout = stagingMembers.length ? arrange(stagingMembers) : null;
 
     const stagingAngle = stagingLayout ? minAngle : 0;
     const available = 2 * Math.PI - stagingAngle;
@@ -220,7 +286,7 @@ export function layoutGraph(allNodes, regions, { innerHole = 60, pad = 12, minAn
         cursor = a1;
         placeZone({
             id: key, label: region.label ?? key, a0, a1, layout, pad, innerHole, capacity, hue: (360 * index) / regionLayouts.length,
-            count: (membersByRegion.get(key) ?? []).length, nodesById, positions, radii, zones,
+            count: countOf.get(key) ?? 0, nodesById, positions, radii, zones,
         });
     });
 
@@ -234,7 +300,10 @@ export function layoutGraph(allNodes, regions, { innerHole = 60, pad = 12, minAn
         });
     }
 
-    return { positions, radii, zones };
+    // Эффективный регион каждой ноды раскладки — у событий (`regionId: null` в данных) это регион их соседей; окно красит и считает по нему.
+    const regionOf = new Map();
+    for (const [key, list] of membersByRegion) for (const node of list) regionOf.set(node.id, key);
+    return { positions, radii, zones, regionOf };
 }
 
 // --- 3.5 Попадание в зону -----------------------------------------------------

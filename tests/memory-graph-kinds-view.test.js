@@ -22,9 +22,11 @@ test('an event edge is drawn once from its out record with an arrow, and the in 
     assert.equal(directedEdgeEnds({ id: 'a' }, { to: 'b', type: 'related' }), null, 'a lore edge stays a plain line');
 });
 
-test('the structured style rules give only arrows and thicker chains, and the full stylesheet includes them', () => {
+test('the structured style rules give arrows, thicker chains and a muted look for superseded states, and the full stylesheet includes them', () => {
     const selectors = structuredStyleRules().map(rule => rule.selector);
-    assert.deepEqual(selectors, ['edge[?directed]', 'edge[?chain]']);
+    assert.deepEqual(selectors, ['edge[?directed]', 'edge[?chain]', 'node[?superseded]']);
+    assert.equal(nodeKindData({ supersededBy: 'x' }).superseded, true);
+    assert.equal(nodeKindData({}).superseded, false);
     const all = graphStylesheet().map(rule => rule.selector);
     for (const selector of selectors) assert.ok(all.includes(selector));
     assert.ok(all.indexOf('.dimmed') > all.indexOf('edge[?directed]'), 'dimming still wins over the structured rules');

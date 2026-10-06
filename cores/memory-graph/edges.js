@@ -1,4 +1,5 @@
 import { edgeTypeFor, isEvent } from './kinds.js';
+import { gameTimeKey } from './game-time.js';
 
 /**
  * Рёбра structured-графа (MEMORY_GRAPH_TYPES_PLAN.md, этап 2) — чистые функции над объектами нод.
@@ -29,7 +30,7 @@ export function addDirectedEdge(from, to, requestedType, { maxDegree = null } = 
     return { ok: true, type, created: true };
 }
 
-const orderKey = node => [Number.isFinite(node.gameTime) ? node.gameTime : Infinity, node.createdTurn ?? 0];
+const orderKey = node => { const key = gameTimeKey(node.gameTime); return [key !== null ? key : Infinity, node.createdTurn ?? 0]; };
 const compareEvents = (a, b) => {
     const [aTime, aTurn] = orderKey(a);
     const [bTime, bTurn] = orderKey(b);

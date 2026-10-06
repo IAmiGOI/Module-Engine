@@ -61,7 +61,7 @@ function fakeEmbed(text) {
     return vec.map(v => v / norm);
 }
 
-function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', fetchReplies = null, fetchOverride = null, lorebookEntries = null, random, embeddingGate = Promise.resolve(), onEmbeddingCall = null, character = null, workerEndpoint = 'https://fast.example.com', workerFormat = 'openai', workers = null } = {}) {
+function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something notable happened.","importance":5}', fetchReplies = null, fetchOverride = null, lorebookEntries = null, random, embeddingGate = Promise.resolve(), onEmbeddingCall = null, character = null, workerEndpoint = 'https://fast.example.com', workerFormat = 'openai', workers = null, rpTimeFields = null } = {}) {
     const engine = createEngine();
     const context = {};
     // `fetchOverride` — полный контроль над fetch (нужно, например, чтобы
@@ -106,7 +106,8 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
 
     // Фейковый RP Time — по умолчанию "выключен" (как requireTracker() бросает в реальном Ядре трекинга).
     const trackingHost = engine.registerCaller('core.tracking', 'cores', { tier: 'official' });
-    trackingHost.own.register('tracking.fields', () => { throw new Error('tracking: unknown tracker "rp-time".'); });
+    // `rpTimeFields` — функция, отдающая поля RP Time (`[{ name, value }]`), как это делает настоящее Ядро трекинга.
+    trackingHost.own.register('tracking.fields', () => { if (rpTimeFields) return rpTimeFields(); throw new Error('tracking: unknown tracker "rp-time".'); });
 
     // Фейковый Lorebook — управляется параметром теста.
     const lorebookHost = engine.registerCaller('core.lorebook', 'cores', { tier: 'official' });
@@ -163,7 +164,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move', 'memoryGraph.nodes.pin',
             'memoryGraph.nodes.createFromCharacterCard',
             'memoryGraph.edges.create', 'memoryGraph.edges.delete', 'memoryGraph.reset',
-            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepCores', 'memoryGraph.reclassify', 'memoryGraph.library.list', 'memoryGraph.library.save', 'memoryGraph.library.saveBack', 'memoryGraph.library.open', 'memoryGraph.library.rename', 'memoryGraph.library.duplicate', 'memoryGraph.library.delete', 'memoryGraph.library.export', 'memoryGraph.library.import', 'memoryGraph.library.findByLorebook', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
+            'memoryGraph.checkAndPlace', 'memoryGraph.sweepStaging', 'memoryGraph.sweepMergeQueue', 'memoryGraph.sweepTimeline', 'memoryGraph.sweepCores', 'memoryGraph.sweepDuplicateScan', 'memoryGraph.sweepEntities', 'memoryGraph.sweepRegionSplits', 'memoryGraph.reclassify', 'memoryGraph.library.list', 'memoryGraph.library.save', 'memoryGraph.library.saveBack', 'memoryGraph.library.open', 'memoryGraph.library.rename', 'memoryGraph.library.duplicate', 'memoryGraph.library.delete', 'memoryGraph.library.export', 'memoryGraph.library.import', 'memoryGraph.library.findByLorebook', 'memoryGraph.sweepReconsolidationQueue', 'memoryGraph.sweepBackbone', 'memoryGraph.bootstrapFromLorebook', 'memoryGraph.bootstrapAbort',
             // Прямой доступ к хранилищу — только для тестов Этапа 2 (MEMORY_GRAPH_FIX_PLAN.md), которым нужно
             // подложить данные "старого формата" (нода с большим createdTurn, без CLOCK_KEY), не воспроизводимые
             // никаким обычным вызовом контракта Ядра.
@@ -1289,6 +1290,66 @@ test('sweepMergeQueue() leaves both nodes untouched when SideCar judges them gen
     assert.equal(graphCore.mergeQueue().length, 0, 'the queue entry is still consumed either way — it does not retry forever');
 });
 
+test('a pair SideCar judged distinct is NOT queued again by the periodic duplicate scan — the verdict is remembered on the nodes', async () => {
+    const entries = [
+        { uid: 0, comment: 'Tavern Door', content: 'The old tavern door creaks in the evening light.' },
+        { uid: 1, comment: 'Tavern Door Again', content: 'The old tavern door creaks loudly in the evening light.' },
+    ];
+    const { graphCore, caller } = buildEngine({
+        lorebookEntries: entries,
+        fetchReplies: ['[{"region":"Door","subCenterUids":[1]}]', '[{"region":"Door","centerUid":0}]', '[]', '{"distinct":true}'],
+    });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+    await graphCore.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.mergeQueueMaxTurns + 1 });
+    await graphCore.sweepMergeQueue();
+    assert.equal(graphCore.mergeQueue().length, 0);
+
+    const scan = await call(caller, 'memoryGraph.sweepDuplicateScan', { force: true });
+    assert.equal(scan.value.queued, 0, 'the scan must skip a pair that was already judged distinct');
+    assert.equal(graphCore.mergeQueue().length, 0);
+});
+
+test('a new value of a state (outfit) replaces the current one: the old node is kept as history with its time, is not merged, and drops out of retrieval', async () => {
+    const clock = { day: '1', time: '09:00' };
+    const outfit = (label, content) => `{"facts":[{"op":"create","kind":"fact","label":"${label}","content":"${content}","importance":4,"subjects":["Nyx"],"attribute":"outfit"}]}`;
+    const { caller, graphCore, pipelineCore } = buildEngine({
+        rpTimeFields: () => Object.entries(clock).map(([name, value]) => ({ name, value })),
+        fetchReplies: [
+            '{"facts":[{"op":"create","kind":"entity","label":"Nyx","content":"Nyx is a girl made by Sasha.","importance":7,"subjects":["Nyx"]}]}',
+            outfit('Nyx outfit', 'Nyx wears a white dress.'),
+            outfit('Nyx outfit now', 'Nyx wears a black coat.'),
+        ],
+    });
+    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured', mergeSimilarityThreshold: 0, mergeWordOverlapThreshold: 0, mergeAdaptiveFloor: 0.5 });
+    await call(caller, 'memoryGraph.reset');
+    let length = 0;
+    for (const day of ['1', '2', '3']) {
+        clock.day = day;
+        length += 30;
+        await call(caller, 'memoryGraph.checkAndPlace', { text: `scene on day ${day}`, chatLength: length });
+    }
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const white = nodes.find(node => node.label === 'Nyx outfit');
+    const black = nodes.find(node => node.label === 'Nyx outfit now');
+    assert.ok(white && black, 'both outfit nodes exist');
+    assert.equal(white.attribute, 'outfit');
+    assert.equal(white.supersededBy, black.id, 'the black coat replaces the white dress');
+    assert.equal(black.supersededBy, undefined, 'the newest value is current');
+    assert.match(black.timeLabel, /3 09:00/, 'the time of the change comes from RP Time');
+    assert.match(white.supersededAt, /3 09:00/, 'the old value remembers WHEN it was replaced');
+    assert.ok(white.content.includes('white dress'), 'the old value is kept, not deleted');
+    assert.equal((await call(caller, 'memoryGraph.mergeQueue')).value.length, 0, 'two values of one state are never queued for merge as duplicates');
+
+    await graphCore.load(); // регистрирует этап инъекции на generation.beforeSend
+    const outgoing = [{ mes: 'What is Nyx wearing today?' }];
+    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+    const memory = outgoing.find(message => message.name === 'Memory')?.mes ?? '';
+    assert.ok(memory.includes('black coat'), 'retrieval shows the current state');
+    assert.ok(memory.includes('[since 3 09:00]'), 'and since when it holds');
+    assert.ok(!memory.includes('white dress'), 'the replaced value stays out of the prompt');
+});
+
 test('bootstrapFromLorebook() skips entries with empty content — nothing to embed or place', async () => {
     const { graphCore, caller } = buildEngine({
         lorebookEntries: [
@@ -1711,6 +1772,40 @@ test('checkAndPlace()\'s "update" fact refines an EXISTING nearby node instead o
     assert.equal(after.length, 1, 'must have refined the SAME node — no second, near-duplicate node created');
     assert.equal(after[0].content, 'Kira is the last surviving heir to the Varekh throne.');
     assert.equal(after[0].importance, 9);
+});
+
+test('an "update" keeps the replaced description in the node\'s short history, with the turn it was current', async () => {
+    let existingId = null;
+    const fetchOverride = async () => fakeModelReply(existingId
+        ? `{"facts":[{"op":"update","id":"${existingId}","content":"Kira is the last surviving heir to the Varekh throne.","importance":9}]}`
+        : '{"facts":[{"op":"create","label":"Kira\'s heritage","content":"Kira is royalty.","importance":6}]}');
+    const { graphCore } = buildEngine({ fetchOverride });
+    await graphCore.load();
+    await graphCore.waitForBootstrap();
+    await graphCore.checkAndPlace('Kira mentions she comes from a noble line.', { chatLength: 5 });
+    existingId = graphCore.nodes()[0].id;
+    await graphCore.checkAndPlace('Kira reveals the true extent of her royal bloodline, a genuinely new detail.', { chatLength: 40 });
+    const [node] = graphCore.nodes();
+    assert.equal(node.content, 'Kira is the last surviving heir to the Varekh throne.');
+    assert.deepEqual(node.history.map(entry => entry.content), ['Kira is royalty.']);
+});
+
+test('the merge question tells SideCar that different values of the same thing (another outfit, place, mood) are NOT duplicates', async () => {
+    const prompts = [];
+    const entries = [
+        { uid: 0, comment: 'Tavern Door', content: 'The old tavern door creaks in the evening light.' },
+        { uid: 1, comment: 'Tavern Door Again', content: 'The old tavern door creaks loudly in the evening light.' },
+    ];
+    const { graphCore } = buildEngine({
+        lorebookEntries: entries,
+        fetchOverride: async (url, options) => { prompts.push(String(options?.body ?? '')); return fakeModelReply(prompts.length === 1 ? '[{"region":"Door","subCenterUids":[1]}]' : prompts.length === 2 ? '[{"region":"Door","centerUid":0}]' : prompts.length === 3 ? '[]' : '{"distinct":true}'); },
+    });
+    await graphCore.load();
+    await graphCore.bootstrapFromLorebook();
+    await graphCore.checkAndPlace('   ', { chatLength: DEFAULT_SETTINGS.mergeQueueMaxTurns + 1 });
+    await graphCore.sweepMergeQueue();
+    const mergePrompt = prompts.find(body => body.includes('may describe the same underlying fact')) ?? '';
+    assert.match(mergePrompt, /DIFFERENT values of the same thing/);
 });
 
 test('checkAndPlace() processes MULTIPLE facts from one SideCar reply — a create alongside an update to an existing node, in a single check()', async () => {

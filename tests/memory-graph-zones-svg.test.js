@@ -36,7 +36,9 @@ test('renderZonesSvg() sizes the <svg> in EXPLICIT pixels (2x the outermost zone
     const { zones } = layoutGraph(nodes, regions);
     const half = zonesHalfExtent(zones);
     const svg = renderZonesSvg(zones);
-    assert.match(svg, new RegExp(`id="${ZONES_SVG_ID}"[^>]*width="${(half * 2).toFixed(1)}"`));
+    const width = svg.match(new RegExp(`id="${ZONES_SVG_ID}"[^>]*width="([\\d.]+)"`));
+    assert.ok(width, 'the <svg> must carry an explicit pixel width');
+    assert.ok(Math.abs(Number(width[1]) - half * 2) < 0.01, `width ${width[1]} must equal 2x the outermost zone radius (${half * 2})`);
 });
 
 /** Вытаскивает атрибуты одного `<path .../>` по его `data-region-id` — порядок атрибутов в самой строке не важен. */
