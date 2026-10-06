@@ -241,6 +241,26 @@ export function diffWords(before, after) {
 
 // --- Модуль -------------------------------------------------------------------
 
+/**
+ * Отпечаток сообщения для отметки «обработано»: отметки лежат по `mesid`, а это ИНДЕКС в чате, не устойчивый номер. Удалили пару сообщений в середине (или ответ
+ * и его замену, пока шёл проход), и новый ответ ложится на индекс с чужой отметкой: авто-запуск молча пропускал его как «уже обработано», а под ним всплывал бейдж с
+ * текстом удалённого. Поэтому отметка носит отпечаток: дата отправки и имя (они не меняются от переписывания) и итоговый текст — для сообщений без даты.
+ */
+export function computeMessagePrint(message, text = message?.text) {
+    return { sendDate: message?.sendDate ?? null, name: String(message?.name ?? ''), text: String(text ?? '') };
+}
+
+/** Относится ли отметка к ЭТОМУ сообщению. Старые отметки без отпечатка принимаются как есть: проверить их нечем. */
+export function entryMatchesMessage(entry, message) {
+    if (!entry) return false;
+    if (!entry.fp) return true;
+    if (!message) return true;
+    if (entry.fp.sendDate !== null && entry.fp.sendDate !== undefined && message.sendDate !== null && message.sendDate !== undefined) {
+        return String(entry.fp.sendDate) === String(message.sendDate) && entry.fp.name === String(message.name ?? '');
+    }
+    return entry.fp.name === String(message.name ?? '') && entry.fp.text === String(message.text ?? '');
+}
+
 export function createPostprocessModule(host) {
     const settings = { autoRun: true, passes: [] };
     const autoRun = signal(true);
@@ -258,6 +278,18 @@ export function createPostprocessModule(host) {
     // Какой свайп был, генерации ещё не было — цель узнаём на beforeSend
     // (тот же приём, что у «RP Time»).
     let pendingSwipe = false;
+    // Завершение ответа, пришедшее, пока шёл прогон: раньше отбрасывалось молча. Теперь прогон встаёт в очередь и идёт сразу за текущим (по САМОМУ свежему сообщению).
+    let pendingAuto = false;
+    // Сообщение, которое последний авто-прогон уже прошёл, но проходы ничего не изменили (отметки нет): повторное событие по нему не платит за модель второй раз.
+    let lastHandled = null;
+    /** Итог последнего прогона для панели и для разбора жалоб: `{ at, status: 'rewritten'|'unchanged'|'skipped'|'queued'|'stale'|'failed', reason }`. */
+    const lastRun = signal(null);
+    function recordRun(status, reason, { auto = true } = {}) {
+        const entry = { at: Date.now(), status, reason, auto };
+        lastRun.set(entry);
+        console.debug(`[postprocess] ${auto ? 'auto-run' : 'manual run'}: ${status}${reason ? ` — ${reason}` : ''}`);
+        return entry;
+    }
 
     async function call(contract, params) {
         return request(host.cores, contract, { params });
@@ -280,19 +312,26 @@ export function createPostprocessModule(host) {
      * стоит, повторно переписывать нечего (реролл стирает бейдж заранее,
      * см. подписки ниже).
      */
-    async function beginRun({ ignoreAutoRun = false } = {}) {
-        if (!ignoreAutoRun && settings.autoRun === false) return { skip: true };
-        if (!sanitizePasses(settings.passes).some(pass => pass.enabled !== false && pass.prompt)) return { skip: true };
+    async function beginRun({ ignoreAutoRun = false, forced = false } = {}) {
+        if (!ignoreAutoRun && settings.autoRun === false) return { skip: true, reason: 'auto-run is switched off' };
+        if (!sanitizePasses(settings.passes).some(pass => pass.enabled !== false && pass.prompt)) return { skip: true, reason: 'there is no enabled pass with an instruction' };
         const mesid = await currentMesid();
-        if (!mesid) return { skip: true };
-        const messagesResult = await call('chatHistory.messages', { limit: CONTEXT_LIMIT });
+        if (!mesid) return { skip: true, reason: 'the chat has no messages' };
+        const messagesResult = await call('chatHistory.messages', { limit: CONTEXT_LIMIT, includeSystem: true });
         const found = (messagesResult.ok ? messagesResult.value ?? [] : []).find(item => item.mesid === String(mesid));
-        if (!found || found.isUser || found.isSystem) return { skip: true };
+        if (!found) return { skip: true, reason: `the last message (#${mesid}) could not be read` };
+        if (found.isUser) return { skip: true, reason: `the last message (#${mesid}) is yours, not a reply` };
+        if (found.isSystem) return { skip: true, reason: `the last message (#${mesid}) is a system message (tool calls or a hidden message), not a reply` };
         const text = String(found.text ?? '');
-        if (!text.trim()) return { skip: true };
+        if (!text.trim()) return { skip: true, reason: `the last reply (#${mesid}) is empty` };
         const annotationsResult = await call('chatHistory.annotations', { namespace: HISTORY_NAMESPACE });
-        if ((annotationsResult.ok ? annotationsResult.value ?? {} : {})[String(mesid)]) return { skip: true };
-        return { skip: false, mesid: String(mesid), original: text, text, trace: [] };
+        const marked = (annotationsResult.ok ? annotationsResult.value ?? {} : {})[String(mesid)];
+        // Отметка по этому индексу могла остаться от другого, уже удалённого сообщения: считается только та, что относится к ЭТОМУ.
+        if (marked && entryMatchesMessage(marked, found)) return { skip: true, reason: `the reply #${mesid} is already processed` };
+        if (!forced && lastHandled && lastHandled.mesid === String(mesid) && lastHandled.sendDate === (found.sendDate ?? null) && lastHandled.name === found.name && lastHandled.text === text) {
+            return { skip: true, reason: `the reply #${mesid} was already run through the passes (they changed nothing)` };
+        }
+        return { skip: false, mesid: String(mesid), original: text, text, trace: [], sendDate: found.sendDate ?? null, name: String(found.name ?? '') };
     }
 
     /**
@@ -331,15 +370,26 @@ export function createPostprocessModule(host) {
      * сообщение не трогается вовсе.
      */
     async function applyResult(value) {
-        if (!value || value.skip) return false;
-        if (String(value.text) === String(value.original)) return false;
-        const entry = { original: value.original, trace: value.trace, appliedAt: Date.now() };
+        if (!value || value.skip) return 'unchanged';
+        if (String(value.text) === String(value.original)) return 'unchanged';
+        // Проход идёт десятки секунд, а чат за это время живёт: ответ могли удалить, перегенерировать, заменить новым на тот же индекс (ST пишет в него прямо сейчас).
+        // Номер сообщения остался прежним, а сообщение уже другое: переписанный текст старого ответа лёг бы поверх нового. Пишем только если там всё ещё тот же ответ.
+        const check = await call('chatHistory.messages', { mesids: [value.mesid], includeSystem: true });
+        const current = (check.ok ? check.value ?? [] : [])[0];
+        const same = current && !current.isUser && current.text === value.original
+            && (value.sendDate === null || value.sendDate === undefined || current.sendDate === null || current.sendDate === undefined || String(current.sendDate) === String(value.sendDate));
+        if (!same) {
+            recordRun('stale', `the reply #${value.mesid} changed while it was being processed, so the rewrite was not applied`, { auto: value.auto !== false });
+            await notify('muted', `Post-Turn: the reply #${value.mesid} changed while it was being processed — the rewrite was not applied`);
+            return 'stale';
+        }
+        const entry = { original: value.original, trace: value.trace, appliedAt: Date.now(), fp: computeMessagePrint({ sendDate: value.sendDate, name: value.name }, value.text) };
         const replaced = await call('chatHistory.replaceText', { mesid: value.mesid, text: value.text });
         if (!replaced.ok) throw new Error(replaced.error?.message ?? 'chatHistory.replaceText failed');
         await call('chatHistory.annotate', { namespace: HISTORY_NAMESPACE, mesid: value.mesid, value: entry });
         badges.set({ ...badges.peek(), [value.mesid]: entry });
         refreshFooter();
-        return true;
+        return 'applied';
     }
 
     /** Ручной прогон той же цепочки по последнему ответу — кнопка в панели. */
@@ -347,20 +397,24 @@ export function createPostprocessModule(host) {
         if (busy.peek()) return null;
         busy.set(true);
         try {
-            const start = await beginRun({ ignoreAutoRun: true });
-            if (start.skip) { await notify('ok', 'Nothing to process — no fresh unprocessed reply'); return false; }
-            let value = start;
+            const start = await beginRun({ ignoreAutoRun: true, forced: true });
+            if (start.skip) { recordRun('skipped', start.reason, { auto: false }); await notify('ok', `Nothing to process — ${start.reason}`); return false; }
+            let value = { ...start, auto: false };
             for (const pass of sanitizePasses(settings.passes).filter(item => item.enabled !== false && item.prompt)) {
                 value = await runOnePass(value, pass);
             }
-            const changed = await applyResult(value);
-            await notify('ok', changed ? 'Reply rewritten' : 'Passes ran, but nothing changed');
-            return changed;
+            const outcome = await applyResult(value);
+            if (outcome === 'applied') recordRun('rewritten', `the reply #${value.mesid}`, { auto: false });
+            else if (outcome === 'unchanged') recordRun('unchanged', 'the passes ran but changed nothing', { auto: false });
+            if (outcome !== 'stale') await notify('ok', outcome === 'applied' ? 'Reply rewritten' : 'Passes ran, but nothing changed');
+            return outcome === 'applied';
         } catch (error) {
+            recordRun('failed', error?.message ?? String(error), { auto: false });
             await notify('error', error?.message ?? String(error));
             return false;
         } finally {
             busy.set(false);
+            runQueuedAuto();
         }
     }
 
@@ -372,25 +426,46 @@ export function createPostprocessModule(host) {
      * событие «ответ готов» читают напрямую. Цепочка та же, что у кнопки
      * «Process last reply now»; повторный вызов безопасен — begin видит
      * аннотацию «уже обработано» и уходит в skip.
+     *
+     * Ответ мог прийти, пока идёт прогон по предыдущему (проход — десятки секунд, пользователь пишет дальше): такой запуск раньше отбрасывался
+     * молча, и свежий ответ не обрабатывался никогда. Теперь он встаёт в очередь и идёт сразу за текущим; каждый пропуск и его причина — в `lastRun` и в консоли.
      */
     async function runOnCompleted() {
-        if (busy.peek()) return;
         if (settings.autoRun === false) return;
         if (!sanitizePasses(settings.passes).some(pass => pass.enabled !== false && pass.prompt)) return;
+        if (busy.peek()) {
+            pendingAuto = true;
+            recordRun('queued', 'a reply finished while the previous one was still being processed; it runs next');
+            return;
+        }
         busy.set(true);
         try {
             const start = await beginRun({ ignoreAutoRun: true });
-            if (start.skip) return;
+            if (start.skip) { recordRun('skipped', start.reason); return; }
             let value = start;
             for (const pass of sanitizePasses(settings.passes).filter(item => item.enabled !== false && item.prompt)) {
                 value = await runOnePass(value, pass);
             }
-            await applyResult(value);
+            const outcome = await applyResult(value);
+            if (outcome === 'applied') recordRun('rewritten', `the reply #${value.mesid}`);
+            else if (outcome === 'unchanged') {
+                lastHandled = { mesid: value.mesid, sendDate: value.sendDate, name: value.name, text: value.original };
+                recordRun('unchanged', `the passes changed nothing in the reply #${value.mesid}`);
+            }
         } catch (error) {
+            recordRun('failed', error?.message ?? String(error));
             await notify('error', error?.message ?? String(error));
         } finally {
             busy.set(false);
+            runQueuedAuto();
         }
+    }
+
+    /** Прогон, вставший в очередь, пока было занято: стартует, когда освободились, и берёт самое свежее сообщение. */
+    function runQueuedAuto() {
+        if (!pendingAuto) return;
+        pendingAuto = false;
+        runOnCompleted();
     }
 
     // --- Бейдж ------------------------------------------------------------------
@@ -424,7 +499,8 @@ export function createPostprocessModule(host) {
     function footerWidget(message) {
         const mesid = String(message.mesid);
         const entry = badges()[mesid];
-        if (!entry) return null;
+        // Отметка по этому индексу может быть от другого, удалённого сообщения: бейдж есть только под тем, к которому она относится.
+        if (!entry || !entryMatchesMessage(entry, message)) return null;
         // Кнопка — чистый StatBlock с дефолтными размерами виджета (как у блока
         // времени); отличает её только класс-модификатор ширины. Попап в это
         // дерево НЕ входит: fixed внутри подвала сообщения не работает (у предков
@@ -643,6 +719,10 @@ export function createPostprocessModule(host) {
                 Button('Save', save),
             ),
             Toggle('Auto-run after each reply', autoRun),
+            h('small', { class: 'stme-module-hint stme-postprocess-last' }, computed(() => {
+                const run = lastRun();
+                return run ? `Last ${run.auto ? 'auto-run' : 'manual run'}: ${run.status}${run.reason ? ` — ${run.reason}` : ''}` : 'No run yet in this session.';
+            })),
             h('p', { class: 'stme-postprocess-help' },
                 'Each pass is an independent rewrite step — its own instruction, its own model connection. Passes run in order right after each reply; pass 2 sees pass 1\'s output, and so on. A ✎ toggle appears under every processed message showing exactly what changed.'),
             EditableList({
@@ -677,7 +757,7 @@ export function createPostprocessModule(host) {
             await clearBadge(await currentMesid());
         }),
         // Другой чат — другие отметки.
-        host.events.subscribe('st.chatChanged', () => { loadBadges(); }),
+        host.events.subscribe('st.chatChanged', () => { lastHandled = null; pendingAuto = false; loadBadges(); }),
         // Пресеты/воркеры редактировал сосед — списки выбора перечитываются сами.
         host.events.subscribe('model.presets.changed', () => refreshCustomPresets()),
         host.events.subscribe('model.workers.changed', () => refreshWorkers()),
@@ -707,6 +787,7 @@ export function createPostprocessModule(host) {
         hud,
         save,
         processNow,
+        lastRun,
         addPass,
         removePass,
         movePass,

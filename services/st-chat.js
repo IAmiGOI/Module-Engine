@@ -177,6 +177,11 @@ export function registerStChatService(bus, { getContext } = {}) {
         const next = String(text ?? '');
         if (!next.trim()) throw new Error(`stChat.setText: "text" is required.`);
         message.mes = next;
+        // Текст активного свайпа ST хранит ВТОРОЙ раз, в `swipes[swipe_id]`, и её собственный редактор пишет оба (script.js, messageEditDone). Если оставить старый
+        // текст в `swipes`, ST вернёт его при ближайшей смене свайпа или синхронизации (`syncSwipeToMes`), и правка (например, переписанный ответ) молча откатится.
+        if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id) && message.swipe_id >= 0 && message.swipe_id < message.swipes.length) {
+            message.swipes[message.swipe_id] = next;
+        }
         await context.eventSource?.emit?.(context.eventTypes?.MESSAGE_EDITED, index);
         // Перерисовка — тем же механизмом ST, каким она сама обновляет блок
         // сообщения (RP Time/Tracker Alpha звали `context.updateMessageBlock`).

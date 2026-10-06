@@ -169,11 +169,24 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         const jev = isolated ? undefined : await prefetchJev(record.preset.tree, chat);
         const result = buildRequest({ ...record.preset, params }, materials, {
             jev, contributions: isolated ? {} : contributions.asContext(), globals, timed, plugins: plugins.conditions(), transform: (messages, env) => plugins.transform(messages, env),
-            onPluginError: () => {}, prevCut: chatState.cut ?? 0, headroom: settings.headroom,
+            onPluginError: () => {}, prevCut: chatState.cut ?? 0,
+            // Бюджет, при котором граница поставлена; у состояния до этой правки его нет — `0`: граница пересчитывается один раз (pm-trim.js).
+            prevBudget: (chatState.cut ?? 0) > 0 ? (chatState.cutBudget ?? 0) : undefined, headroom: settings.headroom,
             seed: settings.freezeRandom ? (info.chatId ?? 'chat') : undefined,
         });
-        if (commit) await request(host.own, 'storage.chatMemory.set', { params: { namespace: NAMESPACE, key: 'state', value: { cut: result.cut, timed } } });
+        if (commit) await request(host.own, 'storage.chatMemory.set', { params: { namespace: NAMESPACE, key: 'state', value: { cut: result.cut, cutBudget: result.cutBudget ?? null, timed } } });
         return { record, info, result, overrideSources: sources, params };
+    }
+
+    /**
+     * «Сбросить обрезку» этого чата: граница, поставленная прежней обрезкой, стирается, и со следующей сборки история берётся целиком, а режется заново по нынешнему бюджету.
+     * Нужна, когда граница осталась от ошибочной настройки или от удалённой части чата; кеш префикса один раз начнётся заново.
+     */
+    async function resetCut() {
+        const chatState = await loadChatState();
+        const was = chatState.cut ?? 0;
+        await request(host.own, 'storage.chatMemory.set', { params: { namespace: NAMESPACE, key: 'state', value: { ...chatState, cut: 0, cutBudget: null } } });
+        return { was };
     }
 
     function pushLog(entry) {
@@ -349,7 +362,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         const chat = (await service('stPromptData.chat', {})) ?? captured?.chat ?? [];
         const assembled = await assemble(chat);
         if (assembled.skipped) return { skipped: assembled.skipped };
-        return { messages: assembled.result.messages, report: assembled.result.report, tokens: { total: assembled.result.tokens.total, byBlock: [...assembled.result.tokens.byBlock].map(([id, tokens]) => [nameOfBlock(assembled.record.preset, id), tokens]) }, dropped: assembled.result.dropped, budget: assembled.result.budget, macros: assembled.result.macros };
+        return { messages: assembled.result.messages, report: assembled.result.report, tokens: { total: assembled.result.tokens.total, byBlock: [...assembled.result.tokens.byBlock].map(([id, tokens]) => [nameOfBlock(assembled.record.preset, id), tokens]) }, dropped: assembled.result.dropped, budget: assembled.result.budget, budgetInvalid: assembled.result.budgetInvalid, cutReleased: assembled.result.cutReleased, macros: assembled.result.macros };
     }
 
     /**
@@ -413,6 +426,7 @@ export function createPromptManagerCore(host, { publish = () => {}, now = () => 
         host.own.register('promptManager.reportUsage', params => { const last = log.at(-1); if (last) last.usageCached = extractCachedTokens(params?.usage); return last?.usageCached ?? null; }),
         host.own.register('promptManager.preview', () => preview()),
         host.own.register('promptManager.assembleForCard', params => assembleForCard(params)),
+        host.own.register('promptManager.resetCut', () => resetCut()),
     ];
 
     const logView = () => log.map(({ withMarkers, messages, ...rest }) => rest);

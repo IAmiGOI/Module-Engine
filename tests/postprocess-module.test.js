@@ -288,3 +288,151 @@ test('the badge annotation is stored and cleared on reroll via messageDeleted', 
     const after = await engine.resolveAs(MODULE_ID, 'chatHistory.annotations', { namespace: MODULE_ID });
     assert.ok(!after.value['1'], 'reroll clears the badge so the new answer is processed again');
 });
+
+// --- Номера сообщений — индексы: гонки с удалением, заменой ответа и очередью (жалобы бета-тестера) ---
+
+const waitMs = ms => new Promise(resolve => setTimeout(resolve, ms));
+const message = (name, mes, sendDate, extra = {}) => ({ name, is_user: false, is_system: false, mes, send_date: sendDate, ...extra });
+const seedChat = (settingsContext, ...items) => { settingsContext.chat.length = 0; settingsContext.chat.push(...items); };
+const waitIdle = async module => { for (let i = 0; i < 300 && module.busy.peek(); i += 1) await waitMs(5); await waitMs(5); };
+
+async function readyModule(options) {
+    const built = buildEngine(options);
+    await built.module.load();
+    built.module.passes.set([ONE_PASS]);
+    await built.module.save();
+    return built;
+}
+
+test('a mark left on an index by a deleted message does not block the new reply that lands there, and does not show its badge', async () => {
+    const { module, calls, live, engine, settingsContext, claims, emitGenerationCompleted } = await readyModule({ replies: [' REWRITTEN '] });
+    seedChat(settingsContext, message('U', 'u0', 'd0', { is_user: true }), message('A', 'a1', 'd1'), message('U', 'u2', 'd2', { is_user: true }), message('A', 'a3', 'd3'), message('U', 'u4', 'd4', { is_user: true }), message('A', 'a5 first draft', 'd5'));
+    live.mesid = '5';
+    await emitGenerationCompleted();
+    assert.equal(calls.length, 1);
+    assert.equal(settingsContext.chat[5].mes, 'REWRITTEN');
+    const oldEntry = module.badges.peek()['5'];
+    // The pair u2/a3 in the middle is deleted: index 5 is free again, but its mark stays.
+    settingsContext.chat.splice(2, 2);
+    engine.events.emit('st.messageDeleted', { args: [3] });
+    engine.events.emit('st.messageDeleted', { args: [2] });
+    await waitMs(20);
+    settingsContext.chat.push(message('U', 'new question', 'd8', { is_user: true }), message('A', 'a brand new reply', 'd9'));
+    live.mesid = String(settingsContext.chat.length - 1);
+    assert.equal(live.mesid, '5');
+    // The footer shows no badge under the new reply (the mark belongs to the deleted one)...
+    const factory = claims[0].node;
+    assert.equal(factory({ mesid: '5', sendDate: 'd9', name: 'A', text: 'a brand new reply' }), null);
+    assert.notEqual(factory({ mesid: '5', sendDate: 'd5', name: 'A', text: 'REWRITTEN' }), null, 'the message the mark was made for still wears it');
+    // ...and the new reply is processed instead of being skipped as "already processed".
+    await emitGenerationCompleted();
+    assert.equal(calls.length, 2);
+    assert.equal(settingsContext.chat[5].mes, 'REWRITTEN');
+    assert.equal(module.badges.peek()['5'].original, 'a brand new reply');
+    assert.notEqual(module.badges.peek()['5'], oldEntry);
+    assert.equal(module.lastRun.peek().status, 'rewritten');
+});
+
+test('marks made before the fingerprint existed carry none and still count as processed; the rule when both messages have a date is date and name, else the text', async () => {
+    const { entryMatchesMessage } = await import('../modules/postprocess/index.js');
+    assert.equal(entryMatchesMessage({ original: 'a', trace: [] }, { mesid: '1', sendDate: 'd1', name: 'A', text: 'old reply' }), true);
+    assert.equal(entryMatchesMessage(null, { mesid: '1' }), false);
+    assert.equal(entryMatchesMessage({ fp: { sendDate: 'd1', name: 'A', text: 'x' } }, { sendDate: 'd1', name: 'A', text: 'changed later' }), true);
+    assert.equal(entryMatchesMessage({ fp: { sendDate: 'd1', name: 'A', text: 'x' } }, { sendDate: 'd2', name: 'A', text: 'x' }), false);
+    assert.equal(entryMatchesMessage({ fp: { sendDate: null, name: 'A', text: 'same text' } }, { sendDate: null, name: 'A', text: 'same text' }), true);
+    assert.equal(entryMatchesMessage({ fp: { sendDate: null, name: 'A', text: 'same text' } }, { sendDate: null, name: 'A', text: 'other' }), false);
+});
+
+test('a rewrite is never written over a message that is no longer the reply that was processed (deleted and replaced while the pass was running)', async () => {
+    const { module, live, settingsContext, engine } = await readyModule({ modelFn: async () => { await waitMs(80); return ' REWRITE OF THE OLD REPLY '; } });
+    seedChat(settingsContext, message('U', 'u0', 'd0', { is_user: true }), message('A', 'OLD reply that the user will delete', 'd1'));
+    live.mesid = '1';
+    engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'ended', toolCalls: 0 });
+    await waitMs(20);
+    settingsContext.chat.splice(1, 1);
+    engine.events.emit('st.messageDeleted', { args: [1] });
+    settingsContext.chat.push(message('A', 'NEW reply, being written right now', 'd2'));
+    await waitIdle(module);
+    assert.equal(settingsContext.chat[1].mes, 'NEW reply, being written right now', 'the new reply is untouched');
+    assert.equal(module.badges.peek()['1'], undefined, 'no badge for a rewrite that was not applied');
+    assert.equal(module.lastRun.peek().status, 'stale');
+    assert.match(module.lastRun.peek().reason, /changed while it was being processed/);
+});
+
+test('the same holds when the reply is edited by someone else while the pass runs: the user\'s own edit wins', async () => {
+    const { module, live, settingsContext, engine } = await readyModule({ modelFn: async () => { await waitMs(60); return ' REWRITE '; } });
+    seedChat(settingsContext, message('U', 'u0', 'd0', { is_user: true }), message('A', 'first text', 'd1'));
+    live.mesid = '1';
+    engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'ended', toolCalls: 0 });
+    await waitMs(15);
+    settingsContext.chat[1].mes = 'text edited by the user meanwhile';
+    await waitIdle(module);
+    assert.equal(settingsContext.chat[1].mes, 'text edited by the user meanwhile');
+    assert.equal(module.lastRun.peek().status, 'stale');
+});
+
+test('a reply that finishes while the previous one is still being processed is queued and processed next, not dropped', async () => {
+    const { module, calls, live, settingsContext, engine } = await readyModule({ modelFn: async params => { await waitMs(50); return ` REWRITE ${calls.length} `; } });
+    seedChat(settingsContext, message('U', 'u0', 'd0', { is_user: true }), message('A', 'a1 original', 'd1'));
+    live.mesid = '1';
+    engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'ended', toolCalls: 0 });
+    await waitMs(10);
+    assert.equal(module.busy.peek(), true);
+    settingsContext.chat.push(message('U', 'u2', 'd2', { is_user: true }), message('A', 'a3 new reply', 'd3'));
+    live.mesid = '3';
+    engine.events.emit('generation.completed', { runId: 'run_2', outcome: 'ended', toolCalls: 0 });
+    assert.equal(module.lastRun.peek().status, 'queued');
+    await waitMs(250);
+    await waitIdle(module);
+    assert.equal(calls.length, 2, 'both replies went through the passes');
+    assert.match(settingsContext.chat[1].mes, /^REWRITE/);
+    assert.match(settingsContext.chat[3].mes, /^REWRITE/);
+    assert.equal(module.lastRun.peek().status, 'rewritten');
+});
+
+test('every skip says why: the last message is yours, a system message (tool calls), empty, or already processed; with auto-run off nothing runs at all', async () => {
+    const { module, calls, live, settingsContext, emitGenerationCompleted } = await readyModule({ replies: [' REWRITTEN '] });
+    const skippedWith = async (items, mesid) => { seedChat(settingsContext, ...items); live.mesid = mesid; await emitGenerationCompleted(); assert.equal(module.lastRun.peek().status, 'skipped'); return module.lastRun.peek().reason; };
+    assert.match(await skippedWith([message('U', 'u0', 'd0', { is_user: true }), message('A', 'a1', 'd1'), message('U', 'u2', 'd2', { is_user: true })], '2'), /is yours, not a reply/);
+    assert.match(await skippedWith([message('U', 'u0', 'd0', { is_user: true }), message('A', '', 'd1'), message('System', 'Tool calls', 'd2', { is_system: true, extra: { tool_invocations: [{}] } })], '2'), /system message \(tool calls or a hidden message\)/);
+    assert.match(await skippedWith([message('U', 'u0', 'd0', { is_user: true }), message('A', '   ', 'd1')], '1'), /is empty/);
+    assert.equal(calls.length, 0, 'none of these reached the model');
+    seedChat(settingsContext, message('U', 'u0', 'd0', { is_user: true }), message('A', 'a1', 'd1'));
+    live.mesid = '1';
+    await emitGenerationCompleted();
+    assert.equal(module.lastRun.peek().status, 'rewritten');
+    await emitGenerationCompleted();
+    assert.match(module.lastRun.peek().reason, /already processed/);
+    module.autoRun.set(false);
+    await module.save();
+    const before = module.lastRun.peek();
+    await emitGenerationCompleted();
+    assert.equal(module.lastRun.peek(), before, 'auto-run off: not even a skip is recorded');
+});
+
+test('a reply the passes left unchanged is not sent to the model again by a repeated completion event, but the manual button still runs it', async () => {
+    const { module, calls, live, settingsContext, emitGenerationCompleted } = await readyModule({ modelFn: () => ' Same text ' });
+    seedChat(settingsContext, message('U', 'u0', 'd0', { is_user: true }), message('A', 'Same text', 'd1'));
+    live.mesid = '1';
+    await emitGenerationCompleted();
+    assert.equal(calls.length, 1);
+    assert.equal(module.lastRun.peek().status, 'unchanged');
+    await emitGenerationCompleted();
+    assert.equal(calls.length, 1, 'no second paid run for the same reply');
+    assert.match(module.lastRun.peek().reason, /already run through the passes/);
+    await module.processNow();
+    assert.equal(calls.length, 2, 'the button always runs');
+    settingsContext.chat[1].mes = 'Different text after a reroll';
+    settingsContext.chat[1].send_date = 'd2';
+    await emitGenerationCompleted();
+    assert.equal(calls.length, 3, 'a rerolled reply is a new reply');
+});
+
+test('the manual button names the reason when there is nothing to process', async () => {
+    const { module, live, settingsContext } = await readyModule();
+    seedChat(settingsContext, message('U', 'u0', 'd0', { is_user: true }));
+    live.mesid = '0';
+    await module.processNow();
+    assert.equal(module.lastRun.peek().auto, false);
+    assert.match(module.lastRun.peek().reason, /is yours, not a reply/);
+});

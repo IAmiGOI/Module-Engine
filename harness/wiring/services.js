@@ -30,6 +30,7 @@ import { registerStCharacterService } from '../../services/st-character.js';
 import { registerStCharacterCardsService } from '../../services/st-character-cards.js';
 import { registerCharacterCardVersionsService } from '../../services/character-card-versions.js';
 import { registerStWebSearchService } from '../../services/st-web-search.js';
+import { registerStChatArchiveService } from '../../services/st-chat-archive.js';
 import { registerStCharacterAvatarService } from '../../services/st-character-avatar.js';
 import { registerStEventsService } from '../../services/st-events.js';
 import { registerStToolsService } from '../../services/st-tools.js';
@@ -90,6 +91,7 @@ export async function wireServices(ctx) {
     registerStCharacterCardsService(engine.buses.services, { getContext, fetch });
     registerCharacterCardVersionsService(engine.buses.services);
     registerStWebSearchService(engine.buses.services, { getContext, fetch });
+    registerStChatArchiveService(engine.buses.services, { getContext, fetch });
     registerStCharacterAvatarService(engine.buses.services, { getContext, fetch });
     registerStEventsService(engine.buses.services, { getContext });
     registerStToolsService(engine.buses.services, { getContext });

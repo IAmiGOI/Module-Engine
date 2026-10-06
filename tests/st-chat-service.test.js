@@ -378,3 +378,18 @@ test('stChat.triggerNative clicks the native button (ST does the real work) and 
         assert.deepEqual(clicks, ['.mes_embed']);
     });
 });
+
+test('stChat.setText keeps ST\'s second copy of the text (swipes[swipe_id]) in step, so a rewrite is not undone by the next swipe sync; messages without swipes and a broken swipe_id are left alone', async () => {
+    const { caller, context } = buildService([
+        { is_user: false, is_system: false, mes: 'Original', swipe_id: 1, swipes: ['First variant', 'Original'], swipe_info: [{}, {}] },
+        { is_user: false, is_system: false, mes: 'Plain' },
+        { is_user: false, is_system: false, mes: 'Odd', swipe_id: 7, swipes: ['A'] },
+    ]);
+    assert.equal((await call(caller, 'stChat.setText', { mesid: '0', text: 'Rewritten' })).ok, true);
+    assert.equal(context.chat[0].mes, 'Rewritten');
+    assert.deepEqual(context.chat[0].swipes, ['First variant', 'Rewritten'], 'only the ACTIVE swipe changes');
+    assert.equal((await call(caller, 'stChat.setText', { mesid: '1', text: 'Plain 2' })).ok, true);
+    assert.equal(context.chat[1].swipes, undefined, 'no swipes are invented');
+    assert.equal((await call(caller, 'stChat.setText', { mesid: '2', text: 'Odd 2' })).ok, true);
+    assert.deepEqual(context.chat[2].swipes, ['A'], 'a swipe_id outside the list is not written');
+});

@@ -475,3 +475,72 @@ test('the function-calling service reads and turns on the ST setting, keeps ST\'
         assert.equal(saved, 1, 'nothing is saved when nothing changed');
     } finally { globalThis.document = originalDocument; }
 });
+
+// --- Граница обрезки привязана к бюджету, при котором её поставили (жалоба тестера: «stable cut» не откатывался после исправления бюджета) ---
+
+const STATE = { namespace: 'core.promptManager', key: 'state' };
+async function longChatBuild() {
+    const built = await build();
+    await built.pm.whenPrepared();
+    built.chat.length = 0;
+    for (let index = 0; index < 60; index += 1) built.chat.push({ is_user: index % 2 === 1, name: index % 2 ? 'Sasha' : 'Lena', mes: index === 0 ? 'GREETING-AT-THE-START' : `turn ${index} ${'filler words '.repeat(40)}` });
+    const setParams = async patch => {
+        const record = await built.pm.store.get(built.pm.settings().activePresetId);
+        await built.pm.store.save({ ...record, preset: { ...record.preset, params: { ...record.preset.params, ...patch } } }, { label: 'test' });
+    };
+    const state = async () => (await built.call('storage.chatMemory.get', { ...STATE, fallback: {} })).value;
+    const sentText = body => body.messages.map(message => (typeof message.content === 'string' ? message.content : '')).join('\n');
+    return { ...built, setParams, state, sentText };
+}
+
+test('when the budget grows by a quarter or more the old cut is released and the history comes back, with the cut counted again for the new budget', async () => {
+    const { send, setParams, state, sentText } = await longChatBuild();
+    await setParams({ openai_max_context: 9000, openai_max_tokens: 100 });
+    let body = await send();
+    assert.ok(!sentText(body).includes('GREETING-AT-THE-START'), 'the start was cut for a small budget');
+    const first = await state();
+    assert.ok(first.cut > 0);
+    assert.equal(first.cutBudget, 8900, 'the budget the cut was made for is remembered');
+    body = await send();
+    assert.equal((await state()).cut, first.cut, 'while the budget stays the cut stays: the same prefix every turn');
+    assert.equal((await state()).cutBudget, 8900);
+    await setParams({ openai_max_context: 9500, openai_max_tokens: 100 });   // +5%: not enough
+    await send();
+    assert.equal((await state()).cut, first.cut);
+    await setParams({ openai_max_context: 60000, openai_max_tokens: 100 });
+    body = await send();
+    assert.ok(sentText(body).includes('GREETING-AT-THE-START'), 'everything fits again, so the greeting is back');
+    assert.deepEqual(await state(), { cut: 0, cutBudget: null, timed: {} });
+});
+
+test('a chat that got a cut before the budget was remembered (the tester\'s stuck chat) is released once, even though nothing else changed', async () => {
+    const { send, call, state, setParams, sentText } = await longChatBuild();
+    await setParams({ openai_max_context: 68000, openai_max_tokens: 4000 });
+    await call('storage.chatMemory.set', { ...STATE, value: { cut: 12, timed: {} } });   // what the old code left behind after "Max response > Max context"
+    const body = await send();
+    assert.ok(sentText(body).includes('GREETING-AT-THE-START'));
+    assert.equal((await state()).cut, 0);
+});
+
+test('a budget that is not usable (Max response not below Max context) switches trimming off instead of cutting the whole history, and never writes a cut into the chat', async () => {
+    const { send, pm, setParams, state, sentText } = await longChatBuild();
+    await setParams({ openai_max_context: 8000, openai_max_tokens: 8000 });
+    const body = await send();
+    assert.ok(sentText(body).includes('GREETING-AT-THE-START'), 'the history is intact');
+    assert.ok(sentText(body).includes('turn 59'));
+    assert.equal((await state()).cut ?? 0, 0, 'nothing was written');
+    const preview = await pm.preview();
+    assert.deepEqual(preview.budgetInvalid, { maxContext: 8000, reserved: 8000 });
+    assert.equal(preview.dropped.length, 0);
+    await setParams({ openai_max_context: 9000, openai_max_tokens: 100 });
+    assert.equal((await pm.preview()).budgetInvalid, null);
+});
+
+test('"Reset trimming" erases the cut of this chat on demand and says what was there', async () => {
+    const { call, state } = await longChatBuild();
+    await call('storage.chatMemory.set', { ...STATE, value: { cut: 5, cutBudget: 1000, timed: { x: 1 } } });
+    const reset = await call('promptManager.resetCut');
+    assert.deepEqual(reset.value, { was: 5 });
+    assert.deepEqual(await state(), { cut: 0, cutBudget: null, timed: { x: 1 } }, 'only the cut goes; the lorebook timers stay');
+    assert.deepEqual((await call('promptManager.resetCut')).value, { was: 0 });
+});

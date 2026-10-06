@@ -1,4 +1,4 @@
-import { chunkPage, computeChunkPassage, rankBySimilarity, fuseMatches } from '../../libraries/core/web-semantic.js';
+import { chunkPage, computeChunkPassage, rankBySimilarity, fuseMatches, MAX_CHUNKS, CHAT_MAX_CHUNKS } from '../../libraries/core/web-semantic.js';
 
 /** Сколько можно тратить на векторы кусков за один поиск (потом поиск идёт с тем, что успело посчитаться, а остальное досчитается в следующий раз). */
 const EMBED_BUDGET_MS = 30000;
@@ -27,7 +27,7 @@ export function createPageSearch({ callService, now = () => Date.now() }) {
         if (!text.ok) return lexical;
         const { url, text: body, outline } = text.value;
         const key = `${id}|${url}`;
-        if (!pages.has(key)) pages.set(key, { chunks: chunkPage(body, outline), vectors: new Map() });
+        if (!pages.has(key)) pages.set(key, { chunks: chunkPage(body, outline, { maxChunks: String(url).startsWith('chat:') ? CHAT_MAX_CHUNKS : MAX_CHUNKS }), vectors: new Map() });
         const page = pages.get(key);
         let meaning = 'used';
         let semantic = [];

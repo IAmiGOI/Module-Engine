@@ -24,7 +24,7 @@ All your ST Chat Completion presets are copied into PM automatically (the ST fil
 
 ## Good to know
 - **Character prompts.** The character card's own system prompt, post-history instructions and depth prompt are applied the way SillyTavern's manager applies them: the card's system prompt fills the preset's `main` block, the post-history text fills `jailbreak` (a block set to forbid overrides is left alone; `{{original}}` inserts the block's own text), and the depth prompt is injected at the depth and role the card names. Turn "Prefer Char. Prompt/Jailbreak" off in SillyTavern to ignore them.
-- **Trimming** cuts the oldest history first and cuts a little extra at once, so the start of the history does not move every turn (that would break the provider cache).
+- **Trimming** cuts the oldest history first and cuts a little extra at once, so the start of the history does not move every turn (that would break the provider cache). The cut then stays where it is (the Preview calls it a "stable cut"), tied to the budget it was made for: when the budget grows by a quarter or more the cut is released by itself and counted again, and **Settings → Reset trimming (this chat)** releases it at once (useful after a wrong Max response / Max context). If Max response is not smaller than Max context there is no budget at all: trimming is switched off and the Preview and Settings say so.
 - **Random macros** break the cache; "Freeze random" (Settings) keeps one value per chat.
 - **Streaming** from the preset is applied by switching ST's own setting for the generation and switching it back afterwards.
 - If PM ever fails while assembling, the original ST request is sent — PM never blocks a generation (except after a second failed CoT step).

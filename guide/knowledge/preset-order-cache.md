@@ -26,7 +26,7 @@ The order of blocks is part of what a preset says. It decides what the model rea
 - **Reading order.** The model weighs the end of the request most. Rules and checklists that must be the last word stand after the chat history; the frame, the character's material and the chat examples stand before it.
 - **Provider cache.** Providers cache only the START of the request that is identical to the previous one. The first change breaks the cache for everything after it. So: stable text first, anything that changes each turn as late as possible. Blocks that stay the same all chat long (frame, rules) are cheap near the top and lose the cache when they stand after something volatile.
 - **A deliberate trade.** Putting rules after the history gives them the last word at the price of re-sending them every turn. That is usually right for behaviour rules; say the trade when it matters, do not "fix" it.
-- **Trimming** cuts the oldest chat history first, a little extra at once, and respects each block's trim priority (100 means never trimmed).
+- **Trimming** cuts the oldest chat history first, a little extra at once, and respects each block's trim priority (100 means never trimmed). The cut stays where it is every turn (the Preview calls it a "stable cut") so the cache keeps working; it is released by itself when the budget grows by a quarter or more, and the user can release it with Settings → Reset trimming. If a chat lost its start after a wrong Max response / Max context, that is the cause and the cure. Max response must stay clearly below Max context: otherwise there is no budget and trimming is switched off.
 
 ## Position of one block
 - *In order*: where it stands in the list.

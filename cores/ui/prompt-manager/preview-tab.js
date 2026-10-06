@@ -32,10 +32,13 @@ export function createPreviewTab({ call }) {
                 const warnings = [
                     data.macros?.usedRandom ? 'This prompt uses random macros: the prefix cache breaks unless "Freeze random" is on (Settings).' : null,
                     data.macros?.unresolved?.length ? `Unknown macros left as text: ${data.macros.unresolved.join(', ')}` : null,
+                    data.budgetInvalid ? `The token budget is not usable: Max response (${data.budgetInvalid.reserved}) leaves ${Math.max(data.budgetInvalid.maxContext - data.budgetInvalid.reserved, 0)} tokens of Max context (${data.budgetInvalid.maxContext}). Trimming is switched off until you fix it in Settings.` : null,
+                    data.cutReleased ? 'The budget grew, so the earlier cut of the history was released and the trimming was counted again (the provider cache restarts once).' : null,
                     data.dropped?.length ? `${data.dropped.length} item(s) were trimmed to fit the context.` : null,
+                    data.dropped?.some(item => item.reason === 'stable cut') ? 'Some history is cut by an earlier trimming ("stable cut" — it stays the same every turn to keep the cache). If it was caused by a wrong setting, press "Reset trimming" in Settings.' : null,
                 ].filter(Boolean);
                 return h('div', {},
-                    Row(Badge(`${data.tokens.total} / ${data.budget} tokens`, { tone: data.tokens.total > data.budget ? 'error' : 'ok' })),
+                    Row(Badge(`${data.tokens.total} / ${data.budget} tokens`, { tone: data.budgetInvalid || data.tokens.total > data.budget ? 'error' : 'ok' })),
                     ...warnings.map(text => h('p', { class: 'stme-pm-warning' }, text)),
                     tokenTable(data),
                     h('details', {}, h('summary', {}, `Messages (${data.messages.length})`),

@@ -31,6 +31,7 @@
     "preset-blocks.md",
     "preset-order-cache.md",
     "preset-modules-card.md",
-    "preset-testing.md"
+    "preset-testing.md",
+    "chat-crawler.md"
   ]
 }

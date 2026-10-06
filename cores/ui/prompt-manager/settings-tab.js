@@ -2,6 +2,7 @@ import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
 import { Button, Row, Field, NumberInput, TextArea, Toggle, Slider, EmptyState, Badge } from '../../../libraries/shared/widgets.js';
 import { Select } from './dropdown.js';
+import { MIN_BUDGET } from '../../../libraries/core/pm-trim.js';
 
 const REASONING = [{ value: 'auto', label: 'auto' }, { value: 'min', label: 'min' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }, { value: 'max', label: 'max' }];
 const VERBOSITY = [{ value: 'auto', label: 'auto (not sent)' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }];
@@ -78,13 +79,31 @@ export function createSettingsTab({ state, actions, call }) {
     const setHeadroom = headroom.set;
     headroom.set = next => { setHeadroom(next); actions.configure({ headroom: next / 100 }); };
 
+    // Сброс обрезки открытого чата: граница, оставшаяся от прежней (в том числе ошибочной) настройки, стирается — история берётся целиком и режется заново.
+    const trimmingStatus = signal('');
+    async function resetTrimming() {
+        const answer = await call('promptManager.resetCut');
+        trimmingStatus.set(answer.ok ? (answer.value?.was > 0 ? `Done: the cut before message #${answer.value.was} of this chat is gone. The next reply uses the whole history that fits.` : 'There was no cut in this chat.') : `Could not reset: ${answer.error?.message}`);
+    }
+    /** Ответ не меньше контекста: бюджет на запрос — ноль, и всё режется (PM в этом случае не режет вовсе и пишет об этом в превью). */
+    const budgetWarning = computed(() => {
+        const params = state.preset()?.params ?? {};
+        const context = Number(params.openai_max_context);
+        const reply = Number(params.openai_max_tokens);
+        if (!Number.isFinite(context) || !Number.isFinite(reply) || context - reply >= MIN_BUDGET) return null;
+        return h('p', { class: 'stme-pm-warning' }, `Max response (${reply}) is not smaller than Max context (${context}) by at least ${MIN_BUDGET}: there is no room for the prompt, so trimming is switched off and the request may not fit. Lower Max response or raise Max context.`);
+    });
+
     function tree() {
         return h('div', { class: 'stme-pm-settings' },
             h('h4', {}, 'Prompt Manager'),
             Toggle('Freeze random macros per chat (keeps the prefix cache)', signal(state.settings().freezeRandom !== false), { onChange: value => actions.configure({ freezeRandom: value }) }),
             Toggle('Apply sampler values from the preset to the request', signal(state.settings().applyParams !== false), { onChange: value => actions.configure({ applyParams: value }) }),
             Slider('Trimming headroom (%) — extra cut at once, so later turns do not move the start of the history', headroom, { min: 0, max: 40, step: 1 }),
+            Row(Button('Reset trimming (this chat)', resetTrimming), computed(() => (trimmingStatus() ? h('small', { class: 'stme-pm-help' }, trimmingStatus()) : null))),
+            h('p', { class: 'stme-pm-help' }, 'The start of the history is cut once and then stays cut, so the provider cache keeps working. It is released by itself when the budget grows by a quarter or more; this button releases it right now.'),
             h('h4', {}, 'Generation parameters of this preset'),
+            budgetWarning,
             computed(() => (state.preset() ? h('div', {},
                 h('div', { class: 'stme-pm-grid' }, NUMBERS.map(([key, label, min, max, step]) => Field(label, NumberInput(paramSignal(key), { min, max, step })))),
                 Field('Candidates (n)', NumberInput(paramSignal('n'), { min: 1, max: 16, step: 1 })),

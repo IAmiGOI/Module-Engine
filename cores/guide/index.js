@@ -9,6 +9,7 @@ import { createCreateActions } from './create-actions.js';
 import { createEditActions } from './edit-actions.js';
 import { createCharacterActions } from './character-actions.js';
 import { createPresetActions } from './preset-actions.js';
+import { createChatActions } from './chat-actions.js';
 import { createWebActions } from './web-actions.js';
 import { createLorebookActions } from './lorebook-actions.js';
 import { createWhatsNew } from './whats-new.js';
@@ -167,6 +168,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         ...createCharacterActions({ call }),
         ...createPresetActions({ call, modules }),
         ...createWebActions({ callService }),
+        ...createChatActions({ call, callService }),
         ...createLorebookActions({ call, callService }),
     };
 

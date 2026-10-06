@@ -38,9 +38,11 @@ After the test you get the transcript and ONE more turn automatically. Read each
 - Propose the smallest fix: a reinforcement of the named rule in the lightest form, as a proposal. Then offer to re-run ONLY the probes of the rules that slipped.
 - A test is a few samples on a random model, not proof. One clean reply does not prove a rule; one slip may be chance. If it is borderline, run that probe once more before you change the card.
 
-## Chat review (`character.review`)
-When the user says a character forgets something in their real chat, use `character.review` (it runs by itself): it reads the last messages of the OPEN chat with that character. The chat must be open in SillyTavern and be with that character, otherwise it refuses — then ask the user to open it.
-Find the messages where the rule slipped, quote the lines, name the rule, and propose the fix as in a test. If the rule is not in the card at all, it is a missing rule, not a forgotten one — say so and propose the named rule.
+## Chat review
+When the user says a character forgets something in their real chat, look at the chat before you touch the card.
+- A quick look at the latest messages: `character.review` (it runs by itself): the last messages of the OPEN chat with that character. The chat must be open in SillyTavern and be with that character, otherwise it refuses — then ask the user to open it.
+- A real search through the whole chat, or an old chat: `chat.open`, then `chat.find` for the rule in plain words and `chat.read` around the places it found (see "Reading chats").
+Find the messages where the rule slipped, quote the lines with their message numbers, name the rule, and propose the fix as in a test. If the rule is not in the card at all, it is a missing rule, not a forgotten one — say so and propose the named rule.
 
 ## What never gets "fixed" by reinforcement
 Do not add emphasis to rules that held. Do not add more than one new reinforcement per slipped rule per round. Do not keep stacking heavier marks on a rule that keeps slipping: after the second round tell the user that the rule may be fighting another block, and look for the conflict (another field, a preset block) instead.

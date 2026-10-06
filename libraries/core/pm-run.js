@@ -2,7 +2,7 @@ import { createMacroEngine } from './pm-macros.js';
 import { chatToMessages } from './pm-history.js';
 import { activateEntries } from './pm-lorebook.js';
 import { assemblePrompt } from './pm-assemble.js';
-import { trimMessages } from './pm-trim.js';
+import { trimMessages, MIN_BUDGET } from './pm-trim.js';
 import { summarizeTokens } from './pm-tokens.js';
 import { finalizeMessages, paramsToBody } from './pm-finalize.js';
 import { blockById } from './pm-preset-format.js';
@@ -22,7 +22,7 @@ const textOf = entry => String(entry?.mes ?? '');
  *   user, char, description, personality, scenario, persona, mesExamples — строки
  *   chat — массив `chat` ST (вставки модулей уже внутри); macros — наши макросы (rp-time_*)
  *   loreEntries — записи лорбука активных книг; tracker(id, field) — значения трекеров
- * options: { contributions, globals, seed (заморозка random), timed, prevCut, headroom, budgetOverride }
+ * options: { contributions, globals, seed (заморозка random), timed, prevCut, prevBudget, headroom, budgetOverride }
  */
 const isBlankText = value => typeof value !== 'string' || value.trim() === '';
 
@@ -74,11 +74,15 @@ export function buildRequest(preset, materials, options = {}) {
     });
     const reserved = params.openai_max_tokens ?? 0;
     const budget = options.budgetOverride ?? Math.max(maxContext - reserved, 0);
-    const trimmed = trimMessages(withPriority, { budget, headroom: options.headroom ?? 0.1, prevCut: options.prevCut ?? 0 });
+    // Бюджет меньше самого малого разумного (ответ не меньше контекста, и бюджет 0): резать по нему нечего, он срезал бы ВСЮ историю и записал бы эту границу в чат навсегда.
+    // Обрезка в этом случае выключена, а причина идёт наружу (превью и окно настроек называют её).
+    const budgetInvalid = options.budgetOverride === undefined && (!Number.isFinite(budget) || budget < MIN_BUDGET);
+    const trimmed = trimMessages(withPriority, { budget: budgetInvalid ? Infinity : budget, headroom: options.headroom ?? 0.1, prevCut: options.prevCut ?? 0, prevBudget: options.prevBudget });
     const joined = joinWrappers(trimmed.messages); // группы с обёрткой — одним сообщением, после обрезки (pm-wrap-join.js)
     const messages = finalizeMessages(joined, { params, substitute: engine.substitute });
     return {
-        messages, body: paramsToBody(params), report: assembled.report, dropped: trimmed.dropped, cut: trimmed.cut,
+        messages, body: paramsToBody(params), report: assembled.report, dropped: trimmed.dropped, cut: trimmed.cut, cutBudget: trimmed.cutBudget, cutReleased: trimmed.released,
+        budgetInvalid: budgetInvalid ? { maxContext, reserved } : null,
         tokens: summarizeTokens(trimmed.messages), overBudget: trimmed.overBudget, budget,
         lore: { activated: lore.activated, skipped: lore.skipped },
         macros: { usedRandom: engine.state.usedRandom, unresolved: [...new Set(engine.state.unresolved)] },

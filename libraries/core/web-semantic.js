@@ -7,6 +7,8 @@
 export const CHUNK_TARGET_CHARS = 700;
 export const CHUNK_MAX_CHARS = 1000;
 export const MAX_CHUNKS = 150;
+/** Чат — страница из сотен сообщений: смысловой индекс его кусков длиннее обычной страницы (векторы считаются лениво и дописываются от поиска к поиску). */
+export const CHAT_MAX_CHUNKS = 2000;
 const RESULT_LIMIT = 8;
 const SNIPPET_CHARS = 260;
 /**
@@ -21,9 +23,9 @@ const RRF_K = 60;
 
 /**
  * Куски страницы: `[{ index, offset, end, section: '2. Appearance', sectionTitle, text }]`. Абзац — строка текста; раздел начинается с новой строки `## …`, и кусок не переходит границу раздела.
- * Больше MAX_CHUNKS не делаем (остальное не в смысловом поиске, но слова его по-прежнему находят).
+ * Больше `maxChunks` (по умолчанию MAX_CHUNKS) не делаем (остальное не в смысловом поиске, но слова его по-прежнему находят).
  */
-export function chunkPage(text, outline = []) {
+export function chunkPage(text, outline = [], { maxChunks = MAX_CHUNKS } = {}) {
     const source = String(text ?? '');
     const sectionAt = offset => [...outline].reverse().find(entry => entry.offset <= offset) ?? null;
     const starts = new Set(outline.map(item => item.offset));
@@ -38,10 +40,10 @@ export function chunkPage(text, outline = []) {
         current.text += `${current.text ? '\n' : ''}${line}`;
         current.end = lineEnd;
         offset = lineEnd + 1;
-        if (chunks.length >= MAX_CHUNKS) break;
+        if (chunks.length >= maxChunks) break;
     }
     close();
-    return chunks.slice(0, MAX_CHUNKS);
+    return chunks.slice(0, maxChunks);
 }
 
 /** Текст куска для эмбеддинга: название раздела помогает смыслу («Personality: She is…»). */

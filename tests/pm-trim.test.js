@@ -68,3 +68,27 @@ test('a tool call and its results are removed together and never separated', () 
     const result = trimMessages(messages, { budget: 25, headroom: 0, count: flatCount });
     assert.deepEqual(result.messages.map(m => m._hid), [2, 3]);
 });
+
+test('a cut is released once the budget has grown by a quarter or more since it was made; without that knowledge it stays', () => {
+    const grown = trimMessages(history(6), { budget: 1250, prevCut: 2, prevBudget: 1000, count: flatCount });
+    assert.equal(grown.released, true);
+    assert.equal(grown.cut, 0);
+    assert.equal(grown.cutBudget, null);
+    assert.equal(grown.dropped.length, 0);
+    const almost = trimMessages(history(6), { budget: 1240, prevCut: 2, prevBudget: 1000, count: flatCount });
+    assert.equal(almost.released, false);
+    assert.equal(almost.cut, 2);
+    assert.equal(almost.cutBudget, 1000, 'the budget the cut was made for is kept');
+    assert.equal(trimMessages(history(6), { budget: 100000, prevCut: 2, count: flatCount }).cut, 2, 'nothing is known about the old budget: the old rule holds');
+    assert.equal(trimMessages(history(6), { budget: 100000, prevCut: 2, prevBudget: 0, count: flatCount }).cut, 0, '0 = a cut from before the budget was remembered: released once');
+});
+
+test('after a release the trimming is counted again for the new budget and remembers it', () => {
+    const result = trimMessages(history(20), { budget: 100, headroom: 0.2, prevCut: 3, prevBudget: 40, count: flatCount });
+    assert.equal(result.released, true);
+    assert.ok(result.cut > 0, 'the history is still too long, so a fresh cut is made');
+    assert.equal(result.cutBudget, 100);
+    const next = trimMessages([...history(20), { role: 'user', content: 'new', _hid: 20 }], { budget: 100, headroom: 0.2, prevCut: result.cut, prevBudget: result.cutBudget, count: flatCount });
+    assert.equal(next.released, false);
+    assert.equal(next.cutBudget, next.cut > result.cut ? 100 : result.cutBudget);
+});
