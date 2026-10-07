@@ -28,6 +28,7 @@ export const ICONS = Object.freeze({
     volumeLow: () => svg(fill(SPEAKER), line('M16 8.5a5 5 0 010 7')),
     volumeMuted: () => svg(fill(SPEAKER), line('M16.5 9.5l5 5M21.5 9.5l-5 5')),
     thumbUp: () => svg(line('M7 11v9H4v-9h3zM7 11l4-7c1.5 0 2.5 1 2.2 2.6L12.7 10H19a2 2 0 011.9 2.6l-1.7 6A2 2 0 0117.3 20H7')),
+    pencil: () => svg(line('M4 20l4-1 11-11-3-3L5 16l-1 4zM14 7l3 3')),
     thumbDown: () => svg(line('M7 13V4H4v9h3zM7 13l4 7c1.5 0 2.5-1 2.2-2.6L12.7 14H19a2 2 0 001.9-2.6l-1.7-6A2 2 0 0017.3 4H7')),
 });
 
@@ -107,6 +108,16 @@ export function MusicPlayerBody({ now, progress, volume, muted, autoSwitch, hasT
             h('span', { class: 'stme-music-feedback-label' }, computed(() => describeFeedback(feedback.state()))),
             ControlButton({ icon: ICONS.thumbUp(), label: 'Right music for this scene', onClick: () => feedback.onMark('good'), className: 'stme-music-btn-small', pressed: computed(() => feedback.state().mark === 'good'), disabled: computed(() => feedback.state().status === 'sending') }),
             ControlButton({ icon: ICONS.thumbDown(), label: 'Wrong music for this scene', onClick: () => feedback.onMark('bad'), className: 'stme-music-btn-small', pressed: computed(() => feedback.state().mark === 'bad'), disabled: computed(() => feedback.state().status === 'sending') }),
+        ) : null)),
+        feedback && feedback.choices && computed(() => (feedback.visible() ? h('div', { class: 'stme-music-choices-box' },
+            ControlButton({ icon: ICONS.pencil(), label: 'Choose the right music for this scene', onClick: feedback.choices.onOpen, className: 'stme-music-btn-small', pressed: computed(() => feedback.choices.state().open), disabled: computed(() => feedback.state().status === 'sending') }),
+            computed(() => {
+                const state = feedback.choices.state();
+                if (!state.open) return null;
+                if (state.status === 'loading') return h('div', { class: 'stme-music-choices-note' }, 'Loading…');
+                if (state.status === 'failed') return h('div', { class: 'stme-music-choices-note' }, 'No choices available for this section');
+                return h('div', { class: 'stme-music-choices' }, ...state.list.map(item => h('button', { type: 'button', class: 'stme-music-choice', title: item.label, 'on:click': () => feedback.choices.onPick(item.id) }, item.label)));
+            }),
         ) : null)),
         h('div', { class: 'stme-music-volume' },
             ControlButton({

@@ -4,7 +4,7 @@ import { createEngine } from '../libraries/shared/engine.js';
 import { createMusicServerCore } from '../cores/music-server/index.js';
 import { EMBEDDING_MODEL_ID } from '../libraries/core/embedding.js';
 import {
-    isServerConfigured, sectionsUrl, sectionUrl, audioUrl, parseSections, parseSectionTracks, isServerTrack, SERVER_TRACK_PREFIX,
+    isServerConfigured, sectionsUrl, sectionUrl, audioUrl, choicesUrl, parseChoices, parseSections, parseSectionTracks, isServerTrack, SERVER_TRACK_PREFIX,
 } from '../libraries/shared/music-catalog.js';
 
 const MODEL = EMBEDDING_MODEL_ID;
@@ -129,6 +129,8 @@ test('the core sends a right/wrong mark with the model id and the scene vector; 
     assert.deepEqual(await core.feedback({ section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'bad' }), { ok: true });
     assert.ok(bodies[0].url.includes('/api/feedback'));
     assert.deepEqual(bodies[0].body, { model: MODEL, section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'bad' });
+    await core.feedback({ section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'bad', wanted: 'n7' });
+    assert.equal(bodies[1].body.wanted, 'n7', 'the chosen right music goes along');
     assert.deepEqual(await core.feedback({ section: 'fantasy', vector: [0.1], mark: 'bad' }), { ok: false }, 'no track — nothing to mark');
     reply = { ok: true, status: 200, text: JSON.stringify({ ok: false, reason: 'model mismatch' }) };
     assert.deepEqual(await core.feedback({ section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'good' }), { ok: false });
@@ -136,4 +138,27 @@ test('the core sends a right/wrong mark with the model id and the scene vector; 
     assert.deepEqual(await core.feedback({ section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'good' }), { ok: false });
     const none = createMusicServerCore(createEngine().registerCaller('core.musicServer', 'cores', { tier: 'official', networkAccess: true }), { server: {}, dim: 4 });
     assert.deepEqual(await none.feedback({ section: 'fantasy', vector: [1], track: 't', mark: 'good' }), { ok: false });
+});
+
+
+test('the list of "right music" choices: only ids and short labels are read, junk and a foreign model give an empty list, and the core asks for one section with the read key', async () => {
+    assert.equal(choicesUrl(server, 'fantasy 1'), 'https://music.example/api/choices?section=fantasy%201&k=k%201');
+    const good = JSON.stringify({ model: MODEL, choices: [{ id: 'a', label: ' Fight   scene ', tag: 'secret' }, { id: 'a', label: 'dup' }, { id: '', label: 'x' }, { id: 'b' }, { id: 'c', label: 'Calm' }] });
+    assert.deepEqual(parseChoices(good, { model: MODEL }), [{ id: 'a', label: 'Fight scene' }, { id: 'c', label: 'Calm' }]);
+    assert.deepEqual(parseChoices(good, { model: 'other' }), [], 'another model — nothing');
+    assert.deepEqual(parseChoices('not json'), []);
+    assert.deepEqual(parseChoices(JSON.stringify({ choices: 'x' })), []);
+    assert.equal(parseChoices(JSON.stringify({ choices: Array.from({ length: 80 }, (_, n) => ({ id: `i${n}`, label: `L${n}` })) })).length, 40, 'a sane cap');
+
+    const engine = createEngine();
+    const urls = [];
+    let reply = { ok: true, status: 200, text: good };
+    engine.buses.network.register('http.request', ({ url }) => { urls.push(url); return reply; });
+    const core = createMusicServerCore(engine.registerCaller('core.musicServer', 'cores', { tier: 'official', networkAccess: true }), { server, dim: 4 });
+    assert.deepEqual(await core.choices({ section: 'fantasy' }), { ok: true, choices: [{ id: 'a', label: 'Fight scene' }, { id: 'c', label: 'Calm' }] });
+    assert.ok(urls[0].includes('/api/choices?section=fantasy&k='));
+    reply = { ok: false };
+    assert.deepEqual(await core.choices({ section: 'fantasy' }), { ok: false, choices: [] });
+    const none = createMusicServerCore(createEngine().registerCaller('core.musicServer', 'cores', { tier: 'official', networkAccess: true }), { server: {}, dim: 4 });
+    assert.deepEqual(await none.choices({ section: 'fantasy' }), { ok: false, choices: [] }, 'no server configured — nothing is contacted');
 });

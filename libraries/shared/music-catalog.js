@@ -66,6 +66,26 @@ export function parseSectionTracks(text, { server, sectionId, model, dim }) {
 
 export const pickUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/pick`, key);
 export const feedbackUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/feedback`, key);
+export const choicesUrl = ({ url, key }, sectionId) => withKey(`${trimSlash(url)}/api/choices?section=${encodeURIComponent(sectionId)}`, key);
+
+/**
+ * Варианты «нужной музыки» раздела: `[{ id, label }]` (только то, что показывает сервер). Мусор, чужая модель или пустой список — пустой массив: кнопка выбора просто не появится.
+ */
+export function parseChoices(text, { model } = {}) {
+    let data;
+    try { data = JSON.parse(text); } catch { return []; }
+    if (!data || typeof data !== 'object' || (model && data.model !== model) || !Array.isArray(data.choices)) return [];
+    const seen = new Set();
+    const list = [];
+    for (const item of data.choices) {
+        const id = typeof item?.id === 'string' ? item.id.trim() : '';
+        const label = typeof item?.label === 'string' ? item.label.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+        if (!id || id.length > 64 || !label || seen.has(id)) continue;
+        seen.add(id); list.push({ id, label });
+        if (list.length >= 40) break;
+    }
+    return list;
+}
 
 /** Трек, который выбрал сервер: у ME нет о нём ничего, кроме id и адреса аудио. `rawId` нужен, чтобы сказать серверу, что сейчас играет. */
 export const serverTrackFrom = ({ server, sectionId, id, ext }) => ({

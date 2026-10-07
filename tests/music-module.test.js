@@ -118,7 +118,7 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
             'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek', 'model.generate',
-            'embedding.compute', 'musicServer.sections', 'musicServer.section', 'musicServer.pick', 'musicServer.feedback', 'classifier.decide',
+            'embedding.compute', 'musicServer.sections', 'musicServer.section', 'musicServer.pick', 'musicServer.feedback', 'musicServer.choices', 'classifier.decide',
         ],
     });
     const rawNotify = moduleHost.cores.subscribe.bind(moduleHost.cores);
@@ -799,4 +799,59 @@ test('right/wrong marks: a track started in advance (smooth switch) is marked wi
     const before = sent.length;
     await module.markTrack('bad');
     assert.equal(sent.length, before, 'and nothing is sent');
+});
+
+
+test('choosing the RIGHT music: the list comes from the server (ids and labels only), the pick goes out as a "wrong" mark that names the chosen one — still no chat text — and the list is closed and cleared with a new track', async () => {
+    const sent = [];
+    const { module, engine } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], serverTracks: [] });
+    let asked = 0;
+    engine.buses.cores.register('musicServer.pick', () => ({ action: 'play', similarity: 0.9, track: { id: 'srv_fantasy_k1', rawId: 'k1', name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: 'https://music.example/audio/k1.mp3' } } }));
+    engine.buses.cores.register('musicServer.choices', () => { asked += 1; return { ok: true, choices: [{ id: 'n1', label: 'Fight' }, { id: 'n2', label: 'Calm' }] }; });
+    engine.buses.cores.register('musicServer.feedback', params => { sent.push(params); return { ok: true }; });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await module.chooseSection('fantasy');
+    await module.openChoices();
+    assert.equal(module.choicesState.peek().open, false, 'nothing is playing yet — nothing to choose for');
+    await module.onGenerationCompleted();
+    await module.openChoices();
+    assert.deepEqual(module.choicesState.peek(), { open: true, status: 'ready', list: [{ id: 'n1', label: 'Fight' }, { id: 'n2', label: 'Calm' }] });
+    await module.openChoices();
+    assert.equal(module.choicesState.peek().open, false, 'the pencil closes the list');
+    await module.openChoices();
+    assert.equal(asked, 1, 'the list is fetched once per track');
+    await module.chooseWanted('nope');
+    assert.equal(sent.length, 0, 'only what the server offered can be chosen');
+    await module.chooseWanted('n2');
+    assert.deepEqual(sent[0], { section: 'fantasy', vector: vec('fight'), track: 'k1', mark: 'bad', wanted: 'n2' });
+    assert.equal(JSON.stringify(sent[0]).includes('Blades'), false, 'never the chat text');
+    assert.deepEqual(module.feedbackState.peek(), { mark: 'bad', status: 'sent', wanted: 'Calm' });
+    assert.equal(module.choicesState.peek().open, false);
+});
+
+test('choosing the right music: no list from the server — the pencil shows a quiet note and sends nothing; a failed send can be retried', async () => {
+    const sent = [];
+    let healthy = false;
+    const { module, engine } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], serverTracks: [] });
+    engine.buses.cores.register('musicServer.pick', () => ({ action: 'play', similarity: 0.9, track: { id: 'srv_fantasy_k1', rawId: 'k1', name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: 'https://music.example/audio/k1.mp3' } } }));
+    let list = [];
+    engine.buses.cores.register('musicServer.choices', () => ({ ok: list.length > 0, choices: list }));
+    engine.buses.cores.register('musicServer.feedback', params => { sent.push(params); return { ok: healthy }; });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await module.chooseSection('fantasy');
+    await module.onGenerationCompleted();
+    await module.openChoices();
+    assert.deepEqual([module.choicesState.peek().status, module.choicesState.peek().list], ['failed', []]);
+    await module.chooseWanted('n1');
+    assert.equal(sent.length, 0);
+    await module.openChoices(); await module.openChoices();   // закрыть и открыть заново
+    list = [{ id: 'n1', label: 'Fight' }];
+    module.choicesState.set({ open: true, status: 'ready', list });
+    await module.chooseWanted('n1');
+    assert.deepEqual(module.feedbackState.peek(), { mark: 'bad', status: 'failed' });
+    healthy = true;
+    await module.chooseWanted('n1');
+    assert.deepEqual(module.feedbackState.peek(), { mark: 'bad', status: 'sent', wanted: 'Fight' });
 });

@@ -17,7 +17,7 @@ model.generate,
 # Вектор сцены и вектора треков — локальный эмбединг.
 embedding.compute, embedding.similarity,
 # Разделы музыкального сервера владельца (сеть — только у Ядра).
-musicServer.sections, musicServer.section, musicServer.pick, musicServer.feedback,
+musicServer.sections, musicServer.section, musicServer.pick, musicServer.feedback, musicServer.choices,
 # Умный выбор: Jev пользователя оценивает категории сцены (запрос от сервера, ответ идёт только как номер категории).
 classifier.decide
 */
@@ -103,7 +103,29 @@ export function createMusicModule(host) {
     let playingScene = null;                                   // { vector, rawId, section }
     const feedbackVisible = signal(false);
     const feedbackState = signal({ mark: null, status: 'idle' });
-    function setPlayingScene(scene) { playingScene = scene; feedbackState.set({ mark: null, status: 'idle' }); feedbackVisible.set(Boolean(scene)); }
+    // «Нужная музыка»: игрок сам называет, какая музыка подошла бы этой сцене (список даёт сервер: id и подписи). Уходит той же отметкой «неверно» с выбранным вариантом.
+    const choicesState = signal({ open: false, status: 'idle', list: [] });
+    function setPlayingScene(scene) { playingScene = scene; feedbackState.set({ mark: null, status: 'idle' }); feedbackVisible.set(Boolean(scene)); choicesState.set({ open: false, status: 'idle', list: [] }); }
+    async function openChoices() {
+        const current = choicesState.peek();
+        if (!playingScene) return;
+        if (current.open) { choicesState.set({ ...current, open: false }); return; }
+        if (current.status === 'ready') { choicesState.set({ ...current, open: true }); return; }
+        choicesState.set({ open: true, status: 'loading', list: [] });
+        const got = await call('musicServer.choices', { section: playingScene.section });
+        const list = got.ok && got.value?.ok ? got.value.choices : [];
+        choicesState.set({ open: true, status: list.length ? 'ready' : 'failed', list });
+    }
+    async function chooseWanted(id) {
+        if (!playingScene || feedbackState.peek().status === 'sending') return;
+        const choice = choicesState.peek().list.find(item => item.id === id);
+        if (!choice) return;
+        feedbackState.set({ mark: 'bad', status: 'sending' });
+        const sent = await call('musicServer.feedback', { section: playingScene.section, vector: playingScene.vector, track: playingScene.rawId, mark: 'bad', wanted: choice.id });
+        const ok = Boolean(sent.ok && sent.value?.ok);
+        feedbackState.set({ mark: 'bad', status: ok ? 'sent' : 'failed', ...(ok ? { wanted: choice.label } : {}) });
+        if (ok) choicesState.set({ ...choicesState.peek(), open: false });
+    }
     async function markTrack(mark) {
         if (!playingScene || feedbackState.peek().status === 'sending') return;
         feedbackState.set({ mark, status: 'sending' });
@@ -558,7 +580,7 @@ export function createMusicModule(host) {
                 onToggleMute: toggleMute,
                 onToggleAuto: toggleAutoSwitch,
                 onVolumeCommit: savePlayer,
-                feedback: { visible: feedbackVisible, state: feedbackState, onMark: markTrack },
+                feedback: { visible: feedbackVisible, state: feedbackState, onMark: markTrack, choices: { state: choicesState, onOpen: openChoices, onPick: chooseWanted } },
             }),
         );
     }
@@ -680,6 +702,7 @@ export function createMusicModule(host) {
         markTrack,
         feedbackState,
         feedbackVisible,
+        choicesState, openChoices, chooseWanted,
         onGenerationCompleted,
         importFiles,
         importLinkText,

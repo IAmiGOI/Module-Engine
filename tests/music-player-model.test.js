@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    formatClock, progressPercent, timeFromPercent, coverHues, coverGradient, coverGlow, trackInitial, matchPercent, describeNowPlaying, volumeLevel,
+    formatClock, progressPercent, timeFromPercent, coverHues, coverGradient, coverGlow, trackInitial, matchPercent, describeNowPlaying, volumeLevel, describeFeedback,
 } from '../libraries/shared/music-player-model.js';
 
 test('the clock reads m:ss, adds hours only when needed, and shows a fixed-width dash for an unknown time', () => {
@@ -73,4 +73,11 @@ test('the window glow uses the same two hues as the cover, so the window is tint
     const glow = coverGlow('Midnight Chase');
     assert.ok(glow.includes(`hsl(${hue} `) && glow.includes(`hsl(${hue2} `));
     assert.equal(coverGlow('Midnight Chase'), glow, 'stable');
+});
+
+
+test('describeFeedback names the music the player chose, and only after it was sent', () => {
+    assert.equal(describeFeedback({ mark: 'bad', status: 'sent', wanted: 'Calm' }), 'Sent: this scene needs “Calm”');
+    assert.equal(describeFeedback({ mark: 'bad', status: 'sending', wanted: 'Calm' }), 'Sending…');
+    assert.equal(describeFeedback({ mark: 'bad', status: 'sent' }), 'Sent: wrong music for this scene');
 });

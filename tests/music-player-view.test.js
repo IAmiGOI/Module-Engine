@@ -119,7 +119,7 @@ test('the volume icon follows the level and mute; every control has an accessibl
     state.muted.set(true);
     assert.equal(read(button.props['aria-label']), 'Unmute');
     for (const name of ['stme-music-btn-primary', 'stme-music-btn-auto']) assert.ok(read(find(tree, name).props['aria-label']));
-    assert.equal(Object.keys(ICONS).length, 11);
+    assert.equal(Object.keys(ICONS).length, 12);
 });
 
 test('right/wrong buttons exist only when the caller gives a feedback handle, show only while visible, say what happened, and call back with the mark', () => {
@@ -150,4 +150,33 @@ test('right/wrong buttons exist only when the caller gives a feedback handle, sh
     feedbackProps.state.set({ mark: 'bad', status: 'sent' });
     assert.equal(read(find(row, 'stme-music-feedback-label').children[0]), 'Sent: wrong music for this scene');
     assert.equal(read(up.props.disabled), false);
+});
+
+
+test('the pencil next to the marks opens the list of right-music choices only when the caller supports it; the list shows loading/failed notes and calls back with the chosen id', () => {
+    const marks = [], picked = [];
+    const choices = { state: signal({ open: false, status: 'idle', list: [] }), onOpen: () => marks.push('open'), onPick: id => picked.push(id) };
+    const feedbackProps = { visible: signal(true), state: signal({ mark: null, status: 'idle' }), onMark: () => {}, choices };
+    const { tree } = setup({ feedbackProps });
+    const slot = tree.children.filter(child => typeof child === 'function').find(child => read(child)?.props?.class === 'stme-music-choices-box');
+    assert.ok(slot, 'a slot for the choices exists');
+    const box = read(slot);
+    const [pencil, list] = [box.children.find(child => child?.tag === 'button'), box.children.find(child => typeof child === 'function')];
+    assert.equal(read(pencil.props['aria-label']), 'Choose the right music for this scene');
+    pencil.props['on:click']();
+    assert.deepEqual(marks, ['open']);
+    assert.equal(read(list), null, 'closed — nothing shown');
+    choices.state.set({ open: true, status: 'loading', list: [] });
+    assert.equal(read(list).children[0], 'Loading…');
+    choices.state.set({ open: true, status: 'failed', list: [] });
+    assert.equal(read(list).children[0], 'No choices available for this section');
+    choices.state.set({ open: true, status: 'ready', list: [{ id: 'n1', label: 'Fight' }, { id: 'n2', label: 'Calm' }] });
+    const buttons = read(list).children.filter(child => child?.tag === 'button');
+    assert.deepEqual(buttons.map(button => button.children[0]), ['Fight', 'Calm']);
+    buttons[1].props['on:click']();
+    assert.deepEqual(picked, ['n2']);
+    feedbackProps.visible.set(false);
+    assert.equal(read(slot), null, 'hidden together with the marks');
+    const plain = setup({ feedbackProps: { visible: signal(true), state: signal({ mark: null, status: 'idle' }), onMark: () => {} } });
+    assert.equal(plain.tree.children.some(child => typeof child === 'function' && read(child)?.props?.class === 'stme-music-choices-box'), false, 'no handle — no pencil');
 });
