@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { openStore, HttpError, AUDIO_EXT } from './store.js';
 import { MODEL_ID, DIM } from './embed.js';
 import { pickTrack, scoreItems } from './pick.js';
-import { decidePattern } from './patterns.js';
+import { decidePattern, explainPatterns } from './patterns.js';
 import { shiftScene, shiftPrototypes } from './alignment.js';
 import { CORS, sendJson, sendFile, readJson, sameSecret } from './http-utils.js';
 import { createRateLimiter, clientAddress } from './rate-limit.js';
@@ -101,6 +101,18 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
         const ranking = [...byKey.values()].sort((a, b) => b.score - a.score).slice(0, 8);
         const chosen = picked.action === 'play' ? items.find(item => item.id === picked.id) : null;
         return { action: picked.action, aligned: Boolean(alignment), relative, similarity: picked.similarity ?? null, chosen: chosen ? { title: chosen.title, group: chosen.groupName } : null, ranking };
+    }
+
+
+    /** Что сделают паттерны раздела на сцене из сообщений (для редактора): войдёт ли паттерн и по какой ветке пойдёт. Ничего не меняет и не считает проигрываний. */
+    async function patternPreview(body) {
+        const section = String(body.section ?? '');
+        if (!store.hasSection(section)) throw new HttpError(404, 'нет такого раздела');
+        const messages = (Array.isArray(body.messages) ? body.messages : [body.text]).map(text => String(text ?? '').trim()).filter(Boolean);
+        if (!messages.length) throw new HttpError(400, 'вставьте хотя бы одно сообщение');
+        const { vector, prototypes } = sceneFor(section, await embedQuery(messages.join('\n')), { align: body.align !== false });
+        const minSimilarity = Number.isFinite(body.minSimilarity) ? body.minSimilarity : undefined;
+        return explainPatterns({ nodes: store.patternNodes(section), items: store.pickItems(section), vector, dim: DIM, minSimilarity, switchMargin: Number.isFinite(body.switchMargin) ? body.switchMargin : undefined, prototypes });
     }
 
     async function route(req, res) {
@@ -202,6 +214,8 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
                 if (method === 'DELETE' && id) { await store.dismissFeedback(id); return sendJson(res, 200, { ok: true }); }
             }
             if (what === 'patterns') {
+                if (method === 'POST' && id === 'chain') { const body = await readJson(req, 64 * 1024); return sendJson(res, 201, await store.addPatternChain({ sectionId: body.section, parent: body.parent ?? null, steps: body.steps })); }
+                if (method === 'POST' && id === 'preview') return sendJson(res, 200, await patternPreview(await readJson(req, 256 * 1024)));
                 if (method === 'POST' && !id) { const body = await readJson(req, 64 * 1024); return sendJson(res, 201, await store.addPatternNode({ sectionId: body.section, parent: body.parent ?? null, kind: body.kind, ref: body.ref, name: body.name, description: body.description, negative: body.negative })); }
                 if (method === 'PATCH' && id) return sendJson(res, 200, await store.updatePatternNode(id, await readJson(req, 64 * 1024)));
                 if (method === 'DELETE' && id) return sendJson(res, 200, { ok: true, ...(await store.deletePatternNode(id)) });

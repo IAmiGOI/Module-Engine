@@ -29,17 +29,27 @@ export function resolveStep(node, { tracks, currentId = null, plays = new Map(),
 
 const played = (node, track, similarity = null) => ({ action: 'play', id: track.id, ext: track.ext, similarity, pattern: node.id });
 
-/** Вход в паттерн: лучший корень с тегом, если он заметно лучше обычных вариантов (и играющего — когда оно играет). `null` — входить не стоит. */
-export function findEntry({ nodes, items, vector, dim, currentId = null, ended = false, minSimilarity, switchMargin, prototypes = null, elapsed = null, remaining = null }) {
+/** Оценки входа: корни с тегом и обычные группы/треки по одной шкале (общее для решения и для объяснения владельцу). */
+function entryScores({ nodes, items, vector, dim, minSimilarity, prototypes }) {
     const roots = childrenOf(nodes, null).filter(node => tagged(node, dim));
     if (!roots.length || !validVector(vector, dim)) return null;
     const { relative, rows } = scoreItems({ items: [...items, ...roots.map(node => asItem(node, `pattern:${node.id}`))], vector, prototypes });
     const floor = floorOf(relative, minSimilarity);
-    const entries = rows.filter(row => row.item.nodeId && !row.vetoed && row.value >= floor).sort((a, b) => b.value - a.value);
-    if (!entries.length) return null;
-    const best = entries[0];
+    const entries = rows.filter(row => row.item.nodeId && !row.vetoed).sort((a, b) => b.value - a.value);
     const regular = rows.filter(row => !row.item.nodeId && !row.vetoed);
-    if (regular.length && best.value <= Math.max(...regular.map(row => row.value))) return null;
+    const regularBest = regular.length ? Math.max(...regular.map(row => row.value)) : -Infinity;
+    return { relative, rows, floor, entries, regularBest };
+}
+
+/** Вход в паттерн: лучший корень с тегом, если он заметно лучше обычных вариантов (и играющего — когда оно играет). `null` — входить не стоит. */
+export function findEntry({ nodes, items, vector, dim, currentId = null, ended = false, minSimilarity, switchMargin, prototypes = null, elapsed = null, remaining = null }) {
+    const scored = entryScores({ nodes, items, vector, dim, minSimilarity, prototypes });
+    if (!scored) return null;
+    const { relative, rows, floor, entries, regularBest } = scored;
+    const passing = entries.filter(row => row.value >= floor);
+    if (!passing.length) return null;
+    const best = passing[0];
+    if (best.value <= regularBest) return null;
     const current = currentId ? rows.find(row => row.item.id === currentId) : null;
     if (current && !ended) {
         if (Number.isFinite(elapsed) && elapsed < TIMING.minDwell) return null;
@@ -95,4 +105,39 @@ export function decidePattern({ nodes, patternId = null, tracks, items, vector, 
     const entry = findEntry({ nodes, items, vector, dim, currentId, ended, minSimilarity, switchMargin, prototypes, elapsed, remaining });
     const track = entry?.node && resolveStep(entry.node, { tracks, currentId, plays, randomFn });
     return track ? played(entry.node, track, entry.cosine) : null;
+}
+
+/**
+ * Для владельца: что сделает паттерн на ЭТОЙ сцене (проверка на консоли). Вход считается так же, как в бою (без времени проигрывания: сцена проверяется «с нуля»),
+ * дальше сцена ведёт по веткам развилок до конца паттерна или до места, где ни одна ветка не подошла. Ничего не меняет.
+ * `{ entered, entry: { ranking, floor, regularBest }, path: [nodeId], forks: [{ nodeId, ranking: [{ id, value, passes, chosen }] }], stopped }`
+ */
+export function explainPatterns({ nodes, items, vector, dim, minSimilarity, switchMargin, prototypes = null }) {
+    const scored = entryScores({ nodes, items, vector, dim, minSimilarity, prototypes });
+    if (!scored) return { entered: false, reason: nodes.some(node => !node.parent) ? 'no tagged start or no scene' : 'no patterns', entry: null, path: [], forks: [], stopped: null };
+    const { floor, entries, regularBest } = scored;
+    const entry = { ranking: entries.map(row => ({ id: row.item.nodeId, value: row.value, cosine: row.cosine, passes: row.value >= floor })), floor, regularBest: Number.isFinite(regularBest) ? regularBest : null };
+    const first = findEntry({ nodes, items, vector, dim, ended: true, minSimilarity, switchMargin, prototypes });
+    if (!first?.node) return { entered: false, reason: entries.some(row => row.value >= floor) ? 'ordinary groups fit better' : 'no start fits the scene', entry, path: [], forks: [], stopped: null };
+    const path = [first.node.id], forks = [];
+    let node = first.node, stopped = null;
+    for (let guard = 0; guard < 200; guard += 1) {
+        const children = childrenOf(nodes, node.id);
+        if (!children.length) { stopped = 'end'; break; }
+        if (children.length > 1) {
+            const withTag = children.filter(child => tagged(child, dim));
+            const rows = withTag.length ? scoreItems({ items: withTag.map(child => asItem(child)), vector, prototypes }) : null;
+            const floorHere = rows ? floorOf(rows.relative, minSimilarity) : 0;
+            forks.push({ nodeId: node.id, ranking: children.map(child => {
+                const row = rows?.rows.find(item => item.item.id === child.id);
+                return { id: child.id, value: row ? row.value : null, passes: row ? !row.vetoed && row.value >= floorHere : null, tagged: Boolean(row) };
+            }) });
+        }
+        const step = nextStep({ nodes, node, vector, dim, minSimilarity, prototypes, plays: new Map(), randomFn: () => 0 });
+        if (!step) { stopped = 'no branch fits'; break; }
+        node = step.node; path.push(node.id);
+        const fork = forks.at(-1);
+        if (fork && fork.nodeId === path.at(-2)) { const mine = fork.ranking.find(item => item.id === node.id); if (mine) mine.chosen = true; }
+    }
+    return { entered: true, entry, path, forks, stopped };
 }

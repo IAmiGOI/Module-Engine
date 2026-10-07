@@ -166,3 +166,94 @@ test('a pattern tree on the real server: fork by scene, shared beginning, ordina
         assert.equal((await ctx.api(`/api/admin/tracks/${made.AftermathTrack.id}`, 'DELETE')).status, 200, 'with the step gone the track is free to delete');
     } finally { await ctx.stop(); }
 });
+
+test('a chain of steps is created all at once under a parent or as a new start — and either everything or nothing: one bad link leaves no half-built pattern', async () => {
+    const ctx = await start();
+    try {
+        const section = (await ctx.api('/api/admin/sections', 'POST', { name: 'Moods', mode: 'groups' })).body;
+        const groups = {};
+        for (const [name, length] of [['Tension', 10], ['Fight', 20], ['After', 30]]) {
+            groups[name] = (await ctx.api('/api/admin/groups', 'POST', { section: section.id, name, description: text(length) })).body;
+            groups[`${name}Track`] = await ctx.addTrack(section.id, groups[name].id, name);
+        }
+        const steps = [{ kind: 'group', ref: groups.Tension.id, name: 'Arena', description: text(15) }, { kind: 'group', ref: groups.Fight.id }, { kind: 'track', ref: groups.AfterTrack.id }];
+        const made = await ctx.api('/api/admin/patterns/chain', 'POST', { section: section.id, steps });
+        assert.equal(made.status, 201);
+        const nodes = (await ctx.api('/api/admin/catalog', 'GET')).body.patterns;
+        assert.equal(nodes.length, 3);
+        const [a, b, c] = made.body.created.map(id => nodes.find(node => node.id === id));
+        assert.deepEqual([a.parent, b.parent, c.parent], [null, a.id, b.id], 'each step continues the previous one');
+        assert.deepEqual([a.name, a.tagged, b.tagged], ['Arena', true, false]);
+
+        const before = (await ctx.api('/api/admin/catalog', 'GET')).body.patterns.length;
+        assert.equal((await ctx.api('/api/admin/patterns/chain', 'POST', { section: section.id, steps: [steps[0], { kind: 'track', ref: 'nope' }] })).status, 400);
+        assert.equal((await ctx.api('/api/admin/patterns/chain', 'POST', { section: section.id, steps: [] })).status, 400);
+        assert.equal((await ctx.api('/api/admin/patterns/chain', 'POST', { section: section.id, parent: 'nope', steps: [steps[1]] })).status, 400);
+        assert.equal((await ctx.api('/api/admin/catalog', 'GET')).body.patterns.length, before, 'nothing was left behind');
+
+        const branch = await ctx.api('/api/admin/patterns/chain', 'POST', { section: section.id, parent: a.id, steps: [{ kind: 'group', ref: groups.After.id, description: text(35) }] });
+        assert.equal((await ctx.api('/api/admin/catalog', 'GET')).body.patterns.find(node => node.id === branch.body.created[0]).parent, a.id, 'a second branch under the same start');
+    } finally { await ctx.stop(); }
+});
+
+test('pattern preview for the editor: does the scene enter a pattern, which branch it takes at each fork, where it stops — and it changes nothing', async () => {
+    const ctx = await start();
+    try {
+        const section = (await ctx.api('/api/admin/sections', 'POST', { name: 'Moods', mode: 'groups' })).body;
+        const g = {};
+        for (const [name, length] of [['Start', 10], ['Fight', 20], ['Escape', 40], ['Calm', 50], ['Party', 60]]) {
+            g[name] = (await ctx.api('/api/admin/groups', 'POST', { section: section.id, name, description: text(length) })).body;
+            g[`${name}Track`] = await ctx.addTrack(section.id, g[name].id, name);
+        }
+        const root = (await ctx.api('/api/admin/patterns', 'POST', { section: section.id, kind: 'group', ref: g.Start.id, description: text(25) })).body;
+        const fight = (await ctx.api('/api/admin/patterns', 'POST', { section: section.id, parent: root.id, kind: 'group', ref: g.Fight.id, description: text(25) })).body;
+        const escape = (await ctx.api('/api/admin/patterns', 'POST', { section: section.id, parent: root.id, kind: 'group', ref: g.Escape.id, description: text(35) })).body;
+        const tail = (await ctx.api('/api/admin/patterns', 'POST', { section: section.id, parent: fight.id, kind: 'track', ref: g.CalmTrack.id })).body;
+        const preview = scene => ctx.api('/api/admin/patterns/preview', 'POST', { section: section.id, messages: [scene], minSimilarity: 0.2 });
+
+        const hit = (await preview(text(25))).body;
+        assert.equal(hit.entered, true);
+        assert.deepEqual(hit.path, [root.id, fight.id, tail.id], 'enters at the start, takes the branch that fits, follows the chain to its end');
+        assert.equal(hit.stopped, 'end');
+        const fork = hit.forks.find(item => item.nodeId === root.id);
+        assert.deepEqual(fork.ranking.map(item => [item.id, item.chosen === true]).sort(), [[escape.id, false], [fight.id, true]].sort());
+        assert.ok(hit.entry.ranking.some(item => item.id === root.id && item.passes));
+
+        const miss = (await preview(text(35))).body;
+        assert.equal(miss.entered, false, 'a scene about something else does not start the pattern');
+        assert.deepEqual(miss.path, []);
+
+        assert.equal((await ctx.api('/api/admin/patterns/preview', 'POST', { section: section.id, messages: [] })).status, 400);
+        assert.equal((await ctx.api('/api/admin/patterns/preview', 'POST', { section: 'nope', messages: ['x'] })).status, 404);
+        assert.equal((await ctx.api('/api/admin/catalog', 'GET')).body.patterns.length, 4, 'nothing changed');
+    } finally { await ctx.stop(); }
+});
+
+test('pattern preview: says "no branch fits" when the scene starts a pattern but none of its branches matches; refuses endless chains; and uses the same aligned scene as the real pick', async () => {
+    const ctx = await start();
+    try {
+        const section = (await ctx.api('/api/admin/sections', 'POST', { name: 'Moods', mode: 'groups' })).body;
+        const g = {};
+        for (const [name, length] of [['Start', 10], ['A', 20], ['B', 30], ['C', 40]]) {
+            g[name] = (await ctx.api('/api/admin/groups', 'POST', { section: section.id, name, description: text(length) })).body;
+            await ctx.addTrack(section.id, g[name].id, name);
+        }
+        const root = (await ctx.api('/api/admin/patterns', 'POST', { section: section.id, kind: 'group', ref: g.Start.id, description: text(25) })).body;
+        for (const [name, length] of [['A', 35], ['B', 45]]) await ctx.api('/api/admin/patterns', 'POST', { section: section.id, parent: root.id, kind: 'group', ref: g[name].id, description: text(length) });
+        const preview = (extra = {}) => ctx.api('/api/admin/patterns/preview', 'POST', { section: section.id, messages: [text(25)], minSimilarity: 0.2, ...extra });
+        const stuck = (await preview()).body;
+        assert.equal(stuck.entered, true);
+        assert.equal(stuck.stopped, 'no branch fits', 'the start fits, no branch does');
+        assert.deepEqual(stuck.path, [root.id]);
+
+        const tooLong = Array.from({ length: 41 }, () => ({ kind: 'group', ref: g.A.id }));
+        assert.equal((await ctx.api('/api/admin/patterns/chain', 'POST', { section: section.id, steps: tooLong })).status, 400);
+
+        const plain = (await preview({ align: false })).body.entry.ranking.find(item => item.id === root.id).cosine;
+        await ctx.api('/api/admin/examples', 'POST', { section: section.id, group: g.A.id, texts: Array.from({ length: 12 }, (_, n) => `${text(60 + n)} scene`) });
+        const aligned = (await preview()).body.entry.ranking.find(item => item.id === root.id).cosine;
+        const stillPlain = (await preview({ align: false })).body.entry.ranking.find(item => item.id === root.id).cosine;
+        assert.equal(stillPlain, plain, '"before" view is unaffected by examples');
+        assert.notEqual(aligned, plain, 'with enough examples the preview shifts the scene exactly like the real pick does');
+    } finally { await ctx.stop(); }
+});

@@ -185,6 +185,31 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             await save();
             return node;
         }),
+
+        /**
+         * Цепочка шагов за один раз (мастер «новый паттерн»): `steps` по порядку, каждый следующий — продолжение предыдущего, под `parent` (или новый корень). Либо
+         * создаётся всё, либо ничего: ссылки проверяются до записи. Тег (`description`) — у любого шага, обычно у первого.
+         */
+        addPatternChain: ({ sectionId, parent = null, steps }) => exclusive(async () => {
+            needSection(sectionId);
+            const list = Array.isArray(steps) ? steps : [];
+            if (!list.length) throw new HttpError(400, 'нужен хотя бы один шаг');
+            if (list.length > 40) throw new HttpError(400, 'слишком длинная цепочка');
+            if (parent) { const up = patternNode(parent); if (!up || up.section !== sectionId) throw new HttpError(400, 'такого родителя нет в этом разделе'); }
+            const refs = list.map(step => checkStep(sectionId, step?.kind, step?.ref));
+            const created = [];
+            let above = parent || null;
+            for (const [index, step] of list.entries()) {
+                const text = String(step.description ?? '').trim();
+                const node = { id: randomId(), section: sectionId, parent: above, kind: step.kind, ref: refs[index], name: String(step.name ?? '').trim(), description: text, vector: text ? await embed(text) : null, negative: '', negVector: null, order: data.patterns.filter(item => item.section === sectionId && item.parent === above).length };
+                if (step.negative) await reembed(node, 'negative', 'negVector', step.negative);
+                data.patterns.push(node);
+                created.push(node);
+                above = node.id;
+            }
+            await save();
+            return { created: created.map(node => node.id) };
+        }),
         /** Правка узла: имя, теги, шаг (`kind` + `ref`), перенос под другого родителя (`parent`: id или `null` — в корень; в свою же ветку нельзя). */
         updatePatternNode: (id, patch) => exclusive(async () => {
             const node = patternNode(id) ?? notFound('шага паттерна');
