@@ -84,9 +84,11 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
     const modelCalls = [];
     if (model) engine.buses.cores.register('model.generate', params => { modelCalls.push(params); return model(params); });
 
+    const embeddedTexts = [];   // что реально ушло в эмбединг (сцена после чистки)
     // Эмбединг-фейк: вектор — СУММА осей, чьи имена встретились в тексте
     // (нормированная). Детерминированно, «ничего не встретилось» — фон города.
     engine.buses.services.register('embedding.compute', ({ text }) => {
+        embeddedTexts.push(String(text));
         const lower = String(text).toLowerCase();
         const hits = Object.keys(AXES).filter(name => lower.includes(name));
         return vec(...(hits.length ? hits : ['city']));
@@ -95,9 +97,9 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
     // chatHistory.messages — фейк над тем же контрактом (реальный живёт на stChat/DOM).
     engine.buses.cores.register('chatHistory.messages', params => {
         const limit = Math.max(0, params?.limit ?? 10);
-        return chat.slice(-limit).map((text, index, array) => ({
+        return chat.slice(-limit).map((entry, index, array) => ({
             mesid: String(chat.length - array.length + index),
-            isUser: false, isSystem: false, name: '', text,
+            isUser: false, isSystem: false, name: typeof entry === 'object' ? entry.name : '', text: typeof entry === 'object' ? entry.text : entry,
         }));
     });
 
@@ -116,7 +118,7 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
             'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek', 'model.generate',
-            'embedding.compute', 'musicServer.sections', 'musicServer.section', 'musicServer.pick', 'classifier.decide',
+            'embedding.compute', 'musicServer.sections', 'musicServer.section', 'musicServer.pick', 'musicServer.places', 'musicServer.times', 'tracking.value', 'classifier.decide',
         ],
     });
     const rawNotify = moduleHost.cores.subscribe.bind(moduleHost.cores);
@@ -127,7 +129,7 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
 
     const module = createMusicModule(moduleHost);
 
-    return { engine, module, audio: playback, blobs, notifications, moduleHost, settingsContext, modelCalls };
+    return { engine, module, audio: playback, blobs, notifications, moduleHost, settingsContext, modelCalls, embeddedTexts };
 }
 
 test('load() restores tracks from settings; import computes vectors and persists both bytes and metadata', async () => {
@@ -715,4 +717,209 @@ test('after the embedding model changes, own tracks get fresh vectors once; the 
     const stamped = JSON.stringify(third.settingsContext.extensionSettings);
     assert.ok(stamped.includes(EMBEDDING_MODEL_ID), 'the current model id is remembered');
     assert.deepEqual(third.module.tracks.peek()[0].vector, vec('fight'));
+});
+
+test('the scene text is cleaned before it is embedded: participant names, emphasis marks and OOC inserts never reach the model', async () => {
+    const chat = [{ name: 'Hatsu', text: '*Hatsu* watched the fight in the rain (OOC: continue)' }, { name: 'Sasha', text: 'Sasha drew a blade, a brutal fight.' }];
+    const { module, embeddedTexts } = buildEngine({ chat });
+    await module.load();
+    await module.importFiles([{ name: 'tense urban fight at night.mp3', blob: new Blob(['a']) }]);
+    embeddedTexts.length = 0;
+    await module.onGenerationCompleted();
+    assert.deepEqual(embeddedTexts, ['watched the fight in the rain', 'drew a blade, a brutal fight.']);
+    assert.equal(module.nowPlaying.peek().similarity > 0.85, true, 'cleaning did not break matching');
+});
+
+
+// --- Места по ключевым словам: слова ищет ME, на сервер уходят только счётчики --------------------------------
+
+const PLACES_REGISTRY = { ok: true, places: [{ id: 'tavern', keywords: ['tavern', 'inn'] }, { id: 'harbor', keywords: ['harbor', 'dock'] }] };
+const playAnswer = place => ({ action: 'play', similarity: 0.9, ...(place ? { place } : {}), track: { id: 'srv_fantasy_k1', rawId: 'k1', name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: 'https://music.example/audio/k1.mp3' } } });
+
+async function placesWorld({ chat, registry = PLACES_REGISTRY, answers = [] }) {
+    const asked = [];
+    const world = buildEngine({ chat, serverTracks: [] });
+    world.engine.buses.cores.register('musicServer.pick', params => { asked.push(params); return answers.shift() ?? { action: 'keep' }; });
+    if (registry) world.engine.buses.cores.register('musicServer.places', () => (registry instanceof Error ? (() => { throw registry; })() : registry));
+    await world.module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await world.module.chooseSection('fantasy');
+    return { ...world, asked };
+}
+
+test('place counts are weighted 3/2/1 over the last three messages and the chat text never leaves ME', async () => {
+    const chat = ['An old inn secret zebra.', 'The tavern is loud, the inn too.', 'We reach the harbor docks; the tavern again.', 'Only the harbor now.'];
+    const { module, asked } = await placesWorld({ chat });
+    await module.onGenerationCompleted();
+    // newest "Only the harbor now." (w3): harbor 1 → 3; "harbor docks; tavern" (w2): harbor 2, tavern 1 → harbor +4, tavern +2; "tavern…inn too" (w1): tavern 2 → +2
+    assert.deepEqual(asked[0].places, { harbor: 7, tavern: 4 });
+    assert.equal('place' in asked[0], false, 'nothing resolved yet');
+    const body = JSON.stringify(asked[0]);
+    for (const word of ['zebra', 'loud', 'docks']) assert.equal(body.includes(word), false, 'no chat text in the request');
+});
+
+test('no keyword matches or no registry: the places field is absent and picking still works', async () => {
+    const quiet = await placesWorld({ chat: ['Nothing here at all.'], answers: [playAnswer()] });
+    await quiet.module.onGenerationCompleted();
+    assert.equal('places' in quiet.asked[0], false);
+    assert.equal(quiet.audio.playing, true);
+
+    for (const registry of [null, { ok: false, places: [] }, new Error('down')]) {
+        const world = await placesWorld({ chat: ['The tavern is loud.'], registry, answers: [playAnswer()] });
+        await world.module.onGenerationCompleted();
+        assert.equal('places' in world.asked[0], false, 'a failed registry means no counts');
+        assert.equal(world.audio.playing, true, 'picking is not broken');
+    }
+});
+
+test('the place the server resolved comes back as `place` on the next request, also through the queued pick, and resets with the section', async () => {
+    const { module, asked, audio } = await placesWorld({ chat: ['The tavern is loud.'], answers: [playAnswer('tavern'), { action: 'keep', place: 'harbor' }, { action: 'keep' }] });
+    await module.onGenerationCompleted();
+    assert.equal('place' in asked[0], false);
+    await module.onGenerationCompleted();
+    assert.equal(asked[1].place, 'tavern');
+    await module.onGenerationCompleted();
+    assert.equal(asked[2].place, 'harbor', 'a keep answer may carry it too');
+
+    // заранее запрошенный шаг несёт место так же, как паттерн
+    const queued = await placesWorld({ chat: ['The tavern is loud.'], answers: [playAnswer(), { ...playAnswer('harbor'), track: { ...playAnswer().track, id: 'srv_fantasy_k2', rawId: 'k2', source: { kind: 'url', ref: 'https://music.example/audio/k2.mp3' } } }, { action: 'keep' }] });
+    await queued.module.onGenerationCompleted();
+    queued.audio.duration = 120; queued.audio.time = 105;
+    await new Promise(resolve => setTimeout(resolve, 650));
+    assert.equal(queued.asked.length, 2, 'the next track was requested ahead');
+    queued.audio.time = 118;
+    await new Promise(resolve => setTimeout(resolve, 650));
+    await queued.module.onGenerationCompleted();
+    const last = queued.asked.at(-1);
+    assert.equal(last.place, 'harbor');
+
+    // смена раздела забывает место
+    await queued.module.chooseSection('');
+    await queued.module.chooseSection('fantasy');
+    await queued.module.onGenerationCompleted();
+    assert.equal('place' in queued.asked.at(-1), false);
+    void audio;
+});
+
+// --- Время суток: слот 0..7 (RP Time или догадка по словам), на сервер уходит только целое ---------------------
+
+const TIMES_REGISTRY = { ok: true, slots: [{ id: 1, keywords: ['dawn', 'sunrise'] }, { id: 6, keywords: ['dusk', 'sunset'] }, { id: 7, keywords: ['midnight', 'moonlight'] }] };
+
+/** `tracker`: объект полей RP Time (`{ time, period }`), `null` — трекера нет (tracking.value бросает), `undefined` — не регистрировать вовсе. */
+async function timeWorld({ chat, registry = TIMES_REGISTRY, tracker = null, answers = [] }) {
+    const asked = [];
+    const world = buildEngine({ chat, serverTracks: [] });
+    world.fields = tracker;
+    world.engine.buses.cores.register('musicServer.pick', params => { asked.push(params); return answers.shift() ?? { action: 'keep' }; });
+    if (registry) world.engine.buses.cores.register('musicServer.times', () => (registry instanceof Error ? (() => { throw registry; })() : registry));
+    if (tracker !== undefined) {
+        world.engine.buses.cores.register('tracking.value', ({ trackerId, fieldName, fallback }) => {
+            if (trackerId !== 'rp-time' || !world.fields) throw new Error('no such tracker');
+            return fieldName in world.fields ? world.fields[fieldName] : fallback;
+        });
+    }
+    await world.module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await world.module.chooseSection('fantasy');
+    return { ...world, asked };
+}
+
+test('time: the RP Time value is read before each pick (24h, am/pm, period fallback) and beats the keywords', async () => {
+    const world = await timeWorld({ chat: ['The sunset burns over the hills.'], tracker: { time: '07:30', period: 'Evening' } });
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[0].time, 2, 'RP Time says 07:30 even though the text talks of sunset');
+    world.fields.time = '9:15 pm';
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[1].time, 7);
+    world.fields.time = 'unknown';
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[2].time, 6, 'period "Evening" is used when the clock is unreadable');
+    world.fields.period = 'Afternoon';
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[3].time, 4);
+});
+
+test('time: no tracker, an unreadable value or an unusable period falls back to the keywords; none at all omits the field', async () => {
+    const absent = await timeWorld({ chat: ['Sunset again.'], tracker: null });
+    await absent.module.onGenerationCompleted();
+    assert.equal(absent.asked[0].time, 6);
+
+    const bad = await timeWorld({ chat: ['Moonlight everywhere.'], tracker: { time: '—', period: 'Dawn?' } });
+    await bad.module.onGenerationCompleted();
+    assert.equal(bad.asked[0].time, 7);
+
+    const none = await timeWorld({ chat: ['Nothing relevant.'], tracker: { time: null, period: '' } });
+    await none.module.onGenerationCompleted();
+    assert.equal('time' in none.asked[0], false);
+});
+
+test('time: keywords are weighted 3/2/1 over the last three messages', async () => {
+    const chat = ['Sunset one, sunset two, sunset three, sunset four.', 'Moonlight and midnight, quiet.', 'The sunrise glows.', 'More dawn.'];   // oldest → newest; the oldest is outside the window
+    const world = await timeWorld({ chat, tracker: undefined });
+    await world.module.onGenerationCompleted();
+    // dawn: "More dawn" 1×3 + "sunrise" 1×2 = 5; night: "Moonlight and midnight" 2×1 = 2; dusk's four hits are out of the window
+    assert.equal(world.asked[0].time, 1);
+    chat.length = 0; chat.push('Moonlight.', 'Midnight.', 'Dawn.');
+    await world.module.onGenerationCompleted();
+    // new previous slot was 1: dawn 3 vs night 2+1=3 → not strictly higher, stays
+    assert.equal(world.asked[1].time, 1);
+});
+
+test('time: the previous slot is kept until another slot STRICTLY beats its count, and with no evidence', async () => {
+    const chat = ['Dusk falls.'];
+    const world = await timeWorld({ chat, tracker: undefined });
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[0].time, 6);
+    chat.push('Quiet words only.');
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[1].time, 6, 'no evidence in the window beyond dusk (w1): dusk 1 vs nothing');
+    chat.push('A calm scene.', 'Another calm scene.', 'And one more.');
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[2].time, 6, 'no evidence at all: the previous slot stays');
+    chat.push('Midnight, dusk.');   // night 3, dusk 3 → tie, stays
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[3].time, 6);
+    chat.push('Midnight, moonlight.');   // night 6 vs dusk 2 (previous message weight 1... 1×2) → switches
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[4].time, 7);
+});
+
+test('time: the slot resets with the section, and the chat text never reaches the pick', async () => {
+    const chat = ['Dusk secret zebra.'];
+    const world = await timeWorld({ chat, tracker: undefined });
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[0].time, 6);
+    chat.push('Nothing here.');
+    await world.module.chooseSection('');
+    await world.module.chooseSection('fantasy');
+    chat.length = 0; chat.push('Nothing here.');
+    await world.module.onGenerationCompleted();
+    assert.equal('time' in world.asked[1], false, 'forgotten with the section');
+    for (const word of ['zebra', 'secret', 'Dusk']) assert.equal(JSON.stringify(world.asked[0]).includes(word), false);
+});
+
+test('time: a failing or absent registry or tracker never breaks picking', async () => {
+    for (const registry of [null, { ok: false, slots: [] }, new Error('down')]) {
+        for (const tracker of [undefined, null]) {
+            const world = await timeWorld({ chat: ['Sunset.'], registry, tracker, answers: [playAnswer()] });
+            await world.module.onGenerationCompleted();
+            assert.equal('time' in world.asked[0], false);
+            assert.equal(world.audio.playing, true, 'music still plays');
+        }
+    }
+    const brokenTracker = await timeWorld({ chat: ['Sunset.'], tracker: undefined, answers: [playAnswer()] });
+    brokenTracker.engine.buses.cores.register('tracking.value', () => { throw new Error('boom'); });
+    await brokenTracker.module.onGenerationCompleted();
+    assert.equal(brokenTracker.asked[0].time, 6, 'a throwing tracker falls back to the keywords');
+});
+
+test('time: a prefetched pick carries the slot of the scene it was computed for (read at that moment)', async () => {
+    const world = await timeWorld({ chat: ['Whatever.'], tracker: { time: '22:00' }, answers: [playAnswer(), { action: 'keep' }] });
+    await world.module.onGenerationCompleted();
+    assert.equal(world.asked[0].time, 7);
+    world.audio.duration = 120; world.audio.time = 105;
+    world.fields.time = '04:00';
+    await new Promise(resolve => setTimeout(resolve, 650));
+    assert.equal(world.asked.length, 2, 'the next track was requested ahead');
+    assert.equal(world.asked[1].time, 1, 'the prefetch scene was built after RP Time moved to 04:00');
 });
