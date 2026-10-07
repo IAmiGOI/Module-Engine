@@ -51,10 +51,10 @@ export function createMusicServerCore(host, { server = {}, timeoutMs = TIMEOUT_M
      * Выбор трека делает сервер: ME присылает только вектор сцены (и что сейчас играет), в ответ — один трек или «оставь/ничего». `ended` — трек доиграл, `force` — кнопка «следующий».
      * Сбой сети — `none`: играющее продолжается.
      */
-    async function pick({ section: id, vector, current = null, ended = false, force = false, minSimilarity, switchMargin, smart = false, answers = null, elapsed = null, remaining = null, lastIntensity = null } = {}) {
+    async function pick({ section: id, vector, current = null, ended = false, force = false, minSimilarity, switchMargin, smart = false, answers = null, elapsed = null, remaining = null, lastIntensity = null, pattern = null } = {}) {
         const sectionId = String(id ?? '');
         if (!isServerConfigured(server) || !sectionId) return { action: 'none' };
-        const body = JSON.stringify({ model, section: sectionId, vector, current, ended, force, minSimilarity, switchMargin, smart, answers, elapsed, remaining, lastIntensity });
+        const body = JSON.stringify({ model, section: sectionId, vector, current, ended, force, minSimilarity, switchMargin, smart, answers, elapsed, remaining, lastIntensity, pattern });
         const result = await request(host.network, 'http.request', { params: { url: pickUrl(server), method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, timeoutMs });
         return result.ok && result.value?.ok ? parsePick(result.value.text, { server, sectionId }) : { action: 'none' };
     }

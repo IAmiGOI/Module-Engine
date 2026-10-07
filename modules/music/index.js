@@ -32,7 +32,8 @@ import { FloatingPanel } from '../../libraries/shared/widgets.js';
 import { MusicPlayerBody } from '../../libraries/shared/music-player-view.js';
 import { sanitizeSource, isRemoteSource } from '../../libraries/shared/music-source.js';
 import { importLink } from './link-import.js';
-import { DEFAULTS, sanitizeTracks, buildSceneText, sceneMessages, blendSceneVectors } from './tracks.js';
+import { DEFAULTS, sanitizeTracks, buildSceneText, sceneMessages, sceneNames, blendSceneVectors } from './tracks.js';
+import { cleanSceneText } from '../../libraries/shared/scene-text.js';
 import { createMusicCard } from './card.js';
 import { createServerSection } from './server-section.js';
 import { isServerTrack } from '../../libraries/shared/music-catalog.js';
@@ -98,6 +99,8 @@ export function createMusicModule(host) {
     let remoteTrack = null;
     const remote = () => server.mode.peek() === 'server' && Boolean(server.selected.peek());
 
+    let patternSection = '';    // раздел, к которому относится patternNode
+    let patternNode = null;     // узел паттерна сервера, который играет (его вернул сервер): без него сервер не знает, где мы в паттерне
     let lastIntensity = null;   // накал прошлой сцены (его вернул сервер): нужен ему для сглаживания
     let lastSceneText = '';
 
@@ -113,15 +116,16 @@ export function createMusicModule(host) {
 
     // Следующий трек просим у сервера заранее (за PREFETCH_S до конца), держим ответ и запускаем за SWITCH_LEAD_S — с кроссфейдом, без тишины на запрос и вопрос к Jev.
     const PREFETCH_S = 20, SWITCH_LEAD_S = 3.5;
-    let queuedNext = null;       // { track, similarity } — ответ сервера, ждущий своего часа
+    let queuedNext = null;       // { track, similarity, pattern } — ответ сервера, ждущий своего часа
     let prefetchFor = null;      // id трека, для которого запрос уже ушёл
     let prefetching = null;      // идущий запрос (Promise)
 
     async function pickRemote({ vector, ended = false, force = false, queue = false } = {}) {
         const state = nowPlaying.peek().playing ? progress.peek() : { time: null, duration: 0 };
+        if (patternSection !== server.selected.peek()) { patternNode = null; patternSection = server.selected.peek(); }
         const params = {
             section: server.selected.peek(), vector, current: remoteTrack?.rawId ?? null, ended, force, minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(),
-            smart: smart.peek() && !force, lastIntensity,
+            smart: smart.peek() && !force, lastIntensity, pattern: patternNode,
             elapsed: state.time, remaining: state.duration ? Math.max(0, state.duration - state.time) : null,
         };
         let result = await request(host.cores, 'musicServer.pick', { params });
@@ -132,8 +136,9 @@ export function createMusicModule(host) {
             value = result.ok ? result.value : null;
         }
         if (Number.isFinite(value?.intensity)) lastIntensity = value.intensity;
+        if (value?.action === 'keep' || (value?.action === 'play' && !queue)) patternNode = value.pattern ?? null;   // заранее запрошенный шаг становится текущим, только когда начнёт играть
         if (value?.action !== 'play') return;   // «оставь» и «ничего не подходит» — играющее продолжается
-        if (queue) { queuedNext = { track: value.track, similarity: value.similarity }; return; }
+        if (queue) { queuedNext = { track: value.track, similarity: value.similarity, pattern: value.pattern ?? null }; return; }
         remoteTrack = value.track;
         await playTrack(value.track, value.similarity);
     }
@@ -143,6 +148,7 @@ export function createMusicModule(host) {
         queuedNext = null;
         if (!next) return false;
         remoteTrack = next.track;
+        patternNode = next.pattern;
         void playTrack(next.track, next.similarity).catch(() => {});
         return true;
     }
@@ -263,6 +269,7 @@ export function createMusicModule(host) {
         const source = sanitizeSource(track.source);
         let blob = null;
         if (!isRemoteSource(source)) {
+            patternNode = null;   // заиграл свой трек — паттерн сервера прерван
             const blobResult = await request(host.services, 'audio.get', { params: { id: track.id } });
             if (!blobResult.ok || !blobResult.value) {
                 await notify('error', `Audio for "${track.name}" is missing from this browser's storage — re-import it.`);
@@ -348,7 +355,9 @@ export function createMusicModule(host) {
     async function computeSceneVector() {
         const messagesResult = await call('chatHistory.messages', { limit: Math.max(1, contextMessages.peek()) });
         if (!messagesResult.ok) return null;
-        const parts = sceneMessages(messagesResult.value, contextMessages.peek());
+        // Имена героев, разметка и OOC-вставки убираются до эмбединга: вектор сцены должен нести настроение (тем же кодом чистятся эталоны на сервере).
+        const names = sceneNames(messagesResult.value);
+        const parts = sceneMessages(messagesResult.value, contextMessages.peek()).map(part => cleanSceneText(part, { names })).filter(Boolean);
         if (!parts.length) return null;
         lastSceneText = buildSceneText(messagesResult.value, contextMessages.peek());
         // Каждая реплика — своим вектором, свежие весят больше (см. blendSceneVectors): длинное старое сообщение не заглушает свежую реплику.

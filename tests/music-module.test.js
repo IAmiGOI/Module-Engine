@@ -84,9 +84,11 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
     const modelCalls = [];
     if (model) engine.buses.cores.register('model.generate', params => { modelCalls.push(params); return model(params); });
 
+    const embeddedTexts = [];   // что реально ушло в эмбединг (сцена после чистки)
     // Эмбединг-фейк: вектор — СУММА осей, чьи имена встретились в тексте
     // (нормированная). Детерминированно, «ничего не встретилось» — фон города.
     engine.buses.services.register('embedding.compute', ({ text }) => {
+        embeddedTexts.push(String(text));
         const lower = String(text).toLowerCase();
         const hits = Object.keys(AXES).filter(name => lower.includes(name));
         return vec(...(hits.length ? hits : ['city']));
@@ -95,9 +97,9 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
     // chatHistory.messages — фейк над тем же контрактом (реальный живёт на stChat/DOM).
     engine.buses.cores.register('chatHistory.messages', params => {
         const limit = Math.max(0, params?.limit ?? 10);
-        return chat.slice(-limit).map((text, index, array) => ({
+        return chat.slice(-limit).map((entry, index, array) => ({
             mesid: String(chat.length - array.length + index),
-            isUser: false, isSystem: false, name: '', text,
+            isUser: false, isSystem: false, name: typeof entry === 'object' ? entry.name : '', text: typeof entry === 'object' ? entry.text : entry,
         }));
     });
 
@@ -127,7 +129,7 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
 
     const module = createMusicModule(moduleHost);
 
-    return { engine, module, audio: playback, blobs, notifications, moduleHost, settingsContext, modelCalls };
+    return { engine, module, audio: playback, blobs, notifications, moduleHost, settingsContext, modelCalls, embeddedTexts };
 }
 
 test('load() restores tracks from settings; import computes vectors and persists both bytes and metadata', async () => {
@@ -715,4 +717,15 @@ test('after the embedding model changes, own tracks get fresh vectors once; the 
     const stamped = JSON.stringify(third.settingsContext.extensionSettings);
     assert.ok(stamped.includes(EMBEDDING_MODEL_ID), 'the current model id is remembered');
     assert.deepEqual(third.module.tracks.peek()[0].vector, vec('fight'));
+});
+
+test('the scene text is cleaned before it is embedded: participant names, emphasis marks and OOC inserts never reach the model', async () => {
+    const chat = [{ name: 'Hatsu', text: '*Hatsu* watched the fight in the rain (OOC: continue)' }, { name: 'Sasha', text: 'Sasha drew a blade, a brutal fight.' }];
+    const { module, embeddedTexts } = buildEngine({ chat });
+    await module.load();
+    await module.importFiles([{ name: 'tense urban fight at night.mp3', blob: new Blob(['a']) }]);
+    embeddedTexts.length = 0;
+    await module.onGenerationCompleted();
+    assert.deepEqual(embeddedTexts, ['watched the fight in the rain', 'drew a blade, a brutal fight.']);
+    assert.equal(module.nowPlaying.peek().similarity > 0.85, true, 'cleaning did not break matching');
 });

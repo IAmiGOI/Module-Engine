@@ -27,6 +27,9 @@
     .group.over { outline: 2px dashed var(--tint); outline-offset: 2px; } button.small { padding: 3px 10px; font-size: 13px; }
     .examples { margin-top: 8px; } .examples summary { cursor: pointer; font-size: 13px; color: var(--dim); } .example { padding: 4px 0; border-top: 1px dashed var(--line); font-size: 13px; }
     .members { margin-top: 8px; border-top: 1px dashed var(--line); } .members .track:first-child { border-top: 0; }
+    .pattern { border-left: 3px solid var(--line); margin: 8px 0 0 14px; padding-left: 12px; } .pattern > .step { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--card); }
+    .pattern > .step .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .pattern > .step textarea { min-height: 44px; margin-top: 6px; }
+    #patterns > .pattern { margin-left: 0; border-left: 0; padding-left: 0; }
     .track { border-top: 1px solid var(--line); padding: 10px 0; } .track:first-child { border-top: 0; }
     .dim { color: var(--dim); font-size: 13px; } .warn { color: var(--warn); } .ok { color: var(--accent); }
     .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--dim); margin-bottom: 12px; }
@@ -66,6 +69,12 @@
                     <svg id="graph"></svg>
                 </details>
             </div>
+            <details id="patternsBox" class="examples" style="margin:14px 0">
+                <summary>Паттерны (порядок проигрыша)</summary>
+                <p class="dim">Дерево порядков: общее начало, дальше любые ветки и под-ветки. Шаг — группа (играет её трек по очереди) или конкретный трек. Тег шага — «когда уместно»: у корня он решает, входить ли в паттерн (корень должен подходить сцене лучше обычных групп), у веток — куда идти на развилке; ветка без тега берётся, когда ни одна с тегом не подошла. Следующий шаг играет, когда трек доиграл или нажали «следующий». Паттерн кончается, когда ветка закончилась, сцена не подходит ни одной ветке или сцена резко сменилась. Те же треки остаются и в обычном выборе.</p>
+                <div id="patterns"></div>
+                <div class="row" id="patternRoot"></div>
+            </details>
             <div class="drop" id="drop">Перетащите аудиофайлы сюда или <input type="file" id="files" accept="audio/*" multiple></div>
             <textarea id="uploadTag" placeholder="Тег для загружаемых файлов (необязательно — можно вписать потом у каждого трека). Например: тихий ночной лагерь, акустическая гитара, грусть и покой"></textarea>
             <div id="progress" class="dim"></div>
@@ -123,11 +132,95 @@ function render() {
         const groups = catalog.groups.filter(group => group.section === current);
         $('groups').replaceChildren(...(groups.length ? groups.map(groupRow) : [el('p', { className: 'dim' }, 'Групп пока нет — добавьте первую.')]));
         renderGraph();
+        renderAlign();
     }
+    renderPatterns();
     // В групповом разделе треки лежат внутри своих групп; здесь остаются только те, что ни в одной группе (они не играют).
     const tracks = catalog.tracks.filter(track => track.section === current && (!grouped || !track.group)).sort((a, b) => b.createdAt - a.createdAt);
     $('tracks').replaceChildren(...(grouped && tracks.length ? [el('h3', {}, 'Без группы — не играют')] : []), ...(tracks.length ? tracks.map(trackRow) : (grouped ? [] : [el('p', { className: 'dim' }, 'В разделе пока нет треков.')])));
 }
+
+
+/** Паттерны: дерево шагов раздела. Корень — вход в паттерн, дальше ветки; каждое изменение сразу уходит на сервер (вектор тега считает он). */
+function stepChoices(section) {
+    const grouped = section.mode === 'groups';
+    const groups = grouped ? catalog.groups.filter(group => group.section === section.id).map(group => ({ value: `group:${group.id}`, label: `Группа: ${group.name}` })) : [];
+    const tracks = catalog.tracks.filter(track => track.section === section.id).map(track => ({ value: `track:${track.id}`, label: `Трек: ${track.title}` }));
+    return [...groups, ...tracks];
+}
+function stepSelect(choices, value = '') {
+    const select = el('select', {}, ...choices.map(choice => el('option', { value: choice.value }, choice.label)));
+    if (value) select.value = value;
+    return select;
+}
+async function addStep(parent, selectValue) {
+    const [kind, ...rest] = selectValue.split(':');
+    try { await api('/api/admin/patterns', { method: 'POST', body: { section: current, parent, kind, ref: rest.join(':') } }); await load(); } catch (error) { fail(error); }
+}
+function patternNodeView(node, all, choices) {
+    const name = el('input', { className: 'grow', value: node.name || '', placeholder: 'Название (необязательно)' });
+    const step = stepSelect(choices, `${node.kind}:${node.ref}`);
+    const tag = el('textarea', { value: node.description || '', placeholder: node.parent ? 'Когда идти по этой ветке (тег). Пусто — ветка «по умолчанию».' : 'Когда начинать этот паттерн (тег). Без тега в паттерн по сцене не войти.' });
+    const negative = el('textarea', { value: node.negative || '', placeholder: 'Когда НЕ идти сюда — без отрицаний (необязательно).' });
+    const save = el('button', { className: 'primary small' }, 'Сохранить');
+    save.onclick = async () => {
+        save.disabled = true; save.textContent = 'Считаю вектор…';
+        const [kind, ...rest] = step.value.split(':');
+        try { await api(`/api/admin/patterns/${node.id}`, { method: 'PATCH', body: { name: name.value, kind, ref: rest.join(':'), description: tag.value, negative: negative.value } }); await load(); } catch (error) { fail(error); save.disabled = false; save.textContent = 'Сохранить'; }
+    };
+    const del = el('button', { className: 'danger small' }, 'Удалить ветку');
+    del.onclick = async () => {
+        const below = all.filter(other => other.parent === node.id).length;
+        if (confirm(below ? `Удалить шаг и ВСЮ ветку под ним?` : 'Удалить шаг?')) { try { await api(`/api/admin/patterns/${node.id}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } }
+    };
+    const addChoice = stepSelect(choices);
+    const add = el('button', { className: 'small' }, '＋ Следующий шаг');
+    add.onclick = () => addStep(node.id, addChoice.value);
+    const kids = all.filter(other => other.parent === node.id).sort((a, b) => (a.order || 0) - (b.order || 0));
+    const box = el('div', { className: 'pattern' }, el('div', { className: 'step' },
+        el('div', { className: 'head' }, el('span', { className: `pill ${node.tagged ? 'state-ok' : ''}` }, node.parent ? 'ветка' : 'начало'), step, name, save, del),
+        tag, negative,
+        choices.length ? el('div', { className: 'row', style: 'margin-top:6px' }, addChoice, add, el('span', { className: 'dim' }, kids.length ? `${kids.length} ${kids.length === 1 ? 'продолжение' : 'продолжения'}` : 'конец паттерна')) : el('p', { className: 'dim' }, 'Нет групп/треков для шагов.')),
+        ...kids.map(kid => patternNodeView(kid, all, choices)));
+    return box;
+}
+function renderPatterns() {
+    const section = catalog.sections.find(item => item.id === current);
+    if (!section) return;
+    const all = (catalog.patterns || []).filter(node => node.section === current);
+    const choices = stepChoices(section);
+    $('patterns').replaceChildren(...all.filter(node => !node.parent).sort((a, b) => (a.order || 0) - (b.order || 0)).map(root => patternNodeView(root, all, choices)));
+    const rootChoice = stepSelect(choices);
+    const addRoot = el('button', { className: 'primary' }, '＋ Новый паттерн (первый шаг)');
+    addRoot.onclick = () => addStep(null, rootChoice.value);
+    $('patternRoot').replaceChildren(...(choices.length ? [rootChoice, addRoot] : [el('span', { className: 'dim' }, 'Сначала добавьте группы или треки.')]));
+}
+
+/** Выравнивание сцен и тегов (alignment.js на сервере) и пересчёт старых эталонов без имён. */
+function renderAlign() {
+    const section = catalog.sections.find(item => item.id === current);
+    if (!section) return;
+    const examples = (catalog.examples || []).filter(item => item.section === current);
+    const old = examples.filter(item => !item.cleaned).length;
+    $('alignStrength').value = Number.isFinite(section.alignStrength) ? section.alignStrength : 1;
+    $('alignState').textContent = examples.length < 12 ? `эталонов ${examples.length} из 12 нужных — пока не действует` : 'действует';
+    $('recleanState').textContent = old ? `ждут пересчёта: ${old} из ${examples.length}` : (examples.length ? 'все эталоны уже без имён' : '');
+}
+$('saveAlign').onclick = async () => {
+    try { await api(`/api/admin/sections/${current}`, { method: 'PATCH', body: { alignStrength: Number($('alignStrength').value) } }); await load(); } catch (error) { fail(error); }
+};
+$('recleanExamples').onclick = async () => {
+    const button = $('recleanExamples'); button.disabled = true;
+    try {
+        for (let guard = 0; guard < 100; guard += 1) {
+            $('recleanState').textContent = 'считаю…';
+            const done = await api('/api/admin/examples/reclean', { method: 'POST', body: { section: current, limit: 30 } });
+            if (!done.remaining) break;
+            $('recleanState').textContent = `осталось ${done.remaining}…`;
+        }
+        await load();
+    } catch (error) { fail(error); } finally { button.disabled = false; }
+};
 
 /** Накал музыки (ось интенсивности): подбор по Jev учитывает, насколько напряжена сцена. Пусто — не влияет. */
 function intensitySelect(value) {
@@ -304,7 +397,13 @@ $('runTest').onclick = async () => {
         out.replaceChildren(el('p', { className: r.action === 'play' ? 'ok' : 'warn' }, headline),
             el('div', { className: 'dim' }, 'Кандидаты по близости:'),
             ...(addAsExample ? [addAsExample] : []),
-            ...r.ranking.map(row => el('div', { className: 'row' }, el('span', { className: 'grow' }, `${row.group ? 'группа ' : ''}${row.label}${row.group ? ` (${row.tracks})` : ''}${row.vetoed ? ' — ОТСЕЧЕНА «не включать»' : row.penalty > 0 ? ` — штраф −${row.penalty.toFixed(2)}` : ''}`), el('span', { title: 'оценка выбора / сырой косинус' }, `${r.relative && !row.vetoed ? 'z ' + row.score.toFixed(2) + ' · ' : ''}${row.similarity.toFixed(3)}`))));
+            ...r.ranking.map(row => el('div', { className: 'row' }, el('span', { className: 'grow' }, `${row.group ? 'группа ' : ''}${row.label}${row.group ? ` (${row.tracks})` : ''}${row.vetoed ? ' — ОТСЕЧЕНА «не включать»' : row.penalty > 0 ? ` — штраф −${row.penalty.toFixed(2)}` : ''}`), el('span', { title: 'оценка выбора / сырой косинус' }, `${r.relative && !row.vetoed ? 'z ' + row.score.toFixed(2) + ' · ' : ''}${row.similarity.toFixed(3)}`),
+                ...(sectionNow && sectionNow.mode === 'groups' && row.groupId ? [(() => {
+                    const mine = el('button', { className: 'small', title: 'Сцена на самом деле про эту группу: добавить как эталон' }, 'это она');
+                    mine.onclick = async () => { try { await api('/api/admin/examples', { method: 'POST', body: { section: current, group: row.groupId, texts: [sceneText] } }); mine.textContent = 'добавлено ✓'; mine.disabled = true; await load(); } catch (error) { fail(error); } };
+                    return mine;
+                })()] : []))));
+        if (r.aligned) out.append(el('p', { className: 'dim' }, 'Выравнивание сцен и тегов включено (см. блок «Выравнивание…»).'));
     } catch (error) { out.textContent = error.message; }
 };
 $('addGroup').onclick = async () => { const name = $('newGroup').value.trim(); if (!name) return; try { await api('/api/admin/groups', { method: 'POST', body: { section: current, name } }); $('newGroup').value = ''; await load(); } catch (error) { fail(error); } };

@@ -81,7 +81,8 @@ const MAX_QUESTIONS = 12, MAX_QUESTION_LENGTH = 400;
 export function parsePick(text, { server, sectionId }) {
     const data = parseJson(text);
     const intensity = Number.isFinite(data?.intensity) ? data.intensity : null;
-    if (data?.action === 'keep') return { action: 'keep', intensity };
+    const pattern = /^[\w-]+$/.test(String(data?.pattern ?? '')) ? String(data.pattern) : null;   // узел паттерна, который играет: ME лишь возвращает его серверу
+    if (data?.action === 'keep') return { action: 'keep', intensity, pattern };
     if (data?.action === 'ask' && data.questions && typeof data.questions === 'object') {
         const questions = Object.fromEntries(Object.entries(data.questions)
             .filter(([id, statement]) => /^[ci]\d{1,2}$/.test(id) && typeof statement === 'string' && statement.trim())
@@ -89,7 +90,7 @@ export function parsePick(text, { server, sectionId }) {
         return Object.keys(questions).length ? { action: 'ask', questions } : { action: 'none' };
     }
     if (data?.action === 'play' && /^[\w-]+$/.test(String(data.id)) && /^[a-z0-9]{2,5}$/i.test(String(data.ext))) {
-        return { action: 'play', intensity, similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
+        return { action: 'play', intensity, pattern, similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
     }
     return { action: 'none' };
 }

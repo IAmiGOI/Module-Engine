@@ -40,6 +40,11 @@ export function sceneMessages(messages, limit) {
         .filter(Boolean);
 }
 
+/** Имена участников сцены (героев и персоны пользователя) — их вычёркивают из текста перед эмбедингом: вектор должен нести настроение, а не имена. */
+export function sceneNames(messages) {
+    return [...new Set((Array.isArray(messages) ? messages : []).filter(message => !message?.isSystem).map(message => String(message?.name ?? '').trim()).filter(Boolean))];
+}
+
 /** Текст сцены: последние реплики (системные — мусор для атмосферы, выкидываем). */
 export function buildSceneText(messages, limit) {
     return sceneMessages(messages, limit).join('\n').trim();

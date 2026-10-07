@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { openStore, HttpError, AUDIO_EXT } from './store.js';
 import { MODEL_ID, DIM } from './embed.js';
 import { pickTrack, scoreItems } from './pick.js';
+import { decidePattern } from './patterns.js';
+import { shiftScene, shiftPrototypes } from './alignment.js';
 import { CORS, sendJson, sendFile, readJson, sameSecret } from './http-utils.js';
 import { createRateLimiter, clientAddress } from './rate-limit.js';
 
@@ -28,6 +30,12 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
     const store = await openStore({ dir, embed, embedQuery });
     const tmpDir = path.join(dir, 'tmp');
     await fsp.mkdir(tmpDir, { recursive: true });
+
+    /** Сцена и эталоны (это тоже сцены) сдвигаются на разницу «регистров» сцена↔теги раздела (alignment.js): иначе «хабы» выигрывают где попало. Одно место для выбора и проверки. */
+    function sceneFor(sectionId, vector, { align = true } = {}) {
+        const alignment = align ? store.alignmentFor(sectionId) : null;
+        return { alignment, vector: shiftScene(vector, alignment), prototypes: shiftPrototypes(store.prototypesFor(sectionId), alignment) };
+    }
 
     const catalogLimiter = limits.catalogPerMinute > 0 ? createRateLimiter({ perMinute: limits.catalogPerMinute }) : null;
     const pickLimiter = limits.pickPerMinute > 0 ? createRateLimiter({ perMinute: limits.pickPerMinute }) : null;
@@ -78,20 +86,20 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
         // `rawOnly` — замер самого эмбеддинга (сравнение моделей): теги «не включать» не участвуют.
         const items = store.previewItems(section).map(item => (body.rawOnly ? { ...item, negVector: null } : item));
         const minSimilarity = Number.isFinite(body.minSimilarity) ? body.minSimilarity : undefined;
-        const prototypes = store.prototypesFor(section);
-        const picked = pickTrack({ items, vector, dim: DIM, minSimilarity, force: false, prototypes });
+        const { alignment, vector: sceneVector, prototypes } = sceneFor(section, vector, { align: body.align !== false });   // как на настоящем выборе; `align: false` — сравнить «до»
+        const picked = pickTrack({ items, vector: sceneVector, dim: DIM, minSimilarity, force: false, prototypes });
         // Кандидаты: в групповом разделе — по группам, иначе по трекам. `score` — оценка, по которой сервер решает (z при ≥3 разных векторах), `similarity` — сырой косинус.
-        const { relative, rows } = scoreItems({ items, vector, prototypes });
+        const { relative, rows } = scoreItems({ items, vector: sceneVector, prototypes });
         const byKey = new Map();
         for (const row of rows) {
             const key = row.item.group ?? row.item.id;
-            const entry = byKey.get(key) ?? { label: row.item.groupName ?? row.item.title, group: Boolean(row.item.group), tracks: 0, score: row.value, similarity: row.cosine, penalty: row.penalty, vetoed: row.vetoed, gap: row.gap ?? null, proto: row.proto ?? null };
+            const entry = byKey.get(key) ?? { groupId: row.item.group ?? null, label: row.item.groupName ?? row.item.title, group: Boolean(row.item.group), tracks: 0, score: row.value, similarity: row.cosine, penalty: row.penalty, vetoed: row.vetoed, gap: row.gap ?? null, proto: row.proto ?? null };
             entry.tracks += 1;
             byKey.set(key, entry);
         }
         const ranking = [...byKey.values()].sort((a, b) => b.score - a.score).slice(0, 8);
         const chosen = picked.action === 'play' ? items.find(item => item.id === picked.id) : null;
-        return { action: picked.action, relative, similarity: picked.similarity ?? null, chosen: chosen ? { title: chosen.title, group: chosen.groupName } : null, ranking };
+        return { action: picked.action, aligned: Boolean(alignment), relative, similarity: picked.similarity ?? null, chosen: chosen ? { title: chosen.title, group: chosen.groupName } : null, ranking };
     }
 
     async function route(req, res) {
@@ -132,7 +140,17 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
             // Вектор сцены обязан быть посчитан той же моделью, что и теги. Старые версии ME модель не присылали (и считали мультиязычной) — им молча «подобрать» нельзя.
             if (body.model !== MODEL_ID) return sendJson(res, 200, { action: 'none', reason: 'model mismatch' });
             if (!store.hasSection(String(body.section))) return sendJson(res, 404, { error: 'нет такого раздела' });
-            const result = pickTrack({ prototypes: store.prototypesFor(body.section), graph: store.graphOf(body.section), items: store.pickItems(body.section), vector: body.vector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, plays, smart: body.smart === true, answers: body.answers && typeof body.answers === 'object' ? body.answers : null, elapsed: Number.isFinite(body.elapsed) ? body.elapsed : null, remaining: Number.isFinite(body.remaining) ? body.remaining : null, lastIntensity: Number.isFinite(body.lastIntensity) ? body.lastIntensity : null });
+            const nodes = store.patternNodes(body.section);
+            const finite = value => (Number.isFinite(value) ? value : null);
+            const { vector: sceneVector, prototypes } = sceneFor(body.section, body.vector);
+            const items = store.pickItems(body.section);
+            // Паттерны (порядок групп/треков): входят в игру, ведут по веткам и сами отпускают; нет паттернов или он не уместен — обычный выбор ниже.
+            const patterned = nodes.length ? decidePattern({ nodes, patternId: typeof body.pattern === 'string' ? body.pattern : null, tracks: store.sectionTracks(body.section), items, vector: sceneVector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, prototypes, plays, elapsed: finite(body.elapsed), remaining: finite(body.remaining) }) : null;
+            if (patterned) {
+                if (patterned.action === 'play') { plays.set(patterned.id, (plays.get(patterned.id) ?? 0) + 1); plays.set(patterned.pattern, (plays.get(patterned.pattern) ?? 0) + 1); }
+                return sendJson(res, 200, patterned);
+            }
+            const result = pickTrack({ prototypes, graph: store.graphOf(body.section), items, vector: sceneVector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, plays, smart: body.smart === true, answers: body.answers && typeof body.answers === 'object' ? body.answers : null, elapsed: Number.isFinite(body.elapsed) ? body.elapsed : null, remaining: Number.isFinite(body.remaining) ? body.remaining : null, lastIntensity: Number.isFinite(body.lastIntensity) ? body.lastIntensity : null });
             if (result.action === 'play') plays.set(result.id, (plays.get(result.id) ?? 0) + 1);
             return sendJson(res, 200, result);
         }
@@ -147,6 +165,7 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
                 if (method === 'PATCH' && id) {
                     const body = await readJson(req, 256 * 1024);
                     if (body.graph !== undefined) return sendJson(res, 200, await store.setGraph(id, body.graph));
+                    if (body.alignStrength !== undefined) return sendJson(res, 200, await store.setAlignStrength(id, body.alignStrength));
                     return sendJson(res, 200, await store.renameSection(id, body.name));
                 }
                 if (method === 'DELETE' && id) { await store.deleteSection(id); return sendJson(res, 200, { ok: true }); }
@@ -154,7 +173,11 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
             if (what === 'examples') {
                 if (method === 'POST' && !id) {
                     const body = await readJson(req, 1 << 20);
-                    return sendJson(res, 201, await store.addExamples({ sectionId: body.section, groupId: body.group, texts: Array.isArray(body.texts) ? body.texts : [body.text] }));
+                    return sendJson(res, 201, await store.addExamples({ sectionId: body.section, groupId: body.group, texts: Array.isArray(body.texts) ? body.texts : [body.text], names: Array.isArray(body.names) ? body.names : [] }));
+                }
+                if (method === 'POST' && id === 'reclean') {
+                    const body = await readJson(req, 64 * 1024);
+                    return sendJson(res, 200, await store.recleanExamples({ sectionId: body.section, limit: body.limit, names: Array.isArray(body.names) ? body.names : [] }));
                 }
                 if (method === 'DELETE' && id) { await store.deleteExample(id); return sendJson(res, 200, { ok: true }); }
             }
@@ -162,6 +185,11 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
                 if (method === 'POST' && !id) { const body = await readJson(req); return sendJson(res, 201, await store.addGroup({ sectionId: body.section, name: body.name, description: body.description, negative: body.negative })); }
                 if (method === 'PATCH' && id) return sendJson(res, 200, await store.updateGroup(id, await readJson(req)));
                 if (method === 'DELETE' && id) { await store.deleteGroup(id); return sendJson(res, 200, { ok: true }); }
+            }
+            if (what === 'patterns') {
+                if (method === 'POST' && !id) { const body = await readJson(req, 64 * 1024); return sendJson(res, 201, await store.addPatternNode({ sectionId: body.section, parent: body.parent ?? null, kind: body.kind, ref: body.ref, name: body.name, description: body.description, negative: body.negative })); }
+                if (method === 'PATCH' && id) return sendJson(res, 200, await store.updatePatternNode(id, await readJson(req, 64 * 1024)));
+                if (method === 'DELETE' && id) return sendJson(res, 200, { ok: true, ...(await store.deletePatternNode(id)) });
             }
             if (what === 'tracks') {
                 if (method === 'POST' && !id) return sendJson(res, 201, await upload(req, url));
