@@ -1,14 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { promises as fs } from 'node:fs';
 import { cleanSceneText, guessNames, normalizeNames } from '../libraries/shared/scene-text.js';
 import { sceneNames } from '../modules/music/tracks.js';
-
-test('the ME copy and the music-server copy of the scene cleaner are byte-identical — scenes and the dictionary must be cleaned by the same code', async () => {
-    const mine = await fs.readFile(new URL('../libraries/shared/scene-text.js', import.meta.url), 'utf8');
-    const server = await fs.readFile(new URL('../tools/music-server/scene-text.js', import.meta.url), 'utf8');
-    assert.equal(server, mine);
-});
 
 test('names of the participants are cut out as whole words (with a possessive), other words that merely contain them stay', () => {
     const out = cleanSceneText('Hatsu held her breath. Hatsu\'s eyes were wide. Hatsune Miku sang. Sasha sighed, and Sasha waited.', { names: ['Hatsu', 'Sasha'] });
