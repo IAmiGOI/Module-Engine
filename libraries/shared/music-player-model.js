@@ -1,3 +1,4 @@
+import { MUSIC_STYLE_LABELS } from './music-catalog.js';
 /**
  * Модель окна плеера Music: чистые функции без DOM и шин — что показать по состоянию проигрывателя. Само окно (`music-player-view.js`) только раскладывает результат по
  * разметке; ничего из этого не знает о браузере, поэтому проверяется как данные.
@@ -99,4 +100,13 @@ export function describeFeedback({ mark = null, status = 'idle', wanted = null }
     if (status === 'failed') return 'Could not send — try again';
     if (status === 'sent') return wanted ? `Sent: this scene needs “${wanted}”` : mark === 'bad' ? 'Sent: wrong music for this scene' : 'Sent: right music for this scene';
     return 'Is this the right music?';
+}
+
+/** Подпись у оценки типа музыки: какой тип выбрал сервер и что с оценкой. `correct` — тип, названный владельцем, когда выбор был неверным. */
+export function describeStyle({ chosen = null, status = 'idle', right = null, correct = null } = {}) {
+    const name = id => MUSIC_STYLE_LABELS[id] ?? id;
+    if (status === 'sending') return 'Sending…';
+    if (status === 'failed') return 'Could not send — try again';
+    if (status === 'sent') return right ? `Sent: ${name(chosen)} is right for this scene` : `Sent: this scene needs ${name(correct)}, not ${name(chosen)}`;
+    return `Type: ${name(chosen)} — right?`;
 }

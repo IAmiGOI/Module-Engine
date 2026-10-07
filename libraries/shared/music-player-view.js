@@ -1,8 +1,9 @@
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import {
-    formatClock, progressPercent, timeFromPercent, coverGradient, coverGlow, trackInitial, describeNowPlaying, volumeLevel, describeFeedback,
+    formatClock, progressPercent, timeFromPercent, coverGradient, coverGlow, trackInitial, describeNowPlaying, volumeLevel, describeFeedback, describeStyle,
 } from './music-player-model.js';
+import { MUSIC_STYLES, MUSIC_STYLE_LABELS } from './music-catalog.js';
 
 /**
  * Тело окна плеера Music — дерево `h()` поверх модели (`music-player-model.js`), без DOM и шин; тестируется как данные. Окно (`FloatingPanel`) даёт модуль, а стили —
@@ -109,6 +110,17 @@ export function MusicPlayerBody({ now, progress, volume, muted, autoSwitch, hasT
             ControlButton({ icon: ICONS.thumbUp(), label: 'Right music for this scene', onClick: () => feedback.onMark('good'), className: 'stme-music-btn-small', pressed: computed(() => feedback.state().mark === 'good'), disabled: computed(() => feedback.state().status === 'sending') }),
             ControlButton({ icon: ICONS.thumbDown(), label: 'Wrong music for this scene', onClick: () => feedback.onMark('bad'), className: 'stme-music-btn-small', pressed: computed(() => feedback.state().mark === 'bad'), disabled: computed(() => feedback.state().status === 'sending') }),
         ) : null)),
+        feedback && feedback.style && computed(() => {
+            const state = feedback.style.state();
+            if (!feedback.visible() || !state.chosen) return null;
+            const busy = state.status === 'sending';
+            return h('div', { class: 'stme-music-style' },
+                h('span', { class: 'stme-music-feedback-label' }, describeStyle(state)),
+                state.status === 'sent' ? null : ControlButton({ icon: ICONS.thumbUp(), label: 'Right type of music', onClick: () => feedback.style.onRate(true), className: 'stme-music-btn-small', disabled: busy }),
+                state.status === 'sent' ? null : ControlButton({ icon: ICONS.thumbDown(), label: 'Wrong type of music', onClick: () => feedback.style.onRate(false), className: 'stme-music-btn-small', pressed: state.open, disabled: busy }),
+                state.open ? h('div', { class: 'stme-music-choices' }, ...MUSIC_STYLES.filter(id => id !== state.chosen).map(id => h('button', { type: 'button', class: 'stme-music-choice', 'on:click': () => feedback.style.onRate(false, id) }, MUSIC_STYLE_LABELS[id]))) : null,
+            );
+        }),
         feedback && feedback.choices && computed(() => (feedback.visible() ? h('div', { class: 'stme-music-choices-box' },
             ControlButton({ icon: ICONS.pencil(), label: 'Choose the right music for this scene', onClick: feedback.choices.onOpen, className: 'stme-music-btn-small', pressed: computed(() => feedback.choices.state().open), disabled: computed(() => feedback.state().status === 'sending') }),
             computed(() => {

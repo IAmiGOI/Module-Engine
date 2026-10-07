@@ -17,7 +17,9 @@ model.generate,
 # Вектор сцены и вектора треков — локальный эмбединг.
 embedding.compute, embedding.similarity,
 # Разделы музыкального сервера владельца (сеть — только у Ядра).
-musicServer.sections, musicServer.section, musicServer.pick, musicServer.feedback, musicServer.choices,
+musicServer.sections, musicServer.section, musicServer.pick, musicServer.feedback, musicServer.styleFeedback, musicServer.choices, musicServer.places, musicServer.times,
+# Время суток из «RP Time» (чтение поля трекера; текст чата не используется).
+tracking.value,
 # Умный выбор: Jev пользователя оценивает категории сцены (запрос от сервера, ответ идёт только как номер категории).
 classifier.decide
 */
@@ -32,11 +34,14 @@ import { FloatingPanel } from '../../libraries/shared/widgets.js';
 import { MusicPlayerBody } from '../../libraries/shared/music-player-view.js';
 import { sanitizeSource, isRemoteSource } from '../../libraries/shared/music-source.js';
 import { importLink } from './link-import.js';
-import { DEFAULTS, sanitizeTracks, buildSceneText, sceneMessages, sceneNames, blendSceneVectors } from './tracks.js';
+import { DEFAULTS, sanitizeTracks } from './tracks.js';
+import { buildSceneText, sceneMessages, sceneNames, blendSceneVectors, weightedCounts, guessTimeSlotFrom, slotOfRpTime } from '../../libraries/shared/music-scene.js';
 import { cleanSceneText } from '../../libraries/shared/scene-text.js';
 import { createMusicCard } from './card.js';
 import { createServerSection } from './server-section.js';
 import { isServerTrack } from '../../libraries/shared/music-catalog.js';
+import { buildIndex, matchPlaces } from '../../libraries/shared/places-match.js';
+import { parseClockHour, slotOfHour, slotOfPeriod } from '../../libraries/shared/music-catalog.js';
 import { tagWithModel } from './tagging.js';
 import { embeddingText, TAG_KINDS } from '../../libraries/shared/music-tagging.js';
 
@@ -105,7 +110,18 @@ export function createMusicModule(host) {
     const feedbackState = signal({ mark: null, status: 'idle' });
     // «Нужная музыка»: игрок сам называет, какая музыка подошла бы этой сцене (список даёт сервер: id и подписи). Уходит той же отметкой «неверно» с выбранным вариантом.
     const choicesState = signal({ open: false, status: 'idle', list: [] });
-    function setPlayingScene(scene) { playingScene = scene; feedbackState.set({ mark: null, status: 'idle' }); feedbackVisible.set(Boolean(scene)); choicesState.set({ open: false, status: 'idle', list: [] }); }
+    // «Тип музыки»: если трек выбран нодой сервера «Тип музыки», владелец может оценить, верно ли она выбрала тип (эмбиент · саундтрек · со словами). Неверно — называет верный из двух остальных.
+    const styleState = signal({ chosen: null, status: 'idle', open: false });
+    function setPlayingScene(scene) { playingScene = scene; feedbackState.set({ mark: null, status: 'idle' }); feedbackVisible.set(Boolean(scene)); choicesState.set({ open: false, status: 'idle', list: [] }); styleState.set({ chosen: scene?.style ?? null, status: 'idle', open: false }); }
+    async function rateStyle(right, correct = null) {
+        const chosen = styleState.peek().chosen;
+        if (!playingScene || !chosen || styleState.peek().status === 'sending' || styleState.peek().status === 'sent') return;
+        if (!right && !correct) { styleState.set({ ...styleState.peek(), open: !styleState.peek().open }); return; }   // «неверно» — сначала показать два других типа
+        styleState.set({ chosen, status: 'sending', open: false });
+        const sent = await call('musicServer.styleFeedback', { section: playingScene.section, vector: playingScene.vector, chosen, right, ...(right ? {} : { correct }) });
+        const ok = Boolean(sent.ok && sent.value?.ok);
+        styleState.set({ chosen, status: ok ? 'sent' : 'failed', open: false, ...(ok ? { right, correct: right ? chosen : correct } : {}) });
+    }
     async function openChoices() {
         const current = choicesState.peek();
         if (!playingScene) return;
@@ -137,6 +153,70 @@ export function createMusicModule(host) {
     let lastIntensity = null;   // накал прошлой сцены (его вернул сервер): нужен ему для сглаживания
     let lastSceneText = '';
 
+    // Места по ключевым словам: реестр (слова) даёт сервер, текст ищет ЗДЕСЬ, на сервер уходят только счётчики `{ место: вес }` — текст чата не покидает ME.
+    let lastPlace = null;       // место, которое определил сервер (его вернул ответ): уходит назад следующим запросом
+    let placesIndex = null;     // индекс слов реестра; null — реестра нет (сбой, чужая модель) и подбор идёт без мест
+    let placesTried = false;    // реестр уже запрошен для текущего раздела (сбой не повторяется на каждый запрос)
+    const sceneCounts = new WeakMap();   // вектор сцены → счётчики мест тех же реплик, из которых он посчитан
+    const PLACE_WEIGHTS = [3, 2, 1];     // самая свежая реплика весит 3, прошлая 2, ещё прошлая 1
+
+    async function ensurePlaces() {
+        if (placesTried) return;
+        placesTried = true;
+        try {
+            const result = await call('musicServer.places', {});
+            placesIndex = result.ok && result.value?.ok && Array.isArray(result.value.places) && result.value.places.length ? buildIndex(result.value.places) : null;
+        } catch { placesIndex = null; }
+    }
+
+    /** Взвешенные счётчики мест по очищенным репликам сцены (последние три, свежая — тяжелее). Пустой объект, если реестра нет или слов не нашлось. */
+    function countPlaces(parts, index = placesIndex) { return weightedCounts(parts, index); }
+
+    /** Смена раздела (или выход из режима сервера): место и реестр относятся к прежнему разделу. */
+    function resetPlaces() { lastPlace = null; placesTried = false; placesIndex = null; lastTimeSlot = null; timesTried = false; timesIndex = null; }
+
+    // Время суток (слот 0..7 по три часа): сервер получает только целое число. Источник 1 — поле «RP Time» (читаем перед каждым подбором), источник 2 — догадка по словам реестра сервера.
+    let lastTimeSlot = null;    // слот прошлой сцены: при отсутствии или неубедительности свидетельств остаётся он
+    let timesIndex = null;      // индекс слов реестра слотов; null — реестра нет
+    let timesTried = false;
+    const sceneTimes = new WeakMap();   // вектор сцены → слот той же сцены (отложенный подбор несёт слот СВОЕЙ сцены)
+    const RP_TIME_TRACKER = 'rp-time';
+
+    async function ensureTimes() {
+        if (timesTried) return;
+        timesTried = true;
+        try {
+            const result = await call('musicServer.times', {});
+            timesIndex = result.ok && result.value?.ok && Array.isArray(result.value.slots) && result.value.slots.length
+                ? buildIndex(result.value.slots.map(slot => ({ id: String(slot.id), keywords: slot.keywords }))) : null;
+        } catch { timesIndex = null; }
+    }
+
+    /** Источник 1: слот по полям трекера «RP Time» (`time`, иначе `period`); трекера нет, выключен или значение неразборчиво — `null`. */
+    async function readRpTimeSlot() {
+        try {
+            const time = await call('tracking.value', { trackerId: RP_TIME_TRACKER, fieldName: 'time', fallback: null });
+            if (!time.ok) return null;
+            const byTime = slotOfHour(parseClockHour(time.value));
+            if (byTime !== null) return byTime;
+            const period = await call('tracking.value', { trackerId: RP_TIME_TRACKER, fieldName: 'period', fallback: null });
+            return period.ok ? slotOfPeriod(period.value) : null;
+        } catch { return null; }
+    }
+
+    /** Источник 2: слот с наибольшим весом; прежний слот сохраняется, пока другой не набрал СТРОГО больше. Свидетельств нет — прежний (или `null`). */
+    function guessTimeSlot(counts) { return guessTimeSlotFrom(counts, lastTimeSlot); }
+
+    async function resolveTimeSlot(parts) {
+        let slot = await readRpTimeSlot();
+        if (slot === null) {
+            await ensureTimes();
+            slot = guessTimeSlot(countPlaces(parts, timesIndex));
+        }
+        if (slot !== null) lastTimeSlot = slot;
+        return slot;
+    }
+
     /**
      * Спросить Jev пользователя про категории сцены. Вопросы пришли от сервера; уходят они в подключение Jev самого пользователя вместе с текстом сцены, а серверу
      * возвращаются только вероятности. Нет подключения / сбой / тайм-аут — пустой ответ, и сервер выбирает по вектору.
@@ -149,16 +229,20 @@ export function createMusicModule(host) {
 
     // Следующий трек просим у сервера заранее (за PREFETCH_S до конца), держим ответ и запускаем за SWITCH_LEAD_S — с кроссфейдом, без тишины на запрос и вопрос к Jev.
     const PREFETCH_S = 20, SWITCH_LEAD_S = 3.5;
-    let queuedNext = null;       // { track, similarity, pattern } — ответ сервера, ждущий своего часа
+    let queuedNext = null;       // { track, similarity, pattern, place } — ответ сервера, ждущий своего часа
     let prefetchFor = null;      // id трека, для которого запрос уже ушёл
     let prefetching = null;      // идущий запрос (Promise)
 
     async function pickRemote({ vector, ended = false, force = false, queue = false } = {}) {
         const state = nowPlaying.peek().playing ? progress.peek() : { time: null, duration: 0 };
-        if (patternSection !== server.selected.peek()) { patternNode = null; patternSection = server.selected.peek(); }
+        if (patternSection !== server.selected.peek()) { patternNode = null; lastPlace = null; lastTimeSlot = null; patternSection = server.selected.peek(); }
+        const timeSlot = vector ? sceneTimes.get(vector) ?? null : null;
+        if (timeSlot !== null) lastTimeSlot = timeSlot;
+        const counts = vector ? sceneCounts.get(vector) : null;
         const params = {
             section: server.selected.peek(), vector, current: remoteTrack?.rawId ?? null, ended, force, minSimilarity: minSimilarity.peek(), switchMargin: switchMargin.peek(),
             smart: smart.peek() && !force, lastIntensity, pattern: patternNode,
+            ...(counts && Object.keys(counts).length ? { places: counts } : {}), ...(lastPlace ? { place: lastPlace } : {}), ...(timeSlot !== null ? { time: timeSlot } : {}),
             elapsed: state.time, remaining: state.duration ? Math.max(0, state.duration - state.time) : null,
         };
         let result = await request(host.cores, 'musicServer.pick', { params });
@@ -169,12 +253,12 @@ export function createMusicModule(host) {
             value = result.ok ? result.value : null;
         }
         if (Number.isFinite(value?.intensity)) lastIntensity = value.intensity;
-        if (value?.action === 'keep' || (value?.action === 'play' && !queue)) patternNode = value.pattern ?? null;   // заранее запрошенный шаг становится текущим, только когда начнёт играть
+        if (value?.action === 'keep' || (value?.action === 'play' && !queue)) { patternNode = value.pattern ?? null; if (value.place) lastPlace = value.place; }   // заранее запрошенный шаг становится текущим, только когда начнёт играть
         if (value?.action !== 'play') return;   // «оставь» и «ничего не подходит» — играющее продолжается
-        if (queue) { queuedNext = { track: value.track, similarity: value.similarity, pattern: value.pattern ?? null, vector, section: params.section }; return; }
+        if (queue) { queuedNext = { track: value.track, similarity: value.similarity, transition: value.transition ?? null, pattern: value.pattern ?? null, place: value.place ?? null, style: value.style ?? null, vector, section: params.section }; return; }
         remoteTrack = value.track;
-        await playTrack(value.track, value.similarity);
-        if (remoteTrack === value.track) setPlayingScene({ vector, rawId: value.track.rawId, section: params.section });
+        await playTrack(value.track, value.similarity, force ? null : value.transition ?? null);   // «следующий» по кнопке — сразу, без ожидания границы такта
+        if (remoteTrack === value.track) setPlayingScene({ vector, rawId: value.track.rawId, section: params.section, style: value.style ?? null });
     }
 
     function playQueued() {
@@ -183,7 +267,8 @@ export function createMusicModule(host) {
         if (!next) return false;
         remoteTrack = next.track;
         patternNode = next.pattern;
-        void playTrack(next.track, next.similarity).then(() => { if (remoteTrack === next.track) setPlayingScene({ vector: next.vector, rawId: next.track.rawId, section: next.section }); }).catch(() => {});
+        if (next.place) lastPlace = next.place;
+        void playTrack(next.track, next.similarity, next.transition ?? null).then(() => { if (remoteTrack === next.track) setPlayingScene({ vector: next.vector, rawId: next.track.rawId, section: next.section, style: next.style ?? null }); }).catch(() => {});
         return true;
     }
 
@@ -192,7 +277,8 @@ export function createMusicModule(host) {
         if (!remote() || userPaused || !nowPlaying.peek().playing || remoteTrack?.id !== currentTrackId || !(duration > 0)) return;
         const remaining = duration - time;
         // Тот же трек (в группе он один) заранее не «переключаем»: он перезапустится сам, когда доиграет (событие ended).
-        if (queuedNext) { if (remaining <= SWITCH_LEAD_S && queuedNext.track.id !== currentTrackId) playQueued(); return; }
+        // Есть план перехода — уходим по нему (сервис сам дождётся границы такта): запускаем на ~секунду раньше точки выхода; нет — за SWITCH_LEAD_S до конца, как раньше.
+        if (queuedNext) { const plan = queuedNext.transition; if (queuedNext.track.id !== currentTrackId && (remaining <= SWITCH_LEAD_S || (plan && time >= plan.outAt - 1.2))) playQueued(); return; }
         if (prefetching || prefetchFor === currentTrackId || remaining > PREFETCH_S || time < 1) return;
         prefetchFor = currentTrackId;
         prefetching = computeSceneVector().then(vector => pickRemote({ vector, ended: true, queue: true })).catch(() => {}).finally(() => { prefetching = null; });
@@ -234,11 +320,11 @@ export function createMusicModule(host) {
      * может молча отклонить промис) — настоящий факт «играет/нет» Модуль
      * уточняет у `audio.playback.state` (см. refreshPlayingState).
      */
-    async function servicePlay(blob, track, similarity) {
+    async function servicePlay(blob, track, similarity, transition = null) {
         const source = sanitizeSource(track.source);
         const result = await request(host.services, 'audio.playback.play', {
             params: {
-                id: track.id, volume: muted.peek() ? 0 : volume.peek(), onEnded: () => { if (!userPaused) replayCurrent(); },
+                id: track.id, volume: muted.peek() ? 0 : volume.peek(), onEnded: () => { if (!userPaused) replayCurrent(); }, ...(transition ? { transition } : {}),
                 ...(isRemoteSource(source) ? { source } : { blob }),
             },
         });
@@ -299,11 +385,13 @@ export function createMusicModule(host) {
         nowPlaying.set({ ...nowPlaying.peek(), ...patch });
     }
 
-    async function playTrack(track, similarity = null) {
+    async function playTrack(track, similarity = null, transition = null) {
         const source = sanitizeSource(track.source);
         let blob = null;
         if (!isRemoteSource(source)) {
             patternNode = null;   // заиграл свой трек — паттерн сервера прерван
+            lastPlace = null;     // и место тоже: режим сервера оставлен
+            lastTimeSlot = null;
             setPlayingScene(null);
             const blobResult = await request(host.services, 'audio.get', { params: { id: track.id } });
             if (!blobResult.ok || !blobResult.value) {
@@ -314,7 +402,7 @@ export function createMusicModule(host) {
         }
         const isNew = nowPlaying.peek().trackId !== track.id;
         queuedNext = null; prefetchFor = null;   // что-то начинает играть — ожидавший следующий трек больше не актуален
-        const started = await servicePlay(blob, track, similarity);
+        const started = await servicePlay(blob, track, similarity, transition);
         if (!started) return;
         if (isNew) {
             // playCount растёт один раз на трек (не на каждый replay) — ровно тот контракт, что ловят тесты.
@@ -395,13 +483,18 @@ export function createMusicModule(host) {
         const parts = sceneMessages(messagesResult.value, contextMessages.peek()).map(part => cleanSceneText(part, { names })).filter(Boolean);
         if (!parts.length) return null;
         lastSceneText = buildSceneText(messagesResult.value, contextMessages.peek());
+        if (remote()) await ensurePlaces();
+        const counts = remote() ? countPlaces(parts) : {};
+        const timeSlot = remote() ? await resolveTimeSlot(parts) : null;
         // Каждая реплика — своим вектором, свежие весят больше (см. blendSceneVectors): длинное старое сообщение не заглушает свежую реплику.
         const vectors = [];
         for (const part of parts) {
             const embedded = await request(host.services, 'embedding.compute', { params: { text: part, kind: 'query' } });
             vectors.push(embedded.ok ? embedded.value : null);
         }
-        return blendSceneVectors(vectors);
+        const blended = blendSceneVectors(vectors);
+        if (blended) { sceneCounts.set(blended, counts); if (timeSlot !== null) sceneTimes.set(blended, timeSlot); }
+        return blended;
     }
 
     /**
@@ -580,7 +673,7 @@ export function createMusicModule(host) {
                 onToggleMute: toggleMute,
                 onToggleAuto: toggleAutoSwitch,
                 onVolumeCommit: savePlayer,
-                feedback: { visible: feedbackVisible, state: feedbackState, onMark: markTrack, choices: { state: choicesState, onOpen: openChoices, onPick: chooseWanted } },
+                feedback: { visible: feedbackVisible, state: feedbackState, onMark: markTrack, style: { state: styleState, onRate: rateStyle }, choices: { state: choicesState, onOpen: openChoices, onPick: chooseWanted } },
             }),
         );
     }
@@ -665,7 +758,9 @@ export function createMusicModule(host) {
 
     /** Пользователь выбрал раздел: запомнить и загрузить его треки. */
     async function chooseSection(id) {
+        resetPlaces();
         await server.select(id);
+        if (remote()) void ensurePlaces();   // реестр мест подтягивается фоном: сбой подбору не мешает
         await savePlayer();
     }
 
@@ -703,6 +798,7 @@ export function createMusicModule(host) {
         feedbackState,
         feedbackVisible,
         choicesState, openChoices, chooseWanted,
+        styleState, rateStyle,
         onGenerationCompleted,
         importFiles,
         importLinkText,

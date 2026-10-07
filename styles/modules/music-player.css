@@ -153,6 +153,7 @@
 /* Отметка «верно / неверно» у трека сервера: подпись слева, две маленькие кнопки справа. Без анимаций, как и всё окно. */
 .stme-music-feedback { display: flex; align-items: center; gap: 8px; }
 .stme-music-choices-box { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.stme-music-style { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .stme-music-choices { display: flex; flex-wrap: wrap; gap: 6px; }
 .stme-music-choice { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer; border: 1px solid color-mix(in srgb, var(--stme-text) 22%, transparent); background: transparent; color: var(--stme-text); }
 .stme-music-choice:hover { background: color-mix(in srgb, var(--stme-text) 12%, transparent); }

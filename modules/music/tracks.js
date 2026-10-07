@@ -31,35 +31,5 @@ export function sanitizeTracks(tracks) {
         }));
 }
 
-/** Реплики сцены: последние `limit` не системных, непустые — по одной (свежие в конце). */
-export function sceneMessages(messages, limit) {
-    return (Array.isArray(messages) ? messages : [])
-        .filter(message => !message?.isSystem)
-        .slice(-Math.max(1, limit))
-        .map(message => String(message?.text ?? ''))
-        .filter(Boolean);
-}
-
-/** Имена участников сцены (героев и персоны пользователя) — их вычёркивают из текста перед эмбедингом: вектор должен нести настроение, а не имена. */
-export function sceneNames(messages) {
-    return [...new Set((Array.isArray(messages) ? messages : []).filter(message => !message?.isSystem).map(message => String(message?.name ?? '').trim()).filter(Boolean))];
-}
-
-/** Текст сцены: последние реплики (системные — мусор для атмосферы, выкидываем). */
-export function buildSceneText(messages, limit) {
-    return sceneMessages(messages, limit).join('\n').trim();
-}
-
-/**
- * Вектор сцены из векторов реплик: свежая реплика весит вдвое больше предыдущей (2^позиция), результат нормируется. Раньше реплики склеивались в один текст — длинное старое
- * сообщение с «военными» словами перевешивало короткую свежую реплику и тянуло музыку не туда.
- */
-export function blendSceneVectors(vectors) {
-    const usable = vectors.map((vector, index) => ({ vector, weight: 2 ** index })).filter(item => Array.isArray(item.vector) && item.vector.length);
-    if (!usable.length) return null;
-    const dim = usable[0].vector.length;
-    const sum = Array(dim).fill(0);
-    for (const { vector, weight } of usable) if (vector.length === dim) vector.forEach((x, i) => { sum[i] += x * weight; });
-    const norm = Math.sqrt(sum.reduce((total, x) => total + x * x, 0));
-    return norm > 0 ? sum.map(x => x / norm) : null;
-}
+// Чистые функции сцены — в общем файле (его же использует симулятор владельца на сервере).
+export { sceneMessages, sceneNames, buildSceneText, blendSceneVectors } from '../../libraries/shared/music-scene.js';

@@ -66,6 +66,9 @@ export function parseSectionTracks(text, { server, sectionId, model, dim }) {
 
 export const pickUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/pick`, key);
 export const feedbackUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/feedback`, key);
+export const styleFeedbackUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/style-feedback`, key);
+export const placesUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/places`, key);
+export const timesUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/times`, key);
 export const choicesUrl = ({ url, key }, sectionId) => withKey(`${trimSlash(url)}/api/choices?section=${encodeURIComponent(sectionId)}`, key);
 
 /**
@@ -87,6 +90,56 @@ export function parseChoices(text, { model } = {}) {
     return list;
 }
 
+const MAX_PLACES = 500, MAX_PLACE_KEYWORDS = 60, MAX_KEYWORD_LENGTH = 80;
+
+/**
+ * Реестр мест сервера: `[{ id, keywords }]`. Слова ищет ME в тексте чата сам и серверу шлёт только счётчики (текст не уходит). Чужая модель, мусор или неверная форма — пустой массив:
+ * без реестра подбор просто идёт без мест. Повторный id и места без слов пропускаются.
+ */
+export function parsePlaces(text, { model } = {}) {
+    const data = parseJson(text);
+    if (!data || typeof data !== 'object' || (model && data.model !== model) || !Array.isArray(data.places)) return [];
+    const seen = new Set();
+    const list = [];
+    for (const item of data.places) {
+        const id = typeof item?.id === 'string' ? item.id : '';
+        if (!/^[\w-]+$/.test(id) || seen.has(id) || !Array.isArray(item.keywords)) continue;
+        const keywords = item.keywords
+            .filter(word => typeof word === 'string' && word.trim() && word.length <= MAX_KEYWORD_LENGTH)
+            .slice(0, MAX_PLACE_KEYWORDS);
+        if (!keywords.length) continue;
+        seen.add(id); list.push({ id, keywords });
+        if (list.length >= MAX_PLACES) break;
+    }
+    return list;
+}
+
+const MAX_TIME_SLOTS = 8, MAX_TIME_KEYWORDS = 80;
+
+/**
+ * Реестр времени суток сервера: `[{ id: 0..7, keywords }]` (id — номер трёхчасового слота). Чужая модель, мусор или неверная форма — пустой массив: подбор идёт без догадки по словам.
+ */
+export function parseTimes(text, { model } = {}) {
+    const data = parseJson(text);
+    if (!data || typeof data !== 'object' || (model && data.model !== model) || !Array.isArray(data.slots)) return [];
+    const seen = new Set();
+    const list = [];
+    for (const item of data.slots) {
+        const id = item?.id;
+        if (!Number.isInteger(id) || id < 0 || id >= MAX_TIME_SLOTS || seen.has(id) || !Array.isArray(item.keywords)) continue;
+        const keywords = item.keywords
+            .filter(word => typeof word === 'string' && word.trim() && word.length <= MAX_KEYWORD_LENGTH)
+            .slice(0, MAX_TIME_KEYWORDS);
+        if (!keywords.length) continue;
+        seen.add(id); list.push({ id, keywords });
+        if (list.length >= MAX_TIME_SLOTS) break;
+    }
+    return list;
+}
+
+// Часы и периоды RP Time живут в общем файле сцены (его же использует симулятор на сервере).
+export { slotOfHour, parseClockHour, slotOfPeriod } from './music-scene.js';
+
 /** Трек, который выбрал сервер: у ME нет о нём ничего, кроме id и адреса аудио. `rawId` нужен, чтобы сказать серверу, что сейчас играет. */
 export const serverTrackFrom = ({ server, sectionId, id, ext }) => ({
     id: `${SERVER_TRACK_PREFIX}${sectionId}_${id}`, rawId: id, name: '', description: '', vector: null, playCount: 0,
@@ -99,11 +152,25 @@ const MAX_QUESTIONS = 12, MAX_QUESTION_LENGTH = 400;
  * Ответ сервера на выбор → `{ action: 'play' | 'keep' | 'none' | 'ask', track?, similarity?, intensity?, questions? }`; мусор и недопустимые id — `none`.
  * `ask` — сервер просит спросить Jev: `questions` = `{ id: утверждение }` (чужой текст ограничен по числу и длине — это данные, не команды).
  */
+/** Типы музыки, между которыми выбирает нода «Тип музыки» сервера (id совпадают с сервером). */
+export const MUSIC_STYLES = Object.freeze(['ambient', 'score', 'vocal']);
+export const MUSIC_STYLE_LABELS = Object.freeze({ ambient: 'Ambient', score: 'Soundtrack', vocal: 'With lyrics' });
+
+/** План перехода от сервера (доли, бас-своп): только числа в разумных пределах, иначе `null` — ME делает обычный кроссфейд. */
+export function cleanTransition(raw) {
+    if (!raw || typeof raw !== 'object' || (raw.kind !== 'beat' && raw.kind !== 'plain')) return null;
+    const within = (value, min, max) => Number.isFinite(value) && value >= min && value <= max;
+    if (!within(raw.outAt, 0, 7200) || !within(raw.fadeSec, 0.5, 30)) return null;
+    return { kind: raw.kind, outAt: raw.outAt, fadeSec: raw.fadeSec, bassSwapAt: within(raw.bassSwapAt, 0, 30) ? raw.bassSwapAt : null, rate: within(raw.rate, 0.8, 1.25) ? raw.rate : 1 };
+}
+
 export function parsePick(text, { server, sectionId }) {
     const data = parseJson(text);
     const intensity = Number.isFinite(data?.intensity) ? data.intensity : null;
     const pattern = /^[\w-]+$/.test(String(data?.pattern ?? '')) ? String(data.pattern) : null;   // узел паттерна, который играет: ME лишь возвращает его серверу
-    if (data?.action === 'keep') return { action: 'keep', intensity, pattern };
+    const style = MUSIC_STYLES.includes(data?.style) ? data.style : null;   // тип музыки, который выбрала нода «Тип музыки» сервера (его можно оценить)
+    const place = typeof data?.place === 'string' && /^[\w-]+$/.test(data.place) ? { place: data.place } : {};   // место, которое определил сервер: ME лишь возвращает его в следующем запросе
+    if (data?.action === 'keep') return { action: 'keep', intensity, pattern, ...place };
     if (data?.action === 'ask' && data.questions && typeof data.questions === 'object') {
         const questions = Object.fromEntries(Object.entries(data.questions)
             .filter(([id, statement]) => /^[ci]\d{1,2}$/.test(id) && typeof statement === 'string' && statement.trim())
@@ -111,7 +178,8 @@ export function parsePick(text, { server, sectionId }) {
         return Object.keys(questions).length ? { action: 'ask', questions } : { action: 'none' };
     }
     if (data?.action === 'play' && /^[\w-]+$/.test(String(data.id)) && /^[a-z0-9]{2,5}$/i.test(String(data.ext))) {
-        return { action: 'play', intensity, pattern, similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
+        const transition = cleanTransition(data.transition);
+        return { action: 'play', intensity, pattern, ...place, ...(transition ? { transition } : {}), style, similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
     }
     return { action: 'none' };
 }
