@@ -25,6 +25,7 @@ export class HttpError extends Error {
 
 /** Накал музыки 1 (тихо) … 3 (напряжённо); пусто — не задан, на выбор не влияет. */
 const cleanIntensity = value => (Number(value) >= 1 && Number(value) <= 3 ? Math.round(Number(value)) : null);
+const MAX_FEEDBACK = 300, ROUND_VECTOR = 10000;
 const MIN_EXAMPLE_LENGTH = 10, MAX_EXAMPLE_LENGTH = 2000, MAX_EXAMPLES_PER_CALL = 200;
 const notFound = what => { throw new HttpError(404, `нет такого ${what}`); };
 const needName = name => String(name ?? '').trim() || (() => { throw new HttpError(400, 'нужно название'); })();
@@ -33,7 +34,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
     const file = path.join(dir, 'catalog.json');
     const audioDir = path.join(dir, 'audio');
     await fs.mkdir(audioDir, { recursive: true });
-    let data = { sections: [], groups: [], tracks: [], examples: [], patterns: [] };
+    let data = { sections: [], groups: [], tracks: [], examples: [], patterns: [], feedback: [] };
     try { data = { ...data, ...JSON.parse(await fs.readFile(file, 'utf8')) }; } catch { /* первый запуск */ }
 
     let queue = Promise.resolve();
@@ -250,7 +251,44 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             return found;
         }),
 
+
+        /**
+         * Отметки из ME («верно» / «неверно» у играющего трека): очередь на проверку владельцем, НЕ словарь. ME шлёт вектор сцены, на которой начал играть трек, и сам трек; в
+         * очередь это попадает по ключу чтения (он не секрет), поэтому ничего сразу не обучается: эталоном отметка становится, только когда владелец разберёт её в консоли.
+         * Очередь ограничена (старые вытесняются), повтор той же отметки той же сцены не копится.
+         */
+        addFeedback: ({ sectionId, vector, trackId, mark, dim }) => exclusive(async () => {
+            needSection(sectionId);
+            if (mark !== 'good' && mark !== 'bad') throw new HttpError(400, 'отметка — «верно» или «неверно»');
+            if (!Array.isArray(vector) || vector.length !== dim || !vector.every(Number.isFinite)) throw new HttpError(400, 'нужен вектор сцены');
+            const played = track(String(trackId ?? ''));
+            if (!played || played.section !== sectionId) throw new HttpError(400, 'такого трека нет в этом разделе');
+            const same = data.feedback.find(item => item.track === played.id && item.vector.every((x, i) => Math.abs(x - vector[i]) < 1e-6));
+            if (same) { same.mark = mark; same.at = Date.now(); await save(); return { queued: data.feedback.length, updated: true }; }
+            data.feedback.push({ id: randomId(), section: sectionId, track: played.id, group: played.group ?? null, mark, vector: vector.map(x => Math.round(x * ROUND_VECTOR) / ROUND_VECTOR), at: Date.now() });
+            if (data.feedback.length > MAX_FEEDBACK) data.feedback.splice(0, data.feedback.length - MAX_FEEDBACK);
+            await save();
+            return { queued: data.feedback.length, updated: false };
+        }),
+        /** Разбор отметки: сцена становится эталоном группы `group` (для «верно» по умолчанию — группа сыгравшего трека), отметка уходит из очереди. */
+        resolveFeedback: (id, { group: groupId } = {}) => exclusive(async () => {
+            const item = data.feedback.find(entry => entry.id === id) ?? notFound('отметки');
+            if (modeOf(item.section) !== MODES.GROUPS) throw new HttpError(400, 'эталонные сцены бывают только в разделе «по группам» — отметку можно только отклонить');
+            const target = checkGroup(item.section, groupId || item.group);
+            if (!target) throw new HttpError(400, 'выберите группу');
+            data.examples.push({ id: randomId(), section: item.section, group: target, text: '(сцена из ME, текст не передаётся)', vector: item.vector, cleaned: true, source: 'feedback', createdAt: Date.now() });
+            data.feedback = data.feedback.filter(entry => entry.id !== id);
+            await save();
+            return { group: target };
+        }),
+        dismissFeedback: id => exclusive(async () => {
+            data.feedback.find(entry => entry.id === id) ?? notFound('отметки');
+            data.feedback = data.feedback.filter(entry => entry.id !== id);
+            await save();
+        }),
+
         adminCatalog: () => ({
+            feedback: data.feedback.map(({ vector, ...rest }) => ({ ...rest, trackTitle: track(rest.track)?.title ?? '(трек удалён)', groupName: group(rest.group)?.name ?? null })),
             patterns: data.patterns.map(({ vector, negVector, ...rest }) => ({ ...rest, tagged: Array.isArray(vector) })),
             examples: data.examples.map(({ vector, ...rest }) => rest),
             sections: data.sections.map(item => ({ ...item, mode: cleanMode(item.mode) })),
@@ -313,6 +351,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             if (data.tracks.some(item => item.section === id)) throw new HttpError(409, 'в разделе есть треки — сначала перенесите или удалите их');
             data.sections = data.sections.filter(item => item.id !== id);
             data.patterns = data.patterns.filter(item => item.section !== id);
+            data.feedback = data.feedback.filter(item => item.section !== id);
             data.groups = data.groups.filter(item => item.section !== id);
             data.examples = data.examples.filter(item => item.section !== id);
             await save();
@@ -383,6 +422,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             const item = track(id) ?? notFound('трека');
             if (usedByPattern('track', id)) throw new HttpError(409, 'трек используется в паттерне — сначала уберите его оттуда');
             data.tracks = data.tracks.filter(other => other.id !== id);
+            data.feedback = data.feedback.filter(entry => entry.track !== id);
             await save();
             await fs.rm(audioPath(item), { force: true });
         }),

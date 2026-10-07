@@ -1,7 +1,7 @@
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import {
-    formatClock, progressPercent, timeFromPercent, coverGradient, coverGlow, trackInitial, describeNowPlaying, volumeLevel,
+    formatClock, progressPercent, timeFromPercent, coverGradient, coverGlow, trackInitial, describeNowPlaying, volumeLevel, describeFeedback,
 } from './music-player-model.js';
 
 /**
@@ -27,6 +27,8 @@ export const ICONS = Object.freeze({
     volumeHigh: () => svg(fill(SPEAKER), line('M16 8.5a5 5 0 010 7M18.6 6a8.6 8.6 0 010 12')),
     volumeLow: () => svg(fill(SPEAKER), line('M16 8.5a5 5 0 010 7')),
     volumeMuted: () => svg(fill(SPEAKER), line('M16.5 9.5l5 5M21.5 9.5l-5 5')),
+    thumbUp: () => svg(line('M7 11v9H4v-9h3zM7 11l4-7c1.5 0 2.5 1 2.2 2.6L12.7 10H19a2 2 0 011.9 2.6l-1.7 6A2 2 0 0117.3 20H7')),
+    thumbDown: () => svg(line('M7 13V4H4v9h3zM7 13l4 7c1.5 0 2.5-1 2.2-2.6L12.7 14H19a2 2 0 001.9-2.6l-1.7-6A2 2 0 0017.3 4H7')),
 });
 
 /** Ползунок: дорожка-заливка (ширина в процентах) и невидимый настоящий `<input type=range>` поверх — клавиатура, фокус и жесты остаются родными. */
@@ -61,8 +63,9 @@ function ControlButton({ icon, label, onClick, className = '', pressed, disabled
  * @param {Function} props.muted      сигнал «звук выключен»
  * @param {Function} props.autoSwitch сигнал «трек подбирается по сцене»
  * @param {Function} props.hasTracks  сигнал «в библиотеке есть треки»
+ * @param {{ visible: Function, state: Function, onMark: Function }} [props.feedback]  отметка «верно / неверно» (только для трека сервера): `visible` — показывать ли, `state` — `{ mark, status }`
  */
-export function MusicPlayerBody({ now, progress, volume, muted, autoSwitch, hasTracks, onPlayPause, onSkip, onRestart, onSeek, onToggleMute, onToggleAuto, onVolumeCommit }) {
+export function MusicPlayerBody({ now, progress, volume, muted, autoSwitch, hasTracks, onPlayPause, onSkip, onRestart, onSeek, onToggleMute, onToggleAuto, onVolumeCommit, feedback }) {
     const draft = signal(null);
     const info = computed(() => describeNowPlaying(now(), { autoSwitch: autoSwitch(), hasTracks: hasTracks() }));
     const seekPercent = computed(() => (draft() ?? progressPercent(progress().time, progress().duration)));
@@ -100,6 +103,11 @@ export function MusicPlayerBody({ now, progress, volume, muted, autoSwitch, hasT
             }),
             ControlButton({ icon: ICONS.next(), label: 'Next track', onClick: onSkip, disabled: computed(() => !hasTracks()) }),
         ),
+        feedback && computed(() => (feedback.visible() ? h('div', { class: 'stme-music-feedback' },
+            h('span', { class: 'stme-music-feedback-label' }, computed(() => describeFeedback(feedback.state()))),
+            ControlButton({ icon: ICONS.thumbUp(), label: 'Right music for this scene', onClick: () => feedback.onMark('good'), className: 'stme-music-btn-small', pressed: computed(() => feedback.state().mark === 'good'), disabled: computed(() => feedback.state().status === 'sending') }),
+            ControlButton({ icon: ICONS.thumbDown(), label: 'Wrong music for this scene', onClick: () => feedback.onMark('bad'), className: 'stme-music-btn-small', pressed: computed(() => feedback.state().mark === 'bad'), disabled: computed(() => feedback.state().status === 'sending') }),
+        ) : null)),
         h('div', { class: 'stme-music-volume' },
             ControlButton({
                 icon: computed(() => ({ muted: ICONS.volumeMuted, low: ICONS.volumeLow, high: ICONS.volumeHigh })[volumeLevel(volume(), muted())]()),

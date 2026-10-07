@@ -65,6 +65,7 @@ export function parseSectionTracks(text, { server, sectionId, model, dim }) {
 }
 
 export const pickUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/pick`, key);
+export const feedbackUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/feedback`, key);
 
 /** Трек, который выбрал сервер: у ME нет о нём ничего, кроме id и адреса аудио. `rawId` нужен, чтобы сказать серверу, что сейчас играет. */
 export const serverTrackFrom = ({ server, sectionId, id, ext }) => ({

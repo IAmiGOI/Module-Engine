@@ -60,6 +60,11 @@
         <div id="panel" hidden>
             <div class="row"><input id="sectionName" class="grow"><button id="renameSection">Переименовать</button><button class="danger" id="deleteSection">Удалить раздел</button></div>
             <p class="dim" id="modeHint"></p>
+            <details id="feedbackBox" class="examples" style="margin:14px 0" hidden>
+                <summary id="feedbackTitle">Отметки из ME</summary>
+                <p class="dim">Это «верно» и «неверно», которые пользователи ME нажали у играющего трека. Сами по себе они ничему не учат: эталоном сцена становится, только когда вы разберёте отметку здесь. «Верно» — сцена станет эталоном той группы, что играла; «неверно» — выберите группу, к которой сцена на самом деле относится. Текст чата ME не передаёт, поэтому у такого эталона текста нет, только его вектор.</p>
+                <div id="feedbackList"></div>
+            </details>
             <div id="groupsBox" hidden>
                 <h3>Группы</h3>
                 <div id="groups"></div>
@@ -67,6 +72,12 @@
                 <details id="graphBox" class="examples" style="margin-top:14px"><summary>Граф переходов</summary>
                     <p class="dim">Тяните группы, чтобы расставить. Клик по группе, затем клик по другой — между ними появляется связь (по ней музыка переходит свободно, причём и в «соседа соседа» — через одну группу — тоже без штрафа); клик по линии — убирает её. Shift + клик по группе — «резкая» (оранжевый пунктир): в неё можно перейти откуда угодно (разоблачение, срыв, паника). Дальше двух шагов по линиям переход не запрещён, но требует заметно более сильной сцены. Группы без линий не ограничены. Сохраняется само.</p>
                     <svg id="graph"></svg>
+                </details>
+                <details id="alignBox" class="examples" style="margin-top:14px"><summary>Выравнивание сцен и тегов, чистка эталонов</summary>
+                    <p class="dim">Теги написаны абстрактным языком настроения, а сцены — ролевая проза, поэтому в пространстве смыслов они лежат в разных местах, и группы, чьи теги случайно ближе к «стилю прозы», выигрывают на любой сцене. Выравнивание вычитает из сцены эту разницу (считается само по эталонам и тегам). 0 — как раньше, 1 — полностью. Работает, когда в разделе есть хотя бы 12 эталонных сцен.</p>
+                    <div class="row"><label class="dim">Сила <input id="alignStrength" type="number" min="0" max="2" step="0.1" value="1" style="width:80px"></label><button class="small primary" id="saveAlign">Сохранить</button><span class="dim" id="alignState"></span></div>
+                    <p class="dim" style="margin-top:10px">Эталоны, добавленные раньше, содержат имена героев и разметку; ME убирает их из сцены, поэтому и из эталонов их надо убрать — одним пересчётом (займёт время, идёт порциями).</p>
+                    <div class="row"><button class="small" id="recleanExamples">Пересчитать старые эталоны без имён</button><span class="dim" id="recleanState"></span></div>
                 </details>
             </div>
             <details id="patternsBox" class="examples" style="margin:14px 0">
@@ -135,6 +146,7 @@ function render() {
         renderAlign();
     }
     renderPatterns();
+    renderFeedback();
     // В групповом разделе треки лежат внутри своих групп; здесь остаются только те, что ни в одной группе (они не играют).
     const tracks = catalog.tracks.filter(track => track.section === current && (!grouped || !track.group)).sort((a, b) => b.createdAt - a.createdAt);
     $('tracks').replaceChildren(...(grouped && tracks.length ? [el('h3', {}, 'Без группы — не играют')] : []), ...(tracks.length ? tracks.map(trackRow) : (grouped ? [] : [el('p', { className: 'dim' }, 'В разделе пока нет треков.')])));
@@ -221,6 +233,32 @@ $('recleanExamples').onclick = async () => {
         await load();
     } catch (error) { fail(error); } finally { button.disabled = false; }
 };
+
+/** Очередь отметок «верно / неверно» из ME (store.addFeedback): разбирает владелец. */
+function renderFeedback() {
+    const items = (catalog.feedback || []).filter(item => item.section === current).sort((a, b) => b.at - a.at);
+    const section = catalog.sections.find(item => item.id === current);
+    const grouped = section && section.mode === 'groups';
+    $('feedbackBox').hidden = !items.length;
+    $('feedbackTitle').textContent = `Отметки из ME (${items.length})`;
+    const groups = catalog.groups.filter(group => group.section === current);
+    $('feedbackList').replaceChildren(...items.map(item => {
+        const label = el('span', { className: 'grow' }, `${item.mark === 'good' ? '👍 верно' : '👎 неверно'} — трек «${item.trackTitle}»${item.groupName ? `, группа «${item.groupName}»` : ''}`);
+        const row = el('div', { className: 'row', style: 'border-top:1px dashed var(--line);padding:6px 0' }, label);
+        const done = async work => { try { await work(); await load(); } catch (error) { fail(error); } };
+        if (grouped) {
+            const choose = el('select', {}, ...groups.map(group => el('option', { value: group.id }, group.name)));
+            choose.value = item.mark === 'good' && item.group ? item.group : (groups[0] ? groups[0].id : '');
+            const add = el('button', { className: 'small primary', title: 'Сцена станет эталоном выбранной группы' }, item.mark === 'good' ? 'В эталоны' : 'В эталоны группы');
+            add.onclick = () => done(() => api(`/api/admin/feedback/${item.id}`, { method: 'POST', body: { group: choose.value } }));
+            row.append(choose, add);
+        }
+        const dismiss = el('button', { className: 'small' }, 'Отклонить');
+        dismiss.onclick = () => done(() => api(`/api/admin/feedback/${item.id}`, { method: 'DELETE' }));
+        row.append(dismiss);
+        return row;
+    }));
+}
 
 /** Накал музыки (ось интенсивности): подбор по Jev учитывает, насколько напряжена сцена. Пусто — не влияет. */
 function intensitySelect(value) {

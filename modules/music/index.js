@@ -17,7 +17,7 @@ model.generate,
 # Вектор сцены и вектора треков — локальный эмбединг.
 embedding.compute, embedding.similarity,
 # Разделы музыкального сервера владельца (сеть — только у Ядра).
-musicServer.sections, musicServer.section, musicServer.pick,
+musicServer.sections, musicServer.section, musicServer.pick, musicServer.feedback,
 # Умный выбор: Jev пользователя оценивает категории сцены (запрос от сервера, ответ идёт только как номер категории).
 classifier.decide
 */
@@ -99,6 +99,17 @@ export function createMusicModule(host) {
     let remoteTrack = null;
     const remote = () => server.mode.peek() === 'server' && Boolean(server.selected.peek());
 
+    // Отметка «верно / неверно» у трека сервера: вектор сцены, на которой он НАЧАЛ играть (его и отмечаем), уходит владельцу в очередь на проверку.
+    let playingScene = null;                                   // { vector, rawId, section }
+    const feedbackVisible = signal(false);
+    const feedbackState = signal({ mark: null, status: 'idle' });
+    function setPlayingScene(scene) { playingScene = scene; feedbackState.set({ mark: null, status: 'idle' }); feedbackVisible.set(Boolean(scene)); }
+    async function markTrack(mark) {
+        if (!playingScene || feedbackState.peek().status === 'sending') return;
+        feedbackState.set({ mark, status: 'sending' });
+        const sent = await call('musicServer.feedback', { section: playingScene.section, vector: playingScene.vector, track: playingScene.rawId, mark });
+        feedbackState.set({ mark, status: sent.ok && sent.value?.ok ? 'sent' : 'failed' });
+    }
     let patternSection = '';    // раздел, к которому относится patternNode
     let patternNode = null;     // узел паттерна сервера, который играет (его вернул сервер): без него сервер не знает, где мы в паттерне
     let lastIntensity = null;   // накал прошлой сцены (его вернул сервер): нужен ему для сглаживания
@@ -138,9 +149,10 @@ export function createMusicModule(host) {
         if (Number.isFinite(value?.intensity)) lastIntensity = value.intensity;
         if (value?.action === 'keep' || (value?.action === 'play' && !queue)) patternNode = value.pattern ?? null;   // заранее запрошенный шаг становится текущим, только когда начнёт играть
         if (value?.action !== 'play') return;   // «оставь» и «ничего не подходит» — играющее продолжается
-        if (queue) { queuedNext = { track: value.track, similarity: value.similarity, pattern: value.pattern ?? null }; return; }
+        if (queue) { queuedNext = { track: value.track, similarity: value.similarity, pattern: value.pattern ?? null, vector, section: params.section }; return; }
         remoteTrack = value.track;
         await playTrack(value.track, value.similarity);
+        if (remoteTrack === value.track) setPlayingScene({ vector, rawId: value.track.rawId, section: params.section });
     }
 
     function playQueued() {
@@ -149,7 +161,7 @@ export function createMusicModule(host) {
         if (!next) return false;
         remoteTrack = next.track;
         patternNode = next.pattern;
-        void playTrack(next.track, next.similarity).catch(() => {});
+        void playTrack(next.track, next.similarity).then(() => { if (remoteTrack === next.track) setPlayingScene({ vector: next.vector, rawId: next.track.rawId, section: next.section }); }).catch(() => {});
         return true;
     }
 
@@ -270,6 +282,7 @@ export function createMusicModule(host) {
         let blob = null;
         if (!isRemoteSource(source)) {
             patternNode = null;   // заиграл свой трек — паттерн сервера прерван
+            setPlayingScene(null);
             const blobResult = await request(host.services, 'audio.get', { params: { id: track.id } });
             if (!blobResult.ok || !blobResult.value) {
                 await notify('error', `Audio for "${track.name}" is missing from this browser's storage — re-import it.`);
@@ -545,6 +558,7 @@ export function createMusicModule(host) {
                 onToggleMute: toggleMute,
                 onToggleAuto: toggleAutoSwitch,
                 onVolumeCommit: savePlayer,
+                feedback: { visible: feedbackVisible, state: feedbackState, onMark: markTrack },
             }),
         );
     }
@@ -663,6 +677,9 @@ export function createMusicModule(host) {
         skip,
         seek,
         toggleMute,
+        markTrack,
+        feedbackState,
+        feedbackVisible,
         onGenerationCompleted,
         importFiles,
         importLinkText,

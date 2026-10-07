@@ -1,6 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { EMBEDDING_MODEL_ID } from '../../libraries/core/embedding.js';
-import { isServerConfigured, sectionsUrl, sectionUrl, pickUrl, parseSections, parseSectionTracks, parsePick } from '../../libraries/shared/music-catalog.js';
+import { isServerConfigured, sectionsUrl, sectionUrl, pickUrl, feedbackUrl, parseSections, parseSectionTracks, parsePick } from '../../libraries/shared/music-catalog.js';
 
 /**
  * Ядро музыкального сервера: единственное место, где Music ходит в сеть (Модуль — сообщество, `http.request` ему закрыт). Читает разделы и векторы треков раздела
@@ -59,10 +59,25 @@ export function createMusicServerCore(host, { server = {}, timeoutMs = TIMEOUT_M
         return result.ok && result.value?.ok ? parsePick(result.value.text, { server, sectionId }) : { action: 'none' };
     }
 
+
+    /**
+     * Отметка «верно / неверно» у играющего трека: вектор сцены, на которой он начал играть, и сам трек уходят владельцу в очередь на проверку (эталоном отметка становится
+     * только после его разбора в консоли). Текст чата не передаётся. Сбой сети — `{ ok: false }`, ничего не ломается.
+     */
+    async function feedback({ section: id, vector, track, mark } = {}) {
+        const sectionId = String(id ?? '');
+        if (!isServerConfigured(server) || !sectionId || !track) return { ok: false };
+        const body = JSON.stringify({ model, section: sectionId, vector, track, mark });
+        const result = await request(host.network, 'http.request', { params: { url: feedbackUrl(server), method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, timeoutMs });
+        if (!result.ok || !result.value?.ok) return { ok: false };
+        try { return { ok: JSON.parse(result.value.text)?.ok === true }; } catch { return { ok: false }; }
+    }
+
     const unregisters = [
         host.own.register('musicServer.pick', params => pick(params)),
+        host.own.register('musicServer.feedback', params => feedback(params)),
         host.own.register('musicServer.sections', params => sections(params)),
         host.own.register('musicServer.section', params => section(params)),
     ];
-    return { sections, section, pick, unregister: () => { for (const unregister of unregisters) unregister(); } };
+    return { sections, section, pick, feedback, unregister: () => { for (const unregister of unregisters) unregister(); } };
 }

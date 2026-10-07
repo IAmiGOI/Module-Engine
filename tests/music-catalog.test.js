@@ -119,3 +119,21 @@ test('the core tells the server which embedding model produced the scene vector 
     assert.equal(bodies[0].body.model, MODEL);
     assert.ok(bodies[0].url.includes('/api/pick'));
 });
+
+test('the core sends a right/wrong mark with the model id and the scene vector; an unconfigured server is never contacted; a refusal is just { ok: false }', async () => {
+    const engine = createEngine();
+    const bodies = [];
+    let reply = { ok: true, status: 200, text: JSON.stringify({ ok: true, queued: 1 }) };
+    engine.buses.network.register('http.request', ({ url, body }) => { bodies.push({ url, body: JSON.parse(body) }); return reply; });
+    const core = createMusicServerCore(engine.registerCaller('core.musicServer', 'cores', { tier: 'official', networkAccess: true }), { server, dim: 4 });
+    assert.deepEqual(await core.feedback({ section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'bad' }), { ok: true });
+    assert.ok(bodies[0].url.includes('/api/feedback'));
+    assert.deepEqual(bodies[0].body, { model: MODEL, section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'bad' });
+    assert.deepEqual(await core.feedback({ section: 'fantasy', vector: [0.1], mark: 'bad' }), { ok: false }, 'no track — nothing to mark');
+    reply = { ok: true, status: 200, text: JSON.stringify({ ok: false, reason: 'model mismatch' }) };
+    assert.deepEqual(await core.feedback({ section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'good' }), { ok: false });
+    reply = { ok: false };
+    assert.deepEqual(await core.feedback({ section: 'fantasy', vector: [0.1, 0.2, 0.3, 0.4], track: 't1', mark: 'good' }), { ok: false });
+    const none = createMusicServerCore(createEngine().registerCaller('core.musicServer', 'cores', { tier: 'official', networkAccess: true }), { server: {}, dim: 4 });
+    assert.deepEqual(await none.feedback({ section: 'fantasy', vector: [1], track: 't', mark: 'good' }), { ok: false });
+});

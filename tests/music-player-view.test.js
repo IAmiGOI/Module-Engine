@@ -23,8 +23,9 @@ function setup(overrides = {}) {
         volume: signal(0.6), muted: signal(false), autoSwitch: signal(true), hasTracks: signal(true),
         ...overrides,
     };
+    delete state.feedbackProps;
     const tree = MusicPlayerBody({
-        ...state,
+        ...state, feedback: overrides.feedbackProps,
         onPlayPause: () => calls.push('playPause'), onSkip: () => calls.push('skip'), onRestart: () => calls.push('restart'),
         onSeek: time => calls.push(['seek', time]), onToggleMute: () => calls.push('mute'), onToggleAuto: () => calls.push('auto'), onVolumeCommit: () => calls.push('commit'),
     });
@@ -118,5 +119,35 @@ test('the volume icon follows the level and mute; every control has an accessibl
     state.muted.set(true);
     assert.equal(read(button.props['aria-label']), 'Unmute');
     for (const name of ['stme-music-btn-primary', 'stme-music-btn-auto']) assert.ok(read(find(tree, name).props['aria-label']));
-    assert.equal(Object.keys(ICONS).length, 9);
+    assert.equal(Object.keys(ICONS).length, 11);
+});
+
+test('right/wrong buttons exist only when the caller gives a feedback handle, show only while visible, say what happened, and call back with the mark', () => {
+    assert.equal(find(setup().tree, 'stme-music-feedback'), null, 'no handle — no row at all');
+
+    const marks = [];
+    const feedbackProps = { visible: signal(false), state: signal({ mark: null, status: 'idle' }), onMark: mark => marks.push(mark) };
+    const { tree } = setup({ feedbackProps });
+    const slot = tree.children.find(child => typeof child === 'function' && (read(child) === null || read(child)?.props?.class === 'stme-music-feedback'));
+    assert.ok(slot, 'the row lives in a reactive slot');
+    assert.equal(read(slot), null, 'hidden while no server track plays');
+
+    feedbackProps.visible.set(true);
+    const row = read(slot);
+    assert.equal(row.props.class, 'stme-music-feedback');
+    assert.equal(read(find(row, 'stme-music-feedback-label').children[0]), 'Is this the right music?');
+    const [up, down] = row.children.filter(child => child?.tag === 'button');
+    assert.equal(read(up.props['aria-label']), 'Right music for this scene');
+    assert.equal(read(down.props['aria-label']), 'Wrong music for this scene');
+    up.props['on:click'](); down.props['on:click']();
+    assert.deepEqual(marks, ['good', 'bad']);
+
+    feedbackProps.state.set({ mark: 'bad', status: 'sending' });
+    assert.equal(read(find(row, 'stme-music-feedback-label').children[0]), 'Sending…');
+    assert.equal(read(down.props['aria-pressed']), 'true');
+    assert.equal(read(up.props['aria-pressed']), 'false');
+    assert.equal(read(up.props.disabled), true, 'no double sending');
+    feedbackProps.state.set({ mark: 'bad', status: 'sent' });
+    assert.equal(read(find(row, 'stme-music-feedback-label').children[0]), 'Sent: wrong music for this scene');
+    assert.equal(read(up.props.disabled), false);
 });

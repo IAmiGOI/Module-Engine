@@ -23,7 +23,7 @@ const CONSOLE_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'co
 const DEFAULT_MAX_UPLOAD = 200 * 1024 * 1024;
 
 /** Лимиты по умолчанию: каталог 60 запросов/мин, аудио 90 запросов/мин (плеер на одну смену трека делает несколько Range-запросов) и 2 МБ/с на поток; на адрес. 0 — без ограничения. */
-export const DEFAULT_LIMITS = Object.freeze({ pickPerMinute: 60, catalogPerMinute: 60, audioPerMinute: 90, audioBytesPerSecond: 2 * 1024 * 1024 });
+export const DEFAULT_LIMITS = Object.freeze({ feedbackPerMinute: 20, pickPerMinute: 60, catalogPerMinute: 60, audioPerMinute: 90, audioBytesPerSecond: 2 * 1024 * 1024 });
 
 export async function createApp({ dir, embed, embedQuery = embed, adminToken, readKey = '', maxUpload = DEFAULT_MAX_UPLOAD, limits = DEFAULT_LIMITS, legacyCatalog = false }) {
     if (!adminToken) throw new Error('ADMIN_TOKEN обязателен: без него консоль была бы открыта всем');
@@ -38,6 +38,7 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
     }
 
     const catalogLimiter = limits.catalogPerMinute > 0 ? createRateLimiter({ perMinute: limits.catalogPerMinute }) : null;
+    const feedbackLimiter = (limits.feedbackPerMinute ?? DEFAULT_LIMITS.feedbackPerMinute) > 0 ? createRateLimiter({ perMinute: limits.feedbackPerMinute ?? DEFAULT_LIMITS.feedbackPerMinute }) : null;
     const pickLimiter = limits.pickPerMinute > 0 ? createRateLimiter({ perMinute: limits.pickPerMinute }) : null;
     const plays = new Map();   // сколько раз каждый трек выбирался (в памяти, до перезапуска): ротация внутри раздела
     const audioLimiter = limits.audioPerMinute > 0 ? createRateLimiter({ perMinute: limits.audioPerMinute }) : null;
@@ -133,6 +134,16 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
             return found ? sendJson(res, 200, { model: MODEL_ID, dim: DIM, ...found }) : sendJson(res, 404, { error: 'нет такого раздела' });
         }
 
+        if (method === 'POST' && parts[0] === 'api' && parts[1] === 'feedback' && parts.length === 2) {
+            // Отметка «верно/неверно» из ME: только в очередь на проверку (см. store.addFeedback), поэтому ключа чтения достаточно, а частота ограничена.
+            if (!readAllowed(url)) return sendJson(res, 401, { error: 'нет доступа' });
+            if (limited(req, res, feedbackLimiter)) return;
+            const body = await readJson(req, 64 * 1024);
+            if (body.model !== MODEL_ID) return sendJson(res, 200, { ok: false, reason: 'model mismatch' });
+            const queued = await store.addFeedback({ sectionId: String(body.section ?? ''), vector: body.vector, trackId: body.track, mark: body.mark, dim: DIM });
+            return sendJson(res, 200, { ok: true, ...queued });
+        }
+
         if (method === 'POST' && parts[0] === 'api' && parts[1] === 'pick') {
             if (!readAllowed(url)) return sendJson(res, 401, { error: 'нет доступа' });
             if (limited(req, res, pickLimiter)) return;
@@ -185,6 +196,10 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
                 if (method === 'POST' && !id) { const body = await readJson(req); return sendJson(res, 201, await store.addGroup({ sectionId: body.section, name: body.name, description: body.description, negative: body.negative })); }
                 if (method === 'PATCH' && id) return sendJson(res, 200, await store.updateGroup(id, await readJson(req)));
                 if (method === 'DELETE' && id) { await store.deleteGroup(id); return sendJson(res, 200, { ok: true }); }
+            }
+            if (what === 'feedback') {
+                if (method === 'POST' && id) { const body = await readJson(req, 16 * 1024); return sendJson(res, 200, await store.resolveFeedback(id, { group: body.group })); }
+                if (method === 'DELETE' && id) { await store.dismissFeedback(id); return sendJson(res, 200, { ok: true }); }
             }
             if (what === 'patterns') {
                 if (method === 'POST' && !id) { const body = await readJson(req, 64 * 1024); return sendJson(res, 201, await store.addPatternNode({ sectionId: body.section, parent: body.parent ?? null, kind: body.kind, ref: body.ref, name: body.name, description: body.description, negative: body.negative })); }

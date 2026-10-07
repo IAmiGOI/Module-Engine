@@ -118,7 +118,7 @@ function buildEngine({ chat = [], model = null, serverTracks = null } = {}) {
             'storage.settings.get', 'storage.settings.set', 'ui.notify',
             'chatHistory.messages', 'audio.put', 'audio.get', 'audio.delete',
             'audio.playback.play', 'audio.playback.pause', 'audio.playback.state', 'audio.playback.volume', 'audio.playback.seek', 'model.generate',
-            'embedding.compute', 'musicServer.sections', 'musicServer.section', 'musicServer.pick', 'classifier.decide',
+            'embedding.compute', 'musicServer.sections', 'musicServer.section', 'musicServer.pick', 'musicServer.feedback', 'classifier.decide',
         ],
     });
     const rawNotify = moduleHost.cores.subscribe.bind(moduleHost.cores);
@@ -728,4 +728,75 @@ test('the scene text is cleaned before it is embedded: participant names, emphas
     await module.onGenerationCompleted();
     assert.deepEqual(embeddedTexts, ['watched the fight in the rain', 'drew a blade, a brutal fight.']);
     assert.equal(module.nowPlaying.peek().similarity > 0.85, true, 'cleaning did not break matching');
+});
+
+test('right/wrong marks: the scene a server track STARTED on goes to the owner with the track — never the chat text — and the mark is shown as sent; a failure can be retried', async () => {
+    const sent = [];
+    let healthy = true;
+    const { module, engine } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], serverTracks: [] });
+    engine.buses.cores.register('musicServer.pick', () => ({ action: 'play', similarity: 0.9, track: { id: 'srv_fantasy_k1', rawId: 'k1', name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: 'https://music.example/audio/k1.mp3' } } }));
+    engine.buses.cores.register('musicServer.feedback', params => { sent.push(params); return { ok: healthy }; });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await module.chooseSection('fantasy');
+    await module.markTrack('good');
+    assert.equal(sent.length, 0, 'nothing is playing yet — nothing to mark');
+
+    await module.onGenerationCompleted();
+    await module.markTrack('bad');
+    assert.deepEqual(sent[0], { section: 'fantasy', vector: vec('fight'), track: 'k1', mark: 'bad' });
+    assert.equal(JSON.stringify(sent[0]).includes('Blades'), false);
+    assert.deepEqual(module.feedbackState.peek(), { mark: 'bad', status: 'sent' });
+
+    healthy = false;
+    await module.markTrack('good');
+    assert.deepEqual(module.feedbackState.peek(), { mark: 'good', status: 'failed' });
+    healthy = true;
+    await module.markTrack('good');
+    assert.deepEqual(module.feedbackState.peek(), { mark: 'good', status: 'sent' });
+});
+
+test('right/wrong marks: a new server track starts with a clean mark; playing one of your OWN tracks removes the buttons', async () => {
+    const { module, engine } = buildEngine({ chat: ['The heroes storm the docks at dawn.'], serverTracks: [] });
+    engine.buses.cores.register('musicServer.pick', () => ({ action: 'play', similarity: 0.9, track: { id: 'srv_fantasy_k1', rawId: 'k1', name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: 'https://music.example/audio/k1.mp3' } } }));
+    engine.buses.cores.register('musicServer.feedback', () => ({ ok: true }));
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    await module.chooseSection('fantasy');
+    await module.onGenerationCompleted();
+    await module.markTrack('good');
+    assert.equal(module.feedbackState.peek().status, 'sent');
+    await module.onGenerationCompleted();
+    await module.skip();
+    assert.deepEqual(module.feedbackState.peek(), { mark: null, status: 'idle' }, 'a new track — a fresh question');
+});
+
+test('right/wrong marks: a track started in advance (smooth switch) is marked with the scene it was picked on, and own tracks have no buttons', async () => {
+    const sent = [];
+    const { module, audio, engine } = buildEngine({ chat: ['Blades clash in the rain — a brutal fight erupts.'], serverTracks: [] });
+    let count = 0;
+    engine.buses.cores.register('musicServer.pick', () => {
+        count += 1;
+        return { action: 'play', similarity: 0.9, track: { id: `srv_fantasy_k${count}`, rawId: `k${count}`, name: '', vector: null, playCount: 0, server: true, source: { kind: 'url', ref: `https://music.example/audio/k${count}.mp3` } } };
+    });
+    engine.buses.cores.register('musicServer.feedback', params => { sent.push(params); return { ok: true }; });
+    await module.load();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(module.feedbackVisible.peek(), false, 'nothing from a server yet');
+    await module.chooseSection('fantasy');
+    await module.onGenerationCompleted();
+    assert.equal(module.feedbackVisible.peek(), true);
+    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+    audio.duration = 120; audio.time = 105; await wait(650);
+    audio.time = 117; await wait(650);
+    assert.equal(module.nowPlaying.peek().trackId, 'srv_fantasy_k2');
+    await module.markTrack('good');
+    assert.deepEqual(sent.at(-1), { section: 'fantasy', vector: vec('fight'), track: 'k2', mark: 'good' }, 'the second track, with ITS scene');
+
+    await module.importFiles([{ name: 'my own fight track.mp3', blob: new Blob(['a']) }]);
+    await module.playTrack(module.tracks.peek()[0]);
+    assert.equal(module.feedbackVisible.peek(), false, 'your own track has nothing to mark');
+    const before = sent.length;
+    await module.markTrack('bad');
+    assert.equal(sent.length, before, 'and nothing is sent');
 });
