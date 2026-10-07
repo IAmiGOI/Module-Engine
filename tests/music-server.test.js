@@ -8,6 +8,7 @@ import { MODEL_ID } from '../tools/music-server/embed.js';
 import { EMBEDDING_MODEL_ID } from '../libraries/core/embedding.js';
 import { createRateLimiter, clientAddress } from '../tools/music-server/rate-limit.js';
 import { parseSections, parseSectionTracks } from '../libraries/shared/music-catalog.js';
+import { uploadToPool, assign, addAssigned } from './music-kit.js';
 
 const DIM = 384;
 // Фейк эмбеддинга: детерминированный вектор из длины текста — реальная модель (~50 МБ) в тестах не нужна, проверяется сам сервер.
@@ -24,8 +25,15 @@ async function start({ readKey = '', maxUpload, limits } = {}) {
     return { base, admin, json, stop, dir };
 }
 
-const upload = (ctx, section, { title = 'Night camp', description = 'quiet night camp, acoustic guitar', ext = 'mp3', bytes = Buffer.from('0123456789') } = {}) =>
-    fetch(`${ctx.base}/api/admin/tracks?${new URLSearchParams({ section, title, description, ext })}`, { method: 'POST', headers: ctx.admin, body: bytes });
+// Трек грузится в пул и сразу назначается разделу (с тегом); отказ загрузки (не аудио, слишком большой) возвращается как есть.
+const upload = async (ctx, section, { title = 'Night camp', description = 'quiet night camp, acoustic guitar', ext = 'mp3', bytes = Buffer.from('0123456789') } = {}) => {
+    const up = await uploadToPool(ctx.base, ctx.admin, { title, ext, bytes });
+    if (up.status !== 201) return up;
+    const track = await up.json();
+    const made = await assign(ctx.base, ctx.admin, { track: track.id, section, description });
+    const body = await made.json();
+    return { status: made.status, json: async () => ({ ...track, ...body, id: track.id }) };
+};
 
 test('the model id and vector size match what ME computes with — otherwise vectors would not be comparable', () => {
     assert.equal(MODEL_ID, EMBEDDING_MODEL_ID);
@@ -80,7 +88,7 @@ test('a track with no tag is silent: absent from the public catalog and its audi
         assert.equal((await fetch(`${ctx.base}/audio/${track.id}.mp3`)).status, 404);
         assert.equal((await fetch(`${ctx.base}/audio/${track.id}.mp3`, { headers: ctx.admin })).status, 200);
 
-        const tagged = await ctx.json(`/api/admin/tracks/${track.id}`, { method: 'PATCH', body: { description: 'soft rain on a window' } });
+        const tagged = await ctx.json(`/api/admin/assignments/${track.assignment}`, { method: 'PATCH', body: { description: 'soft rain on a window' } });
         assert.equal(tagged.status, 200);
         assert.equal((await fetch(`${ctx.base}/audio/${track.id}.mp3`)).status, 200, 'writing the tag makes it playable');
     } finally { await ctx.stop(); }
@@ -102,7 +110,7 @@ test('Range requests work (seeking in <audio>), including suffix ranges and out-
     } finally { await ctx.stop(); }
 });
 
-test('editing a tag recomputes the vector; moving a track between sections works; deleting removes the file', async () => {
+test('editing a tag recomputes the vector; the same track can be assigned to another section with its own tag and taken out of the first; deleting from the pool removes the file', async () => {
     const ctx = await start();
     try {
         const a = await (await ctx.json('/api/admin/sections', { method: 'POST', body: { name: 'A' } })).json();
@@ -111,9 +119,16 @@ test('editing a tag recomputes the vector; moving a track between sections works
         const vectorOf = async section => (await (await fetch(`${ctx.base}/api/sections/${section}`)).json()).tracks[0]?.v.findIndex(x => x === 1);
         assert.equal(await vectorOf(a.id), 5);
 
-        await ctx.json(`/api/admin/tracks/${track.id}`, { method: 'PATCH', body: { description: 'a much longer tag text', section: b.id } });
-        assert.equal(await vectorOf(b.id), 22, 'new tag → new vector');
-        assert.equal((await (await fetch(`${ctx.base}/api/sections/${a.id}`)).json()).tracks?.length ?? 0, 0, 'moved out of A');
+        await ctx.json(`/api/admin/assignments/${track.assignment}`, { method: 'PATCH', body: { description: 'a much longer tag text' } });
+        assert.equal(await vectorOf(a.id), 22, 'new tag → new vector');
+
+        const second = await (await assign(ctx.base, ctx.admin, { track: track.id, section: b.id, description: 'tag for B' })).json();
+        assert.equal(await vectorOf(b.id), 9, 'the same track in another section has its OWN tag');
+        assert.equal(await vectorOf(a.id), 22, 'and the first section is untouched');
+        assert.equal((await ctx.json(`/api/admin/assignments/${track.assignment}`, { method: 'DELETE' })).status, 200);
+        assert.equal((await (await fetch(`${ctx.base}/api/sections/${a.id}`)).json()).tracks?.length ?? 0, 0, 'taken out of A');
+        assert.equal(await vectorOf(b.id), 9, 'still in B');
+        assert.ok(second.assignment);
 
         const file = path.join(ctx.dir, 'audio', `${track.id}.mp3`);
         await fs.access(file);
@@ -130,7 +145,6 @@ test('a non-empty section cannot be deleted; non-audio and oversized uploads are
         assert.equal((await ctx.json(`/api/admin/sections/${id}`, { method: 'DELETE' })).status, 409);
         assert.equal((await upload(ctx, id, { ext: 'exe' })).status, 400);
         assert.equal((await upload(ctx, id, { bytes: Buffer.alloc(64) })).status, 413);
-        assert.equal((await upload(ctx, 'no-such-section')).status, 404);
         assert.deepEqual(await fs.readdir(path.join(ctx.dir, 'tmp')), [], 'failed uploads clean their temp files');
         assert.equal((await fs.readdir(path.join(ctx.dir, 'audio'))).length, 1);
     } finally { await ctx.stop(); }
@@ -210,8 +224,12 @@ test('audio is sent no faster than the speed limit; the owner gets full speed', 
 // --- Разделы «по группам» ----------------------------------------------------------
 
 const post = (ctx, pathname, body, method = 'POST') => ctx.json(pathname, { method, body });
-const uploadTo = (ctx, section, group, { bytes = Buffer.from('abcdef') } = {}) =>
-    fetch(`${ctx.base}/api/admin/tracks?${new URLSearchParams({ section, ...(group ? { group } : {}), title: 'x', ext: 'mp3', description: 'own tag that a grouped track must ignore' })}`, { method: 'POST', headers: ctx.admin, body: bytes });
+// Трек в группу: в пул и назначение с группой (описание «своего» тега в групповом разделе игнорируется); без группы трек остаётся просто в пуле.
+const uploadTo = async (ctx, section, group, { bytes = Buffer.from('abcdef') } = {}) => {
+    if (!group) return uploadToPool(ctx.base, ctx.admin, { title: 'x', bytes });
+    const made = await addAssigned(ctx.base, ctx.admin, { section, group, title: 'x', description: 'own tag that a grouped track must ignore', bytes });
+    return { status: made.status, json: async () => made };
+};
 
 test('a group section serves one vector per GROUP and tracks only point at their group; the client parser expands it', async () => {
     const ctx = await start();
@@ -261,7 +279,7 @@ test('in a group section a track with no group, or in a group with no tag, stays
     } finally { await ctx.stop(); }
 });
 
-test('moving a track to another group works; moving it to another section drops the group; a non-empty group cannot be deleted', async () => {
+test('a track can be moved to another group of its section; a group of another section is refused; taking it out of its group leaves it in the pool and silent; a non-empty group cannot be deleted', async () => {
     const ctx = await start();
     try {
         const moods = await (await post(ctx, '/api/admin/sections', { name: 'Moods', mode: 'groups' })).json();
@@ -272,13 +290,15 @@ test('moving a track to another group works; moving it to another section drops 
         const track = await (await uploadTo(ctx, moods.id, g1.id)).json();
 
         assert.equal((await ctx.json(`/api/admin/groups/${g1.id}`, { method: 'DELETE' })).status, 409);
-        assert.equal((await post(ctx, `/api/admin/tracks/${track.id}`, { group: g2.id }, 'PATCH')).status, 200);
-        assert.equal((await post(ctx, `/api/admin/tracks/${track.id}`, { group: foreign.id }, 'PATCH')).status, 400, 'a group of another section is refused');
+        assert.equal((await post(ctx, `/api/admin/assignments/${track.assignment}`, { group: g2.id }, 'PATCH')).status, 200);
+        assert.equal((await post(ctx, `/api/admin/assignments/${track.assignment}`, { group: foreign.id }, 'PATCH')).status, 400, 'a group of another section is refused');
         assert.equal((await ctx.json(`/api/admin/groups/${g1.id}`, { method: 'DELETE' })).status, 200, 'now empty');
 
-        const moved = await (await post(ctx, `/api/admin/tracks/${track.id}`, { section: other.id }, 'PATCH')).json();
-        assert.equal(moved.group, null, 'the old group does not follow the track');
-        assert.equal((await (await fetch(`${ctx.base}/api/sections`)).json()).sections.length, 0, 'so it is silent until grouped again');
+        assert.equal((await ctx.json(`/api/admin/assignments/${track.assignment}`, { method: 'DELETE' })).status, 200);
+        assert.equal((await (await fetch(`${ctx.base}/api/sections`)).json()).sections.length, 0, 'out of its group the track is silent');
+        const pool = (await (await ctx.json('/api/admin/catalog')).json()).tracks;
+        assert.deepEqual(pool.map(item => item.id), [track.id], 'but it is still in the pool');
+        assert.equal((await post(ctx, '/api/admin/assignments', { track: track.id, section: other.id })).status, 400, 'a grouped section wants a group');
     } finally { await ctx.stop(); }
 });
 
@@ -326,7 +346,7 @@ test('by default the server hands out no vectors at all; ME sends the scene vect
     try {
         const section = await (await fetch(`${base}/api/admin/sections`, { method: 'POST', headers: admin, body: JSON.stringify({ name: 'Mood' }) })).json();
         const description = 'quiet night camp, acoustic guitar';
-        const made = await (await fetch(`${base}/api/admin/tracks?${new URLSearchParams({ section: section.id, ext: 'mp3', description })}`, { method: 'POST', headers: admin, body: Buffer.from('xx') })).json();
+        const made = await addAssigned(base, admin, { section: section.id, description, bytes: Buffer.from('xx') });
         assert.equal((await fetch(`${base}/api/sections/${section.id}`)).status, 404, 'vectors stay on the server');
         assert.equal((await fetch(`${base}/api/sections`)).status, 200, 'section names are still listed');
 

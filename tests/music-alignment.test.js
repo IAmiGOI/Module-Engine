@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { addAssigned } from './music-kit.js';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
@@ -135,7 +136,7 @@ test('the real pick shifts the scene vector by the section\'s alignment — stre
         const text = length => 'x'.repeat(length);
         const a = (await ctx.api('/api/admin/groups', 'POST', { section: section.id, name: 'A', description: text(10) })).body;
         const b = (await ctx.api('/api/admin/groups', 'POST', { section: section.id, name: 'B', description: text(20) })).body;
-        for (const group of [a, b]) await fetch(`${ctx.base}/api/admin/tracks?${new URLSearchParams({ section: section.id, group: group.id, title: group.name, ext: 'mp3' })}`, { method: 'POST', headers: { Authorization: 'Bearer owner-secret' }, body: Buffer.from('xx') });
+        for (const group of [a, b]) await addAssigned(ctx.base, { Authorization: 'Bearer owner-secret' }, { section: section.id, group: group.id, title: group.name, bytes: Buffer.from('xx') });
         await ctx.api('/api/admin/examples', 'POST', { section: section.id, group: a.id, texts: Array.from({ length: 12 }, (_, n) => `${text(30 + n)} scene`) });
         const pick = async () => (await (await fetch(`${ctx.base}/api/pick`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: MODEL_ID, section: section.id, vector: await fakeEmbed(text(10)), minSimilarity: 0 }) })).json());
         const aligned = await pick();
@@ -169,7 +170,7 @@ test('the test pick shifts the dictionary scenes together with the scene: the ra
         const groups = {};
         for (const [key, length] of Object.entries(lengths)) {
             groups[key] = (await ctx.api('/api/admin/groups', 'POST', { section: section.id, name: key, description: text(length) })).body;
-            await fetch(`${ctx.base}/api/admin/tracks?${new URLSearchParams({ section: section.id, group: groups[key].id, title: key, ext: 'mp3' })}`, { method: 'POST', headers: { Authorization: 'Bearer owner-secret' }, body: Buffer.from('xx') });
+            await addAssigned(ctx.base, { Authorization: 'Bearer owner-secret' }, { section: section.id, group: groups[key].id, title: key, bytes: Buffer.from('xx') });
         }
         const exampleLengths = { a: [41, 42, 43, 44], b: [51, 52, 53, 54], c: [61, 62, 63, 64] };
         for (const [key, list] of Object.entries(exampleLengths)) await ctx.api('/api/admin/examples', 'POST', { section: section.id, group: groups[key].id, texts: list.map(length => text(length)) });

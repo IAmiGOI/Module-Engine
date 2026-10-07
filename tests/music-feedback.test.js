@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { addAssigned } from './music-kit.js';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,7 +20,7 @@ async function start({ limits } = {}) {
     const admin = { Authorization: 'Bearer owner-secret', 'Content-Type': 'application/json' };
     const api = async (pathname, method, body) => { const response = await fetch(base + pathname, { method, headers: admin, body: body ? JSON.stringify(body) : undefined }); return { status: response.status, body: await response.json().catch(() => null) }; };
     const send = (body, { key = 'readers', model = MODEL_ID } = {}) => fetch(`${base}/api/feedback?k=${key}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, ...body }) });
-    const addTrack = (section, group, title) => fetch(`${base}/api/admin/tracks?${new URLSearchParams({ section, group, title, ext: 'mp3' })}`, { method: 'POST', headers: admin, body: Buffer.from(title) }).then(response => response.json());
+    const addTrack = (section, group, title) => addAssigned(base, admin, { section, group, title });
     const stop = async () => { app.closeAllConnections?.(); await new Promise(resolve => app.close(resolve)); await fs.rm(dir, { recursive: true, force: true }); };
     return { base, api, send, addTrack, stop };
 }
@@ -125,7 +126,7 @@ test('dismissing drops a mark without learning anything; a wrong group is refuse
         assert.equal((await ctx.api('/api/admin/catalog', 'GET')).body.feedback.length, 0, 'marks of a deleted track are gone');
 
         const flat = (await ctx.api('/api/admin/sections', 'POST', { name: 'Flat' })).body;
-        const track = await (await fetch(`${ctx.base}/api/admin/tracks?${new URLSearchParams({ section: flat.id, title: 'T', description: 'tagged track', ext: 'mp3' })}`, { method: 'POST', headers: { Authorization: 'Bearer owner-secret' }, body: Buffer.from('xx') })).json();
+        const track = await addAssigned(ctx.base, { Authorization: 'Bearer owner-secret', 'Content-Type': 'application/json' }, { section: flat.id, title: 'T', description: 'tagged track' });
         await ctx.send({ section: flat.id, vector: scene(32), track: track.id, mark: 'good' });
         const flatItem = (await ctx.api('/api/admin/catalog', 'GET')).body.feedback[0];
         assert.equal((await ctx.api(`/api/admin/feedback/${flatItem.id}`, 'POST', {})).status, 400);

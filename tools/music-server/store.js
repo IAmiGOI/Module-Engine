@@ -1,11 +1,11 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { estimateAlignment, ALIGN_DEFAULTS } from './alignment.js';
 import { cleanSceneText, guessNames, normalizeNames } from './scene-text.js';
 
 /**
- * Каталог сервера: разделы, группы и треки в одном `catalog.json`, аудио — файлами `audio/<id>.<ext>`. Запись атомарная (временный файл → rename), изменения идут
+ * Каталог сервера: пул треков, назначения «трек → раздел/группа», разделы и группы в одном `catalog.json`, аудио — файлами `audio/<id>.<ext>`. Запись атомарная (временный файл → rename), изменения идут
  * по одному в очереди: две правки одновременно не затрут друг друга. Теги пишет владелец; вектор считается из тега при загрузке и правке (`embed`).
  *
  * Два режима раздела (выбирает владелец, пользователь ME о них не знает):
@@ -34,7 +34,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
     const file = path.join(dir, 'catalog.json');
     const audioDir = path.join(dir, 'audio');
     await fs.mkdir(audioDir, { recursive: true });
-    let data = { sections: [], groups: [], tracks: [], examples: [], patterns: [], feedback: [] };
+    let data = { sections: [], groups: [], tracks: [], assignments: [], examples: [], patterns: [], feedback: [] };
     try { data = { ...data, ...JSON.parse(await fs.readFile(file, 'utf8')) }; } catch { /* первый запуск */ }
 
     let queue = Promise.resolve();
@@ -43,6 +43,23 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
     async function save() {
         await fs.writeFile(`${file}.tmp`, JSON.stringify(data));
         await fs.rename(`${file}.tmp`, file);
+    }
+
+
+    /**
+     * Старая схема: трек сам принадлежал одному разделу и одной группе (и нёс тег). Новая: треки лежат в общем ПУЛЕ (файл и название один раз), а раздел/группа/тег живут
+     * в НАЗНАЧЕНИИ «трек → раздел/группа». Один трек можно положить в несколько групп и разделов. Старый каталог переезжает один раз и без потерь: каждый трек становится
+     * записью пула и одним назначением с тем же разделом, группой и тегом; копия файла до переезда — `catalog.json.pre-pool`.
+     */
+    async function migrateToPool() {
+        const legacy = data.tracks.filter(item => item.section !== undefined);
+        if (!legacy.length) return;
+        await fs.copyFile(file, `${file}.pre-pool`, fsConstants.COPYFILE_EXCL).catch(() => {});
+        for (const item of legacy) {
+            data.assignments.push({ id: randomId(), track: item.id, section: item.section, group: item.group ?? null, description: item.description ?? '', vector: item.vector ?? null, negative: item.negative ?? '', negVector: item.negVector ?? null, intensity: item.intensity ?? null, createdAt: item.createdAt ?? Date.now() });
+            for (const key of ['section', 'group', 'description', 'vector', 'negative', 'negVector', 'intensity']) delete item[key];
+        }
+        await save();
     }
 
     const section = id => data.sections.find(item => item.id === id);
@@ -60,8 +77,14 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
         return found.id;
     }
 
-    /** Играющие треки раздела: в `tracks` — с вектором; в `groups` — из группы, у которой есть вектор. Остальные молчат. */
-    const playable = id => data.tracks.filter(item => item.section === id && (modeOf(id) === MODES.GROUPS ? Array.isArray(group(item.group)?.vector) : Array.isArray(item.vector)));
+    const assignment = id => data.assignments.find(item => item.id === id);
+    /** Назначение вместе с треком: `id` — трек, `assignment` — само назначение; раздел, группа и теги — из назначения. */
+    const rowOf = item => { const found = track(item.track); return found ? { ...item, id: item.track, assignment: item.id, ext: found.ext, title: found.title } : null; };
+    const rows = () => data.assignments.map(rowOf).filter(Boolean);
+    const rowsIn = sectionId => rows().filter(item => item.section === sectionId);
+
+    /** Играющие треки раздела: в `tracks` — с вектором назначения; в `groups` — из группы, у которой есть вектор. Остальные молчат. */
+    const playable = id => rowsIn(id).filter(item => (modeOf(id) === MODES.GROUPS ? Array.isArray(group(item.group)?.vector) : Array.isArray(item.vector)));
 
     /** Новый вектор для текстового поля (`description` → `vector`, `negative` → `negVector`); не пересчитывается, если текст не менялся. */
     async function reembed(item, textField, vectorField, value) {
@@ -96,7 +119,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
         }
         if (kind === 'track') {
             const found = track(ref);
-            if (!found || found.section !== sectionId) throw new HttpError(400, 'такого трека нет в этом разделе');
+            if (!found) throw new HttpError(400, 'такого трека нет в пуле');
             return found.id;
         }
         throw new HttpError(400, 'шаг — это группа или трек');
@@ -106,12 +129,14 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
     const sceneNames = (sectionId, extraTexts = [], given = []) => normalizeNames([...given, ...guessNames([...data.examples.filter(item => item.section === sectionId).map(item => item.text), ...extraTexts])]);
     const usedByPattern = (kind, id) => data.patterns.some(node => node.kind === kind && node.ref === id);
 
+    await migrateToPool();
+
     return {
         audioPath,
         track,
 
         /** Публичный каталог: только разделы, где есть хотя бы один играющий трек. Названий и текста тегов здесь нет. */
-        publicSections: () => data.sections.map(item => ({ id: item.id, name: item.name, tracks: playable(item.id).length })).filter(item => item.tracks > 0),
+        publicSections: () => data.sections.map(item => ({ id: item.id, name: item.name, tracks: new Set(playable(item.id).map(row => row.id)).size })).filter(item => item.tracks > 0),   // разные треки: один и тот же в двух группах — один
         publicSection: id => {
             const found = section(id);
             if (!found) return null;
@@ -129,10 +154,18 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
         pickItems: id => playable(id).map(item => itemFor(id, item)),
         /** Для проверки подбора в консоли: то же, что `pickItems`, плюс названия (их видит только владелец). */
         previewItems: id => playable(id).map(item => ({ ...itemFor(id, item), title: item.title, groupName: group(item.group)?.name ?? null })),
-        /** Играет ли трек (и значит, отдаётся ли его аудио чужим): в групповом разделе — если у его группы есть тег. */
-        isPlayable: id => { const item = track(id); return Boolean(item) && (playable(item.section).includes(item) || usedByPattern('track', item.id) || (item.group && usedByPattern('group', item.group))); },
-        /** Все треки раздела для шагов паттернов (тег у трека не обязателен: шаг сам решает, когда он играет). */
-        sectionTracks: id => data.tracks.filter(item => item.section === id).map(item => ({ id: item.id, ext: item.ext, group: item.group ?? null })),
+        /** Отдаётся ли аудио трека чужим: его играет хоть одно назначение (в групповом разделе у группы есть тег), либо он — шаг паттерна (сам или его группа). */
+        isPlayable: id => {
+            const found = track(id);
+            if (!found) return false;
+            if (usedByPattern('track', id)) return true;
+            return data.assignments.some(item => item.track === id && (playable(item.section).some(row => row.assignment === item.id) || (item.group && usedByPattern('group', item.group))));
+        },
+        /** Треки для шагов паттернов раздела: все треки пула (шаг-трек может быть любым) и их группы в этом разделе (для шагов-групп). Тег у трека не нужен: шаг сам решает, когда он играет. */
+        patternTracks: id => {
+            const inGroups = rowsIn(id).filter(item => item.group).map(item => ({ id: item.id, ext: item.ext, group: item.group }));
+            return [...inGroups, ...data.tracks.map(item => ({ id: item.id, ext: item.ext, group: null }))];
+        },
         hasSection: id => Boolean(section(id)),
 
         /** Всё для консоли владельца (с тегами, без векторов). */
@@ -263,7 +296,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             const found = section(id);
             if (!found) return null;
             const grouped = modeOf(id) === MODES.GROUPS;
-            const tagVectors = grouped ? data.groups.filter(item => item.section === id).map(item => item.vector) : data.tracks.filter(item => item.section === id).map(item => item.vector);
+            const tagVectors = grouped ? data.groups.filter(item => item.section === id).map(item => item.vector) : rowsIn(id).map(item => item.vector);
             return estimateAlignment({ sceneVectors: data.examples.filter(item => item.section === id).map(item => item.vector), tagVectors, strength: Number.isFinite(found.alignStrength) ? found.alignStrength : ALIGN_DEFAULTS.strength });
         },
         /** Сила выравнивания раздела (0 — выключено, 1 — полное; до 2). */
@@ -286,8 +319,8 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             needSection(sectionId);
             if (mark !== 'good' && mark !== 'bad') throw new HttpError(400, 'отметка — «верно» или «неверно»');
             if (!Array.isArray(vector) || vector.length !== dim || !vector.every(Number.isFinite)) throw new HttpError(400, 'нужен вектор сцены');
-            const played = track(String(trackId ?? ''));
-            if (!played || played.section !== sectionId) throw new HttpError(400, 'такого трека нет в этом разделе');
+            const played = rowsIn(sectionId).find(item => item.id === String(trackId ?? '')) ?? (track(String(trackId ?? '')) && data.patterns.some(node => node.section === sectionId && node.kind === 'track' && node.ref === String(trackId ?? '')) ? { id: String(trackId), group: null } : null);
+            if (!played) throw new HttpError(400, 'такого трека нет в этом разделе');
             const same = data.feedback.find(item => item.track === played.id && item.vector.every((x, i) => Math.abs(x - vector[i]) < 1e-6));
             if (same) { same.mark = mark; same.at = Date.now(); await save(); return { queued: data.feedback.length, updated: true }; }
             data.feedback.push({ id: randomId(), section: sectionId, track: played.id, group: played.group ?? null, mark, vector: vector.map(x => Math.round(x * ROUND_VECTOR) / ROUND_VECTOR), at: Date.now() });
@@ -318,7 +351,8 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             examples: data.examples.map(({ vector, ...rest }) => rest),
             sections: data.sections.map(item => ({ ...item, mode: cleanMode(item.mode) })),
             groups: data.groups.map(({ vector, negVector, ...rest }) => ({ ...rest, tagged: Array.isArray(vector) })),
-            tracks: data.tracks.map(({ vector, negVector, ...rest }) => ({ ...rest, tagged: Array.isArray(vector) })),
+            tracks: data.tracks.map(item => ({ ...item, assigned: data.assignments.filter(entry => entry.track === item.id).length })),
+            assignments: data.assignments.map(({ vector, negVector, ...rest }) => ({ ...rest, tagged: Array.isArray(vector) })),
         }),
 
         addSection: (name, mode) => exclusive(async () => {
@@ -373,9 +407,10 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
         /** Непустой раздел не удаляется: случайно потерять десятки размеченных треков слишком дорого. Пустые группы уходят вместе с ним. */
         deleteSection: id => exclusive(async () => {
             needSection(id);
-            if (data.tracks.some(item => item.section === id)) throw new HttpError(409, 'в разделе есть треки — сначала перенесите или удалите их');
+            if (data.assignments.some(item => item.section === id)) throw new HttpError(409, 'в разделе есть назначенные треки — сначала уберите их из раздела');
             data.sections = data.sections.filter(item => item.id !== id);
             data.patterns = data.patterns.filter(item => item.section !== id);
+            data.assignments = data.assignments.filter(item => item.section !== id);
             data.feedback = data.feedback.filter(item => item.section !== id);
             data.groups = data.groups.filter(item => item.section !== id);
             data.examples = data.examples.filter(item => item.section !== id);
@@ -405,48 +440,101 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
 
         deleteGroup: id => exclusive(async () => {
             group(id) ?? notFound('группы');
-            if (data.tracks.some(item => item.group === id)) throw new HttpError(409, 'в группе есть треки — сначала перенесите их');
+            if (data.assignments.some(item => item.group === id)) throw new HttpError(409, 'в группе есть треки — сначала уберите их из группы');
             if (usedByPattern('group', id)) throw new HttpError(409, 'группа используется в паттерне — сначала уберите её оттуда');
             data.groups = data.groups.filter(item => item.id !== id);
             data.examples = data.examples.filter(item => item.group !== id);   // эталоны уходят вместе с группой
             await save();
         }),
 
-        /** Новый трек: байты уже лежат во временном файле `tmpFile`. Без тега (режим `tracks`) или без группы (режим `groups`) трек молчит. */
-        addTrack: ({ sectionId, groupId, title, description, ext, tmpFile }) => exclusive(async () => {
-            needSection(sectionId);
+        /** Новый трек В ПУЛ: байты уже лежат во временном файле `tmpFile`. Раздел и группа назначаются отдельно (`addAssignment`): без назначения трек молчит. */
+        addTrack: ({ title, ext, tmpFile }) => exclusive(async () => {
             if (!AUDIO_EXT.test(ext)) throw new HttpError(400, 'нужен аудиофайл: mp3, ogg, m4a, flac, wav…');
-            const grouped = modeOf(sectionId) === MODES.GROUPS;
-            const text = grouped ? '' : String(description ?? '').trim();   // у трека в группе собственного тега нет
-            const item = { id: randomId(), section: sectionId, group: grouped ? checkGroup(sectionId, groupId) : null, ext: ext.toLowerCase(), title: String(title ?? '').trim() || 'Без названия', description: text, vector: text ? await embed(text) : null, createdAt: Date.now() };
+            const item = { id: randomId(), ext: ext.toLowerCase(), title: String(title ?? '').trim() || 'Без названия', createdAt: Date.now() };
             await fs.rename(tmpFile, audioPath(item));
             data.tracks.push(item);
             await save();
             return item;
         }),
 
+        /** Правка трека пула: пока только название (всё остальное — в назначениях). */
         updateTrack: (id, patch) => exclusive(async () => {
             const item = track(id) ?? notFound('трека');
-            if (patch.section !== undefined && patch.section !== item.section) {
-                if (usedByPattern('track', id)) throw new HttpError(409, 'трек используется в паттерне — сначала уберите его оттуда');
-                item.section = needSection(patch.section).id;
-                item.group = null;   // группа осталась в старом разделе
-            }
             if (patch.title !== undefined) item.title = String(patch.title).trim() || item.title;
-            if (patch.group !== undefined) item.group = modeOf(item.section) === MODES.GROUPS ? checkGroup(item.section, patch.group) : null;
-            if (patch.intensity !== undefined && modeOf(item.section) !== MODES.GROUPS) item.intensity = cleanIntensity(patch.intensity);
-            if (modeOf(item.section) !== MODES.GROUPS) {
+            await save();
+            return item;
+        }),
+
+        /**
+         * Назначение «трек → раздел/группа». В разделе «по группам» нужна группа этого раздела (тег — у группы), в разделе «по трекам» группы нет, а тег (`description`,
+         * `negative`, `intensity`) принадлежит назначению: один трек может быть в нескольких разделах с разными тегами. Повторное назначение той же пары ничего не меняет.
+         */
+        addAssignment: ({ trackId, sectionId, groupId = null, description = '', negative = '', intensity }) => exclusive(async () => {
+            track(trackId) ?? notFound('трека');
+            needSection(sectionId);
+            const grouped = modeOf(sectionId) === MODES.GROUPS;
+            const target = grouped ? checkGroup(sectionId, groupId) : null;
+            if (grouped && !target) throw new HttpError(400, 'в разделе «по группам» выберите группу');
+            const same = data.assignments.find(item => item.track === trackId && item.section === sectionId && (item.group ?? null) === target);
+            if (same) return { ...rowOf(same), existing: true };
+            const item = { id: randomId(), track: trackId, section: sectionId, group: target, description: '', vector: null, negative: '', negVector: null, intensity: grouped ? null : cleanIntensity(intensity), createdAt: Date.now() };
+            if (!grouped) { await reembed(item, 'description', 'vector', description); if (negative) await reembed(item, 'negative', 'negVector', negative); }
+            data.assignments.push(item);
+            await save();
+            return rowOf(item);
+        }),
+
+        /** Много треков сразу в одну группу/раздел; уже назначенные пропускаются. */
+        addAssignments: ({ trackIds, sectionId, groupId = null }) => exclusive(async () => {
+            needSection(sectionId);
+            const grouped = modeOf(sectionId) === MODES.GROUPS;
+            const target = grouped ? checkGroup(sectionId, groupId) : null;
+            if (grouped && !target) throw new HttpError(400, 'в разделе «по группам» выберите группу');
+            const ids = [...new Set(Array.isArray(trackIds) ? trackIds.map(String) : [])];
+            if (!ids.length || ids.length > 500) throw new HttpError(400, 'нужно от 1 до 500 треков');
+            if (ids.some(id => !track(id))) throw new HttpError(400, 'среди выбранных есть несуществующий трек');
+            let added = 0;
+            for (const id of ids) {
+                if (data.assignments.some(item => item.track === id && item.section === sectionId && (item.group ?? null) === target)) continue;
+                data.assignments.push({ id: randomId(), track: id, section: sectionId, group: target, description: '', vector: null, negative: '', negVector: null, intensity: null, createdAt: Date.now() });
+                added += 1;
+            }
+            if (added) await save();
+            return { added, skipped: ids.length - added };
+        }),
+
+        /** Правка назначения: перенос в другую группу своего раздела (`group`) и, в разделе «по трекам», теги и накал. */
+        updateAssignment: (id, patch) => exclusive(async () => {
+            const item = assignment(id) ?? notFound('назначения');
+            const grouped = modeOf(item.section) === MODES.GROUPS;
+            if (patch.group !== undefined) {
+                if (!grouped) throw new HttpError(400, 'группы есть только в разделе «по группам»');
+                const target = checkGroup(item.section, patch.group);
+                if (!target) throw new HttpError(400, 'выберите группу');
+                if (data.assignments.some(other => other !== item && other.track === item.track && other.section === item.section && other.group === target)) throw new HttpError(409, 'этот трек уже в той группе');
+                item.group = target;
+            }
+            if (!grouped) {
+                if (patch.intensity !== undefined) item.intensity = cleanIntensity(patch.intensity);
                 if (patch.description !== undefined) await reembed(item, 'description', 'vector', patch.description);
                 if (patch.negative !== undefined) await reembed(item, 'negative', 'negVector', patch.negative);
             }
             await save();
-            return item;
+            return rowOf(item);
+        }),
+
+        /** Убрать трек из раздела/группы: трек остаётся в пуле. */
+        deleteAssignment: id => exclusive(async () => {
+            assignment(id) ?? notFound('назначения');
+            data.assignments = data.assignments.filter(item => item.id !== id);
+            await save();
         }),
 
         deleteTrack: id => exclusive(async () => {
             const item = track(id) ?? notFound('трека');
             if (usedByPattern('track', id)) throw new HttpError(409, 'трек используется в паттерне — сначала уберите его оттуда');
             data.tracks = data.tracks.filter(other => other.id !== id);
+            data.assignments = data.assignments.filter(entry => entry.track !== id);
             data.feedback = data.feedback.filter(entry => entry.track !== id);
             await save();
             await fs.rm(audioPath(item), { force: true });

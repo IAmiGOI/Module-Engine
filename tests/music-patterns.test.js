@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { addAssigned } from './music-kit.js';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
@@ -109,7 +110,7 @@ async function start() {
     const api = async (pathname, method, body) => { const response = await fetch(base + pathname, { method, headers: admin, body: body ? JSON.stringify(body) : undefined }); return { status: response.status, body: await response.json().catch(() => null) }; };
     const pick = body => fetch(`${base}/api/pick?k=readers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: MODEL_ID, minSimilarity: 0.2, switchMargin: 0.05, elapsed: 500, remaining: 5, ...body }) }).then(response => response.json());
     const stop = async () => { app.closeAllConnections?.(); await new Promise(resolve => app.close(resolve)); await fs.rm(dir, { recursive: true, force: true }); };
-    const addTrack = (section, group, title) => fetch(`${base}/api/admin/tracks?${new URLSearchParams({ section, group, title, ext: 'mp3' })}`, { method: 'POST', headers: admin, body: Buffer.from(title) }).then(response => response.json());
+    const addTrack = (section, group, title) => addAssigned(base, admin, { section, group, title });
     return { base, api, pick, stop, addTrack };
 }
 

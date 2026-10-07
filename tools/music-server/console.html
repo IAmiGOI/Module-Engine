@@ -75,6 +75,15 @@
     </aside>
     <section class="card">
         <div id="empty" class="dim">Создайте раздел слева.</div>
+        <div id="poolPanel" hidden>
+            <h3 style="margin-top:0">Библиотека треков</h3>
+            <p class="dim">Все треки хранятся здесь один раз и лишь назначаются разделам и группам: один и тот же трек можно положить в несколько мест, файл при этом не дублируется. Трек без назначения молчит (его можно только прослушать здесь), а шагом паттерна может быть любой трек библиотеки.</p>
+            <div class="drop" id="poolDrop">Перетащите аудиофайлы сюда или <input type="file" id="poolFiles" accept="audio/*" multiple></div>
+            <div class="row"><input id="poolSearch" class="grow" placeholder="Поиск по названию…"><select id="poolFilter"><option value="all">Все</option><option value="free">Без назначения</option><option value="used">Назначенные</option></select></div>
+            <div id="poolBulk" class="pwizard" hidden></div>
+            <div id="poolProgress" class="dim"></div>
+            <div id="poolList"></div>
+        </div>
         <div id="panel" hidden>
             <div class="row"><input id="sectionName" class="grow"><button id="renameSection">Переименовать</button><button class="danger" id="deleteSection">Удалить раздел</button></div>
             <p class="dim" id="modeHint"></p>
@@ -120,10 +129,21 @@
                 <div class="row"><button class="primary" id="patternTest">Проверить на схеме</button></div>
                 <div id="patternTestResult"></div>
             </details>
-            <div class="drop" id="drop">Перетащите аудиофайлы сюда или <input type="file" id="files" accept="audio/*" multiple></div>
-            <textarea id="uploadTag" placeholder="Тег для загружаемых файлов (необязательно — можно вписать потом у каждого трека). Например: тихий ночной лагерь, акустическая гитара, грусть и покой"></textarea>
+            <div id="flatBox" hidden>
+                <h3>Треки раздела</h3>
+                <p class="dim">Тег принадлежит назначению: один и тот же трек в другом разделе может иметь другой тег. Трек играет, только когда у него есть тег.</p>
+                <div class="drop" id="drop">Перетащите аудиофайлы сюда (они попадут в библиотеку и в этот раздел) или <input type="file" id="files" accept="audio/*" multiple></div>
+                <textarea id="uploadTag" placeholder="Тег для загружаемых файлов (необязательно — можно вписать потом у каждого трека). Например: тихий ночной лагерь, акустическая гитара, грусть и покой"></textarea>
+                <div class="row" style="margin:8px 0"><button class="small" id="pickFromPool">＋ Из библиотеки…</button></div>
+                <div id="tracks"></div>
+            </div>
             <div id="progress" class="dim"></div>
-            <div id="tracks"></div>
+            <div id="poolPick" class="pwizard" hidden>
+                <div id="poolPickTitle" style="font-weight:600;margin-bottom:6px"></div>
+                <input id="poolPickSearch" placeholder="Найти трек в библиотеке…" style="width:100%;margin-bottom:6px">
+                <div id="poolPickList" style="max-height:260px;overflow:auto"></div>
+                <div class="row" style="margin-top:8px"><button class="primary" id="poolPickOk">Назначить выбранные</button><button id="poolPickCancel">Отмена</button><span class="dim" id="poolPickState"></span></div>
+            </div>
             <h3>Проверка подбора</h3>
             <p class="dim">Вставьте одно или несколько сообщений чата (каждое с новой строки через пустую строку) — сервер покажет, что включил бы для такой сцены в этом разделе. Счётчики проигрываний не меняются.</p>
             <textarea id="testText" placeholder="Сообщение 1&#10;&#10;Сообщение 2"></textarea>
@@ -137,6 +157,7 @@ const $ = id => document.getElementById(id);
 let token = localStorage.getItem('musicToken') || '';
 let catalog = { sections: [], tracks: [] };
 let current = '';
+const POOL = '*pool*';   // вместо раздела: окно библиотеки
 
 async function api(path, { method = 'GET', body } = {}) {
     const response = await fetch(path, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -151,40 +172,48 @@ const el = (tag, props = {}, ...kids) => { const node = Object.assign(document.c
 function logout() { localStorage.removeItem('musicToken'); token = ''; $('app').hidden = true; $('login').hidden = false; }
 async function load() {
     catalog = await api('/api/admin/catalog');
-    if (!catalog.sections.some(item => item.id === current)) current = catalog.sections[0]?.id || '';
+    if (current !== POOL && !catalog.sections.some(item => item.id === current)) current = catalog.sections[0]?.id || '';
     render();
 }
 
+const assignmentsOf = trackId => (catalog.assignments || []).filter(item => item.track === trackId);
+const trackById = id => (catalog.tracks || []).find(item => item.id === id);
+const distinctTracksIn = sectionId => new Set((catalog.assignments || []).filter(item => item.section === sectionId).map(item => item.track)).size;
+const placeName = item => { const section = catalog.sections.find(entry => entry.id === item.section); const group = item.group ? catalog.groups.find(entry => entry.id === item.group) : null; return `${section ? section.name : '?'}${group ? ` · ${group.name}` : ''}`; };
+
 function render() {
-    $('sectionList').replaceChildren(...catalog.sections.map(section => {
-        const count = catalog.tracks.filter(track => track.section === section.id).length;
-        const button = el('button', { className: `item${section.id === current ? ' active' : ''}` }, el('span', {}, section.name), el('span', { className: 'dim' }, String(count)));
+    const library = el('button', { className: `item${current === POOL ? ' active' : ''}` }, el('span', {}, '📚 Библиотека'), el('span', { className: 'dim' }, String((catalog.tracks || []).length)));
+    library.onclick = () => { current = POOL; render(); };
+    $('sectionList').replaceChildren(library, ...catalog.sections.map(section => {
+        const button = el('button', { className: `item${section.id === current ? ' active' : ''}` }, el('span', {}, section.name), el('span', { className: 'dim' }, String(distinctTracksIn(section.id))));
         button.onclick = () => { current = section.id; render(); };
         return button;
     }));
+    $('poolPanel').hidden = current !== POOL;
+    if (current === POOL) { $('empty').hidden = true; $('panel').hidden = true; renderPool(); return; }
     const section = catalog.sections.find(item => item.id === current);
     $('empty').hidden = Boolean(section); $('panel').hidden = !section;
     if (!section) return;
     $('sectionName').value = section.name;
     const grouped = section.mode === 'groups';
     $('modeHint').textContent = grouped
-        ? 'Режим «по группам»: тег есть у группы, а не у трека. ME выбирает группу по сцене, а трек внутри неё — по очереди. Трек без группы не играет.'
+        ? 'Режим «по группам»: тег есть у группы, а не у трека. ME выбирает группу по сцене, а трек внутри неё — по очереди. Треки добавляются в группы из библиотеки (или загрузкой прямо в группу).'
         : 'Режим «каждый трек со своим тегом». Раздел увидят пользователи ME в выпадающем списке. Трек играет, только когда у него есть тег.';
     $('groupsBox').hidden = !grouped;
-    $('uploadTag').hidden = grouped;
-    $('drop').hidden = grouped;   // в групповом разделе у каждой группы своя кнопка загрузки
+    $('flatBox').hidden = grouped;
+    $('poolPick').hidden = true;
     if (grouped) {
         const groups = catalog.groups.filter(group => group.section === current);
         $('groups').replaceChildren(...(groups.length ? groups.map(groupRow) : [el('p', { className: 'dim' }, 'Групп пока нет — добавьте первую.')]));
         renderGraph();
         renderAlign();
+    } else {
+        const rows = (catalog.assignments || []).filter(item => item.section === current).sort((a, b) => b.createdAt - a.createdAt);
+        $('tracks').replaceChildren(...(rows.length ? rows.map(flatRow) : [el('p', { className: 'dim' }, 'В разделе пока нет треков: загрузите файлы или добавьте из библиотеки.')]));
     }
     renderPatterns();
     renderWizard();
     renderFeedback();
-    // В групповом разделе треки лежат внутри своих групп; здесь остаются только те, что ни в одной группе (они не играют).
-    const tracks = catalog.tracks.filter(track => track.section === current && (!grouped || !track.group)).sort((a, b) => b.createdAt - a.createdAt);
-    $('tracks').replaceChildren(...(grouped && tracks.length ? [el('h3', {}, 'Без группы — не играют')] : []), ...(tracks.length ? tracks.map(trackRow) : (grouped ? [] : [el('p', { className: 'dim' }, 'В разделе пока нет треков.')])));
 }
 
 
@@ -200,7 +229,7 @@ const shorten = (text, n) => (String(text).length > n ? `${String(text).slice(0,
 
 function stepChoices(section) {
     const groups = section.mode === 'groups' ? catalog.groups.filter(group => group.section === section.id).map(group => ({ value: `group:${group.id}`, label: group.name, kind: 'группа', hue: hueOf(group.id) })) : [];
-    const tracks = catalog.tracks.filter(track => track.section === section.id).map(track => ({ value: `track:${track.id}`, label: track.title, kind: 'трек', hue: hueOf(track.group || track.id) }));
+    const tracks = (catalog.tracks || []).map(track => ({ value: `track:${track.id}`, label: track.title, kind: 'трек', hue: hueOf(track.id) }));
     return [...groups, ...tracks];
 }
 const choiceOf = (choices, node) => choices.find(choice => choice.value === `${node.kind}:${node.ref}`) || null;
@@ -484,7 +513,8 @@ function examplesBlock(group) {
 }
 
 function groupRow(group) {
-    const count = catalog.tracks.filter(track => track.group === group.id).length;
+    const memberRows = (catalog.assignments || []).filter(item => item.group === group.id).sort((a, b) => b.createdAt - a.createdAt);
+    const count = memberRows.length;
     const name = el('input', { className: 'grow', value: group.name });
     const tag = el('textarea', { value: group.description, placeholder: 'Тег ГРУППЫ: какие сцены и настроение. Например: нежный романтичный вечер, медленный темп, пианино' });
     const level = intensitySelect(group.intensity);
@@ -495,67 +525,159 @@ function groupRow(group) {
         try { await api(`/api/admin/groups/${group.id}`, { method: 'PATCH', body: { name: name.value, description: tag.value, negative: negative.value, intensity: level.value } }); await load(); } catch (error) { fail(error); save.disabled = false; save.textContent = 'Сохранить'; }
     };
     const pick = el('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true });
-    pick.onchange = () => { upload(pick.files, group.id); pick.value = ''; };
-    const add = el('button', { className: 'small', title: 'Загрузить треки в эту группу (или перетащите файлы на карточку)' }, '＋ Треки');
+    pick.onchange = () => { uploadFiles(pick.files, { section: current, group: group.id }); pick.value = ''; };
+    const add = el('button', { className: 'small', title: 'Загрузить файлы: они попадут в библиотеку и в эту группу (или перетащите файлы на карточку)' }, '＋ Загрузить');
     add.onclick = () => pick.click();
+    const fromPool = el('button', { className: 'small', title: 'Назначить этой группе треки, которые уже есть в библиотеке' }, '＋ Из библиотеки…');
+    fromPool.onclick = () => openPoolPick({ section: current, group: group.id, title: `В группу «${group.name}»` });
     const del = el('button', { className: 'danger' }, 'Удалить');
     del.onclick = async () => { if (confirm(`Удалить группу «${group.name}»?`)) { try { await api(`/api/admin/groups/${group.id}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } } };
-    const members = catalog.tracks.filter(track => track.group === group.id).sort((a, b) => b.createdAt - a.createdAt);
+    const members = memberRows;
     const card = el('div', { className: 'group' }, el('div', { className: 'head' }, name, el('span', { className: 'pill' }, `${count} треков`), el('span', { className: `pill ${group.tagged ? 'state-ok' : 'state-warn'}` }, group.tagged ? 'тег задан' : 'нет тега — молчит')), tag, negative, level, examplesBlock(group),
-        el('div', { className: 'row' }, add, pick, el('span', { className: 'grow' }), save, del),
-        el('div', { className: 'members' }, ...(members.length ? members.map(trackRow) : [el('p', { className: 'dim' }, 'В группе пока нет треков — загрузите их выше, выбрав эту группу.')])));
+        el('div', { className: 'row' }, add, fromPool, pick, el('span', { className: 'grow' }), save, del),
+        el('div', { className: 'members' }, ...(members.length ? members.map(memberRow) : [el('p', { className: 'dim' }, 'В группе пока нет треков — загрузите файлы или добавьте из библиотеки.')])));
     card.ondragover = event => { event.preventDefault(); card.classList.add('over'); };
     card.ondragleave = () => card.classList.remove('over');
-    card.ondrop = event => { event.preventDefault(); card.classList.remove('over'); upload(event.dataTransfer.files, group.id); };
+    card.ondrop = event => { event.preventDefault(); card.classList.remove('over'); uploadFiles(event.dataTransfer.files, { section: current, group: group.id }); };
     card.style.setProperty('--hue', String([...group.id].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 7)));
     return card;
 }
 
-function trackRow(track) {
-    const title = el('input', { className: 'grow', value: track.title });
-    const section = catalog.sections.find(item => item.id === track.section);
-    const grouped = section?.mode === 'groups';
-    const tag = el('textarea', { value: track.description, placeholder: 'Тег: настроение, темп, звучание, к какой сцене подходит' });
-    const groupSelect = el('select', {}, el('option', { value: '' }, '— без группы'), ...catalog.groups.filter(group => group.section === track.section).map(group => el('option', { value: group.id, selected: group.id === track.group }, group.name)));
-    const trackLevel = intensitySelect(track.intensity);
-    const negTrack = el('textarea', { value: track.negative || '', placeholder: 'Когда НЕ включать — опишите нежелательные сцены БЕЗ отрицаний («не», «нет»): комедия, перепалка, шутки, дневной свет' });
-    const move = el('select', {}, ...catalog.sections.map(section => el('option', { value: section.id, selected: section.id === track.section }, section.name)));
-    const playable = grouped ? catalog.groups.some(group => group.id === track.group && group.tagged) : track.tagged;
-    const status = el('span', { className: playable ? 'ok' : 'warn' }, playable ? (grouped ? 'играет в группе' : 'играет по тегу') : (grouped ? 'нет группы с тегом — не играет' : 'нет тега — не играет'));
-    const save = el('button', { className: 'primary' }, 'Сохранить');
-    save.onclick = async () => {
-        save.disabled = true; save.textContent = 'Считаю вектор…';
-        try { await api(`/api/admin/tracks/${track.id}`, { method: 'PATCH', body: { title: title.value, ...(grouped ? { group: groupSelect.value } : { description: tag.value, negative: negTrack.value, intensity: trackLevel.value }), section: move.value } }); await load(); } catch (error) { fail(error); save.disabled = false; save.textContent = 'Сохранить'; }
-    };
-    const del = el('button', { className: 'danger' }, 'Удалить');
-    del.onclick = async () => { if (confirm(`Удалить «${track.title}»?`)) { try { await api(`/api/admin/tracks/${track.id}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } } };
-    const listen = el('button', {}, '▶');
+/** Кнопка ▶: <audio> не умеет Authorization, поэтому файл тянется с токеном и играет из памяти. */
+function listenButton(track) {
+    const listen = el('button', { className: 'small' }, '▶');
     let audio = null;
-    listen.onclick = async () => {   // <audio> не умеет Authorization — тянем файл с токеном и играем из памяти
+    listen.onclick = async () => {
         if (audio) { audio.pause(); audio = null; listen.textContent = '▶'; return; }
         const response = await fetch(`/audio/${track.id}.${track.ext}`, { headers: { Authorization: `Bearer ${token}` } });
         if (!response.ok) return fail('не удалось загрузить аудио');
         audio = new Audio(URL.createObjectURL(await response.blob())); audio.onended = () => { audio = null; listen.textContent = '▶'; };
         audio.play(); listen.textContent = '■';
     };
-    return el('div', { className: 'track' }, el('div', { className: 'row' }, listen, title, move, ...(grouped ? [groupSelect] : [])), ...(grouped ? [] : [tag, negTrack, trackLevel]), el('div', { className: 'row' }, status, el('span', { className: 'grow' }), save, del));
+    return listen;
+}
+const done = async work => { try { await work(); await load(); } catch (error) { fail(error); } };
+
+/** Трек внутри группы: слушать, перенести в другую группу раздела, убрать из группы (в библиотеке он остаётся). */
+function memberRow(item) {
+    const track = trackById(item.track) || { id: item.track, title: '(трек удалён)', ext: 'mp3' };
+    const groups = catalog.groups.filter(group => group.section === item.section);
+    const move = el('select', { title: 'Перенести в другую группу' }, ...groups.map(group => el('option', { value: group.id, selected: group.id === item.group }, group.name)));
+    move.onchange = () => done(() => api(`/api/admin/assignments/${item.id}`, { method: 'PATCH', body: { group: move.value } }));
+    const remove = el('button', { className: 'small', title: 'Убрать из группы (в библиотеке трек останется)' }, '✕ убрать');
+    remove.onclick = () => done(() => api(`/api/admin/assignments/${item.id}`, { method: 'DELETE' }));
+    const others = assignmentsOf(item.track).length - 1;
+    return el('div', { className: 'track' }, el('div', { className: 'row' }, listenButton(track), el('span', { className: 'grow' }, track.title, others > 0 ? el('span', { className: 'dim' }, `  · ещё в ${others} ${others === 1 ? 'месте' : 'местах'}`) : ''), move, remove));
 }
 
-async function upload(files, groupId = '') {
-    const tag = $('uploadTag').value.trim();
+/** Трек раздела «по трекам»: тег, «когда не включать» и накал принадлежат назначению. */
+function flatRow(item) {
+    const track = trackById(item.track) || { id: item.track, title: '(трек удалён)', ext: 'mp3' };
+    const tag = el('textarea', { value: item.description || '', placeholder: 'Тег: настроение, темп, звучание, к какой сцене подходит' });
+    const negative = el('textarea', { value: item.negative || '', placeholder: 'Когда НЕ включать — опишите нежелательные сцены БЕЗ отрицаний («не», «нет»): комедия, перепалка, шутки, дневной свет' });
+    const level = intensitySelect(item.intensity);
+    const status = el('span', { className: item.tagged ? 'ok' : 'warn' }, item.tagged ? 'играет по тегу' : 'нет тега — не играет');
+    const save = el('button', { className: 'primary' }, 'Сохранить');
+    save.onclick = async () => {
+        save.disabled = true; save.textContent = 'Считаю вектор…';
+        try { await api(`/api/admin/assignments/${item.id}`, { method: 'PATCH', body: { description: tag.value, negative: negative.value, intensity: level.value } }); await load(); } catch (error) { fail(error); save.disabled = false; save.textContent = 'Сохранить'; }
+    };
+    const remove = el('button', { className: 'danger', title: 'Убрать из раздела (в библиотеке трек останется)' }, 'Убрать из раздела');
+    remove.onclick = () => done(() => api(`/api/admin/assignments/${item.id}`, { method: 'DELETE' }));
+    return el('div', { className: 'track' }, el('div', { className: 'row' }, listenButton(track), el('span', { className: 'grow' }, track.title)), tag, negative, level, el('div', { className: 'row' }, status, el('span', { className: 'grow' }), save, remove));
+}
+
+/** Загрузка: файл идёт в ПУЛ; если задана цель (раздел и, в групповом разделе, группа), он сразу и назначается ей. */
+async function uploadFiles(files, target = null, progress = $('progress')) {
+    const tag = target && !target.group ? $('uploadTag').value.trim() : '';
     for (const [index, file] of [...files].entries()) {
-        $('progress').textContent = `Загрузка ${index + 1}/${files.length}: ${file.name}`;
+        progress.textContent = `Загрузка ${index + 1}/${files.length}: ${file.name}`;
         const ext = (file.name.match(/\.([a-z0-9]+)$/i) || [])[1] || '';
         const title = file.name.replace(/\.[^.]+$/, '');
-        const query = new URLSearchParams({ section: current, title, ext, description: tag, group: groupId });
         try {
-            const response = await fetch(`/api/admin/tracks?${query}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: file });
-            if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `ошибка ${response.status}`);
+            const response = await fetch(`/api/admin/tracks?${new URLSearchParams({ title, ext })}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: file });
+            const made = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(made.error || `ошибка ${response.status}`);
+            if (target) await api('/api/admin/assignments', { method: 'POST', body: { track: made.id, section: target.section, group: target.group || null, description: tag } });
         } catch (error) { fail(`${file.name}: ${error.message}`); }
     }
-    $('progress').textContent = '';
+    progress.textContent = '';
     await load();
 }
+
+/** Выбор треков библиотеки для назначения группе (или разделу «по трекам»): поиск, галочки, одним запросом. */
+let pickTarget = null;
+function openPoolPick(target) {
+    pickTarget = target;
+    $('poolPickTitle').textContent = target.title;
+    $('poolPickSearch').value = '';
+    $('poolPickState').textContent = '';
+    $('poolPick').hidden = false;
+    drawPoolPick();
+    $('poolPick').scrollIntoView({ block: 'nearest' });
+}
+function drawPoolPick() {
+    const query = $('poolPickSearch').value.trim().toLowerCase();
+    const placed = new Set((catalog.assignments || []).filter(item => item.section === pickTarget.section && (item.group || null) === (pickTarget.group || null)).map(item => item.track));
+    const free = (catalog.tracks || []).filter(track => !placed.has(track.id) && (!query || track.title.toLowerCase().includes(query)));
+    $('poolPickList').replaceChildren(...(free.length ? free.map(track => el('label', { className: 'row', style: 'padding:3px 0;cursor:pointer' }, el('input', { type: 'checkbox', value: track.id }), el('span', { className: 'grow' }, track.title), el('span', { className: 'dim' }, track.assigned ? `в ${track.assigned} ${track.assigned === 1 ? 'месте' : 'местах'}` : 'без назначения'))) : [el('p', { className: 'dim' }, 'Подходящих треков нет: все уже здесь или библиотека пуста.')]));
+}
+$('poolPickSearch').oninput = () => drawPoolPick();
+$('poolPickCancel').onclick = () => { $('poolPick').hidden = true; };
+$('poolPickOk').onclick = async () => {
+    const ids = [...$('poolPickList').querySelectorAll('input:checked')].map(input => input.value);
+    if (!ids.length) { $('poolPickState').textContent = 'Отметьте хотя бы один трек.'; return; }
+    try {
+        const result = await api('/api/admin/assignments/bulk', { method: 'POST', body: { tracks: ids, section: pickTarget.section, group: pickTarget.group || null } });
+        $('poolPick').hidden = true; await load(); $('progress').textContent = `Назначено: ${result.added}${result.skipped ? `, уже были: ${result.skipped}` : ''}`;
+    } catch (error) { fail(error); }
+};
+$('pickFromPool').onclick = () => openPoolPick({ section: current, group: null, title: 'В этот раздел' });
+
+/** Библиотека: все треки пула, где каждый назначен, массовое назначение, переименование, удаление. */
+const poolSelected = new Set();
+function renderPool() {
+    const query = $('poolSearch').value.trim().toLowerCase(), filter = $('poolFilter').value;
+    const all = (catalog.tracks || []).slice().sort((a, b) => b.createdAt - a.createdAt);
+    for (const id of [...poolSelected]) if (!trackById(id)) poolSelected.delete(id);
+    const shown = all.filter(track => (!query || track.title.toLowerCase().includes(query)) && (filter === 'all' || (filter === 'free' ? !track.assigned : track.assigned > 0)));
+    $('poolList').replaceChildren(...(shown.length ? shown.map(track => {
+        const check = el('input', { type: 'checkbox', checked: poolSelected.has(track.id) });
+        check.onchange = () => { if (check.checked) poolSelected.add(track.id); else poolSelected.delete(track.id); renderPoolBulk(); };
+        const title = el('input', { className: 'grow', value: track.title });
+        title.onchange = () => done(() => api(`/api/admin/tracks/${track.id}`, { method: 'PATCH', body: { title: title.value } }));
+        const places = assignmentsOf(track.id);
+        const chips = places.length ? places.map(item => {
+            const chip = el('span', { className: 'pill', style: 'cursor:pointer', title: 'Убрать из этого места' }, `${placeName(item)} ✕`);
+            chip.onclick = () => done(() => api(`/api/admin/assignments/${item.id}`, { method: 'DELETE' }));
+            return chip;
+        }) : [el('span', { className: 'pill state-warn' }, 'не назначен — молчит')];
+        const del = el('button', { className: 'danger small' }, 'Удалить');
+        del.onclick = () => { if (confirm(`Удалить «${track.title}» из библиотеки${places.length ? ` и из ${places.length} мест` : ''}?`)) done(() => api(`/api/admin/tracks/${track.id}`, { method: 'DELETE' })); };
+        return el('div', { className: 'track' }, el('div', { className: 'row' }, check, listenButton(track), title, del), el('div', { className: 'row' }, ...chips));
+    }) : [el('p', { className: 'dim' }, all.length ? 'Ничего не найдено.' : 'Библиотека пуста: загрузите файлы выше.')]));
+    renderPoolBulk();
+}
+function renderPoolBulk() {
+    const box = $('poolBulk');
+    box.hidden = !poolSelected.size;
+    if (!poolSelected.size) return;
+    const section = el('select', {}, ...catalog.sections.map(item => el('option', { value: item.id }, item.name)));
+    const group = el('select', {});
+    const fill = () => { const chosen = catalog.sections.find(item => item.id === section.value); group.replaceChildren(...(chosen && chosen.mode === 'groups' ? catalog.groups.filter(entry => entry.section === chosen.id).map(entry => el('option', { value: entry.id }, entry.name)) : [])); group.hidden = !group.options.length; };
+    section.onchange = fill; fill();
+    const go = el('button', { className: 'primary' }, 'Назначить');
+    go.onclick = () => done(async () => { const result = await api('/api/admin/assignments/bulk', { method: 'POST', body: { tracks: [...poolSelected], section: section.value, group: group.hidden ? null : group.value } }); $('poolProgress').textContent = `Назначено: ${result.added}${result.skipped ? `, уже были: ${result.skipped}` : ''}`; poolSelected.clear(); });
+    const clear = el('button', {}, 'Снять выбор');
+    clear.onclick = () => { poolSelected.clear(); renderPool(); };
+    box.replaceChildren(el('div', { className: 'row' }, el('span', {}, `Выбрано: ${poolSelected.size}. Назначить в:`), section, group, go, clear));
+}
+$('poolSearch').oninput = () => renderPool();
+$('poolFilter').onchange = () => renderPool();
+$('poolFiles').onchange = event => { uploadFiles(event.target.files, null, $('poolProgress')); event.target.value = ''; };
+$('poolDrop').ondragover = event => { event.preventDefault(); $('poolDrop').classList.add('over'); };
+$('poolDrop').ondragleave = () => $('poolDrop').classList.remove('over');
+$('poolDrop').ondrop = event => { event.preventDefault(); $('poolDrop').classList.remove('over'); uploadFiles(event.dataTransfer.files, null, $('poolProgress')); };
 
 /** Граф переходов: SVG-холст. Данные — `section.graph { nodes: {id: {x,y,sharp}}, edges: [[a,b]] }`; любое изменение сразу сохраняется. */
 let graphSelected = '';
@@ -642,10 +764,10 @@ $('runTest').onclick = async () => {
 $('addGroup').onclick = async () => { const name = $('newGroup').value.trim(); if (!name) return; try { await api('/api/admin/groups', { method: 'POST', body: { section: current, name } }); $('newGroup').value = ''; await load(); } catch (error) { fail(error); } };
 $('renameSection').onclick = async () => { try { await api(`/api/admin/sections/${current}`, { method: 'PATCH', body: { name: $('sectionName').value } }); await load(); } catch (error) { fail(error); } };
 $('deleteSection').onclick = async () => { if (confirm('Удалить раздел?')) { try { await api(`/api/admin/sections/${current}`, { method: 'DELETE' }); await load(); } catch (error) { fail(error); } } };
-$('files').onchange = event => { upload(event.target.files); event.target.value = ''; };
+$('files').onchange = event => { uploadFiles(event.target.files, { section: current, group: null }); event.target.value = ''; };
 $('drop').ondragover = event => { event.preventDefault(); $('drop').classList.add('over'); };
 $('drop').ondragleave = () => $('drop').classList.remove('over');
-$('drop').ondrop = event => { event.preventDefault(); $('drop').classList.remove('over'); upload(event.dataTransfer.files); };
+$('drop').ondrop = event => { event.preventDefault(); $('drop').classList.remove('over'); uploadFiles(event.dataTransfer.files, { section: current, group: null }); };
 
 (async () => { if (token) { try { await load(); $('app').hidden = false; return; } catch { /* покажем вход */ } } $('login').hidden = false; })();
 </script>

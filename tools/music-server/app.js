@@ -70,7 +70,7 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
         };
         try {
             await pipeline(req, limit, fs.createWriteStream(tmpFile));
-            return await store.addTrack({ sectionId: url.searchParams.get('section'), groupId: url.searchParams.get('group'), title: url.searchParams.get('title'), description: url.searchParams.get('description'), ext, tmpFile });
+            return await store.addTrack({ title: url.searchParams.get('title'), ext, tmpFile });
         } catch (error) {
             await fsp.rm(tmpFile, { force: true });
             throw error;
@@ -168,7 +168,7 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
             const { vector: sceneVector, prototypes } = sceneFor(body.section, body.vector);
             const items = store.pickItems(body.section);
             // Паттерны (порядок групп/треков): входят в игру, ведут по веткам и сами отпускают; нет паттернов или он не уместен — обычный выбор ниже.
-            const patterned = nodes.length ? decidePattern({ nodes, patternId: typeof body.pattern === 'string' ? body.pattern : null, tracks: store.sectionTracks(body.section), items, vector: sceneVector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, prototypes, plays, elapsed: finite(body.elapsed), remaining: finite(body.remaining) }) : null;
+            const patterned = nodes.length ? decidePattern({ nodes, patternId: typeof body.pattern === 'string' ? body.pattern : null, tracks: store.patternTracks(body.section), items, vector: sceneVector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, prototypes, plays, elapsed: finite(body.elapsed), remaining: finite(body.remaining) }) : null;
             if (patterned) {
                 if (patterned.action === 'play') { plays.set(patterned.id, (plays.get(patterned.id) ?? 0) + 1); plays.set(patterned.pattern, (plays.get(patterned.pattern) ?? 0) + 1); }
                 return sendJson(res, 200, patterned);
@@ -221,9 +221,15 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
                 if (method === 'DELETE' && id) return sendJson(res, 200, { ok: true, ...(await store.deletePatternNode(id)) });
             }
             if (what === 'tracks') {
-                if (method === 'POST' && !id) return sendJson(res, 201, await upload(req, url));
+                if (method === 'POST' && !id) return sendJson(res, 201, await upload(req, url));   // трек попадает в ПУЛ; раздел и группа назначаются отдельно
                 if (method === 'PATCH' && id) return sendJson(res, 200, await store.updateTrack(id, await readJson(req)));
                 if (method === 'DELETE' && id) { await store.deleteTrack(id); return sendJson(res, 200, { ok: true }); }
+            }
+            if (what === 'assignments') {
+                if (method === 'POST' && id === 'bulk') { const body = await readJson(req, 128 * 1024); return sendJson(res, 201, await store.addAssignments({ trackIds: body.tracks, sectionId: body.section, groupId: body.group ?? null })); }
+                if (method === 'POST' && !id) { const body = await readJson(req, 64 * 1024); return sendJson(res, 201, await store.addAssignment({ trackId: body.track, sectionId: body.section, groupId: body.group ?? null, description: body.description, negative: body.negative, intensity: body.intensity })); }
+                if (method === 'PATCH' && id) return sendJson(res, 200, await store.updateAssignment(id, await readJson(req)));
+                if (method === 'DELETE' && id) { await store.deleteAssignment(id); return sendJson(res, 200, { ok: true }); }
             }
         }
         return sendJson(res, 404, { error: 'не найдено' });
