@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { openStore, HttpError, AUDIO_EXT } from './store.js';
 import { MODEL_ID, DIM } from './embed.js';
 import { pickTrack, scoreItems } from './pick.js';
+import { decidePattern } from './patterns.js';
 import { CORS, sendJson, sendFile, readJson, sameSecret } from './http-utils.js';
 import { createRateLimiter, clientAddress } from './rate-limit.js';
 
@@ -132,7 +133,17 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
             // Вектор сцены обязан быть посчитан той же моделью, что и теги. Старые версии ME модель не присылали (и считали мультиязычной) — им молча «подобрать» нельзя.
             if (body.model !== MODEL_ID) return sendJson(res, 200, { action: 'none', reason: 'model mismatch' });
             if (!store.hasSection(String(body.section))) return sendJson(res, 404, { error: 'нет такого раздела' });
-            const result = pickTrack({ prototypes: store.prototypesFor(body.section), graph: store.graphOf(body.section), items: store.pickItems(body.section), vector: body.vector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, plays, smart: body.smart === true, answers: body.answers && typeof body.answers === 'object' ? body.answers : null, elapsed: Number.isFinite(body.elapsed) ? body.elapsed : null, remaining: Number.isFinite(body.remaining) ? body.remaining : null, lastIntensity: Number.isFinite(body.lastIntensity) ? body.lastIntensity : null });
+            const nodes = store.patternNodes(body.section);
+            const finite = value => (Number.isFinite(value) ? value : null);
+            const prototypes = store.prototypesFor(body.section);
+            const items = store.pickItems(body.section);
+            // Паттерны (порядок групп/треков): входят в игру, ведут по веткам и сами отпускают; нет паттернов или он не уместен — обычный выбор ниже.
+            const patterned = nodes.length ? decidePattern({ nodes, patternId: typeof body.pattern === 'string' ? body.pattern : null, tracks: store.sectionTracks(body.section), items, vector: body.vector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, prototypes, plays, elapsed: finite(body.elapsed), remaining: finite(body.remaining) }) : null;
+            if (patterned) {
+                if (patterned.action === 'play') { plays.set(patterned.id, (plays.get(patterned.id) ?? 0) + 1); plays.set(patterned.pattern, (plays.get(patterned.pattern) ?? 0) + 1); }
+                return sendJson(res, 200, patterned);
+            }
+            const result = pickTrack({ prototypes, graph: store.graphOf(body.section), items, vector: body.vector, dim: DIM, currentId: body.current ?? null, ended: body.ended === true, force: body.force === true, minSimilarity: body.minSimilarity, switchMargin: body.switchMargin, plays, smart: body.smart === true, answers: body.answers && typeof body.answers === 'object' ? body.answers : null, elapsed: Number.isFinite(body.elapsed) ? body.elapsed : null, remaining: Number.isFinite(body.remaining) ? body.remaining : null, lastIntensity: Number.isFinite(body.lastIntensity) ? body.lastIntensity : null });
             if (result.action === 'play') plays.set(result.id, (plays.get(result.id) ?? 0) + 1);
             return sendJson(res, 200, result);
         }
@@ -162,6 +173,11 @@ export async function createApp({ dir, embed, embedQuery = embed, adminToken, re
                 if (method === 'POST' && !id) { const body = await readJson(req); return sendJson(res, 201, await store.addGroup({ sectionId: body.section, name: body.name, description: body.description, negative: body.negative })); }
                 if (method === 'PATCH' && id) return sendJson(res, 200, await store.updateGroup(id, await readJson(req)));
                 if (method === 'DELETE' && id) { await store.deleteGroup(id); return sendJson(res, 200, { ok: true }); }
+            }
+            if (what === 'patterns') {
+                if (method === 'POST' && !id) { const body = await readJson(req, 64 * 1024); return sendJson(res, 201, await store.addPatternNode({ sectionId: body.section, parent: body.parent ?? null, kind: body.kind, ref: body.ref, name: body.name, description: body.description, negative: body.negative })); }
+                if (method === 'PATCH' && id) return sendJson(res, 200, await store.updatePatternNode(id, await readJson(req, 64 * 1024)));
+                if (method === 'DELETE' && id) return sendJson(res, 200, { ok: true, ...(await store.deletePatternNode(id)) });
             }
             if (what === 'tracks') {
                 if (method === 'POST' && !id) return sendJson(res, 201, await upload(req, url));

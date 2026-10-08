@@ -129,10 +129,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     reconsolidationMinCluster: 3,
     // structured: сворачивание старых событий в сводку (timeline-compact.js) — оставить свежих, сколько сворачивать за раз, как часто (в ходах).
     // structured: потолок автоповышения до Core — доля от числа нод, но не меньше `coreMinCap` (core-tier.js); ручное закрепление потолок обходит.
-    // structured: сущности по тексту нод (entity-candidates.js) — имя, которое модель не назвала в subjects, но которое повторяется.
+    // structured: повторяющиеся имена без ноды (entity-candidates.js) подсказываются обычному извлечению — отдельного вызова модели нет.
     entityMinMentions: 3, // в скольких РАЗНЫХ нодах имя должно встретиться
-    entityMaxPerSweep: 2,
-    entitySweepEveryTurns: 6,
+    entityMaxPerSweep: 2, // сколько повторяющихся имён подсказывать извлечению за раз
     // Слияние дублей: порог косинуса подбирается по графу (mean + z·σ по парам нод региона), но не выше `mergeSimilarityThreshold` и не ниже floor.
     mergeAdaptiveZ: 1.8,
     mergeAdaptiveFloor: 0.85,
@@ -326,7 +325,6 @@ export function clampGraphSettings(values = {}) {
         maxRegions: clampInt(values.maxRegions, 1, 60, DEFAULT_SETTINGS.maxRegions),
         entityMinMentions: clampInt(values.entityMinMentions, 2, 50, DEFAULT_SETTINGS.entityMinMentions),
         entityMaxPerSweep: clampInt(values.entityMaxPerSweep, 0, 10, DEFAULT_SETTINGS.entityMaxPerSweep),
-        entitySweepEveryTurns: clampInt(values.entitySweepEveryTurns, 1, 500, DEFAULT_SETTINGS.entitySweepEveryTurns),
         mergeAdaptiveZ: clampInt(values.mergeAdaptiveZ * 10, 5, 50, DEFAULT_SETTINGS.mergeAdaptiveZ * 10) / 10,
         mergeAdaptiveFloor: clampInt(values.mergeAdaptiveFloor * 100, 50, 99, DEFAULT_SETTINGS.mergeAdaptiveFloor * 100) / 100,
         restatementSimilarity: clampInt(values.restatementSimilarity * 1000, 800, 1000, DEFAULT_SETTINGS.restatementSimilarity * 1000) / 1000,

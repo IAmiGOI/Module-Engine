@@ -43,6 +43,12 @@ export function normalizeGraphMeta(raw) {
     if (typeof source.libraryId === 'string' && source.libraryId) meta.libraryId = source.libraryId;
     if (typeof source.convertedFrom === 'string') meta.convertedFrom = source.convertedFrom;
     if (Number.isFinite(source.bootstrapCoreCount)) meta.bootstrapCoreCount = source.bootstrapCoreCount; // Core на конец бутстрапа/конвертации: не запирают автоповышение (core-tier.js)
+    // Имена, которые модель уже признала НЕ именами (entity-ops.js), — чтобы не спрашивать о них снова после перезагрузки.
+    if (Array.isArray(source.entityRejected)) meta.entityRejected = source.entityRejected.filter(name => typeof name === 'string' && name).slice(-200);
+    // Сколько раз имя подсказывалось модели извлечения (entity-ops.js): не создала за два раза — имя отклоняется.
+    if (source.entityHinted && typeof source.entityHinted === 'object' && !Array.isArray(source.entityHinted)) {
+        meta.entityHinted = Object.fromEntries(Object.entries(source.entityHinted).filter(([name, count]) => name && Number.isFinite(count)).slice(-50));
+    }
     return meta;
 }
 

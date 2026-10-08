@@ -31,7 +31,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
     const file = path.join(dir, 'catalog.json');
     const audioDir = path.join(dir, 'audio');
     await fs.mkdir(audioDir, { recursive: true });
-    let data = { sections: [], groups: [], tracks: [], examples: [] };
+    let data = { sections: [], groups: [], tracks: [], examples: [], patterns: [] };
     try { data = { ...data, ...JSON.parse(await fs.readFile(file, 'utf8')) }; } catch { /* первый запуск */ }
 
     let queue = Promise.resolve();
@@ -73,6 +73,33 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
         return { id: item.id, ext: item.ext, group: item.group ?? null, vector: owner.vector, negVector: owner.negVector ?? null, statement: owner.description, intensity: owner.intensity ?? null };
     };
 
+
+    /** Узлы паттернов раздела (дерево: `parent` — id родителя или `null` у корня). Шаг — группа или конкретный трек, играет по порядку веток. */
+    const patternNodes = sectionId => data.patterns.filter(item => item.section === sectionId);
+    const patternNode = id => data.patterns.find(item => item.id === id);
+    const subtreeIds = id => {
+        const ids = new Set([id]);
+        for (let grew = true; grew;) {
+            grew = false;
+            for (const node of data.patterns) if (node.parent && ids.has(node.parent) && !ids.has(node.id)) { ids.add(node.id); grew = true; }
+        }
+        return ids;
+    };
+    /** Шаг ссылается на существующую группу (в групповом разделе) или трек этого же раздела. */
+    function checkStep(sectionId, kind, ref) {
+        if (kind === 'group') {
+            if (modeOf(sectionId) !== MODES.GROUPS) throw new HttpError(400, 'шаг-группа бывает только в разделе «по группам»');
+            return checkGroup(sectionId, ref) ?? (() => { throw new HttpError(400, 'выберите группу'); })();
+        }
+        if (kind === 'track') {
+            const found = track(ref);
+            if (!found || found.section !== sectionId) throw new HttpError(400, 'такого трека нет в этом разделе');
+            return found.id;
+        }
+        throw new HttpError(400, 'шаг — это группа или трек');
+    }
+    const usedByPattern = (kind, id) => data.patterns.some(node => node.kind === kind && node.ref === id);
+
     return {
         audioPath,
         track,
@@ -97,7 +124,9 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
         /** Для проверки подбора в консоли: то же, что `pickItems`, плюс названия (их видит только владелец). */
         previewItems: id => playable(id).map(item => ({ ...itemFor(id, item), title: item.title, groupName: group(item.group)?.name ?? null })),
         /** Играет ли трек (и значит, отдаётся ли его аудио чужим): в групповом разделе — если у его группы есть тег. */
-        isPlayable: id => { const item = track(id); return Boolean(item) && playable(item.section).includes(item); },
+        isPlayable: id => { const item = track(id); return Boolean(item) && (playable(item.section).includes(item) || usedByPattern('track', item.id) || (item.group && usedByPattern('group', item.group))); },
+        /** Все треки раздела для шагов паттернов (тег у трека не обязателен: шаг сам решает, когда он играет). */
+        sectionTracks: id => data.tracks.filter(item => item.section === id).map(item => ({ id: item.id, ext: item.ext, group: item.group ?? null })),
         hasSection: id => Boolean(section(id)),
 
         /** Всё для консоли владельца (с тегами, без векторов). */
@@ -132,7 +161,57 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             return map;
         },
 
+
+        /**
+         * Паттерны: порядок проигрыша групп/треков. Это дерево — общее начало, дальше любые ветки и под-ветки на любую глубину. У узла может быть свой тег
+         * («когда уместно», «когда НЕ уместно»): по нему выбирается вход в паттерн и ветка на развилке. Вектор считается как у тега группы.
+         */
+        patternNodes: id => patternNodes(id).map(node => ({ ...node })),
+        addPatternNode: ({ sectionId, parent = null, kind, ref, name, description, negative }) => exclusive(async () => {
+            needSection(sectionId);
+            if (parent) { const up = patternNode(parent); if (!up || up.section !== sectionId) throw new HttpError(400, 'такого родителя нет в этом разделе'); }
+            const text = String(description ?? '').trim();
+            const node = { id: randomId(), section: sectionId, parent: parent || null, kind, ref: checkStep(sectionId, kind, ref), name: String(name ?? '').trim(), description: text, vector: text ? await embed(text) : null, negative: '', negVector: null, order: data.patterns.filter(item => item.section === sectionId && item.parent === (parent || null)).length };
+            if (negative) await reembed(node, 'negative', 'negVector', negative);
+            data.patterns.push(node);
+            await save();
+            return node;
+        }),
+        /** Правка узла: имя, теги, шаг (`kind` + `ref`), перенос под другого родителя (`parent`: id или `null` — в корень; в свою же ветку нельзя). */
+        updatePatternNode: (id, patch) => exclusive(async () => {
+            const node = patternNode(id) ?? notFound('шага паттерна');
+            if (patch.name !== undefined) node.name = String(patch.name ?? '').trim();
+            if (patch.description !== undefined) await reembed(node, 'description', 'vector', patch.description);
+            if (patch.negative !== undefined) await reembed(node, 'negative', 'negVector', patch.negative);
+            if (patch.kind !== undefined || patch.ref !== undefined) {
+                const kind = patch.kind ?? node.kind;
+                node.ref = checkStep(node.section, kind, patch.ref ?? node.ref);
+                node.kind = kind;
+            }
+            if (patch.parent !== undefined) {
+                const parent = patch.parent || null;
+                if (parent) {
+                    const up = patternNode(parent);
+                    if (!up || up.section !== node.section) throw new HttpError(400, 'такого родителя нет в этом разделе');
+                    if (subtreeIds(id).has(parent)) throw new HttpError(400, 'нельзя перенести шаг в собственную ветку');
+                }
+                node.parent = parent;
+            }
+            if (Number.isFinite(patch.order)) node.order = patch.order;
+            await save();
+            return node;
+        }),
+        /** Удаляется шаг вместе со всей веткой под ним. */
+        deletePatternNode: id => exclusive(async () => {
+            patternNode(id) ?? notFound('шага паттерна');
+            const gone = subtreeIds(id);
+            data.patterns = data.patterns.filter(node => !gone.has(node.id));
+            await save();
+            return { removed: gone.size };
+        }),
+
         adminCatalog: () => ({
+            patterns: data.patterns.map(({ vector, negVector, ...rest }) => ({ ...rest, tagged: Array.isArray(vector) })),
             examples: data.examples.map(({ vector, ...rest }) => rest),
             sections: data.sections.map(item => ({ ...item, mode: cleanMode(item.mode) })),
             groups: data.groups.map(({ vector, negVector, ...rest }) => ({ ...rest, tagged: Array.isArray(vector) })),
@@ -193,6 +272,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
             needSection(id);
             if (data.tracks.some(item => item.section === id)) throw new HttpError(409, 'в разделе есть треки — сначала перенесите или удалите их');
             data.sections = data.sections.filter(item => item.id !== id);
+            data.patterns = data.patterns.filter(item => item.section !== id);
             data.groups = data.groups.filter(item => item.section !== id);
             data.examples = data.examples.filter(item => item.section !== id);
             await save();
@@ -222,6 +302,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
         deleteGroup: id => exclusive(async () => {
             group(id) ?? notFound('группы');
             if (data.tracks.some(item => item.group === id)) throw new HttpError(409, 'в группе есть треки — сначала перенесите их');
+            if (usedByPattern('group', id)) throw new HttpError(409, 'группа используется в паттерне — сначала уберите её оттуда');
             data.groups = data.groups.filter(item => item.id !== id);
             data.examples = data.examples.filter(item => item.group !== id);   // эталоны уходят вместе с группой
             await save();
@@ -243,6 +324,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
         updateTrack: (id, patch) => exclusive(async () => {
             const item = track(id) ?? notFound('трека');
             if (patch.section !== undefined && patch.section !== item.section) {
+                if (usedByPattern('track', id)) throw new HttpError(409, 'трек используется в паттерне — сначала уберите его оттуда');
                 item.section = needSection(patch.section).id;
                 item.group = null;   // группа осталась в старом разделе
             }
@@ -259,6 +341,7 @@ export async function openStore({ dir, embed, embedQuery = embed }) {
 
         deleteTrack: id => exclusive(async () => {
             const item = track(id) ?? notFound('трека');
+            if (usedByPattern('track', id)) throw new HttpError(409, 'трек используется в паттерне — сначала уберите его оттуда');
             data.tracks = data.tracks.filter(other => other.id !== id);
             await save();
             await fs.rm(audioPath(item), { force: true });

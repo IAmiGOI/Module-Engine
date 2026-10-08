@@ -1,78 +1,55 @@
 import { findEntityCandidates } from '../entity-candidates.js';
-import { addDirectedEdge } from '../edges.js';
-import { isEvent } from '../kinds.js';
 
-const IMPORTANCE_BASE = 3;
-const IMPORTANCE_MAX = 8;
+const MAX_HINTS = 2;              // сколько раз имя подсказывается модели; не создала — больше не предлагаем
+const MAX_REJECTED = 200;         // сколько отклонённых имён помнить
+const STUB_MARK = ' — mentioned in ';   // шаблон первой версии: «<Слово> — mentioned in N records…»
 
 /**
- * Сущности, найденные по самому тексту нод (`entity-candidates.js`), получают ноды — когда модель не назвала их в `subjects` и
- * поэтому нода так и не завелась («Nyx» в семи записях). Без вызова модели: содержимое — перечень записей, где имя встречается,
- * рёбра — к этим записям. `ctx` — доступ к состоянию Ядра, см. `core-ops.js`.
+ * Повторяющиеся имена без ноды («Nyx» в семи записях и ни одной ноды Nyx) — подсказка ОБЫЧНОМУ вызову извлечения, без отдельного
+ * вызова модели. Детектор (`entity-candidates.js`) чистый и только предлагает; решает модель, которая и так читает сцену: если это
+ * герой, место, группа или предмет сюжета, она создаёт сущность и использует её в `subjects`, а заголовки, обычные слова и даты
+ * игнорирует. Подсказка идёт не больше `MAX_HINTS` раз на имя: не создала — имя уходит в отклонённые (переживает перезагрузку).
+ * Ноды сами по себе здесь не создаются никогда. `ctx` — доступ к состоянию Ядра, см. `core-ops.js`.
  */
 export function createEntityOps(ctx) {
-    let lastSweepTurn = -Infinity;
+    const rejected = () => ctx.graphMeta.entityRejected ?? [];
+    const hinted = () => ctx.graphMeta.entityHinted ?? {};
 
-    const labelMentioned = (name, node) => {
-        const text = `${node.label ?? ''}. ${node.content ?? ''}`.toLowerCase();
-        return text.includes(name.toLowerCase());
-    };
-
-    /** Регион, где живёт большинство записей с этим именем, — туда и встаёт новая нода (`subjectRegion` каскада размещения). */
-    function dominantRegion(nodeIds) {
-        const votes = new Map();
-        for (const id of nodeIds) { const key = ctx.nodes[id]?.regionId; if (key && ctx.regions[key]) votes.set(key, (votes.get(key) ?? 0) + 1); }
-        const best = [...votes].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0];
-        if (!best) return null;
-        const region = ctx.regions[best];
-        return { regionId: best, sector: region.sector, ring: region.ring };
-    }
-
-    /** Многословное имя («Tea Party») — скорее место/группа, однословное («Nyx») — скорее существо; точнее без модели не сказать. */
-    const kindFor = name => (/\s/.test(name) ? { kind: 'object', subtype: 'group' } : { kind: 'entity' });
-
-    /** Создаёт ноду для одного кандидата; `{ nodeId, links }` либо `null` (чат сменился / нет эмбединга). Вызывается внутри записи. */
-    async function createEntity(candidate, epoch) {
-        const mentioning = candidate.nodeIds.map(id => ctx.nodes[id]).filter(Boolean);
-        const labels = mentioning.filter(node => !isEvent(node)).slice(0, 3).map(node => node.label).filter(Boolean);
-        const content = `${candidate.name} — mentioned in ${mentioning.length} records${labels.length ? `, e.g. ${labels.map(label => `"${label}"`).join('; ')}` : ''}.`;
-        const embedding = await ctx.callService('embedding.compute', { text: `${candidate.name}: ${content}`, kind: 'passage' });
-        if (!ctx.stillSameChat(epoch)) return null;
-        if (!embedding.ok) return null;
-        const importance = Math.min(IMPORTANCE_MAX, IMPORTANCE_BASE + Math.floor(mentioning.length / 2));
-        const placed = ctx.placeNewNode({ label: candidate.name, content, embedding: embedding.value, importance, ...kindFor(candidate.name) }, { source: 'mentions', subjectRegion: dominantRegion(candidate.nodeIds) });
-        const created = ctx.nodes[placed.nodeId];
-        if (!created) return null;
-        let links = 0;
-        for (const other of mentioning) {
-            if (other.id === created.id || !labelMentioned(candidate.name, other)) continue;
-            if (!ctx.edgeAllowed(created, other)) continue;
-            if (addDirectedEdge(created, other, 'related').created) links += 1;
+    /** Имена для подсказки промпту извлечения (до `entityMaxPerSweep`); считает показы и отклоняет те, что не прижились. */
+    async function recurringNames() {
+        if (!ctx.features.kinds) return [];
+        const found = findEntityCandidates(ctx.nodes, { minMentions: ctx.settings.entityMinMentions, maxCandidates: ctx.settings.entityMaxPerSweep, ignore: rejected() });
+        const counts = { ...hinted() };
+        const names = [];
+        let denied = [];
+        for (const candidate of found) {
+            const key = candidate.name.toLowerCase();
+            const shown = counts[key] ?? 0;
+            if (shown >= MAX_HINTS) { denied.push(key); delete counts[key]; continue; }
+            counts[key] = shown + 1;
+            names.push(candidate.name);
         }
-        return { nodeId: created.id, status: placed.status, links };
+        // Показанные раньше, но уже получившие ноду (или пропавшие из кандидатов), из счётчика уходят — он не растёт без границы.
+        const live = new Set(found.map(candidate => candidate.name.toLowerCase()));
+        for (const key of Object.keys(counts)) if (!live.has(key)) delete counts[key];
+        if (denied.length || JSON.stringify(counts) !== JSON.stringify(hinted())) {
+            ctx.graphMeta.entityHinted = counts;
+            if (denied.length) ctx.graphMeta.entityRejected = [...rejected(), ...denied].slice(-MAX_REJECTED);
+            await ctx.persistGraphMeta();
+        }
+        return names;
     }
 
-    /** Периодический проход (не чаще `entitySweepEveryTurns` ходов): новые сущности по тексту нод. `force` — по требованию. Возвращает `{ created: [{ name, nodeId, links }] }`. */
-    async function sweepEntities({ force = false } = {}) {
-        if (!ctx.features.kinds) return { created: [] };
+    /** Убирает заглушки первой версии («<Слово> — mentioned in N records…»): в них попадали заголовки и обычные слова. Настоящие имена модель создаст сама по подсказке. */
+    async function sweepEntities() {
+        if (!ctx.features.kinds) return { retired: 0 };
         return ctx.enqueueWrite(async () => {
-            if (!force && ctx.turnCounter - lastSweepTurn < ctx.settings.entitySweepEveryTurns) return { created: [] };
-            lastSweepTurn = ctx.turnCounter;
-            const epoch = ctx.epoch;
-            const candidates = findEntityCandidates(ctx.nodes, { minMentions: ctx.settings.entityMinMentions, maxCandidates: ctx.settings.entityMaxPerSweep });
-            const created = [];
-            for (const candidate of candidates) {
-                const result = await createEntity(candidate, epoch);
-                if (!result) { if (!ctx.stillSameChat(epoch)) return { created: [] }; continue; }
-                created.push({ name: candidate.name, ...result });
-            }
-            if (created.length) {
-                await Promise.all([ctx.persistNodes(), ctx.persistRegions(), ctx.persistStaging(), ctx.persistMergeQueue(), ctx.persistReconsolidationQueue()]);
-                for (const item of created) ctx.publishEvent('memoryGraph.nodeCreated', { nodeId: item.nodeId, status: item.status, source: 'mentions' });
-            }
-            return { created };
+            const stale = Object.values(ctx.nodes).filter(node => node.source === 'mentions' && String(node.content ?? '').includes(STUB_MARK));
+            for (const node of stale) ctx.removeNode(node.id);
+            if (stale.length) await Promise.all([ctx.persistNodes(), ctx.persistRegions(), ctx.persistStaging(), ctx.persistMergeQueue(), ctx.persistReconsolidationQueue()]);
+            return { retired: stale.length };
         });
     }
 
-    return { sweepEntities, resetClock: () => { lastSweepTurn = -Infinity; } };
+    return { recurringNames, sweepEntities };
 }

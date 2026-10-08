@@ -11,7 +11,8 @@ export const MIN_PLAUSIBLE_COSINE = 0.5;
 /** Словарь эталонных сцен: группа участвует, если у неё не меньше `MIN_EXAMPLES` эталонов; оценка = среднее `TOP_EXAMPLES` ближайших; в итоге `PROTO_WEIGHT` веса у словаря, остальное у тега. */
 export const MIN_EXAMPLES = 3, TOP_EXAMPLES = 3, PROTO_WEIGHT = 0.6;
 /** Единицы относительной шкалы: «планка» = ползунок × 2 стандартных отклонения, «заметно лучше» = ползунок × 10, «близкие» — в пределах 0.35 от лучшего. */
-const Z_FLOOR_SCALE = 2, Z_MARGIN_SCALE = 10, Z_CLOSE = 0.35;
+export const Z_FLOOR_SCALE = 2, Z_MARGIN_SCALE = 10;
+const Z_CLOSE = 0.35;
 const VETOED = -1e12;
 /** Допуск отсечения по тегу «не включать»: нежелательное должно быть ближе к сцене, чем обычный тег, не менее чем на столько (косинусы тегов отличаются на сотые). */
 export const NEGATIVE_MARGIN = 0;
@@ -51,7 +52,7 @@ export function pickWeighted(items, plays, randomFn = Math.random) {
     return items[items.length - 1];
 }
 
-const clamp = (value, min, max, fallback) => (Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback);
+export const clamp = (value, min, max, fallback) => (Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback);
 export const validVector = (vector, dim) => Array.isArray(vector) && vector.length === dim && vector.every(Number.isFinite);
 
 const subtract = (a, b) => a.map((x, i) => x - b[i]);

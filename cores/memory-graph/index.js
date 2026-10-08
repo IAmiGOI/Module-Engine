@@ -1243,7 +1243,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         if (features.structuredExtraction) {
             const characterResult = await callService('stCharacter.current');
             const mainCharacters = characterResult.ok && characterResult.value?.name ? [String(characterResult.value.name)] : [];
-            prompt = buildStructuredExtractionPrompt({ contextText, nearestNodes, knownNames: knownSubjectNames(), mainCharacters, isFirstNode, currentTime: gameTimeLabel(await readGameTime()) });
+            prompt = buildStructuredExtractionPrompt({ contextText, nearestNodes, knownNames: knownSubjectNames(), mainCharacters, isFirstNode, currentTime: gameTimeLabel(await readGameTime()), recurringNames: await entityOps.recurringNames() });
         } else prompt = buildExtractionPrompt({ contextText, nearestNodes, isFirstNode });
         const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) throw new Error(result.error.message);
@@ -2716,6 +2716,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         publishEvent: (...args) => publishEvent(...args), enqueueWrite: task => enqueueWrite(task), stillSameChat: epoch => stillSameChat(epoch),
         persistNodes: () => persistNodes(), persistRegions: () => persistRegions(), persistGraphMeta: () => persistGraphMeta(),
         persistMergeQueue: () => persistMergeQueue(), persistReconsolidationQueue: () => persistReconsolidationQueue(), persistStaging: () => persistStaging(),
+        removeNode: id => removeNodeFromGraph(id),
         applyGraphMeta: raw => applyGraphMeta(raw), collectAnchors: () => collectAnchors(), edgeAllowed: (a, b) => edgeAllowed(a, b),
         mainCharacterImportance: MAIN_CHARACTER_IMPORTANCE, promoteToCore: (...args) => promoteToCore(...args),
         hasHeroCard: () => cardOps.hasHeroCard(), applyCharacterCard: options => cardOps.applyCharacterCard(options), characterName: () => cardOps.characterName(),
@@ -2799,7 +2800,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.library.findByLorebook', () => library.findByLorebook()),
         host.own.register('memoryGraph.sweepCores', () => sweepCores()),
         host.own.register('memoryGraph.sweepDuplicateScan', params => sweepDuplicateScan({ force: params?.force === true })),
-        host.own.register('memoryGraph.sweepEntities', params => sweepEntities({ force: params?.force === true })),
+        host.own.register('memoryGraph.sweepEntities', () => sweepEntities()),
         host.own.register('memoryGraph.sweepRegionSplits', params => sweepRegionSplits({ force: params?.force === true })),
         host.own.register('memoryGraph.sweepTimeline', () => sweepTimeline()),
         host.own.register('memoryGraph.sweepMergeQueue', () => sweepMergeQueue()),
