@@ -136,6 +136,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Слияние дублей: порог косинуса подбирается по графу (mean + z·σ по парам нод региона), но не выше `mergeSimilarityThreshold` и не ниже floor.
     mergeAdaptiveZ: 1.8,
     mergeAdaptiveFloor: 0.85,
+    restatementSimilarity: 0.97, // косинус, с которого новый факт того же субъекта — пересказ существующего (становится update, а не новой нодой)
     mergeScanEveryTurns: 10, // как часто (в ходах) искать дубли среди уже лежащих нод, а не только при вставке
     mergeAdaptiveMinNodes: 6, // меньше нод одного вида в регионе — статистики нет, остаётся абсолютный порог
     // structured: формирование регионов из тем внутри региона (region-split.js) — не привязано к переполнению.
@@ -328,6 +329,7 @@ export function clampGraphSettings(values = {}) {
         entitySweepEveryTurns: clampInt(values.entitySweepEveryTurns, 1, 500, DEFAULT_SETTINGS.entitySweepEveryTurns),
         mergeAdaptiveZ: clampInt(values.mergeAdaptiveZ * 10, 5, 50, DEFAULT_SETTINGS.mergeAdaptiveZ * 10) / 10,
         mergeAdaptiveFloor: clampInt(values.mergeAdaptiveFloor * 100, 50, 99, DEFAULT_SETTINGS.mergeAdaptiveFloor * 100) / 100,
+        restatementSimilarity: clampInt(values.restatementSimilarity * 1000, 800, 1000, DEFAULT_SETTINGS.restatementSimilarity * 1000) / 1000,
         mergeScanEveryTurns: clampInt(values.mergeScanEveryTurns, 1, 500, DEFAULT_SETTINGS.mergeScanEveryTurns),
         mergeAdaptiveMinNodes: clampInt(values.mergeAdaptiveMinNodes, 3, 100, DEFAULT_SETTINGS.mergeAdaptiveMinNodes),
         regionSplitMinNodes: clampInt(values.regionSplitMinNodes, 4, 200, DEFAULT_SETTINGS.regionSplitMinNodes),

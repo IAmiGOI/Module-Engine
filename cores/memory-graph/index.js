@@ -10,7 +10,7 @@ import { createCardOps } from './structured/card-ops.js';
 import { createRegionOps } from './structured/region-ops.js';
 import { createEntityOps } from './structured/entity-ops.js';
 import { gameTimeLabel } from './game-time.js';
-import { planSupersession, isCurrentState, hasState, areStateVariants } from './states.js';
+import { planSupersession, isCurrentState, hasState, areStateVariants, findRestatement } from './states.js';
 import { createReclassifyOps } from './structured/reclassify-ops.js';
 import { addDirectedEdge } from './edges.js';
 import { checkEdge, normalizeKind, kindOf, isCore, isEvent } from './kinds.js';
@@ -1506,6 +1506,16 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                         results.push({ status: 'skipped', nodeId: null, label: fact.label, structured: structuredInfo });
                         continue;
                     }
+                }
+                // Пересказ уже известного факта того же субъекта — не новая нода, а уточнение существующей (иначе «квартира — студия» множится).
+                const restated = subjectLinks && fact.kind !== 'event' ? findRestatement({ embedding: nodeEmbeddingResult.value, subjectIds: subjectLinks.subjectIds, kind: kindOf({ kind: fact.kind }) }, nodes, { threshold: settings.restatementSimilarity }) : null;
+                if (restated) {
+                    const previous = { content: nodes[restated].content, turn: turnCounter };
+                    const updateResult = await applyNodeUpdate({ id: restated, content: fact.content, importance: Math.max(fact.importance ?? 0, nodes[restated].importance ?? 0) });
+                    if (updateResult.ok && previous.content !== nodes[restated]?.content) nodes[restated].history = [...(nodes[restated].history ?? []), { ...previous, time: gameTimeLabel(gameTime) }].slice(-5);
+                    if (!stillSameChat(epoch)) return { status: 'chat-changed' };
+                    if (updateResult.ok) results.push({ status: 'updated', nodeId: restated, label: nodes[restated]?.label ?? restated, restated: true });
+                    continue;
                 }
                 // Свежий трекер ПЕРЕД вызовом — Этап 6 (наблюдаемость): `capacityTracker` читают
                 // `detectMergeCandidate()`/`tryQueueReconsolidation()`/`enforceRegionCapacity()` изнутри `attachToRegion()`
