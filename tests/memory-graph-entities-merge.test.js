@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { findEntityCandidates } from '../cores/memory-graph/entity-candidates.js';
 import { createEntityOps } from '../cores/memory-graph/structured/entity-ops.js';
+import { buildStructuredExtractionPrompt } from '../cores/memory-graph/extraction-prompt.js';
 import { adaptiveMergeThresholds, findMergeCandidate, DEFAULT_SETTINGS } from '../cores/memory-graph/math.js';
 
 // --- Обнаружение сущностей ------------------------------------------------------
@@ -48,69 +49,112 @@ test('findEntityCandidates() reads a multi-word proper name as one name', () => 
     assert.deepEqual(findEntityCandidates(graph).map(item => item.name), ['Tea Party']);
 });
 
-// --- Создание ноды сущности ------------------------------------------------------
+// --- Лорбук с разметкой: заголовки, пункты, даты, национальности (отзыв бета-тестера) ---------------------
 
-function buildCtx() {
-    const nodes = chatGraph();
-    for (const item of Object.values(nodes)) item.regionId = 'main';
-    const regions = { main: { centerNodeId: 'hero', subCenterIds: [], nodeIds: Object.keys(nodes), wordProfile: {} } };
-    const events = [];
-    const ctx = {
-        nodes, regions, turnCounter: 50, epoch: 1, features: { kinds: true },
-        settings: { ...DEFAULT_SETTINGS },
-        enqueueWrite: task => task(),
-        stillSameChat: () => true,
-        callService: async () => ({ ok: true, value: [1, 0, 0] }),
-        publishEvent: (name, payload) => events.push([name, payload]),
-        edgeAllowed: () => true,
-        placeNewNode(spec, options) {
-            const id = `new_${Object.keys(nodes).length}`;
-            nodes[id] = { id, ...spec, edges: [], degree: 0, regionId: options.subjectRegion?.regionId ?? null };
-            regions[options.subjectRegion.regionId].nodeIds.push(id);
-            return { status: 'placed', nodeId: id };
-        },
-        persistNodes: async () => {}, persistRegions: async () => {}, persistStaging: async () => {}, persistMergeQueue: async () => {}, persistReconsolidationQueue: async () => {},
-    };
-    return { ctx, events };
+/** Содержимое нод, как у графа, собранного из лорбука: `**заголовки**`, `-пункты`, `Название — Backstory`, даты, языки, термины сюжета. */
+function lorebookGraph() {
+    const heading = '***Satsuki Saionji — Character Core***\n**Present Relevance**\n**Emotional Instability**\n**Emotional Core**\n';
+    const bullets = '-Security in love does NOT depend on words.\n-Similar small likes can be shared.\n-Notable quirks: allergic to cats.\n';
+    const prose = [
+        'She was born in Spring 2026 in a small town. He speaks English and Japanese. An American student visited in April 2026.',
+        'The player can reach the Bad End route if the choices go wrong. A bad day, a bad habit, an end to the story.',
+        'They travelled to Kyoto in the autumn and stayed in Kyoto for a week. Later Kyoto appeared in the notes.',
+    ];
+    const nodes = [];
+    prose.forEach((text, i) => nodes.push(node(`prose${i}`, `Satsuki Saionji — Backstory ${i}`, `${heading}${bullets}${text} Another spring. A security guard. Similar cases. The core of it. Role play notes say role plays are fine.`)));
+    for (let i = 0; i < 3; i += 1) nodes.push(node(`extra${i}`, `Role Play Memories ${i}`, `${bullets}${prose[i]} The Bad End is rare. Kyoto is far. In Kyoto it rains. English class was fun. Japanese food. American coffee. April rain. Spring flowers.`));
+    return Object.fromEntries(nodes.map(item => [item.id, item]));
 }
 
-test('sweepEntities() creates a node for the repeated name in the region where its records live, linked to every record that mentions it', async () => {
-    const { ctx, events } = buildCtx();
-    const { created } = await createEntityOps(ctx).sweepEntities();
-    assert.equal(created.length, 1);
-    const entity = ctx.nodes[created[0].nodeId];
-    assert.equal(entity.label, 'Nyx');
-    assert.equal(entity.kind, 'entity');
-    assert.equal(entity.regionId, 'main');
-    assert.deepEqual(entity.edges.map(edge => edge.to).sort(), ['a', 'b', 'c']);
-    assert.equal(created[0].links, 3);
-    assert.ok(events.some(([name, payload]) => name === 'memoryGraph.nodeCreated' && payload.source === 'mentions'));
+test('findEntityCandidates() ignores headings, bullet items, dates, seasons, nationalities and story terms from a lorebook — only a real name stays', () => {
+    const names = findEntityCandidates(lorebookGraph(), { minMentions: 3, maxCandidates: 50 }).map(item => item.name);
+    for (const junk of ['Security', 'Similar', 'Notable', 'Relevance', 'Instability', 'Core', 'Bad End', 'Bad', 'Backstory', 'Spring', 'April', 'American', 'English', 'Japanese', 'Role Plays', 'Role Play']) {
+        assert.ok(!names.includes(junk), `${junk} must not be a candidate`);
+    }
+    assert.deepEqual(names, ['Kyoto']);
 });
 
-test('sweepEntities() makes a multi-word name an object (group), and does not create the same entity twice', async () => {
-    const { ctx } = buildCtx();
-    for (const i of [1, 2, 3]) ctx.nodes[`t${i}`] = node(`t${i}`, `Rule ${i}`, `Everyone at the Tea Party obeys rule ${i}. The Tea Party never ends.`, { regionId: 'main' });
-    const ops = createEntityOps(ctx);
-    const { created } = await ops.sweepEntities();
-    const tea = created.find(item => item.name === 'Tea Party');
-    assert.equal(ctx.nodes[tea.nodeId].kind, 'object');
-    assert.equal(ctx.nodes[tea.nodeId].subtype, 'group');
-    ctx.turnCounter += 100;
-    assert.deepEqual((await ops.sweepEntities()).created, [], 'the names now resolve to nodes — nothing to create');
+test('findEntityCandidates() ignores labels (titles) — a name only in titles is not a name', () => {
+    const graph = Object.fromEntries([1, 2, 3, 4].map(i => [`n${i}`, node(`n${i}`, 'Zorvak Chronicle', `Plain text number ${i} about nothing in particular.`)]));
+    assert.deepEqual(findEntityCandidates(graph), []);
 });
 
-test('sweepEntities() respects the sweep period and the structured feature flag', async () => {
+test('findEntityCandidates() returns short contexts for the model to judge, and skips names already rejected', () => {
+    const found = findEntityCandidates(lorebookGraph(), { minMentions: 3, maxCandidates: 5 }).find(item => item.name === 'Kyoto');
+    assert.ok(found.contexts.length >= 1 && found.contexts.every(text => text.includes('Kyoto')));
+    assert.deepEqual(findEntityCandidates(lorebookGraph(), { minMentions: 3, maxCandidates: 5, ignore: ['kyoto'] }), []);
+});
+
+// --- Подсказка извлечению: без отдельного вызова модели ------------------------------------------------------
+
+function buildCtx(nodes = chatGraph()) {
+    const persisted = [];
+    const removed = [];
+    const ctx = {
+        nodes, turnCounter: 50, features: { kinds: true }, graphMeta: { mode: 'structured' }, settings: { ...DEFAULT_SETTINGS },
+        enqueueWrite: task => task(),
+        removeNode: id => { removed.push(id); delete ctx.nodes[id]; },
+        persistNodes: async () => persisted.push('nodes'), persistRegions: async () => {}, persistStaging: async () => {}, persistMergeQueue: async () => {}, persistReconsolidationQueue: async () => {},
+        persistGraphMeta: async () => persisted.push('meta'),
+    };
+    return { ctx, persisted, removed };
+}
+
+test('recurringNames() hands the repeated name without a node to the extraction prompt — and never creates a node itself', async () => {
+    const { ctx } = buildCtx();
+    const before = Object.keys(ctx.nodes).length;
+    assert.deepEqual(await createEntityOps(ctx).recurringNames(), ['Nyx']);
+    assert.equal(Object.keys(ctx.nodes).length, before, 'only the model, through the normal extraction, may create the node');
+});
+
+test('recurringNames() offers a name twice; if the model never creates it, the name is rejected (persisted) and not offered again', async () => {
+    const { ctx, persisted } = buildCtx();
+    const ops = createEntityOps(ctx);
+    assert.deepEqual(await ops.recurringNames(), ['Nyx']);
+    assert.deepEqual(await ops.recurringNames(), ['Nyx']);
+    assert.deepEqual(await ops.recurringNames(), [], 'two hints and no node: enough');
+    assert.deepEqual(ctx.graphMeta.entityRejected, ['nyx']);
+    assert.ok(persisted.includes('meta'), 'the rejection must survive a reload');
+    assert.deepEqual(await ops.recurringNames(), [], 'and it stays rejected');
+});
+
+test('recurringNames() stops offering a name as soon as it has a node, and forgets its counter', async () => {
     const { ctx } = buildCtx();
     const ops = createEntityOps(ctx);
-    assert.equal((await ops.sweepEntities()).created.length, 1);
-    ctx.nodes.x = node('x', 'Other', 'Zorp is here. Zorp laughed.', { regionId: 'main' });
-    ctx.nodes.y = node('y', 'Other 2', 'Zorp left. Zorp cried.', { regionId: 'main' });
-    ctx.nodes.z = node('z', 'Other 3', 'Zorp said so.', { regionId: 'main' });
-    ctx.turnCounter += 1;
-    assert.deepEqual((await ops.sweepEntities()).created, [], 'within entitySweepEveryTurns nothing is re-run');
-    const legacy = buildCtx();
-    legacy.ctx.features = { kinds: false };
-    assert.deepEqual((await createEntityOps(legacy.ctx).sweepEntities()).created, []);
+    await ops.recurringNames();
+    ctx.nodes.nyx = node('nyx', 'Nyx', 'Nyx is a girl.', { kind: 'entity' });
+    assert.deepEqual(await ops.recurringNames(), []);
+    assert.deepEqual(ctx.graphMeta.entityHinted, {});
+    assert.equal(ctx.graphMeta.entityRejected, undefined, 'a name that got its node is not "rejected"');
+});
+
+test('recurringNames() on a lorebook-shaped graph offers only the real name, not headings, dates or story terms', async () => {
+    const { ctx } = buildCtx(lorebookGraph());
+    assert.deepEqual(await createEntityOps(ctx).recurringNames(), ['Kyoto']);
+});
+
+test('recurringNames() gives nothing in a legacy graph', async () => {
+    const { ctx } = buildCtx();
+    ctx.features = { kinds: false };
+    assert.deepEqual(await createEntityOps(ctx).recurringNames(), []);
+});
+
+test('sweepEntities() makes no model call and creates no node: it only removes the junk stubs of the first version ("Word — mentioned in N records")', async () => {
+    const { ctx, removed } = buildCtx();
+    ctx.nodes.stub = { id: 'stub', label: 'Bad', content: 'Bad — mentioned in 5 records, e.g. "Role Play Memories".', source: 'mentions', kind: 'entity', edges: [] };
+    ctx.nodes.mine = { id: 'mine', label: 'Kyoto', content: 'Kyoto — the old capital.', source: 'mentions', kind: 'entity', edges: [] };
+    ctx.nodes.typed = { id: 'typed', label: 'Mention', content: 'Typed by hand: mentioned in the notes.', source: 'chat', kind: 'fact', edges: [] };
+    const before = Object.keys(ctx.nodes).length;
+    assert.deepEqual(await createEntityOps(ctx).sweepEntities(), { retired: 1 });
+    assert.deepEqual(removed, ['stub']);
+    assert.equal(Object.keys(ctx.nodes).length, before - 1);
+});
+
+test('the extraction prompt carries the recurring names with the rule "create only a real name", and nothing when there are none', () => {
+    const prompt = buildStructuredExtractionPrompt({ contextText: 'scene', recurringNames: ['Nyx', 'Kyoto'] });
+    assert.match(prompt, /keep coming up in the notes but have no memory of their own yet: Nyx; Kyoto/);
+    assert.match(prompt, /Ignore anything that is only a heading, an ordinary word, a date/);
+    assert.doesNotMatch(buildStructuredExtractionPrompt({ contextText: 'scene' }), /keep coming up/);
 });
 
 // --- Слияние дублей по порогу графа ----------------------------------------------

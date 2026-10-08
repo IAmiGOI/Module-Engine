@@ -101,13 +101,14 @@ export function parseStructuredFields(raw) {
  * Промпт structured-режима: вид ноды, субъекты, связи, время, псевдонимы. Списки известных имён и главных героев не дают модели
  * плодить «Кира» / «принцесса Кира» / «Kira» отдельными нодами. Legacy-промпт не тронут (`buildExtractionPrompt`).
  */
-export function buildStructuredExtractionPrompt({ contextText, nearestNodes = [], knownNames = [], mainCharacters = [], isFirstNode = false, currentTime = null } = {}) {
+export function buildStructuredExtractionPrompt({ contextText, nearestNodes = [], knownNames = [], mainCharacters = [], isFirstNode = false, currentTime = null, recurringNames = [] } = {}) {
     const clock = currentTime ? `\nCurrent in-world time: ${currentTime}` : '';
     const nearest = nearestNodes.length ? `\n\nExisting nearby memories you may UPDATE instead of duplicating (use their id EXACTLY as given):\n${nearestNodes.map(node => `${node.id}: ${node.label} — ${node.content}`).join('\n')}` : '';
     const names = knownNames.length ? `\n\nKnown characters and objects in memory (use these names EXACTLY; invent a new name only if none fits): ${knownNames.join('; ')}` : '';
     const heroes = mainCharacters.length ? `\nMain characters of this chat: ${mainCharacters.join('; ')}` : '';
+    const recurring = recurringNames.length ? `\n\nThese names keep coming up in the notes but have no memory of their own yet: ${recurringNames.join('; ')}. If one is the name of a specific character, place, group or named object of the story, create it (kind "entity" for a being, "object" for a place/group/item, with a short factual "content") and use it in "subjects". Ignore anything that is only a heading, an ordinary word, a date, a language or a label of story structure.` : '';
     const first = isFirstNode ? ' This is the very first memory of a fresh graph.' : '';
-    return `Recent story context:\n\n${contextText}${clock}\n\nExtract what is worth remembering LONG-TERM (dozens of turns from now); skip short-term plot mechanics and idle talk.${first}${names}${heroes}${nearest}
+    return `Recent story context:\n\n${contextText}${clock}\n\nExtract what is worth remembering LONG-TERM (dozens of turns from now); skip short-term plot mechanics and idle talk.${first}${names}${heroes}${recurring}${nearest}
 
 Give every memory a "kind":
 - "fact": something true that stays true (a trait, a rule of the world, an established relationship).

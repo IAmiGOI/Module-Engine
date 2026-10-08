@@ -1310,23 +1310,6 @@ test('a pair SideCar judged distinct is NOT queued again by the periodic duplica
     assert.equal(graphCore.mergeQueue().length, 0);
 });
 
-test('a state the model re-extracts with the same value updates the existing node instead of piling up copies (the apartment case)', async () => {
-    const flat = content => `{"facts":[{"op":"create","kind":"fact","label":"Sasha's apartment","content":"${content}","importance":4,"subjects":["Sasha"],"attribute":"residence"}]}`;
-    const { caller } = buildEngine({
-        fetchReplies: [
-            '{"facts":[{"op":"create","kind":"entity","label":"Sasha","content":"Sasha is a woman.","importance":7,"subjects":["Sasha"]}]}',
-            flat("Sasha's apartment is a studio."),
-            flat("Sasha's apartment is a studio."),
-        ],
-    });
-    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured', mergeSimilarityThreshold: 0, mergeWordOverlapThreshold: 0, mergeAdaptiveFloor: 0.5 });
-    await call(caller, 'memoryGraph.reset');
-    for (const length of [30, 60, 90]) await call(caller, 'memoryGraph.checkAndPlace', { text: `scene ${length}`, chatLength: length });
-    const flats = (await call(caller, 'memoryGraph.nodes')).value.filter(node => /apartment/.test(node.label));
-    assert.equal(flats.length, 1, 'the same fact is one node, not two');
-    assert.equal(flats[0].supersededBy, undefined, 'and it stays current');
-});
-
 test('a new value of a state (outfit) replaces the current one: the old node is kept as history with its time, is not merged, and drops out of retrieval', async () => {
     const clock = { day: '1', time: '09:00' };
     const outfit = (label, content) => `{"facts":[{"op":"create","kind":"fact","label":"${label}","content":"${content}","importance":4,"subjects":["Nyx"],"attribute":"outfit"}]}`;
@@ -1365,6 +1348,39 @@ test('a new value of a state (outfit) replaces the current one: the old node is 
     assert.ok(memory.includes('black coat'), 'retrieval shows the current state');
     assert.ok(memory.includes('[since 3 09:00]'), 'and since when it holds');
     assert.ok(!memory.includes('white dress'), 'the replaced value stays out of the prompt');
+});
+
+test('a state the model re-extracts with the same value updates the existing node instead of piling up copies (the apartment case)', async () => {
+    const flat = content => `{"facts":[{"op":"create","kind":"fact","label":"Sasha's apartment","content":"${content}","importance":4,"subjects":["Sasha"],"attribute":"residence"}]}`;
+    const { caller } = buildEngine({
+        fetchReplies: [
+            '{"facts":[{"op":"create","kind":"entity","label":"Sasha","content":"Sasha is a woman.","importance":7,"subjects":["Sasha"]}]}',
+            flat("Sasha's apartment is a studio."),
+            flat("Sasha's apartment is a studio."),
+        ],
+    });
+    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured', mergeSimilarityThreshold: 0, mergeWordOverlapThreshold: 0, mergeAdaptiveFloor: 0.5 });
+    await call(caller, 'memoryGraph.reset');
+    for (const length of [30, 60, 90]) await call(caller, 'memoryGraph.checkAndPlace', { text: `scene ${length}`, chatLength: length });
+    const flats = (await call(caller, 'memoryGraph.nodes')).value.filter(node => /apartment/.test(node.label));
+    assert.equal(flats.length, 1, 'the same fact is one node, not two');
+    assert.equal(flats[0].supersededBy, undefined, 'and it stays current');
+});
+
+test('a name that keeps coming up in the notes is handed to the ordinary extraction call — one model call in total, and the entity the model creates becomes a node', async () => {
+    const prompts = [];
+    const reply = '{"facts":[{"op":"create","kind":"entity","label":"Zorvak","content":"Zorvak is a dragon who guards the pass.","importance":6,"subjects":["Zorvak"]}]}';
+    const fetchOverride = async (url, options) => { prompts.push(String(options?.body ?? '')); return fakeModelReply(reply); };
+    const { caller } = buildEngine({ fetchOverride });
+    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured' });
+    await call(caller, 'memoryGraph.reset');
+    for (let i = 0; i < 4; i += 1) await call(caller, 'memoryGraph.nodes.create', { label: `Note ${i}`, content: `Then Zorvak laughed and later Zorvak left the pass, note number ${i}.`, sector: 0, ring: 0 });
+    await call(caller, 'memoryGraph.checkAndPlace', { text: 'The party reaches the mountain pass.', chatLength: 30 });
+    assert.equal(prompts.length, 1, 'no extra model call for entity detection');
+    assert.match(prompts[0], /keep coming up in the notes but have no memory of their own yet: Zorvak/);
+    const nodes = (await call(caller, 'memoryGraph.nodes')).value;
+    const zorvak = nodes.find(node => node.label === 'Zorvak');
+    assert.ok(zorvak && zorvak.kind === 'entity', 'the model\'s answer to the hint becomes a node');
 });
 
 test('bootstrapFromLorebook() skips entries with empty content — nothing to embed or place', async () => {
