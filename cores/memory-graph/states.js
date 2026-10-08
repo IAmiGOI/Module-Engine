@@ -1,5 +1,6 @@
+import { cosineSimilarity } from '../../libraries/core/embedding.js';
 import { gameTimeKey } from './game-time.js';
-import { isEvent } from './kinds.js';
+import { isEvent, kindOf } from './kinds.js';
 
 /**
  * Состояния, которые меняются со временем (одежда, место, настроение, ранение), — чистые функции. Факт «Nyx носит белое платье» и
@@ -49,4 +50,25 @@ export function planSupersession(created, nodesById) {
 /** Пара, которую сливать нельзя: оба — состояния одного атрибута одного субъекта (разные значения — не дубли). */
 export function areStateVariants(a, b) {
     return hasState(a) && hasState(b) && a.attribute === b.attribute && sharesSubject(a, b);
+}
+
+/** Косинус, начиная с которого новый факт — пересказ уже лежащего (а не новое значение состояния): для E5 это почти дословное совпадение. */
+export const RESTATEMENT_SIMILARITY = 0.97;
+
+/**
+ * Не повторяет ли новый факт уже действующий факт того же субъекта (модель заново «открывает» то, что граф и так знает: «квартира —
+ * студия» на каждом ходу, пока сцена в квартире). Новое значение состояния (чёрное пальто после белого платья) на пересказ не похоже —
+ * там сходство заметно ниже. Возвращает id существующей ноды или null; решает только сходство, без вызова модели.
+ */
+export function findRestatement({ embedding, subjectIds, kind }, nodesById, { threshold = RESTATEMENT_SIMILARITY } = {}) {
+    if (!Array.isArray(embedding) || !embedding.length || !subjectIds?.length) return null;
+    let bestId = null;
+    let best = threshold;
+    for (const other of Object.values(nodesById)) {
+        if (!other?.embedding?.length || !isCurrentState(other) || isEvent(other) || kindOf(other) !== kind) continue;
+        if (!sharesSubject({ subjectIds }, other)) continue;
+        const similarity = cosineSimilarity(embedding, other.embedding);
+        if (similarity >= best) { best = similarity; bestId = other.id; }
+    }
+    return bestId;
 }

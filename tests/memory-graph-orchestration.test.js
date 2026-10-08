@@ -1310,6 +1310,23 @@ test('a pair SideCar judged distinct is NOT queued again by the periodic duplica
     assert.equal(graphCore.mergeQueue().length, 0);
 });
 
+test('a state the model re-extracts with the same value updates the existing node instead of piling up copies (the apartment case)', async () => {
+    const flat = content => `{"facts":[{"op":"create","kind":"fact","label":"Sasha's apartment","content":"${content}","importance":4,"subjects":["Sasha"],"attribute":"residence"}]}`;
+    const { caller } = buildEngine({
+        fetchReplies: [
+            '{"facts":[{"op":"create","kind":"entity","label":"Sasha","content":"Sasha is a woman.","importance":7,"subjects":["Sasha"]}]}',
+            flat("Sasha's apartment is a studio."),
+            flat("Sasha's apartment is a studio."),
+        ],
+    });
+    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured', mergeSimilarityThreshold: 0, mergeWordOverlapThreshold: 0, mergeAdaptiveFloor: 0.5 });
+    await call(caller, 'memoryGraph.reset');
+    for (const length of [30, 60, 90]) await call(caller, 'memoryGraph.checkAndPlace', { text: `scene ${length}`, chatLength: length });
+    const flats = (await call(caller, 'memoryGraph.nodes')).value.filter(node => /apartment/.test(node.label));
+    assert.equal(flats.length, 1, 'the same fact is one node, not two');
+    assert.equal(flats[0].supersededBy, undefined, 'and it stays current');
+});
+
 test('a new value of a state (outfit) replaces the current one: the old node is kept as history with its time, is not merged, and drops out of retrieval', async () => {
     const clock = { day: '1', time: '09:00' };
     const outfit = (label, content) => `{"facts":[{"op":"create","kind":"fact","label":"${label}","content":"${content}","importance":4,"subjects":["Nyx"],"attribute":"outfit"}]}`;
@@ -1321,7 +1338,7 @@ test('a new value of a state (outfit) replaces the current one: the old node is 
             outfit('Nyx outfit now', 'Nyx wears a black coat.'),
         ],
     });
-    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured', mergeSimilarityThreshold: 0, mergeWordOverlapThreshold: 0, mergeAdaptiveFloor: 0.5 });
+    await call(caller, 'memoryGraph.configure', { defaultGraphMode: 'structured', mergeSimilarityThreshold: 0, mergeWordOverlapThreshold: 0, mergeAdaptiveFloor: 0.5, restatementSimilarity: 0.999 }); // 4-мерные фейковые эмбединги слишком грубы, чтобы отличить два наряда
     await call(caller, 'memoryGraph.reset');
     let length = 0;
     for (const day of ['1', '2', '3']) {

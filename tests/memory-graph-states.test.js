@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { gameTimeKey, gameTimeLabel } from '../cores/memory-graph/game-time.js';
-import { planSupersession, areStateVariants, normalizeAttribute, isCurrentState } from '../cores/memory-graph/states.js';
+import { planSupersession, areStateVariants, normalizeAttribute, isCurrentState, findRestatement } from '../cores/memory-graph/states.js';
 import { parseStructuredFields, buildStructuredExtractionPrompt } from '../cores/memory-graph/extraction-prompt.js';
 import { timelineOf } from '../cores/memory-graph/edges.js';
 import { renderMemoryPrompt } from '../cores/memory-graph/math.js';
@@ -87,6 +87,7 @@ test('the extraction prompt explains attributes, forbids "update" for a changed 
     const prompt = buildStructuredExtractionPrompt({ contextText: 'x', currentTime: '3 12:21 (Afternoon)' });
     assert.match(prompt, /"attribute"/);
     assert.match(prompt, /never an "update"/);
+    assert.match(prompt, /SAME value as an existing memory/);
     assert.match(prompt, /Current in-world time: 3 12:21 \(Afternoon\)/);
     assert.doesNotMatch(buildStructuredExtractionPrompt({ contextText: 'x' }), /Current in-world time/);
 });
@@ -96,4 +97,20 @@ test('renderMemoryPrompt() says since when a current state holds', () => {
     const text = renderMemoryPrompt({ segments: [], standalone: ['n', 'm'], noise: [] }, nodes);
     assert.match(text, /Nyx wears a black coat\. \[since 3 12:21 \(Afternoon\)\]/);
     assert.match(text, /- Plain \(unconnected\): A plain fact\.$/m);
+});
+
+test('findRestatement() finds the current fact of the same subject that a new fact only repeats — not a changed value, another subject, an event or a replaced state', () => {
+    const near = [1, 0.01, 0], far = [0.8, 0.6, 0];
+    const nodes = {
+        a: { id: 'a', kind: 'fact', subjectIds: ['sasha'], embedding: near },
+        b: { id: 'b', kind: 'fact', subjectIds: ['moon'], embedding: near },
+        c: { id: 'c', kind: 'event', subjectIds: ['sasha'], embedding: near },
+        d: { id: 'd', kind: 'fact', subjectIds: ['sasha'], embedding: near, supersededBy: 'a' },
+    };
+    const probe = { embedding: [1, 0, 0], subjectIds: ['sasha'], kind: 'fact' };
+    assert.equal(findRestatement(probe, nodes), 'a');
+    assert.equal(findRestatement({ ...probe, embedding: far }, nodes), null, 'a different value is not a restatement');
+    assert.equal(findRestatement({ ...probe, subjectIds: ['nyx'] }, nodes), null, 'another subject');
+    assert.equal(findRestatement({ ...probe, subjectIds: [] }, nodes), null, 'no subject, no claim');
+    assert.equal(findRestatement(probe, { c: nodes.c, d: nodes.d, b: nodes.b }), null, 'events, replaced states and other subjects never match');
 });
