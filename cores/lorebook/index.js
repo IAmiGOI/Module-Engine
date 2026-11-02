@@ -332,7 +332,7 @@ export function createLorebookCore(host, { publish } = {}) {
         host.own.register('lorebook.read', params => readBook(params?.name)),
         host.own.register('lorebook.names', () => allBookNames()),
         host.own.register('lorebook.createBook', params => createBook(params?.name)),
-        // Полные записи активных книг — вход собственного движка активации Prompt Manager (pm-lorebook.js).
+        // Полные записи активных книг — память графа и контекст директора.
         host.own.register('lorebook.entries', () => [...byUid.entries()].map(([key, entry]) => ({ ...entry, book: entry.book ?? key.slice(0, key.lastIndexOf(':')) }))),
         host.own.register('lorebook.lastActivated', () => lastActivated),
         host.own.register('lorebook.createEntry', params => createEntry(params?.patch ?? {}, params?.book)),

@@ -15,10 +15,6 @@ chatHistory.messages, chatHistory.annotate, chatHistory.annotations, chatHistory
 # исполняется под ПРАВАМИ ЭТОГО Модуля (см. cores/pipeline/index.js
 # про `resolveAs`), регистрирует и снимает этап сам Модуль.
 pipeline.stages.add, pipeline.stages.remove,
-# Вклад в Prompt Manager (deliverToPrompt) — без этих двух прав Гейт молча отклонял оба вызова,
-# deliverToPrompt читал это как «PM не берёт сборку» и тихо уходил в `legacy` ВСЕГДА, даже когда PM
-# реально включён (найдено по факту: владелец пожаловался, что вклад не появляется в окне PM).
-promptManager.takesOver, promptManager.contribute,
 model.workers.get, model.presets.get, model.presets.set, ui.notify, ui.messageFooter.claim, ui.messageFooter.release,
 ui.messageFooter.liveMesid
 */
@@ -881,10 +877,9 @@ export function createTimeModule(host) {
     }
 
     /**
-     * Вклад через Prompt Manager (владелец: «почему саммари не публикует свой инжект в ПМ, добавь такой же для RP
-     * Time» — тот же контракт `promptManager.contribute`, что уже есть у Summary/Notebook/Secrets/графа памяти;
-     * без него время висло вставкой в `chat`, невидимой и непереставляемой в окне PM). PM выключен/недоступен —
-     * прежний `chat.unshift`, поведение не меняется.
+     * Вставка текущего времени в `chat` через общий `deliverToPrompt`. Prompt Manager
+     * удалён, поэтому всегда работает прежний путь `chat.unshift`; функция осталась
+     * единой точкой вставки, чтобы вкладчики не разъехались.
      */
     async function injectCurrentTime({ chat } = {}) {
         if (!Array.isArray(chat)) return true;

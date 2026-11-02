@@ -12,8 +12,6 @@ generation.registerTool, generation.unregisterTool,
 # (см. cores/pipeline/index.js про `resolveAs`), но регистрирует
 # и снимает этап сам Модуль, отсюда — эти два права.
 pipeline.stages.add, pipeline.stages.remove,
-# Вклад в Prompt Manager (deliverToPrompt) — без них Гейт молча отклонял вызов (см. Notebook выше).
-promptManager.takesOver, promptManager.contribute,
 ui.notify
 */
 import { h } from '../../cores/ui/tree.js';

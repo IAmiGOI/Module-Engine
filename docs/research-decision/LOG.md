@@ -1058,3 +1058,73 @@ query)` в `libraries/core/lorebook-sources.js` и контракт `lorebook.se
 Карта собрана, ход без PM прослежен по коду, `needs` проверен, хранилище
 измерено и решено, способ подключения лорбука выбран. Незаменяемого нет:
 блок f1 продолжается.
+
+## f1. Удаление Prompt Manager
+
+Сделано:
+
+- **PM удалён целиком.** Удалены `cores/prompt-manager/` (ядро, пресеты,
+  вклады), все 21 `libraries/core/pm-*.js`, `libraries/core/jev-question.js`
+  и `guide-preset.js`, `services/pm-presets.js`, `services/st-pm-ui.js`,
+  панель и 12 файлов её вкладок, карточка PM, стиль окна, действия и контекст
+  гида для пресетов. Удалены 23 файла тестов PM и фикстура
+  `pm-amigo-polished.st.json`.
+- **Общее вынесено из PM-файлов до удаления:**
+  - `libraries/core/token-estimate.js` — `estimateTokens` (им пользуются
+    `decision-bank` и `decision-log`);
+  - `libraries/core/chat-to-messages.js` — `chatToMessages` (контекст);
+  - `libraries/core/hash-text.js` — `hashText` (классификатор);
+  - `libraries/core/decision-cache.js` — `extractCachedTokens`,
+    `estimateMessageTokens`, `compareRequests` (ядро решения; замер кеша —
+    в f3).
+- **Проводка.** Из `harness/wiring/data-cores.js`, `services.js`,
+  `ui-cores.js`, `boot.js`, `engine-wiring.js`, `engine-panel.js`,
+  `panel-trees.js`, `styles/index.css`, `harness/index.html` убраны PM-ядро,
+  панель, сервисы, карточка, стили и заглушка родной панели. Порядок запуска
+  «строго после PM» снят: `decisionCore.load()` больше ни от кого не зависит.
+- **`decision:rewrite` без зависимостей.** Удалены `PM_STAGE`, проверка
+  `hasStage`, `needs` и перерегистрация по `pipeline.stagesChanged`. Этап
+  остался единственным на `generation.payload`.
+- **Тест карточки — через связку директор → прозаик.** `card-test.js`
+  вызывает новый контракт `decision.cardTurn`: директор в изолированном
+  состоянии (свой временный store, карточка как Character Notes, ростер из
+  одного персонажа) заполняет форму через инструменты, прозаик получает
+  Push и заметки. Ограниченный набор инструментов (`update_roster`,
+  `assess`, `submit_turn`, `await`, `set_plan`, `character_note`,
+  `current_state`) — чтобы тест не мог писать в саммари, банк и часы
+  настоящего чата. `describeTestResult` больше не печатает имя пресета.
+  Новый `tests/decision-card-turn.test.js` — 2/2: настоящий цикл с фейковым
+  директором и проверка, что в `storage.chatMemory` ничего не пишется.
+- **Бэкап и синхронизация.** Удалён источник `pmPresets` из
+  `cores/backup/index.js` и его регистрация; удалены категория `pmPresets`
+  и пути `stmePmPresets/` из `sync-config.js`, `sync-pack.js`,
+  `st-user-data.js` (вместе с `createIndexedDbPresetStore`). Старый бэкап с
+  разделом `pmPresets` восстанавливается: `importSnapshot` пропускает
+  неизвестный источник. Старый список категорий очищается
+  `sanitizeCategories` по `SYNC_CATEGORY_IDS`, поэтому ничего не падает.
+- **Вклады модулей.** `deliverToPrompt` упрощён: PM больше нет, функция
+  всегда выполняет прежнюю вставку `legacy()` и возвращает `'legacy'`.
+  Шесть вкладчиков (Summary, граф памяти, навигация, RP Time, Notebook,
+  Secrets) не менялись по вызову; из прав трёх Модулей убраны
+  `promptManager.takesOver` / `promptManager.contribute`.
+- **UI-тексты и комментарии.** Убраны упоминания PM из карточки Models,
+  карточки Director/Writer, подписи синхронизации, гида и устаревших
+  комментариев. `guide/knowledge` больше не содержит статей о PM:
+  удалены `prompt-manager.md`, пять `preset-*.md` и
+  `character-preset-fit.md`, обновлён `index.json`; промпт гида больше не
+  перечисляет действия с пресетами.
+- **Документация.** `CORES.md` — строка PM помечена удалённой, описание
+  теста карточки и классификатора обновлено; `PIPELINE.md` — вместо PM
+  финальный этап «директор + прозаик»; `LIBRARIES.md` — PM-строки убраны,
+  добавлен `hash-text.js`; `PROMPT_MANAGER_PLAN.md` помечен историческим.
+  `ROADMAP.md` оставлен как история.
+
+Проверки:
+
+- полный прогон: **3286** тестов, **3115** прошло, **167** упало, **4**
+  пропущено. Падают ровно те же 23 файла базовой линии; новых падений нет.
+  Число тестов уменьшилось на 237 вместе с удалёнными тестами PM.
+- отдельно: `decision-core`, `decision-scenario`, `decision-card-turn`,
+  `character-card-test-run`, `prompt-contribution`, `time-module`,
+  `notebook-module`, `secrets-module`, `summary-core`, `sync-config`,
+  `guide-character`, `guide-chat-crawler`, `engine` — зелёные.

@@ -1,4 +1,4 @@
-import { estimateTokens } from './pm-tokens.js';
+import { estimateTokens } from './token-estimate.js';
 
 /**
  * Банк памяти — записи о результатах планов. Привязаны к персонажу и плану;

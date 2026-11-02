@@ -40,7 +40,7 @@ function makeChat() {
     return chat;
 }
 
-async function build({ enabled = true, withPm = false, directorFails = false } = {}) {
+async function build({ enabled = true, directorFails = false } = {}) {
     const engine = createEngine();
     const chat = makeChat();
     const sent = [];
@@ -113,13 +113,6 @@ async function build({ enabled = true, withPm = false, directorFails = false } =
     });
     await summaryCore.load();
 
-    if (withPm) {
-        const pmHost = engine.registerCaller('core.promptManager', 'cores', { tier: 'official' });
-        pmHost.own.register('promptManager.takesOver', () => false);
-        pmHost.own.register('promptManager.rewrite', ({ payload }) => ({ ...payload, messages: [{ role: 'system', content: 'PM assembled' }] }));
-        await request(pmHost.own, 'pipeline.stages.add', { params: { pipelineId: 'generation.payload', stage: { id: 'prompt-manager:rewrite', contract: 'promptManager.rewrite', params: { payload: { $from: '$value' } } } } });
-    }
-
     const decisionCore = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.decision' }),
         retryDelayMs: 0,
@@ -185,14 +178,6 @@ test('with the core off the outgoing body is byte-for-byte the one ST sent, and 
     const body = JSON.parse(result.sent.body);
     assert.deepEqual(body.messages, [{ role: 'system', content: 'ST assembled' }]);
     assert.equal(body.reasoning_effort, 'high', 'off means exactly as before, including reasoning');
-});
-
-test('when the Prompt Manager is registered, it runs first but the writer body is what really leaves', async () => {
-    const { send } = await build({ enabled: true, withPm: true });
-    const result = await send();
-    const body = JSON.parse(result.sent.body);
-    assert.equal(body.messages.some(message => message.content === 'PM assembled'), false);
-    assert.match(body.messages[0].content, /You write the character's next reply/);
 });
 
 test('a director that fails twice aborts the real generation before anything leaves, and the user is told', async () => {

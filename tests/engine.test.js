@@ -58,7 +58,7 @@ test('same-domain calls (Core -> Core) stay on the caller\'s own bus directly â€
     // A second Core with an otherwise-empty community grant â€” if same-domain
     // calls went through a Gate like cross-domain ones do, this would be
     // denied; same-bus Core->Core must not require any declared right at all.
-    const consumerCore = engine.registerCaller('core.promptManager', 'cores', { tier: 'community', allowedContracts: [] });
+    const consumerCore = engine.registerCaller('core.consumer', 'cores', { tier: 'community', allowedContracts: [] });
     const result = await new Promise(resolve => consumerCore.own.subscribe('model.generate', {}, resolve));
 
     assert.deepEqual(result, { ok: true, value: 'generated text' });

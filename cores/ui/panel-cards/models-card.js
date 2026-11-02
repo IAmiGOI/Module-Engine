@@ -151,7 +151,7 @@ export function createModelsCard(deps) {
     function classifiersCard() {
         return Card('Classifiers', {
             ...collapse.bind('card:classifiers'),
-            subtitle: 'Small models that rate how likely a statement about the chat is (for example Jev). A Prompt Manager block can be sent only when one of them finds a statement likely enough. If the classifier does not answer in time, the block is sent.',
+            subtitle: 'Small models that rate how likely a statement about the chat is (for example Jev). Modules can ask them and act on the answer; if the classifier does not answer in time, the caller decides what to do.',
         },
         EditableList({
             items: classifiers,

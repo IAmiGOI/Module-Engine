@@ -1,4 +1,4 @@
-import { chatToMessages } from './pm-history.js';
+import { chatToMessages } from './chat-to-messages.js';
 import { planSection, arcsSection, notesSection, notesAsBlocks } from './decision-state.js';
 
 /**
@@ -7,10 +7,9 @@ import { planSection, arcsSection, notesSection, notesAsBlocks } from './decisio
  * одних и тех же частей, поэтому порядок и форматирование живут в одном
  * месте.
  *
- * **Порядок — от стабильного к меняющемуся** (PROMPT_MANAGER_PLAN.md, раздел
- * про кэш префикса): правила и саммари меняются редко; блоки о персонаже
- * правит директор каждый ход; история дописывается; задание на ход —
- * последнее. Для `openai`-воркера это `messages`; для `anthropic`/`google`
+ * **Порядок — от стабильного к меняющемуся** (кеш префикса у провайдера):
+ * правила и саммари меняются редко; блоки о персонаже правит директор каждый
+ * ход; история дописывается; задание на ход — последнее. Для `openai`-воркера это `messages`; для `anthropic`/`google`
  * те же части плющатся в `systemPrompt` + `prompt`, потому что multi-turn
  * `model.generate` поддерживает только `openai`.
  */
@@ -53,8 +52,7 @@ function isSummaryEntry(entry) {
 /**
  * Последние `limit` ЛОГИЧЕСКИХ единиц истории. Единица — обычное сообщение
  * либо серия `isToolCall`-сообщений вместе со следующим за ней настоящим
- * ответом: так пара «вызов инструмента + результат» никогда не разрезается
- * (PROMPT_MANAGER_PLAN.md, раздел про историю ST).
+ * ответом: так пара «вызов инструмента + результат» никогда не разрезается.
  */
 export function selectRecentChat(chat, limit = RECENT_MESSAGE_LIMIT) {
     const entries = (Array.isArray(chat) ? chat : []).filter(entry => !isSummaryEntry(entry));

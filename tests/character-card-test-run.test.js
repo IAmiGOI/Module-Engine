@@ -22,9 +22,9 @@ test('the test chat starts with the card\'s first message, like a real chat, and
     assert.equal(buildTestChat({ name: 'Aria', first_mes: '' }, 'Sasha', [{ say: 'Hi' }]).length, 1, 'a card without a first message starts with the user\'s turn');
 });
 
-test('the transcript for the guide names the model, the preset and each probe with the rule it checks, and marks a cut reply', () => {
-    const text = describeTestResult({ name: 'Aria', modelLabel: 'the main SillyTavern connection', presetName: 'AmiGO', results: [{ rule: 'Five Tails', say: 'Count.', reply: 'x'.repeat(4000) }, { rule: '', say: 'Hi', reply: '' }] });
-    assert.match(text, /^Test of “Aria” on the main SillyTavern connection, preset “AmiGO”, isolated chat/);
+test('the transcript for the guide names the model and each probe with the rule it checks, and marks a cut reply', () => {
+    const text = describeTestResult({ name: 'Aria', modelLabel: 'the main SillyTavern connection', results: [{ rule: 'Five Tails', say: 'Count.', reply: 'x'.repeat(4000) }, { rule: '', say: 'Hi', reply: '' }] });
+    assert.match(text, /^Test of “Aria” on the main SillyTavern connection, isolated chat/);
     assert.match(text, /Probe 1 — checks: Five Tails\n\{\{user\}\}: Count\.\nAria: x+\n\[cut: 4000 characters in all\]/);
     assert.match(text, /Probe 2\n\{\{user\}\}: Hi\nAria: \(empty reply\)/);
 });
@@ -35,7 +35,7 @@ test('the chat excerpt keeps the last messages oldest first, skips system lines,
     assert.match(text, /^The last 2 messages of the open chat with “Aria” \(oldest first\):\n\n\{\{user\}\}: hello\n\nAria: y+\n\[cut: 2500 characters in all\]$/);
 });
 
-function buildRunner({ skipped = null, directFails = false, openAvatar = 'Aria.png' } = {}) {
+function buildRunner({ cardTurnFails = null, directFails = false, openAvatar = 'Aria.png' } = {}) {
     const engine = createEngine();
     const cards = { 'Aria.png': { name: 'Aria', description: 'Aria is a scout.', data: { name: 'Aria', first_mes: 'Who goes there?', extensions: {} }, first_mes: 'Who goes there?' } };
     const log = { assembled: [], direct: [], worker: [] };
@@ -46,24 +46,31 @@ function buildRunner({ skipped = null, directFails = false, openAvatar = 'Aria.p
     services.register('stCharacter.current', () => ({ avatar: openAvatar, name: 'Aria' }));
     services.register('stGeneration.direct', ({ messages, maxTokens }) => { log.direct.push({ messages, maxTokens }); return directFails ? { ok: false, error: 'HTTP 401' } : { ok: true, text: `reply ${log.direct.length}` }; });
     const cores = engine.registerCaller('core.test-bus', 'cores', { tier: 'official' });
-    cores.own.register('promptManager.assembleForCard', ({ card, chat }) => { log.assembled.push({ card, chat: structuredClone(chat) }); return skipped ? { skipped } : { messages: [{ role: 'system', content: `card ${card.name}` }, ...chat.map(entry => ({ role: entry.is_user ? 'user' : 'assistant', content: entry.mes }))], tokens: 10, presetName: 'AmiGO' }; });
+    cores.own.register('decision.cardTurn', ({ card, chat }) => {
+        if (cardTurnFails) throw new Error(cardTurnFails);
+        log.assembled.push({ card, chat: structuredClone(chat) });
+        return {
+            messages: [{ role: 'system', content: `card ${card.name} and the director's push` }, ...chat.map(entry => ({ role: entry.is_user ? 'user' : 'assistant', content: entry.mes }))],
+            push: 'PUSH',
+        };
+    });
     cores.own.register('model.generate', ({ workerId, messages }) => { log.worker.push({ workerId, messages }); return `worker ${log.worker.length}`; });
     cores.own.register('chatHistory.messages', ({ limit }) => [{ isUser: true, isSystem: false, name: 'Sasha', text: `last ${limit}` }]);
     createCharacterCardsCore(engine.registerCaller('core.characterCard', 'cores', { tier: 'official' }));
     return { call: (contract, params) => request(engine.buses.cores, contract, { params }), log };
 }
 
-test('a test runs the probes one after another in one growing chat: each request carries the first message, every earlier probe and its reply, on the main connection by default', async () => {
+test('a test runs the probes one after another in one growing chat: each turn carries the first message, every earlier probe and its reply, on the main connection by default', async () => {
     const { call, log } = buildRunner();
     const tested = await call('characterCard.test', { avatar: 'Aria.png', probes: [{ say: 'Who are you?', rule: 'Identity' }, { say: 'Count your tails.', rule: 'Five Tails' }] });
     assert.equal(tested.ok, true);
     assert.deepEqual(log.assembled[0].chat.map(entry => entry.mes), ['Who goes there?', 'Who are you?']);
     assert.deepEqual(log.assembled[1].chat.map(entry => entry.mes), ['Who goes there?', 'Who are you?', 'reply 1', 'Count your tails.']);
-    assert.equal(log.assembled[0].card.description, 'Aria is a scout.', 'the request is built from the card\'s own text');
+    assert.equal(log.assembled[0].card.description, 'Aria is a scout.', 'the turn is built from the card\'s own text');
     assert.equal(log.direct.length, 2);
     assert.equal(log.direct[0].maxTokens, 1200);
     assert.deepEqual(tested.value.results.map(item => [item.say, item.reply]), [['Who are you?', 'reply 1'], ['Count your tails.', 'reply 2']]);
-    assert.match(tested.value.text, /on the main SillyTavern connection \(the model you play on\), preset “AmiGO”/);
+    assert.match(tested.value.text, /on the main SillyTavern connection \(the model you play on\), isolated chat/);
 });
 
 test('a test may run on a chosen model connection instead, and its reply length is kept within sane bounds', async () => {
@@ -75,8 +82,8 @@ test('a test may run on a chosen model connection instead, and its reply length 
     assert.match(tested.value.text, /the model connection “cheap”/);
 });
 
-test('a test that cannot be built or sent says why and stops: no active preset, a refusing connection, a character that does not exist', async () => {
-    assert.match((await buildRunner({ skipped: 'no active preset' }).call('characterCard.test', { avatar: 'Aria.png', probes: ['hi'] })).error.message, /Prompt Manager cannot build the request \(no active preset\)/);
+test('a test that cannot be built or sent says why and stops: no director worker, a refusing connection, a character that does not exist', async () => {
+    assert.match((await buildRunner({ cardTurnFails: 'Decision core: no director worker is configured' }).call('characterCard.test', { avatar: 'Aria.png', probes: ['hi'] })).error.message, /the test turn could not be built: Decision core: no director worker is configured/);
     assert.match((await buildRunner({ directFails: true }).call('characterCard.test', { avatar: 'Aria.png', probes: ['hi'] })).error.message, /the main connection did not answer: HTTP 401/);
     assert.equal((await buildRunner().call('characterCard.test', { avatar: 'Nobody.png', probes: ['hi'] })).ok, false);
     assert.equal((await buildRunner().call('characterCard.test', { avatar: 'Aria.png', probes: [] })).ok, false);

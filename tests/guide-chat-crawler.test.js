@@ -101,7 +101,7 @@ function build({ generate, openMessages = longChat(), saved = {}, openAvatar = '
     bus.register('model.workers.status', () => [{ workerId: 'w', state: 'up' }]);
     bus.register('model.workers.probe', () => [{ workerId: 'w', state: 'up' }]);
     bus.register('model.generate', params => { calls.push(params); return generate(calls.length, params); });
-    for (const name of ['ui.anchors.list', 'tracking.trackers', 'macros.programs', 'lorebook.find', 'promptManager.presets']) bus.register(name, () => []);
+    for (const name of ['ui.anchors.list', 'tracking.trackers', 'macros.programs', 'lorebook.find']) bus.register(name, () => []);
     bus.register('characterCard.list', () => [{ avatar: 'Aria.png', name: 'Aria', tags: [] }, { avatar: 'Bram.png', name: 'Bram', tags: [] }]);
     bus.register('chatHistory.messages', () => openMessages);
     const services = engine.buses.services;

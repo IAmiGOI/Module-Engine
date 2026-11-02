@@ -236,7 +236,7 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
             Details('Writer generation settings',
                 Row(
                     Field('Preset', Select(writer.samplerPreset, presetOptions, { onChange: id => applyPreset('writer', id) })),
-                    Toggle('Apply writer sampler', writer.applySampler, { hint: 'Off: the request keeps the sampler SillyTavern/Prompt Manager already set.' }),
+                    Toggle('Apply writer sampler', writer.applySampler, { hint: 'Off: the request keeps the sampler SillyTavern already set.' }),
                 ),
                 Row(
                     Slider('Temperature', writer.temperature, { min: 0, max: 2, step: 0.05 }),

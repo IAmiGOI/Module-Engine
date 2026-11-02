@@ -19,7 +19,7 @@ const CATEGORY_LABELS = Object.freeze([
     ['characters', 'Characters'],
     ['chats', 'Chats (including group chats)'],
     ['worlds', 'Lorebooks'],
-    ['presets', 'Presets & prompts (Prompt Manager, samplers, instruct, themes, Quick Replies)'],
+    ['presets', 'Presets & prompts (samplers, instruct, themes, Quick Replies)'],
     ['backgrounds', 'Backgrounds'],
     ['personas', 'Persona avatars'],
 ]);

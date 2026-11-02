@@ -16,7 +16,7 @@ function memoryKey(namespace, key) {
     return `${namespace}:${key}`;
 }
 
-async function build({ enabled = false, patch = {}, initialRuns = null, workers = [{ id: 'director', format: 'openai', model: 'director/model' }], summaries = [], withPm = false, reply = () => JSON.stringify({ decision: 'She opens the door.', blocks: [{ op: 'add', title: 'Door', text: 'The east door is open.' }] }) } = {}) {
+async function build({ enabled = false, patch = {}, initialRuns = null, workers = [{ id: 'director', format: 'openai', model: 'director/model' }], summaries = [], reply = () => JSON.stringify({ decision: 'She opens the door.', blocks: [{ op: 'add', title: 'Door', text: 'The east door is open.' }] }) } = {}) {
     const engine = createEngine();
     const settingsStore = new Map();
     const chatMemory = new Map();
@@ -48,12 +48,6 @@ async function build({ enabled = false, patch = {}, initialRuns = null, workers 
     });
     pipelineCore.define({ id: BEFORE_SEND, mode: 'collect' });
     pipelineCore.define({ id: PAYLOAD, mode: 'fold' });
-    const pmHost = engine.registerCaller('core.promptManager', 'cores', { tier: 'official' });
-    if (withPm) {
-        pmHost.own.register('promptManager.rewrite', ({ payload }) => ({ ...payload, messages: [{ role: 'system', content: 'PM assembled' }] }));
-        await request(pmHost.own, 'pipeline.stages.add', { params: { pipelineId: PAYLOAD, stage: { id: 'prompt-manager:rewrite', contract: 'promptManager.rewrite', params: { payload: { $from: '$value' } } } } });
-    }
-
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
     if (enabled) await core.configure({ enabled: true, ...patch });
@@ -78,30 +72,17 @@ test('off by default: no stages are registered at all, and the director/writer c
     assert.equal(await core.rewrite({ payload }), payload);
 });
 
-test('enabling registers both stages, and the writer stage waits for the Prompt Manager rewrite when PM is already there', async () => {
-    const { core, pipelineCore } = await build({ withPm: true });
+test('enabling registers both stages, and the writer stage is the only stage on the payload with no dependencies', async () => {
+    const { core, pipelineCore } = await build();
     await core.configure({ enabled: true });
     assert.deepEqual(stages(pipelineCore, BEFORE_SEND), ['decision:decide']);
-    assert.deepEqual(stages(pipelineCore, PAYLOAD), ['prompt-manager:rewrite', 'decision:rewrite']);
+    assert.deepEqual(stages(pipelineCore, PAYLOAD), ['decision:rewrite']);
     const rewrite = pipelineCore.stages(PAYLOAD).find(stage => stage.id === 'decision:rewrite');
-    assert.deepEqual(rewrite.needs, ['prompt-manager:rewrite']);
+    assert.deepEqual(rewrite.needs, []);
 });
 
-test('the writer stage re-registers with a dependency when the Prompt Manager appears later', async () => {
-    const { core, pipelineCore, engine } = await build();
-    await core.configure({ enabled: true });
-    const before = pipelineCore.stages(PAYLOAD).find(stage => stage.id === 'decision:rewrite');
-    assert.deepEqual(before.needs, []);
-    const pmHost = engine.registerCaller('core.promptManager', 'cores', { tier: 'official' });
-    pmHost.own.register('promptManager.rewrite', ({ payload }) => payload);
-    await request(pmHost.own, 'pipeline.stages.add', { params: { pipelineId: PAYLOAD, stage: { id: 'prompt-manager:rewrite', contract: 'promptManager.rewrite' } } });
-    await flush();
-    const after = pipelineCore.stages(PAYLOAD).find(stage => stage.id === 'decision:rewrite');
-    assert.deepEqual(after.needs, ['prompt-manager:rewrite']);
-});
-
-test('the director runs on beforeSend, the writer replaces the outgoing messages, and PM runs before but is overridden', async () => {
-    const { core, pipelineCore, calls } = await build({ withPm: true, enabled: true, patch: { rules: 'Never kill a named character.', decider: { workerId: 'director' } }, summaries: [{ startIndex: 1, endIndex: 9, text: 'They reached the keep.' }] });
+test('the director runs on beforeSend and the writer replaces the outgoing messages', async () => {
+    const { core, pipelineCore, calls } = await build({ enabled: true, patch: { rules: 'Never kill a named character.', decider: { workerId: 'director' } }, summaries: [{ startIndex: 1, endIndex: 9, text: 'They reached the keep.' }] });
     const chat = [{ mes: 'older' }, { mes: 'Hello?', is_user: true }];
     const before = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat, type: 'normal' } });
     assert.equal(before.ok, true);
@@ -116,7 +97,6 @@ test('the director runs on beforeSend, the writer replaces the outgoing messages
     assert.equal(sent.ok, true);
     const messages = sent.value.messages;
     assert.match(messages[0].content, /You write the character's next reply/);
-    assert.equal(messages.some(message => message.content === 'PM assembled'), false, 'the writer body overrides PM');
     assert.equal(messages.some(message => message.content === 'ST assembled'), false, 'the writer body overrides ST assembly');
     assert.equal(messages.at(-1).content, 'Hello?');
     assert.match(messages.map(message => message.content).join('\n'), /She opens the door/);

@@ -4,16 +4,16 @@ import { buildWriterContext } from '../../libraries/core/decision-context.js';
 import { applyBlockEdits } from '../../libraries/core/decision-format.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { extractReasoning } from '../../libraries/core/decision-reasoning.js';
-import { extractCachedTokens } from '../../libraries/core/pm-cache-hints.js';
+import { extractCachedTokens } from '../../libraries/core/decision-cache.js';
 import { createDecisionStore } from './store.js';
 import { createDecisionCycle } from './cycle.js';
+import { createCardTurn } from './card-turn.js';
 import { createResearcher } from '../../libraries/core/decision-researcher.js';
 
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
 const DECIDE_STAGE = 'decision:decide';
 const REWRITE_STAGE = 'decision:rewrite';
-const PM_STAGE = 'prompt-manager:rewrite';
 const DECIDE_CONTRACT = 'decision.decide';
 const REWRITE_CONTRACT = 'decision.rewrite';
 const RETRY_DELAY_MS = 500;
@@ -26,10 +26,9 @@ const RETRY_DELAY_MS = 500;
  * контекстом. Ядро по умолчанию выключено: пока `settings.enabled` false,
  * этапы НЕ регистрируются, и путь генерации остаётся прежним.
  *
- * Порядок на `payload` задан зависимостью, а не порядком регистрации:
- * `decision:rewrite` объявляет `needs: ['prompt-manager:rewrite']`, если PM
- * уже зарегистрировал свой этап, и поэтому всегда идёт последним. Если PM
- * загрузится позже, этап перерегистрируется по `pipeline.stagesChanged`.
+ * На `generation.payload` `decision:rewrite` — единственный этап: тело ST
+ * целиком заменяется контекстом прозаика. Prompt Manager удалён (часть 3),
+ * поэтому зависимостей по `needs` у этапа больше нет.
  *
  * Правки блоков и запись прогона живут в памяти до успешного конца прогона
  * (`generation.completed` с `outcome: 'ended'`). Вытесненный/отменённый/
@@ -42,7 +41,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     let pending = null; // текущий прогон директора: { runId, type, chat, decision, edits, blocksAfter, … }
     let stagesRegistered = false;
     let registering = false;
-    let rewriteNeedsPm = false;
     let runCounter = 0;
     let typingActive = false;
     const attempts = new Map(); // runId -> шаги попыток (успешная и провалившиеся)
@@ -77,6 +75,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         researcher,
         publishEvent,
     });
+    const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
 
     async function reload() {
         await store.reload();
@@ -97,23 +96,17 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return settings;
     }
 
-    function rewriteStage(withPm) {
+    function rewriteStage() {
         return {
             id: REWRITE_STAGE,
             contract: REWRITE_CONTRACT,
             params: { payload: { $from: '$value' } },
-            ...(withPm ? { needs: [PM_STAGE] } : {}),
             onExhausted: 'abort',
         };
     }
 
     async function addStage(pipelineId, stage) {
         return Boolean(await call('pipeline.stages.add', { pipelineId, stage }).then(value => value !== undefined));
-    }
-
-    async function hasStage(pipelineId, stageId) {
-        const stages = await call('pipeline.stages', { pipelineId });
-        return Array.isArray(stages) && stages.some(stage => stage.id === stageId);
     }
 
     async function registerStages() {
@@ -127,8 +120,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 fallbacks: [{ delayMs: retryDelayMs }],
                 onExhausted: 'abort',
             });
-            rewriteNeedsPm = await hasStage(PAYLOAD_PIPELINE, PM_STAGE);
-            const rewritten = await addStage(PAYLOAD_PIPELINE, rewriteStage(rewriteNeedsPm));
+            const rewritten = await addStage(PAYLOAD_PIPELINE, rewriteStage());
             stagesRegistered = Boolean(decided && rewritten);
         } finally {
             registering = false;
@@ -138,7 +130,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     async function unregisterStages() {
         if (!stagesRegistered) return;
         stagesRegistered = false;
-        rewriteNeedsPm = false;
         await call('pipeline.stages.remove', { pipelineId: BEFORE_SEND_PIPELINE, stageId: DECIDE_STAGE });
         await call('pipeline.stages.remove', { pipelineId: PAYLOAD_PIPELINE, stageId: REWRITE_STAGE });
     }
@@ -301,12 +292,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         attempts.delete(payload?.runId);
     }
 
-    function onStagesChanged(payload) {
+    function onStagesChanged() {
         if (registering) return;
-        if (!stagesRegistered && settings.enabled) { registerStages().catch(() => {}); return; }
-        if (payload?.pipelineId !== PAYLOAD_PIPELINE || !stagesRegistered) return;
-        if (payload?.added === PM_STAGE && !rewriteNeedsPm) { rewriteNeedsPm = true; addStage(PAYLOAD_PIPELINE, rewriteStage(true)).catch(() => {}); }
-        if (payload?.removed === PM_STAGE && rewriteNeedsPm) { rewriteNeedsPm = false; addStage(PAYLOAD_PIPELINE, rewriteStage(false)).catch(() => {}); }
+        if (!stagesRegistered && settings.enabled) registerStages().catch(() => {});
     }
 
     function listen() {
@@ -365,6 +353,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.own.register('decision.names', () => store.names()),
             host.own.register('decision.draft', () => store.draft()),
             host.own.register('decision.reload', () => reload()),
+            host.own.register('decision.cardTurn', params => cardTurn(params)),
             host.own.register(DECIDE_CONTRACT, params => decide(params)),
             host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
         );

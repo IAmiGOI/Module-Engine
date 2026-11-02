@@ -109,8 +109,9 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         };
     }
 
-    async function toolsFor(settings, { background = false } = {}) {
+    async function toolsFor(settings, { background = false, filter = null } = {}) {
         return buildToolList(await externalTools()).filter(tool => {
+            if (filter && !filter.includes(tool.name)) return false;
             if (background && tool.name === 'submit_turn') return false;
             if (!settings.turnDraft && tool.name === 'save_draft') return false;
             return true;
@@ -156,13 +157,13 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return result;
     }
 
-    async function run({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage }) {
+    async function run({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
         awaiting = false;
         const context = buildContext({ chat, settings, summaries: await summaries() });
-        const tools = await toolsFor(settings);
+        const tools = await toolsFor(settings, { filter: toolFilter });
         const startedAt = now();
         const controller = new AbortController();
         const agent = runDecisionCycle({
