@@ -918,3 +918,72 @@ SSE. Директор получает `stream: true` и события
 older» сверху — DOM растёт порциями, виртуализация не нужна. Архив сжатия
 (`e6`) — отдельная свёрнутая секция «Archived arcs». Никакого
 `requestAnimationFrame`: индикатор ожидания обновляет текст раз в секунду.
+
+## Часть 6. Прозаик ходит через своё подключение ME (i0)
+
+### Что ST ждёт от своего бэкенда
+
+ST зовёт `/api/backends/chat-completions/generate` и разбирает ответ по
+`chat_completion_source` (`public/scripts/openai.js`):
+- **без потока** — `response.json()`, дальше `extractMessageFromData()`:
+  для `main_api = openai` берётся `content[].text` (Claude) либо
+  `choices[0].message.content` / `choices[0].text`. Сервер ST для **всех**
+  источников заворачивает ответ провайдера в
+  `{ choices: [{ message: { content } }], content? }`
+  (`src/endpoints/backends/chat-completions.js`).
+- **поток** — SSE-кадры, `data: <json>`, конец — `data: [DONE]`; разбор
+  опять по источнику (`getStreamingReply`):
+  Claude — `delta.text`/`delta.thinking`; Google —
+  `candidates[0].content.parts[].text`; Cohere —
+  `delta.message.content.text`; все openai-совместимые (OpenRouter,
+  OpenAI, custom, NanoGPT, DeepSeek, xAI, MistralAI и т. д.) —
+  `choices[0].delta.content`.
+
+Вывод: **openai-совместимые источники пробрасываются почти как есть**, для
+Claude/Google/Cohere кадры переводятся из openai-дельт в форму источника.
+Без потока JSON подключения уже годится для всех: ST читает из него
+`choices[0].message.content`. Не-chat эндпоинты (text-completions, kobold,
+novelai) не покрываются — там прозаик остаётся на ST, потому что
+подключение прозаика — chat-completions.
+
+### Новый исход обёртки
+
+`services/st-generation.js`, `installSendHook` уже знает исход
+`{ replyWith }` (готовый JSON, 200). Рядом добавляется
+`{ respondWith: Response }`: обёртка возвращает этот объект ST как есть,
+паспорт к бэкенду ST не делается. Обработчику дополнительно передаётся
+`signal: init.signal` и `endpoint` — без сигнала «Стоп» не дойдёт.
+
+От этапа `decision:rewrite` до обёртки исход идёт через результат `fold`:
+этап возвращает `{ respondWith }`, `onSend` узнаёт его и отдаёт наверх.
+Сигнал и эндпоинт передаются этапу рядом с payload — через `$context`
+пайплайна (новое поле `context` у `pipeline.run`, не ломает `$input`).
+
+### Отмена
+
+`init.signal` из fetch ST кладётся в `$context.signal`; этап передаёт его в
+`http.request` сетевого Сервиса. Тот уже пробрасывает сигнал в настоящий
+fetch (`dispatchStreamingRequest`) и обрывает запрос к подключению
+прозаика. Поток, который мы отдаём ST, при отмене закрывается молча.
+
+### Сетевой путь
+
+Ядро решений получает `networkAccess: true` при регистрации (сейчас его
+нет). Запрос к подключению строится `buildProviderRequest()` из
+`libraries/core/provider-request.js` (openai-формат, ключ только в заголовке
+этого запроса) и уходит через `host.network` → `http.request`; прямого
+`fetch` в Ядре нет. Ошибки 401/429/5xx и обрыв возвращаются ST как его
+обычный отказ: JSON `{ error: { message } }` с именем подключения, а в
+потоке — последним кадром ошибки до `[DONE]`.
+
+### Состав
+
+- `libraries/core/writer-response.js` — чистый перевод кадров openai → форма
+  источника ST и ответы об ошибке.
+- `cores/decision/writer-proxy.js` — выбор подключения, запрос через сеть,
+  Response (поток/JSON), отмена.
+- `cores/decision/rewrite.js` — сборка контекста прозаика и решение
+  «ответить самим / отдать тело ST»; выносится из `index.js` (305 строк).
+- `cores/decision/index.js` — только проводка.
+- Тесты: фейковый `fetch`/сеть, регрессия «в ST OpenRouter, у прозаика
+  NanoGPT — запрос ушёл на NanoGPT с его ключом и моделью».
