@@ -200,7 +200,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const payload = input.payload ?? input;
         if (!settings.enabled || !pending || !payload) return payload;
         const summaries = (await call('summary.list')) ?? [];
-        const context = buildWriterContext({ blocks: pending.blocksAfter ?? store.blocks(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision });
+        const context = buildWriterContext({ blocks: pending.blocksAfter ?? store.blocks(), notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision });
         const worker = workers.find(item => item.id === settings.writer.workerId);
         const model = worker && worker.id !== 'st-main' ? String(worker.model ?? '') : '';
         return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;
@@ -271,6 +271,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.own.register('decision.roster', () => store.roster()),
             host.own.register('decision.log', () => store.cycles()),
             host.own.register('decision.archive', () => store.archive()),
+            host.own.register('decision.plan', () => store.plan()),
+            host.own.register('decision.arcs', () => store.arcs()),
+            host.own.register('decision.notes', () => store.notes()),
             host.own.register('decision.reload', () => reload()),
             host.own.register(DECIDE_CONTRACT, params => decide(params)),
             host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
@@ -291,6 +294,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         roster: () => store.roster(),
         log: () => store.cycles(),
         archive: () => store.archive(),
+        plan: () => store.plan(),
+        arcs: () => store.arcs(),
+        notes: () => store.notes(),
         unregister: async () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();

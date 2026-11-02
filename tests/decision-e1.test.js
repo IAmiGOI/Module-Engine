@@ -56,6 +56,7 @@ test('the director runs a tool cycle: a Notebook call with a comment, then submi
     const { pipelineCore, core, calls, memory } = await build({
         replies: [
             call('Notebook', { action: 'write', title: 'Door', content: 'Open', comment: 'I need to remember that the door is open.' }),
+            call('set_plan', { direction: 'Get her out of the keep.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
         ],
         externalTools: [{ name: 'Notebook', description: 'notes', parameters: { type: 'object', properties: {} } }],
@@ -70,7 +71,7 @@ test('the director runs a tool cycle: a Notebook call with a comment, then submi
 
     const log = memory.get(memoryKey('core.decision', 'log'));
     assert.equal(log.length, 1, 'one cycle is recorded');
-    assert.deepEqual(log[0].toolCalls.map(entry => entry.name), ['Notebook', 'submit_turn']);
+    assert.deepEqual(log[0].toolCalls.map(entry => entry.name), ['Notebook', 'set_plan', 'submit_turn']);
     assert.match(log[0].toolCalls[0].comment, /remember/);
     assert.equal(log[0].toolCalls[0].result, 'note saved');
     assert.equal(core.runs()['10'], undefined, 'the log is separate from the per-message runs');
@@ -81,6 +82,7 @@ test('update_roster is persisted and reaches the next context', async () => {
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena walks into the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'arrives', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the form.' }),
+            call('set_plan', { direction: 'Bring Lena into the scene.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', {
                 comment: 'The turn is ready for the writer.',
                 resolution: 'Lena arrives.', scene: { minutes: 1 }, userResult: 'The user waits.',
@@ -91,12 +93,15 @@ test('update_roster is persisted and reaches the next context', async () => {
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     const stored = memory.get(memoryKey('core.decision', 'roster'));
     assert.deepEqual(stored, { active: ['Lena'] });
-    assert.equal(calls.length, 3, 'the cycle asked the model three times: roster, assess, form');
+    assert.equal(calls.length, 4, 'the cycle asked the model four times: roster, assess, plan, form');
 });
 
 test('the writer body carries the form decision and no tools at all', async () => {
     const { pipelineCore, core } = await build({
-        replies: [call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' })],
+        replies: [
+            call('set_plan', { direction: 'Get her out of the keep.', comment: 'I need a direction before the turn can be submitted.' }),
+            call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
+        ],
     });
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     const payload = {

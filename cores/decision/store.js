@@ -13,6 +13,9 @@ export function createDecisionStore({ call, publishEvent }) {
     let log = [];
     let logArchive = [];
     let roster = { active: [] };
+    let directorPlan = null;
+    let arcs = [];
+    let notes = {};
     let tail = Promise.resolve();
 
     function enqueue(task) {
@@ -48,18 +51,24 @@ export function createDecisionStore({ call, publishEvent }) {
     }
 
     async function reload() {
-        const [storedBlocks, storedRuns, storedLog, storedArchive, storedRoster] = await Promise.all([
+        const [storedBlocks, storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes] = await Promise.all([
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'blocks', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'roster', fallback: { active: [] } }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'directorPlan', fallback: null }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'arcs', fallback: [] }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'notes', fallback: {} }),
         ]);
         blocks = sanitizeBlocks(storedBlocks);
         runs = sanitizeRuns(storedRuns);
         log = sanitizeCycles(storedLog);
         logArchive = sanitizeCycles(storedArchive);
         roster = { active: Array.isArray(storedRoster?.active) ? storedRoster.active.map(String) : [] };
+        directorPlan = storedPlan && typeof storedPlan === 'object' ? storedPlan : null;
+        arcs = Array.isArray(storedArcs) ? storedArcs.filter(arc => arc && typeof arc === 'object') : [];
+        notes = storedNotes && typeof storedNotes === 'object' && !Array.isArray(storedNotes) ? storedNotes : {};
         publishEvent('decision.blocks.changed', { count: blocks.length });
         return { blocks, runs, log };
     }
@@ -81,6 +90,30 @@ export function createDecisionStore({ call, publishEvent }) {
             roster = { active: [...new Set((Array.isArray(next?.active) ? next.active : []).map(String).map(name => name.trim()).filter(Boolean))] };
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'roster', value: roster });
             return roster;
+        });
+    }
+
+    function savePlan(plan) {
+        return enqueue(async () => {
+            directorPlan = plan && typeof plan === 'object' ? plan : null;
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'directorPlan', value: directorPlan });
+            return directorPlan;
+        });
+    }
+
+    function saveArcs(next) {
+        return enqueue(async () => {
+            arcs = Array.isArray(next) ? next : [];
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'arcs', value: arcs });
+            return arcs;
+        });
+    }
+
+    function saveNotes(next) {
+        return enqueue(async () => {
+            notes = next && typeof next === 'object' && !Array.isArray(next) ? next : {};
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'notes', value: notes });
+            return notes;
         });
     }
 
@@ -130,6 +163,12 @@ export function createDecisionStore({ call, publishEvent }) {
         archive: () => logArchive,
         roster: () => ({ active: [...roster.active] }),
         saveRoster,
+        plan: () => (directorPlan ? { ...directorPlan, stages: [...(directorPlan.stages ?? [])] } : null),
+        savePlan,
+        arcs: () => arcs.map(arc => ({ ...arc, stages: [...(arc.stages ?? [])] })),
+        saveArcs,
+        notes: () => JSON.parse(JSON.stringify(notes)),
+        saveNotes,
         appendCycle,
         saveLog,
     };

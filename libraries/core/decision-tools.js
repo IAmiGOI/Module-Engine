@@ -117,6 +117,68 @@ export const SUBMIT_TURN_TOOL = Object.freeze({
     },
 });
 
+export const SET_PLAN_TOOL = Object.freeze({
+    name: 'set_plan',
+    displayName: 'Set the director plan',
+    description: 'Keep your own direction for future events around the user. A plan always exists: if you have none, create it before submit_turn. It is a direction, not a fixed sequence, and may change freely when the story turns.',
+    parameters: {
+        type: 'object',
+        properties: {
+            direction: { type: 'string', description: 'Where the story is heading and what you want to put in the user\'s way.' },
+            stages: { type: 'array', items: { type: 'string' }, description: 'Loose stages; not a mandatory script.' },
+            currentStage: { type: 'number', description: 'Index of the current stage (0-based).' },
+            comment: COMMENT,
+        },
+        required: ['direction', 'comment'],
+    },
+});
+
+export const CHARACTER_NOTE_TOOL = Object.freeze({
+    name: 'character_note',
+    displayName: 'Edit a character note',
+    description: 'Keep at most four short notes per character: what the writer must know about them right now. A fifth note is refused — replace or delete one first. This replaces the Notebook notes while the core is on; old Notebook notes are not deleted.',
+    parameters: {
+        type: 'object',
+        properties: {
+            character: { type: 'string' },
+            op: { type: 'string', enum: ['add', 'set', 'remove'] },
+            id: { type: 'string', description: 'Existing note id for set/remove.' },
+            title: { type: 'string' },
+            text: { type: 'string' },
+            comment: COMMENT,
+        },
+        required: ['character', 'op', 'comment'],
+    },
+});
+
+export const ARC_TOOL = Object.freeze({
+    name: 'arc',
+    displayName: 'Open, stage or close an arc',
+    description: 'Track the long arcs of the story. Open one when it starts, add RP-time stages as they pass, close it when it is resolved. A closed arc is not reopened.',
+    parameters: {
+        type: 'object',
+        properties: {
+            op: { type: 'string', enum: ['open', 'stage', 'close'] },
+            id: { type: 'string', description: 'Arc id for stage/close.' },
+            title: { type: 'string', description: 'Arc title for open.' },
+            note: { type: 'string', description: 'Stage note.' },
+            comment: COMMENT,
+        },
+        required: ['op', 'comment'],
+    },
+});
+
+export const CURRENT_STATE_TOOL = Object.freeze({
+    name: 'current_state',
+    displayName: 'Read the current state',
+    description: 'Read where the scene is, the current RP time, the plan stage and the open arc. Read-only: it never invents a source. If the map or RP Time has no value, it says so.',
+    parameters: {
+        type: 'object',
+        properties: { comment: COMMENT },
+        required: ['comment'],
+    },
+});
+
 export const AWAIT_TOOL = Object.freeze({
     name: 'await',
     displayName: 'Await an event',
@@ -134,7 +196,7 @@ export const AWAIT_TOOL = Object.freeze({
 
 /** Все схемы движка, к которым добавляются чужие инструменты при включённом ядре. */
 export function buildToolList(externalSchemas = []) {
-    const own = [UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, AWAIT_TOOL];
+    const own = [UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL, AWAIT_TOOL];
     const external = (Array.isArray(externalSchemas) ? externalSchemas : [])
         .filter(schema => schema && String(schema.name ?? '').trim())
         .map(withComment);

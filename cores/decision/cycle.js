@@ -8,6 +8,7 @@ import { deciderRequestParams } from '../../libraries/core/decision-settings.js'
 import { validateTurn } from '../../libraries/core/decision-turn.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
 import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
+import { applyArc, applyCharacterNote, applyPlan, notesFor } from '../../libraries/core/decision-state.js';
 
 /**
  * Один активный цикл директора: собрать контекст, дать модели инструменты,
@@ -132,6 +133,38 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
                 await store.saveRoster({ active: next });
                 return { ok: true, active: next, added: next.filter(name => !before.includes(name)).length, removed: before.filter(name => !next.includes(name)).length };
             },
+            set_plan: async args => {
+                const applied = applyPlan(store.plan(), args);
+                if (!applied.ok) return { ok: false, error: applied.error };
+                await store.savePlan(applied.plan);
+                return { ok: true, plan: applied.plan };
+            },
+            character_note: async args => {
+                const applied = applyCharacterNote(store.notes(), args);
+                if (!applied.ok) return { ok: false, error: applied.error };
+                await store.saveNotes(applied.notes);
+                return { ok: true, count: notesFor(applied.notes, args.character).length };
+            },
+            arc: async args => {
+                const applied = applyArc(store.arcs(), args);
+                if (!applied.ok) return { ok: false, error: applied.error };
+                await store.saveArcs(applied.arcs);
+                return { ok: true, arcs: applied.arcs.map(arc => ({ id: arc.id, title: arc.title, status: arc.status })) };
+            },
+            current_state: async () => {
+                const place = await resolvePlace();
+                const time = await lastTimeMark();
+                const plan = store.plan();
+                const open = store.arcs().find(arc => arc.status === 'open') ?? null;
+                return {
+                    ok: true,
+                    place: place || null,
+                    time: time || null,
+                    planStage: plan?.stages?.[plan.currentStage] ?? null,
+                    arc: open ? { id: open.id, title: open.title } : null,
+                    sources: { place: place ? 'map' : 'no-position', time: time ? 'rp-time' : 'no-time', plan: plan ? 'plan' : 'no-plan' },
+                };
+            },
             assess: async args => {
                 assessmentCounter += 1;
                 const id = `asm_${runId}_${assessmentCounter}`;
@@ -151,6 +184,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
                 return { ok: true, id, ...result };
             },
             submit_turn: async args => {
+                if (!store.plan() && !args._decision) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };
                 const validation = validateTurn({ form: args, roster: store.roster().active, assessments });
                 if (!validation.ok) return { ok: false, missing: validation.missing };
                 const place = await resolvePlace();
@@ -176,7 +210,8 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         try { summaries = (await call('summary.list')) ?? []; } catch { summaries = []; }
         const context = buildDeciderContext({
             rules: settings.rules, blocks: store.blocks(), summaries, chat, runs: store.runs(),
-            thoughts: thinkingSection(store.cycles()), toolMode: true,
+            thoughts: thinkingSection(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
+            roster: store.roster().active, planMissing: !store.plan(), toolMode: true,
         });
         const tools = buildToolList(await externalTools());
         const startedAt = now();

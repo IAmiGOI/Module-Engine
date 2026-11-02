@@ -70,6 +70,7 @@ test('assess uses the embedding service, the form validates, the place is read f
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'master', comment: 'I need the chance before writing the outcome.' }),
+            call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', {
                 comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
                 userResult: 'The user pushes the door; it opens but the sleeve tears.', scene: { minutes: 90 },
@@ -79,7 +80,7 @@ test('assess uses the embedding service, the form validates, the place is read f
     });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, true);
-    assert.equal(calls.length, 3, 'roster, assess, form');
+    assert.equal(calls.length, 4, 'roster, assess, plan, form');
 
     const log = memory.get(memoryKey('core.decision', 'log'));
     const assess = log[0].toolCalls.find(entry => entry.name === 'assess');
@@ -96,6 +97,7 @@ test('the writer receives a Push with place, time, the user result and the degre
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'master', comment: 'I need the chance before writing the outcome.' }),
+            call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', {
                 comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
                 userResult: 'The user pushes the door; it opens but the sleeve tears.', scene: { minutes: 90 },
@@ -123,6 +125,7 @@ test('an incomplete form is refused with the list of missing fields, and the dir
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the outcome.' }),
+            call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [] }),
             call('submit_turn', {
                 comment: 'The form is ready now.', resolution: 'She gets out.', userResult: 'The user waits.', scene: { minutes: 5 },
@@ -132,7 +135,7 @@ test('an incomplete form is refused with the list of missing fields, and the dir
     });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, true);
-    assert.equal(calls.length, 4, 'the refused form cost one more model call');
+    assert.equal(calls.length, 5, 'the refused form cost one more model call');
 });
 
 test('a form that omits an active roster member is refused, and the missing name is in the tool result', async () => {
@@ -140,6 +143,7 @@ test('a form that omits an active roster member is refused, and the missing name
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }, { name: 'Marek' }], comment: 'Both are in the scene now.' }),
             call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the outcome.' }),
+            call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [lena()] }),
             call('submit_turn', {
                 comment: 'The form is ready now.', resolution: 'They leave.', userResult: 'The user waits.', scene: { minutes: 5 },

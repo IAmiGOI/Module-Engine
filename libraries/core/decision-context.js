@@ -1,4 +1,5 @@
 import { chatToMessages } from './pm-history.js';
+import { planSection, arcsSection, notesSection, notesAsBlocks } from './decision-state.js';
 
 /**
  * Сборка контекстов директора и прозаика — чистые функции над уже
@@ -113,6 +114,12 @@ export function blocksSection(blocks) {
     return `CHARACTER BLOCKS (maintained by the director):\n\n${body}`;
 }
 
+export function rosterSection(roster) {
+    const active = Array.isArray(roster) ? roster.filter(Boolean) : [];
+    if (!active.length) return '';
+    return `ACTIVE ROSTER (everyone who can affect the scene right now; the form must cover each of them):\n\n${active.map(name => `- ${name}`).join('\n')}`;
+}
+
 export function runsSection(runs) {
     const list = Object.values(runs && typeof runs === 'object' ? runs : {})
         .filter(record => record && typeof record === 'object')
@@ -136,11 +143,17 @@ function rulesSection(rules) {
  * `prompt` — эквивалент для `anthropic`/`google`. Оба варианта собираются из
  * одного и того же порядка частей.
  */
-export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, thoughts = '', toolMode = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, thoughts = '', plan = null, arcs = [], notes = {}, roster = [], planMissing = false, toolMode = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = historyMessages(chat, limit);
-    const parts = [summariesSection(summaries), runsSection(runs), String(thoughts ?? '').trim(), blocksSection(blocks)].filter(Boolean);
+    // Порядок — от стабильного к меняющемуся: правила, саммари, план/арки,
+    // заметки, ростер, прогоны, thinking, блоки; история и задание в конце.
+    const parts = [
+        summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), rosterSection(roster),
+        runsSection(runs), String(thoughts ?? '').trim(), blocksSection(blocks),
+    ].filter(Boolean);
     const systemPrompt = [DECIDER_ROLE, rulesSection(rules)].filter(Boolean).join('\n\n');
-    const task = toolMode ? DECIDER_TOOL_TASK : DECIDER_TASK;
+    const baseTask = toolMode ? DECIDER_TOOL_TASK : DECIDER_TASK;
+    const task = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
     const messages = [
         { role: 'system', content: systemPrompt },
         ...parts.map(content => ({ role: 'system', content })),
@@ -156,12 +169,13 @@ export function buildDeciderContext({ rules = '', blocks = [], summaries = [], c
  * хода. Дополнительного `user`-сообщения нет — последним остаётся хвост
  * истории, иначе прозаик ответил бы не на ту реплику.
  */
-export function buildWriterContext({ blocks = [], summaries = [], chat = [], decision = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ blocks = [], notes = {}, summaries = [], chat = [], decision = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = historyMessages(chat, limit);
+    const allBlocks = [...blocks, ...notesAsBlocks(notes)];
     const parts = [
         WRITER_ROLE,
         summariesSection(summaries),
-        blocksSection(blocks),
+        blocksSection(allBlocks),
         String(decision ?? '').trim() ? `THE DIRECTOR'S PUSH FOR THIS TURN:\n\n${String(decision).trim()}` : '',
     ].filter(Boolean);
     const messages = [...parts.map(content => ({ role: 'system', content })), ...history];
