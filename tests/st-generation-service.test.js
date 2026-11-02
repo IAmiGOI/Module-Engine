@@ -143,6 +143,37 @@ test('the hook can answer the request itself — the engine serving a generation
     assert.equal((await response.json()).choices[0].message.content, 'answered by the engine');
 });
 
+test('the hook can answer with a Response of its own — a stream or JSON — and no ST backend is called', async () => {
+    const { bus, target, sent } = build();
+    const frames = new ReadableStream({
+        start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'));
+            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+            controller.close();
+        },
+    });
+    await call(bus, 'stGeneration.installSendHook', {
+        handler: () => ({ respondWith: new Response(frames, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }) }),
+    });
+
+    const response = await target.fetch('/api/backends/chat-completions/generate', { method: 'POST', body: '{}' });
+
+    assert.deepEqual(sent, [], 'the ST backend never sees the request');
+    assert.equal(response.headers.get('Content-Type'), 'text/event-stream');
+    assert.match(await response.text(), /"content":"hi"/);
+});
+
+test('the hook receives ST\'s abort signal, so Stop can reach the provider request', async () => {
+    const { bus, target } = build();
+    const seen = [];
+    await call(bus, 'stGeneration.installSendHook', { handler: params => { seen.push(params.signal); return {}; } });
+    const controller = new AbortController();
+
+    await target.fetch('/api/backends/chat-completions/generate', { method: 'POST', body: '{}', signal: controller.signal });
+
+    assert.equal(seen[0], controller.signal);
+});
+
 test('a body that is not the JSON we expect is passed through untouched rather than breaking the user\'s generation', async () => {
     const { bus, target, sent } = build();
     let called = false;

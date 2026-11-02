@@ -36,6 +36,8 @@
 export const INPUT_REF = '$input';
 /** Текущее переносимое значение в режиме `fold` — в `collect` его нет. */
 export const VALUE_REF = '$value';
+/** Непереносимое окружение прогона (например, `signal` запроса ST) — видно этапам, но не становится значением. */
+export const CONTEXT_REF = '$context';
 
 /**
  * Раскладывает этапы по УРОВНЯМ зависимостей: уровень N зависит только от
@@ -192,6 +194,7 @@ export async function runPipeline({
     stages,
     mode = 'collect',
     input = null,
+    context = null,
     execute,
     resolveTimeout = null,
     onEvent = () => {},
@@ -202,7 +205,7 @@ export async function runPipeline({
     if (mode !== 'collect' && mode !== 'fold') throw new Error(`pipeline: unknown mode "${mode}" (expected "collect" or "fold").`);
 
     const levels = computeStageLevels(stages ?? []);
-    const outputs = { [INPUT_REF]: input };
+    const outputs = { [INPUT_REF]: input, [CONTEXT_REF]: context };
     const records = [];
     const flagged = [];
     let value = input;

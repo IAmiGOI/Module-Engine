@@ -32,3 +32,19 @@ test('the persona avatar comes from the last user message, as ST stamps it there
 
     assert.deepEqual(avatars.persona, { name: 'Me', url: '/User Avatars/me.png' });
 });
+
+test('the chat character carries the card fields the banks need, and the persona comes from power_user', async () => {
+    const bus = createContractBus();
+    const context = {
+        characters: [{ name: 'Aria', avatar: 'Aria.png', description: 'A courier.', personality: 'Quiet.', scenario: 'Port.', mes_example: '<START>', data: { post_history_instructions: 'Named rule.' } }],
+        characterId: 0, user_avatar: 'me.png',
+        power_user: { personas: { 'me.png': 'Me' }, persona_descriptions: { 'me.png': { description: 'A traveller.' } } },
+    };
+    registerStCharacterService(bus, { getContext: () => context });
+    const cards = (await request(bus, 'stCharacter.chatCharacters')).value;
+    assert.equal(cards[0].avatar, 'Aria.png');
+    assert.equal(cards[0].description, 'A courier.');
+    assert.equal(cards[0].post_history_instructions, 'Named rule.');
+    const persona = (await request(bus, 'stCharacter.persona')).value;
+    assert.deepEqual(persona, { avatar: 'me.png', name: 'Me', description: 'A traveller.' });
+});

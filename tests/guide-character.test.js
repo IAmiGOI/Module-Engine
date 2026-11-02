@@ -115,7 +115,7 @@ test('the character topic is a sticky focus like trackers: named by the talk, ke
 });
 
 test('the character articles work as one topic: while the talk is about characters ALL of them reach the model, otherwise none of them does', async () => {
-    const titles = ['Creating and editing character cards', 'Character cards: the skeleton and the named rules', 'Character cards: example dialogues and greetings', 'How the owner\'s preset reads a card', 'Character cards: testing and reinforcing'];
+    const titles = ['Creating and editing character cards', 'Character cards: the skeleton and the named rules', 'Character cards: example dialogues and greetings', 'Character cards: testing and reinforcing'];
     let system = '';
     const { guide } = buildGuide({ generate: params => { system = params.systemPrompt; return 'ok'; } });
     await guide.load();
@@ -129,7 +129,7 @@ test('the character articles work as one topic: while the talk is about characte
 });
 
 test('every character article names its topic, and every field the Core accepts is explained in the workflow article', () => {
-    const articles = ['character-cards.md', 'character-rules.md', 'character-examples.md', 'character-preset-fit.md', 'character-testing.md'].map(file => readArticle(`knowledge/${file}`));
+    const articles = ['character-cards.md', 'character-rules.md', 'character-examples.md', 'character-testing.md'].map(file => readArticle(`knowledge/${file}`));
     for (const text of articles) assert.match(text, /^topic: characters$/m);
     const workflow = articles[0];
     for (const field of ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'post_history_instructions', 'system_prompt', 'alternate_greetings', 'tags', 'creator', 'character_version', 'creator_notes', 'talkativeness', 'fav', 'depth_prompt', 'world', 'character_book', 'extensions']) {

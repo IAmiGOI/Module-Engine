@@ -97,7 +97,8 @@ export function registerStGenerationService(bus, { target = globalThis, getConte
      * Забирает отправку себе. `handler({ endpoint, payload })` отвечает:
      *   `{ payload }`     — отправить это вместо исходного (обычный случай);
      *   `{ cancel, reason }` — не отправлять вовсе, ST получит отказ;
-     *   `{ replyWith }`   — ответить самим, к бэкенду не ходить вообще.
+     *   `{ replyWith }`   — ответить самим готовым JSON, к бэкенду не ходить;
+     *   `{ respondWith }` — ответить готовым Response (поток или JSON), к бэкенду не ходить.
      * Всё, что не наш эндпоинт, уходит в исходный `fetch` нетронутым.
      */
     function installSendHook({ handler }) {
@@ -116,8 +117,11 @@ export function registerStGenerationService(bus, { target = globalThis, getConte
             // генерацию из-за нашего же неверного предположения.
             catch { return passthrough(input, init); }
 
-            const decision = await handler({ endpoint: pathOf(input), payload });
+            const decision = await handler({ endpoint: pathOf(input), payload, signal: init?.signal });
             if (decision?.cancel) return jsonResponse({ error: { message: decision.reason ?? 'Generation cancelled by ST Module Engine.' } }, CANCELLED_STATUS);
+            // `respondWith` — готовый Response (в том числе поток SSE): ответ за ST
+            // целиком, бэкенд ST не вызывается.
+            if (decision?.respondWith) return decision.respondWith;
             if (decision?.replyWith !== undefined) return jsonResponse(decision.replyWith, 200);
             return passthrough(input, { ...init, body: JSON.stringify(decision?.payload ?? payload) });
         };

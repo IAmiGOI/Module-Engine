@@ -1,5 +1,5 @@
 import { createDispatchQueue } from '../../libraries/core/dispatch-queue.js';
-import { buildProviderRequest, resolveProviderResponseText, resolveStreamDelta } from '../../libraries/core/provider-request.js';
+import { buildProviderRequest, createStreamToolCallCollector, resolveProviderResponseMessage, resolveProviderResponseText, resolveStreamDelta } from '../../libraries/core/provider-request.js';
 import { createPersistedList } from '../../libraries/core/persisted-list.js';
 import { request } from '../../libraries/shared/request.js';
 import { buildCustomPreset, resolveGenerateRequest } from './generate-request.js';
@@ -140,14 +140,23 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
         if (worker.format === ST_MAIN_FORMAT) return dispatchToMainConnection(worker, generateRequest, { onChunk, stallMs, signal });
         const providerRequest = buildProviderRequest(worker, generateRequest, { stream });
         let accumulated = '';
+        let reasoning = '';
+        let streamedUsage = null;
+        const toolCalls = createStreamToolCallCollector();
         const send = () => request(host.network, 'http.request', {
             params: {
                 ...providerRequest, stream, stallMs, signal,
                 onChunk: stream ? frame => {
-                    const { delta } = resolveStreamDelta(worker.format, frame);
-                    if (!delta) return;
-                    accumulated += delta;
-                    onChunk?.(delta, accumulated);
+                    const parsed = resolveStreamDelta(worker.format, frame);
+                    if (parsed.toolCalls) toolCalls.push(parsed.toolCalls);
+                    if (parsed.reasoning) reasoning += parsed.reasoning;
+                    if (parsed.usage) streamedUsage = parsed.usage;
+                    if (!parsed.delta) {
+                        if (parsed.reasoning) onChunk?.('', accumulated, { reasoning: parsed.reasoning, thinking: reasoning });
+                        return;
+                    }
+                    accumulated += parsed.delta;
+                    onChunk?.(parsed.delta, accumulated, { reasoning: parsed.reasoning, thinking: reasoning });
                 } : undefined,
             },
             // Нестриминговый путь ждёт ответ целиком тем же сроком; сам fetch обрывает `signal` очереди (стрим — ещё и watchdog в http.js).
@@ -162,7 +171,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
         }
         if (!result.ok) throw new Error(result.error.message);
         // Сырое тело ответа (для журнала отладки гида): текст — это лишь то, что мы из него прочли, а tool_calls, ризонинг и finish_reason остаются только здесь.
-        onRaw?.({ status: result.value.status, format: worker.format, body: String(result.value.text ?? ''), content: accumulated });
+        onRaw?.({ status: result.value.status, format: worker.format, body: String(result.value.text ?? ''), content: accumulated, reasoning, usage: streamedUsage, toolCalls: toolCalls.calls() });
         if (!result.value.ok) throw httpError(worker, result.value.status);
         if (accumulated) return accumulated;
         return resolveProviderResponseText(worker.format, result.value.text);
@@ -279,6 +288,10 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
 
             publishEvent('model.generate.started', { requestId, workerId: params?.workerId });
             let lastWorkerId = params?.workerId;
+            // Сырое тело последней попытки — нужно, чтобы отдать `tool_calls`
+            // и `finish_reason` тем, кто попросил `returnMessage`. Без флага
+            // ничего не читается, а тело всё равно отбрасывается, как раньше.
+            let lastRaw = null;
             return dispatchQueue.enqueueWithFallback(
                 tiers,
                 (worker, { signal }) => {
@@ -286,8 +299,14 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     return attempt(worker, resolveGenerateRequest(params, worker), {
                         stream: params?.stream !== false,
                         stallMs, signal,
-                        onChunk: (delta, text) => publishEvent('model.generate.chunk', { requestId, workerId: worker.id, delta, text }),
-                        onRaw: raw => publishEvent('model.generate.raw', { requestId, workerId: worker.id, ...raw }),
+                        onChunk: (delta, text, extra) => {
+                            if (delta) publishEvent('model.generate.chunk', { requestId, workerId: worker.id, delta, text });
+                            if (extra?.reasoning) publishEvent('model.generate.reasoning', { requestId, workerId: worker.id, delta: extra.reasoning, text: extra.thinking });
+                        },
+                        onRaw: raw => {
+                            lastRaw = { format: raw.format, body: raw.body, toolCalls: raw.toolCalls ?? [], reasoning: raw.reasoning ?? '', usage: raw.usage ?? null };
+                            publishEvent('model.generate.raw', { requestId, workerId: worker.id, ...raw });
+                        },
                     });
                 },
                 {
@@ -304,7 +323,20 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     }),
                 },
             ).then(
-                text => { publishEvent('model.generate.finished', { requestId, workerId: lastWorkerId, text }); return text; },
+                text => {
+                    publishEvent('model.generate.finished', { requestId, workerId: lastWorkerId, text });
+                    // `returnMessage` — строго opt-in: без него возвращается та
+                    // же строка, что и раньше, и ни один старый вызывающий не
+                    // замечает разницы.
+                    if (params?.returnMessage === true) {
+                        const message = lastRaw ? resolveProviderResponseMessage(lastRaw.format, lastRaw.body) : { text, toolCalls: [], finishReason: null };
+                        // У потока тело — SSE-кадры, и разбор как одного JSON даёт
+                        // пустые tool_calls. Тогда берём вызовы, собранные из дельт.
+                        const toolCalls = message.toolCalls.length ? message.toolCalls : (lastRaw?.toolCalls ?? []);
+                        return { text: text ?? message.text, toolCalls, finishReason: message.finishReason };
+                    }
+                    return text;
+                },
                 error => { publishEvent('model.generate.failed', { requestId, error: { message: error.message } }); throw error; },
             ).finally(() => { cancellers.delete(requestId); });
         }),

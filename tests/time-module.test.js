@@ -139,7 +139,6 @@ function buildEngine({ replies, gate, fail = false } = {}) {
             'storage.settings.get', 'storage.settings.set',
             'chatHistory.messages', 'chatHistory.annotate', 'chatHistory.annotations', 'chatHistory.clearAnnotations',
             'pipeline.stages.add', 'pipeline.stages.remove',
-            'promptManager.takesOver', 'promptManager.contribute',
             'model.workers.get', 'model.presets.get', 'model.presets.set', 'ui.notify', 'ui.messageFooter.claim', 'ui.messageFooter.release',
             'ui.messageFooter.liveMesid',
         ],
@@ -525,27 +524,7 @@ test('the load() registers the time-inject stage on generation.beforeSend — th
     assert.ok(hit, 'этап инъекции времени зарегистрирован');
 });
 
-test('when Prompt Manager takes over, the current time reaches it through promptManager.contribute instead of being unshifted into chat — the module\'s Gate rights never listed these two contracts, so it silently fell back to legacy forever, even with PM on (owner: "добавь такой же [вклад в PM] для RP Time")', async () => {
-    const { engine, module, live, pipelineCore } = buildEngine();
-    const contributed = [];
-    const pm = engine.registerCaller('core.promptManager', 'cores', { tier: 'official' });
-    pm.own.register('promptManager.takesOver', () => true);
-    pm.own.register('promptManager.contribute', params => { contributed.push(params); return true; });
-    await module.load();
-    module.applyPreset('clock-only');
-    live.mesid = '1';
-    await module.advance(); // 11:40
-    const chat = [{ mes: 'hello' }];
-
-    await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat } });
-
-    assert.deepEqual(chat, [{ mes: 'hello' }], 'chat is untouched — the time went through PM, not an unshift');
-    assert.equal(contributed.length, 1);
-    assert.equal(contributed[0].id, 'time');
-    assert.match(contributed[0].content, /11:40/);
-});
-
-test('with no Prompt Manager to take over, the old unshift into chat still runs — legacy behavior unchanged', async () => {
+test('the current time is unshifted into chat as a system line', async () => {
     const { module, live, pipelineCore } = buildEngine();
     await module.load();
     module.applyPreset('clock-only');
@@ -675,4 +654,18 @@ test('advance() asks for the live message FRESH at write time, not from a value 
     await running;
 
     assert.deepEqual(module.badges(), { 6: '11:40 (Morning)' }, 'ушло на настоящее последнее сообщение, а не на то, что запомнилось раньше');
+});
+
+test('a decision.timeShift moves the clock without a model and writes a new mark under the live message', async () => {
+    const { engine, module, live } = buildEngine();
+    await module.load();
+    module.label.set('Day 1, 08:00 (Morning)');
+    live.mesid = '1';
+    engine.events.emit('decision.timeShift', { minutes: 90 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(module.label(), 'Day 1, 09:30 (Morning)');
+    const marks = await new Promise(resolve => engine.registerCaller('probe.time', 'cores', { tier: 'official' }).own.subscribe('chatHistory.annotations', { params: { namespace: MODULE_ID } }, resolve));
+    assert.equal(marks.ok, true);
+    assert.equal(marks.value['1'], 'Day 1, 09:30 (Morning)');
 });

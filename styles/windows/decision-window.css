@@ -1,0 +1,70 @@
+/* --- director feed window ------------------------------------------------ */
+/* Своё плавающее окно директора: лента по циклам, как у кодинг-агента. Никакой
+   анимации — только цвет, отступы и прокрутка (TEXT_ENGINE_BRIEF.md §7). */
+.stme-floating-panel.stme-dw-window { z-index: 6960; background: linear-gradient(var(--stme-surface), var(--stme-surface)), #15171e; }
+.stme-dw-window > .stme-floating-panel-body { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+.stme-dw-window-body { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+
+.stme-dw-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--stme-border); }
+.stme-dw-toolbar .text_pole { flex: 1 1 180px; min-width: 120px; }
+
+.stme-dw-feed { flex: 1; min-height: 0; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.stme-dw-more { display: flex; justify-content: center; }
+
+.stme-dw-cycle { border: 1px solid var(--stme-border); border-left: 3px solid var(--stme-accent); border-radius: var(--stme-radius-sm); padding: 6px 8px; background: var(--stme-level-1); display: flex; flex-direction: column; gap: 5px; }
+.stme-dw-live { border-left-style: dashed; }
+.stme-dw-rejected { opacity: .55; }
+.stme-dw-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.stme-dw-meta { font-size: .78em; opacity: .65; white-space: nowrap; }
+.stme-dw-detail { font-size: .86em; opacity: .8; white-space: pre-wrap; }
+.stme-dw-waiting { font-size: .85em; color: var(--stme-accent); }
+
+.stme-dw-thinking { border-left: 3px solid var(--stme-accent); padding: 3px 8px; background: var(--stme-level-2); border-radius: var(--stme-radius-sm); font-size: .9em; }
+.stme-dw-thinking summary { cursor: pointer; opacity: .85; }
+.stme-dw-thinking pre, .stme-dw-push pre, .stme-dw-report pre { white-space: pre-wrap; margin: 4px 0; max-height: 240px; overflow: auto; font-size: .86em; }
+
+.stme-dw-call { border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); padding: 4px 8px; background: var(--stme-level-2); }
+.stme-dw-call-head { display: flex; justify-content: space-between; gap: 8px; }
+.stme-dw-call-detail { font-size: .78em; opacity: .65; }
+.stme-dw-comment { font-size: .9em; margin: 2px 0; }
+.stme-dw-fold summary { cursor: pointer; font-size: .82em; opacity: .8; }
+.stme-dw-fold pre { white-space: pre-wrap; margin: 2px 0 6px; max-height: 200px; overflow: auto; font-size: .82em; opacity: .9; }
+.stme-dw-error { border-color: var(--stme-danger-bright); }
+.stme-dw-error-text { color: var(--stme-danger-bright); font-size: .86em; }
+
+.stme-dw-assess { border-left: 3px solid var(--stme-ok); padding: 3px 8px; font-size: .88em; }
+.stme-dw-assess-odds { opacity: .85; }
+.stme-dw-muted { opacity: .65; font-size: .82em; }
+
+.stme-dw-form { padding: 4px 0; }
+.stme-dw-block-title { font-weight: 700; font-size: .85em; text-transform: uppercase; letter-spacing: .04em; opacity: .8; }
+.stme-dw-table { width: 100%; border-collapse: collapse; font-size: .85em; margin: 4px 0; }
+.stme-dw-table th, .stme-dw-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--stme-border); vertical-align: top; }
+.stme-dw-scene { font-size: .84em; opacity: .8; margin: 4px 0; }
+.stme-dw-push, .stme-dw-report { border-left: 3px solid var(--stme-warn); padding: 3px 8px; background: var(--stme-level-2); border-radius: var(--stme-radius-sm); }
+.stme-dw-push summary, .stme-dw-report summary { cursor: pointer; opacity: .85; }
+.stme-dw-warning { border-left: 3px solid var(--stme-warn); padding: 3px 8px; background: color-mix(in srgb, var(--stme-warn) 12%, transparent); font-size: .85em; }
+.stme-dw-usage { font-size: .78em; opacity: .6; }
+.stme-dw-message { border-left: 3px solid var(--stme-accent); padding: 4px 8px; background: color-mix(in srgb, var(--stme-accent) 10%, transparent); }
+.stme-dw-answer { font-size: .9em; font-style: italic; opacity: .9; white-space: pre-wrap; }
+
+.stme-dw-archive { border-top: 1px dashed var(--stme-border); padding-top: 6px; }
+.stme-dw-archive summary { cursor: pointer; opacity: .75; font-size: .86em; }
+
+.stme-dw-compose { border-top: 1px solid var(--stme-border); padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+.stme-dw-compose-title { font-weight: 700; font-size: .86em; }
+.stme-dw-compose .text_pole { width: 100%; box-sizing: border-box; resize: vertical; }
+
+.stme-dw-root .stme-dock-button { z-index: 6940; }
+.stme-dw-dock-icon { font-size: 18px; line-height: 1; }
+
+/* Дата-банки в окне директора. */
+.stme-dw-banks { border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); padding: 5px 8px; background: var(--stme-level-1); max-height: 42vh; overflow: auto; }
+.stme-dw-banks > summary { cursor: pointer; font-weight: 600; }
+.stme-dw-bank-progress { font-size: .82em; opacity: .7; margin: 3px 0 6px; }
+.stme-dw-bank { border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); padding: 4px 6px; margin: 5px 0; background: var(--stme-level-2); }
+.stme-dw-bank > summary { cursor: pointer; }
+.stme-dw-bank-kind { font-size: .78em; opacity: .65; }
+.stme-dw-bank-error { border-color: var(--stme-danger-bright); }
+.stme-dw-bank-pending { border-style: dashed; }
+.stme-dw-bank-text { width: 100%; box-sizing: border-box; margin-top: 4px; resize: vertical; }

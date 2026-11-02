@@ -5,7 +5,6 @@ import { createStartupCore } from '../../cores/startup/index.js';
 import { createBackgroundsCore } from '../../cores/backgrounds/index.js';
 import { createMusicServerCore } from '../../cores/music-server/index.js';
 import { createGlAnimationsCore } from '../../cores/ui/gl-animations.js';
-import { createPromptManagerPanelCore } from '../../cores/ui/prompt-manager-panel.js';
 import { createFirstLoadCore, FIRST_LAUNCH_EVENT } from '../../cores/first-load/index.js';
 import { createUiEngineCore } from '../../cores/ui/ui-engine.js';
 import { createFinalUiPc } from '../../cores/ui/final-ui-pc.js';
@@ -19,9 +18,11 @@ import { createInputBarCore } from '../../cores/ui/input-bar/index.js';
 import { createHomeCore } from '../../cores/ui/home/index.js';
 import { createMemoryGraphPanelCore } from '../../cores/ui/memory-graph-panel.js';
 import { createPicturePanelCore } from '../../cores/ui/picture-panel.js';
+import { createDecisionPromptsPanelCore } from '../../cores/ui/decision-prompts-panel.js';
+import { createDecisionWindowCore } from '../../cores/ui/decision-window.js';
 import { MUSIC_SERVER, BACKGROUNDS_REPO } from './config.js';
 
-/** Интерфейс: Ядро UI, окна (граф, Prompt Manager, картинка), уведомления, фоны, синхронизация, лента чата, поле ввода, домашний экран. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
+/** Интерфейс: Ядро UI, окна (граф, картинка), уведомления, фоны, синхронизация, лента чата, поле ввода, домашний экран. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireUiCores(ctx) {
     const { engine, eventsCore } = ctx;
 
@@ -44,13 +45,6 @@ export async function wireUiCores(ctx) {
         { mount: node => uiEngine.mount('memoryGraph', node) },
     );
 
-    // Prompt Manager: своё плавающее окно, открывается иконкой ST «AI Response Configuration», перехваченной
-    // сервисом (services/st-pm-ui.js) — родная панель ST под ней не открывается вообще (ROADMAP.md 5.141).
-    const promptManagerPanel = createPromptManagerPanelCore(
-        engine.registerCaller('core.ui.promptManager', 'cores', { tier: 'official' }),
-        { mount: node => uiEngine.mount('promptManager', node) },
-    );
-
     // Плавающее окно «Картинка» — та же форма официального UI-Ядра, что у
     // окна графа выше (решено с пользователем: кнопка дока с видом картинки
     // получает РАСШИРЯЕМУЮ плавающую панель, как у музыки/трекера, только
@@ -60,6 +54,19 @@ export async function wireUiCores(ctx) {
     const picturePanel = createPicturePanelCore(
         engine.registerCaller('core.ui.picture', 'cores', { tier: 'official', networkAccess: true }),
         { mount: node => uiEngine.mount('picture', node) },
+    );
+    // Окно разделов промптов директора и прозаика — выборочно возвращённый
+    // старый Prompt Manager. Своё floating-окно, открывается иконкой ST через
+    // сервис `stDecisionUi` и событием из карточки.
+    const decisionPromptsPanel = createDecisionPromptsPanelCore(
+        engine.registerCaller('core.ui.decisionPrompts', 'cores', { tier: 'official' }),
+        { mount: node => uiEngine.mount('decisionPrompts', node) },
+    );
+    // Окно директора: лента по циклам и поле сообщения. Своё дерево, постоянная
+    // кнопка дока и событие `decisionWindow.openRequested` из карточки.
+    const decisionWindow = createDecisionWindowCore(
+        engine.registerCaller('core.ui.decisionWindow', 'cores', { tier: 'official' }),
+        { mount: node => uiEngine.mount('decisionWindow', node) },
     );
     // У Модулей СВОЙ реестр UI, отдельный от слотов движка: у каждого
     // включённого Модуля свой независимый Final UI, иначе пути их деревьев
@@ -165,5 +172,5 @@ export async function wireUiCores(ctx) {
     });
 
 
-    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, promptManagerPanel, picturePanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home };
+    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, picturePanel, decisionPromptsPanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home, decisionWindow };
 }

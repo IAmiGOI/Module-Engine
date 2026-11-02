@@ -1,11 +1,10 @@
-import { createPromptManagerCore } from '../../cores/prompt-manager/index.js';
 import { createDrawerGuardCore } from '../../cores/drawer-guard/index.js';
 import { createEventsCore } from '../../cores/events/index.js';
 import { createGenerationCore } from '../../cores/generation/index.js';
 import { createPipelineCore } from '../../cores/pipeline/index.js';
 import { createInternalEngineModelsCore } from '../../cores/models/internal-engine.js';
 import { createDiffusionCore } from '../../cores/models/diffusion.js';
-import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource, createGraphLibraryBackupSource, createPmPresetsBackupSource } from '../../cores/backup/index.js';
+import { createBackupCore, createChatMetadataBackupSource, createExtensionSettingsBackupSource, createGraphLibraryBackupSource } from '../../cores/backup/index.js';
 import { createTrackingCore } from '../../cores/tracking/index.js';
 import { createMacrosCore } from '../../cores/macros/index.js';
 import { createSpeakerCore } from '../../cores/speaker/index.js';
@@ -16,8 +15,9 @@ import { createCharacterCardsCore } from '../../cores/character-cards/index.js';
 import { createClassifierCore } from '../../cores/classifier/index.js';
 import { createBasicSummaryCore } from '../../cores/summary/index.js';
 import { createMemoryGraphCore } from '../../cores/memory-graph/index.js';
+import { createDecisionCore } from '../../cores/decision/index.js';
 
-/** Ядра данных и логики: события, модели, пайплайн, генерация, Prompt Manager, макросы, трекинг, карта, лорбук, память. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
+/** Ядра данных и логики: события, модели, пайплайн, генерация, макросы, трекинг, карта, лорбук, память. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireDataCores(ctx) {
     const { engine } = ctx;
 
@@ -26,7 +26,6 @@ export async function wireDataCores(ctx) {
     backupCore.registerSource('chatMemory', createChatMetadataBackupSource(backupHost));
     backupCore.registerSource('settings', createExtensionSettingsBackupSource(backupHost));
     backupCore.registerSource('graphLibrary', createGraphLibraryBackupSource(backupHost)); // сохранённые графы памяти — и в бэкап, и в пресет
-    backupCore.registerSource('pmPresets', createPmPresetsBackupSource(backupHost)); // пресеты Prompt Manager
 
     // Ядро событий строится раньше всех, кто публикует события: они получают
     // его `publish` при сборке, чтобы защиты и реестр видели ВСЮ поверхность,
@@ -59,10 +58,6 @@ export async function wireDataCores(ctx) {
     const generationCore = createGenerationCore(engine.registerCaller('core.generation', 'cores', { tier: 'official' }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.generation' }),
         pipelines: pipelineCore,
-    });
-    // Prompt Manager (PROMPT_MANAGER_PLAN.md): своя сборка промпта на `generation.payload`; без активного пресета ничего не меняет.
-    const promptManagerCore = createPromptManagerCore(engine.registerCaller('core.promptManager', 'cores', { tier: 'official' }), {
-        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.promptManager' }),
     });
     // ST's own drawers (API Connections, World Info, Preset…) close on any click that isn't on them; a click in the engine's own UI
     // (the panel, the guide's chat) counts as "elsewhere" too — see services/st-drawer-guard.js. Always on, no user-facing toggle.
@@ -110,7 +105,7 @@ export async function wireDataCores(ctx) {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.lorebook' }),
     });
 
-    // Классификатор (Jev): ответы на вопросы-утверждения для условий блоков Prompt Manager; ходит в сеть, поэтому `networkAccess`.
+    // Классификатор (Jev): ответы на вопросы-утверждения; ходит в сеть, поэтому `networkAccess`.
     const classifierCore = createClassifierCore(engine.registerCaller('core.classifier', 'cores', { tier: 'official', networkAccess: true }));
 
     // Карточки персонажей ST: чтение, создание и правка всех полей (гид и любые Модули — через контракты `characterCards.*`).
@@ -133,6 +128,13 @@ export async function wireDataCores(ctx) {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.memoryGraph' }),
     });
 
+    // «Директор + прозаик» (docs/research-decision/DESIGN.md). По умолчанию
+    // выключено: этапы не регистрируются до `decision.configure({ enabled: true })`.
+    // Прозаик с выбранным подключением ME отвечает ST сам — значит Ядру решений
+    // нужен сетевой Гейт: запрос идёт через `http.request`, не прямым fetch.
+    const decisionCore = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official', networkAccess: true }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.decision' }),
+    });
 
-    return { backupHost, backupCore, eventsCore, modelsHost, modelsCore, diffusionHost, diffusionCore, pipelineCore, generationCore, promptManagerCore, drawerGuardCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, characterCardsCore, summaryCore, memoryGraphCore };
+    return { backupHost, backupCore, eventsCore, modelsHost, modelsCore, diffusionHost, diffusionCore, pipelineCore, generationCore, drawerGuardCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, characterCardsCore, summaryCore, memoryGraphCore, decisionCore };
 }

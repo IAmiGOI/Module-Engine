@@ -18,9 +18,7 @@ import { registerEmbeddingService } from '../../services/embedding.js';
 import { registerAudioStoreService } from '../../services/audio-store.js';
 import { registerImageStoreService } from '../../services/image-store.js';
 import { registerGraphLibraryService } from '../../services/graph-library.js';
-import { registerPmPresetsService } from '../../services/pm-presets.js';
 import { registerStPromptDataService } from '../../services/st-prompt-data.js';
-import { registerStPmUiService } from '../../services/st-pm-ui.js';
 import { registerAudioPlaybackService } from '../../services/audio-playback.js';
 import { registerExtensionSettingsService } from '../../services/extension-settings.js';
 import { registerFileService } from '../../services/file.js';
@@ -39,6 +37,7 @@ import { registerStExtensionsService } from '../../services/st-extensions.js';
 import { registerStWorldInfoService } from '../../services/st-worldinfo.js';
 import { registerStPresetService } from '../../services/st-preset.js';
 import { registerStDrawerGuard } from '../../services/st-drawer-guard.js';
+import { registerStDecisionUiService } from '../../services/st-decision-ui.js';
 import { registerSessionService } from '../../services/session.js';
 import { createChatMemoryCore } from '../../cores/memory/index.js';
 import { createChatHistoryCore } from '../../cores/chat-history/index.js';
@@ -79,9 +78,7 @@ export async function wireServices(ctx) {
     registerAudioStoreService(engine.buses.services);
     registerImageStoreService(engine.buses.services);
     registerGraphLibraryService(engine.buses.services);
-    registerPmPresetsService(engine.buses.services);
     registerStPromptDataService(engine.buses.services, { getContext });
-    registerStPmUiService(engine.buses.services);
     registerAudioPlaybackService(engine.buses.services, { crossfadeMs: 2500 });   // смена трека плавная, как в кино
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);
@@ -99,6 +96,7 @@ export async function wireServices(ctx) {
     registerStWorldInfoService(engine.buses.services);
     registerStPresetService(engine.buses.services, { getContext });
     registerStDrawerGuard(engine.buses.services);
+    registerStDecisionUiService(engine.buses.services);
     // Сервис перехвата: сюда встанут обе точки, которыми движок забирает
     // отправку себе. `interceptTarget` — «глобальный объект», на который
     // ставится именованная функция перехватчика и чей `fetch` подменяется;

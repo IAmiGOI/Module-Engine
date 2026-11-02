@@ -21,6 +21,7 @@ export const HUB_TILES = Object.freeze([
     Object.freeze({ id: 'lorebook', title: 'Lorebook', card: 'Lorebook', group: HUB_GROUPS.WORK, description: 'Entries of the active lorebooks, editable here' }),
     Object.freeze({ id: 'summary', title: 'Chat Summary', card: 'Chat Summary', group: HUB_GROUPS.WORK, description: 'Folds old messages into summaries' }),
     Object.freeze({ id: 'engine', title: 'Engine', card: 'Engine', group: HUB_GROUPS.SETTINGS, description: 'What is actually wired right now' }),
+    Object.freeze({ id: 'decision', title: 'Director / Writer', card: 'Director / Writer', group: HUB_GROUPS.SETTINGS, description: 'One model decides, another writes' }),
     Object.freeze({ id: 'viewport', title: 'Chat Viewport', card: 'Chat Viewport (experimental)', group: HUB_GROUPS.SETTINGS, description: 'WebGL chat, own input bar and docks' }),
     Object.freeze({ id: 'preset', title: 'Preset', card: 'Preset', group: HUB_GROUPS.SETTINGS, description: 'Save and load the whole engine setup' }),
     Object.freeze({ id: 'updates', title: 'Updates', card: 'Updates', group: HUB_GROUPS.SETTINGS, description: 'Check GitHub for a newer engine' }),

@@ -36,8 +36,8 @@ export function buildTestChat(card, userName, turns) {
 }
 
 /** Результат теста для гида: кто и на чём отвечал, затем по пробе — что написано и что ответила модель (длинный ответ обрезается с пометкой). */
-export function describeTestResult({ name, modelLabel, presetName, results }) {
-    const header = `Test of “${name}” on ${modelLabel}, preset “${presetName}”, isolated chat (the card's first message, then the probes; no lorebook or memory of any open chat).`;
+export function describeTestResult({ name, modelLabel, results }) {
+    const header = `Test of “${name}” on ${modelLabel}, isolated chat (the card's first message, then the probes; no lorebook or memory of any open chat).`;
     const body = results.map((item, index) => {
         const reply = item.reply.length > REPLY_VIEW_CHARS ? `${item.reply.slice(0, REPLY_VIEW_CHARS)}\n[cut: ${item.reply.length} characters in all]` : item.reply;
         return `Probe ${index + 1}${item.rule ? ` — checks: ${item.rule}` : ''}\n{{user}}: ${item.say}\n${name}: ${reply || '(empty reply)'}`;

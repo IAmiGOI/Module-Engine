@@ -31,6 +31,10 @@
  *    задан), положительное число — явный бюджет.
  */
 
+import { buildOpenAiTools } from './provider-tools.js';
+
+export { resolveProviderResponseMessage } from './provider-tools.js';
+
 const FORMATS = Object.freeze(['openai', 'anthropic', 'google']);
 
 /** Defensive reader — an unrecognized/missing format falls back to 'openai', the most common API shape. */
@@ -146,6 +150,7 @@ function buildOpenAiRequest(worker, request, stream) {
             ...(request.frequencyPenalty ? { frequency_penalty: request.frequencyPenalty } : {}),
             ...(request.presencePenalty ? { presence_penalty: request.presencePenalty } : {}),
             ...buildOpenAiReasoning(worker, request),
+            ...buildOpenAiTools(request),
             ...(stream ? { stream: true } : {}),
         }),
     };
@@ -237,6 +242,13 @@ function trimTrailingSlash(url) {
  *    showing up, not from the transport — the stream's real end is the caller's
  *    (http.js's) job once the reader itself reports done.
  */
+function withStreamExtras(result, extra) {
+    for (const [key, value] of Object.entries(extra)) {
+        if (Array.isArray(value) ? value.length : value) result[key] = value;
+    }
+    return result;
+}
+
 export function resolveStreamDelta(format, frame) {
     const resolvedFormat = resolveProviderFormat(format);
     const data = frame?.data ?? '';
@@ -244,14 +256,29 @@ export function resolveStreamDelta(format, frame) {
         if (data.trim() === '[DONE]') return { delta: '', done: true };
         try {
             const json = JSON.parse(data);
-            return { delta: String(json?.choices?.[0]?.delta?.content ?? ''), done: false };
+            const delta = json?.choices?.[0]?.delta ?? {};
+            const rawCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+            return withStreamExtras({ delta: String(delta.content ?? ''), done: false }, {
+                reasoning: String(delta.reasoning_content ?? delta.reasoning ?? ''),
+                toolCalls: rawCalls.map((call, index) => ({
+                    index: Number.isInteger(call?.index) ? call.index : index,
+                    id: String(call?.id ?? ''),
+                    name: String(call?.function?.name ?? ''),
+                    arguments: typeof call?.function?.arguments === 'string' ? call.function.arguments : '',
+                })),
+                usage: json?.usage ?? null,
+            });
         } catch { return { delta: '', done: false }; }
     }
     if (resolvedFormat === 'anthropic') {
         try {
             const json = JSON.parse(data);
             if (json?.type === 'message_stop') return { delta: '', done: true };
-            if (json?.type === 'content_block_delta') return { delta: String(json?.delta?.text ?? ''), done: false };
+            if (json?.type === 'content_block_delta') {
+                return withStreamExtras({ delta: String(json?.delta?.text ?? ''), done: false }, {
+                    reasoning: String(json?.delta?.thinking ?? ''),
+                });
+            }
             return { delta: '', done: false };
         } catch { return { delta: '', done: false }; }
     }
@@ -259,8 +286,43 @@ export function resolveStreamDelta(format, frame) {
     try {
         const json = JSON.parse(data);
         const candidate = json?.candidates?.[0];
-        return { delta: String(candidate?.content?.parts?.[0]?.text ?? ''), done: Boolean(candidate?.finishReason) };
+        const part = candidate?.content?.parts?.[0];
+        return withStreamExtras({ delta: String(part?.text ?? ''), done: Boolean(candidate?.finishReason) }, {
+            reasoning: part?.thought === true ? String(part?.text ?? '') : '',
+            usage: json?.usageMetadata ?? null,
+        });
     } catch { return { delta: '', done: false }; }
+}
+
+/**
+ * Сборка дельт `tool_calls` из потока: провайдер присылает имя один раз, а
+ * аргументы — кусками, по `index` вызова. Возвращает вызовы в той же форме,
+ * что `resolveProviderResponseMessage()`, чтобы `assistantToolMessage()`
+ * приняла их без отдельной ветки.
+ */
+export function createStreamToolCallCollector() {
+    const parts = new Map();
+    return {
+        push(deltas = []) {
+            for (const part of deltas) {
+                const index = Number.isInteger(part?.index) ? part.index : parts.size;
+                const current = parts.get(index) ?? { id: '', name: '', arguments: '' };
+                if (part?.id) current.id = part.id;
+                const name = String(part?.name ?? '');
+                if (name && !current.name.endsWith(name)) current.name += name;
+                current.arguments += String(part?.arguments ?? '');
+                parts.set(index, current);
+            }
+        },
+        calls() {
+            return [...parts.entries()].sort((a, b) => a[0] - b[0]).map(([index, part]) => {
+                let args = {};
+                try { args = part.arguments ? JSON.parse(part.arguments) : {}; } catch { args = {}; }
+                return { id: part.id || `call_${index}`, name: part.name, arguments: args, rawArguments: part.arguments || '{}' };
+            }).filter(call => call.name);
+        },
+        reset() { parts.clear(); },
+    };
 }
 
 /** Defensive reader — a malformed/unexpected response body yields '' rather than throwing, matching `resolveX()`'s contract. */

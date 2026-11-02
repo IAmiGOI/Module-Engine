@@ -143,3 +143,31 @@ export function blankEntry(uid) {
         automationId: '', role: 0, sticky: null, cooldown: null, delay: null,
     };
 }
+
+const cleanText = value => String(value ?? '').trim();
+const entryKeys = entry => [...(Array.isArray(entry?.key) ? entry.key : []), ...(Array.isArray(entry?.keysecondary) ? entry.keysecondary : [])].map(String).filter(Boolean);
+
+/** Поиск по содержимому активных записей: имя, ключи и текст; без модели и сети. */
+export function searchEntries(entries, query, { limit = 8 } = {}) {
+    const needle = cleanText(query).toLowerCase();
+    if (!needle) return [];
+    const found = [];
+    for (const entry of Array.isArray(entries) ? entries : []) {
+        if (!entry || entry.disable) continue;
+        const name = cleanText(entry.comment);
+        const keys = entryKeys(entry).join(' ');
+        const content = cleanText(entry.content);
+        const lowerName = name.toLowerCase();
+        const lowerKeys = keys.toLowerCase();
+        const lowerContent = content.toLowerCase();
+        let score = 0;
+        if (lowerName.includes(needle)) score += 5;
+        if (lowerKeys.includes(needle)) score += 3;
+        const at = lowerContent.indexOf(needle);
+        if (at >= 0) score += 2;
+        if (!score) continue;
+        const start = at >= 0 ? Math.max(0, at - 120) : 0;
+        found.push({ uid: entry.uid, book: entry.book ?? '', name, keys: entryKeys(entry), score, snippet: content.slice(start, start + 320) || content.slice(0, 320) });
+    }
+    return found.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).slice(0, Math.max(1, Number(limit) || 8));
+}
