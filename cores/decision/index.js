@@ -10,6 +10,8 @@ import { captureReasoning } from './capture.js';
 import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
 import { registerDecisionContracts } from './contracts.js';
+import { assembleSectionFor, previewSection } from './prompt-sections.js';
+import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
 
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
@@ -88,7 +90,14 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     }
 
     async function saveSettings(patch = {}) {
-        settings = clampDecisionSettings({ ...settings, ...patch });
+        const next = { ...settings, ...patch };
+        // Совместимость с частями 1–3: старый API правит `prompts`, а разделов
+        // ещё нет. Как только у раздела появилось содержимое, миграция больше
+        // не повторяется — очищенный пользователем блок остаётся пустым.
+        if (patch.prompts !== undefined && patch.promptSections === undefined && sectionsAreEmpty(settings.promptSections)) {
+            next.promptSections = migratePromptSections(null, { ...settings.prompts, ...patch.prompts });
+        }
+        settings = clampDecisionSettings(next);
         await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'settings', value: settings });
         return settings;
     }
@@ -192,11 +201,15 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const payload = input.payload ?? input;
         if (!pending || !payload) return payload;
         const summaries = (await call('summary.list')) ?? [];
-        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision, writerBlock: settings.prompts.writer });
         const worker = workers.find(item => item.id === settings.writer.workerId);
         const model = worker && worker.id !== 'st-main' ? String(worker.model ?? '') : '';
+        const writerBlock = (await assembleSectionFor({ sectionId: 'writer', settings, chat: pending.chat, call, model })).messages;
+        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision, writerBlock });
         return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;
     }
+
+    /** Предпросмотр раздела: собирает блок и плашки данных для окна промптов. */
+    const preview = input => previewSection({ input, settings, call, store });
 
     /** Отбросить ход и, если включены снимки, вернуть состояние до него. */
     function discardPending() {
@@ -243,6 +256,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             cardTurn,
             decide,
             rewrite,
+            preview,
             reload,
             decideContract: DECIDE_CONTRACT,
             rewriteContract: REWRITE_CONTRACT,
@@ -252,12 +266,16 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return settings;
     }
 
-    const publicSettings = () => ({ ...settings, decider: { ...settings.decider }, writer: { ...settings.writer }, prompts: { ...settings.prompts } });
+    const publicSettings = () => ({
+        ...settings, decider: { ...settings.decider }, writer: { ...settings.writer }, prompts: { ...settings.prompts },
+        promptSections: structuredClone(settings.promptSections ?? {}),
+    });
     return {
         load,
         configure: saveSettings,
         decide,
         rewrite,
+        preview,
         settings: publicSettings,
         runs: () => ({ ...store.runs() }),
         roster: () => store.roster(),

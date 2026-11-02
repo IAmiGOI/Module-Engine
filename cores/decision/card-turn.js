@@ -1,5 +1,6 @@
 import { createDecisionCycle } from './cycle.js';
 import { buildWriterContext } from '../../libraries/core/decision-context.js';
+import { assembleSectionFor } from './prompt-sections.js';
 
 /**
  * Один изолированный ход «директор → прозаик» для проверки карточки.
@@ -105,7 +106,8 @@ export function createCardTurn({ call, getSettings, getWorkers, now = () => Date
         const result = await cycle.run({ chat, runId: `cardtest_${(counter += 1)}`, type: 'normal', toolFilter: CARD_TEST_TOOLS, lorebook: false });
         if (!result.ok) throw new Error(`The director did not finish the test turn: ${result.reason ?? 'no form'}.`);
         const settings = getSettings();
-        const writer = buildWriterContext({ notes, summaries: [], chat, decision: result.push, writerBlock: settings.prompts.writer });
+        const writerBlock = (await assembleSectionFor({ sectionId: 'writer', settings, chat, call })).messages;
+        const writer = buildWriterContext({ notes, summaries: [], chat, decision: result.push, writerBlock });
         return { messages: writer.messages, push: result.push };
     };
 }

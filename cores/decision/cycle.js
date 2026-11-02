@@ -13,6 +13,7 @@ import { createHandlers } from './handlers.js';
 import { createCompaction } from './compaction.js';
 import { createJudge } from './judge.js';
 import { createPlaceReader, createTimeReader, createSimilarity } from './readers.js';
+import { assembleSectionFor } from './prompt-sections.js';
 
 /**
  * Активный и пассивный циклы директора. Здесь только оркестровка: контекст,
@@ -72,13 +73,19 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         try { return (await call('summary.list')) ?? []; } catch { return []; }
     }
 
-    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '' }) {
+    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', directorBlock = [] }) {
         return buildDeciderContext({
             summaries: list, chat, runs: store.runs(),
             thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
-            roster: store.roster().active, planMissing: !store.plan(), directorBlock: settings.prompts.director, lorebookText, task,
+            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, task,
         });
+    }
+
+    /** Пользовательский блок директора — тот же, что раньше брался из `prompts.director`, но собранный из раздела. */
+    async function directorBlockFor(settings, chat, worker) {
+        const block = await assembleSectionFor({ sectionId: 'director', settings, chat, call, model: worker.model });
+        return block.messages;
     }
 
     /** Лорбук — только директору: стабильный текст книги. Ошибка чтения не ломает ход. */
@@ -121,7 +128,10 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         const worker = deciderWorker(settings);
         state.runId = runId;
         awaiting = false;
-        const context = buildContext({ chat, settings, summaries: await summaries(), lorebookText: await lorebookTextFor(lorebook) });
+        const context = buildContext({
+            chat, settings, summaries: await summaries(), lorebookText: await lorebookTextFor(lorebook),
+            directorBlock: await directorBlockFor(settings, chat ?? [], worker),
+        });
         const tools = await toolsFor(settings, { filter: toolFilter });
         const startedAt = now();
         const controller = new AbortController();
@@ -206,7 +216,10 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         const worker = deciderWorker(settings);
         state.runId = runId;
         awaiting = false;
-        const context = buildContext({ settings, summaries: await summaries(), task, lorebookText: await lorebookTextFor(true) });
+        const context = buildContext({
+            settings, summaries: await summaries(), task, lorebookText: await lorebookTextFor(true),
+            directorBlock: await directorBlockFor(settings, [], worker),
+        });
         const messages = context.messages;
         const tools = await toolsFor(settings, { background: true });
         const startedAt = now();

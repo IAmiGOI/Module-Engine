@@ -1,14 +1,18 @@
 /** Контракты ядра «директор + прозаик». Только регистрация; логика — в index.js. */
 export function registerDecisionContracts(host, {
-    getSettings, configure, store, researcher, cycle, cardTurn, decide, rewrite, reload, decideContract, rewriteContract,
+    getSettings, configure, store, researcher, cycle, cardTurn, decide, rewrite, reload, preview, decideContract, rewriteContract,
 }) {
     const settings = () => {
         const value = getSettings();
-        return { ...value, decider: { ...value.decider }, writer: { ...value.writer }, prompts: { ...value.prompts } };
+        return {
+            ...value, decider: { ...value.decider }, writer: { ...value.writer }, prompts: { ...value.prompts },
+            promptSections: structuredClone(value.promptSections ?? {}),
+        };
     };
     return [
         host.own.register('decision.settings', settings),
         host.own.register('decision.configure', params => configure(params?.patch ?? {})),
+        host.own.register('decision.preview', params => preview(params ?? {})),
         host.own.register('decision.runs', () => ({ ...store.runs() })),
         host.own.register('decision.lastRun', () => store.lastRun()),
         host.own.register('decision.roster', () => store.roster()),

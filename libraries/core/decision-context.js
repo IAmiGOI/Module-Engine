@@ -78,11 +78,22 @@ export function historyMessages(chat, limit = RECENT_MESSAGE_LIMIT) {
     return selectedUnits(chat, limit).flatMap(unitMessages);
 }
 
-function insertBlock(messages, block, index) {
+/** Блок пользователя: строка (часть 3) или готовые сообщения раздела (часть 4). */
+function blockMessages(block) {
+    if (Array.isArray(block)) {
+        return block
+            .filter(message => String(message?.content ?? '').trim())
+            .map(message => ({ role: message?.role ?? 'system', content: String(message.content) }));
+    }
     const text = String(block ?? '').trim();
-    if (!text) return messages;
+    return text ? [{ role: 'system', content: text }] : [];
+}
+
+function insertBlock(messages, block, index) {
+    const parts = blockMessages(block);
+    if (!parts.length) return messages;
     const at = Math.max(0, Math.min(Number(index) || 0, messages.length));
-    return [...messages.slice(0, at), { role: 'system', content: text }, ...messages.slice(at)];
+    return [...messages.slice(0, at), ...parts, ...messages.slice(at)];
 }
 
 /** Цикл — реплика пользователя и всё, что идёт до следующей его реплики. */

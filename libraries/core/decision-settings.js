@@ -3,6 +3,7 @@
  * хранения. Форма одна и та же в памяти, в `storage.settings` и в панели;
  * панель правит те же поля, поэтому клэмп живёт здесь, а не в UI.
  */
+import { migratePromptSections } from './decision-prompt-model.js';
 
 export const DECISION_NAMESPACE = 'core.decision';
 export const DECISION_MEMORY_NAMESPACE = 'core.decision';
@@ -89,6 +90,7 @@ export function clampDecisionSettings(values = {}) {
             director: text(prompts.director, text(source.rules, DEFAULT_PROMPTS.director)),
             writer: text(prompts.writer, DEFAULT_PROMPTS.writer),
         },
+        promptSections: migratePromptSections(source.promptSections, { director: prompts.director, writer: prompts.writer }),
         regen: REGEN_MODES.includes(source.regen) ? source.regen : DEFAULT_SETTINGS.regen,
         maxSteps: Math.round(number(source.maxSteps, 1, 500, DEFAULT_SETTINGS.maxSteps)),
         implicitAwait: source.implicitAwait === undefined ? DEFAULT_SETTINGS.implicitAwait : Boolean(source.implicitAwait),
