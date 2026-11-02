@@ -75,7 +75,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     }
 
     function handlersFor(settings) {
-        return createHandlers({ store, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores });
+        return createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores });
     }
 
     async function summaries() {

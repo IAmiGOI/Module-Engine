@@ -48,6 +48,46 @@ export function searchRecords(bank, { character, query, limit = 10 } = {}) {
     return found.slice(-Math.max(1, Number(limit) || 10));
 }
 
+/** Обычные записи персонажа — кандидаты на сжатие. Важные не попадают сюда никогда. */
+export function ordinaryRecords(bank, character) {
+    return recordsFor(bank, character).filter(record => !record.important);
+}
+
+export function canCompress(bank, character, thresholdTokens) {
+    return bankTokens(bank, character) >= Number(thresholdTokens) && ordinaryRecords(bank, character).length > 0;
+}
+
+export const COMPRESS_SYSTEM = 'You compress roleplay memory records. Keep names, causal links, promises, relationships and unresolved threads; drop repeated wording. Never invent facts. Output ONLY the compressed record text, no preamble.';
+
+export function buildCompressionPrompt(records) {
+    const body = records.map(record => `- ${record.text}`).join('\n');
+    return `Compress these ordinary memory records of one character into one concise record. Keep every fact that still matters later.\n\n${body}`;
+}
+
+/**
+ * Заменяет обычные записи одним сжатым. Важные остаются на своих местах.
+ * `covers` — id сжатых записей, чтобы было видно, что именно ушло.
+ */
+export function replaceOrdinaryWithSummary(bank, { character, summary, covers = [], now = Date.now(), rid = Math.random } = {}) {
+    const name = key(character);
+    const body = String(summary ?? '').trim();
+    if (!name) return { ok: false, error: 'A compressed record needs a character.' };
+    if (!body) return { ok: false, error: 'A compressed record needs text.' };
+    const current = recordsFor(bank, character);
+    const important = current.filter(record => record.important);
+    const compressed = {
+        id: `mem_${now.toString(36)}_${rid().toString(36).slice(2, 8)}`,
+        planId: null,
+        at: now,
+        text: body,
+        important: false,
+        compressed: true,
+        covers,
+        tokens: estimateTokens(body),
+    };
+    return { ok: true, bank: { ...(bank ?? {}), [name]: [...important, compressed] }, record: compressed };
+}
+
 export function bankIndex(bank) {
     const entries = Object.entries(bank ?? {}).map(([character, records]) => {
         const list = Array.isArray(records) ? records : [];

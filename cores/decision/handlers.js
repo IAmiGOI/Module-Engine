@@ -4,7 +4,10 @@ import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
 import { applyArc, applyCharacterNote, applyPlan, notesFor } from '../../libraries/core/decision-state.js';
 import { advanceClock, clockFromLabel } from '../../libraries/core/decision-clock.js';
 import { setLevel, removeOnLeavingRoster, setPlan, interruptPlan, completePlan, planFor } from '../../libraries/core/decision-library.js';
-import { addRecord } from '../../libraries/core/decision-bank.js';
+import {
+    addRecord, searchRecords, canCompress, ordinaryRecords, buildCompressionPrompt,
+    replaceOrdinaryWithSummary, COMPRESS_SYSTEM,
+} from '../../libraries/core/decision-bank.js';
 
 /**
  * Исполнители инструментов директора — вынесены из цикла, чтобы цикл
@@ -69,9 +72,36 @@ export function createSimilarity(call) {
  *           state: { assessments: Map, assessmentCounter: number, turnCounter: number },
  *           resolvePlace: Function, lastTimeMark: Function, similarityScores: Function }} input
  */
-export function createHandlers({ store, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores }) {
+export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
+
+    /**
+     * Сжатие — отдельной моделью и только для обычных записей. Важные не
+     * трогаются никогда; если раздел не дорос до порога — модель не зовётся.
+     * Ошибка сжатия не ломает запись результата: банк остаётся как был.
+     */
+    async function compressIfNeeded(character, bank) {
+        const settings = getSettings();
+        if (!canCompress(bank, character, settings.compression.thresholdTokens)) return bank;
+        const ordinary = ordinaryRecords(bank, character);
+        try {
+            const summary = await call('model.generate', {
+                workerId: settings.compression.workerId || undefined,
+                systemPrompt: COMPRESS_SYSTEM,
+                prompt: buildCompressionPrompt(ordinary),
+                maxTokens: settings.compression.maxTokens,
+                temperature: settings.compression.temperature,
+                stream: false,
+            });
+            if (!String(summary ?? '').trim()) return bank;
+            const replaced = replaceOrdinaryWithSummary(bank, { character, summary, covers: ordinary.map(record => record.id) });
+            if (!replaced.ok) return bank;
+            await store.saveBank(replaced.bank);
+            publishEvent('decision.bank.compressed', { character, records: ordinary.length });
+            return replaced.bank;
+        } catch { return bank; }
+    }
 
     return {
         update_roster: async args => {
@@ -166,7 +196,8 @@ export function createHandlers({ store, publishEvent, getSettings, state, resolv
             }
             await store.saveBank(banked.bank);
             await store.savePlans(plans);
-            return { ok: true, record: banked.record, nextPlan };
+            const finalBank = await compressIfNeeded(record.name, banked.bank);
+            return { ok: true, record: banked.record, nextPlan, compressed: finalBank !== banked.bank };
         },
 
         library: async args => {
@@ -175,6 +206,18 @@ export function createHandlers({ store, publishEvent, getSettings, state, resolv
                 .filter(record => !wanted || key(record.name) === wanted)
                 .map(record => ({ ...record, plan: planFor(store.plans(), { character: record.name }) }));
             return { ok: true, characters: records };
+        },
+
+        memory: async args => {
+            if (args.op === 'write') {
+                const banked = addRecord(store.bank(), { character: args.character, text: args.text, important: args.important === true });
+                if (!banked.ok) return { ok: false, error: banked.error };
+                await store.saveBank(banked.bank);
+                await compressIfNeeded(args.character, banked.bank);
+                return { ok: true, record: banked.record };
+            }
+            const records = searchRecords(store.bank(), { character: args.character, query: args.query, limit: args.limit });
+            return { ok: true, records };
         },
 
         current_state: async () => {

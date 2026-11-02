@@ -24,6 +24,13 @@ export const DEFAULT_DECIDER = Object.freeze({
     reasoningBudget: 0,
 });
 
+export const DEFAULT_COMPRESSION = Object.freeze({
+    workerId: '',
+    thresholdTokens: 50000,
+    maxTokens: 2000,
+    temperature: 0.2,
+});
+
 export const DEFAULT_WRITER = Object.freeze({
     workerId: '',
     samplerPreset: '',
@@ -46,6 +53,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     assessSeed: null,
     decider: DEFAULT_DECIDER,
     writer: DEFAULT_WRITER,
+    compression: DEFAULT_COMPRESSION,
 });
 
 function number(value, min, max, fallback) {
@@ -63,6 +71,7 @@ export function clampDecisionSettings(values = {}) {
     const source = values && typeof values === 'object' ? values : {};
     const decider = source.decider && typeof source.decider === 'object' ? source.decider : {};
     const writer = source.writer && typeof source.writer === 'object' ? source.writer : {};
+    const compression = source.compression && typeof source.compression === 'object' ? source.compression : {};
     return {
         enabled: source.enabled === undefined ? DEFAULT_SETTINGS.enabled : Boolean(source.enabled),
         rules: text(source.rules, DEFAULT_SETTINGS.rules),
@@ -90,6 +99,12 @@ export function clampDecisionSettings(values = {}) {
             topP: number(writer.topP, 0, 1, DEFAULT_WRITER.topP),
             topK: Math.round(number(writer.topK, 0, 200, DEFAULT_WRITER.topK)),
             maxTokens: Math.round(number(writer.maxTokens, 1, 32768, DEFAULT_WRITER.maxTokens)),
+        },
+        compression: {
+            workerId: text(compression.workerId, DEFAULT_COMPRESSION.workerId).trim(),
+            thresholdTokens: Math.round(number(compression.thresholdTokens, 1, 500000, DEFAULT_COMPRESSION.thresholdTokens)),
+            maxTokens: Math.round(number(compression.maxTokens, 200, 32768, DEFAULT_COMPRESSION.maxTokens)),
+            temperature: number(compression.temperature, 0, 2, DEFAULT_COMPRESSION.temperature),
         },
     };
 }

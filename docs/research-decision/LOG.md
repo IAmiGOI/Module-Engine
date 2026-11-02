@@ -628,3 +628,34 @@ master/trivial → 0.998, novice/impossible → 0.002, master/impossible →
 
 Файлы: `cycle.js` разделён на оркестровку и `handlers.js` (исполнители
 инструментов), чтобы не выходить за разумный размер.
+
+## e5. Банк памяти и сжатие
+
+Сделано:
+
+- `libraries/core/decision-bank.js` — записи по персонажу и плану,
+  `important`, подсчёт токенов, поиск по тексту, `canCompress`,
+  `buildCompressionPrompt`, `replaceOrdinaryWithSummary`. Важные записи
+  исключены из сжатия на уровне выборки — их нельзя потерять даже случайно.
+- Инструмент `memory { op: 'search'|'read'|'write', character?, query?,
+  text?, important? }`; полное чтение только инструментом, в контексте —
+  компактный индекс (`bankIndex`).
+- Сжатие в `handlers.js`: после записи результата плана или `memory.write`,
+  если раздел персонажа ≥ `compression.thresholdTokens`, зовётся
+  **отдельный воркер** `compression.workerId` (`model.generate`, свой
+  maxTokens/temperature). Сжатые обычные записи заменяются одним рекордом
+  с `compressed: true` и `covers`; важные остаются. Ошибка сжатия не ломает
+  запись.
+- Настройки: `compression { workerId, thresholdTokens, maxTokens,
+  temperature }`, по умолчанию 50 000. Клэмп порога снижен до 1, чтобы
+  тесты могли задать маленький.
+- Событие `decision.bank.compressed`.
+
+Тесты:
+
+- `tests/decision-bank.test.js` — 5/5: записи/план/important, обычные vs
+  важные, замена с сохранением важных, промпт и индекс, поиск.
+- `tests/decision-e5.test.js` — 3/3: порог вызывает именно `compressor` и
+  оставляет один сжатый рекорд; важная запись остаётся неповреждённой;
+  ниже порога компрессор не зовётся.
+- Полный набор решений — 151/151.

@@ -244,6 +244,25 @@ export const LIBRARY_TOOL = Object.freeze({
     },
 });
 
+export const MEMORY_TOOL = Object.freeze({
+    name: 'memory',
+    displayName: 'Read or write the memory bank',
+    description: 'The memory bank holds the results of character plans. Only its index is in your context; search it here. "important" records are never compressed, so mark promises, betrayals and lasting rules.',
+    parameters: {
+        type: 'object',
+        properties: {
+            op: { type: 'string', enum: ['search', 'read', 'write'] },
+            character: { type: 'string' },
+            query: { type: 'string', description: 'Words to look for in the records.' },
+            text: { type: 'string', description: 'For write: the new record.' },
+            important: { type: 'boolean', description: 'For write: never compress this record.' },
+            limit: { type: 'number', description: 'How many records to return (default 10).' },
+            comment: COMMENT,
+        },
+        required: ['op', 'comment'],
+    },
+});
+
 export const AWAIT_TOOL = Object.freeze({
     name: 'await',
     displayName: 'Await an event',
@@ -263,7 +282,7 @@ export const AWAIT_TOOL = Object.freeze({
 export function buildToolList(externalSchemas = []) {
     const own = [
         UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL,
-        SET_CHARACTER_LEVEL_TOOL, SET_CHARACTER_PLAN_TOOL, RESOLVE_CHARACTER_PLAN_TOOL, LIBRARY_TOOL, AWAIT_TOOL,
+        SET_CHARACTER_LEVEL_TOOL, SET_CHARACTER_PLAN_TOOL, RESOLVE_CHARACTER_PLAN_TOOL, LIBRARY_TOOL, MEMORY_TOOL, AWAIT_TOOL,
     ];
     const external = (Array.isArray(externalSchemas) ? externalSchemas : [])
         .filter(schema => schema && String(schema.name ?? '').trim())
