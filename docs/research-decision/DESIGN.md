@@ -837,3 +837,84 @@ PM, и кнопкой «Open prompts» из карточки.
   `decision.configure`, предпросмотр через `decision.preview`, кнопка в
   карточке;
 - сборка контекста: блок встаёт на прежнюю глубину (2 цикла / @5).
+
+## Часть 5. Окно директора — разведка (h0)
+
+### Что уже лежит в логе
+
+Запись цикла — `createCycleRecord()` (`libraries/core/decision-log.js`):
+`{ id, runId, at, event, messages, toolCalls, thinking, warnings, usage, tokens }`.
+Цикл дописывается в `storage.chatMemory` (`core.decision`, ключ `log`) только
+ПОСЛЕ завершения (`appendCycle` в `cores/decision/store.js`), поэтому в
+сохранённом виде есть только «прошлое». `toolCalls` — плоский список
+`{ name, args, comment, result, error, durationMs, at }`, `messages` —
+сообщения диалога с моделью. Мы уже видим: пробуждение (`event`), thinking
+(текст провайдера), вызовы с комментариями, аргументы и результаты, assess
+(в `result` вызова), предупреждения, расходы (`usage`), пометку отвергнутого
+(`rejected`, `rejectedAt` ставит `journal.markRejected`).
+
+### Чего не хватает ленте — дописать в лог, не вычислять в окне
+
+| Строка ленты | Чего нет теперь | Откуда брать после правки |
+|---|---|---|
+| Заголовок цикла | нет причины пробуждения словами, номера хода, RP-времени и длительности | новые поля `wake { type, label, detail }`, `turn`, `clockMinutes`, `endedAt`, `durationMs` |
+| Форма хода | `submit_turn` отдаёт форму, но в запись цикла она не попадает | поле `form` в записи цикла |
+| Push | собирается в `cycle.run()` уже после записи и живёт только в `pending` до конца генерации | поле `push` в записи цикла |
+| Отчёты субагента | текст отчёта есть только в задании цикла | `wake.detail` + `wake.task`/`wake.report` |
+| Сообщения директору | их нет вовсе: поля ввода и контракта нет | запись `event: 'message'` с полем `message` и отдельный цикл-пробуждение |
+| «thinking…» | снаружи не видно, что шаг идёт | событие «шаг начат» |
+
+`assess` отдельной строкой вычисляется из `toolCalls[].result` — это тот же
+факт, что уже пришёл модели; дублировать его в записи не нужно. Отвергнутый
+цикл уже помечен, ленте остаётся его приглушить.
+
+### Каких событий не хватает
+
+Сейчас Ядро публикует `decision.started`, `decision.completed`,
+`decision.failed`, `decision.cycle.ended`, `decision.cycle.submitted`,
+`decision.cycle.draft_used`, `decision.passive.ended`, `decision.timeShift`,
+`decision.log.warning`, `decision.log.compacted`, `decision.bank.compressed`,
+`decision.researcher.report`. Для живого потока этого мало: всё интересное
+происходит МЕЖДУ `decision.started` и концом цикла, а запись появляется
+только в конце.
+
+Добавить ровно события хода, с данными, которых хватит строке ленты без
+перечитывания лога: `decision.cycle.started`, `decision.cycle.step`
+(модель думает / ответила), `decision.tool.called`, `decision.tool.result`,
+`decision.cycle.thinking`, `decision.cycle.form` (форма + Push),
+`decision.cycle.finished` (готовая запись), `decision.message.added`.
+Чистая модель ленты (`libraries/core/decision-feed.js`) принимает старые
+циклы плюс эти события и дописывает строки; полное перестроение — только
+при первой загрузке и при «показать ещё».
+
+### Поток с инструментами
+
+Сейчас директор зовёт модель с `stream: false`
+(`cores/decision/cycle.js`, `generateFor`). Поток текста сам по себе уже
+есть (`model.generate.chunk`, `resolveStreamDelta`), но включить его как
+есть нельзя: при `stream: true` и `returnMessage: true`
+`cores/models/internal-engine.js` разбирает `lastRaw.body` как один JSON, а
+тело потока — это SSE-кадры. Разбор падает, и `tool_calls` теряются. Вдобавок
+`resolveStreamDelta` читает только `choices[0].delta.content` — дельты
+`tool_calls` и `reasoning_content` пропускаются.
+
+Значит, поток с инструментами **возможен, но требует правки разбора**, а не
+только флага: `resolveStreamDelta` для `openai` отдаёт ещё и дельты
+`tool_calls` (сборка по `index`, склейка `function.arguments`) и
+`reasoning_content`; `dispatchToWorker` копит их рядом с текстом;
+`model.generate` при `returnMessage` берёт накопленные вызовы, если тело —
+SSE. Директор получает `stream: true` и события
+`decision.cycle.step`/`decision.cycle.thinking` по мере прихода. Это h3 —
+отдельным блоком, с тестами на фейковых кадрах, без живых запросов.
+
+### Кнопка и объём
+
+Кнопка «Open director» — в карточке Director / Writer (вместо свёрнутых
+«Director log» и «Researcher reports»); постоянная круглая кнопка
+`DockButton` — в собственном дереве окна, рядом с чатом. Окно открывается
+событием `decisionWindow.openRequested`.
+
+До 500 тыс. токенов окно рисует последние N циклов (30) и кнопку «Load
+older» сверху — DOM растёт порциями, виртуализация не нужна. Архив сжатия
+(`e6`) — отдельная свёрнутая секция «Archived arcs». Никакого
+`requestAnimationFrame`: индикатор ожидания обновляет текст раз в секунду.
