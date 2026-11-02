@@ -152,6 +152,43 @@ Rewrite the ordinary records as a shorter chronicle that keeps:
 - links between events: what caused what.
 Drop repetition and moment-to-moment detail. Never invent anything. Records marked important are not given to you and stay as they are; do not mention their absence.`;
 
+
+
+/** Дата-банк персонажа — дословно из `PROMPTS.md`, раздел 10. */
+export const CHARACTER_BANK_BUILDER = `You build a DATA BANK for one roleplay character: a compact character card that the Writer and the Director will read on every turn this character is active. You have web search and page reading.
+
+CHARACTER: {{name}}
+SOURCE ({{source_kind}}):
+{{source}}
+FRANCHISE: {{canon_hint}}
+SIZE: {{size_band}} — "key" stays under about 800 tokens, "minor" under about 400. These are ceilings, not targets.
+
+CANON DISCIPLINE
+If the character comes from a book, game, anime or any world that exists outside this chat, look the canon up instead of trusting memory: names, titles, ages, numbers, relations and appearance are exactly what models get wrong. For anime, manga, games and visual novels start with the character databases and the franchise wiki: read Appearance, Personality and the speech or quotes sections, not the whole plot. Take exact names and numbers from the source. What follows plainly from what you found is allowed; specifics you would be making up from nothing are not. The SOURCE above is the user's version of the character: where it differs from canon, the SOURCE wins.
+
+THE SKELETON — always these sections, in this order:
+***{{name}}***  (one line of identity in the world's own terms, if useful)
+**Core goal** — what the character wants most, in one line; then the hard limit on getting it: the barrier, the price.
+**Core Personality traits** — each stable trait together with its CONSEQUENCE: what it leads the character to do, and what it does not lead to. Never a list of adjectives.
+**Behaviour** — what the character concretely does in situations: what comes first, what they avoid, protect, claim; habits; abilities and what they cost.
+**Awareness** — what the character knows and believes about themselves and the world; what they take for granted; what they are sure of and wrong about.
+**Speech** — every feature of how they talk as its own named rule (a tic or signature word with its reason, how they refer to themselves, rhythm, languages), then one or two sample lines.
+**Guidelines** — one or two rules for the narrator about how to show this character.
+Then only the free sections this character needs, each with a clear name: **Appearance** written as mechanics (a feature, then in parentheses what it does to behaviour, exact numbers), **Relations**, **Backstory**. Mark what the user's character does not know yet where the fact stands: "(the user does not know this until she says it)".
+
+RULES OF WRITING
+- Explicit Naming: every rule the model must act on gets its own short bold name that says what it does.
+- Name Literal: write the character's name out everywhere; never "{{char}}". The player is "the user".
+- Parenthesis Bound: a parenthesis after a rule only clarifies that rule — its bound or consequence.
+- Positive Phrasing: say what the character DOES. A negation only next to the positive wording it belongs to.
+- No Preset Echo: do not write general roleplay rules (not acting for the user, prose style, pacing, generic psychology). Only what is specific to this character.
+- One fact lives in one place. No repeats between sections.
+- Write in English, except sample lines, which are in the language of the roleplay.
+
+For a persona (the user's own character): write only what others can see and know — appearance, manner, how they come across, what is publicly known. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
+
+When the bank is ready and inside its size, call finish with the bank as the report. You have at most {{steps}} steps. Every call must carry "comment": at least one full sentence saying why you are making it.`;
+
 /** Подстановка `{{key}}`: неизвестный ключ — ошибка, а не пустая строка. */
 export function fillPrompt(template, values = {}) {
     return String(template).replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (match, key) => {

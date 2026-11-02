@@ -1696,3 +1696,14 @@ isodate/weekday`, `trim`, `newline`, `<USER>/<BOT>/<CHAR>`.
 - Решение: базовый слой — `storage.settings` (бэкап и синхронизация уже
   возят все extension settings); копия чата — `storage.chatMemory`; хеш
   источника решает, копировать банк или пересобирать.
+
+## j1. Промпт субагента для банков
+
+- `libraries/core/decision-prompts.js` — `CHARACTER_BANK_BUILDER`: раздел 10
+  `PROMPTS.md` перенесён программно, дословно; подстановки через `fillPrompt`.
+  Литеральный `{{char}}` из правила Name Literal остаётся в тексте (значение
+  `char: '{{char}}'` передаёт вызывающий).
+- `libraries/core/decision-banks.js` — `bankSizeBand()`: `key` для главного
+  персонажа карточки и уровней библиотеки 1–2, `minor` для остальных.
+- Тест `tests/decision-bank-prompt.test.js` сверяет промпт с разделом 10
+  `PROMPTS.md` посимвольно, заполняет все подстановки и проверяет полосы.
