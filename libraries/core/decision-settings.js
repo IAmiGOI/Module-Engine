@@ -52,7 +52,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     implicitAwait: false,
     formTimeoutMs: 180000,
     bankColdStartTimeoutMs: 120000,
-    logLimitTokens: 500000,
+    compressedLimitTokens: 100000,
     archiveLimitTokens: 500000,
     researcher: { workerId: '', maxTasks: 2, maxSteps: 50 },
     // e11: предложения Claude, каждое — отдельной настройкой.
@@ -97,7 +97,7 @@ export function clampDecisionSettings(values = {}) {
         implicitAwait: source.implicitAwait === undefined ? DEFAULT_SETTINGS.implicitAwait : Boolean(source.implicitAwait),
         formTimeoutMs: Math.round(number(source.formTimeoutMs, 10, 3600000, DEFAULT_SETTINGS.formTimeoutMs)),
         bankColdStartTimeoutMs: Math.round(number(source.bankColdStartTimeoutMs, 1000, 3600000, DEFAULT_SETTINGS.bankColdStartTimeoutMs)),
-        logLimitTokens: Math.round(number(source.logLimitTokens, 1, 5000000, DEFAULT_SETTINGS.logLimitTokens)),
+        compressedLimitTokens: Math.round(number(source.compressedLimitTokens, 1, 5000000, DEFAULT_SETTINGS.compressedLimitTokens)),
         archiveLimitTokens: Math.round(number(source.archiveLimitTokens, 1, 5000000, DEFAULT_SETTINGS.archiveLimitTokens)),
         assessSeed: Number.isFinite(source.assessSeed) ? Number(source.assessSeed) : null,
         snapshots: source.snapshots === undefined ? DEFAULT_SETTINGS.snapshots : Boolean(source.snapshots),

@@ -4,7 +4,7 @@ import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
 import { duePlans } from '../../libraries/core/decision-library.js';
 import { createHandlers } from './handlers.js';
-import { createCompaction } from './compaction.js';
+import { createTurnPrefix } from './prefix.js';
 import { createJudge } from './judge.js';
 import { createPlaceReader, createTimeReader, createSimilarity } from './readers.js';
 import { createCycleLive } from './live.js';
@@ -47,7 +47,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return worker;
     }
 
-    const { maybeCompactLog } = createCompaction({ store, getSettings, deciderWorker, call, now, publishEvent });
+    const prefix = createTurnPrefix({ store, getSettings, deciderWorker, call, now, publishEvent });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
     function handlersFor(settings) {
@@ -125,6 +125,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             const warnings = ['the form timed out; the saved draft was used'];
             const cycle = { ...startedCycle.cycle, form, push, warnings };
             await store.appendCycle(cycle).catch(() => {});
+            await prefix.sync().catch(error => publishEvent('decision.log.warning', { reason: `compressed prefix failed: ${error?.message ?? error}` }));
             live.form({ runId, form, push });
             live.finished({ cycle });
             wakeQueue.rest();
@@ -137,7 +138,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, contextMessages: built.messages,
         });
         await store.appendCycle(cycle).catch(() => {});
-        await maybeCompactLog().catch(error => publishEvent('decision.log.warning', { reason: `log compaction failed: ${error?.message ?? error}` }));
+        await prefix.sync().catch(error => publishEvent('decision.log.warning', { reason: `compressed prefix failed: ${error?.message ?? error}` }));
         if (form) live.form({ runId, form, push });
         live.finished({ cycle });
         wakeQueue.rest();
@@ -197,7 +198,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             workerId: worker.id, usage: usage(), contextMessages: built.messages,
         });
         await store.appendCycle(cycle).catch(() => {});
-        await maybeCompactLog().catch(error => publishEvent('decision.log.warning', { reason: `log compaction failed: ${error?.message ?? error}` }));
+        await prefix.sync().catch(error => publishEvent('decision.log.warning', { reason: `compressed prefix failed: ${error?.message ?? error}` }));
         live.finished({ cycle });
         wakeQueue.rest();
         publishEvent('decision.passive.ended', { runId, event, steps: result.steps, type: result.type });
@@ -254,6 +255,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             workerId: getSettings().decider.workerId || null,
         });
         try { await store.appendCycle(record); } catch { /* the wake still runs */ }
+        await prefix.sync().catch(() => {});
         publishEvent('decision.message.added', { record });
         const runId = `message_${at.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
         wakeQueue.schedule(() => backgroundRun({
@@ -268,6 +270,8 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
 
     return {
         run, runPassive, runDraft, onResearcherReport, sendMessage, judgeForcedMemory,
+        syncPrefix: () => prefix.sync(),
+        noteCorrection: params => prefix.noteCorrection(params),
         assessments: () => new Map(assessments), resetAssessments: () => assessments.clear(),
         waiting: () => ({ awaiting: wakeQueue.isAwaiting(), queued: wakeQueue.queued() }),
     };

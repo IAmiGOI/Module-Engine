@@ -270,3 +270,12 @@ Call mark_lorebook_characters once, with every character entry:
 - franchise — the existing work this character comes from, only if the entries or the chat character make it clear; leave it empty if the world may be original. Never guess.
 Entries you do not list are treated as not characters. The call needs a comment of at least one sentence.
 ```
+
+## 12. Служебные заголовки контекста
+
+Это не промпты, а короткие английские заголовки разделов, которые движок
+ставит в контекст директора:
+
+- `EARLIER TURNS (compressed):` — сжатая часть префикса (часть 9). Записи под
+  ней только дописываются и никогда не переписываются, кроме сводки
+  закрытой арки.

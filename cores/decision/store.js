@@ -1,16 +1,12 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
-import { trimThinking, totalLogTokens } from '../../libraries/core/decision-log.js';
+import { totalLogTokens } from '../../libraries/core/decision-log.js';
 import { createJournal } from './journal.js';
+import { createDigestStore } from './store-digests.js';
 import { loadChatMemory } from './store-load.js';
 import { sanitizeCycles } from './store-sanitize.js';
 
-/**
- * Хранение блоков и записей прогонов директора в памяти чата. Вынесено из
- * самого ядра, чтобы у него осталась только логика хода (и файл не рос за
- * 300 строк). Запись сериализована собственной очередью: `persist()`
- * читает-меняет-пишет и `runs`, и `blocks`, поэтому два одновременных
- * завершения не должны затирать друг друга.
- */
+/** Хранение состояния директора в памяти чата; запись сериализована очередью,
+ * чтобы `persist()` и правки блоков не затирали друг друга. */
 export function createDecisionStore({ call, publishEvent }) {
     let runs = {};
     let log = [];
@@ -27,7 +23,6 @@ export function createDecisionStore({ call, publishEvent }) {
     let issuedNames = [];
     let snapshots = {};
     let draft = null;
-    let appendCount = 0;
     let tail = Promise.resolve();
 
     function enqueue(task) {
@@ -45,7 +40,10 @@ export function createDecisionStore({ call, publishEvent }) {
         setNames: value => { issuedNames = value; },
         getLog: () => log,
         setLog: value => { log = value; },
+        getArchive: () => logArchive,
+        setArchive: value => { logArchive = value; },
     });
+    const digests = createDigestStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
 
     async function reload() {
         const data = await loadChatMemory(call);
@@ -64,6 +62,7 @@ export function createDecisionStore({ call, publishEvent }) {
         issuedNames = data.issuedNames;
         snapshots = data.snapshots;
         draft = data.draft;
+        digests.load(data.turnDigests);
         return { runs, log };
     }
 
@@ -74,11 +73,6 @@ export function createDecisionStore({ call, publishEvent }) {
     function appendCycle(cycle) {
         return enqueue(async () => {
             log = [...log, cycle];
-            appendCount += 1;
-            // Thinking — за текущий цикл и два предыдущих. Чистим ПАЧКОЙ на
-            // границе трёх циклов (e0: так платится одно падение префикса раз
-            // в три хода, а не каждый).
-            if (appendCount % 3 === 0) log = trimThinking(log, 2);
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
             return cycle;
         });
@@ -216,11 +210,14 @@ export function createDecisionStore({ call, publishEvent }) {
         });
     }
 
-    /** Заменить лог (после хранения thinking/архива). Архив — отдельным ключом, чтобы он не искал старые записи. */
-    function saveLog(next, { archived = [] } = {}) {
+    /** Заменить лог (после переноса старых ходов в архив). Архив — отдельным ключом. */
+    function saveLog(next, { archived = [], archiveLimitTokens = 0 } = {}) {
         return enqueue(async () => {
             log = sanitizeCycles(next);
             if (archived.length) logArchive = [...logArchive, ...sanitizeCycles(archived)];
+            if (archiveLimitTokens > 0) {
+                while (logArchive.length > 1 && totalLogTokens(logArchive) > archiveLimitTokens) logArchive = logArchive.slice(1);
+            }
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
             if (archived.length) await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', value: logArchive });
             return log;
@@ -293,5 +290,7 @@ export function createDecisionStore({ call, publishEvent }) {
         appendCycle,
         saveLog,
         logTokens,
+        digests: digests.digests,
+        saveDigests: digests.saveDigests,
     };
 }

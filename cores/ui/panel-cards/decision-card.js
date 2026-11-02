@@ -31,7 +31,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
     const presets = signal([]);
     const maxSteps = signal(50);
     const formTimeoutMs = signal(180000);
-    const logLimitTokens = signal(500000);
+    const compressedLimitTokens = signal(100000);
     const compression = { workerId: signal(''), thresholdTokens: signal(50000) };
     const researcherSettings = { workerId: signal(''), maxTasks: signal(2), maxSteps: signal(50) };
     const snapshots = signal(true);
@@ -106,7 +106,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
         writer.maxTokens.set(Number(readWriter.maxTokens ?? 1000));
         maxSteps.set(Number(value.maxSteps ?? 50));
         formTimeoutMs.set(Number(value.formTimeoutMs ?? 180000));
-        logLimitTokens.set(Number(value.logLimitTokens ?? 500000));
+        compressedLimitTokens.set(Number(value.compressedLimitTokens ?? 100000));
         compression.workerId.set(String(value.compression?.workerId ?? ''));
         compression.thresholdTokens.set(Number(value.compression?.thresholdTokens ?? 50000));
         researcherSettings.workerId.set(String(value.researcher?.workerId ?? ''));
@@ -132,7 +132,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
                 workerId: writerWorkerId.peek(), samplerPreset: writer.samplerPreset.peek(), applySampler: writer.applySampler.peek(),
                 temperature: writer.temperature.peek(), topP: writer.topP.peek(), topK: writer.topK.peek(), maxTokens: writer.maxTokens.peek(),
             },
-            maxSteps: maxSteps.peek(), formTimeoutMs: formTimeoutMs.peek(), logLimitTokens: logLimitTokens.peek(),
+            maxSteps: maxSteps.peek(), formTimeoutMs: formTimeoutMs.peek(), compressedLimitTokens: compressedLimitTokens.peek(),
             compression: { workerId: compression.workerId.peek(), thresholdTokens: compression.thresholdTokens.peek() },
             researcher: {
                 workerId: researcherSettings.workerId.peek(),
@@ -241,7 +241,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
                 Row(
                     Slider('Max steps without await', maxSteps, { min: 1, max: 500, step: 1 }),
                     Slider('Form timeout (ms)', formTimeoutMs, { min: 1000, max: 3600000, step: 1000 }),
-                    Slider('Log limit (tokens)', logLimitTokens, { min: 1000, max: 5000000, step: 10000 }),
+                    Slider('Compressed prefix limit (tokens)', compressedLimitTokens, { min: 1000, max: 5000000, step: 10000 }),
                 ),
                 Row(
                     Field('Compression connection', Select(compression.workerId, workerOptions), { hint: 'Separate model that compresses ordinary memory records. Important records are never compressed.' }),

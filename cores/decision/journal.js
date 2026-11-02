@@ -6,7 +6,7 @@ import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-setting
  * массивы совпадают), поэтому в снимок попадает только тронутое, а не весь
  * банк. Лог не откатывается — его циклы помечаются `rejected`.
  */
-export function createJournal({ enqueue, call, getBank, setBank, getNames, setNames, getLog, setLog }) {
+export function createJournal({ enqueue, call, getBank, setBank, getNames, setNames, getLog, setLog, getArchive = () => [], setArchive = () => {} }) {
     let bankBaseline = {};
     let namesBaseline = [];
     let bankTracking = false;
@@ -57,17 +57,25 @@ export function createJournal({ enqueue, call, getBank, setBank, getNames, setNa
     function markRejected(runId) {
         return enqueue(async () => {
             if (!runId) return false;
-            let changed = false;
-            const next = getLog().map(cycle => {
+            const reject = cycles => cycles.map(cycle => {
                 if (cycle.runId !== runId || cycle.rejected) return cycle;
-                changed = true;
                 return { ...cycle, rejected: true, rejectedAt: Date.now() };
             });
-            if (changed) {
-                setLog(next);
-                await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: next });
+            const logBefore = getLog();
+            const archiveBefore = getArchive();
+            const nextLog = reject(logBefore);
+            const nextArchive = reject(archiveBefore);
+            const logChanged = nextLog.some((cycle, index) => cycle !== logBefore[index]);
+            const archiveChanged = nextArchive.some((cycle, index) => cycle !== archiveBefore[index]);
+            if (logChanged) {
+                setLog(nextLog);
+                await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: nextLog });
             }
-            return changed;
+            if (archiveChanged) {
+                setArchive(nextArchive);
+                await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', value: nextArchive });
+            }
+            return logChanged || archiveChanged;
         });
     }
 

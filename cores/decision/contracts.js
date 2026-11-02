@@ -18,6 +18,7 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.roster', () => store.roster()),
         host.own.register('decision.log', () => store.cycles()),
         host.own.register('decision.archive', () => store.archive()),
+        host.own.register('decision.digests', () => store.digests()),
         host.own.register('decision.plan', () => store.plan()),
         host.own.register('decision.arcs', () => store.arcs()),
         host.own.register('decision.notes', () => store.notes()),

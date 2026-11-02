@@ -78,6 +78,8 @@ function createVolatileStore({ notes, roster }) {
         saveDraft: setter('draft'),
         saveLog: setter('cycles'),
         logTokens: () => 0,
+        digests: () => [],
+        saveDigests: async () => [],
         snapshot: () => null,
         deleteSnapshot: async () => false,
         persist: async () => null,

@@ -13,3 +13,7 @@ export function sanitizeRuns(value) {
 export function sanitizeCycles(value) {
     return (Array.isArray(value) ? value : []).filter(cycle => cycle && typeof cycle === 'object');
 }
+
+export function sanitizeDigests(value) {
+    return (Array.isArray(value) ? value : []).filter(record => record && typeof record === 'object' && String(record.text ?? '').trim());
+}

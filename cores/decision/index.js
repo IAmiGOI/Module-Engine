@@ -219,6 +219,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         persist: record => store.persist(record),
         discardPending,
         getLastFailure: () => lastFailure,
+        noteCorrection: params => cycle.noteCorrection(params),
         notify,
         revealCard: () => request(host.own, 'ui.reveal', { params: { anchor: 'card:decision' } }),
         restoreSnapshotFor,
@@ -236,6 +237,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const stored = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'settings', fallback: null });
         settings = clampDecisionSettings(stored ?? DEFAULT_SETTINGS);
         await reload();
+        await cycle.syncPrefix().catch(error => publishEvent('decision.log.warning', { reason: `compressed prefix failed: ${error?.message ?? error}` }));
         unregisters.push(...registerDecisionContracts(host, {
             getSettings: () => settings,
             configure: saveSettings,
@@ -271,6 +273,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         roster: () => store.roster(),
         log: () => store.cycles(),
         archive: () => store.archive(),
+        digests: () => store.digests(),
         plan: () => store.plan(),
         arcs: () => store.arcs(),
         notes: () => store.notes(),

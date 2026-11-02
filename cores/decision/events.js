@@ -5,7 +5,7 @@
  */
 export function createDecisionEvents({
     host, getSettings, getPending, setPending, clearAttempts, deleteAttempt, persist,
-    discardPending, getLastFailure, notify, revealCard, restoreSnapshotFor, lastMesid,
+    discardPending, getLastFailure, noteCorrection, notify, revealCard, restoreSnapshotFor, lastMesid,
     cycle, reload, startDraft, canReregister, registerStages, publishEvent, decideStage,
 }) {
     let typingActive = false;
@@ -67,7 +67,15 @@ export function createDecisionEvents({
     }
 
     function onDeleted(payload) {
-        restoreSnapshotFor(payload?.args?.[0], { remove: true }).catch(() => {});
+        const mesid = payload?.args?.[0];
+        restoreSnapshotFor(mesid, { remove: true }).catch(() => {});
+        noteCorrection?.({ mesid, action: 'deleted' }).catch(() => {});
+    }
+
+    function onEdited(payload) {
+        const mesid = payload?.args?.[0] ?? payload?.mesid ?? (typeof payload === 'number' ? payload : null);
+        if (mesid === null || mesid === undefined) return;
+        noteCorrection?.({ mesid, action: 'edited' }).catch(() => {});
     }
 
     function onTyping(payload) {
@@ -95,6 +103,7 @@ export function createDecisionEvents({
             // Свайп и удаление: вернуть состояние к снимку до этого хода.
             host.events.subscribe('st.messageSwiped', onSwipe),
             host.events.subscribe('st.messageDeleted', onDeleted),
+            host.events.subscribe('st.messageEdited', onEdited),
             // Старт по набору текста — только когда включены и настройка, и заготовка.
             host.events.subscribe('ui.inputBar.changed', onTyping),
         ];
