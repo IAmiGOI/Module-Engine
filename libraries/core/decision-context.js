@@ -37,6 +37,7 @@ const DECIDER_TOOL_TASK = `Decide this turn with the tools you are given. Work i
 4. When the turn is done, continue with the passive work if there is any, then call await.
 
 Every single call must carry "comment": why you are making it, at least one full sentence. A call without a comment is rejected.
+You are FORBIDDEN to wait for the web researcher: start it with spawn_researcher if research would help, and let its report come later. Never make the user's turn wait for it.
 You never decide what the user does; in userResult write only the result of the user's action.
 You never write the reply itself — the writer does that from your form.`;
 

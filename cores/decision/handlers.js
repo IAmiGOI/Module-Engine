@@ -72,7 +72,7 @@ export function createSimilarity(call) {
  *           state: { assessments: Map, assessmentCounter: number, turnCounter: number },
  *           resolvePlace: Function, lastTimeMark: Function, similarityScores: Function }} input
  */
-export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores }) {
+export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -206,6 +206,11 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
                 .filter(record => !wanted || key(record.name) === wanted)
                 .map(record => ({ ...record, plan: planFor(store.plans(), { character: record.name }) }));
             return { ok: true, characters: records };
+        },
+
+        spawn_researcher: async args => {
+            if (!researcher) return { ok: false, error: 'The researcher is not available.' };
+            return researcher.start({ task: args.task });
         },
 
         forced_memory: async args => {

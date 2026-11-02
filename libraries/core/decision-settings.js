@@ -51,6 +51,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     formTimeoutMs: 180000,
     logLimitTokens: 500000,
     archiveLimitTokens: 500000,
+    researcher: { workerId: '', maxTasks: 2, maxSteps: 50 },
     // Seed оценки — только для тестов; `null` означает настоящий бросок.
     assessSeed: null,
     decider: DEFAULT_DECIDER,
@@ -74,6 +75,7 @@ export function clampDecisionSettings(values = {}) {
     const decider = source.decider && typeof source.decider === 'object' ? source.decider : {};
     const writer = source.writer && typeof source.writer === 'object' ? source.writer : {};
     const compression = source.compression && typeof source.compression === 'object' ? source.compression : {};
+    const researcher = source.researcher && typeof source.researcher === 'object' ? source.researcher : {};
     return {
         enabled: source.enabled === undefined ? DEFAULT_SETTINGS.enabled : Boolean(source.enabled),
         rules: text(source.rules, DEFAULT_SETTINGS.rules),
@@ -109,6 +111,11 @@ export function clampDecisionSettings(values = {}) {
             thresholdTokens: Math.round(number(compression.thresholdTokens, 1, 500000, DEFAULT_COMPRESSION.thresholdTokens)),
             maxTokens: Math.round(number(compression.maxTokens, 200, 32768, DEFAULT_COMPRESSION.maxTokens)),
             temperature: number(compression.temperature, 0, 2, DEFAULT_COMPRESSION.temperature),
+        },
+        researcher: {
+            workerId: text(researcher.workerId, '').trim(),
+            maxTasks: Math.round(number(researcher.maxTasks, 1, 8, 2)),
+            maxSteps: Math.round(number(researcher.maxSteps, 1, 200, 50)),
         },
     };
 }

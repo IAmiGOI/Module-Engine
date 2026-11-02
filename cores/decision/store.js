@@ -21,6 +21,7 @@ export function createDecisionStore({ call, publishEvent }) {
     let plans = [];
     let clock = { minutes: 0, updatedAt: 0 };
     let memoryBank = {};
+    let research = [];
     let appendCount = 0;
     let tail = Promise.resolve();
 
@@ -57,7 +58,7 @@ export function createDecisionStore({ call, publishEvent }) {
     }
 
     async function reload() {
-        const [storedBlocks, storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank] = await Promise.all([
+        const [storedBlocks, storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch] = await Promise.all([
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'blocks', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
@@ -70,6 +71,7 @@ export function createDecisionStore({ call, publishEvent }) {
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'plans', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'clock', fallback: { minutes: 0, updatedAt: 0 } }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'memoryBank', fallback: {} }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'research', fallback: [] }),
         ]);
         blocks = sanitizeBlocks(storedBlocks);
         runs = sanitizeRuns(storedRuns);
@@ -83,6 +85,7 @@ export function createDecisionStore({ call, publishEvent }) {
         plans = Array.isArray(storedPlans) ? storedPlans.filter(plan => plan && typeof plan === 'object') : [];
         clock = Number.isFinite(storedClock?.minutes) ? { minutes: Number(storedClock.minutes), updatedAt: Number(storedClock.updatedAt) || 0 } : { minutes: 0, updatedAt: 0 };
         memoryBank = storedBank && typeof storedBank === 'object' && !Array.isArray(storedBank) ? storedBank : {};
+        research = Array.isArray(storedResearch) ? storedResearch.filter(task => task && typeof task === 'object') : [];
         publishEvent('decision.blocks.changed', { count: blocks.length });
         return { blocks, runs, log };
     }
@@ -172,6 +175,31 @@ export function createDecisionStore({ call, publishEvent }) {
         });
     }
 
+    function saveResearch(next) {
+        return enqueue(async () => {
+            research = Array.isArray(next) ? next : [];
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'research', value: research });
+            return research;
+        });
+    }
+
+    /** Добавить/обновить задачу под той же очередью: два отчёта одновременно не затирают друг друга. */
+    function addResearch(task) {
+        return enqueue(async () => {
+            research = [...research, task];
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'research', value: research });
+            return research;
+        });
+    }
+
+    function updateResearch(id, patch) {
+        return enqueue(async () => {
+            research = research.map(task => (task.id === id ? { ...task, ...patch } : task));
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'research', value: research });
+            return research;
+        });
+    }
+
     /** Заменить лог (после хранения thinking/архива). Архив — отдельным ключом, чтобы он не искал старые записи. */
     function saveLog(next, { archived = [] } = {}) {
         return enqueue(async () => {
@@ -232,6 +260,10 @@ export function createDecisionStore({ call, publishEvent }) {
         saveClock,
         bank: () => JSON.parse(JSON.stringify(memoryBank)),
         saveBank,
+        research: () => research.map(task => ({ ...task })),
+        saveResearch,
+        addResearch,
+        updateResearch,
         appendCycle,
         saveLog,
         logTokens,

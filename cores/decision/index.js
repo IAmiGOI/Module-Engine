@@ -6,6 +6,7 @@ import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { extractReasoning } from '../../libraries/core/decision-reasoning.js';
 import { createDecisionStore } from './store.js';
 import { createDecisionCycle } from './cycle.js';
+import { createResearcher } from '../../libraries/core/decision-researcher.js';
 
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
@@ -58,12 +59,20 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return result.value;
     };
     const store = createDecisionStore({ call, publishEvent });
+    const researcher = createResearcher({
+        call: callStrict,
+        getSettings: () => settings,
+        getWorkers: () => workers,
+        store,
+        publishEvent,
+    });
     const cycle = createDecisionCycle({
         call: callStrict,
         callTool: async (name, args) => callStrict('generation.callTool', { name, args }),
         getSettings: () => settings,
         getWorkers: () => workers,
         store,
+        researcher,
         publishEvent,
     });
 
@@ -259,6 +268,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.events.subscribe('pipeline.stagesChanged', onStagesChanged),
             host.events.subscribe('model.workers.changed', () => { reload().catch(() => {}); }),
             host.events.subscribe('st.chatChanged', () => { pending = null; attempts.clear(); reload().catch(() => {}); }),
+            host.events.subscribe('decision.researcher.report', payload => {
+                cycle.onResearcherReport(payload).catch(error => publishEvent('decision.failed', { runId: null, message: `researcher wake: ${error?.message ?? error}` }));
+            }),
         );
     }
 
@@ -283,6 +295,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.own.register('decision.clock', () => store.clock()),
             host.own.register('decision.bank', () => store.bank()),
             host.own.register('decision.forcedMemory', params => cycle.judgeForcedMemory(params)),
+            host.own.register('decision.research', () => researcher.tasks()),
             host.own.register('decision.reload', () => reload()),
             host.own.register(DECIDE_CONTRACT, params => decide(params)),
             host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
@@ -310,6 +323,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         plans: () => store.plans(),
         clock: () => store.clock(),
         bank: () => store.bank(),
+        research: () => researcher.tasks(),
         unregister: async () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();

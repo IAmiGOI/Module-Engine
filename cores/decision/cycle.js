@@ -7,6 +7,7 @@ import { deciderRequestParams } from '../../libraries/core/decision-settings.js'
 import { buildPush } from '../../libraries/core/decision-push.js';
 import { librarySection, duePlans } from '../../libraries/core/decision-library.js';
 import { bankIndex } from '../../libraries/core/decision-bank.js';
+import { researchSection } from '../../libraries/core/decision-researcher.js';
 import { createHandlers, createPlaceReader, createTimeReader, createSimilarity } from './handlers.js';
 
 /**
@@ -53,9 +54,10 @@ function fallbackDecision(form) {
     return [String(form?.resolution ?? '').trim(), ...lines].filter(Boolean).join('\n') || 'The turn is decided.';
 }
 
-export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, publishEvent, now = () => Date.now() }) {
+export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, researcher = null, publishEvent, now = () => Date.now() }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
+    let awaiting = false; // директор между циклами: отчёт субагента может его разбудить
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
     const similarityScores = createSimilarity(call);
@@ -75,7 +77,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     }
 
     function handlersFor(settings) {
-        return createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores });
+        return createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher });
     }
 
     async function summaries() {
@@ -86,7 +88,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return buildDeciderContext({
             rules: settings.rules, blocks: store.blocks(), summaries: list, chat, runs: store.runs(),
             thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
-            libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank())].filter(Boolean).join('\n\n'),
+            libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
             roster: store.roster().active, planMissing: !store.plan(), toolMode: true,
         });
     }
@@ -148,6 +150,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
+        awaiting = false;
         const context = buildContext({ chat, settings, summaries: await summaries() });
         const tools = buildToolList(await externalTools());
         const startedAt = now();
@@ -171,6 +174,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         await maybeCompactLog().catch(() => {});
 
         if (result.type !== 'submit') {
+            awaiting = true;
             publishEvent('decision.cycle.ended', { runId, type: result.type, reason: result.reason, steps: result.steps });
             return { ok: false, reason: result.reason, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
         }
@@ -181,6 +185,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         });
         form.push = push;
         const decision = String(form._decision ?? '').trim() || fallbackDecision(form);
+        awaiting = true;
         publishEvent('decision.cycle.submitted', { runId, type, steps: result.steps, characters: form.characters?.length ?? 0 });
         return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
     }
@@ -191,25 +196,26 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
 - when the list is empty, call await.
 The user's turn does not wait for you.`;
 
-    let passiveTail = Promise.resolve();
+    const WAKE_TASK = `A background researcher has finished. Read the report and decide whether it changes your plan or the library. Do not wait for anything else. End the cycle with await.
+Report:
+`;
 
-    /** Пассивный цикл: только если есть завершившиеся планы. Очередь — строго по одному. */
-    function runPassive({ runId, thinking = () => '' } = {}) {
-        const job = passiveTail.then(() => passiveRun({ runId, thinking }), () => passiveRun({ runId, thinking }));
-        passiveTail = job.then(() => {}, () => {});
+    let backgroundTail = Promise.resolve();
+
+    /** Фоновый цикл (планы или отчёт субагента) — строго по одному, не в ходу прозаика. */
+    function enqueueBackground(run) {
+        const job = backgroundTail.then(run, run);
+        backgroundTail = job.then(() => {}, () => {});
         return job;
     }
 
-    async function passiveRun({ runId, thinking }) {
-        const clock = store.clock();
-        const due = duePlans(store.plans(), clock.minutes);
-        if (!due.length) return { skipped: true, due: 0 };
+    async function backgroundRun({ runId, event, task, thinking = () => '' }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
+        awaiting = false;
         const context = buildContext({ settings, summaries: await summaries() });
-        const dueText = due.map(plan => `- ${plan.character} (level ${plan.level}): ${plan.summary}${plan.needsNewPlan ? ' [left the active roster — a new plan is needed]' : ''}`).join('\n');
-        const messages = [...context.messages, { role: 'user', content: `${PASSIVE_TASK}\n\n${dueText}` }];
+        const messages = [...context.messages, { role: 'user', content: task }];
         const tools = buildToolList(await externalTools()).filter(tool => tool.name !== 'submit_turn');
         const startedAt = now();
         const result = await runDecisionCycle({
@@ -223,13 +229,35 @@ The user's turn does not wait for you.`;
             now,
         });
         const cycle = createCycleRecord({
-            event: 'time', messages: result.messages.slice(messages.length), toolCalls: result.trace,
+            event, messages: result.messages.slice(messages.length), toolCalls: result.trace,
             thinking: thinking(), warnings: result.warnings, at: startedAt,
         });
         await store.appendCycle(cycle).catch(() => {});
         await maybeCompactLog().catch(() => {});
-        publishEvent('decision.passive.ended', { runId, due: due.length, steps: result.steps, type: result.type });
-        return { skipped: false, due: due.length, steps: result.steps, type: result.type };
+        awaiting = true;
+        publishEvent('decision.passive.ended', { runId, event, steps: result.steps, type: result.type });
+        return { skipped: false, steps: result.steps, type: result.type };
+    }
+
+    /** Пассивный цикл: только если есть завершившиеся планы. */
+    function runPassive({ runId, thinking = () => '' } = {}) {
+        return enqueueBackground(async () => {
+            const clock = store.clock();
+            const due = duePlans(store.plans(), clock.minutes);
+            if (!due.length) return { skipped: true, due: 0 };
+            const dueText = due.map(plan => `- ${plan.character} (level ${plan.level}): ${plan.summary}${plan.needsNewPlan ? ' [left the active roster — a new plan is needed]' : ''}`).join('\n');
+            return backgroundRun({ runId, event: 'time', task: `${PASSIVE_TASK}\n\n${dueText}`, thinking });
+        });
+    }
+
+    /** Отчёт субагента будит директора, только если он между циклами. */
+    function onResearcherReport(payload = {}) {
+        if (!awaiting) return Promise.resolve({ skipped: true, reason: 'the director is not between cycles' });
+        return enqueueBackground(() => backgroundRun({
+            runId: `researcher_${payload.taskId ?? 'task'}`,
+            event: 'researcher',
+            task: `${WAKE_TASK}${String(payload.report ?? '')}`,
+        }));
     }
 
     const FORCED_SYSTEM = `You protect the long-term memory of a roleplay. You get summaries that are about to be folded into a higher-level summary. Decide which of them must be KEPT as they are: a summary is worth keeping if it holds a promise, a betrayal, a lasting rule, a relationship change or an open thread that a higher-level summary would blur.
@@ -252,5 +280,5 @@ Reply with ONLY a JSON object: {"keep":["summary id", …]}. An empty list means
         return { keep };
     }
 
-    return { run, runPassive, judgeForcedMemory, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
+    return { run, runPassive, onResearcherReport, judgeForcedMemory, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
 }
