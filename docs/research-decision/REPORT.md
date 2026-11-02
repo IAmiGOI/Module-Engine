@@ -1035,11 +1035,14 @@ thinking, форма и Push; банки ~1200 токенов, лорбук ~120
 | | тестов | прошло | упало | пропущено |
 |---|---:|---:|---:|---:|
 | эталон (часть 8) | 3375 | 3204 | 167 | 4 |
+| старт части 9 (после `514f047`) | 3380 | 3209 | 167 | 4 |
 | итог (часть 9) | 3394 | 3223 | 167 | 4 |
 
-Добавлены `decision-turn-digest` (4), `decision-prefix` (6),
-`decision-prefix-cache` (2), `decision-context-order` (3); обновлены
-`decision-context`, `decision-custom-block`, `decision-prompt-model`,
-`decision-e7`, `decision-log`. Падают ровно те же 167 тестов базовой линии
-(node 18), ошибок решений среди них нет. `npm run typecheck` — без ошибок.
-В `Dev-Version`/`Main-Testing` ничего не вливалось и не пушилось.
+Относительно старта части 9 добавлено 14 проверок: `decision-turn-digest`
+(4), `decision-prefix` (6), `decision-prefix-cache` (2), плюс
+`decision-context-order` (3) и минус два теста удалённого `runsSection`.
+Обновлены `decision-context`, `decision-custom-block`,
+`decision-prompt-model`, `decision-e7`, `decision-log`. Падают ровно те же
+167 тестов базовой линии (node 18), ошибок решений среди них нет.
+`npm run typecheck` — без ошибок. В `Dev-Version`/`Main-Testing` ничего не
+вливалось и не пушилось.

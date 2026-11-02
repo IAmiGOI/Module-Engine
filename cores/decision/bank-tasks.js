@@ -2,9 +2,9 @@ import { bankPromptFor } from '../../libraries/core/decision-banks.js';
 
 const BANK_MAX_TOKENS = 4000;
 export const bankSteps = settings => Math.max(2, Number(settings?.researcher?.bankMaxSteps) || 12);
-export const bankConcurrency = settings => Math.max(1, Number(settings?.researcher?.bankConcurrency) || 2);
+export const bankConcurrency = settings => Math.max(1, Number(settings?.researcher?.bankConcurrency) || 4);
 
-/** Задачи субагента на сборку банков: не больше двух одновременно, как у исследователя. */
+/** Задачи субагента на сборку банков: свой лимит, отдельно от двух слотов исследователя. */
 export function createBankTasks({ getSettings, researcher, publishEvent }) {
     async function build(source) {
         if (!researcher) throw new Error('The researcher is not available.');
