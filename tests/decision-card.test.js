@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { signal } from '../cores/ui/reactive.js';
+import { createDecisionCard } from '../cores/ui/panel-cards/decision-card.js';
+
+function strings(node, out = []) {
+    if (typeof node === 'string') out.push(node);
+    else if (Array.isArray(node)) for (const child of node) strings(child, out);
+    else if (node && typeof node === 'object' && Array.isArray(node.children)) strings(node.children, out);
+    return out;
+}
+
+test('the decision card reads its state through the decision contracts and renders the enable/rules/worker controls', async () => {
+    const calls = [];
+    const call = async (contract, params) => {
+        calls.push({ contract, params });
+        if (contract === 'decision.settings') return { ok: true, value: { enabled: true, rules: 'Never kill a named character.', regen: 'writer', decider: { workerId: 'director' }, writer: { applySampler: true } } };
+        if (contract === 'decision.blocks') return { ok: true, value: [{ id: 'blk_1', title: 'Exit', text: 'The east door.' }] };
+        if (contract === 'decision.lastRun') return { ok: true, value: { decision: 'She leaves.' } };
+        if (contract === 'model.presets.get') return { ok: true, value: [{ id: 'custom:mine', name: 'Mine' }] };
+        return { ok: true, value: null };
+    };
+    const card = createDecisionCard({ call, collapse: { bind: () => ({}) }, notify: async () => ({ ok: true }), workers: signal([{ id: 'director', name: 'Director' }]) });
+
+    await card.loadDecision();
+    const node = card.decisionCard();
+    assert.equal(node.tag, 'details');
+    assert.match(node.props.class, /stme-card/);
+    const text = strings(node).join(' | ');
+    for (const expected of ['Director / Writer', 'Enabled', 'Director rules', 'Director model connection', 'Writer model connection', 'Character blocks', 'Last decision']) {
+        assert.match(text, new RegExp(expected.replace(/[/]/g, '\\$&')));
+    }
+    assert.deepEqual(calls.map(entry => entry.contract).sort(), ['decision.blocks', 'decision.lastRun', 'decision.settings', 'model.presets.get']);
+});
