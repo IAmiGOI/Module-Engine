@@ -2,7 +2,7 @@ import { bankPromptFor } from '../../libraries/core/decision-banks.js';
 
 const BANK_MAX_TOKENS = 4000;
 export const bankSteps = settings => Math.max(2, Number(settings?.researcher?.bankMaxSteps) || 12);
-export const bankConcurrency = settings => Math.max(1, Number(settings?.researcher?.bankConcurrency) || 4);
+export const bankConcurrency = settings => Math.max(1, Number(settings?.researcher?.bankConcurrency) || 2);
 
 /** Задачи субагента на сборку банков: не больше двух одновременно, как у исследователя. */
 export function createBankTasks({ getSettings, researcher, publishEvent }) {

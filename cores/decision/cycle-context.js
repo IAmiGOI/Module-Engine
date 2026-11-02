@@ -2,8 +2,8 @@ import { buildDeciderContext } from '../../libraries/core/decision-context.js';
 import { normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildToolList } from '../../libraries/core/decision-tools.js';
 import { buildLorebookContext } from '../../libraries/core/decision-lorebook.js';
-import { thinkingMessages } from '../../libraries/core/decision-log.js';
 import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
+import { fullTurns } from '../../libraries/core/decision-turn-digest.js';
 import { librarySection } from '../../libraries/core/decision-library.js';
 import { bankIndex } from '../../libraries/core/decision-bank.js';
 import { researchSection } from '../../libraries/core/decision-researcher.js';
@@ -57,10 +57,12 @@ export function createCycleContext({ call, store, banks = null }) {
 
     function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', directorBlock = [], banksText = '' }) {
         return buildDeciderContext({
-            summaries: list, chat, runs: store.runs(),
-            thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
-            libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
+            summaries: list, chat, plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
+            libraryText: librarySection(store.library(), store.plans(), store.clock().minutes),
+            bankText: bankIndex(store.bank()), researchText: researchSection(store.research()),
             roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, banksText, task,
+            digests: typeof store.digests === 'function' ? store.digests() : [],
+            turns: fullTurns(store.cycles()),
         });
     }
 

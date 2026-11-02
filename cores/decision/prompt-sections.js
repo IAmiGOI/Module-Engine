@@ -8,7 +8,7 @@ import { systemLines } from '../../libraries/core/decision-prompt-model.js';
 import { previewRows } from '../../libraries/core/decision-prompt-preview.js';
 import { DIRECTOR_TURN, WRITER_PUSH } from '../../libraries/core/decision-prompts.js';
 import { directorHistory, writerHistory, RECENT_MESSAGE_LIMIT } from '../../libraries/core/decision-context.js';
-import { thinkingMessages } from '../../libraries/core/decision-log.js';
+import { fullTurns, groupTurns } from '../../libraries/core/decision-turn-digest.js';
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 
 const COOLDOWN_KEY = 'promptCooldowns';
@@ -130,15 +130,16 @@ export async function previewFor({ sectionId, settings, chat, call, store }) {
     if (sectionId === 'director') {
         const lorebook = await call('lorebook.entries').catch(() => []);
         before.push(
+            { label: 'Character banks', detail: `${bankCount(store.bank())} records in the prefix` },
             { label: 'Lorebook', detail: Array.isArray(lorebook) && lorebook.length ? `${lorebook.length} entries` : 'empty' },
-            { label: 'Long-term summaries', detail: `${summaryCount}` },
+            { label: 'Compressed turns', detail: `${(store.digests?.() ?? []).length} records, append-only` },
+            { label: 'Full turns', detail: `${fullTurns(store.cycles()).length} of ${groupTurns(store.cycles()).length} (the last two)` },
             { label: 'Director plan', detail: store.plan() ? 'present' : 'missing — the director will have to create one' },
             { label: 'Arcs', detail: `${store.arcs().length}` },
             { label: 'Character notes', detail: `${noteCount(store.notes())}` },
-            { label: 'Library, memory bank and research', detail: `${Object.keys(store.library()).length} characters · ${bankCount(store.bank())} records · ${store.research().length} tasks` },
             { label: 'Active roster', detail: `${store.roster().active.length}` },
-            { label: 'Past director runs', detail: `${Object.keys(store.runs()).length}` },
-            { label: 'Thinking (last three cycles)', detail: `${thinkingMessages(store.cycles()).length}` },
+            { label: 'Library, memory bank and research', detail: `${Object.keys(store.library()).length} characters · ${bankCount(store.bank())} records · ${store.research().length} tasks` },
+            { label: 'Long-term summaries', detail: `${summaryCount}` },
             historyBefore,
         );
         tail = { label: 'Turn task', detail: 'sent as the last user message' };

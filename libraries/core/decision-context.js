@@ -1,6 +1,7 @@
 import { chatToMessages } from './chat-to-messages.js';
 import { planSection, arcsSection, notesSection, notesAsBlocks } from './decision-state.js';
 import { DIRECTOR_SYSTEM, DIRECTOR_TURN, WRITER_SYSTEM, WRITER_PUSH, fillPrompt } from './decision-prompts.js';
+import { renderCompressedDigests, renderFullTurns } from './decision-turn-digest.js';
 
 /**
  * Сборка контекстов директора и прозаика — чистые функции над уже
@@ -153,19 +154,6 @@ export function rosterSection(roster) {
     return `ACTIVE ROSTER (everyone who can affect the scene right now; the form must cover each of them):\n\n${active.map(name => `- ${name}`).join('\n')}`;
 }
 
-export function runsSection(runs) {
-    const list = Object.values(runs && typeof runs === 'object' ? runs : {})
-        .filter(record => record && typeof record === 'object')
-        .sort((a, b) => (Number(a.mesid) || 0) - (Number(b.mesid) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0));
-    if (!list.length) return '';
-    const body = list.map(record => {
-        const heading = record.mesid === undefined ? 'Earlier turn' : `Turn #${record.mesid}`;
-        const reasoning = String(record.reasoning ?? '').trim();
-        return `${heading}\nDecision: ${String(record.decision ?? '').trim()}${reasoning ? `\nReasoning: ${reasoning}` : ''}`;
-    }).join('\n\n');
-    return `PAST DIRECTOR RUNS (oldest first):\n\n${body}`;
-}
-
 function notesText(notes) {
     const blocks = notesAsBlocks(notes);
     if (!blocks.length) return '';
@@ -178,27 +166,32 @@ function notesText(notes) {
  * ход (пассивный цикл и заготовка), по умолчанию — начало хода.
  */
 export function buildDeciderContext({
-    summaries = [], chat = [], runs = {}, thoughts = '', thoughtMessages = [], plan = null, arcs = [], notes = {},
-    roster = [], libraryText = '', lorebookText = '', banksText = '', planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
+    summaries = [], chat = [], plan = null, arcs = [], notes = {}, roster = [],
+    libraryText = '', bankText = '', researchText = '', lorebookText = '', banksText = '',
+    digests = [], turns = [], planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
     const history = directorHistory(chat, limit, directorBlock);
+    // Порядок — от неизменного к меняющемуся и только дописываемому:
+    // банки и лорбук почти не меняются, сжатые ходы дописываются в конец,
+    // два полных хода — окно, дальше всё изменяемое и история.
     const parts = [
-        String(lorebookText ?? '').trim(), summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(banksText ?? '').trim(), String(libraryText ?? '').trim(),
-        rosterSection(roster), runsSection(runs), String(thoughts ?? '').trim(),
+        String(banksText ?? '').trim(),
+        String(lorebookText ?? '').trim(),
+        renderCompressedDigests(digests),
+        renderFullTurns(turns),
+        planSection(plan), arcsSection(arcs), notesSection(notes), rosterSection(roster),
+        String(libraryText ?? '').trim(), String(bankText ?? '').trim(),
+        summariesSection(summaries), String(researchText ?? '').trim(),
     ].filter(Boolean);
-    const thoughtList = (Array.isArray(thoughtMessages) ? thoughtMessages : [])
-        .filter(message => String(message?.content ?? '').trim())
-        .map(message => ({ role: 'system', content: String(message.content) }));
     const baseTask = String(task ?? '').trim() || DIRECTOR_TURN;
     const turnTask = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
     const messages = [
         { role: 'system', content: DIRECTOR_SYSTEM },
         ...parts.map(content => ({ role: 'system', content })),
-        ...thoughtList,
         ...history,
         { role: 'user', content: turnTask },
     ];
-    const prompt = [DIRECTOR_SYSTEM, ...parts, ...thoughtList.map(message => message.content), renderHistory(history), turnTask].filter(Boolean).join('\n\n');
+    const prompt = [DIRECTOR_SYSTEM, ...parts, renderHistory(history), turnTask].filter(Boolean).join('\n\n');
     return { systemPrompt: DIRECTOR_SYSTEM, messages, prompt };
 }
 

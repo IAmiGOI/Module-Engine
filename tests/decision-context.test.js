@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     buildDeciderContext, buildWriterContext, historyMessages, selectRecentChat,
-    summariesSection, runsSection, RECENT_MESSAGE_LIMIT,
+    summariesSection, RECENT_MESSAGE_LIMIT,
 } from '../libraries/core/decision-context.js';
 
 function message(text, extra = {}) {
@@ -43,22 +43,32 @@ test('historyMessages expands a tool call into the same assistant + tool pair PM
     assert.equal('_hid' in messages[0], false);
 });
 
-test('the director context puts stable rules and summaries first, volatile notes last before the task, and ends with a user message', () => {
+test('the director context puts the immutable prefix first, then compressed and full turns, then mutable state, history and the task', () => {
     const context = buildDeciderContext({
+        banksText: 'ALL-CHARACTER-BANKS',
+        lorebookText: 'THE LOREBOOK',
+        digests: [{ text: 'TURN 1 (compressed) — they left the keep.' }],
+        turns: [{ cycles: [{ event: 'turn', turn: 2, messages: [{ role: 'user', content: 'Where is the exit?' }] }] }],
+        plan: { direction: 'Find the way out.', stages: [], currentStage: 0 },
+        arcs: [{ status: 'open', title: 'The escape' }],
         directorBlock: 'Never kill a named character.',
         notes: { aria: [{ id: 'n1', character: 'Aria', title: 'Goal', text: 'Find the exit.' }] },
         summaries: [{ startIndex: 1, endIndex: 9, text: 'They arrived at the keep.' }],
-        runs: { 5: { mesid: '5', decision: 'She trusted the guard.' } },
         chat: [message('older'), message('Where is the exit?', { is_user: true })],
     });
     const contents = context.messages.map(item => item.content);
-    assert.match(contents.join('\n'), /Never kill a named character/, 'the custom block is in the history');
     assert.match(contents[0], /You are the Director of a living roleplay world/);
-    assert.match(contents[1], /LONG-TERM SUMMARIES/);
-    assert.match(contents[2], /CHARACTER NOTES/);
-    assert.match(contents[2], /Find the exit/);
-    assert.match(contents[3], /PAST DIRECTOR RUNS/);
-    assert.equal(contents[4], 'Never kill a named character.', 'two cycles before the end is before both history turns');
+    assert.match(contents[1], /ALL-CHARACTER-BANKS/);
+    assert.match(contents[2], /THE LOREBOOK/);
+    assert.match(contents[3], /EARLIER TURNS \(compressed\)/);
+    assert.match(contents[3], /they left the keep/);
+    assert.match(contents[4], /TURN 2 \(full\)/);
+    assert.match(contents[5], /YOUR PLAN/);
+    assert.match(contents[6], /ARCS/);
+    assert.match(contents[7], /CHARACTER NOTES/);
+    assert.match(contents[7], /Find the exit/);
+    assert.ok(contents.findIndex(item => /LONG-TERM SUMMARIES/.test(item)) > 7, 'summaries are mutable state and belong after the turns');
+    assert.equal(contents.at(-4), 'Never kill a named character.', 'two cycles before the end is before both history turns');
     assert.equal(context.messages.at(-2).role, 'user');
     assert.equal(context.messages.at(-2).content, 'Where is the exit?');
     assert.equal(context.messages.at(-1).role, 'user');
@@ -89,16 +99,9 @@ test('the writer context puts the push after the history, and the history tail s
 
 test('empty parts are omitted instead of producing empty system messages', () => {
     assert.equal(summariesSection([]), '');
-    assert.equal(runsSection({}), '');
     const context = buildWriterContext({ chat: [message('hi', { is_user: true })], decision: '' });
     assert.equal(context.messages.filter(item => item.role === 'system').length, 1, 'only the writer role');
 });
-
-test('past runs are ordered by message number, not by object insertion order', () => {
-    const section = runsSection({ 9: { mesid: '9', decision: 'later' }, 2: { mesid: '2', decision: 'earlier' } });
-    assert.ok(section.indexOf('Turn #2') < section.indexOf('Turn #9'));
-});
-
 
 test('the writer context puts example dialogues first, then all active banks, then summaries and notes', () => {
     const context = buildWriterContext({
