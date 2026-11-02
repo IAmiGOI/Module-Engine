@@ -4,6 +4,7 @@ import { request } from '../../libraries/shared/request.js';
 import { createDragHandlers, clampToViewport } from '../../libraries/shared/draggable.js';
 import { FloatingPanel, DockButton, Button, Toggle, TextArea, TextInput, Row, Field } from '../../libraries/shared/widgets.js';
 import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/core/decision-feed.js';
+import { createBanksView } from './decision-banks-view.js';
 
 /**
  * Окно директора: лента по циклам, как у кодинг-агента. Читает лог и архив
@@ -125,16 +126,15 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const note = signal('');
     const now = signal(Date.now());
     const costCounter = signal(true);
+    const banksView = createBanksView({ call });
     let timer = null;
     const subscriptions = [];
-
     const filtered = computed(() => filterFeed(feed(), {
         showThinking: showThinking(), onlyTurns: onlyTurns(), onlyPassive: onlyPassive(), showUsage: costCounter(), search: search(),
     }));
     const all = computed(() => filtered().cycles);
     const shown = computed(() => all().slice(-limit()));
     const hiddenCount = computed(() => Math.max(0, all().length - shown().length));
-
     async function refresh() {
         const [log, archive, settings] = await Promise.all([call('decision.log'), call('decision.archive'), call('decision.settings')]);
         costCounter.set(settings.ok ? settings.value?.costCounter !== false : true);
@@ -142,6 +142,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
             cycles: log.ok && Array.isArray(log.value) ? log.value : [],
             archive: archive.ok && Array.isArray(archive.value) ? archive.value : [],
         }));
+        await banksView.refresh();
         scheduleScroll(true);
     }
 
@@ -170,6 +171,9 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 scheduleScroll();
             }));
         }
+        for (const name of ['decision.bank.ready', 'decision.bank.failed', 'decision.bank.short', 'decision.bank.edited', 'decision.bank.timeout']) {
+            subscriptions.push(host.events.subscribe(name, () => banksView.refresh()));
+        }
     }
 
     async function send() {
@@ -196,6 +200,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 Toggle('Turns only', onlyTurns),
                 Toggle('Passive only', onlyPassive),
                 TextInput(search, { placeholder: 'Search the feed' })),
+            banksView.section(),
             h('div', { class: 'stme-dw-feed', 'on:scroll': () => {} },
                 hiddenCount() > 0
                     ? h('div', { class: 'stme-dw-more' }, Button(`Load ${Math.min(PAGE, hiddenCount())} older`, () => limit.update(value => value + PAGE)))

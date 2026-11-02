@@ -40,6 +40,12 @@ function build() {
     const engine = createEngine();
     const host = engine.registerCaller('core.ui.decisionWindow', 'cores', { tier: 'official' });
     let sent = [];
+    const bankWrites = [];
+    const bankList = [{ sourceKey: 'card:A', sourceKind: 'card', name: 'Aria', sizeBand: 'key', status: 'ready', text: '***Aria***\nA courier.', examples: '' }];
+    host.own.register('decision.banks', () => bankList);
+    host.own.register('decision.bankProgress', () => ({ status: 'ready', total: 1, done: 1, errors: 0, timedOut: false }));
+    host.own.register('decision.bankWrite', params => { bankWrites.push(params); return { ok: true, bank: { ...bankList[0], text: params.text } }; });
+    host.own.register('decision.bankRebuild', params => ({ ok: true, queued: true, name: params.name }));
     host.own.register('storage.settings.get', ({ fallback }) => fallback);
     host.own.register('storage.settings.set', () => true);
     host.own.register('decision.log', () => [cycle()]);
@@ -50,7 +56,7 @@ function build() {
         return { ok: true, record: createCycleRecord({ event: 'message', message: { text: params.text, at: 5 } }) };
     });
     const panel = createDecisionWindowCore(host, { mount: node => ({ settled: async () => {}, getRoot: () => node, unmount() {} }) });
-    return { engine, host, panel, sent: () => sent };
+    return { engine, host, panel, sent: () => sent, bankWrites };
 }
 
 const flush = () => new Promise(done => setTimeout(done, 10));
@@ -121,4 +127,22 @@ test('a rejected cycle is marked and dimmed, not removed', async () => {
     panel.feed.set({ cycles: [{ ...panel.filtered().cycles[0], rejected: true }], archive: [], live: {} });
     const node = walk(panel.tree(), item => hasClass(item, 'stme-dw-rejected'));
     assert.equal(node.length, 1);
+});
+
+
+test('the banks section shows cold-start progress and saves a hand-edited bank', async () => {
+    const { panel, bankWrites } = build();
+    await panel.open();
+    panel.show();
+    await flush();
+    const text = textOf(panel.tree());
+    assert.match(text, /Character banks: 1 of 1 ready/);
+    assert.match(text, /Cold start: ready/);
+    const area = walk(panel.tree(), node => node.tag === 'textarea' && hasClass(node, 'stme-dw-bank-text'))[0];
+    assert.ok(area, 'the bank has an editable textarea');
+    area.props['on:input']({ target: { value: '***Aria***\nEdited by hand.' } });
+    const save = walk(panel.tree(), node => node.tag === 'button' && textOf(node) === 'Save bank')[0];
+    save.props['on:click']();
+    await flush();
+    assert.deepEqual(bankWrites[0], { name: 'Aria', text: '***Aria***\nEdited by hand.' });
 });

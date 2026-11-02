@@ -57,3 +57,14 @@
 
 .stme-dw-root .stme-dock-button { z-index: 6940; }
 .stme-dw-dock-icon { font-size: 18px; line-height: 1; }
+
+/* Дата-банки в окне директора. */
+.stme-dw-banks { border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); padding: 5px 8px; background: var(--stme-level-1); max-height: 42vh; overflow: auto; }
+.stme-dw-banks > summary { cursor: pointer; font-weight: 600; }
+.stme-dw-bank-progress { font-size: .82em; opacity: .7; margin: 3px 0 6px; }
+.stme-dw-bank { border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); padding: 4px 6px; margin: 5px 0; background: var(--stme-level-2); }
+.stme-dw-bank > summary { cursor: pointer; }
+.stme-dw-bank-kind { font-size: .78em; opacity: .65; }
+.stme-dw-bank-error { border-color: var(--stme-danger-bright); }
+.stme-dw-bank-pending { border-style: dashed; }
+.stme-dw-bank-text { width: 100%; box-sizing: border-box; margin-top: 4px; resize: vertical; }
