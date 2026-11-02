@@ -139,7 +139,7 @@ async function buildCore() {
     engine.buses.cores.register('model.generate', async params => {
         calls.push(params);
         const system = String(params.messages?.[0]?.content ?? '');
-        if (system.includes('background researcher')) {
+        if (system.startsWith('You are a background researcher')) {
             await gate;
             return { text: '', toolCalls: [{ id: 'f', name: 'finish', arguments: { report: 'found it', comment: 'I have enough now.' }, rawArguments: '{}' }] };
         }

@@ -240,7 +240,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const payload = input.payload ?? input;
         if (!pending || !payload) return payload;
         const summaries = (await call('summary.list')) ?? [];
-        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision });
+        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision, writerBlock: settings.prompts.writer });
         const worker = workers.find(item => item.id === settings.writer.workerId);
         const model = worker && worker.id !== 'st-main' ? String(worker.model ?? '') : '';
         return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;

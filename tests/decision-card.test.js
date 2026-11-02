@@ -10,7 +10,7 @@ function strings(node, out = []) {
     return out;
 }
 
-test('the decision card reads its state through the decision contracts and renders the always-on/rules/worker controls', async () => {
+test('the decision card reads its state through the decision contracts and renders the always-on/prompt/worker controls', async () => {
     const calls = [];
     const call = async (contract, params) => {
         calls.push({ contract, params });
@@ -26,7 +26,7 @@ test('the decision card reads its state through the decision contracts and rende
     assert.equal(node.tag, 'details');
     assert.match(node.props.class, /stme-card/);
     const text = strings(node).join(' | ');
-    for (const expected of ['Director / Writer', 'Always on', 'Director rules', 'Director model connection', 'Writer model connection', 'Limits and background workers', 'Director state', 'Memory bank', 'Arcs and character notes', 'Researcher reports', 'Forced summaries', 'Last decision', 'Director log (never shown in chat)']) {
+    for (const expected of ['Director / Writer', 'Always on', 'Director prompt', 'Writer prompt', 'Director model connection', 'Writer model connection', 'Limits and background workers', 'Director state', 'Memory bank', 'Arcs and character notes', 'Researcher reports', 'Forced summaries', 'Last decision', 'Director log (never shown in chat)']) {
         assert.match(text, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     assert.deepEqual(calls.map(entry => entry.contract).sort(), [

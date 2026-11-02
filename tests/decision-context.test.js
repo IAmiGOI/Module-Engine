@@ -45,44 +45,46 @@ test('historyMessages expands a tool call into the same assistant + tool pair PM
 
 test('the director context puts stable rules and summaries first, volatile notes last before the task, and ends with a user message', () => {
     const context = buildDeciderContext({
-        rules: 'Never kill a named character.',
+        directorBlock: 'Never kill a named character.',
         notes: { aria: [{ id: 'n1', character: 'Aria', title: 'Goal', text: 'Find the exit.' }] },
         summaries: [{ startIndex: 1, endIndex: 9, text: 'They arrived at the keep.' }],
         runs: { 5: { mesid: '5', decision: 'She trusted the guard.' } },
         chat: [message('older'), message('Where is the exit?', { is_user: true })],
     });
-    assert.match(context.systemPrompt, /DIRECTOR RULES/);
-    assert.match(context.systemPrompt, /Never kill a named character/);
     const contents = context.messages.map(item => item.content);
-    assert.match(contents[0], /You are the director/);
+    assert.match(contents.join('\n'), /Never kill a named character/, 'the custom block is in the history');
+    assert.match(contents[0], /You are the Director of a living roleplay world/);
     assert.match(contents[1], /LONG-TERM SUMMARIES/);
     assert.match(contents[2], /CHARACTER NOTES/);
     assert.match(contents[2], /Find the exit/);
     assert.match(contents[3], /PAST DIRECTOR RUNS/);
+    assert.equal(contents[4], 'Never kill a named character.', 'two cycles before the end is before both history turns');
     assert.equal(context.messages.at(-2).role, 'user');
     assert.equal(context.messages.at(-2).content, 'Where is the exit?');
     assert.equal(context.messages.at(-1).role, 'user');
-    assert.match(context.messages.at(-1).content, /Decide this turn with the tools you are given/);
+    assert.match(context.messages.at(-1).content, /A new turn has started/);
     assert.match(context.prompt, /Where is the exit\?/);
     assert.match(context.prompt, /Find the exit/);
 });
 
-test('the writer context has no extra user turn: the last message is the history tail, so the writer answers the right line', () => {
+test('the writer context puts the push after the history, and the history tail stays the last story line', () => {
     const context = buildWriterContext({
         notes: { aria: [{ id: 'n1', character: 'Aria', title: 'Goal', text: 'Find the exit.' }] },
         summaries: [{ startIndex: 1, endIndex: 9, text: 'They arrived.' }],
         chat: [message('older'), message('Where is the exit?', { is_user: true })],
         decision: 'She points at the eastern door and starts walking.',
     });
-    assert.equal(context.messages.at(-1).role, 'user');
-    assert.equal(context.messages.at(-1).content, 'Where is the exit?');
+    assert.equal(context.messages.at(-2).role, 'user');
+    assert.equal(context.messages.at(-2).content, 'Where is the exit?');
     assert.equal(context.messages.filter(item => item.role === 'user').length, 1, 'no synthetic user turn after the real one');
+    assert.equal(context.messages.at(-1).role, 'system');
+    assert.match(context.messages.at(-1).content, /^PUSH — what happens this turn:/);
     const system = context.messages.filter(item => item.role === 'system').map(item => item.content).join('\n');
     assert.match(system, /LONG-TERM SUMMARIES/);
     assert.match(system, /CHARACTER NOTES/);
     assert.match(system, /Find the exit/);
-    assert.match(system, /THE DIRECTOR'S PUSH FOR THIS TURN/);
-    assert.match(system, /eastern door/);
+    assert.doesNotMatch(context.messages[0].content, /PUSH — what happens this turn/, 'the push is not in the system preface');
+    assert.match(context.messages.at(-1).content, /eastern door/);
 });
 
 test('empty parts are omitted instead of producing empty system messages', () => {

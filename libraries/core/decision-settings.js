@@ -41,8 +41,10 @@ export const DEFAULT_WRITER = Object.freeze({
     maxTokens: 1000,
 });
 
+export const DEFAULT_PROMPTS = Object.freeze({ director: '', writer: '' });
+
 export const DEFAULT_SETTINGS = Object.freeze({
-    rules: '',
+    prompts: DEFAULT_PROMPTS,
     regen: 'decider',
     // Предохранители и таймаут формы части 2.
     maxSteps: 50,
@@ -80,9 +82,13 @@ export function clampDecisionSettings(values = {}) {
     const decider = source.decider && typeof source.decider === 'object' ? source.decider : {};
     const writer = source.writer && typeof source.writer === 'object' ? source.writer : {};
     const compression = source.compression && typeof source.compression === 'object' ? source.compression : {};
+    const prompts = source.prompts && typeof source.prompts === 'object' ? source.prompts : {};
     const researcher = source.researcher && typeof source.researcher === 'object' ? source.researcher : {};
     return {
-        rules: text(source.rules, DEFAULT_SETTINGS.rules),
+        prompts: {
+            director: text(prompts.director, text(source.rules, DEFAULT_PROMPTS.director)),
+            writer: text(prompts.writer, DEFAULT_PROMPTS.writer),
+        },
         regen: REGEN_MODES.includes(source.regen) ? source.regen : DEFAULT_SETTINGS.regen,
         maxSteps: Math.round(number(source.maxSteps, 1, 500, DEFAULT_SETTINGS.maxSteps)),
         implicitAwait: source.implicitAwait === undefined ? DEFAULT_SETTINGS.implicitAwait : Boolean(source.implicitAwait),

@@ -1,8 +1,8 @@
 import { buildDeciderContext } from '../../libraries/core/decision-context.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
-import { buildToolList } from '../../libraries/core/decision-tools.js';
+import { buildToolList, FORCED_MEMORY_TOOL, AWAIT_TOOL } from '../../libraries/core/decision-tools.js';
+import { DIRECTOR_PASSIVE, DIRECTOR_FORCED_MEMORY, DIRECTOR_ARC_SUMMARY, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord, thinkingMessages, compactLog, totalLogTokens } from '../../libraries/core/decision-log.js';
-import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
 import { librarySection, duePlans } from '../../libraries/core/decision-library.js';
@@ -71,12 +71,12 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         try { return (await call('summary.list')) ?? []; } catch { return []; }
     }
 
-    function buildContext({ chat = [], settings, summaries: list }) {
+    function buildContext({ chat = [], settings, summaries: list, task = '' }) {
         return buildDeciderContext({
-            rules: settings.rules, summaries: list, chat, runs: store.runs(),
+            summaries: list, chat, runs: store.runs(),
             thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
-            roster: store.roster().active, planMissing: !store.plan(),
+            roster: store.roster().active, planMissing: !store.plan(), directorBlock: settings.prompts.director, task,
         });
     }
 
@@ -105,8 +105,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         });
     }
 
-    const ARC_SUMMARY_SYSTEM = `You compact the director's own log. Summarize the completed arcs into a short, factual record: what happened, what changed, what is still open. Keep names and causal links, drop scene detail. Output ONLY the summary text, no preamble.`;
-
     /**
      * Порог лога (500 тыс. по умолчанию). Сначала директор отдельным
      * запросом пишет сводку завершённых арок; только потом сырые старые
@@ -124,10 +122,10 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             return null;
         }
         const worker = deciderWorker(settings);
-        const prompt = closed.map(arc => `ARC: ${arc.title}\nStages: ${(arc.stages ?? []).map(stage => stage.note).filter(Boolean).join('; ') || 'none'}`).join('\n\n');
+        const prompt = fillPrompt(DIRECTOR_ARC_SUMMARY, { arcs: closed.map(arc => `ARC: ${arc.title}\nStages: ${(arc.stages ?? []).map(stage => stage.note).filter(Boolean).join('; ') || 'none'}`).join('\n\n') });
         let summary = '';
         try {
-            summary = await call('model.generate', { workerId: worker.id, systemPrompt: ARC_SUMMARY_SYSTEM, prompt, maxTokens: 1200, temperature: 0, stream: false });
+            summary = await call('model.generate', { workerId: worker.id, prompt, maxTokens: 1200, temperature: 0, stream: false });
         } catch (error) {
             publishEvent('decision.log.warning', { reason: `arc summary failed: ${error?.message ?? error}`, tokens: before });
             return null;
@@ -220,16 +218,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
     }
 
-    const PASSIVE_TASK = `Some character plans have ended by RP time. Handle them in the order given, oldest first:
-- call resolve_character_plan for each: say what actually came of the plan, mark the record "important" if it must never be compressed, and give the next plan when one is due;
-- do not submit a turn in this cycle;
-- when the list is empty, call await.
-The user's turn does not wait for you.`;
-
-    const WAKE_TASK = `A background researcher has finished. Read the report and decide whether it changes your plan or the library. Do not wait for anything else. End the cycle with await.
-Report:
-`;
-
     let backgroundTail = Promise.resolve();
 
     /** Фоновый цикл (планы или отчёт субагента) — строго по одному, не в ходу прозаика. */
@@ -244,8 +232,8 @@ Report:
         const worker = deciderWorker(settings);
         state.runId = runId;
         awaiting = false;
-        const context = buildContext({ settings, summaries: await summaries() });
-        const messages = [...context.messages, { role: 'user', content: task }];
+        const context = buildContext({ settings, summaries: await summaries(), task });
+        const messages = context.messages;
         const tools = await toolsFor(settings, { background: true });
         const startedAt = now();
         const result = await runDecisionCycle({
@@ -277,7 +265,7 @@ Report:
             if (!due.length) return { skipped: true, due: 0 };
             const dueText = due.map(plan => `- ${plan.character} (level ${plan.level}): ${plan.summary}${plan.needsNewPlan ? ' [left the active roster — a new plan is needed]' : ''}`).join('\n');
             const draftLine = getSettings().turnDraft ? '\nBefore await, if you can guess the likely next turn, call save_draft with it.' : '';
-            return backgroundRun({ runId, event: 'time', task: `${PASSIVE_TASK}${draftLine}\n\n${dueText}`, thinking });
+            return backgroundRun({ runId, event: 'time', task: fillPrompt(DIRECTOR_PASSIVE, { event: `${dueText}${draftLine}` }), thinking });
         });
     }
 
@@ -296,14 +284,11 @@ Report:
         return enqueueBackground(() => backgroundRun({
             runId: `researcher_${payload.taskId ?? 'task'}`,
             event: 'researcher',
-            task: `${WAKE_TASK}${String(payload.report ?? '')}`,
+            task: fillPrompt(DIRECTOR_PASSIVE, { event: `A researcher reported:\n${String(payload.report ?? '')}` }),
         }));
     }
 
-    const FORCED_SYSTEM = `You protect the long-term memory of a roleplay. You get summaries that are about to be folded into a higher-level summary. Decide which of them must be KEPT as they are: a summary is worth keeping if it holds a promise, a betrayal, a lasting rule, a relationship change or an open thread that a higher-level summary would blur.
-Reply with ONLY a JSON object: {"keep":["summary id", …]}. An empty list means fold everything. Never invent ids.`;
-
-    /** Forced Memory: какие саммари батча не сворачивать. Ядро выключено — пусто, без вызова модели. */
+    /** Forced Memory: какие саммари батча не сворачивать. Без воркера — пусто, без вызова модели. */
     async function judgeForcedMemory({ batch = [] } = {}) {
         const settings = getSettings();
         const list = (Array.isArray(batch) ? batch : []).filter(record => record?.id);
@@ -314,12 +299,29 @@ Reply with ONLY a JSON object: {"keep":["summary id", …]}. An empty list means
             throw error;
         }
         const ids = new Set(list.map(record => record.id));
-        const prompt = `Summaries about to be folded:\n\n${list.map(record => `[${record.id}] (level ${record.level}, messages #${record.startIndex}–#${record.endIndex})\n${record.text}`).join('\n\n')}`;
-        const answer = await call('model.generate', {
-            workerId: worker.id, systemPrompt: FORCED_SYSTEM, prompt, maxTokens: 800, temperature: 0, stream: false,
+        const kept = new Set();
+        const prompt = fillPrompt(DIRECTOR_FORCED_MEMORY, {
+            summaries: list.map(record => `[${record.id}] (level ${record.level}, messages #${record.startIndex}–#${record.endIndex})\n${record.text}`).join('\n\n'),
         });
-        const parsed = parseModelJson(answer);
-        const keep = Array.isArray(parsed?.keep) ? parsed.keep.filter(id => ids.has(id)) : [];
+        await runDecisionCycle({
+            messages: [{ role: 'system', content: prompt }],
+            tools: [FORCED_MEMORY_TOOL, AWAIT_TOOL],
+            generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', {
+                workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 800, temperature: 0,
+            })),
+            handlers: {
+                forced_memory: async args => {
+                    if (args.op === 'keep' && ids.has(args.summaryId)) kept.add(args.summaryId);
+                    if (args.op === 'unkeep') kept.delete(args.summaryId);
+                    return { ok: true };
+                },
+                await: async () => ({ ok: true }),
+            },
+            maxSteps: 20,
+            implicitAwait: true,
+            now,
+        });
+        const keep = [...kept];
         publishEvent('decision.forcedMemory.judged', { batch: list.length, keep: keep.length });
         return { keep };
     }

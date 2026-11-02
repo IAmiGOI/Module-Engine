@@ -98,7 +98,7 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
     const finished = [];
     const waiters = new Map(); // runId -> [resolve]
     const subscriptions = [];
-    // Определения, а не только имена: при включённом ядре директор получает
+    // Определения, а не только имена: директор получает
     // те же инструменты через `generation.tools`/`generation.callTool`, а не
     // ST-цикл. Снимаются они всё так же при разборке.
     const registeredTools = new Map();

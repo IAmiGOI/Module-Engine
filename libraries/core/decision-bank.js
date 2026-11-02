@@ -1,4 +1,5 @@
 import { estimateTokens } from './token-estimate.js';
+import { BANK_COMPRESSION, fillPrompt } from './decision-prompts.js';
 
 /**
  * Банк памяти — записи о результатах планов. Привязаны к персонажу и плану;
@@ -57,11 +58,9 @@ export function canCompress(bank, character, thresholdTokens) {
     return bankTokens(bank, character) >= Number(thresholdTokens) && ordinaryRecords(bank, character).length > 0;
 }
 
-export const COMPRESS_SYSTEM = 'You compress roleplay memory records. Keep names, causal links, promises, relationships and unresolved threads; drop repeated wording. Never invent facts. Output ONLY the compressed record text, no preamble.';
-
 export function buildCompressionPrompt(records) {
     const body = records.map(record => `- ${record.text}`).join('\n');
-    return `Compress these ordinary memory records of one character into one concise record. Keep every fact that still matters later.\n\n${body}`;
+    return fillPrompt(BANK_COMPRESSION, { records: body });
 }
 
 /**

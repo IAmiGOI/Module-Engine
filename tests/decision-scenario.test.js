@@ -124,7 +124,7 @@ async function build({ directorFails = false, deciderWorkerId = 'director' } = {
         retryDelayMs: 0,
     });
     await decisionCore.load();
-    await decisionCore.configure({ rules: 'Never kill a named character.', decider: { workerId: deciderWorkerId } });
+    await decisionCore.configure({ prompts: { director: 'Never kill a named character.' }, decider: { workerId: deciderWorkerId } });
 
     await generationCore.install();
 
@@ -165,7 +165,7 @@ test('the writer body really reaches the outgoing request: exactly 20 history me
     assert.equal(history[0].content, 'char 2');
     assert.equal(history.at(-1).content, 'What now?');
     const all = body.messages.map(message => message.content).join('\n');
-    assert.match(all, /You write the character's next reply/);
+    assert.match(all, /You are the Writer of a roleplay/);
     assert.match(all, new RegExp(SUMMARY_TEXT));
     assert.match(all, new RegExp(DECISION_TEXT));
     assert.equal('reasoning_effort' in body, false, 'ST reasoning is gone');

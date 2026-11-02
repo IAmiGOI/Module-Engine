@@ -82,9 +82,9 @@ test('the writer sampler is applied only when the setting asks for it, and model
 });
 
 test('settings clamp to safe defaults, and an explicit regen choice survives', () => {
-    const clamped = clampDecisionSettings({ regen: 'writer', rules: 'Be brief.', decider: { temperature: 99, topP: -1, maxTokens: 0, reasoningMode: 'sometimes' }, writer: { topK: 'lots' } });
+    const clamped = clampDecisionSettings({ regen: 'writer', prompts: { director: 'Be brief.' }, decider: { temperature: 99, topP: -1, maxTokens: 0, reasoningMode: 'sometimes' }, writer: { topK: 'lots' } });
     assert.equal(clamped.regen, 'writer');
-    assert.equal(clamped.rules, 'Be brief.');
+    assert.equal(clamped.prompts.director, 'Be brief.');
     assert.equal(clamped.decider.temperature, 2);
     assert.equal(clamped.decider.topP, 0);
     assert.equal(clamped.decider.maxTokens, 1);

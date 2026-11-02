@@ -82,7 +82,7 @@ test('the core is always on: loading registers both stages, and the writer stage
 });
 
 test('the director runs on beforeSend and the writer replaces the outgoing messages', async () => {
-    const { pipelineCore, calls } = await build({ patch: { rules: 'Never kill a named character.', decider: { workerId: 'director' } }, summaries: [{ startIndex: 1, endIndex: 9, text: 'They reached the keep.' }] });
+    const { pipelineCore, calls } = await build({ patch: { prompts: { director: 'Never kill a named character.' }, decider: { workerId: 'director' } }, summaries: [{ startIndex: 1, endIndex: 9, text: 'They reached the keep.' }] });
     const chat = [{ mes: 'older' }, { mes: 'Hello?', is_user: true }];
     const before = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat, type: 'normal' } });
     assert.equal(before.ok, true);
@@ -96,9 +96,10 @@ test('the director runs on beforeSend and the writer replaces the outgoing messa
     const sent = await pipelineCore.run({ pipelineId: PAYLOAD, input: payload });
     assert.equal(sent.ok, true);
     const messages = sent.value.messages;
-    assert.match(messages[0].content, /You write the character's next reply/);
+    assert.match(messages[0].content, /You are the Writer of a roleplay/);
     assert.equal(messages.some(message => message.content === 'ST assembled'), false, 'the writer body overrides ST assembly');
-    assert.equal(messages.at(-1).content, 'Hello?');
+    assert.equal(messages.at(-2).content, 'Hello?');
+    assert.match(messages.at(-1).content, /^PUSH — what happens this turn:/);
     assert.match(messages.map(message => message.content).join('\n'), /She opens the door/);
     assert.equal('reasoning_effort' in sent.value, false);
     assert.equal(sent.value.stream, true, 'streaming is ST\'s own setting and must not be changed');

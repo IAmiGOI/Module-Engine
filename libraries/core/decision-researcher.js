@@ -1,5 +1,6 @@
 import { assistantToolMessage, toolResultMessage } from './provider-tools.js';
 import { commentProblem } from './decision-tools.js';
+import { RESEARCHER_SYSTEM, fillPrompt } from './decision-prompts.js';
 
 /**
  * Веб-субагент директора — свой воркер и те же инструменты, что у гида Mea
@@ -68,8 +69,6 @@ export function researchSection(tasks, { limit = 5, reportChars = 800 } = {}) {
     return parts.length ? `RESEARCHER REPORTS (background; you never wait for them):\n\n${parts.join('\n\n')}` : '';
 }
 
-const SYSTEM = `You are a background researcher for a roleplay director. Your task is to find real information on the internet and report it. Use web_search, then web_open and web_view/web_find to read the useful pages. Do not invent facts. When you have enough, call finish with a concise report: what you found, how sure you are, and the addresses. You may not ask questions or wait — the director does not wait for you.`;
-
 function taskId(now, rid) {
     return `res_${now.toString(36)}_${rid().toString(36).slice(2, 8)}`;
 }
@@ -97,7 +96,7 @@ export function createResearcher({ call, getSettings, getWorkers, store, publish
         let report = '';
         let steps = 0;
         const trace = [];
-        const messages = [{ role: 'system', content: SYSTEM }, { role: 'user', content: `RESEARCH TASK:\n\n${task.task}` }];
+        const messages = [{ role: 'system', content: fillPrompt(RESEARCHER_SYSTEM, { steps: settings.researcher.maxSteps }) }, { role: 'user', content: `RESEARCH TASK:\n\n${task.task}` }];
         try {
             if (!worker) throw new Error('no researcher worker is configured');
             if (worker.format !== 'openai') throw new Error(`the researcher needs an "openai" worker, "${worker.id}" is "${worker.format}"`);

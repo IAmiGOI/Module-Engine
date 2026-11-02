@@ -14,7 +14,8 @@ import { rosterView, planView, libraryView, bankView, arcsNotesView, researchVie
  * сэмплер.
  */
 export function createDecisionCard({ call, collapse, notify, workers }) {
-    const rules = signal('');
+    const directorPrompt = signal('');
+    const writerPrompt = signal('');
     const regen = signal('decider');
     const deciderWorkerId = signal('');
     const writerWorkerId = signal('');
@@ -76,7 +77,8 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     ];
 
     function applySettings(value = {}) {
-        rules.set(String(value.rules ?? ''));
+        directorPrompt.set(String(value.prompts?.director ?? value.rules ?? ''));
+        writerPrompt.set(String(value.prompts?.writer ?? ''));
         regen.set(value.regen === 'writer' ? 'writer' : 'decider');
         const readDecider = value.decider ?? {};
         deciderWorkerId.set(String(readDecider.workerId ?? ''));
@@ -114,7 +116,7 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
 
     function collect() {
         return {
-            rules: rules.peek(),
+            prompts: { director: directorPrompt.peek(), writer: writerPrompt.peek() },
             regen: regen.peek(),
             decider: {
                 workerId: deciderWorkerId.peek(), samplerPreset: decider.samplerPreset.peek(),
@@ -192,9 +194,14 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     function decisionCard() {
         return Card('Director / Writer', { ...collapse.bind('card:decision'), subtitle: 'Every generation: one model decides, another writes' },
             h('small', { class: 'stme-module-hint' }, 'Always on. Without an openai director connection, generation is not sent; this card is opened for you.'),
-            Field('Director rules', TextArea(rules, { rows: 4, placeholder: 'Rules the director always follows, e.g. "Never kill a named character."' }), {
-                hint: 'Written by you, appended to the director prompt before everything else.',
-            }),
+            Details('Director prompt',
+                TextArea(directorPrompt, { rows: 8, placeholder: 'Your own instructions for the director. Leave empty for no block.' }),
+                h('small', { class: 'stme-module-hint' }, 'Inserted as a separate system message two cycles from the end of the log. The empty field inserts nothing.'),
+            ),
+            Details('Writer prompt',
+                TextArea(writerPrompt, { rows: 8, placeholder: 'Your own instructions for the writer. Leave empty for no block.' }),
+                h('small', { class: 'stme-module-hint' }, 'Inserted as a separate system message five messages from the end of the story. The empty field inserts nothing.'),
+            ),
             Field('On swipe / regenerate', Select(regen, regenOptions), {
                 hint: 'The default asks the director again. "Writer only" reuses the last decision for this chat and only rewrites the prose.',
             }),

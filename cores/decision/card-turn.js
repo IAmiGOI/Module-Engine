@@ -104,7 +104,8 @@ export function createCardTurn({ call, getSettings, getWorkers, now = () => Date
         });
         const result = await cycle.run({ chat, runId: `cardtest_${(counter += 1)}`, type: 'normal', toolFilter: CARD_TEST_TOOLS });
         if (!result.ok) throw new Error(`The director did not finish the test turn: ${result.reason ?? 'no form'}.`);
-        const writer = buildWriterContext({ notes, summaries: [], chat, decision: result.push });
+        const settings = getSettings();
+        const writer = buildWriterContext({ notes, summaries: [], chat, decision: result.push, writerBlock: settings.prompts.writer });
         return { messages: writer.messages, push: result.push };
     };
 }

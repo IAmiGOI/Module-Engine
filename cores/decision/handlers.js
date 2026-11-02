@@ -6,7 +6,7 @@ import { advanceClock, clockFromLabel } from '../../libraries/core/decision-cloc
 import { setLevel, removeOnLeavingRoster, setPlan, interruptPlan, completePlan, planFor } from '../../libraries/core/decision-library.js';
 import {
     addRecord, searchRecords, canCompress, ordinaryRecords, buildCompressionPrompt,
-    replaceOrdinaryWithSummary, COMPRESS_SYSTEM,
+    replaceOrdinaryWithSummary,
 } from '../../libraries/core/decision-bank.js';
 import { issueName } from '../../libraries/core/decision-names.js';
 
@@ -89,7 +89,6 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
         try {
             const summary = await call('model.generate', {
                 workerId: settings.compression.workerId || undefined,
-                systemPrompt: COMPRESS_SYSTEM,
                 prompt: buildCompressionPrompt(ordinary),
                 maxTokens: settings.compression.maxTokens,
                 temperature: settings.compression.temperature,

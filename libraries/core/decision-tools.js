@@ -136,7 +136,7 @@ export const SET_PLAN_TOOL = Object.freeze({
 export const CHARACTER_NOTE_TOOL = Object.freeze({
     name: 'character_note',
     displayName: 'Edit a character note',
-    description: 'Keep at most four short notes per character: what the writer must know about them right now. A fifth note is refused — replace or delete one first. This replaces the Notebook notes while the core is on; old Notebook notes are not deleted.',
+    description: 'Keep at most four short notes per character: what the Writer must know about them right now. A fifth note is refused — replace or delete one first. Old Notebook notes are not touched.',
     parameters: {
         type: 'object',
         properties: {
@@ -345,7 +345,7 @@ export const AWAIT_TOOL = Object.freeze({
     },
 });
 
-/** Все схемы движка, к которым добавляются чужие инструменты при включённом ядре. */
+/** Все схемы движка, к которым добавляются чужие инструменты. */
 export function buildToolList(externalSchemas = []) {
     const own = [
         UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL,

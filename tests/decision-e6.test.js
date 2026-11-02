@@ -78,7 +78,13 @@ test('forced memory uses the director model when a worker is configured, and kee
     engine.buses.cores.register('model.workers.get', () => [{ id: 'director', format: 'openai' }]);
     engine.buses.cores.register('summary.list', () => []);
     engine.buses.cores.register('ui.notify', () => true);
-    engine.buses.cores.register('model.generate', async params => { calls.push(params); return JSON.stringify({ keep: ['s1'] }); });
+    engine.buses.cores.register('model.generate', async params => {
+        calls.push(params);
+        return { text: '', toolCalls: [
+            { id: 'keep', name: 'forced_memory', arguments: { comment: 'This promise must survive folding.', op: 'keep', summaryId: 's1' } },
+            { id: 'end', name: 'await', arguments: { comment: 'I have decided.', reason: 'done' } },
+        ] };
+    });
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
     const host = engine.registerCaller('probe.e6', 'cores', { tier: 'official' });
@@ -90,5 +96,5 @@ test('forced memory uses the director model when a worker is configured, and kee
     const on = await request(host.own, 'decision.forcedMemory', { params: { batch: [{ id: 's1', text: 'a' }, { id: 's2', text: 'b' }] } });
     assert.deepEqual(on.value, { keep: ['s1'] });
     assert.equal(calls.length, 1);
-    assert.match(calls[0].prompt, /s1/);
+    assert.match(JSON.stringify(calls[0].messages), /s1/);
 });

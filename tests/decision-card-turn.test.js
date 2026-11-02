@@ -52,11 +52,12 @@ test('a card-test turn goes through the real director and gives the writer notes
     assert.equal(answer.ok, true, answer.error?.message);
     const messages = answer.value.messages;
     const all = messages.map(message => message.content).join('\n');
-    assert.match(all, /You write the character's next reply/);
+    assert.match(all, /You are the Writer of a roleplay/);
     assert.match(all, /### Aria: Description\nAria is a scout\./, 'the card reaches the writer as character notes');
     assert.match(all, /Resolution: Aria steps out of the shadows\./);
     assert.match(all, /Aria says: "Who goes there\?"/);
-    assert.equal(messages.at(-1).role, 'user', 'the last message is the history tail, so the writer answers it');
+    assert.equal(messages.at(-1).role, 'system', 'the push comes after the history');
+    assert.match(messages.at(-1).content, /^PUSH — what happens this turn:/);
     assert.equal(calls.length, 2, 'assess, then the form');
     assert.ok(calls[0].tools.some(tool => tool.name === 'submit_turn'));
     assert.equal(calls[0].tools.some(tool => tool.name === 'forced_memory'), false, 'the test cannot write real summary state');
