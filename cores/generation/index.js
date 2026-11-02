@@ -264,7 +264,7 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
     async function ensureFunctionCalling() {
         if (!registeredTools.size) return;
         const answer = await request(host.services, 'stPromptData.functionCalling', { params: { value: true } }).catch(() => null);
-        if (answer?.ok && answer.value && answer.value.previous === false && answer.value.current === true) publishEvent('generation.functionCallingEnabled', { tools: [...registeredTools] });
+        if (answer?.ok && answer.value && answer.value.previous === false && answer.value.current === true) publishEvent('generation.functionCallingEnabled', { tools: [...registeredTools.keys()] });
     }
 
     async function onIntercept({ chat, contextSize, abort, type }) {
