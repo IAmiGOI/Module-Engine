@@ -160,7 +160,7 @@ async function buildCore() {
     pipelineCore.define({ id: 'generation.beforeSend', mode: 'collect' });
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
-    await core.configure({ enabled: true, decider: { workerId: 'director' }, researcher: { workerId: 'web', maxTasks: 2, maxSteps: 10 } });
+    await core.configure({ decider: { workerId: 'director' }, researcher: { workerId: 'web', maxTasks: 2, maxSteps: 10 } });
     return { pipelineCore, core, calls, reports, release: () => gateResolve(), memory };
 }
 

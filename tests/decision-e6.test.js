@@ -64,7 +64,7 @@ test('without the decision contract the fold is exactly as before: both level-1 
     assert.equal(active.some(record => record.forced), false);
 });
 
-test('the decision core answers forced memory with the director model when on, and with an empty list without a model when off', async () => {
+test('forced memory uses the director model when a worker is configured, and keeps nothing without a model', async () => {
     const engine = createEngine();
     const settings = new Map();
     const memory = new Map();
@@ -84,9 +84,9 @@ test('the decision core answers forced memory with the director model when on, a
     const host = engine.registerCaller('probe.e6', 'cores', { tier: 'official' });
     const off = await request(host.own, 'decision.forcedMemory', { params: { batch: [{ id: 's1', text: 'a' }, { id: 's2', text: 'b' }] } });
     assert.deepEqual(off.value, { keep: [] });
-    assert.equal(calls.length, 0, 'the core is off, so no model call');
+    assert.equal(calls.length, 0, 'no worker, so no model call');
 
-    await core.configure({ enabled: true, decider: { workerId: 'director' } });
+    await core.configure({ decider: { workerId: 'director' } });
     const on = await request(host.own, 'decision.forcedMemory', { params: { batch: [{ id: 's1', text: 'a' }, { id: 's2', text: 'b' }] } });
     assert.deepEqual(on.value, { keep: ['s1'] });
     assert.equal(calls.length, 1);

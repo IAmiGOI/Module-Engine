@@ -81,9 +81,8 @@ test('the writer sampler is applied only when the setting asks for it, and model
     assert.equal(applied.max_tokens, 100);
 });
 
-test('settings clamp to safe defaults, and an explicit enable/regen choice survives', () => {
-    const clamped = clampDecisionSettings({ enabled: true, regen: 'writer', rules: 'Be brief.', decider: { temperature: 99, topP: -1, maxTokens: 0, reasoningMode: 'sometimes' }, writer: { topK: 'lots' } });
-    assert.equal(clamped.enabled, true);
+test('settings clamp to safe defaults, and an explicit regen choice survives', () => {
+    const clamped = clampDecisionSettings({ regen: 'writer', rules: 'Be brief.', decider: { temperature: 99, topP: -1, maxTokens: 0, reasoningMode: 'sometimes' }, writer: { topK: 'lots' } });
     assert.equal(clamped.regen, 'writer');
     assert.equal(clamped.rules, 'Be brief.');
     assert.equal(clamped.decider.temperature, 2);
@@ -91,7 +90,7 @@ test('settings clamp to safe defaults, and an explicit enable/regen choice survi
     assert.equal(clamped.decider.maxTokens, 1);
     assert.equal(clamped.decider.reasoningMode, 'inherit');
     assert.equal(clamped.writer.topK, 0);
-    assert.equal(clampDecisionSettings({}).enabled, DEFAULT_SETTINGS.enabled, 'off by default');
+    assert.equal('enabled' in clampDecisionSettings({}), false, 'there is no on/off switch anymore');
 });
 
 test('the writer body carries no tools: tools, tool_choice and the legacy function keys are stripped, while everything else survives', () => {

@@ -42,7 +42,6 @@ export const DEFAULT_WRITER = Object.freeze({
 });
 
 export const DEFAULT_SETTINGS = Object.freeze({
-    enabled: false,
     rules: '',
     regen: 'decider',
     // Предохранители и таймаут формы части 2.
@@ -83,7 +82,6 @@ export function clampDecisionSettings(values = {}) {
     const compression = source.compression && typeof source.compression === 'object' ? source.compression : {};
     const researcher = source.researcher && typeof source.researcher === 'object' ? source.researcher : {};
     return {
-        enabled: source.enabled === undefined ? DEFAULT_SETTINGS.enabled : Boolean(source.enabled),
         rules: text(source.rules, DEFAULT_SETTINGS.rules),
         regen: REGEN_MODES.includes(source.regen) ? source.regen : DEFAULT_SETTINGS.regen,
         maxSteps: Math.round(number(source.maxSteps, 1, 500, DEFAULT_SETTINGS.maxSteps)),

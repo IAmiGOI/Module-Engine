@@ -9,7 +9,6 @@ import { trimThinking, totalLogTokens } from '../../libraries/core/decision-log.
  * завершения не должны затирать друг друга.
  */
 export function createDecisionStore({ call, publishEvent }) {
-    let blocks = [];
     let runs = {};
     let log = [];
     let logArchive = [];
@@ -34,17 +33,6 @@ export function createDecisionStore({ call, publishEvent }) {
         return run;
     }
 
-    function sanitizeBlocks(value) {
-        return (Array.isArray(value) ? value : [])
-            .filter(block => block && typeof block === 'object')
-            .map((block, index) => ({
-                id: String(block.id ?? '').trim() || `blk_recovered_${index}`,
-                title: String(block.title ?? '').trim() || 'Untitled',
-                text: String(block.text ?? ''),
-                updatedAt: Number.isFinite(block.updatedAt) ? block.updatedAt : 0,
-            }));
-    }
-
     function sanitizeRuns(value) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
         const out = {};
@@ -61,8 +49,7 @@ export function createDecisionStore({ call, publishEvent }) {
     }
 
     async function reload() {
-        const [storedBlocks, storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft] = await Promise.all([
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'blocks', fallback: [] }),
+        const [storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft] = await Promise.all([
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', fallback: [] }),
@@ -79,7 +66,6 @@ export function createDecisionStore({ call, publishEvent }) {
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', fallback: {} }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'draft', fallback: null }),
         ]);
-        blocks = sanitizeBlocks(storedBlocks);
         runs = sanitizeRuns(storedRuns);
         log = sanitizeCycles(storedLog);
         logArchive = sanitizeCycles(storedArchive);
@@ -95,8 +81,7 @@ export function createDecisionStore({ call, publishEvent }) {
         issuedNames = Array.isArray(storedNames) ? storedNames.map(String) : [];
         snapshots = storedSnapshots && typeof storedSnapshots === 'object' && !Array.isArray(storedSnapshots) ? storedSnapshots : {};
         draft = storedDraft && typeof storedDraft === 'object' ? storedDraft : null;
-        publishEvent('decision.blocks.changed', { count: blocks.length });
-        return { blocks, runs, log };
+        return { runs, log };
     }
 
     /**
@@ -225,15 +210,6 @@ export function createDecisionStore({ call, publishEvent }) {
         });
     }
 
-    function saveBlocks(next) {
-        return enqueue(async () => {
-            blocks = sanitizeBlocks(next);
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'blocks', value: blocks });
-            publishEvent('decision.blocks.changed', { count: blocks.length });
-            return blocks;
-        });
-    }
-
     function snapshot(mesid) {
         return snapshots[String(mesid)] ? JSON.parse(JSON.stringify(snapshots[String(mesid)])) : null;
     }
@@ -291,18 +267,12 @@ export function createDecisionStore({ call, publishEvent }) {
                 snapshots[mesid] = record.snapshot;
                 await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', value: snapshots });
             }
-            if (record.edits?.length && record.blocksAfter) {
-                blocks = record.blocksAfter;
-                await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'blocks', value: blocks });
-                publishEvent('decision.blocks.changed', { count: blocks.length });
-            }
             return stored;
         });
     }
 
     return {
         reload, persist, lastRun,
-        blocks: () => blocks,
         runs: () => runs,
         cycles: () => log,
         archive: () => logArchive,
@@ -329,7 +299,6 @@ export function createDecisionStore({ call, publishEvent }) {
         names: () => [...issuedNames],
         saveNames,
         addName,
-        saveBlocks,
         snapshot,
         deleteSnapshot,
         draft: () => (draft ? JSON.parse(JSON.stringify(draft)) : null),

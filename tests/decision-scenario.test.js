@@ -21,14 +21,12 @@ import { createDecisionCore } from '../cores/decision/index.js';
  * слой Сервисов: ST, его чат, chatMetadata и extensionSettings.
  *
  * Главное, что доказывается: на `generation.payload` в ИСХОДЯЩЕЕ тело
- * попадает контекст прозаика (блоки, ровно 20 сообщений, саммари, решение),
- * ризонинга нет, а при выключенном ядре тело уходит байт в байт таким, каким
- * его отправил ST.
+ * попадает контекст прозаика (заметки, ровно 20 сообщений, саммари, решение),
+ * ризонинга нет, а без воркера директора генерация не отправляется.
  */
 
 const SUMMARY_TEXT = 'They met at the keep and agreed to leave at dawn.';
 const DECISION_TEXT = 'She opens the east door and steps into the rain.';
-const BLOCK_TEXT = 'The east door is the only way out.';
 
 function makeChat() {
     const chat = [];
@@ -40,12 +38,13 @@ function makeChat() {
     return chat;
 }
 
-async function build({ enabled = true, directorFails = false } = {}) {
+async function build({ directorFails = false, deciderWorkerId = 'director' } = {}) {
     const engine = createEngine();
     const chat = makeChat();
     const sent = [];
     const directorCalls = [];
     const notifications = [];
+    const reveals = [];
     const context = {
         chat,
         mainApi: 'openai',
@@ -98,6 +97,7 @@ async function build({ enabled = true, directorFails = false } = {}) {
         { id: 'writer', model: 'writer/model', format: 'openai' },
     ]);
     engine.buses.cores.register('ui.notify', params => { notifications.push(params); return true; });
+    engine.buses.cores.register('ui.reveal', params => { reveals.push(params); return true; });
     engine.buses.cores.register('model.generate', async params => {
         directorCalls.push(params);
         if (directorFails) throw new Error('the director is down');
@@ -105,7 +105,13 @@ async function build({ enabled = true, directorFails = false } = {}) {
             requestId: params.requestId, format: 'openai',
             body: JSON.stringify({ choices: [{ message: { reasoning_content: 'the door is the only way' } }] }),
         }, { source: 'core.models.internal' });
-        return JSON.stringify({ decision: DECISION_TEXT, blocks: [{ op: 'add', title: 'Exit', text: BLOCK_TEXT }] });
+        return {
+            text: '',
+            toolCalls: [
+                { id: 'plan', name: 'set_plan', arguments: { comment: 'The turn needs a direction.', direction: 'Leave through the east door.' } },
+                { id: 'turn', name: 'submit_turn', arguments: { comment: 'The turn is decided.', scene: { minutes: 2 }, resolution: DECISION_TEXT, userResult: 'The user waited.', characters: [] } },
+            ],
+        };
     });
 
     const summaryCore = createBasicSummaryCore(engine.registerCaller('core.summary', 'cores', { tier: 'official' }), {
@@ -118,7 +124,7 @@ async function build({ enabled = true, directorFails = false } = {}) {
         retryDelayMs: 0,
     });
     await decisionCore.load();
-    if (enabled) await decisionCore.configure({ enabled: true, rules: 'Never kill a named character.', decider: { workerId: 'director' } });
+    await decisionCore.configure({ rules: 'Never kill a named character.', decider: { workerId: deciderWorkerId } });
 
     await generationCore.install();
 
@@ -135,11 +141,11 @@ async function build({ enabled = true, directorFails = false } = {}) {
         return { aborted: false, sent: sent.at(-1), response, original: JSON.stringify(payload) };
     }
 
-    return { engine, chat, sent, directorCalls, notifications, decisionCore, summaryCore, send };
+    return { engine, chat, sent, directorCalls, notifications, reveals, decisionCore, summaryCore, generationCore, send };
 }
 
-test('the writer body really reaches the outgoing request: blocks, exactly 20 history messages, summaries, the decision, and no reasoning', async () => {
-    const { directorCalls, send, decisionCore } = await build({ enabled: true });
+test('the writer body really reaches the outgoing request: exactly 20 history messages, summaries, the decision, and no reasoning', async () => {
+    const { directorCalls, send } = await build();
     const result = await send();
     assert.equal(result.aborted, false);
 
@@ -161,39 +167,26 @@ test('the writer body really reaches the outgoing request: blocks, exactly 20 hi
     const all = body.messages.map(message => message.content).join('\n');
     assert.match(all, /You write the character's next reply/);
     assert.match(all, new RegExp(SUMMARY_TEXT));
-    assert.match(all, new RegExp(BLOCK_TEXT));
     assert.match(all, new RegExp(DECISION_TEXT));
     assert.equal('reasoning_effort' in body, false, 'ST reasoning is gone');
     assert.equal('reasoning' in body, false);
     assert.equal(body.stream, true, 'streaming is untouched');
     assert.equal(body.model, 'st-model');
-    assert.deepEqual(decisionCore.blocks().map(block => [block.title, block.text]), [['Exit', BLOCK_TEXT]], 'the block is committed after the completed run');
-});
-
-test('with the core off the outgoing body is byte-for-byte the one ST sent, and the director is never called', async () => {
-    const { send, directorCalls } = await build({ enabled: false });
-    const result = await send();
-    assert.equal(result.sent.body, result.original, 'nothing in the body changed');
-    assert.equal(directorCalls.length, 0);
-    const body = JSON.parse(result.sent.body);
-    assert.deepEqual(body.messages, [{ role: 'system', content: 'ST assembled' }]);
-    assert.equal(body.reasoning_effort, 'high', 'off means exactly as before, including reasoning');
 });
 
 test('a director that fails twice aborts the real generation before anything leaves, and the user is told', async () => {
-    const { send, sent, notifications, decisionCore, directorCalls } = await build({ enabled: true, directorFails: true });
+    const { send, sent, notifications, decisionCore, directorCalls } = await build({ directorFails: true });
     const result = await send();
     assert.equal(result.aborted, true);
     assert.equal(sent.length, 0, 'no request reaches the backend');
     assert.equal(directorCalls.length, 2, 'one retry before giving up');
     assert.equal(notifications.length, 1);
     assert.match(notifications[0].text, /failed twice/);
-    assert.deepEqual(decisionCore.blocks(), []);
     assert.deepEqual(decisionCore.runs(), {});
 });
 
 test('a Text Completion request gets a flat writer prompt instead of messages, and still has no reasoning keys', async () => {
-    const { send } = await build({ enabled: true });
+    const { send } = await build();
     const result = await send({ prompt: 'ST prompt', max_new_tokens: 500, temperature: 0.8, stream: true, reasoning_effort: 'low' });
     const body = JSON.parse(result.sent.body);
     assert.equal(typeof body.prompt, 'string');
@@ -203,4 +196,19 @@ test('a Text Completion request gets a flat writer prompt instead of messages, a
     assert.match(body.prompt, /What now\?/);
     assert.equal('reasoning_effort' in body, false);
     assert.equal(body.max_new_tokens, 500);
+});
+
+
+test('without a director worker no request leaves the engine, the run closes, and the Director / Writer card opens', async () => {
+    const { send, sent, notifications, reveals, directorCalls, decisionCore, generationCore } = await build({ deciderWorkerId: '' });
+    const result = await send();
+    assert.equal(result.aborted, true, 'the interceptor cancels before ST builds and sends');
+    assert.equal(sent.length, 0, 'nothing reaches the backend');
+    assert.equal(directorCalls.length, 0);
+    assert.equal(generationCore.current(), null, 'the run is closed, nothing is left open');
+    assert.deepEqual(decisionCore.runs(), {});
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].text, /no director worker is configured/);
+    assert.match(notifications[0].text, /was not sent/);
+    assert.deepEqual(reveals[0], { anchor: 'card:decision' });
 });

@@ -44,7 +44,7 @@ async function build({ replies }) {
     pipelineCore.define({ id: PAYLOAD, mode: 'fold' });
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
-    await core.configure({ enabled: true, assessSeed: 1, decider: { workerId: 'director' } });
+    await core.configure({ assessSeed: 1, decider: { workerId: 'director' } });
     return { pipelineCore, core, calls, memory };
 }
 

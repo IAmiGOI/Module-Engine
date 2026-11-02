@@ -39,14 +39,13 @@ export function cardNotes(card = {}) {
 
 function createVolatileStore({ notes, roster }) {
     let state = {
-        blocks: [], runs: {}, cycles: [], archive: [], roster: { active: [...roster] },
+        runs: {}, cycles: [], archive: [], roster: { active: [...roster] },
         plan: { direction: 'Play the test turn for the character in the card.', stages: [], currentStage: 0, updatedAt: 0 },
         arcs: [], notes, library: {}, plans: [], clock: { minutes: 0, updatedAt: 0 },
         bank: {}, research: [], names: [], draft: null,
     };
     const setter = key => async value => { state = { ...state, [key]: value }; };
     return {
-        blocks: () => state.blocks,
         runs: () => state.runs,
         cycles: () => state.cycles,
         archive: () => state.archive,
@@ -75,7 +74,6 @@ function createVolatileStore({ notes, roster }) {
         updateResearch: async (id, patch) => { state.research = state.research.map(task => (task.id === id ? { ...task, ...patch } : task)); },
         saveNames: setter('names'),
         addName: async key => { if (!state.names.includes(key)) state.names = [...state.names, key]; },
-        saveBlocks: setter('blocks'),
         saveDraft: setter('draft'),
         saveLog: setter('cycles'),
         logTokens: () => 0,
@@ -106,7 +104,7 @@ export function createCardTurn({ call, getSettings, getWorkers, now = () => Date
         });
         const result = await cycle.run({ chat, runId: `cardtest_${(counter += 1)}`, type: 'normal', toolFilter: CARD_TEST_TOOLS });
         if (!result.ok) throw new Error(`The director did not finish the test turn: ${result.reason ?? 'no form'}.`);
-        const writer = buildWriterContext({ blocks: [], notes, summaries: [], chat, decision: result.push });
+        const writer = buildWriterContext({ notes, summaries: [], chat, decision: result.push });
         return { messages: writer.messages, push: result.push };
     };
 }

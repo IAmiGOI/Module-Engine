@@ -14,7 +14,6 @@ import { rosterView, planView, libraryView, bankView, arcsNotesView, researchVie
  * сэмплер.
  */
 export function createDecisionCard({ call, collapse, notify, workers }) {
-    const enabled = signal(false);
     const rules = signal('');
     const regen = signal('decider');
     const deciderWorkerId = signal('');
@@ -27,7 +26,6 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
         samplerPreset: signal(''), applySampler: signal(false),
         temperature: signal(0.9), topP: signal(1), topK: signal(0), maxTokens: signal(1000),
     };
-    const blocks = signal([]);
     const lastRun = signal(null);
     const presets = signal([]);
     const maxSteps = signal(50);
@@ -78,7 +76,6 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     ];
 
     function applySettings(value = {}) {
-        enabled.set(Boolean(value.enabled));
         rules.set(String(value.rules ?? ''));
         regen.set(value.regen === 'writer' ? 'writer' : 'decider');
         const readDecider = value.decider ?? {};
@@ -117,7 +114,6 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
 
     function collect() {
         return {
-            enabled: enabled.peek(),
             rules: rules.peek(),
             regen: regen.peek(),
             decider: {
@@ -171,14 +167,13 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     }
 
     async function loadDecision() {
-        const [settings, storedBlocks, run, savedPresets, rosterAnswer, planAnswer, arcsAnswer, notesAnswer, libraryAnswer, plansAnswer, bankAnswer, researchAnswer, clockAnswer, logAnswer, forcedAnswer] = await Promise.all([
-            call('decision.settings'), call('decision.blocks'), call('decision.lastRun'), call('model.presets.get'),
+        const [settings, run, savedPresets, rosterAnswer, planAnswer, arcsAnswer, notesAnswer, libraryAnswer, plansAnswer, bankAnswer, researchAnswer, clockAnswer, logAnswer, forcedAnswer] = await Promise.all([
+            call('decision.settings'), call('decision.lastRun'), call('model.presets.get'),
             call('decision.roster'), call('decision.plan'), call('decision.arcs'), call('decision.notes'),
             call('decision.library'), call('decision.plans'), call('decision.bank'), call('decision.research'),
             call('decision.clock'), call('decision.log'), call('summary.forced'),
         ]);
         if (settings.ok) applySettings(settings.value);
-        blocks.set(storedBlocks.ok ? storedBlocks.value ?? [] : []);
         lastRun.set(run.ok ? run.value ?? null : null);
         presets.set(savedPresets.ok ? savedPresets.value ?? [] : []);
         roster.set(rosterAnswer.ok ? rosterAnswer.value ?? { active: [] } : { active: [] });
@@ -194,17 +189,9 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
         forced.set(forcedAnswer.ok ? forcedAnswer.value ?? [] : []);
     }
 
-    function blockList() {
-        const list = blocks();
-        if (!list.length) return h('small', { class: 'stme-module-hint' }, 'No character blocks yet — the director adds them as the story goes.');
-        return h('div', { class: 'stme-decision-blocks' }, list.map(block => h('div', { class: 'stme-decision-block' },
-            h('strong', {}, block.title ?? 'Untitled'),
-            h('div', {}, block.text ?? ''))));
-    }
-
     function decisionCard() {
-        return Card('Director / Writer', { ...collapse.bind('card:decision'), subtitle: 'One model decides, another writes' },
-            Toggle('Enabled', enabled, { hint: 'Off by default. While off, no stage is registered and generation is exactly as before.', onChange: () => { save(); } }),
+        return Card('Director / Writer', { ...collapse.bind('card:decision'), subtitle: 'Every generation: one model decides, another writes' },
+            h('small', { class: 'stme-module-hint' }, 'Always on. Without an openai director connection, generation is not sent; this card is opened for you.'),
             Field('Director rules', TextArea(rules, { rows: 4, placeholder: 'Rules the director always follows, e.g. "Never kill a named character."' }), {
                 hint: 'Written by you, appended to the director prompt before everything else.',
             }),
@@ -282,10 +269,6 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
             Details('Arcs and character notes', computed(() => arcsNotesView(arcs(), notes()))),
             Details('Researcher reports', computed(() => researchView(research()))),
             Details('Forced summaries', computed(() => forcedView(forced()))),
-            Details('Character blocks',
-                h('small', { class: 'stme-module-hint' }, 'Maintained by the director; the writer sees them every turn.'),
-                blockList(),
-            ),
             Details('Last decision',
                 computed(() => lastRun()?.decision ?? 'No decision yet in this chat.'),
             ),

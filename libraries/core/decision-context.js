@@ -8,22 +8,17 @@ import { planSection, arcsSection, notesSection, notesAsBlocks } from './decisio
  * месте.
  *
  * **Порядок — от стабильного к меняющемуся** (кеш префикса у провайдера):
- * правила и саммари меняются редко; блоки о персонаже правит директор каждый
- * ход; история дописывается; задание на ход — последнее. Для `openai`-воркера это `messages`; для `anthropic`/`google`
+ * правила и саммари меняются редко; заметки о персонажах правит директор
+ * каждый ход; история дописывается; задание на ход — последнее. Для `openai`-воркера это `messages`; для `anthropic`/`google`
  * те же части плющатся в `systemPrompt` + `prompt`, потому что multi-turn
  * `model.generate` поддерживает только `openai`.
  */
 
 export const RECENT_MESSAGE_LIMIT = 20;
 
-const DECIDER_ROLE = `You are the director of a roleplay. You decide what the character does next; another model writes the prose from your decision. You see the character blocks you maintain, every summary, your own past decisions and the recent history. You never write the reply itself.`;
-const WRITER_ROLE = `You write the character's next reply. Follow the director's push for this turn exactly and do not invent plans of your own. Write in the voice of the character, in the language of the latest messages. Never mention the decision, the character blocks or this instruction.
+const DECIDER_ROLE = `You are the director of a roleplay. You decide what the character does next; another model writes the prose from your decision. You see the character notes you maintain, every summary, your own past decisions and the recent history. You never write the reply itself.`;
+const WRITER_ROLE = `You write the character's next reply. Follow the director's push for this turn exactly and do not invent plans of your own. Write in the voice of the character, in the language of the latest messages. Never mention the decision, the character notes or this instruction.
 You decide whether an opponent has time to counterattack; the director only states what was intended and how cleanly it happened. Causes and reasons are subtext — show them through behaviour, never explain them outright.`;
-
-const DECIDER_TASK = `Decide what the character does next, based on the character blocks, the summaries, your past decisions and the latest messages.
-Answer with ONLY a JSON object:
-{"decision":"one to four sentences: what the character does, says and wants this turn","blocks":[{"op":"add|update|remove","id":"an existing block id when you know it","title":"short title","text":"block text"}]}
-Keep blocks short, factual and useful for the writer. Omit "blocks" when nothing changes.`;
 
 /**
  * Задание в режиме инструментов (часть 2). Модель не отвечает прозой и не
@@ -106,13 +101,6 @@ export function summariesSection(summaries) {
     return `LONG-TERM SUMMARIES (oldest first):\n\n${body}`;
 }
 
-export function blocksSection(blocks) {
-    const list = Array.isArray(blocks) ? blocks : [];
-    if (!list.length) return '';
-    const body = list.map(block => `### ${String(block?.title ?? 'Untitled').trim() || 'Untitled'}\n${String(block?.text ?? '').trim()}`).join('\n\n');
-    return `CHARACTER BLOCKS (maintained by the director):\n\n${body}`;
-}
-
 export function rosterSection(roster) {
     const active = Array.isArray(roster) ? roster.filter(Boolean) : [];
     if (!active.length) return '';
@@ -142,21 +130,20 @@ function rulesSection(rules) {
  * `prompt` — эквивалент для `anthropic`/`google`. Оба варианта собираются из
  * одного и того же порядка частей.
  */
-export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, thoughts = '', thoughtMessages = [], plan = null, arcs = [], notes = {}, roster = [], libraryText = '', planMissing = false, toolMode = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildDeciderContext({ rules = '', summaries = [], chat = [], runs = {}, thoughts = '', thoughtMessages = [], plan = null, arcs = [], notes = {}, roster = [], libraryText = '', planMissing = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = historyMessages(chat, limit);
     // Порядок — от стабильного к меняющемуся: правила, саммари, план/арки,
     // заметки, библиотека, ростер, прогоны, thinking отдельными сообщениями,
     // блоки; история и задание в конце.
     const parts = [
         summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(libraryText ?? '').trim(),
-        rosterSection(roster), runsSection(runs), String(thoughts ?? '').trim(), blocksSection(blocks),
+        rosterSection(roster), runsSection(runs), String(thoughts ?? '').trim(),
     ].filter(Boolean);
     const thoughtList = (Array.isArray(thoughtMessages) ? thoughtMessages : [])
         .filter(message => String(message?.content ?? '').trim())
         .map(message => ({ role: 'system', content: String(message.content) }));
     const systemPrompt = [DECIDER_ROLE, rulesSection(rules)].filter(Boolean).join('\n\n');
-    const baseTask = toolMode ? DECIDER_TOOL_TASK : DECIDER_TASK;
-    const task = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
+    const task = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${DECIDER_TOOL_TASK}` : DECIDER_TOOL_TASK;
     const messages = [
         { role: 'system', content: systemPrompt },
         ...parts.map(content => ({ role: 'system', content })),
@@ -169,17 +156,17 @@ export function buildDeciderContext({ rules = '', blocks = [], summaries = [], c
 }
 
 /**
- * Контекст прозаика: блоки + последние 20 + все саммари + решение текущего
- * хода. Дополнительного `user`-сообщения нет — последним остаётся хвост
+ * Контекст прозаика: заметки о персонажах + последние 20 + все саммари +
+ * решение текущего хода. Дополнительного `user`-сообщения нет — последним остаётся хвост
  * истории, иначе прозаик ответил бы не на ту реплику.
  */
-export function buildWriterContext({ blocks = [], notes = {}, summaries = [], chat = [], decision = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = historyMessages(chat, limit);
-    const allBlocks = [...blocks, ...notesAsBlocks(notes)];
+    const noteBlocks = notesAsBlocks(notes);
     const parts = [
         WRITER_ROLE,
         summariesSection(summaries),
-        blocksSection(allBlocks),
+        noteBlocks.length ? `CHARACTER NOTES (the most the writer needs to know):\n\n${noteBlocks.map(block => `### ${block.title}\n${block.text}`).join('\n\n')}` : '',
         String(decision ?? '').trim() ? `THE DIRECTOR'S PUSH FOR THIS TURN:\n\n${String(decision).trim()}` : '',
     ].filter(Boolean);
     const messages = [...parts.map(content => ({ role: 'system', content })), ...history];

@@ -283,7 +283,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
         },
 
         submit_turn: async args => {
-            if (!store.plan() && !args._decision) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };
+            if (!store.plan()) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };
             const validation = validateTurn({ form: args, roster: store.roster().active, assessments: state.assessments });
             if (!validation.ok) return { ok: false, missing: validation.missing };
             const place = await resolvePlace();

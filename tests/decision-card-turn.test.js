@@ -25,7 +25,7 @@ function build({ workers = [{ id: 'director', format: 'openai', model: 'director
         return reply;
     });
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
-    return { engine, core, calls, memoryWrites, load: () => core.load() };
+    return { engine, core, calls, memoryWrites, load: async () => { await core.load(); await core.configure({ decider: { workerId: 'director' } }); } };
 }
 
 const chat = [{ name: 'Sasha', is_user: true, mes: 'Who goes there?', extra: {} }];

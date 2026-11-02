@@ -48,7 +48,7 @@ async function build({ replies, settings = {}, seed = {}, model = null, usage = 
     pipelineCore.define({ id: PAYLOAD, mode: 'fold' });
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
-    await core.configure({ enabled: true, decider: { workerId: 'director' }, ...settings });
+    await core.configure({ decider: { workerId: 'director' }, ...settings });
     return { engine, pipelineCore, core, calls, memory, events };
 }
 

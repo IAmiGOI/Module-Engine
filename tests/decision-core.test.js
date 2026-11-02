@@ -16,13 +16,22 @@ function memoryKey(namespace, key) {
     return `${namespace}:${key}`;
 }
 
-async function build({ enabled = false, patch = {}, initialRuns = null, workers = [{ id: 'director', format: 'openai', model: 'director/model' }], summaries = [], reply = () => JSON.stringify({ decision: 'She opens the door.', blocks: [{ op: 'add', title: 'Door', text: 'The east door is open.' }] }) } = {}) {
+const turnReply = (decision = 'She opens the door.') => ({
+    text: '',
+    toolCalls: [
+        { id: 'plan', name: 'set_plan', arguments: { comment: 'This turn needs a direction.', direction: 'Open the east door.' } },
+        { id: 'turn', name: 'submit_turn', arguments: { comment: 'The turn is decided.', scene: { minutes: 0 }, resolution: decision, userResult: 'The user waited.', characters: [] } },
+    ],
+});
+
+async function build({ patch = {}, initialRuns = null, workers = [{ id: 'director', format: 'openai', model: 'director/model' }], summaries = [], reply = () => turnReply() } = {}) {
     const engine = createEngine();
     const settingsStore = new Map();
     const chatMemory = new Map();
     if (initialRuns) chatMemory.set(memoryKey('core.decision', 'runs'), clone(initialRuns));
     const calls = [];
     const notifications = [];
+    const reveals = [];
     const workersList = [...workers];
 
     engine.buses.cores.register('storage.settings.get', ({ namespace, key, fallback }) => settingsStore.has(memoryKey(namespace, key)) ? clone(settingsStore.get(memoryKey(namespace, key))) : fallback);
@@ -33,6 +42,7 @@ async function build({ enabled = false, patch = {}, initialRuns = null, workers 
     engine.buses.cores.register('summary.list', () => summaries);
     engine.buses.cores.register('chatHistory.messages', () => [{ mesid: '10', text: 'last message' }]);
     engine.buses.cores.register('ui.notify', params => { notifications.push(params); return true; });
+    engine.buses.cores.register('ui.reveal', params => { reveals.push(params); return true; });
     engine.buses.cores.register('model.generate', async params => {
         calls.push(params);
         engine.events.emit('model.generate.raw', {
@@ -50,8 +60,8 @@ async function build({ enabled = false, patch = {}, initialRuns = null, workers 
     pipelineCore.define({ id: PAYLOAD, mode: 'fold' });
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
-    if (enabled) await core.configure({ enabled: true, ...patch });
-    return { engine, pipelineCore, core, calls, notifications, chatMemory, settingsStore };
+    await core.configure({ decider: { workerId: 'director' }, ...patch });
+    return { engine, pipelineCore, core, calls, notifications, reveals, chatMemory, settingsStore };
 }
 
 async function flush() {
@@ -63,18 +73,8 @@ function stages(pipelineCore, id) {
     return pipelineCore.stages(id).map(stage => stage.id);
 }
 
-test('off by default: no stages are registered at all, and the director/writer contracts do nothing', async () => {
-    const { core, pipelineCore } = await build();
-    assert.deepEqual(stages(pipelineCore, BEFORE_SEND), []);
-    assert.deepEqual(stages(pipelineCore, PAYLOAD), []);
-    assert.deepEqual(await core.decide({ chat: [{ mes: 'hi' }] }), { skipped: 'the decision core is off' });
-    const payload = { messages: [{ role: 'system', content: 'ST' }] };
-    assert.equal(await core.rewrite({ payload }), payload);
-});
-
-test('enabling registers both stages, and the writer stage is the only stage on the payload with no dependencies', async () => {
-    const { core, pipelineCore } = await build();
-    await core.configure({ enabled: true });
+test('the core is always on: loading registers both stages, and the writer stage is the only stage on the payload with no dependencies', async () => {
+    const { pipelineCore } = await build();
     assert.deepEqual(stages(pipelineCore, BEFORE_SEND), ['decision:decide']);
     assert.deepEqual(stages(pipelineCore, PAYLOAD), ['decision:rewrite']);
     const rewrite = pipelineCore.stages(PAYLOAD).find(stage => stage.id === 'decision:rewrite');
@@ -82,7 +82,7 @@ test('enabling registers both stages, and the writer stage is the only stage on 
 });
 
 test('the director runs on beforeSend and the writer replaces the outgoing messages', async () => {
-    const { core, pipelineCore, calls } = await build({ enabled: true, patch: { rules: 'Never kill a named character.', decider: { workerId: 'director' } }, summaries: [{ startIndex: 1, endIndex: 9, text: 'They reached the keep.' }] });
+    const { pipelineCore, calls } = await build({ patch: { rules: 'Never kill a named character.', decider: { workerId: 'director' } }, summaries: [{ startIndex: 1, endIndex: 9, text: 'They reached the keep.' }] });
     const chat = [{ mes: 'older' }, { mes: 'Hello?', is_user: true }];
     const before = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat, type: 'normal' } });
     assert.equal(before.ok, true);
@@ -104,43 +104,41 @@ test('the director runs on beforeSend and the writer replaces the outgoing messa
     assert.equal(sent.value.stream, true, 'streaming is ST\'s own setting and must not be changed');
 });
 
-test('blocks and the run are committed only after a genuinely ended run, under the last message number', async () => {
-    const { core, pipelineCore, engine, chatMemory } = await build({ enabled: true });
+test('the run is committed only after a genuinely ended run, under the last message number', async () => {
+    const { core, pipelineCore, engine, chatMemory } = await build();
     const chat = [{ mes: 'Hello?', is_user: true }];
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat, type: 'normal' } });
-    assert.deepEqual(core.blocks(), [], 'nothing is committed before the generation ends');
+    assert.deepEqual(core.runs(), {}, 'nothing is committed before the generation ends');
 
     engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'ended' });
     await flush();
 
-    assert.deepEqual(core.blocks().map(block => [block.title, block.text]), [['Door', 'The east door is open.']]);
     const storedRuns = chatMemory.get(memoryKey('core.decision', 'runs'));
     assert.equal(storedRuns['10'].decision, 'She opens the door.');
     assert.equal(storedRuns['10'].reasoning, 'she is certain');
     assert.equal(storedRuns['10'].steps.length, 1);
 });
 
-test('a superseded run leaves no blocks and no run behind, even if a completed event arrives afterwards', async () => {
-    const { core, pipelineCore, engine } = await build({ enabled: true });
+test('a superseded run leaves no run behind, even if a completed event arrives afterwards', async () => {
+    const { core, pipelineCore, engine } = await build();
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     engine.events.emit('generation.superseded', { runId: 'run_1' });
     engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'ended' });
     await flush();
-    assert.deepEqual(core.blocks(), []);
     assert.deepEqual(core.runs(), {});
 });
 
 test('a stopped run is treated as cancelled and commits nothing', async () => {
-    const { core, pipelineCore, engine } = await build({ enabled: true });
+    const { core, pipelineCore, engine } = await build();
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'stopped' });
     await flush();
-    assert.deepEqual(core.blocks(), []);
+    assert.deepEqual(core.runs(), {});
 });
 
 test('a director failure retries once, aborts the beforeSend pipeline after the second failure, notifies, and keeps the old state', async () => {
     let attempts = 0;
-    const { core, pipelineCore, engine, notifications } = await build({ enabled: true, reply: () => { attempts += 1; throw new Error('provider is down'); } });
+    const { pipelineCore, engine, notifications } = await build({ reply: () => { attempts += 1; throw new Error('provider is down'); } });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, false);
     assert.equal(result.failedStage, 'decision:decide');
@@ -149,18 +147,17 @@ test('a director failure retries once, aborts the beforeSend pipeline after the 
     await flush();
     assert.equal(notifications.length, 1);
     assert.match(notifications[0].text, /failed twice/);
-    assert.deepEqual(core.blocks(), []);
 });
 
 test('a malformed director answer is a failure of the attempt, not an exception escaping the pipeline', async () => {
-    const { pipelineCore } = await build({ enabled: true, reply: () => 'I think she should run.' });
+    const { pipelineCore } = await build({ reply: () => 'I think she should run.' });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, false);
     assert.match(result.error.message, /did not submit the turn/);
 });
 
 test('on regenerate with "writer only" the director is not called again; the last decision is reused', async () => {
-    const { core, pipelineCore, calls } = await build({ enabled: true, patch: { regen: 'writer' }, initialRuns: { 10: { id: 'old', mesid: '10', at: 1, decision: 'She already decided.', reasoning: 'old thought', steps: [] } } });
+    const { core, pipelineCore, calls } = await build({ patch: { regen: 'writer' }, initialRuns: { 10: { id: 'old', mesid: '10', at: 1, decision: 'She already decided.', reasoning: 'old thought', steps: [] } } });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_2', chat: [{ mes: 'Hello again?', is_user: true }], type: 'regenerate' } });
     assert.equal(result.ok, true);
     assert.equal(calls.length, 0, 'no new director call');
@@ -170,14 +167,38 @@ test('on regenerate with "writer only" the director is not called again; the las
 });
 
 test('on regenerate with the default "decider" the director does run again', async () => {
-    const { pipelineCore, calls } = await build({ enabled: true, initialRuns: { 10: { id: 'old', mesid: '10', at: 1, decision: 'old', steps: [] } } });
+    const { pipelineCore, calls } = await build({ initialRuns: { 10: { id: 'old', mesid: '10', at: 1, decision: 'old', steps: [] } } });
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_2', chat: [{ mes: 'Hello again?', is_user: true }], type: 'regenerate' } });
     assert.equal(calls.length, 1);
 });
 
 test('"writer only" with no earlier decision falls back to running the director instead of writing without a plan', async () => {
-    const { pipelineCore, calls } = await build({ enabled: true, patch: { regen: 'writer' } });
+    const { pipelineCore, calls } = await build({ patch: { regen: 'writer' } });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_2', chat: [{ mes: 'Hello?', is_user: true }], type: 'swipe' } });
     assert.equal(result.ok, true);
     assert.equal(calls.length, 1);
+});
+
+test('without a configured director worker generation is not sent, the user is told, and the Director / Writer card opens', async () => {
+    const { pipelineCore, engine, notifications, reveals, calls } = await build({ patch: { decider: { workerId: '' } } });
+    const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
+    assert.equal(result.ok, false);
+    assert.equal(calls.length, 0, 'no request reaches any model');
+    engine.events.emit('generation.aborted', { runId: 'run_1', stage: 'decision:decide' });
+    await flush();
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].text, /no director worker is configured/);
+    assert.match(notifications[0].text, /not sent/);
+    assert.deepEqual(reveals[0], { anchor: 'card:decision' }, 'the card is opened for the user');
+});
+
+test('a director worker that is not openai is a configuration error too, not a silent fallback', async () => {
+    const { pipelineCore, engine, notifications, reveals, calls } = await build({ workers: [{ id: 'director', format: 'anthropic' }] });
+    const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
+    assert.equal(result.ok, false);
+    assert.equal(calls.length, 0);
+    engine.events.emit('generation.aborted', { runId: 'run_1', stage: 'decision:decide' });
+    await flush();
+    assert.match(notifications[0].text, /needs an "openai" worker/);
+    assert.deepEqual(reveals[0], { anchor: 'card:decision' });
 });

@@ -47,7 +47,7 @@ async function build({ replies, seed = {}, settings = {} }) {
     pipelineCore.define({ id: BEFORE_SEND, mode: 'collect' });
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
-    await core.configure({ enabled: true, assessSeed: 1, decider: { workerId: 'director' }, ...settings });
+    await core.configure({ assessSeed: 1, decider: { workerId: 'director' }, ...settings });
     return { pipelineCore, core, calls, memory, events };
 }
 

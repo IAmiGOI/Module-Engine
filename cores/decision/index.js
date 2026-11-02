@@ -1,7 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { clampDecisionSettings, DECISION_NAMESPACE, DEFAULT_SETTINGS } from '../../libraries/core/decision-settings.js';
 import { buildWriterContext } from '../../libraries/core/decision-context.js';
-import { applyBlockEdits } from '../../libraries/core/decision-format.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { extractReasoning } from '../../libraries/core/decision-reasoning.js';
 import { extractCachedTokens } from '../../libraries/core/decision-cache.js';
@@ -23,22 +22,24 @@ const RETRY_DELAY_MS = 500;
  *
  * Директор думает и решает на `generation.beforeSend`; прозаик пишет тот же
  * основной запрос ST на `generation.payload`, но с телом, заменённым его
- * контекстом. Ядро по умолчанию выключено: пока `settings.enabled` false,
- * этапы НЕ регистрируются, и путь генерации остаётся прежним.
+ * контекстом. Ядро всегда включено: выключателя нет, запасного пути через
+ * сборку ST тоже. Без воркера директора генерация не отправляется — вместо
+ * этого пользователь получает понятное уведомление и карточку настройки.
  *
  * На `generation.payload` `decision:rewrite` — единственный этап: тело ST
  * целиком заменяется контекстом прозаика. Prompt Manager удалён (часть 3),
  * поэтому зависимостей по `needs` у этапа больше нет.
  *
- * Правки блоков и запись прогона живут в памяти до успешного конца прогона
+ * Запись прогона живёт в памяти до успешного конца прогона
  * (`generation.completed` с `outcome: 'ended'`). Вытесненный/отменённый/
- * остановленный прогон ничего не коммитит — полузаписанных блоков не бывает.
+ * остановленный прогон ничего не коммитит — полузаписанных ходов не бывает.
  */
 export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_MS } = {}) {
     const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
     let settings = clampDecisionSettings(DEFAULT_SETTINGS);
     let workers = [];
-    let pending = null; // текущий прогон директора: { runId, type, chat, decision, edits, blocksAfter, … }
+    let pending = null; // текущий прогон директора: { runId, type, chat, decision, form, push, … }
+    let lastFailure = null; // последняя неудача: нужна, чтобы отличить ошибку настройки от сбоя модели
     let stagesRegistered = false;
     let registering = false;
     let runCounter = 0;
@@ -80,19 +81,12 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     async function reload() {
         await store.reload();
         workers = (await call('model.workers.get')) ?? [];
-        return { blocks: store.blocks(), runs: store.runs() };
+        return { runs: store.runs() };
     }
 
     async function saveSettings(patch = {}) {
-        const wasEnabled = settings.enabled;
         settings = clampDecisionSettings({ ...settings, ...patch });
         await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'settings', value: settings });
-        if (!wasEnabled && settings.enabled) await registerStages();
-        if (wasEnabled && !settings.enabled) {
-            await unregisterStages();
-            pending = null;
-            attempts.clear();
-        }
         return settings;
     }
 
@@ -161,7 +155,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     /** Снимок состояния до хода: форма/решения, ростер, планы, заметки, библиотека, план, арки, часы. */
     function snapshotState() {
         return {
-            blocks: store.blocks(), roster: store.roster(), plan: store.plan(), arcs: store.arcs(),
+            roster: store.roster(), plan: store.plan(), arcs: store.arcs(),
             notes: store.notes(), library: store.library(), plans: store.plans(), clock: store.clock(),
         };
     }
@@ -169,7 +163,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     async function restoreState(state) {
         if (!state) return;
         await Promise.all([
-            store.saveBlocks(state.blocks ?? []), store.saveRoster(state.roster ?? { active: [] }),
+            store.saveRoster(state.roster ?? { active: [] }),
             store.savePlan(state.plan ?? null), store.saveArcs(state.arcs ?? []),
             store.saveNotes(state.notes ?? {}), store.saveLibrary(state.library ?? {}),
             store.savePlans(state.plans ?? []), store.saveClock(state.clock ?? { minutes: 0 }),
@@ -194,7 +188,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     }
 
     async function decide(input = {}) {
-        if (!settings.enabled) return { skipped: 'the decision core is off' };
+        lastFailure = null;
         const runId = input.runId ?? `decision_${(runCounter += 1)}`;
         const type = input.type ?? 'normal';
         const chat = Array.isArray(input.chat) ? input.chat : [];
@@ -202,9 +196,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             const last = store.lastRun();
             if (last) {
                 const push = last.push ?? last.decision;
-                pending = { runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null, edits: [], blocksAfter: store.blocks(), reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true };
+                pending = { runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null, reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true };
                 publishEvent('decision.started', { runId, type, reused: true });
-                publishEvent('decision.completed', { runId, reused: true, edits: 0, blocks: store.blocks().length, workerId: pending.workerId });
+                publishEvent('decision.completed', { runId, reused: true, workerId: pending.workerId });
                 return { reused: true, decision: push };
             }
         }
@@ -216,26 +210,25 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         try {
             const result = await cycle.run({ chat, runId, type, thinking: () => captured.value, usage: () => captured.usage });
             if (!result.ok) throw new Error(`The director did not submit the turn: ${result.reason ?? 'no form'}.`);
-            const edits = Array.isArray(result.form?.blocks) ? result.form.blocks : [];
-            const applied = applyBlockEdits(store.blocks(), edits);
             const steps = recordStep(runId, { attempt, workerId: result.workerId ?? null, durationMs: Date.now() - startedAt, error: null });
             pending = {
                 runId, type, chat, chatLength: chat.length, decision: result.decision,
-                push: result.push ?? result.decision, form: result.form, edits, blocksAfter: applied.blocks, reasoning: captured.value,
-                warnings: [...(result.warnings ?? []), ...applied.warnings], steps,
+                push: result.push ?? result.decision, form: result.form, reasoning: captured.value,
+                warnings: [...(result.warnings ?? [])], steps,
                 workerId: result.workerId ?? null, trace: result.trace ?? [], snapshot: beforeSnapshot,
             };
-            publishEvent('decision.completed', { runId, edits: edits.length, blocks: applied.blocks.length, workerId: pending.workerId });
+            publishEvent('decision.completed', { runId, workerId: pending.workerId });
             // Пассивный цикл — ПОСЛЕ формы и НЕ ожидается: прозаик не должен
             // ждать планов персонажей. Если планов к разбору нет, модели не
             // будет вовсе.
             cycle.runPassive({ runId }).catch(error => publishEvent('decision.failed', { runId, message: `passive cycle: ${error?.message ?? error}` }));
-            return { decision: result.decision, edits: edits.length };
+            return { decision: result.decision };
         } catch (error) {
             // Неудачная попытка не должна оставлять полу-состояние: откат к
             // снимку до хода, иначе повтор/свайп увидят чужие правки.
             if (beforeSnapshot) await restoreState(beforeSnapshot).catch(() => {});
             recordStep(runId, { attempt, workerId: settings.decider.workerId || null, durationMs: Date.now() - startedAt, error: error?.message ?? String(error) });
+            lastFailure = { runId, kind: error?.code === 'decision-config' ? 'config' : 'runtime', message: error?.message ?? String(error) };
             publishEvent('decision.failed', { runId, message: error?.message ?? String(error) });
             throw error;
         } finally {
@@ -245,9 +238,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
 
     async function rewrite(input = {}) {
         const payload = input.payload ?? input;
-        if (!settings.enabled || !pending || !payload) return payload;
+        if (!pending || !payload) return payload;
         const summaries = (await call('summary.list')) ?? [];
-        const context = buildWriterContext({ blocks: pending.blocksAfter ?? store.blocks(), notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision });
+        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision });
         const worker = workers.find(item => item.id === settings.writer.workerId);
         const model = worker && worker.id !== 'st-main' ? String(worker.model ?? '') : '';
         return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;
@@ -282,7 +275,14 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     }
 
     function onAborted(payload) {
-        if (payload?.stage === DECIDE_STAGE) notify('error', 'Decision core: the director failed twice, so this generation was cancelled.');
+        if (payload?.stage === DECIDE_STAGE) {
+            if (lastFailure?.kind === 'config') {
+                notify('error', `Director: ${lastFailure.message} The generation was not sent.`);
+                request(host.own, 'ui.reveal', { params: { anchor: 'card:decision' } });
+            } else {
+                notify('error', 'Decision core: the director failed twice, so this generation was cancelled.');
+            }
+        }
         if (!payload?.runId || !pending || pending.runId === payload.runId) discardPending();
         attempts.delete(payload?.runId);
     }
@@ -294,7 +294,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
 
     function onStagesChanged() {
         if (registering) return;
-        if (!stagesRegistered && settings.enabled) registerStages().catch(() => {});
+        if (!stagesRegistered) registerStages().catch(() => {});
     }
 
     function listen() {
@@ -322,7 +322,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 if (!active) { typingActive = false; return; }
                 if (typingActive) return;
                 typingActive = true;
-                if (!settings.enabled || !settings.startOnTyping || !settings.turnDraft || pending) return;
+                if (!settings.startOnTyping || !settings.turnDraft || pending) return;
                 cycle.runDraft({ runId: `typing_${(runCounter += 1)}` }).catch(error => publishEvent('decision.failed', { runId: null, message: `typing draft: ${error?.message ?? error}` }));
             }),
         );
@@ -335,7 +335,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         unregisters.push(
             host.own.register('decision.settings', () => ({ ...settings, decider: { ...settings.decider }, writer: { ...settings.writer } })),
             host.own.register('decision.configure', params => saveSettings(params?.patch ?? {})),
-            host.own.register('decision.blocks', () => store.blocks().map(block => ({ ...block }))),
             host.own.register('decision.runs', () => ({ ...store.runs() })),
             host.own.register('decision.lastRun', () => store.lastRun()),
             host.own.register('decision.roster', () => store.roster()),
@@ -358,7 +357,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
         );
         listen();
-        if (settings.enabled) await registerStages();
+        await registerStages();
         return settings;
     }
 
@@ -368,7 +367,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         decide,
         rewrite,
         settings: () => ({ ...settings, decider: { ...settings.decider }, writer: { ...settings.writer } }),
-        blocks: () => store.blocks().map(block => ({ ...block })),
         runs: () => ({ ...store.runs() }),
         roster: () => store.roster(),
         log: () => store.cycles(),

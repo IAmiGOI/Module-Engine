@@ -43,7 +43,7 @@ async function build({ replies, thresholdTokens = 10 }) {
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
     await core.configure({
-        enabled: true, assessSeed: 1, decider: { workerId: 'director' },
+        assessSeed: 1, decider: { workerId: 'director' },
         compression: { workerId: 'compressor', thresholdTokens, maxTokens: 500, temperature: 0 },
     });
     return { pipelineCore, core, calls, memory };

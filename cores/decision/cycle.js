@@ -17,34 +17,19 @@ import { createHandlers, createPlaceReader, createTimeReader, createSimilarity }
 
 const OPENAI_FORMAT = 'openai';
 
-function resolveWorker(workers, id) {
-    if (id) return workers.find(worker => worker.id === id) ?? null;
-    return workers[0] ?? null;
-}
-
-/** `model.generate` может вернуть строку (старый/фейковый воркер) — тогда понимаем её как прежний JSON директора. */
+/** Строка от воркера — просто текст без вызова инструмента: директор получит напоминание. */
 function normalizeGenerateAnswer(value) {
     if (typeof value !== 'string') return value;
-    const parsed = parseModelJson(value);
-    if (parsed && typeof parsed === 'object' && typeof parsed.decision === 'string') {
-        return {
-            text: '',
-            toolCalls: [{
-                id: 'legacy_json', name: 'submit_turn',
-                arguments: {
-                    comment: 'Legacy JSON answer from the director.',
-                    resolution: parsed.decision,
-                    userResult: 'The user action is reflected in the decision.',
-                    scene: { minutes: 0 },
-                    characters: [],
-                    _decision: parsed.decision,
-                    ...(Array.isArray(parsed.blocks) ? { blocks: parsed.blocks } : {}),
-                },
-                rawArguments: '{}',
-            }],
-        };
-    }
     return { text: value, toolCalls: [] };
+}
+
+/** Ошибка настройки: воркера директора нет или он не `openai`. От неё не помогает повтор. */
+export class DecisionConfigError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'DecisionConfigError';
+        this.code = 'decision-config';
+    }
 }
 
 function fallbackDecision(form) {
@@ -63,9 +48,11 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     const similarityScores = createSimilarity(call);
 
     function deciderWorker(settings) {
-        const worker = resolveWorker(getWorkers(), settings.decider.workerId);
-        if (!worker) throw new Error('Decision core: no director worker is configured — choose one in the Director / Writer card.');
-        if (worker.format !== OPENAI_FORMAT) throw new Error(`Decision core: the director needs an "openai" worker with multi-turn tools; "${worker.id}" is "${worker.format}".`);
+        const id = String(settings.decider.workerId ?? '').trim();
+        if (!id) throw new DecisionConfigError('Decision core: no director worker is configured — choose one in the Director / Writer card.');
+        const worker = getWorkers().find(item => item.id === id);
+        if (!worker) throw new DecisionConfigError(`Decision core: the director worker "${id}" is not available — choose an existing connection in the Director / Writer card.`);
+        if (worker.format !== OPENAI_FORMAT) throw new DecisionConfigError(`Decision core: the director needs an "openai" worker with multi-turn tools; "${worker.id}" is "${worker.format}". Choose an openai connection in the Director / Writer card.`);
         return worker;
     }
 
@@ -86,10 +73,10 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
 
     function buildContext({ chat = [], settings, summaries: list }) {
         return buildDeciderContext({
-            rules: settings.rules, blocks: store.blocks(), summaries: list, chat, runs: store.runs(),
+            rules: settings.rules, summaries: list, chat, runs: store.runs(),
             thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
-            roster: store.roster().active, planMissing: !store.plan(), toolMode: true,
+            roster: store.roster().active, planMissing: !store.plan(),
         });
     }
 
@@ -227,7 +214,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '',
         });
         form.push = push;
-        const decision = String(form._decision ?? '').trim() || fallbackDecision(form);
+        const decision = fallbackDecision(form);
         awaiting = true;
         publishEvent('decision.cycle.submitted', { runId, type, steps: result.steps, characters: form.characters?.length ?? 0 });
         return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
@@ -320,8 +307,12 @@ Reply with ONLY a JSON object: {"keep":["summary id", …]}. An empty list means
     async function judgeForcedMemory({ batch = [] } = {}) {
         const settings = getSettings();
         const list = (Array.isArray(batch) ? batch : []).filter(record => record?.id);
-        if (!settings.enabled || !list.length) return { keep: [] };
-        const worker = deciderWorker(settings);
+        if (!list.length) return { keep: [] };
+        let worker;
+        try { worker = deciderWorker(settings); } catch (error) {
+            if (error?.code === 'decision-config') return { keep: [] };
+            throw error;
+        }
         const ids = new Set(list.map(record => record.id));
         const prompt = `Summaries about to be folded:\n\n${list.map(record => `[${record.id}] (level ${record.level}, messages #${record.startIndex}–#${record.endIndex})\n${record.text}`).join('\n\n')}`;
         const answer = await call('model.generate', {
