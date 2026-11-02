@@ -244,6 +244,21 @@ export const LIBRARY_TOOL = Object.freeze({
     },
 });
 
+export const FORCED_MEMORY_TOOL = Object.freeze({
+    name: 'forced_memory',
+    displayName: 'Keep or release a summary',
+    description: 'Mark a summary so it is never folded into a higher level, or release it again. Without a mark the summary folds as usual.',
+    parameters: {
+        type: 'object',
+        properties: {
+            op: { type: 'string', enum: ['keep', 'unkeep', 'list'] },
+            summaryId: { type: 'string', description: 'Summary id for keep/unkeep.' },
+            comment: COMMENT,
+        },
+        required: ['op', 'comment'],
+    },
+});
+
 export const MEMORY_TOOL = Object.freeze({
     name: 'memory',
     displayName: 'Read or write the memory bank',
@@ -282,7 +297,8 @@ export const AWAIT_TOOL = Object.freeze({
 export function buildToolList(externalSchemas = []) {
     const own = [
         UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL,
-        SET_CHARACTER_LEVEL_TOOL, SET_CHARACTER_PLAN_TOOL, RESOLVE_CHARACTER_PLAN_TOOL, LIBRARY_TOOL, MEMORY_TOOL, AWAIT_TOOL,
+        SET_CHARACTER_LEVEL_TOOL, SET_CHARACTER_PLAN_TOOL, RESOLVE_CHARACTER_PLAN_TOOL, LIBRARY_TOOL, MEMORY_TOOL,
+        FORCED_MEMORY_TOOL, AWAIT_TOOL,
     ];
     const external = (Array.isArray(externalSchemas) ? externalSchemas : [])
         .filter(schema => schema && String(schema.name ?? '').trim())

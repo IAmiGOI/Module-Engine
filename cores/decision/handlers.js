@@ -208,6 +208,12 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             return { ok: true, characters: records };
         },
 
+        forced_memory: async args => {
+            if (args.op !== 'list') await call('summary.force', { id: args.summaryId, forced: args.op === 'keep' });
+            const kept = await call('summary.forced');
+            return { ok: true, kept: Array.isArray(kept) ? kept : [] };
+        },
+
         memory: async args => {
             if (args.op === 'write') {
                 const banked = addRecord(store.bank(), { character: args.character, text: args.text, important: args.important === true });

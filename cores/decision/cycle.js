@@ -191,5 +191,25 @@ The user's turn does not wait for you.`;
         return { skipped: false, due: due.length, steps: result.steps, type: result.type };
     }
 
-    return { run, runPassive, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
+    const FORCED_SYSTEM = `You protect the long-term memory of a roleplay. You get summaries that are about to be folded into a higher-level summary. Decide which of them must be KEPT as they are: a summary is worth keeping if it holds a promise, a betrayal, a lasting rule, a relationship change or an open thread that a higher-level summary would blur.
+Reply with ONLY a JSON object: {"keep":["summary id", …]}. An empty list means fold everything. Never invent ids.`;
+
+    /** Forced Memory: какие саммари батча не сворачивать. Ядро выключено — пусто, без вызова модели. */
+    async function judgeForcedMemory({ batch = [] } = {}) {
+        const settings = getSettings();
+        const list = (Array.isArray(batch) ? batch : []).filter(record => record?.id);
+        if (!settings.enabled || !list.length) return { keep: [] };
+        const worker = deciderWorker(settings);
+        const ids = new Set(list.map(record => record.id));
+        const prompt = `Summaries about to be folded:\n\n${list.map(record => `[${record.id}] (level ${record.level}, messages #${record.startIndex}–#${record.endIndex})\n${record.text}`).join('\n\n')}`;
+        const answer = await call('model.generate', {
+            workerId: worker.id, systemPrompt: FORCED_SYSTEM, prompt, maxTokens: 800, temperature: 0, stream: false,
+        });
+        const parsed = parseModelJson(answer);
+        const keep = Array.isArray(parsed?.keep) ? parsed.keep.filter(id => ids.has(id)) : [];
+        publishEvent('decision.forcedMemory.judged', { batch: list.length, keep: keep.length });
+        return { keep };
+    }
+
+    return { run, runPassive, judgeForcedMemory, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
 }

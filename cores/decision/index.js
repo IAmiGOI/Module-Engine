@@ -282,6 +282,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.own.register('decision.plans', () => store.plans()),
             host.own.register('decision.clock', () => store.clock()),
             host.own.register('decision.bank', () => store.bank()),
+            host.own.register('decision.forcedMemory', params => cycle.judgeForcedMemory(params)),
             host.own.register('decision.reload', () => reload()),
             host.own.register(DECIDE_CONTRACT, params => decide(params)),
             host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
