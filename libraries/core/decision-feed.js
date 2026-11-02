@@ -180,7 +180,18 @@ export function applyFeedEvent(state, event, payload = {}) {
         return { ...state, cycles: [...state.cycles, entry] };
     }
     if (event === 'decision.cycle.failed') {
-        return withLive(state, runId, entry => upsertRow(entry, { kind: 'warning', id: 'failed', text: text(payload.message) || 'The cycle failed.' }));
+        const message = text(payload.message) || 'The cycle failed.';
+        if (state.live[runId]) return withLive(state, runId, entry => upsertRow(entry, { kind: 'warning', id: 'failed', text: message }));
+        // Ошибка настройки случается ДО первого шага — живого цикла ещё нет,
+        // но в ленте она обязана быть видна.
+        const entry = {
+            id: `failed_${runId}`, kind: 'cycle', runId, event: 'failed', at: payload.at ?? Date.now(),
+            title: 'The cycle failed', detail: '', turn: null, clockMinutes: null, rejected: false,
+            running: false, waiting: false, rows: [{ kind: 'warning', id: 'failed', text: message }], tokens: 0,
+        };
+        const index = state.cycles.findIndex(item => item.id === entry.id);
+        const cycles = index < 0 ? [...state.cycles, entry] : state.cycles.map((item, at) => (at === index ? entry : item));
+        return { ...state, cycles };
     }
     if (event === 'decision.cycle.ended') return withLive(state, runId, entry => ({ ...entry, running: false, waiting: false }));
     return state;

@@ -74,6 +74,15 @@ test('the form and the push arrive live, before the cycle is written', () => {
     assert.equal(state.live.r.rows[1].text, 'LIVE PUSH');
 });
 
+test('a failure before the first step still lands in the feed as a warning section', () => {
+    const state = applyFeedEvent(createFeedState(), 'decision.cycle.failed', { runId: 'run_x', message: 'no director worker is configured', at: 9 });
+    assert.equal(state.cycles.length, 1);
+    assert.equal(state.cycles[0].title, 'The cycle failed');
+    assert.match(state.cycles[0].rows[0].text, /no director worker/);
+    const again = applyFeedEvent(state, 'decision.cycle.failed', { runId: 'run_x', message: 'still no worker', at: 10 });
+    assert.equal(again.cycles.length, 1, 'the retry replaces the same failure section');
+});
+
 test('filters hide thinking, keep only turns or passive cycles, and search the whole section', () => {
     const state = createFeedState({ cycles: [turnCycle(), createCycleRecord({ id: 'cyc_2', event: 'time', wake: { label: 'The clock moved', detail: 'plans are due' } })] });
     const noThinking = filterFeed(state, { showThinking: false });

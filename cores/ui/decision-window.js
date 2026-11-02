@@ -261,7 +261,11 @@ export function createDecisionWindowCore(host, { mount } = {}) {
 
     function startTimer() {
         if (timer || !globalThis.document) return;
-        timer = setInterval(() => { if (visible.peek()) now.set(Date.now()); }, 1000);
+        timer = setInterval(() => {
+            if (!visible.peek()) return;
+            const waiting = Object.values(feed.peek().live ?? {}).some(entry => entry.waiting);
+            if (waiting) now.set(Date.now());
+        }, 1000);
     }
 
     function stopTimer() {
