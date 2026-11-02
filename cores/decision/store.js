@@ -21,8 +21,8 @@ export function createDecisionStore({ call, publishEvent }) {
     function sanitizeBlocks(value) {
         return (Array.isArray(value) ? value : [])
             .filter(block => block && typeof block === 'object')
-            .map(block => ({
-                id: String(block.id ?? '').trim() || `blk_${Math.random().toString(36).slice(2, 8)}`,
+            .map((block, index) => ({
+                id: String(block.id ?? '').trim() || `blk_recovered_${index}`,
                 title: String(block.title ?? '').trim() || 'Untitled',
                 text: String(block.text ?? ''),
                 updatedAt: Number.isFinite(block.updatedAt) ? block.updatedAt : 0,

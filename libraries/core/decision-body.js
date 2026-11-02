@@ -60,7 +60,13 @@ export function disableReasoning(body, format = resolveBodyFormat(body)) {
     const source = String(next.chat_completion_source ?? '').toLowerCase();
     if (format === 'openai' && source === 'openrouter') next.reasoning = { enabled: false };
     if (format === 'anthropic') next.thinking = { type: 'disabled' };
-    if (format === 'google') next.thinkingConfig = { thinkingBudget: 0 };
+    if (format === 'google') {
+        // Нативный Google-запрос держит это внутри `generationConfig`
+        // (provider-request.js); у тела ST такого объекта нет — тогда
+        // выключатель кладётся рядом с остальными полями.
+        if (next.generationConfig && typeof next.generationConfig === 'object') next.generationConfig = { ...next.generationConfig, thinkingConfig: { thinkingBudget: 0 } };
+        else next.thinkingConfig = { thinkingBudget: 0 };
+    }
     return next;
 }
 

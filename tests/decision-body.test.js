@@ -35,9 +35,12 @@ test('reasoning is removed for every format provider-request.js knows; OpenRoute
     assert.deepEqual(anthropic.thinking, { type: 'disabled' });
 
     const google = disableReasoning({ ...base, chat_completion_source: 'makersuite', generationConfig: { thinkingConfig: { thinkingBudget: 9 }, temperature: 1 } }, 'google');
-    assert.deepEqual(google.thinkingConfig, { thinkingBudget: 0 });
-    assert.equal('thinkingConfig' in google.generationConfig, false);
+    assert.deepEqual(google.generationConfig.thinkingConfig, { thinkingBudget: 0 }, 'a native Google body keeps the flag where the API expects it');
+    assert.equal('thinkingConfig' in google, false);
     assert.equal(google.generationConfig.temperature, 1);
+
+    const googleStBody = disableReasoning({ ...base, chat_completion_source: 'makersuite' }, 'google');
+    assert.deepEqual(googleStBody.thinkingConfig, { thinkingBudget: 0 }, 'the ST body has no generationConfig, so the off switch sits on top');
 
     const text = disableReasoning({ ...base, prompt: 'x' }, 'text');
     assert.equal('reasoning_effort' in text, false);
