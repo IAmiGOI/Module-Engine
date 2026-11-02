@@ -79,24 +79,3 @@ export function forcedView(ids) {
     if (!list.length) return hint('No summaries are forced; folding works as usual.');
     return h('div', { class: 'stme-decision-list' }, list.map(id => h('div', { class: 'stme-decision-row' }, `• ${id}`)));
 }
-
-/** Лог директора: циклы, вызовы с комментариями, thinking, предупреждения. */
-export function logView(cycles) {
-    const list = Array.isArray(cycles) ? cycles.slice(-12).reverse() : [];
-    if (!list.length) return hint('The director has not run a cycle yet.');
-    return h('div', { class: 'stme-decision-log' }, list.map(cycle => h('div', { class: 'stme-decision-cycle' },
-        h('strong', {}, `${cycle.event ?? 'turn'} · ${new Date(Number(cycle.at) || 0).toLocaleTimeString()} · ${cycle.tokens ?? 0} tokens${cycle.usage ? ` · ${cycle.usage.prompt ?? 0} in / ${cycle.usage.completion ?? 0} out, ${cycle.usage.cached ?? 0} cached` : ''}`),
-        ...(cycle.toolCalls ?? []).map(call => h('div', { class: 'stme-decision-row' },
-            h('code', {}, call.name ?? '?'),
-            h('div', {}, line(call.comment) || '(no comment)'),
-            h('small', { class: 'stme-module-hint' }, call.error ? `error: ${call.error}` : summarize(call.result)))),
-        cycle.thinking ? h('details', {}, h('summary', {}, 'thinking'), h('div', { class: 'stme-decision-thinking' }, String(cycle.thinking).slice(0, 4000))) : null,
-        ...(cycle.warnings ?? []).map(warning => h('small', { class: 'stme-module-hint' }, `⚠ ${warning}`)),
-    )));
-}
-
-function summarize(result) {
-    if (result === null || result === undefined) return 'ok';
-    try { return JSON.stringify(result).slice(0, 240); }
-    catch { return String(result).slice(0, 240); }
-}

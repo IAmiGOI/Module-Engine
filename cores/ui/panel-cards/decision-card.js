@@ -2,7 +2,7 @@ import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
 import { Card, Toggle, Select, Field, Row, Button, Slider, Details } from '../../../libraries/shared/widgets.js';
 import { SAMPLER_PRESETS } from '../../models/generate-request.js';
-import { rosterView, planView, libraryView, bankView, arcsNotesView, researchView, forcedView, logView } from './decision-views.js';
+import { rosterView, planView, libraryView, bankView, arcsNotesView, forcedView } from './decision-views.js';
 
 /**
  * Карточка «Director / Writer» на экране настроек движка. Читает и пишет
@@ -15,7 +15,7 @@ import { rosterView, planView, libraryView, bankView, arcsNotesView, researchVie
  */
 const readField = value => (typeof value === 'function' ? value() : value);
 
-export function createDecisionCard({ call, collapse, notify, workers, openPrompts }) {
+export function createDecisionCard({ call, collapse, notify, workers, openPrompts, openDirector }) {
     const regen = signal('decider');
     const deciderWorkerId = signal('');
     const writerWorkerId = signal('');
@@ -47,9 +47,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
     const library = signal({});
     const plans = signal([]);
     const bank = signal({});
-    const research = signal([]);
     const clock = signal({ minutes: 0 });
-    const log = signal([]);
     const forced = signal([]);
 
     const workerOptions = computed(() => [
@@ -172,11 +170,11 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
     }
 
     async function loadDecision() {
-        const [settings, run, savedPresets, rosterAnswer, planAnswer, arcsAnswer, notesAnswer, libraryAnswer, plansAnswer, bankAnswer, researchAnswer, clockAnswer, logAnswer, forcedAnswer] = await Promise.all([
+        const [settings, run, savedPresets, rosterAnswer, planAnswer, arcsAnswer, notesAnswer, libraryAnswer, plansAnswer, bankAnswer, clockAnswer, forcedAnswer] = await Promise.all([
             call('decision.settings'), call('decision.lastRun'), call('model.presets.get'),
             call('decision.roster'), call('decision.plan'), call('decision.arcs'), call('decision.notes'),
-            call('decision.library'), call('decision.plans'), call('decision.bank'), call('decision.research'),
-            call('decision.clock'), call('decision.log'), call('summary.forced'),
+            call('decision.library'), call('decision.plans'), call('decision.bank'),
+            call('decision.clock'), call('summary.forced'),
         ]);
         if (settings.ok) applySettings(settings.value);
         lastRun.set(run.ok ? run.value ?? null : null);
@@ -188,16 +186,14 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
         library.set(libraryAnswer.ok ? libraryAnswer.value ?? {} : {});
         plans.set(plansAnswer.ok ? plansAnswer.value ?? [] : []);
         bank.set(bankAnswer.ok ? bankAnswer.value ?? {} : {});
-        research.set(researchAnswer.ok ? researchAnswer.value ?? [] : []);
         clock.set(clockAnswer.ok ? clockAnswer.value ?? { minutes: 0 } : { minutes: 0 });
-        log.set(logAnswer.ok ? logAnswer.value ?? [] : []);
         forced.set(forcedAnswer.ok ? forcedAnswer.value ?? [] : []);
     }
 
     function decisionCard() {
         return Card('Director / Writer', { ...collapse.bind('card:decision'), subtitle: 'Every generation: one model decides, another writes' },
             h('small', { class: 'stme-module-hint' }, 'Always on. Without an openai director connection, generation is not sent; this card is opened for you.'),
-            Row(Button('Open prompts', openPrompts ?? (() => {}))),
+            Row(Button('Open prompts', openPrompts ?? (() => {})), Button('Open director', openDirector ?? (() => {}))),
             h('small', { class: 'stme-module-hint' }, 'Two sections in one window, like Prompt Manager: the built-in instructions are locked, and your own prompts move only inside their block. The director block sits two cycles before the end; the writer block sits five messages before the end.'),
             Field('On swipe / regenerate', Select(regen, regenOptions), {
                 hint: 'The default asks the director again. "Writer only" reuses the last decision for this chat and only rewrites the prose.',
@@ -271,14 +267,9 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
             ),
             Details('Memory bank', computed(() => bankView(bank()))),
             Details('Arcs and character notes', computed(() => arcsNotesView(arcs(), notes()))),
-            Details('Researcher reports', computed(() => researchView(research()))),
             Details('Forced summaries', computed(() => forcedView(forced()))),
             Details('Last decision',
                 computed(() => lastRun()?.decision ?? 'No decision yet in this chat.'),
-            ),
-            Details('Director log (never shown in chat)',
-                h('small', { class: 'stme-module-hint' }, 'Cycles, tool calls with their comments, forms, push, researcher reports and warnings.'),
-                computed(() => logView(log())),
             ),
             Row(Button('Save', save)),
         );

@@ -219,6 +219,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     const { decisionCard, loadDecision } = createDecisionCard({
         call, collapse, notify, workers,
         openPrompts: () => host.events.emit('decisionPrompts.openRequested', {}),
+        openDirector: () => host.events.emit('decisionWindow.openRequested', {}),
     });
 
     async function open() {
