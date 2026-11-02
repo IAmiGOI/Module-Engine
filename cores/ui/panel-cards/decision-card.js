@@ -13,6 +13,8 @@ import { rosterView, planView, libraryView, bankView, arcsNotesView, researchVie
  * ядра), поэтому у него в карточке нет полей ризонинга вовсе — только
  * сэмплер.
  */
+const readField = value => (typeof value === 'function' ? value() : value);
+
 export function createDecisionCard({ call, collapse, notify, workers, openPrompts }) {
     const regen = signal('decider');
     const deciderWorkerId = signal('');
@@ -52,7 +54,13 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
 
     const workerOptions = computed(() => [
         { value: '', label: 'Any connection (load-balanced)' },
-        ...workers().map(worker => ({ value: worker.id, label: worker.name ? `${worker.name} (${worker.id})` : worker.id })),
+        // Записи подключений из карточки моделей держат поля сигналами (`record.id()`), а не строками: без вызова все
+        // пункты получали одно значение — текст функции — и выбрать можно было только последний.
+        ...workers().map(worker => {
+            const id = String(readField(worker.id) ?? '');
+            const model = String(readField(worker.model) ?? '');
+            return { value: id, label: model ? `${id} — ${model}` : id };
+        }),
     ]);
     const presetOptions = computed(() => [
         { value: '', label: 'Custom (do not change on pick)' },

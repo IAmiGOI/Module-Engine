@@ -35,3 +35,25 @@ test('the decision card reads its state through the decision contracts and rende
         'decision.settings', 'model.presets.get', 'summary.forced',
     ]);
 });
+
+function optionValues(node, out = []) {
+    if (typeof node === 'function') return optionValues(node(), out);
+    if (Array.isArray(node)) { for (const child of node) optionValues(child, out); return out; }
+    if (node && typeof node === 'object') {
+        if (node.tag === 'option') out.push(node.props?.value);
+        optionValues(node.children, out);
+    }
+    return out;
+}
+
+test('every model connection is a separate pick in the director card when connection fields are signals', async () => {
+    const call = async contract => (contract === 'decision.settings' ? { ok: true, value: {} } : { ok: true, value: null });
+    const record = (id, model) => ({ id: signal(id), model: signal(model), format: signal('openai') });
+    const workers = signal([record('connection_1', 'flash'), record('connection_2', 'writer-30b'), record('connection_3', 'big')]);
+    const card = createDecisionCard({ call, collapse: { bind: () => ({}) }, notify: async () => ({ ok: true }), workers });
+
+    await card.loadDecision();
+    const values = optionValues(card.decisionCard());
+    for (const id of ['connection_1', 'connection_2', 'connection_3']) assert.ok(values.includes(id), `no option for ${id}`);
+    assert.ok(values.every(value => typeof value === 'string'), 'option values must be plain strings');
+});
