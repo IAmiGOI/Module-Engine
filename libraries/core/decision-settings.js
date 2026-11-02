@@ -38,6 +38,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
     rules: '',
     regen: 'decider',
+    // Предохранители и таймаут формы части 2.
+    maxSteps: 50,
+    implicitAwait: false,
+    formTimeoutMs: 180000,
+    // Seed оценки — только для тестов; `null` означает настоящий бросок.
+    assessSeed: null,
     decider: DEFAULT_DECIDER,
     writer: DEFAULT_WRITER,
 });
@@ -61,6 +67,10 @@ export function clampDecisionSettings(values = {}) {
         enabled: source.enabled === undefined ? DEFAULT_SETTINGS.enabled : Boolean(source.enabled),
         rules: text(source.rules, DEFAULT_SETTINGS.rules),
         regen: REGEN_MODES.includes(source.regen) ? source.regen : DEFAULT_SETTINGS.regen,
+        maxSteps: Math.round(number(source.maxSteps, 1, 500, DEFAULT_SETTINGS.maxSteps)),
+        implicitAwait: source.implicitAwait === undefined ? DEFAULT_SETTINGS.implicitAwait : Boolean(source.implicitAwait),
+        formTimeoutMs: Math.round(number(source.formTimeoutMs, 1000, 3600000, DEFAULT_SETTINGS.formTimeoutMs)),
+        assessSeed: Number.isFinite(source.assessSeed) ? Number(source.assessSeed) : null,
         decider: {
             workerId: text(decider.workerId, DEFAULT_DECIDER.workerId).trim(),
             samplerPreset: text(decider.samplerPreset, DEFAULT_DECIDER.samplerPreset).trim(),

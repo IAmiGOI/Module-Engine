@@ -24,6 +24,20 @@ Answer with ONLY a JSON object:
 {"decision":"one to four sentences: what the character does, says and wants this turn","blocks":[{"op":"add|update|remove","id":"an existing block id when you know it","title":"short title","text":"block text"}]}
 Keep blocks short, factual and useful for the writer. Omit "blocks" when nothing changes.`;
 
+/**
+ * Задание в режиме инструментов (часть 2). Модель не отвечает прозой и не
+ * решает исход сцены за прозаика: она заполняет форму и заканчивает цикл.
+ */
+const DECIDER_TOOL_TASK = `Decide this turn with the tools you are given. Work in this order:
+1. If someone entered or left the active scene, call update_roster.
+2. For every action whose chance matters, call assess first: describe difficulty and experience in words, cite the returned id in the form.
+3. Call submit_turn with the mandatory form. Every active roster member must appear exactly once. If it answers "missing", fix those fields and call it again.
+4. When the turn is done, continue with the passive work if there is any, then call await.
+
+Every single call must carry "comment": why you are making it, at least one full sentence. A call without a comment is rejected.
+You never decide what the user does; in userResult write only the result of the user's action.
+You never write the reply itself — the writer does that from your form.`;
+
 function isToolCallEntry(entry) {
     return Array.isArray(entry?.extra?.tool_invocations) && entry.extra.tool_invocations.length > 0;
 }
@@ -121,17 +135,18 @@ function rulesSection(rules) {
  * `prompt` — эквивалент для `anthropic`/`google`. Оба варианта собираются из
  * одного и того же порядка частей.
  */
-export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, thoughts = '', toolMode = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = historyMessages(chat, limit);
-    const parts = [summariesSection(summaries), runsSection(runs), blocksSection(blocks)].filter(Boolean);
+    const parts = [summariesSection(summaries), runsSection(runs), String(thoughts ?? '').trim(), blocksSection(blocks)].filter(Boolean);
     const systemPrompt = [DECIDER_ROLE, rulesSection(rules)].filter(Boolean).join('\n\n');
+    const task = toolMode ? DECIDER_TOOL_TASK : DECIDER_TASK;
     const messages = [
         { role: 'system', content: systemPrompt },
         ...parts.map(content => ({ role: 'system', content })),
         ...history,
-        { role: 'user', content: DECIDER_TASK },
+        { role: 'user', content: task },
     ];
-    const prompt = [systemPrompt, ...parts, renderHistory(history), DECIDER_TASK].filter(Boolean).join('\n\n');
+    const prompt = [systemPrompt, ...parts, renderHistory(history), task].filter(Boolean).join('\n\n');
     return { systemPrompt, messages, prompt };
 }
 

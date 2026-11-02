@@ -16,7 +16,7 @@ function memoryKey(namespace, key) {
     return `${namespace}:${key}`;
 }
 
-async function build({ enabled = false, patch = {}, initialRuns = null, workers = [], summaries = [], withPm = false, reply = () => JSON.stringify({ decision: 'She opens the door.', blocks: [{ op: 'add', title: 'Door', text: 'The east door is open.' }] }) } = {}) {
+async function build({ enabled = false, patch = {}, initialRuns = null, workers = [{ id: 'director', format: 'openai', model: 'director/model' }], summaries = [], withPm = false, reply = () => JSON.stringify({ decision: 'She opens the door.', blocks: [{ op: 'add', title: 'Door', text: 'The east door is open.' }] }) } = {}) {
     const engine = createEngine();
     const settingsStore = new Map();
     const chatMemory = new Map();
@@ -176,7 +176,7 @@ test('a malformed director answer is a failure of the attempt, not an exception 
     const { pipelineCore } = await build({ enabled: true, reply: () => 'I think she should run.' });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, false);
-    assert.match(result.error.message, /JSON object/);
+    assert.match(result.error.message, /did not submit the turn/);
 });
 
 test('on regenerate with "writer only" the director is not called again; the last decision is reused', async () => {

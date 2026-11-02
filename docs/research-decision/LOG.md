@@ -462,3 +462,46 @@ master/trivial → 0.998, novice/impossible → 0.002, master/impossible →
 `model-tools` 2/2, `decision-probability` 9/9; `provider-request` 41/41,
 `decision-body` 9/9. `tools` в `model.generate` возможны без поломки
 вызывающих — блок продолжается.
+
+## e1. Агент, лог, общие правила инструментов
+
+Сделано:
+
+- `libraries/core/decision-agent.js` — цикл вызовов: модель → `tool_calls` →
+  результаты → следующий вызов, до `submit_turn` или `await`. Комментарий
+  проверяется до исполнения (`decision-tools.hasSentence`): без предложения
+  вызов не исполняется, модели возвращается понятная ошибка. Ответ без
+  инструмента — напоминание (дважды), затем предохранитель. Лимит шагов — 50
+  (настройка `maxSteps`).
+- `libraries/core/decision-tools.js` — схемы `update_roster`, `assess`,
+  `submit_turn`, `await`; поле `comment` добавляется и чужим инструментам.
+- `libraries/core/decision-log.js` — форма цикла, подсчёт токенов, thinking
+  за три цикла (`trimThinking`), порог 500 тыс. с архивом (`compactLog`).
+- `cores/decision/cycle.js` — активный цикл: контекст, инструменты, прогон,
+  запись в лог. `model.generate` зовётся с `tools`, `stream: false`,
+  `returnMessage: true`; ризонинг копится по `requestId` цикла.
+- `cores/generation/index.js` — зарегистрированные инструменты теперь хранят
+  определения; новые контракты `generation.tools` (схемы без `action`) и
+  `generation.callTool` (исполнение в процессе движка). Notebook/Secrets и
+  всё, что регистрируется через `generation.registerTool`, доступно только
+  директору; прозаику тело чистит `stripTools`.
+- `cores/decision/store.js` — ключи `log`, `logArchive`, `roster`; запись
+  через свою очередь.
+- `await` заканчивает цикл; без формы на ходу генерация отменяется (этап
+  `decision:decide` с `onExhausted: 'abort'`). Неявный `await` — настройка
+  `implicitAwait`, по умолчанию выключен.
+- Совместимость: если воркер вернул прежний JSON вместо `tool_calls`, цикл
+  понимает его как `submit_turn` (старые тесты части 1 остаются зелёными);
+  это явный фоллбэк, а не второй формат.
+
+Тесты:
+
+- `tests/decision-agent.test.js` — 8/8: комментарий (нет/слово/предложение),
+  порядок assess → submit, await, напоминание, предохранитель, неявный await,
+  чужой инструмент без `comment` в аргументах.
+- `tests/decision-e1.test.js` — 4/4: цикл Notebook → submit, лог отдельно от
+  `runs`, ростер сохраняется, тело прозаика без `tools`, `await` без формы
+  отменяет ход.
+- `tests/decision-core.test.js` + `decision-scenario.test.js` — 17/17 после
+  перевода на агент; тест «малформированный ответ» теперь ждёт отказа формы,
+  а не JSON.

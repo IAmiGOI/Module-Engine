@@ -1,10 +1,11 @@
 import { request } from '../../libraries/shared/request.js';
-import { clampDecisionSettings, deciderRequestParams, DECISION_NAMESPACE, DEFAULT_SETTINGS } from '../../libraries/core/decision-settings.js';
-import { buildDeciderContext, buildWriterContext } from '../../libraries/core/decision-context.js';
-import { applyBlockEdits, parseDeciderResponse } from '../../libraries/core/decision-format.js';
+import { clampDecisionSettings, DECISION_NAMESPACE, DEFAULT_SETTINGS } from '../../libraries/core/decision-settings.js';
+import { buildWriterContext } from '../../libraries/core/decision-context.js';
+import { applyBlockEdits } from '../../libraries/core/decision-format.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { extractReasoning } from '../../libraries/core/decision-reasoning.js';
 import { createDecisionStore } from './store.js';
+import { createDecisionCycle } from './cycle.js';
 
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
@@ -50,7 +51,21 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return result.ok ? result.value : undefined;
     };
     const notify = (tone, text) => { request(host.own, 'ui.notify', { params: { tone, text } }); };
+    /** Строгий вызов: ошибка контракта обязана дойти до цикла, иначе сбой модели выглядел бы как «модель молчит». */
+    const callStrict = async (contract, params, options) => {
+        const result = await request(host.own, contract, { params, ...options });
+        if (!result.ok) throw new Error(result.error.message);
+        return result.value;
+    };
     const store = createDecisionStore({ call, publishEvent });
+    const cycle = createDecisionCycle({
+        call: callStrict,
+        callTool: async (name, args) => callStrict('generation.callTool', { name, args }),
+        getSettings: () => settings,
+        getWorkers: () => workers,
+        store,
+        publishEvent,
+    });
 
     async function reload() {
         await store.reload();
@@ -117,13 +132,17 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         await call('pipeline.stages.remove', { pipelineId: PAYLOAD_PIPELINE, stageId: REWRITE_STAGE });
     }
 
-    /** Захват ризонинга провайдера из `model.generate.raw`: запись прогона хранит его рядом с решением. */
-    function captureReasoning(requestId) {
+    /**
+     * Захват ризонинга провайдера за ВЕСЬ цикл: у агента несколько вызовов,
+     * их requestId начинаются с `${runId}:`. Текст копится по порядку — это
+     * то, что лог хранит как thinking цикла.
+     */
+    function captureReasoning(prefix) {
         const state = { value: '' };
         const unsubscribe = host.events.subscribe('model.generate.raw', payload => {
-            if (payload?.requestId !== requestId) return;
+            if (!String(payload?.requestId ?? '').startsWith(prefix)) return;
             const extracted = extractReasoning(payload.format, payload.body);
-            if (extracted) state.value = extracted;
+            if (extracted) state.value = state.value ? `${state.value}\n\n${extracted}` : extracted;
         });
         return { get value() { return state.value; }, stop: unsubscribe };
     }
@@ -152,28 +171,21 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
-        const requestId = `decision:${runId}:${attempt}`;
-        const captured = captureReasoning(requestId);
+        const captured = captureReasoning(`${runId}:`);
         try {
-            const summaries = (await call('summary.list')) ?? [];
-            const context = buildDeciderContext({ rules: settings.rules, blocks: store.blocks(), summaries, chat, runs: store.runs() });
-            const result = await request(host.own, 'model.generate', {
-                params: { requestId, ...deciderRequestParams(settings.decider), messages: context.messages, prompt: context.prompt, systemPrompt: context.systemPrompt, stream: false },
-                priority: 'pipeline',
-            });
-            if (!result.ok) throw new Error(result.error.message);
-            const parsed = parseDeciderResponse(result.value);
-            if (!parsed.ok) throw new Error(parsed.error.message);
-            const applied = applyBlockEdits(store.blocks(), parsed.value.edits);
-            const steps = recordStep(runId, { attempt, workerId: settings.decider.workerId || null, durationMs: Date.now() - startedAt, error: null });
+            const result = await cycle.run({ chat, runId, type, thinking: () => captured.value });
+            if (!result.ok) throw new Error(`The director did not submit the turn: ${result.reason ?? 'no form'}.`);
+            const edits = Array.isArray(result.form?.blocks) ? result.form.blocks : [];
+            const applied = applyBlockEdits(store.blocks(), edits);
+            const steps = recordStep(runId, { attempt, workerId: result.workerId ?? null, durationMs: Date.now() - startedAt, error: null });
             pending = {
-                runId, type, chat, chatLength: chat.length, decision: parsed.value.decision,
-                edits: parsed.value.edits, blocksAfter: applied.blocks, reasoning: captured.value,
-                warnings: [...parsed.value.warnings, ...applied.warnings], steps,
-                workerId: settings.decider.workerId || null,
+                runId, type, chat, chatLength: chat.length, decision: result.decision,
+                form: result.form, edits, blocksAfter: applied.blocks, reasoning: captured.value,
+                warnings: [...(result.warnings ?? []), ...applied.warnings], steps,
+                workerId: result.workerId ?? null, trace: result.trace ?? [],
             };
-            publishEvent('decision.completed', { runId, edits: parsed.value.edits.length, blocks: applied.blocks.length, workerId: pending.workerId });
-            return { decision: parsed.value.decision, edits: parsed.value.edits.length };
+            publishEvent('decision.completed', { runId, edits: edits.length, blocks: applied.blocks.length, workerId: pending.workerId });
+            return { decision: result.decision, edits: edits.length };
         } catch (error) {
             recordStep(runId, { attempt, workerId: settings.decider.workerId || null, durationMs: Date.now() - startedAt, error: error?.message ?? String(error) });
             publishEvent('decision.failed', { runId, message: error?.message ?? String(error) });

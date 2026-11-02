@@ -98,7 +98,10 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
     const finished = [];
     const waiters = new Map(); // runId -> [resolve]
     const subscriptions = [];
-    const registeredTools = new Set(); // чтобы снять свои инструменты при разборке, а не оставить их висеть в ST
+    // Определения, а не только имена: при включённом ядре директор получает
+    // те же инструменты через `generation.tools`/`generation.callTool`, а не
+    // ST-цикл. Снимаются они всё так же при разборке.
+    const registeredTools = new Map();
 
     function snapshot(run) {
         return run && { ...run, toolCalls: run.toolCalls.map(call => ({ ...call })) };
@@ -221,7 +224,7 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
 
         const result = await request(host.services, 'stTools.register', { params: { definition: instrumented } });
         if (!result.ok) throw new Error(result.error.message);
-        registeredTools.add(name);
+        registeredTools.set(name, instrumented);
         return name;
     }
 
@@ -372,6 +375,22 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
         host.own.register('generation.runs', () => finished.map(snapshot)),
         host.own.register('generation.registerTool', params => registerTool(params?.definition)),
         host.own.register('generation.unregisterTool', params => unregisterTool(params?.name)),
+        /** Определения без `action`: их получает директор, когда ядро включено. */
+        host.own.register('generation.tools', () => [...registeredTools.entries()].map(([name, definition]) => {
+            const { action, formatMessage, ...schema } = definition;
+            return { name, ...schema };
+        })),
+        /**
+         * Исполнение инструмента директором — в процессе движка, без ST-цикла.
+         * `action` уже инструментирован `registerTool()`, поэтому события
+         * `generation.toolCall`/`toolResult` публикуются как обычно.
+         */
+        host.own.register('generation.callTool', async params => {
+            const name = String(params?.name ?? '').trim();
+            const definition = registeredTools.get(name);
+            if (!definition) throw new Error(`generation.callTool: there is no tool named "${name}".`);
+            return definition.action(params?.args ?? {});
+        }),
         host.own.register('generation.reportToolCall', params => reportToolCall(params)),
         host.own.register('generation.reportToolResult', params => reportToolResult(params)),
         /** Держим ли мы отправку прямо сейчас — панель спрашивает, а не догадывается. */
@@ -397,7 +416,7 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
         unregister: async () => {
             stop();
             await uninstall().catch(() => {});
-            for (const name of [...registeredTools]) await unregisterTool(name).catch(() => {});
+            for (const name of [...registeredTools.keys()]) await unregisterTool(name).catch(() => {});
             for (const unregister of unregisters) unregister();
         },
     };

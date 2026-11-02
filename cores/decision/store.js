@@ -10,6 +10,9 @@ import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-setting
 export function createDecisionStore({ call, publishEvent }) {
     let blocks = [];
     let runs = {};
+    let log = [];
+    let logArchive = [];
+    let roster = { active: [] };
     let tail = Promise.resolve();
 
     function enqueue(task) {
@@ -40,15 +43,56 @@ export function createDecisionStore({ call, publishEvent }) {
         return out;
     }
 
+    function sanitizeCycles(value) {
+        return (Array.isArray(value) ? value : []).filter(cycle => cycle && typeof cycle === 'object');
+    }
+
     async function reload() {
-        const [storedBlocks, storedRuns] = await Promise.all([
+        const [storedBlocks, storedRuns, storedLog, storedArchive, storedRoster] = await Promise.all([
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'blocks', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', fallback: [] }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'roster', fallback: { active: [] } }),
         ]);
         blocks = sanitizeBlocks(storedBlocks);
         runs = sanitizeRuns(storedRuns);
+        log = sanitizeCycles(storedLog);
+        logArchive = sanitizeCycles(storedArchive);
+        roster = { active: Array.isArray(storedRoster?.active) ? storedRoster.active.map(String) : [] };
         publishEvent('decision.blocks.changed', { count: blocks.length });
-        return { blocks, runs };
+        return { blocks, runs, log };
+    }
+
+    /**
+     * Дописать цикл в лог. Через ту же очередь, что и прогоны: лог не должен
+     * терять запись, если рядом сохраняется решение.
+     */
+    function appendCycle(cycle) {
+        return enqueue(async () => {
+            log = [...log, cycle];
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
+            return cycle;
+        });
+    }
+
+    function saveRoster(next) {
+        return enqueue(async () => {
+            roster = { active: [...new Set((Array.isArray(next?.active) ? next.active : []).map(String).map(name => name.trim()).filter(Boolean))] };
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'roster', value: roster });
+            return roster;
+        });
+    }
+
+    /** Заменить лог (после хранения thinking/архива). Архив — отдельным ключом, чтобы он не искал старые записи. */
+    function saveLog(next, { archived = [] } = {}) {
+        return enqueue(async () => {
+            log = sanitizeCycles(next);
+            if (archived.length) logArchive = [...logArchive, ...sanitizeCycles(archived)];
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
+            if (archived.length) await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', value: logArchive });
+            return log;
+        });
     }
 
     function lastRun() {
@@ -77,5 +121,15 @@ export function createDecisionStore({ call, publishEvent }) {
         });
     }
 
-    return { reload, persist, lastRun, blocks: () => blocks, runs: () => runs };
+    return {
+        reload, persist, lastRun,
+        blocks: () => blocks,
+        runs: () => runs,
+        cycles: () => log,
+        archive: () => logArchive,
+        roster: () => ({ active: [...roster.active] }),
+        saveRoster,
+        appendCycle,
+        saveLog,
+    };
 }
