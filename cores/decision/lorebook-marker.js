@@ -24,7 +24,8 @@ function chooseWorker({ getSettings, getWorkers }) {
 }
 
 export function createLorebookMarker({ call, getSettings, getWorkers, publishEvent }) {
-    async function mark({ book, entries, cardHint = '' }) {
+    /** `entries` — записи для разметки (новые и изменённые); `sectionsFrom` — вся книга, чтобы разделы были видны целиком. */
+    async function mark({ book, entries, cardHint = '', sectionsFrom = null }) {
         const worker = chooseWorker({ getSettings, getWorkers });
         const list = Array.isArray(entries) ? entries : [];
         const byUid = new Map(list.map(entry => [Number(entry.uid), entry]));
@@ -34,7 +35,7 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
         const prompt = fillPrompt(LOREBOOK_MARKER, {
             book: text(book) || 'Lorebook',
             card_hint: text(cardHint),
-            sections: lorebookSections(list).join(', ') || 'none',
+            sections: lorebookSections(Array.isArray(sectionsFrom) ? sectionsFrom : list).join(', ') || 'none',
             entries: lines,
         });
         const marks = [];

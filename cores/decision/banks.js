@@ -1,4 +1,4 @@
-import { bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, lorebookHash } from '../../libraries/core/decision-banks.js';
+import { bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking } from '../../libraries/core/decision-banks.js';
 import { createBankStore } from './bank-store.js';
 import { createBankTasks } from './bank-tasks.js';
 import { createLorebookMarker } from './lorebook-marker.js';
@@ -39,11 +39,16 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         }
         const cardHint = (Array.isArray(cards) ? cards : []).map(card => [card.name, ...(card.tags ?? [])].filter(Boolean).join(' — ')).filter(Boolean).join('; ');
         for (const [book, list] of byBook) {
-            const sourceHash = lorebookHash(list);
-            if (stored[book]?.sourceHash === sourceHash) continue;
+            const plan = planLorebookMarking(stored[book], list);
+            const record = marks => ({ sourceHash: plan.sourceHash, entryHashes: plan.entryHashes, marks, at: now() });
+            if (!plan.toMark.length) {
+                // Ничего нового: удалённые записи просто теряют отметки, запрос не нужен.
+                if (stored[book]?.sourceHash !== plan.sourceHash || !stored[book]?.entryHashes) await bankStore.saveMarks({ ...bankStore.marks(), [book]: record(plan.kept) });
+                continue;
+            }
             try {
-                const result = await marker.mark({ book, entries: list, cardHint });
-                await bankStore.saveMarks({ ...bankStore.marks(), [book]: { sourceHash, marks: result.marks, at: now() } });
+                const result = await marker.mark({ book, entries: plan.toMark, sectionsFrom: list, cardHint });
+                await bankStore.saveMarks({ ...bankStore.marks(), [book]: record([...plan.kept, ...result.marks]) });
             } catch (error) {
                 const message = `Lorebook "${book}" was not marked (${error?.message ?? error}); using sections.`;
                 markWarnings.push(message);

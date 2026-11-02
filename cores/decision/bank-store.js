@@ -11,7 +11,9 @@ function sanitizeMarks(value) {
     const out = {};
     for (const [book, record] of Object.entries(value && typeof value === 'object' && !Array.isArray(value) ? value : {})) {
         if (!record || typeof record !== 'object' || !Array.isArray(record.marks)) continue;
-        out[book] = { sourceHash: String(record.sourceHash ?? ''), marks: record.marks.filter(mark => mark && mark.uid !== undefined && String(mark.name ?? '').trim()), at: Number(record.at) || 0 };
+        const entryHashes = record.entryHashes && typeof record.entryHashes === 'object' && !Array.isArray(record.entryHashes)
+            ? Object.fromEntries(Object.entries(record.entryHashes).map(([uid, hash]) => [String(uid), String(hash)])) : null;
+        out[book] = { sourceHash: String(record.sourceHash ?? ''), marks: record.marks.filter(mark => mark && mark.uid !== undefined && String(mark.name ?? '').trim()), at: Number(record.at) || 0, ...(entryHashes ? { entryHashes } : {}) };
     }
     return out;
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCharacterBanks } from '../cores/decision/banks.js';
-import { characterLorebookEntries, bankSourcesForChat, hashText } from '../libraries/core/decision-banks.js';
+import { characterLorebookEntries, bankSourcesForChat, hashText, planLorebookMarking, lorebookHash } from '../libraries/core/decision-banks.js';
 
 const CARD = { avatar: 'Aria.png', name: 'Aria', description: 'A courier.', personality: 'Quiet.', scenario: 'A rain-soaked port.', mes_example: '<START>\n{{char}}: "Rain."' };
 const PERSONA = { avatar: 'me.png', name: 'Me', description: 'A traveller in a grey coat.' };
@@ -182,7 +182,7 @@ test('the director marks a villain outside the characters section; the marked en
     assert.equal(world.banks.records().some(record => record.sourceKey === 'lorebook:Story:3'), false, 'an unmarked group entry is not a character');
 });
 
-test('marking is cached by the book hash: an unchanged book is not marked again, a changed one is', async () => {
+test('marking is cached per entry: an unchanged book is not marked again, a changed entry is', async () => {
     const entries = [{ book: 'Story', uid: 1, comment: 'Rem', content: 'A demon maid.' }];
     const world = fakeWorld({ entries, markReply: [{ uid: 1, name: 'Rem', importance: 'minor' }], failName: null });
     await world.banks.ensureColdStart();
@@ -193,7 +193,7 @@ test('marking is cached by the book hash: an unchanged book is not marked again,
     entries[0].content = 'A demon maid with a new scar.';
     await newChat(world);
     await world.banks.ensureColdStart();
-    assert.equal(world.markCalls.length, 2, 'a changed book is marked again');
+    assert.equal(world.markCalls.length, 2, 'a changed entry is marked again');
 });
 
 test('when marking fails, the section fallback is used and the cold start carries a warning', async () => {
@@ -229,4 +229,40 @@ test('the franchise from the marking reaches the subagent prompt, and an empty f
     const original = fakeWorld({ entries, markReply: [{ uid: 1, name: 'Rem', importance: 'minor', franchise: '' }], failName: null });
     await original.banks.ensureColdStart();
     assert.match(original.calls.at(-1).system, /FRANCHISE: \n/);
+});
+
+test('a new lorebook entry is the only one sent for marking; the marks of the old entries are kept', async () => {
+    const entries = [
+        { book: 'Story', uid: 1, comment: 'Rem (Still comatose lmao)', content: 'A demon maid.' },
+        { book: 'Story', uid: 2, comment: 'The Mansion', content: 'A big house.' },
+    ];
+    const world = fakeWorld({ entries, markReply: [{ uid: 1, name: 'Rem', importance: 'key' }], failName: null });
+    await world.banks.ensureColdStart();
+    assert.equal(world.markCalls.length, 1);
+
+    entries.push({ book: 'Story', uid: 3, comment: 'Alley ambush fight', content: 'The memory graph wrote this event.' });
+    await newChat(world);
+    await world.banks.ensureColdStart();
+    assert.equal(world.markCalls.length, 2);
+    const sent = JSON.stringify(world.markCalls[1].messages);
+    assert.match(sent, /Alley ambush fight/);
+    assert.doesNotMatch(sent, /1 \| Rem \(Still comatose/, 'old entries are not sent again');
+    assert.doesNotMatch(sent, /The Mansion/, 'old entries are not sent again');
+    const rem = world.banks.records().find(record => record.sourceKey === 'lorebook:Story:1');
+    assert.equal(rem.name, 'Rem', 'the old mark survives the new marking');
+});
+
+test('the marking plan drops marks of removed and changed entries and treats a matching legacy record as fully reviewed', () => {
+    const list = [
+        { uid: 1, comment: 'Rem', content: 'A demon maid.' },
+        { uid: 2, comment: 'Ram', content: 'Her sister, edited.' },
+    ];
+    const legacy = { sourceHash: lorebookHash(list), marks: [{ uid: 1, name: 'Rem' }, { uid: 2, name: 'Ram' }] };
+    assert.equal(planLorebookMarking(legacy, list).toMark.length, 0, 'a legacy record that matches the whole book needs no request');
+
+    const first = planLorebookMarking(null, [{ uid: 1, comment: 'Rem', content: 'A demon maid.' }, { uid: 2, comment: 'Ram', content: 'Her sister.' }, { uid: 9, comment: 'Gone', content: 'Removed later.' }]);
+    const stored = { ...first, marks: [{ uid: 1, name: 'Rem' }, { uid: 2, name: 'Ram' }, { uid: 9, name: 'Gone' }] };
+    const plan = planLorebookMarking(stored, list);
+    assert.deepEqual(plan.toMark.map(entry => entry.uid), [2], 'only the changed entry is marked again');
+    assert.deepEqual(plan.kept.map(mark => mark.uid), [1], 'the changed and the removed entries lose their old marks');
 });

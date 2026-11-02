@@ -96,6 +96,32 @@ export function lorebookHash(entries) {
     return hashText(list.join('\n'));
 }
 
+/** Хеш одной записи: по нему разметка понимает, какие записи новые или изменились. */
+export function lorebookEntryHash(entry) {
+    return hashText(`${entry?.uid}|${text(entry?.comment)}|${entryKeys(entry).join(',')}|${text(entry?.content)}`);
+}
+
+/**
+ * План разметки книги ПО ЗАПИСЯМ, а не по всей книге: граф памяти постоянно дописывает в лорбук новые записи, и
+ * перемечать из-за этого всю книгу (сотни записей) было бы дорого. Директору уходят только новые и изменённые
+ * записи; отметки неизменённых сохраняются, отметки удалённых пропадают. Старая запись хранилища без хешей записей,
+ * совпадающая с книгой целиком, считается проверенной полностью.
+ * @returns {{ toMark: object[], kept: object[], entryHashes: Record<string, string>, sourceHash: string }}
+ */
+export function planLorebookMarking(record, entries) {
+    const list = Array.isArray(entries) ? entries : [];
+    const entryHashes = Object.fromEntries(list.map(entry => [String(entry?.uid), lorebookEntryHash(entry)]));
+    const sourceHash = lorebookHash(list);
+    let reviewed = record?.entryHashes && typeof record.entryHashes === 'object' ? record.entryHashes : null;
+    if (!reviewed && record?.sourceHash === sourceHash) reviewed = entryHashes;
+    reviewed = reviewed ?? {};
+    const toMark = list.filter(entry => reviewed[String(entry?.uid)] !== entryHashes[String(entry?.uid)]);
+    const changed = new Set(toMark.map(entry => String(entry?.uid)));
+    const kept = (Array.isArray(record?.marks) ? record.marks : [])
+        .filter(mark => entryHashes[String(mark?.uid)] !== undefined && !changed.has(String(mark?.uid)));
+    return { toMark, kept, entryHashes, sourceHash };
+}
+
 function bookMarkList(marks, book) {
     if (!marks || typeof marks !== 'object') return null;
     const record = marks[book];
