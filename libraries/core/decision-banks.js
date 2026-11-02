@@ -51,8 +51,15 @@ export function lorebookSourceText(entry = {}) {
 }
 
 /** Запись банка: базовый слой и копия чата отличаются лишь `status`/`rawSource`. */
-export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now() }) {
+/**
+ * Версия сборщика банков. Банк старее этой версии не считается готовым и пересобирается: так банки, собранные, пока
+ * веб-поиск субагента был сломан (в них лежала служебная строка «The researcher returned no report.»), уходят сами.
+ */
+export const BANK_BUILDER_VERSION = 2;
+
+export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0 }) {
     return {
+        builderVersion: Number(builderVersion) || 0,
         sourceKey: String(sourceKey ?? ''), sourceKind: String(sourceKind ?? ''),
         name: text(name), sourceHash: String(sourceHash ?? ''), text: String(bankText ?? ''),
         sizeBand: sizeBand === 'key' ? 'key' : 'minor', rawSource: String(rawSource ?? ''), examples: String(examples ?? ''),
@@ -63,7 +70,9 @@ export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text
     };
 }
 
-export function bankIsReady(record) { return Boolean(record && record.status === 'ready' && text(record.text)); }
+export function bankIsReady(record) {
+    return Boolean(record && record.status === 'ready' && text(record.text) && (record.sourceKind === 'manual' || Number(record.builderVersion) >= BANK_BUILDER_VERSION));
+}
 
 export function bankMatches(record, sourceHash) {
     return Boolean(record && record.sourceHash === sourceHash);

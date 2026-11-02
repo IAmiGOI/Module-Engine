@@ -73,14 +73,15 @@ function taskId(now, rid) {
     return `res_${now.toString(36)}_${rid().toString(36).slice(2, 8)}`;
 }
 
-export function createResearcher({ call, getSettings, getWorkers, store, publishEvent, now = () => Date.now(), rid = Math.random }) {
+export function createResearcher({ call, callService = call, getSettings, getWorkers, store, publishEvent, now = () => Date.now(), rid = Math.random }) {
     const running = new Map();
+    const NUDGE = 'Call finish now with your report. Put the whole report into its "report" field.';
 
     async function execute(name, args) {
-        if (name === 'web_search') return call('stWebSearch.search', { query: args.query });
-        if (name === 'web_open') return call('stWebSearch.open', { url: args.url });
-        if (name === 'web_view') return call('stWebSearch.view', { id: args.id, section: args.section, offset: args.offset, chars: args.chars });
-        if (name === 'web_find') return call('stWebSearch.find', { id: args.id, query: args.query });
+        if (name === 'web_search') return callService('stWebSearch.search', { query: args.query });
+        if (name === 'web_open') return callService('stWebSearch.open', { url: args.url });
+        if (name === 'web_view') return callService('stWebSearch.view', { id: args.id, section: args.section, offset: args.offset, chars: args.chars });
+        if (name === 'web_find') return callService('stWebSearch.find', { id: args.id, query: args.query });
         if (name === 'finish') return { ok: true };
         return { ok: false, error: `There is no researcher tool named "${name}".` };
     }
@@ -93,24 +94,33 @@ export function createResearcher({ call, getSettings, getWorkers, store, publish
 
     async function runTask(task, settings, { system = null } = {}) {
         const worker = workerFor(settings);
+        const maxSteps = Math.max(1, Number(task.maxSteps) || settings.researcher.maxSteps);
         let report = '';
         let steps = 0;
         let failure = null;
+        let nudged = false;
         const trace = [];
-        const systemPrompt = system || fillPrompt(RESEARCHER_SYSTEM, { steps: settings.researcher.maxSteps });
+        const systemPrompt = system || fillPrompt(RESEARCHER_SYSTEM, { steps: maxSteps });
         const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: `RESEARCH TASK:\n\n${task.task}` }];
         try {
             if (!worker) throw new Error('no researcher worker is configured');
             if (worker.format !== 'openai') throw new Error(`the researcher needs an "openai" worker, "${worker.id}" is "${worker.format}"`);
-            while (steps < settings.researcher.maxSteps && !report) {
+            while (steps < maxSteps && !report) {
                 steps += 1;
                 const answer = await call('model.generate', {
                     workerId: worker.id, messages, tools: RESEARCH_TOOLS, toolChoice: 'auto',
-                    stream: false, returnMessage: true, maxTokens: 2000,
+                    stream: false, returnMessage: true, maxTokens: Number(task.maxTokens) || 2000,
                 });
                 const calls = Array.isArray(answer?.toolCalls) ? answer.toolCalls : [];
                 const text = String(answer?.text ?? '');
-                if (!calls.length) { report = text.trim() || 'The researcher returned no report.'; break; }
+                if (!calls.length) {
+                    if (text.trim()) { report = text.trim(); break; }
+                    // Пустой ответ без инструмента (часто: ризонинг съел лимит) — один раз просим finish, потом сдаёмся.
+                    if (nudged) throw new Error('the model returned no report');
+                    nudged = true;
+                    messages.push({ role: 'user', content: NUDGE });
+                    continue;
+                }
                 messages.push(assistantToolMessage({ text, toolCalls: calls }));
                 for (const toolCall of calls) {
                     const args = toolCall.arguments ?? {};
@@ -123,11 +133,16 @@ export function createResearcher({ call, getSettings, getWorkers, store, publish
                     }
                     trace.push({ name: toolCall.name, args, comment: String(args.comment ?? ''), result, error: problem ?? result?.error ?? null, at: now() });
                     messages.push(toolResultMessage(toolCall, result));
-                    if (toolCall.name === 'finish' && !problem) { report = String(args.report ?? '').trim() || 'The researcher finished without text.'; break; }
+                    if (toolCall.name === 'finish' && !problem) {
+                        report = String(args.report ?? '').trim();
+                        if (!report) throw new Error('the researcher finished without text');
+                        break;
+                    }
                 }
             }
-            if (!report) report = `The researcher reached the ${settings.researcher.maxSteps}-step limit without a report.`;
+            if (!report) throw new Error(`the ${maxSteps}-step limit was reached without a report`);
         } catch (error) {
+            // Отказ — это ошибка задачи, а не её отчёт: иначе служебная строка становилась «готовым» дата-банком.
             failure = error?.message ?? String(error);
             report = `The researcher failed: ${failure}`;
         }
@@ -139,17 +154,26 @@ export function createResearcher({ call, getSettings, getWorkers, store, publish
     }
 
     /** Ставит задачу и сразу возвращает id. Третья задача — отказ, не ожидание. */
-    function start({ task, system = null, kind = 'research', notify = true } = {}) {
+    /**
+     * Ставит задачу и сразу возвращает id. Задачи директора — не больше `maxTasks`, третья — отказ, не ожидание.
+     * Сборка дата-банков (`kind: 'bank'`) — свой лимит `bankConcurrency` и не занимает места исследований директора.
+     */
+    function start({ task, system = null, kind = 'research', notify = true, maxSteps = null, maxTokens = null } = {}) {
         const settings = getSettings();
         const text = String(task ?? '').trim();
         if (!text) return { ok: false, error: 'A researcher task needs text.' };
-        if (running.size >= settings.researcher.maxTasks) return { ok: false, error: 'Two research tasks are already running — wait for their reports, do not queue a third.' };
-        const record = { id: taskId(now(), rid), task: text, kind, notify: notify !== false, status: 'running', steps: 0, startedAt: now(), report: null };
+        const isBank = kind === 'bank';
+        const sameKind = [...running.values()].filter(item => (item.kind === 'bank') === isBank).length;
+        const limit = isBank ? Math.max(1, Number(settings.researcher.bankConcurrency) || 4) : settings.researcher.maxTasks;
+        if (sameKind >= limit) {
+            return { ok: false, error: isBank ? 'The bank builders are all busy.' : 'Two research tasks are already running — wait for their reports, do not queue a third.' };
+        }
+        const record = { id: taskId(now(), rid), task: text, kind, notify: notify !== false, status: 'running', steps: 0, startedAt: now(), report: null, maxSteps, maxTokens };
         running.set(record.id, record);
         store.addResearch(record).catch(() => {});
         const done = runTask(record, settings, { system });
         return { ok: true, taskId: record.id, done };
     }
 
-    return { start, running: () => running.size, tasks: () => store.research() };
+    return { start, running: () => [...running.values()].filter(item => item.kind !== 'bank').length, tasks: () => store.research() };
 }

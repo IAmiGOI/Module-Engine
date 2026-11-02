@@ -181,3 +181,53 @@ test('the core exposes spawn_researcher, refuses a third task, and wakes for the
     assert.ok(core.research().every(task => task.status === 'done'));
     assert.ok(calls.some(params => String(params.messages?.[0]?.content ?? '').includes('background researcher')));
 });
+
+function splitBusHarness(reply) {
+    const memory = { tasks: [] };
+    const store = {
+        research: () => memory.tasks,
+        addResearch: async task => { memory.tasks = [...memory.tasks, task]; return memory.tasks; },
+        updateResearch: async (id, patch) => { memory.tasks = memory.tasks.map(task => (task.id === id ? { ...task, ...patch } : task)); return memory.tasks; },
+    };
+    const services = [];
+    const call = async (contract, params) => {
+        if (contract.startsWith('stWebSearch.')) throw new Error(`No supplier registered for contract "${contract}".`);
+        if (contract === 'model.generate') return reply(params);
+        throw new Error(`unexpected ${contract}`);
+    };
+    const callService = async (contract, params) => { services.push(contract); return { source: 'web', results: [{ title: 'Rem', url: 'https://wiki', snippet: 'A maid.' }] }; };
+    const settings = { researcher: { workerId: 'web', maxTasks: 2, maxSteps: 6, bankConcurrency: 4 } };
+    const researcher = createResearcher({ call, callService, getSettings: () => settings, getWorkers: () => [{ id: 'web', format: 'openai' }], store, publishEvent: () => {} });
+    return { researcher, services };
+}
+
+test('the web tools go through the services bus, not the cores bus', async () => {
+    let step = 0;
+    const { researcher, services } = splitBusHarness(() => {
+        step += 1;
+        if (step === 1) return { text: '', toolCalls: [{ id: 's', name: 'web_search', arguments: { query: 'Rem Re:Zero', comment: 'I need the canon.' } }] };
+        return { text: '', toolCalls: [{ id: 'f', name: 'finish', arguments: { report: '***Rem***', comment: 'The bank is ready.' } }] };
+    });
+    const done = await researcher.start({ task: 'Build the bank.' }).done;
+    assert.deepEqual(services, ['stWebSearch.search']);
+    assert.equal(done.error, null);
+    assert.equal(done.trace[0].error, null, 'the search succeeded instead of "No supplier registered"');
+    assert.equal(done.report, '***Rem***');
+});
+
+test('an empty answer gets one nudge to finish; a second empty answer is a failure, never a report', async () => {
+    let step = 0;
+    const { researcher } = splitBusHarness(() => { step += 1; return { text: '', toolCalls: [] }; });
+    const done = await researcher.start({ task: 'Build the bank.', kind: 'bank' }).done;
+    assert.equal(step, 2, 'one nudge, then give up');
+    assert.match(done.error, /no report/);
+});
+
+test('bank builders have their own limit and do not take the two director research slots', () => {
+    const { researcher } = splitBusHarness(() => new Promise(() => {}));
+    for (let index = 0; index < 4; index += 1) assert.equal(researcher.start({ task: `bank ${index}`, kind: 'bank' }).ok, true);
+    assert.equal(researcher.start({ task: 'bank 5', kind: 'bank' }).ok, false);
+    assert.equal(researcher.start({ task: 'director one' }).ok, true);
+    assert.equal(researcher.start({ task: 'director two' }).ok, true);
+    assert.equal(researcher.start({ task: 'director three' }).ok, false);
+});

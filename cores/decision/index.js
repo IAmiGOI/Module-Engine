@@ -47,18 +47,20 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return result.value;
     };
     const store = createDecisionStore({ call, publishEvent });
-    const researcher = createResearcher({
-        call: callStrict,
-        getSettings: () => settings,
-        getWorkers: () => workers,
-        store,
-        publishEvent,
-    });
     const callService = async (contract, params) => {
         const result = await request(host.services, contract, { params });
         if (!result.ok) throw new Error(result.error.message);
         return result.value;
     };
+    // Веб-инструменты — Сервис (`stWebSearch.*`), а не контракт Ядра: через `call` их не было вовсе («No supplier registered»).
+    const researcher = createResearcher({
+        call: callStrict,
+        callService,
+        getSettings: () => settings,
+        getWorkers: () => workers,
+        store,
+        publishEvent,
+    });
     const banks = createCharacterBanks({ call, callService, getSettings: () => settings, getWorkers: () => workers, store, researcher, publishEvent });
     const cycle = createDecisionCycle({
         call: callStrict,

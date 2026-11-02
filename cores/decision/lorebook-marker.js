@@ -9,6 +9,8 @@ import { lorebookSections } from '../../libraries/core/decision-banks.js';
  * Ошибка/пустой ответ — сигнал вызывающему перейти на запасной путь.
  */
 const text = value => String(value ?? '').trim();
+// Ответ — вызов с записью на каждого персонажа (имя, алиасы, важность): на большой книге это тысячи токенов, а
+// ризонинг воркера директора тратит тот же лимит. С 1600 вызов обрезался, и разметка молча уходила в запасной путь.
 
 function entryKeys(entry) {
     return [entry?.key, entry?.keys].flatMap(value => (Array.isArray(value) ? value : String(value ?? '').split(','))).map(text).filter(Boolean);
@@ -45,7 +47,7 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
             messages: [{ role: 'system', content: prompt }],
             tools: [MARK_LOREBOOK_CHARACTERS_TOOL, AWAIT_TOOL],
             generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', {
-                workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 1600, temperature: 0,
+                workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 8000, temperature: 0,
             })),
             handlers: {
                 mark_lorebook_characters: args => {
