@@ -147,10 +147,25 @@ export function renderFullTurns(turns) {
     return (Array.isArray(turns) ? turns : []).map(turn => renderTurn(turn)).filter(Boolean).join('\n\n');
 }
 
+/** Каждый ход — отдельным сообщением: дописывание нового не меняет предыдущие. */
+export function fullTurnMessages(turns) {
+    return (Array.isArray(turns) ? turns : [])
+        .map(turn => ({ role: 'system', content: renderTurn(turn) }))
+        .filter(message => message.content);
+}
+
 /** Сжатая часть префикса: только уже дописанные записи, порядок не меняется. */
 export function renderCompressedDigests(records) {
     const body = (Array.isArray(records) ? records : []).map(record => text(record?.text)).filter(Boolean).join('\n\n');
     return body ? `EARLIER TURNS (compressed):\n\n${body}` : '';
+}
+
+/** По сообщению на запись: новая запись дописывается, прежние байт в байт те же. */
+export function compressedDigestMessages(records) {
+    const list = (Array.isArray(records) ? records : [])
+        .map(record => ({ role: 'system', content: text(record?.text) }))
+        .filter(message => message.content);
+    return list.length ? [{ role: 'system', content: 'EARLIER TURNS (compressed):' }, ...list] : [];
 }
 
 /**

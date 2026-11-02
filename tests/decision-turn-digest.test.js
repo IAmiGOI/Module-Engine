@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCycleRecord } from '../libraries/core/decision-log.js';
 import {
-    buildTurnDigest, groupTurns, renderCompressedDigests, renderFullTurns,
+    buildTurnDigest, compressedDigestMessages, groupTurns, renderCompressedDigests, renderFullTurns,
 } from '../libraries/core/decision-turn-digest.js';
 
 function call(name, args, result, extra = {}) {
@@ -91,4 +91,9 @@ test('the compressed prefix renders stored records in order and is byte-identica
     assert.equal(first, second);
     assert.match(first, /^EARLIER TURNS \(compressed\):/);
     assert.ok(first.indexOf('TURN 2 (compressed)') < first.indexOf('message edited by the user'));
+
+    const messages = compressedDigestMessages(records);
+    assert.equal(messages.length, 3, 'a header and one message per record');
+    assert.equal(messages[0].content, 'EARLIER TURNS (compressed):');
+    assert.deepEqual(messages.slice(1).map(message => message.content), records.map(record => record.text));
 });

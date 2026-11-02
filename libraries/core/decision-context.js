@@ -1,7 +1,9 @@
 import { chatToMessages } from './chat-to-messages.js';
 import { planSection, arcsSection, notesSection, notesAsBlocks } from './decision-state.js';
 import { DIRECTOR_SYSTEM, DIRECTOR_TURN, WRITER_SYSTEM, WRITER_PUSH, fillPrompt } from './decision-prompts.js';
-import { renderCompressedDigests, renderFullTurns } from './decision-turn-digest.js';
+import {
+    compressedDigestMessages, fullTurnMessages, renderCompressedDigests, renderFullTurns,
+} from './decision-turn-digest.js';
 
 /**
  * Сборка контекстов директора и прозаика — чистые функции над уже
@@ -175,24 +177,30 @@ export function buildDeciderContext({
     // Порядок — от неизменного к меняющемуся и только дописываемому:
     // банки и лорбук почти не меняются, сжатые ходы дописываются в конец,
     // два полных хода — окно, дальше всё изменяемое и история.
-    const parts = [
-        String(banksText ?? '').trim(),
-        String(lorebookText ?? '').trim(),
-        renderCompressedDigests(digests),
-        renderFullTurns(turns),
+    const head = [String(banksText ?? '').trim(), String(lorebookText ?? '').trim()].filter(Boolean);
+    const state = [
         planSection(plan), arcsSection(arcs), notesSection(notes), rosterSection(roster),
         String(libraryText ?? '').trim(), String(bankText ?? '').trim(),
         summariesSection(summaries), String(researchText ?? '').trim(),
     ].filter(Boolean);
+    const sections = [
+        ...head.map(content => ({ role: 'system', content })),
+        ...compressedDigestMessages(digests),
+        ...fullTurnMessages(turns),
+        ...state.map(content => ({ role: 'system', content })),
+    ];
     const baseTask = String(task ?? '').trim() || DIRECTOR_TURN;
     const turnTask = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
     const messages = [
         { role: 'system', content: DIRECTOR_SYSTEM },
-        ...parts.map(content => ({ role: 'system', content })),
+        ...sections,
         ...history,
         { role: 'user', content: turnTask },
     ];
-    const prompt = [DIRECTOR_SYSTEM, ...parts, renderHistory(history), turnTask].filter(Boolean).join('\n\n');
+    const prompt = [
+        DIRECTOR_SYSTEM, ...head, renderCompressedDigests(digests), renderFullTurns(turns),
+        ...state, renderHistory(history), turnTask,
+    ].filter(Boolean).join('\n\n');
     return { systemPrompt: DIRECTOR_SYSTEM, messages, prompt };
 }
 

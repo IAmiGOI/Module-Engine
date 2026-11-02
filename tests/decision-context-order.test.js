@@ -27,21 +27,21 @@ test('two adjacent turns with unchanged banks, lorebook and turns share the whol
     const previous = context({ chat: [{ mes: 'older', is_user: true }] });
     const next = context({ chat: [{ mes: 'newer', is_user: true }] });
     const comparison = compareRequests(previous.messages, next.messages);
-    assert.equal(comparison.sharedMessages, 6, 'system, banks, lorebook, compressed, the full turn and the plan all match');
-    assert.equal(comparison.culprit.index, 6, 'the first difference is the history, not the mutable state');
+    assert.equal(comparison.sharedMessages, 7, 'system, banks, lorebook, the compressed header, the digest, the full turn and the plan all match');
+    assert.equal(comparison.culprit.index, 7, 'the first difference is the history, not the mutable state');
 });
 
 test('a changed plan or notes does not touch the prefix before it', () => {
     const base = context({ chat: [{ mes: 'same', is_user: true }] });
     const changedPlan = context({ chat: [{ mes: 'same', is_user: true }], plan: 'a different plan' });
     const planComparison = compareRequests(base.messages, changedPlan.messages);
-    assert.equal(planComparison.culprit.index, 5, 'the plan is the first mutable part after the full turn');
-    assert.match(base.messages[5].content, /the same plan/);
-    assert.match(changedPlan.messages[5].content, /a different plan/);
+    assert.equal(planComparison.culprit.index, 6, 'the plan is the first mutable part after the full turn');
+    assert.match(base.messages[6].content, /the same plan/);
+    assert.match(changedPlan.messages[6].content, /a different plan/);
 
     const changedNotes = context({ chat: [{ mes: 'same', is_user: true }], notes: { aria: [{ title: 'Goal', text: 'Find the exit.' }] } });
     const notesComparison = compareRequests(base.messages, changedNotes.messages);
-    assert.equal(notesComparison.culprit.index, 6, 'notes come after the plan and arcs; the history moves once they exist');
+    assert.equal(notesComparison.culprit.index, 7, 'notes come after the plan and arcs; the history moves once they exist');
 });
 
 test('the custom user block still sits two cycles from the end of the history, after the mutable state', () => {
