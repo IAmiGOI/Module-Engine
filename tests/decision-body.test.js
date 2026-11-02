@@ -45,11 +45,13 @@ test('reasoning is removed for every format provider-request.js knows; OpenRoute
 });
 
 test('a Chat Completion body gets the writer messages, keeps every other field, and never touches stream', () => {
-    const body = computeWriterPayload({ model: 'st', temperature: 1, stream: true, max_tokens: 500, messages: [{ role: 'system', content: 'ST assembled' }] }, context, { writer: {} });
+    const body = computeWriterPayload({ model: 'st', temperature: 1, stream: true, max_tokens: 500, reasoning_effort: 'high', include_reasoning: true, messages: [{ role: 'system', content: 'ST assembled' }] }, context, { writer: {} });
     assert.deepEqual(body.messages, context.messages);
     assert.equal(body.stream, true);
     assert.equal(body.max_tokens, 500);
     assert.equal(body.temperature, 1);
+    assert.equal('reasoning_effort' in body, false, 'computeWriterPayload always disables reasoning, even without a sampler override');
+    assert.equal('include_reasoning' in body, false);
 });
 
 test('a Text Completion body gets the flat writer prompt instead of messages', () => {
