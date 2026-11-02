@@ -107,6 +107,7 @@ export function createDecisionStore({ call, publishEvent }) {
             const mesid = String(last?.mesid ?? Math.max(0, record.chatLength));
             const stored = {
                 id: record.runId, mesid, at: Date.now(), type: record.type, decision: record.decision,
+                push: record.push ?? record.decision ?? '', form: record.form ?? null,
                 reasoning: record.reasoning ?? '', steps: record.steps ?? [], workerId: record.workerId ?? null,
                 warnings: record.warnings ?? [],
             };

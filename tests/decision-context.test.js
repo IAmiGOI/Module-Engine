@@ -79,7 +79,7 @@ test('the writer context has no extra user turn: the last message is the history
     const system = context.messages.filter(item => item.role === 'system').map(item => item.content).join('\n');
     assert.match(system, /LONG-TERM SUMMARIES/);
     assert.match(system, /CHARACTER BLOCKS/);
-    assert.match(system, /DECISION FOR THIS TURN/);
+    assert.match(system, /THE DIRECTOR'S PUSH FOR THIS TURN/);
     assert.match(system, /eastern door/);
 });
 

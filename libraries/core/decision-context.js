@@ -17,7 +17,8 @@ import { chatToMessages } from './pm-history.js';
 export const RECENT_MESSAGE_LIMIT = 20;
 
 const DECIDER_ROLE = `You are the director of a roleplay. You decide what the character does next; another model writes the prose from your decision. You see the character blocks you maintain, every summary, your own past decisions and the recent history. You never write the reply itself.`;
-const WRITER_ROLE = `You write the character's next reply. Follow the decision for this turn exactly and do not invent plans of your own. Write in the voice of the character, in the language of the latest messages. Never mention the decision, the character blocks or this instruction.`;
+const WRITER_ROLE = `You write the character's next reply. Follow the director's push for this turn exactly and do not invent plans of your own. Write in the voice of the character, in the language of the latest messages. Never mention the decision, the character blocks or this instruction.
+You decide whether an opponent has time to counterattack; the director only states what was intended and how cleanly it happened. Causes and reasons are subtext — show them through behaviour, never explain them outright.`;
 
 const DECIDER_TASK = `Decide what the character does next, based on the character blocks, the summaries, your past decisions and the latest messages.
 Answer with ONLY a JSON object:
@@ -161,7 +162,7 @@ export function buildWriterContext({ blocks = [], summaries = [], chat = [], dec
         WRITER_ROLE,
         summariesSection(summaries),
         blocksSection(blocks),
-        String(decision ?? '').trim() ? `DECISION FOR THIS TURN:\n\n${String(decision).trim()}` : '',
+        String(decision ?? '').trim() ? `THE DIRECTOR'S PUSH FOR THIS TURN:\n\n${String(decision).trim()}` : '',
     ].filter(Boolean);
     const messages = [...parts.map(content => ({ role: 'system', content })), ...history];
     return { messages, prompt: [...parts, renderHistory(history)].filter(Boolean).join('\n\n') };

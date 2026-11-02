@@ -162,10 +162,11 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         if ((type === 'regenerate' || type === 'swipe') && settings.regen === 'writer') {
             const last = store.lastRun();
             if (last) {
-                pending = { runId, type, chat, chatLength: chat.length, decision: last.decision, edits: [], blocksAfter: store.blocks(), reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true };
+                const push = last.push ?? last.decision;
+                pending = { runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null, edits: [], blocksAfter: store.blocks(), reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true };
                 publishEvent('decision.started', { runId, type, reused: true });
                 publishEvent('decision.completed', { runId, reused: true, edits: 0, blocks: store.blocks().length, workerId: pending.workerId });
-                return { reused: true, decision: last.decision };
+                return { reused: true, decision: push };
             }
         }
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
@@ -180,7 +181,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             const steps = recordStep(runId, { attempt, workerId: result.workerId ?? null, durationMs: Date.now() - startedAt, error: null });
             pending = {
                 runId, type, chat, chatLength: chat.length, decision: result.decision,
-                form: result.form, edits, blocksAfter: applied.blocks, reasoning: captured.value,
+                push: result.push ?? result.decision, form: result.form, edits, blocksAfter: applied.blocks, reasoning: captured.value,
                 warnings: [...(result.warnings ?? []), ...applied.warnings], steps,
                 workerId: result.workerId ?? null, trace: result.trace ?? [],
             };
@@ -199,7 +200,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const payload = input.payload ?? input;
         if (!settings.enabled || !pending || !payload) return payload;
         const summaries = (await call('summary.list')) ?? [];
-        const context = buildWriterContext({ blocks: pending.blocksAfter ?? store.blocks(), summaries, chat: pending.chat, decision: pending.decision });
+        const context = buildWriterContext({ blocks: pending.blocksAfter ?? store.blocks(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision });
         const worker = workers.find(item => item.id === settings.writer.workerId);
         const model = worker && worker.id !== 'st-main' ? String(worker.model ?? '') : '';
         return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;
@@ -267,6 +268,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.own.register('decision.blocks', () => store.blocks().map(block => ({ ...block }))),
             host.own.register('decision.runs', () => ({ ...store.runs() })),
             host.own.register('decision.lastRun', () => store.lastRun()),
+            host.own.register('decision.roster', () => store.roster()),
+            host.own.register('decision.log', () => store.cycles()),
+            host.own.register('decision.archive', () => store.archive()),
             host.own.register('decision.reload', () => reload()),
             host.own.register(DECIDE_CONTRACT, params => decide(params)),
             host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
@@ -284,6 +288,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         settings: () => ({ ...settings, decider: { ...settings.decider }, writer: { ...settings.writer } }),
         blocks: () => store.blocks().map(block => ({ ...block })),
         runs: () => ({ ...store.runs() }),
+        roster: () => store.roster(),
+        log: () => store.cycles(),
+        archive: () => store.archive(),
         unregister: async () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();

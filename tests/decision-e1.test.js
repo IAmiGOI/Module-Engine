@@ -77,18 +77,21 @@ test('the director runs a tool cycle: a Notebook call with a comment, then submi
 });
 
 test('update_roster is persisted and reaches the next context', async () => {
-    const { pipelineCore, core, memory, calls } = await build({
+    const { pipelineCore, memory, calls } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena walks into the scene and can affect it.' }),
-            call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'Lena arrives.', characters: [], scene: { minutes: 1 }, userResult: 'The user waits.' }),
-            call('await', { reason: 'next turn', comment: 'Nothing else happens between turns.' }),
+            call('assess', { character: 'Lena', action: 'arrives', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the form.' }),
+            call('submit_turn', {
+                comment: 'The turn is ready for the writer.',
+                resolution: 'Lena arrives.', scene: { minutes: 1 }, userResult: 'The user waits.',
+                characters: [{ name: 'Lena', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }],
+            }),
         ],
     });
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
-    assert.deepEqual(core.roster?.() ?? memory.get(memoryKey('core.decision', 'roster')), { active: ['Lena'] });
     const stored = memory.get(memoryKey('core.decision', 'roster'));
     assert.deepEqual(stored, { active: ['Lena'] });
-    assert.equal(calls.length, 2, 'the cycle asked the model twice: roster, then the form');
+    assert.equal(calls.length, 3, 'the cycle asked the model three times: roster, assess, form');
 });
 
 test('the writer body carries the form decision and no tools at all', async () => {

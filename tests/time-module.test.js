@@ -676,3 +676,17 @@ test('advance() asks for the live message FRESH at write time, not from a value 
 
     assert.deepEqual(module.badges(), { 6: '11:40 (Morning)' }, 'ушло на настоящее последнее сообщение, а не на то, что запомнилось раньше');
 });
+
+test('a decision.timeShift moves the clock without a model and writes a new mark under the live message', async () => {
+    const { engine, module, live } = buildEngine();
+    await module.load();
+    module.label.set('Day 1, 08:00 (Morning)');
+    live.mesid = '1';
+    engine.events.emit('decision.timeShift', { minutes: 90 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(module.label(), 'Day 1, 09:30 (Morning)');
+    const marks = await new Promise(resolve => engine.registerCaller('probe.time', 'cores', { tier: 'official' }).own.subscribe('chatHistory.annotations', { params: { namespace: MODULE_ID } }, resolve));
+    assert.equal(marks.ok, true);
+    assert.equal(marks.value['1'], 'Day 1, 09:30 (Morning)');
+});
