@@ -1,5 +1,5 @@
 import { createDispatchQueue } from '../../libraries/core/dispatch-queue.js';
-import { buildProviderRequest, resolveProviderResponseText, resolveStreamDelta } from '../../libraries/core/provider-request.js';
+import { buildProviderRequest, resolveProviderResponseMessage, resolveProviderResponseText, resolveStreamDelta } from '../../libraries/core/provider-request.js';
 import { createPersistedList } from '../../libraries/core/persisted-list.js';
 import { request } from '../../libraries/shared/request.js';
 import { buildCustomPreset, resolveGenerateRequest } from './generate-request.js';
@@ -279,6 +279,10 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
 
             publishEvent('model.generate.started', { requestId, workerId: params?.workerId });
             let lastWorkerId = params?.workerId;
+            // Сырое тело последней попытки — нужно, чтобы отдать `tool_calls`
+            // и `finish_reason` тем, кто попросил `returnMessage`. Без флага
+            // ничего не читается, а тело всё равно отбрасывается, как раньше.
+            let lastRaw = null;
             return dispatchQueue.enqueueWithFallback(
                 tiers,
                 (worker, { signal }) => {
@@ -287,7 +291,10 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                         stream: params?.stream !== false,
                         stallMs, signal,
                         onChunk: (delta, text) => publishEvent('model.generate.chunk', { requestId, workerId: worker.id, delta, text }),
-                        onRaw: raw => publishEvent('model.generate.raw', { requestId, workerId: worker.id, ...raw }),
+                        onRaw: raw => {
+                            lastRaw = { format: raw.format, body: raw.body };
+                            publishEvent('model.generate.raw', { requestId, workerId: worker.id, ...raw });
+                        },
                     });
                 },
                 {
@@ -304,7 +311,17 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     }),
                 },
             ).then(
-                text => { publishEvent('model.generate.finished', { requestId, workerId: lastWorkerId, text }); return text; },
+                text => {
+                    publishEvent('model.generate.finished', { requestId, workerId: lastWorkerId, text });
+                    // `returnMessage` — строго opt-in: без него возвращается та
+                    // же строка, что и раньше, и ни один старый вызывающий не
+                    // замечает разницы.
+                    if (params?.returnMessage === true) {
+                        const message = lastRaw ? resolveProviderResponseMessage(lastRaw.format, lastRaw.body) : { text, toolCalls: [], finishReason: null };
+                        return { text: text ?? message.text, toolCalls: message.toolCalls, finishReason: message.finishReason };
+                    }
+                    return text;
+                },
                 error => { publishEvent('model.generate.failed', { requestId, error: { message: error.message } }); throw error; },
             ).finally(() => { cancellers.delete(requestId); });
         }),

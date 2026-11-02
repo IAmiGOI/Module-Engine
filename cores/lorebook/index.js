@@ -1,5 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
-import { resolveBookNames, matchesFilter, mergeBooks, nextUid, blankEntry } from '../../libraries/core/lorebook-sources.js';
+import { resolveBookNames, matchesFilter, mergeBooks, nextUid, blankEntry, searchEntries } from '../../libraries/core/lorebook-sources.js';
 
 const PERSISTENCE_NAMESPACE = 'core.lorebook';
 const PUBLISHED_KEY = 'published';
@@ -327,12 +327,17 @@ export function createLorebookCore(host, { publish } = {}) {
     const unregisters = [
         host.own.register('lorebook.scan', () => scan()),
         host.own.register('lorebook.find', params => find(params)),
+        host.own.register('lorebook.search', params => {
+            const all = [...byUid.values()];
+            const pool = params?.book ? all.filter(entry => entry.book === params.book) : all;
+            return searchEntries(pool, params?.query, { limit: params?.limit });
+        }),
         host.own.register('lorebook.get', params => { const { uid, book } = requireEntryLocation(params); return getEntry(uid, book); }),
         host.own.register('lorebook.books', () => books),
         host.own.register('lorebook.read', params => readBook(params?.name)),
         host.own.register('lorebook.names', () => allBookNames()),
         host.own.register('lorebook.createBook', params => createBook(params?.name)),
-        // Полные записи активных книг — вход собственного движка активации Prompt Manager (pm-lorebook.js).
+        // Полные записи активных книг — память графа и контекст директора.
         host.own.register('lorebook.entries', () => [...byUid.entries()].map(([key, entry]) => ({ ...entry, book: entry.book ?? key.slice(0, key.lastIndexOf(':')) }))),
         host.own.register('lorebook.lastActivated', () => lastActivated),
         host.own.register('lorebook.createEntry', params => createEntry(params?.patch ?? {}, params?.book)),

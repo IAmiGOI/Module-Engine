@@ -31,6 +31,10 @@
  *    задан), положительное число — явный бюджет.
  */
 
+import { buildOpenAiTools } from './provider-tools.js';
+
+export { resolveProviderResponseMessage } from './provider-tools.js';
+
 const FORMATS = Object.freeze(['openai', 'anthropic', 'google']);
 
 /** Defensive reader — an unrecognized/missing format falls back to 'openai', the most common API shape. */
@@ -146,6 +150,7 @@ function buildOpenAiRequest(worker, request, stream) {
             ...(request.frequencyPenalty ? { frequency_penalty: request.frequencyPenalty } : {}),
             ...(request.presencePenalty ? { presence_penalty: request.presencePenalty } : {}),
             ...buildOpenAiReasoning(worker, request),
+            ...buildOpenAiTools(request),
             ...(stream ? { stream: true } : {}),
         }),
     };

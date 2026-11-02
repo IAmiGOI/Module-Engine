@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveProviderFormat, buildProviderRequest, resolveProviderResponseText, resolveStreamDelta } from '../libraries/core/provider-request.js';
+import { resolveProviderFormat, buildProviderRequest, resolveProviderResponseText, resolveProviderResponseMessage, resolveStreamDelta } from '../libraries/core/provider-request.js';
+import { buildOpenAiTools, normalizeToolDefinition, assistantToolMessage, toolResultMessage } from '../libraries/core/provider-tools.js';
 
 const REQUEST = Object.freeze({ prompt: 'hello', systemPrompt: '', temperature: 0.5, maxTokens: 100, topP: 1, topK: 0, seed: 0 });
 
@@ -315,4 +316,63 @@ test('resolveStreamDelta() returns an empty, not-done delta for malformed JSON i
     assert.deepEqual(resolveStreamDelta('openai', { data: 'not json' }), { delta: '', done: false });
     assert.deepEqual(resolveStreamDelta('anthropic', { data: 'not json' }), { delta: '', done: false });
     assert.deepEqual(resolveStreamDelta('google', { data: 'not json' }), { delta: '', done: false });
+});
+
+// --- Инструменты (function calling): opt-in, старые тела не меняются -------
+
+test('a request without tools produces a byte-identical openai body — nothing about tools leaks into existing callers', () => {
+    const worker = { endpoint: 'https://api.example.com/v1', model: 'gpt-test', format: 'openai' };
+    const plain = JSON.parse(buildProviderRequest(worker, REQUEST).body);
+    const withEmpty = JSON.parse(buildProviderRequest(worker, { ...REQUEST, tools: [] }).body);
+    assert.equal('tools' in plain, false);
+    assert.deepEqual(withEmpty, plain);
+});
+
+test('tools are shaped into OpenAI form only when explicitly given, with tool_choice and parallel_tool_calls passed through', () => {
+    const worker = { endpoint: 'https://api.example.com/v1', model: 'gpt-test', format: 'openai' };
+    const built = buildProviderRequest(worker, {
+        ...REQUEST,
+        tools: [{ name: 'submit_turn', description: 'Submit the form', parameters: { type: 'object', properties: {} } }],
+        toolChoice: 'auto',
+        parallelToolCalls: false,
+    });
+    const body = JSON.parse(built.body);
+    assert.deepEqual(body.tools.map(tool => tool.function.name), ['submit_turn']);
+    assert.equal(body.tool_choice, 'auto');
+    assert.equal(body.parallel_tool_calls, false);
+});
+
+test('normalizeToolDefinition() accepts both the engine shape and an already-built OpenAI tool, and drops nameless junk', () => {
+    assert.equal(normalizeToolDefinition({ name: 'assess' }).function.name, 'assess');
+    assert.equal(normalizeToolDefinition({ type: 'function', function: { name: 'assess' } }).function.name, 'assess');
+    assert.equal(normalizeToolDefinition({ description: 'no name' }), null);
+    assert.equal(normalizeToolDefinition(null), null);
+});
+
+test('buildOpenAiTools() ignores tools with no usable name rather than sending an empty tools array', () => {
+    assert.deepEqual(buildOpenAiTools({ tools: [{ description: 'junk' }] }), {});
+});
+
+test('resolveProviderResponseMessage() reads openai tool_calls and parses their JSON arguments, keeping the text too', () => {
+    const body = JSON.stringify({ choices: [{ finish_reason: 'tool_calls', message: { content: 'thinking', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'assess', arguments: '{"character":"Lena"}' } }] } }] });
+    const message = resolveProviderResponseMessage('openai', body);
+    assert.equal(message.text, 'thinking');
+    assert.equal(message.finishReason, 'tool_calls');
+    assert.deepEqual(message.toolCalls, [{ id: 'c1', name: 'assess', arguments: { character: 'Lena' }, rawArguments: '{"character":"Lena"}' }]);
+});
+
+test('resolveProviderResponseMessage() tolerates malformed tool arguments and old function_call, never throws', () => {
+    const broken = resolveProviderResponseMessage('openai', JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: 'c', function: { name: 'x', arguments: 'not json' } }] } }] }));
+    assert.deepEqual(broken.toolCalls[0].arguments, {});
+    const legacy = resolveProviderResponseMessage('openai', JSON.stringify({ choices: [{ message: { function_call: { name: 'old', arguments: '{}' } } }] }));
+    assert.equal(legacy.toolCalls[0].name, 'old');
+    assert.deepEqual(resolveProviderResponseMessage('openai', 'not json'), { text: '', toolCalls: [], finishReason: null });
+});
+
+test('assistantToolMessage() and toolResultMessage() build the two turns the next request needs, preserving raw argument strings', () => {
+    const message = assistantToolMessage({ text: '', toolCalls: [{ id: 'c1', name: 'assess', arguments: { a: 1 }, rawArguments: '{"a":1}' }] });
+    assert.equal(message.role, 'assistant');
+    assert.deepEqual(message.tool_calls[0].function, { name: 'assess', arguments: '{"a":1}' });
+    const result = toolResultMessage({ id: 'c1', name: 'assess' }, { ok: true });
+    assert.deepEqual(result, { role: 'tool', tool_call_id: 'c1', name: 'assess', content: '{"ok":true}' });
 });

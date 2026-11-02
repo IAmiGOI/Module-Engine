@@ -222,8 +222,8 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
     /**
      * Отдаёт ВСЕ поля пользовательских трекеров в `onUserFieldRegistered` (макросы `{{трекер_поле}}`), а не только
      * обновлённые опросом. Иначе после перезагрузки страницы макрос не зарегистрирован до первого опроса (ST оставлял
-     * `{{rp-time_year}}` текстом — лог владельца, PROMPT_MANAGER_PLAN.md раздел 12, п. 6), а после смены чата держал
-     * значение ПРЕДЫДУЩЕГО чата — и в ST, и в `macros.snapshot`, из которого берёт значения Prompt Manager.
+     * `{{rp-time_year}}` текстом — лог владельца), а после смены чата держал значение ПРЕДЫДУЩЕГО чата — и в ST, и в
+     * `macros.snapshot`, из которого берут значения потребители макросов.
      */
     function announceUserFields() {
         for (const tracker of trackers.values()) {

@@ -2,7 +2,7 @@ import { createSyncToastsCore } from '../../cores/ui/sync-toasts.js';
 
 /** Запуск: восстановление сохранённого, открытие окон и панели, подключение пайплайна генерации — строго в этом порядке. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireBoot(ctx) {
-    const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, promptManagerCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, promptManagerPanel, picturePanel, notifications, firstLoad, messageFooter, updateOverlay, modules, guide, enginePanel } = ctx;
+    const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, decisionCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, notifications, firstLoad, messageFooter, updateOverlay, modules, guide, enginePanel } = ctx;
 
     // Every Ядро is constructed by now (Settings Core included) — safe to
     // actually read back whatever was persisted last time.
@@ -15,7 +15,8 @@ export async function wireBoot(ctx) {
     // silently leaving a real, non-empty Lorebook's graph bootstrap empty
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
-    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), classifierCore.load(), summaryCore.load(), promptManagerCore.load()]);
+    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), classifierCore.load(), summaryCore.load()]);
+    await decisionCore.load();
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
     // отдельно" — при большом Lorebook эмбединг каждой записи по
@@ -71,8 +72,6 @@ export async function wireBoot(ctx) {
     // Окно «Картинка» — тот же порядок, что у графа выше: open() (дерево +
     // loadWindowState), append корня в body после settled(), активации (CSS-
     // инициализации) у окна нет — содержимого пока нет.
-    const promptManagerPanelUi = await promptManagerPanel.open();
-    document.body.append(promptManagerPanelUi.getRoot());
     const picturePanelUi = await picturePanel.open();
     document.body.append(picturePanelUi.getRoot());
     await guide.load();
@@ -89,5 +88,5 @@ export async function wireBoot(ctx) {
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { firstLoadResult, notificationsUi, updateOverlayUi, memoryGraphPanelUi, promptManagerPanelUi, picturePanelUi, guideUi };
+    return { firstLoadResult, notificationsUi, updateOverlayUi, memoryGraphPanelUi, picturePanelUi, guideUi };
 }

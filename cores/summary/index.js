@@ -761,11 +761,30 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
                 for (let levelIndex = 1; levelIndex < settings.levels.length; levelIndex += 1) {
                     const level = settings.levels[levelIndex];
                     const parentLevel = levelIndex; // саммари уровня `levelIndex` (1-based level number == levelIndex here, since levels[0] produces level:1)
-                    let pool = activeSummaries(list).filter(record => record.level === parentLevel);
+                    let pool = activeSummaries(list).filter(record => record.level === parentLevel && !record.forced);
                     while (pool.length >= level.batchSize) {
                         const batch = pool.slice(0, level.batchSize);
-                        const record = await foldChildSummaries(batch, parentLevel + 1);
                         pool = pool.slice(level.batchSize);
+
+                        // Forced Memory: директор видит каждое саммари батча и
+                        // отвечает, какое НЕ сворачивать. Контракта нет (ядро
+                        // выключено) или ответа нет — сворачиваем как раньше.
+                        let keep = new Set();
+                        try {
+                            const answer = await call('decision.forcedMemory', {
+                                batch: batch.map(record => ({ id: record.id, level: record.level, startIndex: record.startIndex, endIndex: record.endIndex, text: record.text })),
+                            });
+                            if (answer.ok) keep = new Set((answer.value?.keep ?? []).filter(id => batch.some(record => record.id === id)));
+                        } catch { /* нет контракта — как раньше */ }
+                        if (keep.size) {
+                            list = list.map(item => (keep.has(item.id) ? { ...item, forced: true, folded: false } : item));
+                            await saveSummaries(list);
+                            publishEvent('summary.forced', { ids: [...keep] });
+                        }
+                        const foldBatch = batch.filter(record => !keep.has(record.id));
+                        if (!foldBatch.length) continue;
+
+                        const record = await foldChildSummaries(foldBatch, parentLevel + 1);
 
                         if (settings.verifyEnabled) {
                             // НЕ идёт в `list`/`summaries` сразу и НЕ помечает
@@ -777,12 +796,12 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
                             // видит ещё не промоутнутый черновик — заберёт его
                             // на СЛЕДУЮЩЕМ вызове `checkAndFold()`, когда он уже
                             // будет в `summaries`.
-                            const entry = { draft: record, batchIds: batch.map(child => child.id), prompt: buildLevelNPrompt(batch), attempts: 0 };
+                            const entry = { draft: record, batchIds: foldBatch.map(child => child.id), prompt: buildLevelNPrompt(foldBatch), attempts: 0 };
                             await pushPendingRaw(entry);
                             publishEvent('summary.verify.started', { id: record.id, level: record.level });
                             runPendingVerification(record.id); // fire-and-forget — см. doc-comment функции
                         } else {
-                            const batchIds = new Set(batch.map(child => child.id));
+                            const batchIds = new Set(foldBatch.map(child => child.id));
                             list = list.map(item => (batchIds.has(item.id) ? { ...item, folded: true } : item));
                             list = [...list, record];
                             await saveSummaries(list);
@@ -838,6 +857,19 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
             const next = [...summaries];
             next[index] = { ...next[index], text: String(text ?? '').trim(), edited: true };
             await saveSummaries(next);
+            return next[index];
+        });
+    }
+
+    /** Forced Memory: пометить/снять пометку «не сворачивать» вручную. */
+    async function forceSummary({ id, forced = true } = {}) {
+        return enqueueWrite(async () => {
+            const index = summaries.findIndex(record => record.id === id);
+            if (index < 0) throw new Error(`summary.force: no summary with id "${id}".`);
+            const next = [...summaries];
+            next[index] = { ...next[index], forced: Boolean(forced), ...(forced ? { folded: false } : {}) };
+            await saveSummaries(next);
+            publishEvent('summary.forced', { ids: next.filter(record => record.forced).map(record => record.id) });
             return next[index];
         });
     }
@@ -964,6 +996,8 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         host.own.register('summary.ledger.set', params => setLedger(params)),
         host.own.register('summary.update', params => updateSummary(params)),
         host.own.register('summary.delete', params => deleteSummary(params)),
+        host.own.register('summary.force', params => forceSummary(params)),
+        host.own.register('summary.forced', () => summaries.filter(record => record.forced).map(record => record.id)),
     ];
 
     const unsubscribeChatChanged = host.events.subscribe('st.chatChanged', () => { reloadSummariesForChat(); });

@@ -18,7 +18,7 @@ import { createModelsCard } from './panel-cards/models-card.js';
 import { createMacrosCard } from './panel-cards/macros-card.js';
 import { createLorebookCard } from './panel-cards/lorebook-card.js';
 import { createSummaryCard } from './panel-cards/summary-card.js';
-import { createPromptManagerCard } from './panel-cards/prompt-manager-card.js';
+import { createDecisionCard } from './panel-cards/decision-card.js';
 export { sanitizeMacroName } from './panel-cards/macros-card.js';
 
 /**
@@ -216,7 +216,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         enabledSignal, collapse, toggleModule, modules, registry: moduleRegistry, notify,
         refresh: () => { modules.set(moduleRegistry?.list() ?? []); syncEnabled(moduleRegistry?.enabled() ?? []); },
     });
-    const { promptManagerCard, loadEnabled: loadPromptManagerEnabled } = createPromptManagerCard({ call, collapse });
+    const { decisionCard, loadDecision } = createDecisionCard({ call, collapse, notify, workers });
 
     async function open() {
         // Сначала память о свёрнутом — иначе первый кадр раскрылся бы по
@@ -232,7 +232,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         await loadMemoryGraphCount();
         await loadMemoryGraphSettings();
         await refreshBackgrounds();
-        await loadPromptManagerEnabled();
+        await loadDecision();
         await syncCard.refresh();
         // Список контрактов приходит от сборщика движка: своя шина доступна
         // через host.own, а шины сервисов и сети — нет (у Ядра туда только
@@ -256,7 +256,7 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
     }
 
     const { watch } = createPanelWatch({ host, eventCount, generationStage, loadTrackerFields, loadLorebook, syncCard, loadSummaries, notify, loadMemoryGraphCount, memoryGraphFlash, memoryGraphProgress, flash });
-    const { tree, settingsTree } = createPanelTrees({ modelsCard, classifiersCard, macrosCard, lorebookCard, summaryCard, modulesCard, statusCard, chatViewportCard, presetCard, updatesCard, syncCard, backgroundsCard, promptManagerCard });
+    const { tree, settingsTree } = createPanelTrees({ modelsCard, classifiersCard, macrosCard, lorebookCard, summaryCard, modulesCard, statusCard, chatViewportCard, presetCard, updatesCard, syncCard, backgroundsCard, decisionCard });
 
     const subscriptions = watch();
     subscriptions.push(host.events.subscribe('model.workers.status.changed', payload => applyWorkerStatus(payload?.workers)));

@@ -223,7 +223,7 @@ test('an unknown section is refused, and refreshing asks ST to reload its charac
     assert.ok(st.calls.includes('getCharacters'));
 });
 
-test('Prompt Manager prompts travel inside the Chat Completion preset, unchanged, and other kinds of presets are listed too', async () => {
+test('Chat Completion prompts travel inside the preset file, unchanged, and other kinds of presets are listed too', async () => {
     const { call, st } = setup();
     const blob = await call('stUserData.read', { path: 'presets/openai/Default.json' });
     const preset = JSON.parse(await blob.text());

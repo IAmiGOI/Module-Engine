@@ -203,8 +203,8 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     /**
-     * Вставка памяти и «ядра сюжета» в промпт: через Prompt Manager (вклады, место выбирает пользователь), а если PM не
-     * берёт сборку на себя — прежней вставкой в `chat`. Порядок прежней вставки сохранён: сначала сюжет, потом память (она выше).
+     * Вставка памяти и «ядра сюжета» в промпт: общий `deliverToPrompt`, который после удаления Prompt Manager всегда
+     * делает прежнюю вставку в `chat`. Порядок сохранён: сначала сюжет, потом память (она выше).
      */
     async function deliverMemory(chat, plotText, memoryText) {
         const legacy = (name, mes) => () => chat.unshift({ is_user: false, is_system: true, name, mes });

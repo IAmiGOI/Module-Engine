@@ -1,6 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { buildJevRequest, readJevAnswers, describeJevFailure, JEV_DEFAULT_ENDPOINT, JEV_DEFAULT_MODEL, JEV_DEFAULT_TIMEOUT_MS } from '../../libraries/core/jev-request.js';
-import { hashText } from '../../libraries/core/jev-question.js';
+import { hashText } from '../../libraries/core/hash-text.js';
 
 const NAMESPACE = 'core.classifier';
 const SETTINGS_KEY = 'settings';
@@ -35,8 +35,8 @@ export function sanitizeConnections(stored) {
 
 /**
  * Ядро классификатора — ответы классификатора (Jev) на вопросы-утверждения: вероятность 0…1 (режим Noul), с кэшем и жёстким сроком. Подключений может быть несколько
- * (отдельная категория моделей, как diffusion): условие ссылается на подключение по имени, без имени берётся первое. Им пользуется Prompt Manager для условий блоков, но
- * Ядро о PM ничего не знает: оно принимает срезы чата и вопросы, отдаёт вероятности.
+ * (отдельная категория моделей, как diffusion): запрос ссылается на подключение по имени, без имени берётся первое. Ядро принимает
+ * срезы чата и вопросы, отдаёт вероятности.
  *
  * Контракты: `classifier.connections.get`, `classifier.connections.set { connections }`, `classifier.decide { calls: [{ state, questions: { id: утверждение }, connectionId? }] }` →
  * `{ answers: { id: 0…1 }, failed: [id], error? }`, `classifier.test { connectionId? }`, `classifier.clearCache`. Сбой, тайм-аут, нет подключения или ключа — НЕ исключение:

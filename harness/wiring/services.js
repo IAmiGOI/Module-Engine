@@ -18,9 +18,7 @@ import { registerEmbeddingService } from '../../services/embedding.js';
 import { registerAudioStoreService } from '../../services/audio-store.js';
 import { registerImageStoreService } from '../../services/image-store.js';
 import { registerGraphLibraryService } from '../../services/graph-library.js';
-import { registerPmPresetsService } from '../../services/pm-presets.js';
 import { registerStPromptDataService } from '../../services/st-prompt-data.js';
-import { registerStPmUiService } from '../../services/st-pm-ui.js';
 import { registerAudioPlaybackService } from '../../services/audio-playback.js';
 import { registerExtensionSettingsService } from '../../services/extension-settings.js';
 import { registerFileService } from '../../services/file.js';
@@ -79,9 +77,7 @@ export async function wireServices(ctx) {
     registerAudioStoreService(engine.buses.services);
     registerImageStoreService(engine.buses.services);
     registerGraphLibraryService(engine.buses.services);
-    registerPmPresetsService(engine.buses.services);
     registerStPromptDataService(engine.buses.services, { getContext });
-    registerStPmUiService(engine.buses.services);
     registerAudioPlaybackService(engine.buses.services, { crossfadeMs: 2500 });   // смена трека плавная, как в кино
     registerExtensionSettingsService(engine.buses.services, { getContext });
     registerFileService(engine.buses.services);

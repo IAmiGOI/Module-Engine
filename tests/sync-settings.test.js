@@ -134,7 +134,7 @@ test('storage.settings.set stamps the edit time and emits settings.changed; sett
 function userDataService(settings) {
     const engine = createEngine();
     const context = { extensionSettings: { stme_settings: settings }, saveSettingsDebounced() {} };
-    registerStUserDataService(engine.buses.services, { getContext: () => context, fetch: async () => ({ ok: true, json: async () => [] }), graphStore: null, pmStore: null });
+    registerStUserDataService(engine.buses.services, { getContext: () => context, fetch: async () => ({ ok: true, json: async () => [] }), graphStore: null });
     const call = (contract, params) => new Promise(resolve => engine.buses.services.subscribe(contract, { params }, resolve));
     return { context, call };
 }

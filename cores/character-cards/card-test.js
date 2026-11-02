@@ -2,9 +2,13 @@ import { request } from '../../libraries/shared/request.js';
 import { normalizeProbes, buildTestChat, describeTestResult, describeChatExcerpt, selectExcerptMessages, CHAT_EXCERPT_MAX_MESSAGES } from '../../libraries/core/character-test.js';
 
 /**
- * Проверка карточки: серия ходов в изолированном чате (запрос собирает Prompt Manager тем же путём, что настоящую отправку, но с текстом ЭТОЙ карточки) и разбор
- * настоящего открытого чата. Идёт на модели, на которой человек играет (основное подключение ST) либо на выбранном воркере: забывчивость зависит от модели,
- * поэтому проверять на чужой бессмысленно. Каждая проба — полная генерация, то есть токены человека; пределы — в libraries/core/character-test.js.
+ * Проверка карточки: серия ходов в изолированном чате через связку
+ * директор → прозаик (тем же путём, что игра, но состояние чата не
+ * трогается) и разбор настоящего открытого чата. Ответ пишет прозаик на
+ * модели, на которой человек играет (основное подключение ST) либо на
+ * выбранном воркере: забывчивость зависит от модели, поэтому проверять на
+ * чужой бессмысленно. Каждая проба — полная генерация, то есть токены
+ * человека; пределы — в libraries/core/character-test.js.
  */
 export function createCardTestRunner(host, { readCard }) {
     const callOwn = (contract, params) => request(host.own, contract, { params });
@@ -29,17 +33,17 @@ export function createCardTestRunner(host, { readCard }) {
         const userName = (await requireValue(await callService('stPromptData.read', {}), 'SillyTavern data is not available'))?.user ?? 'User';
         const maxTokens = Math.min(Math.max(Number(params.maxTokens) || 1200, 200), 4000);
         const turns = [];
-        let presetName = '';
         for (const probe of made.value) {
             const turn = { ...probe };
             turns.push(turn);
-            const assembled = await requireValue(await callOwn('promptManager.assembleForCard', { card: fields, chat: buildTestChat(fields, userName, turns) }), 'the request could not be built');
-            if (assembled.skipped) throw new Error(`characterCard: Prompt Manager cannot build the request (${assembled.skipped}).`);
-            presetName = assembled.presetName;
+            const assembled = await requireValue(
+                await callOwn('decision.cardTurn', { card: fields, chat: buildTestChat(fields, userName, turns) }),
+                'the test turn could not be built',
+            );
             turn.reply = await generateReply(assembled.messages, { workerId: params.workerId, maxTokens });
         }
         const modelLabel = params.workerId ? `the model connection “${params.workerId}”` : 'the main SillyTavern connection (the model you play on)';
-        return { name: fields.name, text: describeTestResult({ name: fields.name, modelLabel, presetName, results: turns }), results: turns };
+        return { name: fields.name, text: describeTestResult({ name: fields.name, modelLabel, results: turns }), results: turns };
     }
 
     async function readChatExcerpt(params = {}) {

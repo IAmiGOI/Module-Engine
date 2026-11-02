@@ -15,10 +15,6 @@ chatHistory.messages, chatHistory.annotate, chatHistory.annotations, chatHistory
 # исполняется под ПРАВАМИ ЭТОГО Модуля (см. cores/pipeline/index.js
 # про `resolveAs`), регистрирует и снимает этап сам Модуль.
 pipeline.stages.add, pipeline.stages.remove,
-# Вклад в Prompt Manager (deliverToPrompt) — без этих двух прав Гейт молча отклонял оба вызова,
-# deliverToPrompt читал это как «PM не берёт сборку» и тихо уходил в `legacy` ВСЕГДА, даже когда PM
-# реально включён (найдено по факту: владелец пожаловался, что вклад не появляется в окне PM).
-promptManager.takesOver, promptManager.contribute,
 model.workers.get, model.presets.get, model.presets.set, ui.notify, ui.messageFooter.claim, ui.messageFooter.release,
 ui.messageFooter.liveMesid
 */
@@ -31,6 +27,7 @@ import { Button, TextInput, Select, Toggle, Chip, Field, Row, EditableList, Stat
 import { GenerationSettingsPanel } from '../../libraries/shared/generation-settings-panel.js';
 import { deliverToPrompt } from '../../libraries/shared/prompt-contribution.js';
 import { SAMPLER_PRESETS, REASONING_MODES, clampSamplerSettings, clampReasoningSettings, buildCustomPreset } from '../../cores/models/internal-engine.js';
+import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
 
 /**
  * Модуль «Время» — определитель внутриигрового времени, как в Alpha.
@@ -425,6 +422,21 @@ export function createTimeModule(host) {
         await call('chatHistory.annotate', { namespace: HISTORY_NAMESPACE, mesid, value: value || null });
     }
 
+
+    /**
+     * Сдвиг часов без вызова модели — событие от ядра решения
+     * (`decision.timeShift { minutes }`). Берём последнюю отметку и двигаем
+     * её чистым разбором; формат не разобрался — ничего не меняем, только
+     * предупреждение в консоль (в лог директора это уйдёт от него самого).
+     */
+    async function shiftByMinutes({ minutes } = {}) {
+        const current = label.peek() || history.peek().at(-1) || '';
+        const next = shiftTimeLabel(current, Number(minutes) || 0);
+        if (!next) return false;
+        label.set(next);
+        await markMessage(await currentMesid(), next);
+        return true;
+    }
 
     // --- Настройка трекера в Ядре -------------------------------------------
 
@@ -826,6 +838,10 @@ export function createTimeModule(host) {
         }),
         // Другой чат — другое время. Шкалу перечитываем, а не тащим с собой.
         host.events.subscribe('st.chatChanged', () => { loadHistory().then(() => label.set(history.peek().at(-1) ?? '')); }),
+        // Ядро решения закончило ход — сдвиг сцены без модели. Событие есть
+        // только когда ядро включено и форма прошла; при выключенном ядре
+        // этой подписки никто не тревожит.
+        host.events.subscribe('decision.timeShift', payload => { shiftByMinutes(payload); }),
         // Пресет сохранил или удалил КТО-ТО ДРУГОЙ — свой же список общий с
         // Модулем «Трекер», и без этого сохранённое там появлялось бы здесь
         // только после ручной перезагрузки страницы.
@@ -861,10 +877,9 @@ export function createTimeModule(host) {
     }
 
     /**
-     * Вклад через Prompt Manager (владелец: «почему саммари не публикует свой инжект в ПМ, добавь такой же для RP
-     * Time» — тот же контракт `promptManager.contribute`, что уже есть у Summary/Notebook/Secrets/графа памяти;
-     * без него время висло вставкой в `chat`, невидимой и непереставляемой в окне PM). PM выключен/недоступен —
-     * прежний `chat.unshift`, поведение не меняется.
+     * Вставка текущего времени в `chat` через общий `deliverToPrompt`. Prompt Manager
+     * удалён, поэтому всегда работает прежний путь `chat.unshift`; функция осталась
+     * единой точкой вставки, чтобы вкладчики не разъехались.
      */
     async function injectCurrentTime({ chat } = {}) {
         if (!Array.isArray(chat)) return true;
@@ -947,6 +962,7 @@ export function createTimeModule(host) {
         tree,
         hud,
         advance,
+        shiftByMinutes,
         reset,
         save,
         applyPreset,

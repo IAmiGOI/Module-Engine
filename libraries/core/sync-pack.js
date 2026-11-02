@@ -32,7 +32,7 @@ export const MIN_COMPRESS_BYTES = 256;
 export const MAX_COMPRESSED_RATIO = 0.9;
 
 const TEXT_EXTENSIONS = /\.(jsonl|json|txt|md|css|ya?ml)$/i;
-const TEXT_SECTIONS = new Set(['chats', 'groupChats', 'groups', 'worlds', 'presets', 'themes', 'quickReplies', 'stmeSettings', 'stmeGraphs', 'stmePmPresets']);
+const TEXT_SECTIONS = new Set(['chats', 'groupChats', 'groups', 'worlds', 'presets', 'themes', 'quickReplies', 'stmeSettings', 'stmeGraphs']);
 
 /** Текстовый путь, который стоит сжимать. Картинки, карточки и прочее бинарное — нет. */
 export function isCompressible(path, size = Infinity) {
