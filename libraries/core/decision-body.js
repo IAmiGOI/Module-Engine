@@ -18,8 +18,28 @@ const REASONING_KEYS = Object.freeze([
     'thinking_budget',
 ]);
 
+/** Ключи, которыми тело просит у провайдера инструменты. У прозаика их нет никогда. */
+const TOOL_KEYS = Object.freeze(['tools', 'tool_choice', 'functions', 'function_call', 'parallel_tool_calls', 'tool_config']);
+
 const ANTHROPIC_SOURCES = Object.freeze(['claude', 'anthropic']);
 const GOOGLE_SOURCES = Object.freeze(['makersuite', 'vertexai', 'google', 'gemini']);
+
+/**
+ * Снимает инструменты с тела основного запроса ST. При включённом ядре все
+ * ToolCalls живут у директора; прозаик получает тело без `tools` и без
+ * выбора инструмента, иначе ST/провайдер могли бы снова позвать инструмент
+ * мимо директора. Тело без этих ключей не меняется.
+ */
+export function stripTools(body) {
+    const next = { ...(body ?? {}) };
+    for (const key of TOOL_KEYS) delete next[key];
+    if (next.generationConfig && typeof next.generationConfig === 'object') {
+        const generationConfig = { ...next.generationConfig };
+        for (const key of TOOL_KEYS) delete generationConfig[key];
+        next.generationConfig = generationConfig;
+    }
+    return next;
+}
 
 /**
  * Какой формат у ЭТОГО тела. `messages` — Chat Completion; источник уточняет
@@ -101,5 +121,6 @@ export function computeWriterPayload(payload, context, { writer = {}, model = ''
     else body.messages = messages;
     body = applySampler(body, writer, format);
     if (model) body.model = model;
+    body = stripTools(body);
     return disableReasoning(body, format);
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveBodyFormat, disableReasoning, computeWriterPayload } from '../libraries/core/decision-body.js';
+import { resolveBodyFormat, disableReasoning, computeWriterPayload, stripTools } from '../libraries/core/decision-body.js';
 import { clampDecisionSettings, DEFAULT_SETTINGS } from '../libraries/core/decision-settings.js';
 
 const context = {
@@ -92,4 +92,30 @@ test('settings clamp to safe defaults, and an explicit enable/regen choice survi
     assert.equal(clamped.decider.reasoningMode, 'inherit');
     assert.equal(clamped.writer.topK, 0);
     assert.equal(clampDecisionSettings({}).enabled, DEFAULT_SETTINGS.enabled, 'off by default');
+});
+
+test('the writer body carries no tools: tools, tool_choice and the legacy function keys are stripped, while everything else survives', () => {
+    const payload = {
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [{ type: 'function', function: { name: 'Notebook' } }],
+        tool_choice: 'auto',
+        functions: [{ name: 'old' }],
+        function_call: 'auto',
+        parallel_tool_calls: true,
+        temperature: 0.4,
+        stream: true,
+    };
+    const body = computeWriterPayload(payload, context, { writer: {} });
+    for (const key of ['tools', 'tool_choice', 'functions', 'function_call', 'parallel_tool_calls']) {
+        assert.equal(key in body, false, `${key} must not reach the writer`);
+    }
+    assert.equal(body.temperature, 0.4);
+    assert.equal(body.stream, true);
+    assert.deepEqual(body.messages, context.messages);
+});
+
+test('stripTools() leaves a body without tools untouched and also clears nested generationConfig tool keys', () => {
+    assert.deepEqual(stripTools({ prompt: 'x' }), { prompt: 'x' });
+    const google = stripTools({ generationConfig: { temperature: 1, tools: [{ name: 'x' }], tool_config: {} } });
+    assert.deepEqual(google.generationConfig, { temperature: 1 });
 });

@@ -336,3 +336,129 @@ tests/sync-secrets.test.js (5)
 ровно те же 23 файла, что и на чистой ветке до начала работы; новых
 падений нет. Ветка `Dev-Version`/`Main-Testing` не трогалась, ничего не
 пушилось.
+
+## e0. Разведка и схема части 2
+
+Ветка `research/decision`, поверх части 1. Живых запросов нет; все модели —
+фейки. Прочитан `DIRECTOR-SPEC.md` целиком; расхождений по правам с
+`PART2.md` не найдено, оба итога (DESIGN и REPORT) будут сделаны.
+
+### `tools` и `tool_calls` в `model.generate`
+
+**До правок их не было вовсе.** `buildOpenAiRequest()` собирал только
+`messages`/сэмплер/ризонинг; `resolveProviderResponseText()` читал
+`choices[0].message.content` и терял `tool_calls`; `model.generate`
+возвращал строку.
+
+**Можно добавить, не ломая нынешних вызывающих — да, opt-in.** Сделано:
+
+- `libraries/core/provider-tools.js`: нормализация определений (форма ST и
+  форма OpenAI), `buildOpenAiTools()`, `assistantToolMessage()`,
+  `toolResultMessage()`, `resolveProviderResponseMessage()` для
+  `openai`/`anthropic`/`google`.
+- `resolveGenerateRequest()` получил `tools`, `toolChoice`,
+  `parallelToolCalls`, `returnMessage`; без `tools` они `null`/`false`.
+- `buildOpenAiRequest()` кладёт `tools` только при непустом списке.
+- `model.generate` с `returnMessage: true` отдаёт
+  `{ text, toolCalls, finishReason }`; без флага — прежнюю строку.
+  `model.generate.raw` публикуется как раньше.
+- Multi-turn `messages` — по-прежнему только `openai`; директору и
+  субагенту на других форматах карточка покажет ошибку.
+
+Проверки: `tests/model-tools.test.js` (2/2, весь путь до фейкового HTTP),
+`tests/provider-request.test.js` (41/41, включая «без `tools` тело байт в
+байт прежнее»). Старые вызывающие не тронуты: тело без `tools` не меняется.
+
+### Снятие инструментов с основного запроса ST
+
+Сделано в `libraries/core/decision-body.js`: `stripTools()` удаляет
+`tools`, `tool_choice`, `functions`, `function_call`, `parallel_tool_calls`,
+`tool_config` (и те же ключи в `generationConfig`) и вызывается из
+`computeWriterPayload()`. Тело без этих ключей не меняется; тесты
+`tests/decision-body.test.js` — 9/9.
+
+Существующие ToolCalls (Notebook, Secrets) остаются зарегистрированными в
+ST, но директор получает их через новые контракты `generation.tools` /
+`generation.callTool` (e1), а не через ST-цикл. Прозаик их не видит.
+
+### Хранилище: объём, синхронизация, бэкап
+
+Всё — `storage.chatMemory`, namespace `core.decision` (как часть 1).
+Замеры `pm-tokens.js`: английский текст — 4,66 символа/токен, русский —
+2,48.
+
+- лог 500 тыс. токенов ≈ 2,3 млн символов EN / 1,24 млн RU ≈ **2,0–2,4 МБ**;
+- банк 50 тыс. токенов на персонажа ≈ **0,2–0,25 МБ**, на 20 персонажей —
+  4–5 МБ;
+- библиотека/планы/ростер/арки/имена — сотни килобайт.
+
+`chatMetadata` живёт в файле чата ST, поэтому лог и банк синхронизируются и
+бэкапятся **вместе с чатом** штатными средствами ST, без отдельного кода.
+Цена — раздувание чата; лечится порогами 500 тыс. (лог + архив) и 50 тыс.
+(сжатие обычных записей банка). Запись — `set` + `flush`, как у саммари.
+
+### Сдвиг RP Time без модели
+
+Контракта не было. Выбран минимальный путь: директор читает последнюю
+отметку через `chatHistory.annotations` (namespace `module.time`), после
+формы публикует `decision.timeShift { minutes }`; Модуль времени подписан
+на событие и двигает часы чистым разбором `HH:MM` (12/24 ч), пишет новую
+отметку и обновляет бейдж. Модель не зовётся. Не разобрался формат —
+предупреждение, время не меняется. При выключенном ядре подписки нет.
+
+### Место без модели
+
+`map.position.get` → `map.nodes.containmentPath`. Нет позиции — честный
+`null` и причина `'no-position'`.
+
+### Forced Memory: точка
+
+`cores/summary/index.js`, `checkAndFold()`, цикл уровней **перед**
+`foldChildSummaries(batch, parentLevel + 1)`. При включённом ядре движок
+зовёт `decision.forcedMemory { batch }`; директор отвечает `{ keep: [id] }`,
+помеченное остаётся активным (`forced: true`) и не сворачивается. Снятие —
+тем же инструментом. Ядро выключено/нет ответа — свёртка как сейчас.
+
+### Thinking и кеш
+
+Замер `compareRequests()` на запросе ≈ 6700 токенов (правила, 5 саммари,
+лог, 20+ истории, задача; thinking ≈ 507 токенов):
+
+| Порядок | Общий префикс |
+|---|---|
+| лог до истории, без удаления | 4328 (64,6 %) |
+| лог до истории, удалять каждый цикл | 2780 (41,5 %), −1548 |
+| лог до истории, удалять раз в 3 цикла | в среднем 4091 (61,1 %), ≈ −237/цикл |
+| лог после истории | 5020 (74,9 %), но лог не кешируется из-за скользящей истории |
+
+История — последние 20, её начало меняется каждый ход, поэтому всё после
+неё в кеш не попадает. Решение: лог **до** истории, thinking удалять
+**пачками на границе циклов** (раз в три). Цена падения префикса — раз в
+три хода, а не каждый.
+
+### Формула вероятности
+
+Шкалы по опорам: сложность `trivial…impossible`, опыт `novice…master`.
+Проекция — мягкий максимум по близости к опорам (e5-small; без модели —
+лексический фоллбэк). Сложность переводится в абсолютную шкалу
+`2·d − 0.5`, чтобы концы не гасили друг друга:
+
+`p = 1 / (1 + exp(−4 · (опыт − (2·сложность − 0.5))))`
+
+Бросок движка — mulberry32 от seed (в бою `Math.random`), `margin = p −
+roll`, полосы: `flawless` (≥0.45), `clean` (≥0.2), `barely` (≥0), `clumsy`
+(≥−0.2), `botched` (<−0.2); слова уходят в Push.
+
+Примеры: novice/trivial → 0.88, competent/moderate → 0.50,
+master/trivial → 0.998, novice/impossible → 0.002, master/impossible →
+0.12. Это «смог ли сделать», а не исход сцены.
+
+Реализация: `libraries/core/decision-probability.js`, тесты
+`tests/decision-probability.test.js` — 9/9.
+
+### Итог e0
+
+Схема части 2 записана в `DESIGN.md` (раздел «Часть 2»). Новые тесты:
+`model-tools` 2/2, `decision-probability` 9/9; `provider-request` 41/41,
+`decision-body` 9/9. `tools` в `model.generate` возможны без поломки
+вызывающих — блок продолжается.

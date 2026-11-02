@@ -152,5 +152,14 @@ export function resolveGenerateRequest(params, worker) {
         reasoningMode: REASONING_MODES.includes(source.reasoningMode) ? source.reasoningMode : reasoningDefaults.reasoningMode,
         reasoningEffort: REASONING_EFFORTS.includes(source.reasoningEffort) ? source.reasoningEffort : reasoningDefaults.reasoningEffort,
         reasoningBudget: Number.isFinite(source.reasoningBudget) ? source.reasoningBudget : reasoningDefaults.reasoningBudget,
+        // Инструменты — opt-in по определению: без `tools` тело остаётся
+        // прежним до байта. Поддержаны только форматом `openai` (см.
+        // buildOpenAiTools); остальные форматы просто не увидят этих полей.
+        tools: Array.isArray(source.tools) && source.tools.length ? source.tools : null,
+        toolChoice: source.toolChoice && (typeof source.toolChoice === 'string' || typeof source.toolChoice === 'object') ? source.toolChoice : null,
+        parallelToolCalls: typeof source.parallelToolCalls === 'boolean' ? source.parallelToolCalls : null,
+        // `returnMessage` — opt-in ответ объектом `{ text, toolCalls, finishReason }`
+        // вместо строки: старые вызывающие просят строку и ничего не замечают.
+        returnMessage: source.returnMessage === true,
     };
 }
