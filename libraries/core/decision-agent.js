@@ -90,7 +90,7 @@ export async function runDecisionCycle({
         steps += 1;
         const modelStartedAt = now();
         onModelStart({ step: steps, at: modelStartedAt });
-        const answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: false, returnMessage: true }));
+        const answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true }));
         onModelEnd({
             step: steps, at: now(), durationMs: now() - modelStartedAt,
             text: String(answer?.text ?? ''), toolCalls: Array.isArray(answer?.toolCalls) ? answer.toolCalls : [],

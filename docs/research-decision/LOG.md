@@ -1597,3 +1597,27 @@ isodate/weekday`, `trim`, `newline`, `<USER>/<BOT>/<CHAR>`.
   полная лента, живой цикл, фильтры, отправка сообщения, отвергнутый цикл);
   в тест карточки добавлена кнопка «Open director».
 - Все тесты решений: **171/171**. `npm run typecheck` — без ошибок.
+
+## h3. Живой поток
+
+- `libraries/core/provider-request.js` — `resolveStreamDelta` для `openai`
+  теперь отдаёт не только текст, но и дельты `reasoning_content` и
+  `tool_calls` (по `index`, с кусками аргументов) и `usage`; новый
+  `createStreamToolCallCollector()` склеивает вызовы в форму
+  `resolveProviderResponseMessage()`.
+- `cores/models/internal-engine.js` — потоковые дельты `tool_calls` копятся
+  в `dispatchToWorker`; при `returnMessage` на SSE-теле берутся собранные
+  вызовы, а не пустой разбор одного JSON. Новое событие
+  `model.generate.reasoning` несёт thinking по мере прихода.
+- Директор зовёт модель с `stream: true` (`decision-agent.js`,
+  `cycle-context.js`). `cores/decision/capture.js` слушает дельты: thinking и
+  текст директора уходят в ленту сразу (`decision.cycle.thinking`,
+  `decision.cycle.answer`), а не только после ответа. Расходы из потокового
+  `usage` считаются один раз.
+- Чистые тесты на фейковых кадрах: `tests/provider-request.test.js` — 3
+  проверки (reasoning + tool_call-фрагменты, склейка по index, другие
+  форматы); `tests/decision-capture.test.js` — 3 проверки (дельты по порядку,
+  нестриминговое тело, потоковый usage).
+- Все тесты решений: **174/174**; `tests/provider-request.test.js` —
+  **44/44**; тесты моделей (`models-*`, `internal-engine-models-core`,
+  `model-cancel`) — **55/55**. `npm run typecheck` — без ошибок.

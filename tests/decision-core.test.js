@@ -89,7 +89,7 @@ test('the director runs on beforeSend and the writer replaces the outgoing messa
     assert.equal(before.ok, true);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].workerId, 'director');
-    assert.equal(calls[0].stream, false);
+    assert.equal(calls[0].stream, true, 'the director streams so the window can show thinking and calls as they arrive');
     assert.match(JSON.stringify(calls[0].messages), /Never kill a named character/);
     assert.match(JSON.stringify(calls[0].messages), /They reached the keep/);
 

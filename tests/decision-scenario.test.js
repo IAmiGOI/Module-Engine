@@ -151,7 +151,7 @@ test('the writer body really reaches the outgoing request: exactly 20 history me
 
     assert.equal(directorCalls.length, 1, 'the director ran exactly once');
     const director = directorCalls[0];
-    assert.equal(director.stream, false);
+    assert.equal(director.stream, true);
     assert.equal(director.workerId, 'director');
     const directorText = JSON.stringify(director.messages);
     assert.match(directorText, new RegExp(SUMMARY_TEXT));

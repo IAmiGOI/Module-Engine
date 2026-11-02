@@ -53,11 +53,13 @@ test('live events append and update rows without rebuilding the cycles already o
     assert.equal(next.live.run_2.waiting, false);
     next = applyFeedEvent(next, 'decision.cycle.step', { runId: 'run_2', phase: 'waiting', at: 2001 });
     assert.equal(next.live.run_2.waiting, true);
+    next = applyFeedEvent(next, 'decision.cycle.answer', { runId: 'run_2', text: 'Waiting for the turn.' });
+    assert.equal(next.live.run_2.rows[0].kind, 'answer');
     next = applyFeedEvent(next, 'decision.tool.called', { runId: 'run_2', id: 'a1', name: 'assess', comment: 'Need the odds.', args: { character: 'Lena' } });
-    assert.equal(next.live.run_2.rows[0].pending, true);
+    assert.equal(next.live.run_2.rows[1].pending, true);
     next = applyFeedEvent(next, 'decision.tool.result', { runId: 'run_2', name: 'assess', result: { ok: true, probability: 0.4, degree: 'clumsy', words: 'clumsily' } });
-    assert.equal(next.live.run_2.rows[0].kind, 'assess');
-    assert.equal(next.live.run_2.rows[0].probability, 0.4);
+    assert.equal(next.live.run_2.rows[1].kind, 'assess');
+    assert.equal(next.live.run_2.rows[1].probability, 0.4);
     next = applyFeedEvent(next, 'decision.cycle.finished', { runId: 'run_2', cycle: turnCycle({ id: 'cyc_2', runId: 'run_2', at: 2000 }) });
     assert.equal(Object.keys(next.live).length, 0);
     assert.equal(next.cycles.length, 2);

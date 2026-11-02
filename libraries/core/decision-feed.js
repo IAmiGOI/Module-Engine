@@ -138,6 +138,9 @@ export function applyFeedEvent(state, event, payload = {}) {
     if (event === 'decision.cycle.thinking') {
         return withLive(state, runId, entry => upsertRow(entry, { kind: 'thinking', id: 'thinking', text: text(payload.text) }));
     }
+    if (event === 'decision.cycle.answer') {
+        return withLive(state, runId, entry => upsertRow(entry, { kind: 'answer', id: 'answer', text: text(payload.text) }));
+    }
     if (event === 'decision.tool.called') {
         return withLive(state, runId, entry => {
             const row = toolRow({ name: payload.name, args: payload.args, comment: payload.comment });
@@ -194,7 +197,7 @@ function entryText(entry) {
 }
 
 /** Простые фильтры и поиск: окно не прячет данные, а только выбирает секции. */
-export function filterFeed(state, { showThinking = true, onlyTurns = false, onlyPassive = false, search = '' } = {}) {
+export function filterFeed(state, { showThinking = true, onlyTurns = false, onlyPassive = false, showUsage = true, search = '' } = {}) {
     const query = text(search).toLowerCase();
     const keep = entry => {
         if (onlyTurns && !TURN_EVENTS.has(entry.event)) return false;
@@ -202,7 +205,10 @@ export function filterFeed(state, { showThinking = true, onlyTurns = false, only
         if (query && !entryText(entry).includes(query)) return false;
         return true;
     };
-    const clean = entry => (showThinking ? entry : { ...entry, rows: entry.rows.filter(row => row.kind !== 'thinking') });
+    const clean = entry => {
+        if (showThinking && showUsage) return entry;
+        return { ...entry, rows: entry.rows.filter(row => (showThinking || row.kind !== 'thinking') && (showUsage || row.kind !== 'usage')) };
+    };
     const all = [...state.cycles, ...Object.values(state.live)].filter(keep).map(clean).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     return { cycles: all, live: state.live, archive: state.archive.filter(keep).map(clean) };
 }

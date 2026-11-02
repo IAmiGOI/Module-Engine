@@ -80,7 +80,7 @@ export function createCycleContext({ call, store }) {
                 ...deciderRequestParams(settings.decider),
                 ...(effort ? { reasoningEffort: effort } : {}),
                 workerId: worker.id,
-                messages, tools, toolChoice, stream: false, returnMessage,
+                messages, tools, toolChoice, stream: true, returnMessage,
                 ...(signal ? { signal } : {}),
             });
             return normalizeGenerateAnswer(answer);

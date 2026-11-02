@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveProviderFormat, buildProviderRequest, resolveProviderResponseText, resolveProviderResponseMessage, resolveStreamDelta } from '../libraries/core/provider-request.js';
+import { resolveProviderFormat, buildProviderRequest, resolveProviderResponseText, resolveProviderResponseMessage, resolveStreamDelta, createStreamToolCallCollector } from '../libraries/core/provider-request.js';
 import { buildOpenAiTools, normalizeToolDefinition, assistantToolMessage, toolResultMessage } from '../libraries/core/provider-tools.js';
 
 const REQUEST = Object.freeze({ prompt: 'hello', systemPrompt: '', temperature: 0.5, maxTokens: 100, topP: 1, topK: 0, seed: 0 });
@@ -375,4 +375,30 @@ test('assistantToolMessage() and toolResultMessage() build the two turns the nex
     assert.deepEqual(message.tool_calls[0].function, { name: 'assess', arguments: '{"a":1}' });
     const result = toolResultMessage({ id: 'c1', name: 'assess' }, { ok: true });
     assert.deepEqual(result, { role: 'tool', tool_call_id: 'c1', name: 'assess', content: '{"ok":true}' });
+});
+
+
+test('an openai stream frame carries reasoning and tool_call fragments, not only text', () => {
+    const frame = { data: JSON.stringify({ choices: [{ delta: { content: 'He', reasoning_content: 'thinking', tool_calls: [{ index: 0, id: 'c1', function: { name: 'assess', arguments: '{"char' } }] } }] }) };
+    const delta = resolveStreamDelta('openai', frame);
+    assert.equal(delta.delta, 'He');
+    assert.equal(delta.reasoning, 'thinking');
+    assert.deepEqual(delta.toolCalls, [{ index: 0, id: 'c1', name: 'assess', arguments: '{"char' }]);
+    assert.equal(resolveStreamDelta('openai', { data: JSON.stringify({ choices: [{ delta: { content: 'x' } }] }) }).toolCalls, undefined, 'no empty keys on ordinary frames');
+});
+
+test('tool_call deltas split across frames are reassembled by index, with parsed arguments', () => {
+    const collector = createStreamToolCallCollector();
+    collector.push(resolveStreamDelta('openai', { data: JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'assess', arguments: '{"character":' } }] } }] }) }).toolCalls);
+    collector.push(resolveStreamDelta('openai', { data: JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"Lena"}' } }] } }] }) }).toolCalls);
+    collector.push(resolveStreamDelta('openai', { data: JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 1, id: 'c2', function: { name: 'await', arguments: '{}' } }] } }] }) }).toolCalls);
+    assert.deepEqual(collector.calls(), [
+        { id: 'c1', name: 'assess', arguments: { character: 'Lena' }, rawArguments: '{"character":"Lena"}' },
+        { id: 'c2', name: 'await', arguments: {}, rawArguments: '{}' },
+    ]);
+});
+
+test('the stream parser keeps working for the other formats and ignores their tool-call shapes safely', () => {
+    assert.equal(resolveStreamDelta('anthropic', { data: JSON.stringify({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hmm' } }) }).reasoning, 'hmm');
+    assert.equal(resolveStreamDelta('google', { data: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'hm', thought: true }] } }] }) }).reasoning, 'hm');
 });

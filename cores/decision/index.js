@@ -167,7 +167,10 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const startedAt = Date.now();
         const journal = store.beginTurn(Boolean(settings.snapshots));
         const beforeSnapshot = settings.snapshots ? snapshotState(runId, journal) : null;
-        const captured = captureReasoning(host, `${runId}:`);
+        const captured = captureReasoning(host, `${runId}:`, {
+            onThinking: text => publishEvent('decision.cycle.thinking', { runId, text }),
+            onAnswer: text => publishEvent('decision.cycle.answer', { runId, text }),
+        });
         try {
             const result = await cycle.run({ chat, runId, type, thinking: () => captured.value, usage: () => captured.usage });
             if (!result.ok) throw new Error(`The director did not submit the turn: ${result.reason ?? 'no form'}.`);
