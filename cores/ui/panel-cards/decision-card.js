@@ -1,6 +1,6 @@
 import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
-import { Card, Toggle, Select, Field, Row, Button, TextArea, Slider, Details } from '../../../libraries/shared/widgets.js';
+import { Card, Toggle, Select, Field, Row, Button, Slider, Details } from '../../../libraries/shared/widgets.js';
 import { SAMPLER_PRESETS } from '../../models/generate-request.js';
 import { rosterView, planView, libraryView, bankView, arcsNotesView, researchView, forcedView, logView } from './decision-views.js';
 
@@ -13,9 +13,7 @@ import { rosterView, planView, libraryView, bankView, arcsNotesView, researchVie
  * ядра), поэтому у него в карточке нет полей ризонинга вовсе — только
  * сэмплер.
  */
-export function createDecisionCard({ call, collapse, notify, workers }) {
-    const directorPrompt = signal('');
-    const writerPrompt = signal('');
+export function createDecisionCard({ call, collapse, notify, workers, openPrompts }) {
     const regen = signal('decider');
     const deciderWorkerId = signal('');
     const writerWorkerId = signal('');
@@ -77,8 +75,6 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     ];
 
     function applySettings(value = {}) {
-        directorPrompt.set(String(value.prompts?.director ?? value.rules ?? ''));
-        writerPrompt.set(String(value.prompts?.writer ?? ''));
         regen.set(value.regen === 'writer' ? 'writer' : 'decider');
         const readDecider = value.decider ?? {};
         deciderWorkerId.set(String(readDecider.workerId ?? ''));
@@ -116,7 +112,6 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
 
     function collect() {
         return {
-            prompts: { director: directorPrompt.peek(), writer: writerPrompt.peek() },
             regen: regen.peek(),
             decider: {
                 workerId: deciderWorkerId.peek(), samplerPreset: decider.samplerPreset.peek(),
@@ -194,14 +189,8 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     function decisionCard() {
         return Card('Director / Writer', { ...collapse.bind('card:decision'), subtitle: 'Every generation: one model decides, another writes' },
             h('small', { class: 'stme-module-hint' }, 'Always on. Without an openai director connection, generation is not sent; this card is opened for you.'),
-            Details('Director prompt',
-                TextArea(directorPrompt, { rows: 8, placeholder: 'Your own instructions for the director. Leave empty for no block.' }),
-                h('small', { class: 'stme-module-hint' }, 'Inserted as a separate system message two cycles from the end of the log. The empty field inserts nothing.'),
-            ),
-            Details('Writer prompt',
-                TextArea(writerPrompt, { rows: 8, placeholder: 'Your own instructions for the writer. Leave empty for no block.' }),
-                h('small', { class: 'stme-module-hint' }, 'Inserted as a separate system message five messages from the end of the story. The empty field inserts nothing.'),
-            ),
+            Row(Button('Open prompts', openPrompts ?? (() => {}))),
+            h('small', { class: 'stme-module-hint' }, 'Two sections in one window, like Prompt Manager: the built-in instructions are locked, and your own prompts move only inside their block. The director block sits two cycles before the end; the writer block sits five messages before the end.'),
             Field('On swipe / regenerate', Select(regen, regenOptions), {
                 hint: 'The default asks the director again. "Writer only" reuses the last decision for this chat and only rewrites the prose.',
             }),

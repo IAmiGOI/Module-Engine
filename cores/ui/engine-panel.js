@@ -216,7 +216,10 @@ export function createEnginePanelCore(host, { mount, mountSettings, listContract
         enabledSignal, collapse, toggleModule, modules, registry: moduleRegistry, notify,
         refresh: () => { modules.set(moduleRegistry?.list() ?? []); syncEnabled(moduleRegistry?.enabled() ?? []); },
     });
-    const { decisionCard, loadDecision } = createDecisionCard({ call, collapse, notify, workers });
+    const { decisionCard, loadDecision } = createDecisionCard({
+        call, collapse, notify, workers,
+        openPrompts: () => host.events.emit('decisionPrompts.openRequested', {}),
+    });
 
     async function open() {
         // Сначала память о свёрнутом — иначе первый кадр раскрылся бы по

@@ -1,0 +1,139 @@
+/* --- prompt sections ------------------------------------------------------------ */
+/* Своё плавающее окно (services/st-pm-ui.js перехватывает иконку ST «AI Response Configuration» — родная панель ST
+   не открывается вообще, ни целиком, ни каким-то под-блоком: ROADMAP.md 5.141). Корень несёт `.stme-panel`
+   (feedback-floating-window-css-scope): окно стоит вне `.stme-panel` движка, своих оверрайдов `.menu_button`/
+   `.text_pole` без этого не было бы, и кнопки/поля выглядели бы сырыми дефолтами ST. */
+.stme-floating-panel.stme-dp-window { z-index: 6950; background: linear-gradient(var(--stme-surface), var(--stme-surface)), #15171e; backdrop-filter: none; -webkit-backdrop-filter: none; }
+/* `min-width: 0` — без него classic flex-контейнер отказывается сжиматься ниже intrinsic-ширины своего контента
+   (два столбца `.stme-dp-split` требуют ~520px), окно раздувается вместо того, чтобы скроллиться, и `@container` ниже
+   никогда не видит узкую ширину — измеряет раздутый контейнер, а не то, что реально видно на телефоне. */
+.stme-dp-window-body { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1; }
+
+/* Вкладки — сегменты в одну строку (без переноса подписи по словам), активная подсвечена. */
+.stme-dp-tabs { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--stme-border); }
+.stme-panel .menu_button.stme-dp-tab { padding: 3px 10px; border-width: 1px; font-size: 12px; white-space: nowrap; border-color: transparent; opacity: .8; }
+.stme-panel .menu_button.stme-dp-tab.stme-dp-tab-active { opacity: 1; border-color: var(--stme-accent); color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 12%, transparent); }
+.stme-panel .menu_button.stme-dp-popout { margin-left: auto; }
+.stme-dp-status { font-size: 12px; opacity: .8; }
+
+/* Панель инструментов редактора: компактные кнопки в одну строку каждая. */
+.stme-panel .stme-dp-toolbar .menu_button { padding: 3px 10px; border-width: 1px; font-size: 12px; white-space: nowrap; }
+
+.stme-dp-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 8px; }
+.stme-dp-toolbar { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+/* Раскладка «список / редактор»: рядом на широком окне, друг под другом на узком (окно можно сузить руками). */
+.stme-dp-split { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr); gap: 10px; align-items: start; min-width: 0; }
+@container (max-width: 620px) { .stme-dp-split { grid-template-columns: 1fr; } }
+.stme-dp-list { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow: auto; }
+.stme-dp-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--stme-radius-sm); border: 1px solid var(--stme-border); cursor: grab; background: var(--stme-level-1); transition: background-color .1s, border-color .1s; }
+.stme-dp-row:hover { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 8%, var(--stme-level-1)); }
+.stme-dp-row:active { cursor: grabbing; }
+.stme-dp-selected { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
+.stme-dp-off .stme-dp-label { opacity: .45; text-decoration: line-through; }
+.stme-dp-kind-group { font-weight: 700; text-transform: uppercase; font-size: .82em; letter-spacing: .04em; background: var(--stme-level-2); border-color: color-mix(in srgb, var(--stme-accent) 35%, var(--stme-border)); border-left: 3px solid var(--stme-accent); }
+.stme-dp-kind-marker .stme-dp-label { color: var(--stme-accent); }
+.stme-dp-kind-module .stme-dp-label { color: var(--stme-ok-bright); }
+.stme-dp-kind-note { font-style: italic; opacity: .8; }
+/* Разделители: цветная полоса, цвет задаёт окно в style строки (рейки областей слева — там же, inset box-shadow). Нижняя полоса тоньше и без условия. */
+.stme-dp-kind-divider { font-weight: 700; font-size: .8em; letter-spacing: .03em; border-width: 2px; cursor: grab; }
+.stme-dp-kind-divider .stme-dp-detail { font-weight: 400; opacity: .85; }
+.stme-dp-divider-end { padding-top: 1px; padding-bottom: 1px; min-height: 18px; }
+.stme-dp-divider-broken { border-style: dashed; opacity: .75; }
+.stme-dp-kind-divider.stme-dp-selected { outline: 2px solid var(--stme-accent); outline-offset: 1px; }
+.stme-dp-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.stme-dp-swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+.stme-dp-swatch-on { border-color: var(--stme-text, #fff); box-shadow: 0 0 0 2px var(--stme-accent); }
+.stme-dp-kind-missing .stme-dp-label { color: var(--stme-danger-bright); }
+.stme-dp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stme-dp-detail { font-size: .8em; opacity: .65; white-space: nowrap; }
+.stme-dp-actions { display: flex; gap: 2px; }
+/* Порядок меняется перетаскиванием и Alt+↑/↓; стрелки — только на тач-экране, где перетаскивания HTML5 нет. */
+.stme-dp-step { display: none; gap: 2px; }
+.stme-android .stme-dp-step { display: flex; }
+.stme-dp-row:focus-visible { outline: 1px solid var(--stme-accent); outline-offset: -1px; }
+.stme-dp-spacer { display: inline-block; width: 24px; height: 24px; box-sizing: border-box; }
+.stme-dp-drop-before { box-shadow: 0 -2px 0 var(--stme-accent); }
+.stme-dp-drop-after { box-shadow: 0 2px 0 var(--stme-accent); }
+.stme-dp-drop-inside { outline: 2px dashed var(--stme-accent); }
+.stme-dp-editor { display: flex; flex-direction: column; gap: 8px; }
+.stme-dp-help { font-size: .85em; opacity: .75; margin: 0; }
+.stme-dp-table { width: 100%; border-collapse: collapse; font-size: .9em; }
+.stme-dp-table th, .stme-dp-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--stme-border); }
+.stme-dp-message pre { white-space: pre-wrap; margin: 2px 0 8px; max-height: 240px; overflow: auto; font-size: .85em; }
+.stme-dp-warning, .stme-dp-advice { padding: 6px 8px; border-left: 3px solid var(--stme-warn); background: color-mix(in srgb, var(--stme-warn) 12%, transparent); margin: 6px 0; }
+/* `box-sizing: border-box` на обеих — иначе бордер кнопки (наследуется от базового `.stme-icon-button`) добавляет ей
+   лишнюю ширину сверх заглушки-спейсера, и текст строк с кнопкой сворачивания и без неё съезжает на разный оффсет. */
+.stme-dp-row .stme-icon-button { width: 24px; height: 24px; min-width: 24px; padding: 0; font-size: 12px; line-height: 1; box-sizing: border-box; }
+.stme-dp-toolbar .menu_button { padding: 3px 10px; }
+.stme-dp-side { position: sticky; top: 0; }
+.stme-dp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 12px; }
+.stme-dp-condition { display: flex; flex-direction: column; gap: 6px; }
+.stme-dp-rulegroup { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-left: 3px solid var(--stme-accent); background: var(--stme-level-1); border-radius: var(--stme-radius-sm); }
+.stme-dp-rule { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: var(--stme-level-2); border-radius: var(--stme-radius-sm); }
+.stme-dp-rule-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.stme-dp-rule-field { display: flex; flex-direction: column; gap: 2px; font-size: .85em; }
+.stme-dp-rule-sentence { font-size: .85em; opacity: .8; font-style: italic; }
+.stme-dp-try { white-space: pre-wrap; padding: 6px 8px; background: var(--stme-level-2); border-radius: var(--stme-radius-sm); margin: 0; }
+.stme-cot-block { margin: 6px 0 0; padding: 4px 8px; border-left: 3px solid var(--stme-accent); background: var(--stme-level-1); border-radius: var(--stme-radius-sm); font-size: .9em; }
+.stme-cot-block pre { white-space: pre-wrap; margin: 2px 0 8px; opacity: .85; }
+.stme-cot-block summary { cursor: pointer; opacity: .8; }
+.stme-dp-ok { padding: 6px 8px; border-left: 3px solid var(--stme-ok); background: color-mix(in srgb, var(--stme-ok) 12%, transparent); margin: 6px 0; }
+
+/* Свой выпадающий список (cores/ui/prompt-manager/dropdown.js) вместо нативного `<select>` — владелец: «убери все
+   дефолтные системные/браузерные кнопки, списки». Список — обычный `<div>`, не popup ОС, поэтому стилизуется
+   целиком, вплоть до скроллбара списка (styles/base — общий оверрайд скроллбара уже покрывает `.stme-dp-dropdown-list`). */
+.stme-dp-dropdown { position: relative; display: block; width: 100%; }
+.stme-panel .stme-dp-dropdown-btn {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%;
+    padding: 4px 10px; border-radius: var(--stme-radius-sm); border: 1px solid var(--stme-border);
+    background: var(--stme-level-1); color: var(--stme-text); font: inherit; text-align: left; cursor: pointer;
+}
+.stme-panel .stme-dp-dropdown-btn:hover { border-color: var(--stme-accent); }
+.stme-dp-dropdown-btn[aria-expanded="true"] { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 10%, var(--stme-level-1)); }
+.stme-dp-dropdown-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stme-dp-dropdown-arrow { opacity: .7; font-size: .85em; }
+/* Список — ВСЕГДА в дереве (dropdown.js), скрыт по умолчанию через `display:none`, а не условным
+   insert/remove — тот вариант живьём давал гонку (диффер эмитил remove и тут же свежий insert того же узла
+   одним тиком, список оставался открытым после выбора). */
+.stme-dp-dropdown-list { display: none; }
+.stme-dp-dropdown-list.stme-dp-dropdown-list-open {
+    display: block;
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; max-height: 220px; overflow: auto;
+    /* `--stme-level-1` — полупрозрачная подложка НАД непрозрачной поверхностью панели, не для парящего попапа: без
+       собственного opaque-слоя ряды под списком (тумблеры, текст) просвечивали сквозь него (найдено живьём).
+       Тот же приём непрозрачности, что у самого окна prompt sections (`.stme-dp-window` выше): цвет темы поверх жёсткого hex. */
+    background: linear-gradient(var(--stme-level-1), var(--stme-level-1)), linear-gradient(var(--stme-surface), var(--stme-surface)), #15171e;
+    border: 1px solid var(--stme-accent); border-radius: var(--stme-radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .4); padding: 4px;
+}
+.stme-dp-dropdown-option { padding: 5px 8px; border-radius: var(--stme-radius-sm); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stme-dp-dropdown-option:hover { background: color-mix(in srgb, var(--stme-accent) 16%, transparent); }
+.stme-dp-dropdown-option-active { color: var(--stme-accent); font-weight: 600; }
+
+/* Число без родных браузерных стрелочек-спиннеров — тот же список жалоб владельца: своё поле, не вид ОС.
+   Селектор нарочно `.stme-dp-window-body`, а не общий `.stme-panel` — правка только для окна prompt sections, не для всего
+   движка (владелец ограничил переделку одним окном). */
+.stme-dp-window-body input.stme-number::-webkit-outer-spin-button, .stme-dp-window-body input.stme-number::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.stme-dp-window-body input.stme-number { -moz-appearance: textfield; appearance: textfield; }
+
+/* Панель сохранения: прилипает к нижней кромке окна на любой вкладке, пока в пресете есть несохранённое. */
+.stme-dp-savebar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-top: 1px solid var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, var(--stme-surface)); }
+.stme-dp-savebar-text { flex: 1 1 160px; font-size: 13px; font-weight: 600; color: var(--stme-accent); }
+.stme-panel .menu_button.stme-dp-savebar-save { padding: 8px 22px; min-height: 36px; font-size: 14px; font-weight: 700; border-width: 2px; border-color: var(--stme-accent); background: var(--stme-accent); color: var(--stme-accent-contrast, #fff); }
+.stme-panel .menu_button.stme-dp-savebar-save:disabled { opacity: .6; }
+.stme-panel .menu_button.stme-dp-savebar-discard { padding: 6px 12px; min-height: 36px; font-size: 13px; opacity: .85; }
+@media (max-width: 520px) { .stme-dp-savebar-save, .stme-dp-savebar-discard { flex: 1 1 40%; } }
+
+/* Прокручивается ТОЛЬКО область вкладки (`.stme-dp-body`), а панель сохранения стоит на нижней кромке окна. Невидимые чекбоксы переключателей —
+   `position: absolute`, и без своей рамки отсчёта у прокручиваемой области они считали ближайшим «позиционированным» предком внешний контейнер окна,
+   выпадали за пределы области и растягивали ВНЕШНЮЮ прокрутку (до 1290px при окне в 640): стоило прокрутить чуть ниже, окно уезжало вверх и под
+   панелью сохранения оставалась пустота. */
+.stme-dp-body { position: relative; }
+.stme-dp-window > .stme-floating-panel-body { overflow: hidden; }
+
+/* Закреплённые системные строки: замок, другой фон, не перетаскиваются. */
+.stme-dp-row-locked { cursor: default; background: color-mix(in srgb, var(--stme-accent) 6%, var(--stme-level-2)); border-style: dashed; }
+.stme-dp-row-locked .stme-dp-label { opacity: .9; }
+.stme-dp-lock { min-width: 1.1em; text-align: center; opacity: .8; }
+.stme-dp-locked-note { font-size: .85em; opacity: .75; }
+.stme-dp-block-text { white-space: pre-wrap; word-break: break-word; font-size: .9em; max-height: 40vh; overflow: auto; }

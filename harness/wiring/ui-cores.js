@@ -18,6 +18,7 @@ import { createInputBarCore } from '../../cores/ui/input-bar/index.js';
 import { createHomeCore } from '../../cores/ui/home/index.js';
 import { createMemoryGraphPanelCore } from '../../cores/ui/memory-graph-panel.js';
 import { createPicturePanelCore } from '../../cores/ui/picture-panel.js';
+import { createDecisionPromptsPanelCore } from '../../cores/ui/decision-prompts-panel.js';
 import { MUSIC_SERVER, BACKGROUNDS_REPO } from './config.js';
 
 /** Интерфейс: Ядро UI, окна (граф, картинка), уведомления, фоны, синхронизация, лента чата, поле ввода, домашний экран. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
@@ -52,6 +53,13 @@ export async function wireUiCores(ctx) {
     const picturePanel = createPicturePanelCore(
         engine.registerCaller('core.ui.picture', 'cores', { tier: 'official', networkAccess: true }),
         { mount: node => uiEngine.mount('picture', node) },
+    );
+    // Окно разделов промптов директора и прозаика — выборочно возвращённый
+    // старый Prompt Manager. Своё floating-окно, открывается иконкой ST через
+    // сервис `stDecisionUi` и событием из карточки.
+    const decisionPromptsPanel = createDecisionPromptsPanelCore(
+        engine.registerCaller('core.ui.decisionPrompts', 'cores', { tier: 'official' }),
+        { mount: node => uiEngine.mount('decisionPrompts', node) },
     );
     // У Модулей СВОЙ реестр UI, отдельный от слотов движка: у каждого
     // включённого Модуля свой независимый Final UI, иначе пути их деревьев
@@ -157,5 +165,5 @@ export async function wireUiCores(ctx) {
     });
 
 
-    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, picturePanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home };
+    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, picturePanel, decisionPromptsPanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home };
 }
