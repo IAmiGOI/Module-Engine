@@ -1,4 +1,5 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
+import { trimThinking, totalLogTokens } from '../../libraries/core/decision-log.js';
 
 /**
  * Хранение блоков и записей прогонов директора в памяти чата. Вынесено из
@@ -20,6 +21,7 @@ export function createDecisionStore({ call, publishEvent }) {
     let plans = [];
     let clock = { minutes: 0, updatedAt: 0 };
     let memoryBank = {};
+    let appendCount = 0;
     let tail = Promise.resolve();
 
     function enqueue(task) {
@@ -92,9 +94,18 @@ export function createDecisionStore({ call, publishEvent }) {
     function appendCycle(cycle) {
         return enqueue(async () => {
             log = [...log, cycle];
+            appendCount += 1;
+            // Thinking — за текущий цикл и два предыдущих. Чистим ПАЧКОЙ на
+            // границе трёх циклов (e0: так платится одно падение префикса раз
+            // в три хода, а не каждый).
+            if (appendCount % 3 === 0) log = trimThinking(log, 2);
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
             return cycle;
         });
+    }
+
+    function logTokens() {
+        return totalLogTokens(log);
     }
 
     function saveRoster(next) {
@@ -223,5 +234,6 @@ export function createDecisionStore({ call, publishEvent }) {
         saveBank,
         appendCycle,
         saveLog,
+        logTokens,
     };
 }

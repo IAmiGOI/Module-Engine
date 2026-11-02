@@ -143,24 +143,29 @@ function rulesSection(rules) {
  * `prompt` — эквивалент для `anthropic`/`google`. Оба варианта собираются из
  * одного и того же порядка частей.
  */
-export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, thoughts = '', plan = null, arcs = [], notes = {}, roster = [], libraryText = '', planMissing = false, toolMode = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, thoughts = '', thoughtMessages = [], plan = null, arcs = [], notes = {}, roster = [], libraryText = '', planMissing = false, toolMode = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = historyMessages(chat, limit);
     // Порядок — от стабильного к меняющемуся: правила, саммари, план/арки,
-    // заметки, ростер, прогоны, thinking, блоки; история и задание в конце.
+    // заметки, библиотека, ростер, прогоны, thinking отдельными сообщениями,
+    // блоки; история и задание в конце.
     const parts = [
         summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(libraryText ?? '').trim(),
         rosterSection(roster), runsSection(runs), String(thoughts ?? '').trim(), blocksSection(blocks),
     ].filter(Boolean);
+    const thoughtList = (Array.isArray(thoughtMessages) ? thoughtMessages : [])
+        .filter(message => String(message?.content ?? '').trim())
+        .map(message => ({ role: 'system', content: String(message.content) }));
     const systemPrompt = [DECIDER_ROLE, rulesSection(rules)].filter(Boolean).join('\n\n');
     const baseTask = toolMode ? DECIDER_TOOL_TASK : DECIDER_TASK;
     const task = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
     const messages = [
         { role: 'system', content: systemPrompt },
         ...parts.map(content => ({ role: 'system', content })),
+        ...thoughtList,
         ...history,
         { role: 'user', content: task },
     ];
-    const prompt = [systemPrompt, ...parts, renderHistory(history), task].filter(Boolean).join('\n\n');
+    const prompt = [systemPrompt, ...parts, ...thoughtList.map(message => message.content), renderHistory(history), task].filter(Boolean).join('\n\n');
     return { systemPrompt, messages, prompt };
 }
 

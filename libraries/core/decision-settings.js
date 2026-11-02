@@ -49,6 +49,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     maxSteps: 50,
     implicitAwait: false,
     formTimeoutMs: 180000,
+    logLimitTokens: 500000,
+    archiveLimitTokens: 500000,
     // Seed оценки — только для тестов; `null` означает настоящий бросок.
     assessSeed: null,
     decider: DEFAULT_DECIDER,
@@ -79,6 +81,8 @@ export function clampDecisionSettings(values = {}) {
         maxSteps: Math.round(number(source.maxSteps, 1, 500, DEFAULT_SETTINGS.maxSteps)),
         implicitAwait: source.implicitAwait === undefined ? DEFAULT_SETTINGS.implicitAwait : Boolean(source.implicitAwait),
         formTimeoutMs: Math.round(number(source.formTimeoutMs, 1000, 3600000, DEFAULT_SETTINGS.formTimeoutMs)),
+        logLimitTokens: Math.round(number(source.logLimitTokens, 1, 5000000, DEFAULT_SETTINGS.logLimitTokens)),
+        archiveLimitTokens: Math.round(number(source.archiveLimitTokens, 1, 5000000, DEFAULT_SETTINGS.archiveLimitTokens)),
         assessSeed: Number.isFinite(source.assessSeed) ? Number(source.assessSeed) : null,
         decider: {
             workerId: text(decider.workerId, DEFAULT_DECIDER.workerId).trim(),

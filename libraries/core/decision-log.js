@@ -82,3 +82,14 @@ export function thinkingSection(cycles) {
         .join('\n\n');
     return body ? `YOUR RECENT THINKING (the last three cycles):\n\n${body}` : '';
 }
+
+/**
+ * То же, но ОТДЕЛЬНЫМИ сообщениями на цикл. Так новое thinking дописывается
+ * в конец и не меняет предыдущие сообщения — кеш префикса переживает
+ * добавление, чего один склеенный блок не даёт.
+ */
+export function thinkingMessages(cycles) {
+    return (Array.isArray(cycles) ? cycles : [])
+        .filter(cycle => String(cycle?.thinking ?? '').trim())
+        .map(cycle => ({ role: 'system', content: `YOUR THINKING FROM CYCLE ${cycle.at}:\n\n${String(cycle.thinking).trim()}` }));
+}

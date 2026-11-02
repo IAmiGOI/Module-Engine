@@ -1,7 +1,7 @@
 import { buildDeciderContext } from '../../libraries/core/decision-context.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { buildToolList } from '../../libraries/core/decision-tools.js';
-import { createCycleRecord, thinkingSection } from '../../libraries/core/decision-log.js';
+import { createCycleRecord, thinkingMessages, compactLog, totalLogTokens } from '../../libraries/core/decision-log.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
@@ -85,7 +85,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     function buildContext({ chat = [], settings, summaries: list }) {
         return buildDeciderContext({
             rules: settings.rules, blocks: store.blocks(), summaries: list, chat, runs: store.runs(),
-            thoughts: thinkingSection(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
+            thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank())].filter(Boolean).join('\n\n'),
             roster: store.roster().active, planMissing: !store.plan(), toolMode: true,
         });
@@ -103,6 +103,45 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             });
             return normalizeGenerateAnswer(answer);
         };
+    }
+
+    const ARC_SUMMARY_SYSTEM = `You compact the director's own log. Summarize the completed arcs into a short, factual record: what happened, what changed, what is still open. Keep names and causal links, drop scene detail. Output ONLY the summary text, no preamble.`;
+
+    /**
+     * Порог лога (500 тыс. по умолчанию). Сначала директор отдельным
+     * запросом пишет сводку завершённых арок; только потом сырые старые
+     * циклы уходят в архив. Нет завершённых арок — предупреждение, лог не
+     * трогаем (лучше честный перегруз, чем потерянный контекст).
+     */
+    async function maybeCompactLog() {
+        const settings = getSettings();
+        const cycles = store.cycles();
+        const before = totalLogTokens(cycles);
+        if (before <= settings.logLimitTokens) return null;
+        const closed = store.arcs().filter(arc => arc.status === 'closed' && !arc.summary);
+        if (!closed.length) {
+            publishEvent('decision.log.warning', { reason: 'no closed arcs to summarize; the log is over the limit', tokens: before });
+            return null;
+        }
+        const worker = deciderWorker(settings);
+        const prompt = closed.map(arc => `ARC: ${arc.title}\nStages: ${(arc.stages ?? []).map(stage => stage.note).filter(Boolean).join('; ') || 'none'}`).join('\n\n');
+        let summary = '';
+        try {
+            summary = await call('model.generate', { workerId: worker.id, systemPrompt: ARC_SUMMARY_SYSTEM, prompt, maxTokens: 1200, temperature: 0, stream: false });
+        } catch (error) {
+            publishEvent('decision.log.warning', { reason: `arc summary failed: ${error?.message ?? error}`, tokens: before });
+            return null;
+        }
+        if (!String(summary ?? '').trim()) {
+            publishEvent('decision.log.warning', { reason: 'the director returned an empty arc summary', tokens: before });
+            return null;
+        }
+        const arcs = store.arcs().map(arc => (closed.some(item => item.id === arc.id) ? { ...arc, summary: String(summary).trim(), summaryAt: now() } : arc));
+        await store.saveArcs(arcs);
+        const result = compactLog(cycles, { limitTokens: settings.logLimitTokens, archiveLimitTokens: settings.archiveLimitTokens, keepCurrent: true });
+        await store.saveLog(result.cycles, { archived: result.archived });
+        publishEvent('decision.log.compacted', { before, after: totalLogTokens(result.cycles), archived: result.archived.length });
+        return result;
     }
 
     async function run({ chat, runId, type = 'normal', thinking = () => '' }) {
@@ -129,6 +168,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             toolCalls: result.trace, thinking: thinking(), warnings: result.warnings, at: startedAt,
         });
         await store.appendCycle(cycle).catch(() => {});
+        await maybeCompactLog().catch(() => {});
 
         if (result.type !== 'submit') {
             publishEvent('decision.cycle.ended', { runId, type: result.type, reason: result.reason, steps: result.steps });
@@ -187,6 +227,7 @@ The user's turn does not wait for you.`;
             thinking: thinking(), warnings: result.warnings, at: startedAt,
         });
         await store.appendCycle(cycle).catch(() => {});
+        await maybeCompactLog().catch(() => {});
         publishEvent('decision.passive.ended', { runId, due: due.length, steps: result.steps, type: result.type });
         return { skipped: false, due: due.length, steps: result.steps, type: result.type };
     }
