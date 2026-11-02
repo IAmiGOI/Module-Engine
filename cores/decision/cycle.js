@@ -2,6 +2,7 @@ import { buildDeciderContext } from '../../libraries/core/decision-context.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { buildToolList, FORCED_MEMORY_TOOL, AWAIT_TOOL } from '../../libraries/core/decision-tools.js';
 import { DIRECTOR_PASSIVE, DIRECTOR_FORCED_MEMORY, DIRECTOR_ARC_SUMMARY, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { buildLorebookContext } from '../../libraries/core/decision-lorebook.js';
 import { createCycleRecord, thinkingMessages, compactLog, totalLogTokens } from '../../libraries/core/decision-log.js';
 import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
@@ -71,13 +72,23 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         try { return (await call('summary.list')) ?? []; } catch { return []; }
     }
 
-    function buildContext({ chat = [], settings, summaries: list, task = '' }) {
+    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '' }) {
         return buildDeciderContext({
             summaries: list, chat, runs: store.runs(),
             thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
-            roster: store.roster().active, planMissing: !store.plan(), directorBlock: settings.prompts.director, task,
+            roster: store.roster().active, planMissing: !store.plan(), directorBlock: settings.prompts.director, lorebookText, task,
         });
+    }
+
+    /** Лорбук — только директору: стабильный текст книги. Ошибка чтения не ломает ход. */
+    async function lorebookTextFor(enabled) {
+        if (!enabled) return '';
+        try {
+            const books = await call('lorebook.books');
+            if (!Array.isArray(books) || !books.length) return '';
+            return buildLorebookContext((await call('lorebook.entries')) ?? []).text;
+        } catch { return ''; }
     }
 
     function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {
@@ -142,12 +153,12 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return result;
     }
 
-    async function run({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null }) {
+    async function run({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
         awaiting = false;
-        const context = buildContext({ chat, settings, summaries: await summaries() });
+        const context = buildContext({ chat, settings, summaries: await summaries(), lorebookText: await lorebookTextFor(lorebook) });
         const tools = await toolsFor(settings, { filter: toolFilter });
         const startedAt = now();
         const controller = new AbortController();
@@ -232,7 +243,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         const worker = deciderWorker(settings);
         state.runId = runId;
         awaiting = false;
-        const context = buildContext({ settings, summaries: await summaries(), task });
+        const context = buildContext({ settings, summaries: await summaries(), task, lorebookText: await lorebookTextFor(true) });
         const messages = context.messages;
         const tools = await toolsFor(settings, { background: true });
         const startedAt = now();

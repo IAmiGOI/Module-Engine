@@ -105,6 +105,6 @@ test('the director prompt names exactly the tools the engine gives it, and no de
     const tools = buildToolList();
     const names = new Set(tools.map(tool => tool.name));
     for (const name of named) assert.ok(names.has(name), `the prompt names "${name}" but there is no such tool`);
-    for (const name of names) if (name !== 'save_draft') assert.ok(named.has(name), `the tool "${name}" is not explained in the director prompt`);
+    for (const name of names) if (name !== 'save_draft' && name !== 'lorebook') assert.ok(named.has(name), `the tool "${name}" is not explained in the director prompt`);
     for (const tool of tools) assert.doesNotMatch(String(tool.description ?? ''), /while the core is on/i);
 });

@@ -1,5 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
-import { resolveBookNames, matchesFilter, mergeBooks, nextUid, blankEntry } from '../../libraries/core/lorebook-sources.js';
+import { resolveBookNames, matchesFilter, mergeBooks, nextUid, blankEntry, searchEntries } from '../../libraries/core/lorebook-sources.js';
 
 const PERSISTENCE_NAMESPACE = 'core.lorebook';
 const PUBLISHED_KEY = 'published';
@@ -327,6 +327,11 @@ export function createLorebookCore(host, { publish } = {}) {
     const unregisters = [
         host.own.register('lorebook.scan', () => scan()),
         host.own.register('lorebook.find', params => find(params)),
+        host.own.register('lorebook.search', params => {
+            const all = [...byUid.values()];
+            const pool = params?.book ? all.filter(entry => entry.book === params.book) : all;
+            return searchEntries(pool, params?.query, { limit: params?.limit });
+        }),
         host.own.register('lorebook.get', params => { const { uid, book } = requireEntryLocation(params); return getEntry(uid, book); }),
         host.own.register('lorebook.books', () => books),
         host.own.register('lorebook.read', params => readBook(params?.name)),

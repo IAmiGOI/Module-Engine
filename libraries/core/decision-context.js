@@ -168,11 +168,11 @@ function notesText(notes) {
  */
 export function buildDeciderContext({
     summaries = [], chat = [], runs = {}, thoughts = '', thoughtMessages = [], plan = null, arcs = [], notes = {},
-    roster = [], libraryText = '', planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
+    roster = [], libraryText = '', lorebookText = '', planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
     const history = directorHistory(chat, limit, directorBlock);
     const parts = [
-        summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(libraryText ?? '').trim(),
+        String(lorebookText ?? '').trim(), summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(libraryText ?? '').trim(),
         rosterSection(roster), runsSection(runs), String(thoughts ?? '').trim(),
     ].filter(Boolean);
     const thoughtList = (Array.isArray(thoughtMessages) ? thoughtMessages : [])

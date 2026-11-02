@@ -308,6 +308,24 @@ export const MEMORY_TOOL = Object.freeze({
     },
 });
 
+export const LOREBOOK_TOOL = Object.freeze({
+    name: 'lorebook',
+    displayName: 'Search or read the lorebook',
+    description: 'Search the connected lorebook for a fact (op "search" with "query"), or read one entry (op "read" with "uid" and "book"). Always-on entries are already in your context; this tool finds the rest. The Writer never sees the lorebook.',
+    parameters: {
+        type: 'object',
+        properties: {
+            op: { type: 'string', enum: ['search', 'read'] },
+            query: { type: 'string', description: 'For search: what to look for.' },
+            uid: { type: 'number', description: 'For read: the entry uid.' },
+            book: { type: 'string', description: 'Optional book name.' },
+            limit: { type: 'number', description: 'How many entries to return (default 8).' },
+            comment: COMMENT,
+        },
+        required: ['op', 'comment'],
+    },
+});
+
 export const SAVE_DRAFT_TOOL = Object.freeze({
     name: 'save_draft',
     displayName: 'Save a draft turn',
@@ -350,7 +368,7 @@ export function buildToolList(externalSchemas = []) {
     const own = [
         UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL,
         SET_CHARACTER_LEVEL_TOOL, SET_CHARACTER_PLAN_TOOL, RESOLVE_CHARACTER_PLAN_TOOL, LIBRARY_TOOL, MEMORY_TOOL,
-        FORCED_MEMORY_TOOL, SPAWN_RESEARCHER_TOOL, RECALL_NAME_TOOL, SAVE_DRAFT_TOOL, AWAIT_TOOL,
+        FORCED_MEMORY_TOOL, SPAWN_RESEARCHER_TOOL, RECALL_NAME_TOOL, LOREBOOK_TOOL, SAVE_DRAFT_TOOL, AWAIT_TOOL,
     ];
     const external = (Array.isArray(externalSchemas) ? externalSchemas : [])
         .filter(schema => schema && String(schema.name ?? '').trim())

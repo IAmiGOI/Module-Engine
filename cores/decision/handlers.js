@@ -235,6 +235,18 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             return { ok: true, kept: Array.isArray(kept) ? kept : [] };
         },
 
+        lorebook: async args => {
+            if (args.op === 'search') {
+                const results = await call('lorebook.search', { query: args.query, book: args.book, limit: args.limit });
+                return { ok: true, results: Array.isArray(results) ? results : [] };
+            }
+            if (args.op === 'read') {
+                const entry = await call('lorebook.get', { uid: args.uid, book: args.book });
+                return entry ? { ok: true, entry } : { ok: false, error: 'There is no such lorebook entry.' };
+            }
+            return { ok: false, error: 'The lorebook tool needs op "search" or "read".' };
+        },
+
         memory: async args => {
             if (args.op === 'write') {
                 const banked = addRecord(store.bank(), { character: args.character, text: args.text, important: args.important === true });
