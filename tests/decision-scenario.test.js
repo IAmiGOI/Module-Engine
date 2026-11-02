@@ -195,6 +195,18 @@ test('when the Prompt Manager is registered, it runs first but the writer body i
     assert.match(body.messages[0].content, /You write the character's next reply/);
 });
 
+test('a director that fails twice aborts the real generation before anything leaves, and the user is told', async () => {
+    const { send, sent, notifications, decisionCore, directorCalls } = await build({ enabled: true, directorFails: true });
+    const result = await send();
+    assert.equal(result.aborted, true);
+    assert.equal(sent.length, 0, 'no request reaches the backend');
+    assert.equal(directorCalls.length, 2, 'one retry before giving up');
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].text, /failed twice/);
+    assert.deepEqual(decisionCore.blocks(), []);
+    assert.deepEqual(decisionCore.runs(), {});
+});
+
 test('a Text Completion request gets a flat writer prompt instead of messages, and still has no reasoning keys', async () => {
     const { send } = await build({ enabled: true });
     const result = await send({ prompt: 'ST prompt', max_new_tokens: 500, temperature: 0.8, stream: true, reasoning_effort: 'low' });

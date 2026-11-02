@@ -184,13 +184,20 @@ test('on regenerate with "writer only" the director is not called again; the las
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_2', chat: [{ mes: 'Hello again?', is_user: true }], type: 'regenerate' } });
     assert.equal(result.ok, true);
     assert.equal(calls.length, 0, 'no new director call');
-    await pipelineCore.run({ pipelineId: PAYLOAD, input: { messages: [{ role: 'system', content: 'ST' }] } });
-    const decision = core.runs()['10'].decision;
-    assert.equal(decision, 'She already decided.');
+    const sent = await pipelineCore.run({ pipelineId: PAYLOAD, input: { messages: [{ role: 'system', content: 'ST' }] } });
+    assert.match(JSON.stringify(sent.value.messages), /She already decided/, 'the writer really used the reused decision');
+    assert.equal(core.runs()['10'].decision, 'She already decided.');
 });
 
 test('on regenerate with the default "decider" the director does run again', async () => {
     const { pipelineCore, calls } = await build({ enabled: true, initialRuns: { 10: { id: 'old', mesid: '10', at: 1, decision: 'old', steps: [] } } });
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_2', chat: [{ mes: 'Hello again?', is_user: true }], type: 'regenerate' } });
+    assert.equal(calls.length, 1);
+});
+
+test('"writer only" with no earlier decision falls back to running the director instead of writing without a plan', async () => {
+    const { pipelineCore, calls } = await build({ enabled: true, patch: { regen: 'writer' } });
+    const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_2', chat: [{ mes: 'Hello?', is_user: true }], type: 'swipe' } });
+    assert.equal(result.ok, true);
     assert.equal(calls.length, 1);
 });
