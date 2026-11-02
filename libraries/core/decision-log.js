@@ -59,4 +59,3 @@ export function cycleTokens(cycle) {
 export function totalLogTokens(cycles) {
     return (Array.isArray(cycles) ? cycles : []).reduce((sum, cycle) => sum + (Number(cycle?.tokens) || cycleTokens(cycle)), 0);
 }
-
