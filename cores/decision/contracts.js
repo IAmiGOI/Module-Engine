@@ -29,6 +29,7 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.research', () => researcher.tasks()),
         host.own.register('decision.names', () => store.names()),
         host.own.register('decision.draft', () => store.draft()),
+        host.own.register('decision.message', params => cycle.sendMessage(params ?? {})),
         host.own.register('decision.reload', () => reload()),
         host.own.register('decision.cardTurn', params => cardTurn(params)),
         host.own.register(decideContract, params => decide(params)),

@@ -46,6 +46,9 @@ export async function runDecisionCycle({
     implicitAwait = false,
     now = () => Date.now(),
     onStep = () => {},
+    onToolStart = () => {},
+    onModelStart = () => {},
+    onModelEnd = () => {},
 } = {}) {
     if (typeof generate !== 'function') throw new Error('runDecisionCycle: "generate" must be a function.');
     const conversation = [...messages];
@@ -62,6 +65,7 @@ export async function runDecisionCycle({
     async function execute(call) {
         const startedAt = now();
         const args = call?.arguments && typeof call.arguments === 'object' ? call.arguments : {};
+        onToolStart({ id: call?.id ?? '', name: call?.name ?? '', args, comment: args.comment ?? '', at: startedAt });
         const problem = commentProblem(args);
         if (problem) {
             const result = { ok: false, error: problem };
@@ -84,7 +88,13 @@ export async function runDecisionCycle({
 
     while (steps < maxSteps) {
         steps += 1;
+        const modelStartedAt = now();
+        onModelStart({ step: steps, at: modelStartedAt });
         const answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: false, returnMessage: true }));
+        onModelEnd({
+            step: steps, at: now(), durationMs: now() - modelStartedAt,
+            text: String(answer?.text ?? ''), toolCalls: Array.isArray(answer?.toolCalls) ? answer.toolCalls : [],
+        });
         if (!answer.toolCalls.length) {
             if (implicitAwait) {
                 warnings.push('the director answered without a tool call; treated as await');

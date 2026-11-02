@@ -60,7 +60,7 @@ test('a swipe returns the bank records and issued names from the rejected turn, 
     assert.equal(made.core.bank().aria.length, 1);
     assert.equal(made.core.names().length, 1);
     assert.equal(made.core.log().length, 1);
-    assert.equal(made.core.log()[0].rejected, undefined);
+    assert.equal(made.core.log()[0].rejected, false);
 
     made.engine.events.emit('st.messageSwiped', {});
     await flush();

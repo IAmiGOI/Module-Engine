@@ -1,23 +1,20 @@
-import { buildDeciderContext } from '../../libraries/core/decision-context.js';
-import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
-import { buildToolList } from '../../libraries/core/decision-tools.js';
+import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/core/decision-prompts.js';
-import { buildLorebookContext } from '../../libraries/core/decision-lorebook.js';
-import { createCycleRecord, thinkingMessages } from '../../libraries/core/decision-log.js';
-import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
+import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
-import { librarySection, duePlans } from '../../libraries/core/decision-library.js';
-import { bankIndex } from '../../libraries/core/decision-bank.js';
-import { researchSection } from '../../libraries/core/decision-researcher.js';
+import { duePlans } from '../../libraries/core/decision-library.js';
 import { createHandlers } from './handlers.js';
 import { createCompaction } from './compaction.js';
 import { createJudge } from './judge.js';
 import { createPlaceReader, createTimeReader, createSimilarity } from './readers.js';
-import { assembleSectionFor } from './prompt-sections.js';
+import { createCycleLive } from './live.js';
+import { createWakeQueue } from './queue.js';
+import { createCycleContext, fallbackDecision, turnWake, wakeFor } from './cycle-context.js';
 
 /**
  * Активный и пассивный циклы директора. Здесь только оркестровка: контекст,
- * модель, инструменты, лог. Исполнители инструментов — в `handlers.js`.
+ * модель, инструменты, лог. Исполнители инструментов — в `handlers.js`,
+ * сборка контекста — в `cycle-context.js`.
  */
 
 const OPENAI_FORMAT = 'openai';
@@ -31,17 +28,12 @@ export class DecisionConfigError extends Error {
     }
 }
 
-function fallbackDecision(form) {
-    const lines = (Array.isArray(form?.characters) ? form.characters : [])
-        .filter(character => String(character?.action ?? '').trim())
-        .map(character => `${character.name}: ${character.action}`);
-    return [String(form?.resolution ?? '').trim(), ...lines].filter(Boolean).join('\n') || 'The turn is decided.';
-}
-
 export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, researcher = null, publishEvent, usage = () => null, now = () => Date.now() }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
-    let awaiting = false; // директор между циклами: отчёт субагента может его разбудить
+    const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
+    const live = createCycleLive({ publishEvent, getTurn: () => state.turnCounter, getClock: () => store.clock().minutes });
+    const context = createCycleContext({ call, store });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
     const similarityScores = createSimilarity(call);
@@ -58,95 +50,52 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     const { maybeCompactLog } = createCompaction({ store, getSettings, deciderWorker, call, now, publishEvent });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
-    async function externalTools() {
-        try {
-            const tools = await call('generation.tools');
-            return Array.isArray(tools) ? tools : [];
-        } catch { return []; }
-    }
-
     function handlersFor(settings) {
         return createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher });
     }
 
-    async function summaries() {
-        try { return (await call('summary.list')) ?? []; } catch { return []; }
-    }
-
-    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', directorBlock = [] }) {
-        return buildDeciderContext({
-            summaries: list, chat, runs: store.runs(),
-            thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
-            libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
-            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, task,
+    function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {
+        const form = result.type === 'submit' ? (result.form ?? {}) : null;
+        const push = form
+            ? buildPush({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '' })
+            : '';
+        if (form) form.push = push;
+        const endedAt = now();
+        const cycle = createCycleRecord({
+            runId, event, messages: result.messages.slice(contextMessages.length), toolCalls: result.trace,
+            thinking: typeof thinking === 'function' ? thinking() : thinking, warnings: result.warnings, at: startedAt,
+            usage: typeof runUsage === 'function' ? runUsage() : runUsage,
+            form, push, wake, turn: state.turnCounter, clockMinutes: store.clock().minutes,
+            workerId, endedAt, durationMs: endedAt - startedAt,
         });
+        return { cycle, form, push };
     }
 
-    /** Пользовательский блок директора — тот же, что раньше брался из `prompts.director`, но собранный из раздела. */
-    async function directorBlockFor(settings, chat, worker) {
-        const block = await assembleSectionFor({ sectionId: 'director', settings, chat, call, model: worker.model });
-        return block.messages;
-    }
-
-    /** Лорбук — только директору: стабильный текст книги. Ошибка чтения не ломает ход. */
-    async function lorebookTextFor(enabled) {
-        if (!enabled) return '';
-        try {
-            const books = await call('lorebook.books');
-            if (!Array.isArray(books) || !books.length) return '';
-            return buildLorebookContext((await call('lorebook.entries')) ?? []).text;
-        } catch { return ''; }
-    }
-
-    function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {
-        let modelCall = 0;
-        return async ({ messages, tools, toolChoice, returnMessage }) => {
-            modelCall += 1;
-            const answer = await call('model.generate', {
-                requestId: `${runId}:${prefix}${modelCall}:${startedAt}`,
-                ...deciderRequestParams(settings.decider),
-                ...(effort ? { reasoningEffort: effort } : {}),
-                workerId: worker.id,
-                messages, tools, toolChoice, stream: false, returnMessage,
-                ...(signal ? { signal } : {}),
-            });
-            return normalizeGenerateAnswer(answer);
-        };
-    }
-
-    async function toolsFor(settings, { background = false, filter = null } = {}) {
-        return buildToolList(await externalTools()).filter(tool => {
-            if (filter && !filter.includes(tool.name)) return false;
-            if (background && tool.name === 'submit_turn') return false;
-            if (!settings.turnDraft && tool.name === 'save_draft') return false;
-            return true;
-        });
-    }
-
-    async function run({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true }) {
+    async function runCycle({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true, wake = null }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
-        awaiting = false;
-        const context = buildContext({
-            chat, settings, summaries: await summaries(), lorebookText: await lorebookTextFor(lorebook),
-            directorBlock: await directorBlockFor(settings, chat ?? [], worker),
-        });
-        const tools = await toolsFor(settings, { filter: toolFilter });
+        wakeQueue.begin();
+        const startedWake = wake ?? turnWake(type);
         const startedAt = now();
+        live.started({ runId, event: type === 'normal' ? 'turn' : type, wake: startedWake, at: startedAt, type });
+        const built = await context.runContext({ settings, chat, lorebook, worker });
+        const tools = await context.toolsFor(settings, { filter: toolFilter });
         const controller = new AbortController();
+        const hooks = live.hooks({ runId, thinking });
         const agent = runDecisionCycle({
-            messages: context.messages,
+            messages: built.messages,
             tools,
-            generate: generateFor({ settings, worker, runId, prefix: '', startedAt, effort: settings.adaptiveReasoning ? 'low' : null, signal: controller.signal }),
+            generate: context.generateFor({ settings, worker, runId, prefix: '', startedAt, effort: settings.adaptiveReasoning ? 'low' : null, signal: controller.signal }),
             handlers: handlersFor(settings),
             callTool,
             maxSteps: settings.maxSteps,
             implicitAwait: Boolean(settings.implicitAwait),
             now,
+            ...hooks,
         });
         let timer = null;
-        const timeout = new Promise(resolve => { timer = setTimeout(() => resolve({ type: 'timeout', reason: 'form timeout', trace: [], warnings: [], steps: 0, messages: context.messages }), settings.formTimeoutMs); });
+        const timeout = new Promise(resolve => { timer = setTimeout(() => resolve({ type: 'timeout', reason: 'form timeout', trace: [], warnings: [], steps: 0, messages: built.messages }), settings.formTimeoutMs); });
         let result;
         try {
             result = await Promise.race([agent, timeout]);
@@ -167,113 +116,159 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
                 meta: { place: draft.scene?.place ?? '', timeBefore: '', timeAfter: '', clockMinutes: store.clock().minutes },
             };
             const push = buildPush({ form, assessments });
+            form.push = push;
             await store.saveDraft(null).catch(() => {});
-            await store.appendCycle(createCycleRecord({
-                runId, event: 'turn', messages: [], toolCalls: [], thinking: thinking(),
-                warnings: ['the form timed out; the saved draft was used'], at: startedAt, usage: runUsage(),
-            })).catch(() => {});
-            awaiting = true;
+            const startedCycle = cycleRecord({
+                runId, event: type === 'normal' ? 'turn' : type, result: { ...result, type: 'await', messages: [], trace: [] },
+                thinking: thinking(), wake: startedWake, startedAt, workerId: worker.id, usage: runUsage,
+            });
+            const warnings = ['the form timed out; the saved draft was used'];
+            const cycle = { ...startedCycle.cycle, form, push, warnings };
+            await store.appendCycle(cycle).catch(() => {});
+            live.form({ runId, form, push });
+            live.finished({ cycle });
+            wakeQueue.rest();
             publishEvent('decision.cycle.draft_used', { runId, minutes: form.scene.minutes });
-            return { ok: true, form, push, decision: fallbackDecision(form), trace: [], warnings: ['form timeout; draft used'], steps: 0, workerId: worker.id, draft: true };
+            return { ok: true, form, push, decision: fallbackDecision(form), trace: [], warnings, steps: 0, workerId: worker.id, draft: true };
         }
 
-        const cycle = createCycleRecord({
-            runId, event: type === 'normal' ? 'turn' : type,
-            messages: result.messages.slice(context.messages.length),
-            toolCalls: result.trace, thinking: thinking(), warnings: result.warnings, at: startedAt, usage: runUsage(),
+        const { cycle, form, push } = cycleRecord({
+            runId, event: type === 'normal' ? 'turn' : type, result, thinking,
+            wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, contextMessages: built.messages,
         });
         await store.appendCycle(cycle).catch(() => {});
         await maybeCompactLog().catch(error => publishEvent('decision.log.warning', { reason: `log compaction failed: ${error?.message ?? error}` }));
+        if (form) live.form({ runId, form, push });
+        live.finished({ cycle });
+        wakeQueue.rest();
 
         if (result.type !== 'submit') {
-            awaiting = true;
             publishEvent('decision.cycle.ended', { runId, type: result.type, reason: result.reason, steps: result.steps });
             return { ok: false, reason: result.reason, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
         }
-        const form = result.form ?? {};
-        const push = buildPush({
-            form, assessments,
-            place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '',
-        });
-        form.push = push;
         const decision = fallbackDecision(form);
-        awaiting = true;
         publishEvent('decision.cycle.submitted', { runId, type, steps: result.steps, characters: form.characters?.length ?? 0 });
         return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
     }
 
+    async function run(options) {
+        try {
+            return await runCycle(options);
+        } catch (error) {
+            wakeQueue.rest();
+            live.failed({ runId: options?.runId, message: error?.message ?? String(error) });
+            throw error;
+        }
+    }
+
     let backgroundTail = Promise.resolve();
 
-    /** Фоновый цикл (планы или отчёт субагента) — строго по одному, не в ходу прозаика. */
+    /** Фоновый цикл (планы, отчёт субагента, сообщение пользователя) — строго по одному, не в ходу прозаика. */
     function enqueueBackground(run) {
         const job = backgroundTail.then(run, run);
         backgroundTail = job.then(() => {}, () => {});
         return job;
     }
 
-    async function backgroundRun({ runId, event, task, thinking = () => '' }) {
+    async function backgroundRun({ runId, event, task, thinking = () => '', wake = null }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
-        awaiting = false;
-        const context = buildContext({
-            settings, summaries: await summaries(), task, lorebookText: await lorebookTextFor(true),
-            directorBlock: await directorBlockFor(settings, [], worker),
-        });
-        const messages = context.messages;
-        const tools = await toolsFor(settings, { background: true });
+        wakeQueue.begin();
+        const startedWake = wake ?? wakeFor({ type: event, label: `The director woke up: ${event}` });
         const startedAt = now();
+        live.started({ runId, event, wake: startedWake, at: startedAt });
+        const built = await context.runContext({ settings, task, worker });
+        const tools = await context.toolsFor(settings, { background: true });
+        const hooks = live.hooks({ runId, thinking });
         const result = await runDecisionCycle({
-            messages,
+            messages: built.messages,
             tools,
-            generate: generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null }),
+            generate: context.generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null }),
             handlers: handlersFor(settings),
             callTool,
             maxSteps: settings.maxSteps,
             implicitAwait: true,
             now,
+            ...hooks,
         });
-        const cycle = createCycleRecord({
-            runId, event, messages: result.messages.slice(messages.length), toolCalls: result.trace,
-            thinking: thinking(), warnings: result.warnings, at: startedAt, usage: usage(),
+        const { cycle } = cycleRecord({
+            runId, event, result, thinking, wake: startedWake, startedAt,
+            workerId: worker.id, usage: usage(), contextMessages: built.messages,
         });
         await store.appendCycle(cycle).catch(() => {});
         await maybeCompactLog().catch(error => publishEvent('decision.log.warning', { reason: `log compaction failed: ${error?.message ?? error}` }));
-        awaiting = true;
+        live.finished({ cycle });
+        wakeQueue.rest();
         publishEvent('decision.passive.ended', { runId, event, steps: result.steps, type: result.type });
         return { skipped: false, steps: result.steps, type: result.type };
     }
 
     /** Пассивный цикл: только если есть завершившиеся планы. */
     function runPassive({ runId, thinking = () => '' } = {}) {
-        return enqueueBackground(async () => {
+        return wakeQueue.schedule(() => {
             const clock = store.clock();
             const due = duePlans(store.plans(), clock.minutes);
             if (!due.length) return { skipped: true, due: 0 };
             const dueText = due.map(plan => `- ${plan.character} (level ${plan.level}): ${plan.summary}${plan.needsNewPlan ? ' [left the active roster — a new plan is needed]' : ''}`).join('\n');
             const draftLine = getSettings().turnDraft ? '\nBefore await, if you can guess the likely next turn, call save_draft with it.' : '';
-            return backgroundRun({ runId, event: 'time', task: fillPrompt(DIRECTOR_PASSIVE, { event: `${dueText}${draftLine}` }), thinking });
+            return backgroundRun({
+                runId, event: 'time', thinking,
+                wake: wakeFor({ type: 'time', label: 'The clock moved', detail: dueText }),
+                task: fillPrompt(DIRECTOR_PASSIVE, { event: `${dueText}${draftLine}` }),
+            });
         });
     }
 
     /** Старт по набору текста: подготовить заготовку хода заранее (настройка, по умолчанию выключена). */
     function runDraft({ runId } = {}) {
-        return enqueueBackground(() => backgroundRun({
+        return wakeQueue.schedule(() => backgroundRun({
             runId: runId ?? `typing_${now()}`,
-            event: 'turn',
+            event: 'typing',
+            wake: wakeFor({ type: 'typing', label: 'The user is typing' }),
             task: 'The user is typing. Prepare a draft of the likely next decisions. If turn drafting is on, call save_draft with it, then await. Do not submit a turn.',
         }));
     }
 
-    /** Отчёт субагента будит директора, только если он между циклами. */
+    /** Отчёт субагента будит директора; во время хода ждёт в очереди. */
     function onResearcherReport(payload = {}) {
-        if (!awaiting) return Promise.resolve({ skipped: true, reason: 'the director is not between cycles' });
-        return enqueueBackground(() => backgroundRun({
+        const task = String(payload.task ?? '');
+        const report = String(payload.report ?? '');
+        return wakeQueue.schedule(() => backgroundRun({
             runId: `researcher_${payload.taskId ?? 'task'}`,
             event: 'researcher',
-            task: fillPrompt(DIRECTOR_PASSIVE, { event: `A researcher reported:\n${String(payload.report ?? '')}` }),
+            wake: wakeFor({ type: 'researcher', label: 'A researcher reported', detail: report, task }),
+            task: fillPrompt(DIRECTOR_PASSIVE, { event: `A researcher reported:\n${report}` }),
         }));
     }
 
-    return { run, runPassive, runDraft, onResearcherReport, judgeForcedMemory, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
+    /** Сообщение пользователя директору: в лог сразу, пробуждение — в очередь. */
+    async function sendMessage({ text } = {}) {
+        const clean = String(text ?? '').trim();
+        if (!clean) return { ok: false, error: 'An empty message is not sent.' };
+        const at = now();
+        const record = createCycleRecord({
+            event: 'message', message: { text: clean, at }, at, endedAt: at, durationMs: 0,
+            wake: wakeFor({ type: 'message', label: 'A message from the user', detail: clean }),
+            turn: state.turnCounter, clockMinutes: store.clock().minutes,
+            workerId: getSettings().decider.workerId || null,
+        });
+        try { await store.appendCycle(record); } catch { /* the wake still runs */ }
+        publishEvent('decision.message.added', { record });
+        const runId = `message_${at.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        wakeQueue.schedule(() => backgroundRun({
+            runId, event: 'message',
+            wake: wakeFor({ type: 'message', label: 'A message from the user', detail: clean, text: clean }),
+            task: fillPrompt(DIRECTOR_PASSIVE, {
+                event: `The user wrote to you directly, outside the story:\n\n${clean}\n\nTreat it as direction for where the story should go, not as an order.`,
+            }),
+        })).catch(error => live.failed({ runId, message: error?.message ?? String(error) }));
+        return { ok: true, record };
+    }
+
+    return {
+        run, runPassive, runDraft, onResearcherReport, sendMessage, judgeForcedMemory,
+        assessments: () => new Map(assessments), resetAssessments: () => assessments.clear(),
+        waiting: () => ({ awaiting: wakeQueue.isAwaiting(), queued: wakeQueue.queued() }),
+    };
 }

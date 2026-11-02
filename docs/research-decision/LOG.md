@@ -1542,3 +1542,30 @@ isodate/weekday`, `trim`, `newline`, `<USER>/<BOT>/<CHAR>`.
 - `DESIGN.md` — раздел «Часть 5»: что уже есть в записи цикла, каких полей не хватает (форма, Push, причина пробуждения, номер хода, RP-время, длительность, сообщения директору), какие события нужны для живого потока.
 - Поток с инструментами возможен, но не флагом: при `stream: true` тело ответа — SSE, а `returnMessage` разбирает его как один JSON, поэтому `tool_calls` теряются; `resolveStreamDelta` читает только текст. Решение — научить разбор потока дельтам `tool_calls` и `reasoning_content` (h3).
 - Кнопка: «Open director» в карточке и постоянная `DockButton` в дереве окна. Окно рисует последние 30 циклов с подгрузкой выше, архив — свёрнутой секцией.
+
+## h1. Данные и события
+
+- `libraries/core/decision-log.js` — запись цикла теперь хранит `form`, `push`,
+  `wake`, `message`, `turn`, `clockMinutes`, `workerId`, `endedAt`,
+  `durationMs`, `rejected`/`rejectedAt`; токены считают и их.
+- `cores/decision/live.js` публикует события хода: `decision.cycle.started`,
+  `decision.cycle.step` (модель ждёт / ответила), `decision.tool.called`,
+  `decision.tool.result`, `decision.cycle.thinking`, `decision.cycle.form`,
+  `decision.cycle.finished`, `decision.cycle.failed`.
+- `cores/decision/queue.js` — очередь событий директора: сообщение
+  пользователю и отчёт субагента не прерывают ход, а ждут его конца.
+- `decision.message` (`cores/decision/contracts.js`) пишет сообщение в лог
+  записью `event: 'message'` и будит директора отдельным циклом; в чат оно
+  не попадает.
+- `cores/decision/cycle-context.js` — контекст и запрос директора вынесены
+  из цикла, чтобы `cycle.js` остался ≤ 300 строк.
+- `libraries/core/decision-feed.js` — чистая модель ленты: цикл → строки
+  (пробуждение, thinking, вызов, assess, форма, Push, отчёт,
+  предупреждение, расходы, сообщение, ответ), живое дописывание событий,
+  фильтры (thinking, только ходы, только пассивные, поиск), архив.
+- В `DIRECTOR_SYSTEM` дословно перенесён абзац «MESSAGES FROM THE USER» из
+  `PROMPTS.md`.
+- Тесты: `tests/decision-feed.test.js` — 7 проверок модели ленты;
+  `tests/decision-core.test.js` — сообщение как запись лога и отдельный
+  цикл, сообщение во время хода ждёт в очереди, абзац промпта дословно.
+- Все тесты решений: **168/168** (166 + 2 новых файла/теста).

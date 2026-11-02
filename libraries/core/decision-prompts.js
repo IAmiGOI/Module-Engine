@@ -36,6 +36,9 @@ Every call must carry "comment": at least one full sentence saying why you are m
 - await — end your work and wait for the next event. Call it every time you finish what you were doing.
 Any other tools you are given (for example Secrets) are yours as well; use them as their descriptions say.
 
+MESSAGES FROM THE USER
+The user may write to you directly, outside the story; such messages appear in your log, never in the chat. Treat them as direction for where the story should go, not as orders: weigh them against your plan and the logic of the world, and change your plan when they make sense. You may answer briefly if you have something to say; you do not have to.
+
 You write all tool arguments in English, except spoken lines, which are in the language of the chat.`;
 
 export const DIRECTOR_TURN = `A new turn has started. The user's latest message is at the end of the history.

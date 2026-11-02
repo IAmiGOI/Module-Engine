@@ -10,7 +10,12 @@ import { estimateTokens } from './token-estimate.js';
  * В чат и прозаику это не попадает ни при каких условиях.
  */
 
-export function createCycleRecord({ id, runId = '', event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], usage = null, at = Date.now() } = {}) {
+export function createCycleRecord({
+    id, runId = '', event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], usage = null,
+    at = Date.now(), endedAt = null, durationMs = null, form = null, push = '', wake = null, message = null,
+    turn = null, clockMinutes = null, workerId = null, rejected = false, rejectedAt = null,
+} = {}) {
+    const number = value => (Number.isFinite(Number(value)) ? Number(value) : null);
     const cycle = {
         id: String(id ?? `cyc_${at.toString(36)}_${Math.random().toString(36).slice(2, 8)}`),
         runId: String(runId ?? ''),
@@ -24,6 +29,19 @@ export function createCycleRecord({ id, runId = '', event = 'turn', messages = [
         thinking: String(thinking ?? ''),
         warnings: (Array.isArray(warnings) ? warnings : []).map(String),
         usage: usage && typeof usage === 'object' ? { ...usage } : null,
+        // Всё, что окно ленты показывает отдельными строками. Хранится здесь,
+        // а не вычисляется в окне: лог — единственный источник прошлого.
+        form: form && typeof form === 'object' ? form : null,
+        push: String(push ?? ''),
+        wake: wake && typeof wake === 'object' ? { ...wake } : null,
+        message: message && typeof message === 'object' ? { text: String(message.text ?? ''), at: message.at ?? at } : null,
+        turn: number(turn),
+        clockMinutes: number(clockMinutes),
+        workerId: workerId ? String(workerId) : null,
+        endedAt: number(endedAt),
+        durationMs: number(durationMs),
+        rejected: Boolean(rejected),
+        rejectedAt: number(rejectedAt),
         tokens: 0,
     };
     cycle.tokens = cycleTokens(cycle);
@@ -34,7 +52,8 @@ export function createCycleRecord({ id, runId = '', event = 'turn', messages = [
 export function cycleTokens(cycle) {
     const messageTokens = (cycle?.messages ?? []).reduce((sum, message) => sum + estimateTokens(message?.content) + 4, 0);
     const callTokens = (cycle?.toolCalls ?? []).reduce((sum, call) => sum + estimateTokens(JSON.stringify(call?.args ?? {})) + estimateTokens(JSON.stringify(call?.result ?? null)), 0);
-    return messageTokens + callTokens + estimateTokens(cycle?.thinking) + estimateTokens((cycle?.warnings ?? []).join('\n'));
+    const formTokens = estimateTokens(JSON.stringify(cycle?.form ?? null)) + estimateTokens(cycle?.push) + estimateTokens(cycle?.message?.text);
+    return messageTokens + callTokens + formTokens + estimateTokens(cycle?.thinking) + estimateTokens((cycle?.warnings ?? []).join('\n'));
 }
 
 export function totalLogTokens(cycles) {

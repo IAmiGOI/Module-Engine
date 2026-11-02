@@ -291,6 +291,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         research: () => researcher.tasks(),
         names: () => store.names(),
         draft: () => store.draft(),
+        message: params => cycle.sendMessage(params),
+        waiting: () => cycle.waiting(),
         unregister: async () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();

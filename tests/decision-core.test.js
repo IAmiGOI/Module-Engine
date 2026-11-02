@@ -4,6 +4,7 @@ import { createEngine } from '../libraries/shared/engine.js';
 import { request } from '../libraries/shared/request.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createDecisionCore } from '../cores/decision/index.js';
+import { DIRECTOR_SYSTEM } from '../libraries/core/decision-prompts.js';
 
 const BEFORE_SEND = 'generation.beforeSend';
 const PAYLOAD = 'generation.payload';
@@ -193,6 +194,53 @@ test('without a configured director worker generation is not sent, the user is t
     assert.deepEqual(reveals[0], { anchor: 'card:decision' }, 'the card is opened for the user');
 });
 
+test('a message to the director is logged as a message and wakes a separate cycle, never touching the chat', async () => {
+    const { core, engine } = await build();
+    const events = [];
+    for (const name of ['decision.message.added', 'decision.cycle.started', 'decision.tool.called', 'decision.tool.result', 'decision.cycle.finished']) {
+        engine.events.subscribe(name, payload => events.push({ name, payload }));
+    }
+    const sent = await core.message({ text: 'Make the night colder.' });
+    assert.equal(sent.ok, true);
+    await flush();
+    await flush();
+    const log = core.log();
+    assert.equal(log[0].event, 'message');
+    assert.equal(log[0].message.text, 'Make the night colder.');
+    const wake = log.find(cycle => cycle.event === 'message' && cycle.wake?.type === 'message');
+    assert.ok(wake, 'the director woke up for the message');
+    assert.equal(wake.wake.detail, 'Make the night colder.');
+    assert.ok(events.some(event => event.name === 'decision.message.added'));
+    assert.ok(events.some(event => event.name === 'decision.cycle.started' && event.payload.event === 'message'));
+    assert.ok(events.some(event => event.name === 'decision.cycle.finished'));
+    assert.equal(events.some(event => event.name === 'decision.tool.called'), true, 'tool calls stream live');
+});
+
+test('a message during a turn waits in the queue and does not call the model until the turn ends', async () => {
+    let release;
+    let modelCalls = 0;
+    const gate = new Promise(resolve => { release = resolve; });
+    const { core, pipelineCore } = await build({
+        reply: async () => {
+            modelCalls += 1;
+            if (modelCalls === 1) await gate;
+            return turnReply();
+        },
+    });
+    const turn = pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
+    while (!modelCalls) await flush();
+    await core.message({ text: 'Wait until the turn is done.' });
+    await flush();
+    assert.equal(modelCalls, 1, 'the message did not interrupt the turn');
+    assert.equal(core.waiting().queued, 1);
+    release();
+    await turn;
+    await flush();
+    await flush();
+    assert.ok(modelCalls >= 2, 'the queued message ran after the turn');
+    assert.ok(core.log().some(cycle => cycle.event === 'message' && cycle.wake?.type === 'message'));
+});
+
 test('a director worker that is not openai is a configuration error too, not a silent fallback', async () => {
     const { pipelineCore, engine, notifications, reveals, calls } = await build({ workers: [{ id: 'director', format: 'anthropic' }] });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
@@ -202,4 +250,10 @@ test('a director worker that is not openai is a configuration error too, not a s
     await flush();
     assert.match(notifications[0].text, /needs an "openai" worker/);
     assert.deepEqual(reveals[0], { anchor: 'card:decision' });
+});
+
+
+test('the MESSAGES FROM THE USER paragraph is in the built-in director prompt word for word', () => {
+    const paragraph = 'MESSAGES FROM THE USER\nThe user may write to you directly, outside the story; such messages appear in your log, never in the chat. Treat them as direction for where the story should go, not as orders: weigh them against your plan and the logic of the world, and change your plan when they make sense. You may answer briefly if you have something to say; you do not have to.';
+    assert.ok(DIRECTOR_SYSTEM.includes(paragraph));
 });
