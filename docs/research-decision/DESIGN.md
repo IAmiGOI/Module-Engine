@@ -987,3 +987,95 @@ fetch (`dispatchStreamingRequest`) и обрывает запрос к подк�
 - `cores/decision/index.js` — только проводка.
 - Тесты: фейковый `fetch`/сеть, регрессия «в ST OpenRouter, у прозаика
   NanoGPT — запрос ушёл на NanoGPT с его ключом и моделью».
+
+## Часть 7. Карточки персонажей → дата-банки (j0)
+
+### Что отдают источники
+
+- **Карточка ST** — `characterCard.get { avatar | name }` →
+  `{ avatar, fields }`; плоские поля `description`, `personality`,
+  `scenario`, `mes_example`, `post_history_instructions`, `system_prompt`.
+  В банк идут `description` и `personality` (и `post_history_instructions`,
+  если это уточнения, а не копия описания); `scenario` — отдельным банком
+  «World / Scene»; `mes_example` — в контекст прозаика как есть, не в банк;
+  `system_prompt` не используется нигде.
+- **Лорбук** — `lorebook.entries` → `{ book, uid, comment, content, key,
+  disable, constant }`. Категории у записи нет. Персонажи отделяются
+  **разделом книги**: запись-разделитель (`comment` или первая строка
+  `content`) вида `-- CHARACTERS --` открывает секцию, следующая такая же
+  строка её закрывает; записи внутри — персонажи. Дополнительно принимается
+  явный префикс `Character:`/`CHARACTER:` в `comment`. Порядок — по `uid`
+  внутри книги; `disable` пропускается.
+- **Персона** — ST держит `power_user.personas[user_avatar]` (имя) и
+  `power_user.persona_descriptions[user_avatar].description` (описание).
+  Сервис `services/st-character.js` получит контракт `stCharacter.persona`;
+  для группового чата — `stCharacter.chatCharacters` (текущий персонаж или
+  участники группы).
+- **Активный ростер** — имена из `decision.roster`; банки строятся по
+  источникам, а ростер решает только, кого видит прозаик.
+
+### Хранение
+
+Два слоя, оба в `core.decision`:
+- **базовый** — `storage.settings`, ключ `characterBanks`: `{ [sourceKey]:
+  { sourceHash, sourceKind, name, text, sizeBand, updatedAt } }`. Бэкап и
+  синхронизация уже возят все extension settings, отдельного хранилища не
+  нужно; ключ — `card:<avatar>`, `lorebook:<book>:<uid>`,
+  `persona:<avatar>`, `scene:<cardAvatar>`.
+- **копия в чате** — `storage.chatMemory`, ключи `characterBanks` (та же
+  форма плюс `rawSource`, `status`, `error`) и `bankColdStart`
+  `{ status, total, done, startedAt, updatedAt }`.
+
+`sourceHash` — хеш текста источника (без `system_prompt` и `mes_example` у
+карточки, с `comment` у записи). Совпал хеш — банк копируется из базового
+слоя без модели; изменился — пересобирается.
+
+### Холодный запуск
+
+`decide()` и `st.chatChanged` запускают `banks.ensureColdStart()`. Он
+собирает источники чата, копирует готовые базовые банки и ставит недостающие
+задачи субагенту; одновременно не больше двух (лимит исследователя).
+Первый ход ждёт этот промис. Ограничение — `bankColdStartTimeoutMs`
+(по умолчанию 120000): по таймауту ход не отменяется, банки остаются
+`pending`, а прозаик получает `rawSource`; окно директора показывает
+«собрано N из M» и ошибки. Ошибка одного банка не валит остальные.
+
+Новый персонаж в ростере без банка: директор пишет короткую версию из
+известного источника сразу, полная сборка — фоновой задачей; ход её не ждёт.
+
+### Формат банка и субагент
+
+Банк — микро-карточка по `guide/knowledge/character-rules.md` и
+`character-cards.md`: тот же скелет (Core goal, Core Personality traits,
+Behaviour, Awareness, Speech, Guidelines, затем свободные разделы), короче.
+`size_band`: `key` — уровни библиотеки 1–2 и главный персонаж карточки,
+`minor` — остальные. Промпт субагента — `PROMPTS.md`, раздел 10, дословно,
+через `fillPrompt`; подстановки `name`, `source_kind`, `source`,
+`canon_hint`, `size_band`, `steps`.
+
+### Что видит каждая роль
+
+- **Директор** — все банки в стабильной части контекста (включая
+  «World / Scene» и персону).
+- **Прозаик** — только банки активного ростера и банк персоны, плюс
+  «World / Scene»; примеры диалогов активных карточек — в самом начале
+  стабильной части; `system_prompt` карточки — нигде.
+
+### Инструменты директора
+
+`character_bank` (`read` / `write` / `rebuild`) с обязательным `comment`;
+чтение и правка — чатовой копии, пересборка — задача субагенту. Схема
+добавляется в `decision-tool-schemas-world.js`, исполнение — в
+`handlers.js`.
+
+### Файлы
+
+- `libraries/core/decision-banks.js` — чистые ключи, хеши, выбор источников,
+  модель банка и размерные полосы.
+- `cores/decision/banks.js` — два слоя, холодный запуск, очередь задач,
+  инструменты.
+- `libraries/core/decision-lorebook.js` — выделение записей персонажей.
+- `libraries/core/decision-context.js` — банки в контекстах, примеры в
+  начале.
+- `cores/decision/window` / окно директора (`cores/ui/decision-window.js`) —
+  список банков, текст, ручная правка, прогресс.
