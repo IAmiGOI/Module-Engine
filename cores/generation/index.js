@@ -305,16 +305,19 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
      * каждый этап получает текущее тело и возвращает новое. Отказ — отмена
      * отправки, а не тихая отправка неполного промпта.
      */
-    async function onSend({ endpoint, payload }) {
+    async function onSend({ endpoint, payload, signal }) {
         publishEvent('generation.sending', { runId: current?.runId ?? null, endpoint });
         if (!pipelines) return { payload };
 
-        const result = await pipelines.run({ pipelineId: PAYLOAD_PIPELINE, input: payload });
+        const result = await pipelines.run({ pipelineId: PAYLOAD_PIPELINE, input: payload, context: { signal, endpoint } });
         if (!result.ok) {
             publishEvent('generation.aborted', { runId: current?.runId ?? null, stage: result.failedStage, error: result.error });
             endRun('aborted');
             return { cancel: true, reason: result.error.message };
         }
+        // Этап вправе ответить за ST целиком: тогда наверх уходит готовый
+        // Response, а к бэкенду ST запрос не идёт вовсе.
+        if (result.value && typeof result.value === 'object' && result.value.respondWith) return { respondWith: result.value.respondWith };
         return { payload: result.value };
     }
 

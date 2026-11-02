@@ -1,7 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
 import { clampDecisionSettings, DECISION_NAMESPACE, DEFAULT_SETTINGS } from '../../libraries/core/decision-settings.js';
-import { buildWriterContext } from '../../libraries/core/decision-context.js';
-import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { createDecisionStore } from './store.js';
 import { createDecisionCycle } from './cycle.js';
 import { createCardTurn } from './card-turn.js';
@@ -10,7 +8,9 @@ import { captureReasoning } from './capture.js';
 import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
 import { registerDecisionContracts } from './contracts.js';
-import { assembleSectionFor, previewSection } from './prompt-sections.js';
+import { previewSection } from './prompt-sections.js';
+import { createWriterProxy } from './writer-proxy.js';
+import { createWriterRewrite } from './rewrite.js';
 import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
 
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
@@ -63,6 +63,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return result.value;
     };
     const store = createDecisionStore({ call, publishEvent });
+    const writerProxy = createWriterProxy({ host, getSettings: () => settings, getWorkers: () => workers });
     const researcher = createResearcher({
         call: callStrict,
         getSettings: () => settings,
@@ -106,7 +107,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return {
             id: REWRITE_STAGE,
             contract: REWRITE_CONTRACT,
-            params: { payload: { $from: '$value' } },
+            params: { payload: { $from: '$value' }, signal: { $from: '$context.signal' }, endpoint: { $from: '$context.endpoint' } },
             onExhausted: 'abort',
         };
     }
@@ -200,16 +201,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }
     }
 
-    async function rewrite(input = {}) {
-        const payload = input.payload ?? input;
-        if (!pending || !payload) return payload;
-        const summaries = (await call('summary.list')) ?? [];
-        const worker = workers.find(item => item.id === settings.writer.workerId);
-        const model = worker && worker.id !== 'st-main' ? String(worker.model ?? '') : '';
-        const writerBlock = (await assembleSectionFor({ sectionId: 'writer', settings, chat: pending.chat, call, model })).messages;
-        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision, writerBlock });
-        return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;
-    }
+    const rewrite = createWriterRewrite({ call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, writerProxy });
 
     /** Предпросмотр раздела: собирает блок и плашки данных для окна промптов. */
     const preview = input => previewSection({ input, settings, call, store });

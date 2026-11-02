@@ -130,7 +130,9 @@ export async function wireDataCores(ctx) {
 
     // «Директор + прозаик» (docs/research-decision/DESIGN.md). По умолчанию
     // выключено: этапы не регистрируются до `decision.configure({ enabled: true })`.
-    const decisionCore = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), {
+    // Прозаик с выбранным подключением ME отвечает ST сам — значит Ядру решений
+    // нужен сетевой Гейт: запрос идёт через `http.request`, не прямым fetch.
+    const decisionCore = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official', networkAccess: true }), {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.decision' }),
     });
 

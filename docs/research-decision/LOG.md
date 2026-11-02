@@ -1640,3 +1640,35 @@ isodate/weekday`, `trim`, `newline`, `<USER>/<BOT>/<CHAR>`.
 - Решение: openai-совместимые источники ST получают поток провайдера почти
   как есть; Claude/Google/Cohere переводятся из openai-дельт; без потока
   JSON подключения подходит всем. Не-chat эндпоинты остаются на ST.
+
+## i1. Ответ ST своим запросом
+
+- `services/st-generation.js` — второй исход обёртки `{ respondWith: Response }`
+  (поток или JSON); обработчику передаётся `signal` из `init`, «Стоп» доходит
+  до запроса к подключению прозаика.
+- `cores/generation/index.js` — результат `fold` может быть
+  `{ respondWith }`; `onSend` отдаёт его наверх. Окружение этапа (`signal`,
+  `endpoint`) идёт через новое `$context` пайплайна
+  (`cores/pipeline/index.js`, `libraries/core/pipeline-runner.js`), `$input`
+  не изменился.
+- `libraries/core/writer-response.js` — чистый перевод openai-кадров в форму
+  источника ST: openai — как есть, Claude — `delta.text`, Google —
+  `candidates.parts`, Cohere — `delta.message.content.text`; безопасный текст
+  ошибки без тела ответа и ключей.
+- `cores/decision/writer-proxy.js` — запрос к подключению прозаика через
+  `host.network` → `http.request` (`buildProviderRequest`, openai-формат),
+  поток/JSON в `Response`, отмена по сигналу, ошибки 401/429/5xx/обрыв с
+  именем подключения.
+- `cores/decision/rewrite.js` — контекст прозаика и выбор «ответить самим или
+  отдать тело ST»; `cores/decision/index.js` сокращён до 297 строк и только
+  проводит этапы. Ядру решений дан `networkAccess: true`
+  (`harness/wiring/data-cores.js`).
+- Первый пункт выбора подключения прозаика (`''`) и `st-main` остаются путём
+  ST: тело подменяется как раньше, адрес и ключ — ST.
+- Тесты: `tests/decision-writer.test.js` — 7 проверок, включая **регрессию
+  владельца** (в ST OpenRouter, у прозаика NanoGPT: запрос ушёл на NanoGPT с
+  его ключом и моделью, бэкенд ST не вызван), поток кадрами, JSON, «Стоп»
+  (сигнал дошёл до провайдера), 401/429/обрыв, отсутствие подключения,
+  перевод ответов. `tests/st-generation-service.test.js` — 2 новые проверки
+  (`respondWith`, передача сигнала).
+- Затронутые наборы: **262/262**; `npm run typecheck` — без ошибок.

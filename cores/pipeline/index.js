@@ -140,7 +140,7 @@ export function createPipelineCore(host, { publish, resolveAs, timeouts } = {}) 
         return own === undefined ? maxMs : clampTimeout(own);
     }
 
-    async function run({ pipelineId, input = null } = {}) {
+    async function run({ pipelineId, input = null, context = null } = {}) {
         const pipeline = requirePipeline(pipelineId);
         runCounter += 1;
         const runId = `pipe_${runCounter}`;
@@ -153,6 +153,7 @@ export function createPipelineCore(host, { publish, resolveAs, timeouts } = {}) 
             stages,
             mode: pipeline.mode,
             input,
+            context,
             // Вот та единственная точка, где объявление превращается в
             // работу — и она идёт ПОД ЛИЧНОСТЬЮ владельца этапа.
             // Этапы пайплайна — критический путь генерации: их запросы к моделям идут вперёд фоновых (`priority: 'pipeline'`).
