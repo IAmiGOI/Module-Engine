@@ -1,6 +1,6 @@
 import { estimateTokens } from './token-estimate.js';
 import { entryHeading } from './lorebook-page.js';
-import { characterLorebookEntries } from './decision-banks.js';
+import { markedLorebookCharacters } from './decision-banks.js';
 
 /**
  * Лорбук директора: маленькая книга едет в стабильную часть контекста
@@ -41,14 +41,14 @@ function renderEntries(entries) {
  * @returns {{ text: string, large: boolean, entries: number, constants: number }}
  */
 /** Записи лорбука без записей-персонажей: те уже едут дата-банками. */
-export function withoutCharacterEntries(entries) {
+export function withoutCharacterEntries(entries, marks = null) {
     const list = Array.isArray(entries) ? entries : [];
-    const characters = new Set(characterLorebookEntries(list).map(entry => `${text(entry.book)}:${text(entry.uid)}`));
+    const characters = new Set(markedLorebookCharacters(list, marks).map(({ entry }) => `${text(entry.book)}:${text(entry.uid)}`));
     return list.filter(entry => !characters.has(`${text(entry?.book) || 'Lorebook'}:${text(entry?.uid)}`));
 }
 
-export function buildLorebookContext(entries, { smallTokens = LOREBOOK_SMALL_TOKENS } = {}) {
-    const active = withoutCharacterEntries(entries).filter(entry => entry && !entry.disable && text(entry.content));
+export function buildLorebookContext(entries, { smallTokens = LOREBOOK_SMALL_TOKENS, marks = null } = {}) {
+    const active = withoutCharacterEntries(entries, marks).filter(entry => entry && !entry.disable && text(entry.content));
     if (!active.length) return { text: '', large: false, entries: 0, constants: 0 };
     const total = active.reduce((sum, entry) => sum + estimateTokens(renderEntry(entry)), 0);
     if (total <= Number(smallTokens)) {
@@ -78,8 +78,8 @@ export function entryMatches(entry, haystack) {
  * Лорбук прозаика. `scanText` — его окно истории и Push: по ним срабатывают ключи записей большой книги.
  * @returns {{ text: string, large: boolean, entries: number }}
  */
-export function buildWriterLorebook(entries, { scanText = '', smallTokens = LOREBOOK_SMALL_TOKENS } = {}) {
-    const active = withoutCharacterEntries(entries).filter(entry => entry && !entry.disable && text(entry.content));
+export function buildWriterLorebook(entries, { scanText = '', smallTokens = LOREBOOK_SMALL_TOKENS, marks = null } = {}) {
+    const active = withoutCharacterEntries(entries, marks).filter(entry => entry && !entry.disable && text(entry.content));
     if (!active.length) return { text: '', large: false, entries: 0 };
     const total = active.reduce((sum, entry) => sum + estimateTokens(renderEntry(entry)), 0);
     if (total <= Number(smallTokens)) return { text: `THE LOREBOOK (always true in this world):\n\n${renderEntries(active)}`, large: false, entries: active.length };

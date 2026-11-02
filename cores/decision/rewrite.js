@@ -25,7 +25,7 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const bankText = banks ? banks.contextFor({ names: store.roster().active, all: false }).text : '';
         const examples = banks ? banks.examplesForCards() : '';
         const decision = pending.push ?? pending.decision;
-        const lorebookText = await writerLorebookText(call, pending.chat, decision);
+        const lorebookText = await writerLorebookText(call, pending.chat, decision, banks);
         const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText, examples, lorebookText });
         if (writerId && writerId !== 'st-main') {
             const own = await writerProxy.respond({ payload, messages: context.messages, signal: input.signal });
@@ -36,11 +36,11 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
 }
 
 /** Лорбук прозаика как есть; ключи большой книги ищутся в его окне истории и в Push. Ошибка чтения не ломает ход. */
-async function writerLorebookText(call, chat, decision) {
+async function writerLorebookText(call, chat, decision, banks = null) {
     try {
         const books = await call('lorebook.books');
         if (!Array.isArray(books) || !books.length) return '';
         const scanText = [...selectRecentChat(chat ?? []).map(message => String(message?.mes ?? '')), String(decision ?? '')].join('\n');
-        return buildWriterLorebook((await call('lorebook.entries')) ?? [], { scanText }).text;
+        return buildWriterLorebook((await call('lorebook.entries')) ?? [], { scanText, marks: banks?.marksForLorebook() ?? null }).text;
     } catch { return ''; }
 }

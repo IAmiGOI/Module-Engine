@@ -51,7 +51,7 @@ export function createCycleContext({ call, store, banks = null }) {
         try {
             const books = await call('lorebook.books');
             if (!Array.isArray(books) || !books.length) return '';
-            return buildLorebookContext((await call('lorebook.entries')) ?? []).text;
+            return buildLorebookContext((await call('lorebook.entries')) ?? [], { marks: banks?.marksForLorebook() ?? null }).text;
         } catch { return ''; }
     }
 

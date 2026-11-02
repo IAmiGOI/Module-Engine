@@ -59,7 +59,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         if (!result.ok) throw new Error(result.error.message);
         return result.value;
     };
-    const banks = createCharacterBanks({ call, callService, getSettings: () => settings, store, researcher, publishEvent });
+    const banks = createCharacterBanks({ call, callService, getSettings: () => settings, getWorkers: () => workers, store, researcher, publishEvent });
     const cycle = createDecisionCycle({
         call: callStrict,
         callTool: async (name, args) => callStrict('generation.callTool', { name, args }),

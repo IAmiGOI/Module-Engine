@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CHARACTER_BANK_BUILDER, fillPrompt } from '../libraries/core/decision-prompts.js';
+import { CHARACTER_BANK_BUILDER, LOREBOOK_MARKER, fillPrompt } from '../libraries/core/decision-prompts.js';
 
 function promptFromDoc() {
     const doc = readFileSync(new URL('../docs/research-decision/PROMPTS.md', import.meta.url), 'utf8');
@@ -17,7 +17,7 @@ test('the bank subagent prompt is the PROMPTS.md section 10 text word for word',
 
 test('every bank placeholder is filled, including the size band', () => {
     const filled = fillPrompt(CHARACTER_BANK_BUILDER, {
-        name: 'Lena', source_kind: 'card', source: 'A traveller.', canon_hint: '',
+        name: 'Lena', source_kind: 'card', source: 'A traveller.', canon_hint: '', aliases: '',
         size_band: 'key', steps: 12,
         // Name Literal mentions the literal macro on purpose; it must stay in the prompt.
         char: '{{char}}',
@@ -36,4 +36,13 @@ test('the size band is key for the main card character and library levels 1–2,
     assert.equal(bankSizeBand({ level: 2 }), 'key');
     assert.equal(bankSizeBand({ level: 3 }), 'minor');
     assert.equal(bankSizeBand({}), 'minor');
+});
+
+
+test('the lorebook marking prompt is the PROMPTS.md section 11 text word for word', () => {
+    const doc = readFileSync(new URL('../docs/research-decision/PROMPTS.md', import.meta.url), 'utf8');
+    const start = doc.indexOf('## 11. Директор — разметка лорбука при холодном запуске');
+    const fence = doc.indexOf('```text', start);
+    const body = doc.indexOf('\n', fence) + 1;
+    assert.equal(LOREBOOK_MARKER, doc.slice(body, doc.indexOf('```', body)).trimEnd());
 });

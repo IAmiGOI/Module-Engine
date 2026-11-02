@@ -5,6 +5,16 @@ import { createBankRecord } from '../../libraries/core/decision-banks.js';
 const BASE_KEY = 'characterBanks';
 const CHAT_KEY = 'characterBanks';
 const COLD_START_KEY = 'bankColdStart';
+const MARKS_KEY = 'lorebookMarks';
+
+function sanitizeMarks(value) {
+    const out = {};
+    for (const [book, record] of Object.entries(value && typeof value === 'object' && !Array.isArray(value) ? value : {})) {
+        if (!record || typeof record !== 'object' || !Array.isArray(record.marks)) continue;
+        out[book] = { sourceHash: String(record.sourceHash ?? ''), marks: record.marks.filter(mark => mark && mark.uid !== undefined && String(mark.name ?? '').trim()), at: Number(record.at) || 0 };
+    }
+    return out;
+}
 
 function sanitizeBanks(value) {
     const out = {};
@@ -17,6 +27,7 @@ function sanitizeBanks(value) {
 
 export function createBankStore({ call }) {
     let base = {};
+    let marks = {};
     let chat = {};
     let coldStart = { status: 'idle', total: 0, done: 0, errors: 0, startedAt: 0, updatedAt: 0 };
     let tail = Promise.resolve();
@@ -28,21 +39,28 @@ export function createBankStore({ call }) {
     }
 
     async function load() {
-        const [baseValue, chatValue, coldValue] = await Promise.all([
+        const [baseValue, marksValue, chatValue, coldValue] = await Promise.all([
             call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: BASE_KEY, fallback: {} }),
+            call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: MARKS_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: CHAT_KEY, fallback: {} }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: COLD_START_KEY, fallback: null }),
         ]);
         base = sanitizeBanks(baseValue);
+        marks = sanitizeMarks(marksValue);
         chat = sanitizeBanks(chatValue);
         coldStart = coldValue && typeof coldValue === 'object' ? { ...coldStart, ...coldValue } : { status: 'idle', total: 0, done: 0, errors: 0, startedAt: 0, updatedAt: 0 };
-        return { base, chat, coldStart };
+        return { base, marks, chat, coldStart };
     }
 
     const saveBase = next => enqueue(async () => {
         base = sanitizeBanks(next);
         await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: BASE_KEY, value: base });
         return base;
+    });
+    const saveMarks = next => enqueue(async () => {
+        marks = sanitizeMarks(next);
+        await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: MARKS_KEY, value: marks });
+        return marks;
     });
     const saveChat = next => enqueue(async () => {
         chat = sanitizeBanks(next);
@@ -56,8 +74,8 @@ export function createBankStore({ call }) {
     });
 
     return {
-        load, saveBase, saveChat, saveColdStart,
-        base: () => ({ ...base }), chat: () => ({ ...chat }), coldStart: () => ({ ...coldStart }),
+        load, saveBase, saveMarks, saveChat, saveColdStart,
+        base: () => ({ ...base }), marks: () => ({ ...marks }), chat: () => ({ ...chat }), coldStart: () => ({ ...coldStart }),
         putBase: record => saveBase({ ...base, [record.sourceKey]: record }).then(() => record),
         putChat: record => saveChat({ ...chat, [record.sourceKey]: record }).then(() => record),
     };

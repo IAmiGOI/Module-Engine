@@ -51,11 +51,13 @@ export function lorebookSourceText(entry = {}) {
 }
 
 /** Запись банка: базовый слой и копия чата отличаются лишь `status`/`rawSource`. */
-export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', status = 'pending', error = null, at = Date.now() }) {
+export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now() }) {
     return {
         sourceKey: String(sourceKey ?? ''), sourceKind: String(sourceKind ?? ''),
         name: text(name), sourceHash: String(sourceHash ?? ''), text: String(bankText ?? ''),
         sizeBand: sizeBand === 'key' ? 'key' : 'minor', rawSource: String(rawSource ?? ''), examples: String(examples ?? ''),
+        aliases: (Array.isArray(aliases) ? aliases : String(aliases ?? '').split(',')).map(item => text(item)).filter(Boolean),
+        canonicalName: text(canonicalName) || text(name),
         status: ['ready', 'pending', 'error', 'short'].includes(status) ? status : 'pending',
         error: error ? String(error) : null, updatedAt: Number(at) || Date.now(),
     };
@@ -68,13 +70,61 @@ export function bankMatches(record, sourceHash) {
 }
 
 /** Готовый промпт субагента для одного источника. */
-export function bankPromptFor({ name, sourceKind, source, canonHint = '', sizeBand = 'minor', steps = 20 }) {
+export function bankPromptFor({ name, sourceKind, source, canonHint = '', aliases = '', sizeBand = 'minor', steps = 20 }) {
     return fillPrompt(CHARACTER_BANK_BUILDER, {
         name: text(name) || 'Unknown', source_kind: sourceKind || 'card', source: text(source),
-        canon_hint: text(canonHint), size_band: sizeBand === 'key' ? 'key' : 'minor', steps,
+        canon_hint: text(canonHint), aliases: text(aliases), size_band: sizeBand === 'key' ? 'key' : 'minor', steps,
         // Name Literal в промпте называет сам макрос — он должен остаться буквальным.
         char: '{{char}}',
     });
+}
+
+function entryKeys(entry) {
+    return [entry?.key, entry?.keys].flatMap(value => (Array.isArray(value) ? value : String(value ?? '').split(','))).map(text).filter(Boolean);
+}
+
+/** Все разделители книги в порядке появления — подсказка для разметки. */
+export function lorebookSections(entries) {
+    return [...new Set((Array.isArray(entries) ? entries : []).map(entry => dividerOf(entry)).filter(Boolean))];
+}
+
+/** Хеш списка записей книги: uid + название + ключи + текст. */
+export function lorebookHash(entries) {
+    const list = [...(Array.isArray(entries) ? entries : [])]
+        .sort((a, b) => (Number(a?.uid) || 0) - (Number(b?.uid) || 0))
+        .map(entry => `${entry?.uid}|${text(entry?.comment)}|${entryKeys(entry).join(',')}|${text(entry?.content)}`);
+    return hashText(list.join('\n'));
+}
+
+function bookMarkList(marks, book) {
+    if (!marks || typeof marks !== 'object') return null;
+    const record = marks[book];
+    if (!record) return null;
+    return Array.isArray(record) ? record : (Array.isArray(record.marks) ? record.marks : null);
+}
+
+/** Отмеченные директором записи: `{ entry, mark }`; для неразмеченной книги — запасной путь по разделам. */
+export function markedLorebookCharacters(entries, marks = null) {
+    const byBook = new Map();
+    for (const entry of Array.isArray(entries) ? entries : []) {
+        const book = text(entry?.book) || 'Lorebook';
+        if (!byBook.has(book)) byBook.set(book, []);
+        byBook.get(book).push(entry);
+    }
+    const found = [];
+    for (const [book, list] of byBook) {
+        const marked = bookMarkList(marks, book);
+        if (marked) {
+            const byUid = new Map(list.map(entry => [Number(entry.uid), entry]));
+            for (const mark of marked) {
+                const entry = byUid.get(Number(mark?.uid));
+                if (entry && !entry.disable) found.push({ entry: { ...entry, book }, mark });
+            }
+        } else {
+            for (const entry of characterLorebookEntries(list)) found.push({ entry: { ...entry, book }, mark: null });
+        }
+    }
+    return found;
 }
 
 function dividerOf(entry) {
@@ -120,7 +170,7 @@ export function characterLorebookEntries(entries) {
 }
 
 /** Все источники чата: карточка (и сцена), записи-персонажи лорбука, персона. */
-export function bankSourcesForChat({ cards = [], persona = null, lorebookEntries = [] } = {}) {
+export function bankSourcesForChat({ cards = [], persona = null, lorebookEntries = [], lorebookMarks = null } = {}) {
     const sources = [];
     (Array.isArray(cards) ? cards : []).forEach((card, index) => {
         const avatar = text(card?.avatar) || text(card?.name) || `card_${index}`;
@@ -132,10 +182,16 @@ export function bankSourcesForChat({ cards = [], persona = null, lorebookEntries
     if (persona && personaSourceText(persona)) {
         sources.push({ sourceKey: personaSourceKey(persona.avatar), sourceKind: 'persona', name: text(persona.name) || 'User', source: personaSourceText(persona), sizeBand: 'key', avatar: text(persona.avatar) });
     }
-    for (const entry of characterLorebookEntries(lorebookEntries)) {
+    for (const { entry, mark } of markedLorebookCharacters(lorebookEntries, lorebookMarks)) {
         const source = lorebookSourceText(entry);
         if (!source) continue;
-        sources.push({ sourceKey: lorebookSourceKey(entry.book, entry.uid), sourceKind: 'lorebook entry', name: text(entry.comment) || `Entry ${entry.uid}`, source, sizeBand: 'minor' });
+        const aliases = mark ? [...(Array.isArray(mark.aliases) ? mark.aliases : String(mark.aliases ?? '').split(','))].map(text).filter(Boolean) : entryKeys(entry);
+        sources.push({
+            sourceKey: lorebookSourceKey(entry.book, entry.uid), sourceKind: 'lorebook entry',
+            name: text(mark?.name) || text(entry.comment) || `Entry ${entry.uid}`,
+            canonicalName: text(entry.comment), aliases, canonHint: text(mark?.franchise),
+            source, sizeBand: mark?.importance === 'key' ? 'key' : 'minor',
+        });
     }
     const seen = new Set();
     return sources.filter(source => (seen.has(source.sourceKey) ? false : (seen.add(source.sourceKey), true)));
@@ -144,7 +200,8 @@ export function bankSourcesForChat({ cards = [], persona = null, lorebookEntries
 export function findBankSource(sources, name) {
     const wanted = text(name).toLowerCase();
     if (!wanted) return null;
-    const exact = (Array.isArray(sources) ? sources : []).filter(source => source.name.toLowerCase() === wanted);
+    const aliases = source => (Array.isArray(source.aliases) ? source.aliases : String(source.aliases ?? '').split(',')).map(text).map(value => value.toLowerCase()).filter(Boolean);
+    const exact = (Array.isArray(sources) ? sources : []).filter(source => text(source.name).toLowerCase() === wanted || aliases(source).includes(wanted));
     return exact.find(source => source.sourceKind === 'card') ?? exact[0] ?? null;
 }
 

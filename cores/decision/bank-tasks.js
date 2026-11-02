@@ -8,7 +8,7 @@ export function createBankTasks({ getSettings, researcher, publishEvent }) {
         if (!String(settings.researcher?.workerId ?? '').trim()) throw new Error('No researcher connection is configured — the bank keeps its raw source.');
         const system = bankPromptFor({
             name: source.name, sourceKind: source.sourceKind, source: source.source,
-            canonHint: source.canonHint ?? '', sizeBand: source.sizeBand ?? 'minor',
+            canonHint: source.canonHint ?? '', aliases: source.aliases ?? '', sizeBand: source.sizeBand ?? 'minor',
             steps: settings.researcher.maxSteps,
         });
         const started = researcher.start({ task: 'Build the data bank now.', system, kind: 'bank', notify: false });

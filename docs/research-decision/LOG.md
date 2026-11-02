@@ -1777,3 +1777,21 @@ isodate/weekday`, `trim`, `newline`, `<USER>/<BOT>/<CHAR>`.
   использование разметки в источниках банков и обоих лорбуках, чистые имена
   и алиасы, `importance → size band`, пустая франшиза как норма, запасной
   путь по разделам с предупреждением.
+
+## k1. Разметка лорбука
+
+- `libraries/core/decision-prompts.js` — раздел 11 `PROMPTS.md` дословно
+  (`LOREBOOK_MARKER`), раздел 10 обновлён (алиасы и пустая франшиза).
+- `cores/decision/lorebook-marker.js` — один вызов воркера директора на
+  книгу, инструмент `mark_lorebook_characters` с проверкой uid/имени/
+  важности, запасной путь при отказе или пустом ответе.
+- `libraries/core/decision-banks.js` — `lorebookHash`, `lorebookSections`,
+  `markedLorebookCharacters`; источники банков от отмеченных записей.
+- `cores/decision/bank-store.js` — базовый слой `lorebookMarks` по книге и
+  хешу списка записей.
+- `cores/decision/banks.js` — разметка перед сборкой банков, кэш по хешу,
+  предупреждения в `bankColdStart.warnings`; `marksForLorebook()`.
+- `libraries/core/decision-lorebook.js` — исключение записей по разметке у
+  директора и прозаика; без разметки — прежний путь по разделам.
+- Тесты: `decision-lorebook-marker` (3), разметка/кэш/запасной путь и
+  исключение по меткам в `decision-banks` и `decision-lorebook`.

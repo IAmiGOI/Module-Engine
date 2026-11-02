@@ -69,6 +69,7 @@ export function registerStCharacterService(bus, { getContext } = {}) {
                     scenario: character.scenario ?? data.scenario ?? '',
                     mes_example: character.mes_example ?? data.mes_example ?? '',
                     post_history_instructions: data.post_history_instructions ?? character.post_history_instructions ?? '',
+                    tags: Array.isArray(character.tags) ? character.tags.map(String) : Array.isArray(data.tags) ? data.tags.map(String) : [],
                 };
             });
     }

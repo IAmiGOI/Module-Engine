@@ -153,6 +153,34 @@ export const LOREBOOK_TOOL = Object.freeze({
 });
 
 
+
+export const MARK_LOREBOOK_CHARACTERS_TOOL = Object.freeze({
+    name: 'mark_lorebook_characters',
+    displayName: 'Mark lorebook characters',
+    description: 'Mark every entry of one lorebook that describes a single character. Entries you do not list are treated as not characters.',
+    parameters: {
+        type: 'object',
+        properties: {
+            characters: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        uid: { type: 'number' },
+                        name: { type: 'string', description: 'The clean name people in the story use.' },
+                        aliases: { type: 'array', items: { type: 'string' }, description: 'Other names, titles and nicknames.' },
+                        importance: { type: 'string', enum: ['key', 'minor'] },
+                        franchise: { type: 'string', description: 'The existing work, only if the entries make it clear; otherwise empty.' },
+                    },
+                    required: ['uid', 'name'],
+                },
+            },
+            comment: COMMENT,
+        },
+        required: ['characters', 'comment'],
+    },
+});
+
 export const CHARACTER_BANK_TOOL = Object.freeze({
     name: 'character_bank',
     displayName: 'Read, edit or rebuild a character bank',

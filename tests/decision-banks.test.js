@@ -13,11 +13,12 @@ const LOREBOOK = [
     { book: 'World', uid: 5, comment: 'The Port', content: 'A wet harbour.' },
 ];
 
-function fakeWorld({ cards = [CARD], persona = PERSONA, entries = LOREBOOK, settings = {}, failName = 'Bram' } = {}) {
+function fakeWorld({ cards = [CARD], persona = PERSONA, entries = LOREBOOK, settings = {}, failName = 'Bram', markReply = null } = {}) {
     const settingsStore = new Map();
     const chatMemory = new Map();
     const base = {};
     const calls = [];
+    const markCalls = [];
     let active = 0;
     let maxActive = 0;
     const key = (namespace, name) => `${namespace}:${name}`;
@@ -27,6 +28,10 @@ function fakeWorld({ cards = [CARD], persona = PERSONA, entries = LOREBOOK, sett
         if (contract === 'storage.chatMemory.get') return chatMemory.has(key(params.namespace, params.key)) ? chatMemory.get(key(params.namespace, params.key)) : params.fallback;
         if (contract === 'storage.chatMemory.set') { chatMemory.set(key(params.namespace, params.key), params.value); return true; }
         if (contract === 'lorebook.entries') return entries;
+        if (contract === 'model.generate') {
+            markCalls.push(params);
+            return { text: '', toolCalls: [{ id: 'mark', name: 'mark_lorebook_characters', arguments: { comment: 'These entries describe single characters.', characters: markReply ?? [] } }] };
+        }
         return undefined;
     };
     const callService = async contract => (contract === 'stCharacter.chatCharacters' ? cards : contract === 'stCharacter.persona' ? persona : []);
@@ -46,11 +51,12 @@ function fakeWorld({ cards = [CARD], persona = PERSONA, entries = LOREBOOK, sett
     };
     const banks = createCharacterBanks({
         call, callService, researcher,
-        getSettings: () => ({ researcher: { workerId: 'subagent', maxSteps: 8 }, bankColdStartTimeoutMs: 500, ...settings }),
+        getSettings: () => ({ researcher: { workerId: 'subagent', maxSteps: 8 }, bankColdStartTimeoutMs: 500, ...(markReply ? { decider: { workerId: 'director' } } : {}), ...settings }),
+        getWorkers: () => [{ id: 'director', format: 'openai', model: 'director/model' }],
         store: { library: () => ({}) },
         publishEvent: () => {},
     });
-    return { banks, calls, call, callService, settingsStore, chatMemory, maxActive: () => maxActive, base };
+    return { banks, calls, markCalls, call, callService, settingsStore, chatMemory, maxActive: () => maxActive, base };
 }
 
 async function newChat(world) {
@@ -158,4 +164,69 @@ test('a card system prompt and mes_example never enter the bank source; examples
     assert.equal(cardSource.source.includes('SYSTEM-CARD'), false);
     assert.equal(cardSource.source.includes('{{char}}'), false);
     assert.match(cardSource.examples, /\{\{char\}\}: "Hi\."/);
+});
+
+
+test('the director marks a villain outside the characters section; the marked entry becomes a bank with a clean name, aliases, key size and franchise', async () => {
+    const entries = [
+        { book: 'Story', uid: 1, comment: '-- VILLAINS AND SIN ARCHBISHOPS --', content: '' },
+        { book: 'Story', uid: 2, comment: 'Rem (Still comatose lmao)', keys: ['Rem-tan'], content: 'A demon maid.' },
+        { book: 'Story', uid: 3, comment: 'The family', content: 'A whole family entry.' },
+    ];
+    const world = fakeWorld({ entries, markReply: [{ uid: 2, name: 'Rem', aliases: ['Rem-tan'], importance: 'key', franchise: '' }], failName: null });
+    await world.banks.ensureColdStart();
+    const rem = world.banks.records().find(record => record.sourceKey === 'lorebook:Story:2');
+    assert.equal(rem.name, 'Rem');
+    assert.equal(rem.sizeBand, 'key');
+    assert.deepEqual(rem.aliases, ['Rem-tan']);
+    assert.equal(world.banks.records().some(record => record.sourceKey === 'lorebook:Story:3'), false, 'an unmarked group entry is not a character');
+});
+
+test('marking is cached by the book hash: an unchanged book is not marked again, a changed one is', async () => {
+    const entries = [{ book: 'Story', uid: 1, comment: 'Rem', content: 'A demon maid.' }];
+    const world = fakeWorld({ entries, markReply: [{ uid: 1, name: 'Rem', importance: 'minor' }], failName: null });
+    await world.banks.ensureColdStart();
+    assert.equal(world.markCalls.length, 1);
+    await newChat(world);
+    await world.banks.ensureColdStart();
+    assert.equal(world.markCalls.length, 1, 'the same book list needs no new marking');
+    entries[0].content = 'A demon maid with a new scar.';
+    await newChat(world);
+    await world.banks.ensureColdStart();
+    assert.equal(world.markCalls.length, 2, 'a changed book is marked again');
+});
+
+test('when marking fails, the section fallback is used and the cold start carries a warning', async () => {
+    const world = fakeWorld();
+    const result = await world.banks.ensureColdStart();
+    assert.ok(result.warnings.some(warning => /was not marked/.test(warning)));
+    assert.equal(world.banks.records().some(record => record.name === 'Lena'), true, 'the section fallback still found Lena');
+});
+
+test('a clean marked name and its aliases match the roster, so no empty short bank is created', async () => {
+    const entries = [
+        { book: 'Story', uid: 1, comment: '-- VILLAINS --', content: '' },
+        { book: 'Story', uid: 2, comment: 'Rem (Still comatose lmao)', key: ['Rem-tan'], content: 'A demon maid.' },
+    ];
+    const world = fakeWorld({ entries, markReply: [{ uid: 2, name: 'Rem', aliases: ['Rem-tan'], importance: 'key', franchise: '' }], failName: null });
+    await world.banks.ensureColdStart();
+    const before = world.banks.records().length;
+    const rem = await world.banks.ensureName('Rem');
+    const alias = await world.banks.ensureName('Rem-tan');
+    assert.equal(rem.status, 'ready');
+    assert.equal(alias.sourceKey, rem.sourceKey);
+    assert.equal(world.banks.records().length, before, 'no extra short bank was created');
+    assert.equal(world.calls.at(-1).system.includes('ALSO KNOWN AS: Rem-tan'), true);
+});
+
+test('the franchise from the marking reaches the subagent prompt, and an empty franchise stays empty', async () => {
+    const entries = [{ book: 'Story', uid: 1, comment: 'Rem', content: 'A demon maid.' }];
+    const withFranchise = fakeWorld({ entries, markReply: [{ uid: 1, name: 'Rem', aliases: ['Rem-tan'], importance: 'key', franchise: 'Re:Zero' }], failName: null });
+    await withFranchise.banks.ensureColdStart();
+    assert.match(withFranchise.calls.at(-1).system, /FRANCHISE: Re:Zero/);
+    assert.match(withFranchise.calls.at(-1).system, /ALSO KNOWN AS: Rem-tan/);
+
+    const original = fakeWorld({ entries, markReply: [{ uid: 1, name: 'Rem', importance: 'minor', franchise: '' }], failName: null });
+    await original.banks.ensureColdStart();
+    assert.match(original.calls.at(-1).system, /FRANCHISE: \n/);
 });

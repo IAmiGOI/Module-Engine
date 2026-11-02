@@ -6,6 +6,7 @@ import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createDecisionCore } from '../cores/decision/index.js';
 import { buildLorebookContext, buildWriterLorebook, withoutCharacterEntries, LOREBOOK_SMALL_TOKENS } from '../libraries/core/decision-lorebook.js';
 import { searchEntries } from '../libraries/core/lorebook-sources.js';
+import { characterLorebookEntries } from '../libraries/core/decision-banks.js';
 
 const long = text => `${text} ${'detail '.repeat(2000)}`;
 const entries = [
@@ -71,6 +72,10 @@ function build({ bookEntries = entries, worker = 'director' } = {}) {
     bus.register('ui.notify', () => true);
     bus.register('ui.reveal', () => true);
     bus.register('model.generate', async params => {
+        if (String(params.messages?.[0]?.content ?? '').startsWith("You are preparing the Director's character data banks")) {
+            const marked = characterLorebookEntries(bookEntries).map(entry => ({ uid: entry.uid, name: entry.comment, importance: 'minor' }));
+            return { text: '', toolCalls: [{ id: 'mark', name: 'mark_lorebook_characters', arguments: { comment: 'These entries describe single characters.', characters: marked } }] };
+        }
         calls.push(params);
         return {
             text: '',
@@ -163,4 +168,14 @@ test('a large book reaches the writer by its always-on entries and the entries w
     assert.match(built.text, /The lighthouse fact/);
     assert.doesNotMatch(built.text, /Ordinary fact/);
     assert.doesNotMatch(built.text, /search/i, 'the writer has no tools, so the text never points at one');
+});
+
+test('the director\'s marking decides which entries are excluded from the lorebook text, not the section headings', () => {
+    const entries = [
+        { book: 'Story', uid: 1, comment: '-- VILLAINS --', content: '' },
+        { book: 'Story', uid: 2, comment: 'Rem (Still comatose lmao)', content: 'A demon maid.' },
+        { book: 'Story', uid: 3, comment: 'The family', content: 'A whole family.' },
+    ];
+    const marks = { Story: { sourceHash: 'x', marks: [{ uid: 2, name: 'Rem', importance: 'key' }] } };
+    assert.deepEqual(withoutCharacterEntries(entries, marks).map(entry => entry.comment), ['-- VILLAINS --', 'The family']);
 });
