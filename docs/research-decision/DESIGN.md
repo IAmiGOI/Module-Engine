@@ -1079,3 +1079,60 @@ Behaviour, Awareness, Speech, Guidelines, затем свободные разд
   начале.
 - `cores/decision/window` / окно директора (`cores/ui/decision-window.js`) —
   список банков, текст, ручная правка, прогресс.
+
+## Часть 8. Разметка лорбука, имена, важность, франшиза (k0)
+
+### Где встаёт разметка
+
+Холодный запуск уже собирает источники в `banks.collectSources()`. Перед
+этим добавляется шаг **разметки книг**: для каждой подключённой книги — один
+вызов воркера директора с промптом `PROMPTS.md`, раздел 11. Ответ —
+`mark_lorebook_characters` с `uid`, чистым `name`, `aliases`, `importance`
+(`key`/`minor`) и `franchise` (может быть пусто). Один вызов на книгу, не на
+запись.
+
+### Хранение
+
+В базовом слое `storage.settings` (`core.decision`) — ключ `lorebookMarks`:
+`{ [book]: { sourceHash, marks: [{ uid, name, aliases, importance, franchise }], at } }`.
+`sourceHash` — хеш списка записей книги (`uid + comment + keys + text`).
+Хеш совпал — разметка берётся без запроса; изменился — книга размечается
+заново. Пустой ответ — законная разметка «персонажей нет»; в хранилище она
+тоже лежит и повторно модель не зовёт.
+
+### Кто использует разметку
+
+- `bankSourcesForChat()` получает `lorebookMarks` и строит записи-персонажи
+  из отмеченных `uid`, а не из разделов.
+- `withoutCharacterEntries()` и оба лорбука (директора и прозаика) исключают
+  ровно отмеченные записи; запись-персонаж не дублируется текстом.
+- Имя банка — `name` из разметки; алиасы хранятся в записи банка и
+  участвуют в `findBankSource`, `ensureName`, `recordsFor` без учёта
+  регистра.
+- `importance: key` → полоса `key`; уровни библиотеки 1–2 тоже `key`.
+- `franchise` из разметки идёт в `canon_hint`; пусто — пустая строка,
+  франшиза не выдумывается ни из карточки, ни из памяти модели.
+- `aliases` уходят в промпт субагента (раздел 10 обновлён).
+
+### Запасной путь
+
+Если воркера директора нет, вызов упал, ответ не разобрался или книга не
+размечена — остаётся прежний поиск по разделам (`-- CHARACTERS --`,
+`Character:`), а в `bankColdStart.warnings` и в окне директора появляется
+предупреждение. Ошибка разметки одной книги не мешает размечать остальные.
+
+### Файлы
+
+- `libraries/core/decision-banks.js` — `lorebookHash`, `lorebookSections`,
+  `characterLorebookEntries(entries, marks)`, источники с алиасами и
+  важностью.
+- `libraries/core/decision-prompts.js` — разделы 10 (обновлён) и 11
+  дословно.
+- `cores/decision/lorebook-marker.js` — один вызов директора на книгу,
+  проверка `mark_lorebook_characters`, запасной путь.
+- `cores/decision/bank-store.js` — базовый слой `lorebookMarks`.
+- `cores/decision/banks.js` — разметка перед сборкой, предупреждения,
+  сопоставление по алиасам.
+- `libraries/core/decision-lorebook.js` — исключение записей по разметке.
+- `cores/decision/handlers.js`, `decision-tool-schemas-world.js` — схема
+  инструмента (только для разметки, не в обычном списке директора).
