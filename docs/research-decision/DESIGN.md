@@ -319,6 +319,30 @@ Guided CoT), до прозаика не доходят. При выключен�
 успел — генерация отменяется с уведомлением (если не включена заготовка
 хода, e11).
 
+## Библиотека, планы и RP-часы
+
+Библиотека (`library`) хранит имя, уровень 1–5 и обновляется инструментами
+`set_character_level` / `set_character_plan`. Планы (`plans`) — отдельный
+список; у каждого срок `dueAt` в **монотонных RP-минутах** (`clock`).
+Минуты берутся из строки RP Time при первом ходе (`Day N, HH:MM`) и дальше
+двигаются только числом `scene.minutes`; модель для этого не нужна.
+
+| уровень | срок плана | поведение |
+|---|---|---|
+| 1 | 180–720 мин (3–12 ч) | несколько действий |
+| 2 | 1440–10080 мин (1–7 дней) | менее подробно |
+| 3 | 720–4320 мин (12 ч – 3 дня) | подробно, без особых деталей |
+| 4 | — | планов нет, `set_character_plan` отказывает |
+| 5 | — | только в ростере; ушёл — запись удалена |
+
+- Персонаж в ростере: план **прерывается** (`interrupted: true`,
+  `approximate: true`, `dueAt: null`) — без времени.
+- Вышел из ростера: план снова ставится в очередь (`dueAt = часы`), и
+  пассивный цикл пишет результат + новый план.
+- Конец плана: `duePlans()` сортирует по `dueAt`; пассивный цикл разбирает
+  **по одному**, ход прозаика не ждёт. Если планов нет — модель не зовётся
+  вовсе.
+
 ## Инструменты директора
 
 Каждый вызов **обязан** нести `comment` — не меньше одного предложения
@@ -337,6 +361,10 @@ Secrets и любого инструмента, зарегистрированн
 | `arc` | `{ op: 'open'\|'close'\|'stage', id?, title?, note?, comment }` | `{ ok: true, arcs }` | закрытая арка не открывается повторно; этапы — строки |
 | `current_state` | `{ comment }` | `{ place, time, planStage, arc, sources }` | только чтение; нет источника — `null` и причина, без выдумки |
 | `memory` | `{ op: 'search'\|'read'\|'write', character?, planId?, query?, text?, important?, comment }` | поиск → `{ records }`; запись → `{ ok, id }` | банк не вставляется в контекст целиком (см. кеш); `important` не сжимается никогда |
+| `set_character_level` | `{ character, level, comment }` | `{ ok, character, level }` | 1–5; уровень 5 — только в ростере |
+| `set_character_plan` | `{ character, summary, steps?, durationMinutes?, comment }` | `{ ok, plan }` | срок по уровню; уровень 4 — отказ; в ростере — без времени |
+| `resolve_character_plan` | `{ character, result, important?, nextSummary?, nextSteps?, nextDurationMinutes?, comment }` | `{ ok, record, nextPlan }` | результат в банк; план закрывается; новый — по тем же правилам |
+| `library` | `{ character?, comment }` | `{ ok, characters }` | только чтение |
 | `forced_memory` | `{ op: 'keep'\|'unkeep'\|'list', summaryId, comment }` | `{ ok, kept }` | работает до свёртки Stage 1 → Stage 2 (см. ниже) |
 | `spawn_researcher` | `{ task, comment }` | `{ ok: true, taskId }` или `{ ok: false, error }` | ≤ 2 задач; третья — отказ, не ожидание; ≤ 50 шагов до отчёта |
 | `recall_name` | `{ gender, culture, setting, comment }` | `{ name, surname? }` или `{ ok: false, error }` | выданное имя не повторяется; кончились — честный отказ |

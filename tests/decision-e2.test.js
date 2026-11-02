@@ -89,7 +89,7 @@ test('assess uses the embedding service, the form validates, the place is read f
     assert.equal(log[0].toolCalls.find(entry => entry.name === 'submit_turn').result.ok, true);
 
     assert.equal(timeShifts.length, 1);
-    assert.deepEqual(timeShifts[0], { runId: 'run_1', minutes: 90, timeBefore: 'Day 1, 08:00 (Morning)', timeAfter: 'Day 1, 09:30 (Morning)' });
+    assert.deepEqual(timeShifts[0], { runId: 'run_1', minutes: 90, timeBefore: 'Day 1, 08:00 (Morning)', timeAfter: 'Day 1, 09:30 (Morning)', clockMinutes: 2010 });
 });
 
 test('the writer receives a Push with place, time, the user result and the degree words — and no tools', async () => {

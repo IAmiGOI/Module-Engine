@@ -16,6 +16,10 @@ export function createDecisionStore({ call, publishEvent }) {
     let directorPlan = null;
     let arcs = [];
     let notes = {};
+    let library = {};
+    let plans = [];
+    let clock = { minutes: 0, updatedAt: 0 };
+    let memoryBank = {};
     let tail = Promise.resolve();
 
     function enqueue(task) {
@@ -51,7 +55,7 @@ export function createDecisionStore({ call, publishEvent }) {
     }
 
     async function reload() {
-        const [storedBlocks, storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes] = await Promise.all([
+        const [storedBlocks, storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank] = await Promise.all([
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'blocks', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
@@ -60,6 +64,10 @@ export function createDecisionStore({ call, publishEvent }) {
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'directorPlan', fallback: null }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'arcs', fallback: [] }),
             call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'notes', fallback: {} }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'library', fallback: {} }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'plans', fallback: [] }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'clock', fallback: { minutes: 0, updatedAt: 0 } }),
+            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'memoryBank', fallback: {} }),
         ]);
         blocks = sanitizeBlocks(storedBlocks);
         runs = sanitizeRuns(storedRuns);
@@ -69,6 +77,10 @@ export function createDecisionStore({ call, publishEvent }) {
         directorPlan = storedPlan && typeof storedPlan === 'object' ? storedPlan : null;
         arcs = Array.isArray(storedArcs) ? storedArcs.filter(arc => arc && typeof arc === 'object') : [];
         notes = storedNotes && typeof storedNotes === 'object' && !Array.isArray(storedNotes) ? storedNotes : {};
+        library = storedLibrary && typeof storedLibrary === 'object' && !Array.isArray(storedLibrary) ? storedLibrary : {};
+        plans = Array.isArray(storedPlans) ? storedPlans.filter(plan => plan && typeof plan === 'object') : [];
+        clock = Number.isFinite(storedClock?.minutes) ? { minutes: Number(storedClock.minutes), updatedAt: Number(storedClock.updatedAt) || 0 } : { minutes: 0, updatedAt: 0 };
+        memoryBank = storedBank && typeof storedBank === 'object' && !Array.isArray(storedBank) ? storedBank : {};
         publishEvent('decision.blocks.changed', { count: blocks.length });
         return { blocks, runs, log };
     }
@@ -114,6 +126,38 @@ export function createDecisionStore({ call, publishEvent }) {
             notes = next && typeof next === 'object' && !Array.isArray(next) ? next : {};
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'notes', value: notes });
             return notes;
+        });
+    }
+
+    function saveLibrary(next) {
+        return enqueue(async () => {
+            library = next && typeof next === 'object' && !Array.isArray(next) ? next : {};
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'library', value: library });
+            return library;
+        });
+    }
+
+    function savePlans(next) {
+        return enqueue(async () => {
+            plans = Array.isArray(next) ? next : [];
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'plans', value: plans });
+            return plans;
+        });
+    }
+
+    function saveClock(next) {
+        return enqueue(async () => {
+            clock = { minutes: Number(next?.minutes) || 0, updatedAt: Number(next?.updatedAt) || Date.now() };
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'clock', value: clock });
+            return clock;
+        });
+    }
+
+    function saveBank(next) {
+        return enqueue(async () => {
+            memoryBank = next && typeof next === 'object' && !Array.isArray(next) ? next : {};
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'memoryBank', value: memoryBank });
+            return memoryBank;
         });
     }
 
@@ -169,6 +213,14 @@ export function createDecisionStore({ call, publishEvent }) {
         saveArcs,
         notes: () => JSON.parse(JSON.stringify(notes)),
         saveNotes,
+        library: () => JSON.parse(JSON.stringify(library)),
+        saveLibrary,
+        plans: () => plans.map(plan => ({ ...plan, steps: [...(plan.steps ?? [])] })),
+        savePlans,
+        clock: () => ({ ...clock }),
+        saveClock,
+        bank: () => JSON.parse(JSON.stringify(memoryBank)),
+        saveBank,
         appendCycle,
         saveLog,
     };

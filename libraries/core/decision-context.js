@@ -143,13 +143,13 @@ function rulesSection(rules) {
  * `prompt` — эквивалент для `anthropic`/`google`. Оба варианта собираются из
  * одного и того же порядка частей.
  */
-export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, thoughts = '', plan = null, arcs = [], notes = {}, roster = [], planMissing = false, toolMode = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, thoughts = '', plan = null, arcs = [], notes = {}, roster = [], libraryText = '', planMissing = false, toolMode = false, limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = historyMessages(chat, limit);
     // Порядок — от стабильного к меняющемуся: правила, саммари, план/арки,
     // заметки, ростер, прогоны, thinking, блоки; история и задание в конце.
     const parts = [
-        summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), rosterSection(roster),
-        runsSection(runs), String(thoughts ?? '').trim(), blocksSection(blocks),
+        summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(libraryText ?? '').trim(),
+        rosterSection(roster), runsSection(runs), String(thoughts ?? '').trim(), blocksSection(blocks),
     ].filter(Boolean);
     const systemPrompt = [DECIDER_ROLE, rulesSection(rules)].filter(Boolean).join('\n\n');
     const baseTask = toolMode ? DECIDER_TOOL_TASK : DECIDER_TASK;

@@ -186,6 +186,10 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 workerId: result.workerId ?? null, trace: result.trace ?? [],
             };
             publishEvent('decision.completed', { runId, edits: edits.length, blocks: applied.blocks.length, workerId: pending.workerId });
+            // Пассивный цикл — ПОСЛЕ формы и НЕ ожидается: прозаик не должен
+            // ждать планов персонажей. Если планов к разбору нет, модели не
+            // будет вовсе.
+            cycle.runPassive({ runId }).catch(error => publishEvent('decision.failed', { runId, message: `passive cycle: ${error?.message ?? error}` }));
             return { decision: result.decision, edits: edits.length };
         } catch (error) {
             recordStep(runId, { attempt, workerId: settings.decider.workerId || null, durationMs: Date.now() - startedAt, error: error?.message ?? String(error) });
@@ -274,6 +278,10 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.own.register('decision.plan', () => store.plan()),
             host.own.register('decision.arcs', () => store.arcs()),
             host.own.register('decision.notes', () => store.notes()),
+            host.own.register('decision.library', () => store.library()),
+            host.own.register('decision.plans', () => store.plans()),
+            host.own.register('decision.clock', () => store.clock()),
+            host.own.register('decision.bank', () => store.bank()),
             host.own.register('decision.reload', () => reload()),
             host.own.register(DECIDE_CONTRACT, params => decide(params)),
             host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
@@ -297,6 +305,10 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         plan: () => store.plan(),
         arcs: () => store.arcs(),
         notes: () => store.notes(),
+        library: () => store.library(),
+        plans: () => store.plans(),
+        clock: () => store.clock(),
+        bank: () => store.bank(),
         unregister: async () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();

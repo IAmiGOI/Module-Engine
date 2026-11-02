@@ -2,18 +2,16 @@ import { buildDeciderContext } from '../../libraries/core/decision-context.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { buildToolList } from '../../libraries/core/decision-tools.js';
 import { createCycleRecord, thinkingSection } from '../../libraries/core/decision-log.js';
-import { assessAction, DIFFICULTY_ANCHORS, EXPERIENCE_ANCHORS, lexicalSimilarity } from '../../libraries/core/decision-probability.js';
 import { parseModelJson } from '../../libraries/core/parse-model-json.js';
 import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
-import { validateTurn } from '../../libraries/core/decision-turn.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
-import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
-import { applyArc, applyCharacterNote, applyPlan, notesFor } from '../../libraries/core/decision-state.js';
+import { librarySection, duePlans } from '../../libraries/core/decision-library.js';
+import { bankIndex } from '../../libraries/core/decision-bank.js';
+import { createHandlers, createPlaceReader, createTimeReader, createSimilarity } from './handlers.js';
 
 /**
- * Один активный цикл директора: собрать контекст, дать модели инструменты,
- * провести вызовы, записать цикл в лог и вернуть форму. Хранение и шины —
- * снаружи (`call`, `callTool`, `store`), здесь только ход.
+ * Активный и пассивный циклы директора. Здесь только оркестровка: контекст,
+ * модель, инструменты, лог. Исполнители инструментов — в `handlers.js`.
  */
 
 const OPENAI_FORMAT = 'openai';
@@ -56,9 +54,11 @@ function fallbackDecision(form) {
 }
 
 export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, publishEvent, now = () => Date.now() }) {
-    let assessmentCounter = 0;
-    let turnCounter = 0;
     const assessments = new Map();
+    const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
+    const resolvePlace = createPlaceReader(call);
+    const lastTimeMark = createTimeReader(call);
+    const similarityScores = createSimilarity(call);
 
     function deciderWorker(settings) {
         const worker = resolveWorker(getWorkers(), settings.decider.workerId);
@@ -74,162 +74,49 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         } catch { return []; }
     }
 
-    const anchorVectors = new Map();
-    async function vectorFor(text, kind) {
-        const key = `${kind}:${text}`;
-        if (anchorVectors.has(key)) return anchorVectors.get(key);
-        const vector = await call('embedding.compute', { text, kind });
-        if (Array.isArray(vector)) anchorVectors.set(key, vector);
-        return Array.isArray(vector) ? vector : null;
+    function handlersFor(settings) {
+        return createHandlers({ store, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores });
     }
 
-    /** Близость слова директора к каждой опоре через e5-small; `null` — модель недоступна, тогда лексика. */
-    async function similarityScores(phrase, anchors) {
-        try {
-            const query = await vectorFor(phrase, 'query');
-            if (!query) return null;
-            const scores = new Map();
-            for (const anchor of anchors) {
-                for (const anchorPhrase of anchor.phrases) {
-                    const vector = await vectorFor(anchorPhrase, 'passage');
-                    if (!vector) continue;
-                    const similarity = await call('embedding.similarity', { a: query, b: vector });
-                    if (Number.isFinite(similarity)) scores.set(anchorPhrase, similarity);
-                }
-            }
-            return scores.size ? scores : null;
-        } catch { return null; }
+    async function summaries() {
+        try { return (await call('summary.list')) ?? []; } catch { return []; }
     }
 
-    async function resolvePlace() {
-        try {
-            const position = await call('map.position.get');
-            if (!position?.nodeId) return '';
-            const nodes = await call('map.nodes.list');
-            const path = await call('map.nodes.containmentPath', { id: position.nodeId });
-            const byId = new Map((Array.isArray(nodes) ? nodes : []).map(node => [node.id, node]));
-            return (Array.isArray(path) ? path : []).map(id => byId.get(id)?.name ?? id).join(' → ');
-        } catch { return ''; }
+    function buildContext({ chat = [], settings, summaries: list }) {
+        return buildDeciderContext({
+            rules: settings.rules, blocks: store.blocks(), summaries: list, chat, runs: store.runs(),
+            thoughts: thinkingSection(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
+            libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank())].filter(Boolean).join('\n\n'),
+            roster: store.roster().active, planMissing: !store.plan(), toolMode: true,
+        });
     }
 
-    async function lastTimeMark() {
-        try {
-            const marks = await call('chatHistory.annotations', { namespace: 'module.time' });
-            const ids = Object.keys(marks ?? {}).sort((a, b) => Number(a) - Number(b));
-            return String(marks?.[ids.at(-1)] ?? '');
-        } catch { return ''; }
-    }
-
-    function handlers({ runId, settings }) {
-        return {
-            update_roster: async args => {
-                const before = store.roster().active;
-                const remove = new Set((Array.isArray(args.remove) ? args.remove : []).map(name => String(name).trim()).filter(Boolean));
-                const next = [...before.filter(name => !remove.has(name))];
-                for (const entry of Array.isArray(args.add) ? args.add : []) {
-                    const name = String(entry?.name ?? '').trim();
-                    if (name && !next.some(existing => existing.toLowerCase() === name.toLowerCase())) next.push(name);
-                }
-                await store.saveRoster({ active: next });
-                return { ok: true, active: next, added: next.filter(name => !before.includes(name)).length, removed: before.filter(name => !next.includes(name)).length };
-            },
-            set_plan: async args => {
-                const applied = applyPlan(store.plan(), args);
-                if (!applied.ok) return { ok: false, error: applied.error };
-                await store.savePlan(applied.plan);
-                return { ok: true, plan: applied.plan };
-            },
-            character_note: async args => {
-                const applied = applyCharacterNote(store.notes(), args);
-                if (!applied.ok) return { ok: false, error: applied.error };
-                await store.saveNotes(applied.notes);
-                return { ok: true, count: notesFor(applied.notes, args.character).length };
-            },
-            arc: async args => {
-                const applied = applyArc(store.arcs(), args);
-                if (!applied.ok) return { ok: false, error: applied.error };
-                await store.saveArcs(applied.arcs);
-                return { ok: true, arcs: applied.arcs.map(arc => ({ id: arc.id, title: arc.title, status: arc.status })) };
-            },
-            current_state: async () => {
-                const place = await resolvePlace();
-                const time = await lastTimeMark();
-                const plan = store.plan();
-                const open = store.arcs().find(arc => arc.status === 'open') ?? null;
-                return {
-                    ok: true,
-                    place: place || null,
-                    time: time || null,
-                    planStage: plan?.stages?.[plan.currentStage] ?? null,
-                    arc: open ? { id: open.id, title: open.title } : null,
-                    sources: { place: place ? 'map' : 'no-position', time: time ? 'rp-time' : 'no-time', plan: plan ? 'plan' : 'no-plan' },
-                };
-            },
-            assess: async args => {
-                assessmentCounter += 1;
-                const id = `asm_${runId}_${assessmentCounter}`;
-                const [difficultyScores, experienceScores] = await Promise.all([
-                    similarityScores(args.difficulty, DIFFICULTY_ANCHORS),
-                    similarityScores(args.experience, EXPERIENCE_ANCHORS),
-                ]);
-                // Обе шкалы проецируются своей близостью; если e5 недоступна — лексика для обеих.
-                const similarity = (text, anchorPhrase) => difficultyScores?.get(anchorPhrase)
-                    ?? experienceScores?.get(anchorPhrase)
-                    ?? lexicalSimilarity(text, anchorPhrase);
-                const seed = Number.isFinite(settings.assessSeed) ? settings.assessSeed + assessmentCounter : undefined;
-                const result = assessAction({
-                    character: args.character, action: args.action, difficulty: args.difficulty, experience: args.experience, seed, similarity,
-                });
-                assessments.set(id, { ...result, id });
-                return { ok: true, id, ...result };
-            },
-            submit_turn: async args => {
-                if (!store.plan() && !args._decision) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };
-                const validation = validateTurn({ form: args, roster: store.roster().active, assessments });
-                if (!validation.ok) return { ok: false, missing: validation.missing };
-                const place = await resolvePlace();
-                const timeBefore = await lastTimeMark();
-                const timeAfter = shiftTimeLabel(timeBefore, validation.normalized.scene.minutes) ?? '';
-                const form = {
-                    ...validation.normalized,
-                    scene: { ...validation.normalized.scene, place: place || validation.normalized.scene.place || '' },
-                    meta: { place, timeBefore, timeAfter },
-                };
-                turnCounter += 1;
-                publishEvent('decision.timeShift', { runId, minutes: validation.normalized.scene.minutes, timeBefore, timeAfter });
-                return { ok: true, turnId: `turn_${turnCounter}`, form };
-            },
-            await: args => ({ ok: true, reason: String(args.reason ?? '') }),
+    function generateFor({ settings, worker, runId, prefix, startedAt }) {
+        let modelCall = 0;
+        return async ({ messages, tools, toolChoice, returnMessage }) => {
+            modelCall += 1;
+            const answer = await call('model.generate', {
+                requestId: `${runId}:${prefix}${modelCall}:${startedAt}`,
+                ...deciderRequestParams(settings.decider),
+                workerId: worker.id,
+                messages, tools, toolChoice, stream: false, returnMessage,
+            });
+            return normalizeGenerateAnswer(answer);
         };
     }
 
     async function run({ chat, runId, type = 'normal', thinking = () => '' }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
-        let summaries = [];
-        try { summaries = (await call('summary.list')) ?? []; } catch { summaries = []; }
-        const context = buildDeciderContext({
-            rules: settings.rules, blocks: store.blocks(), summaries, chat, runs: store.runs(),
-            thoughts: thinkingSection(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
-            roster: store.roster().active, planMissing: !store.plan(), toolMode: true,
-        });
+        state.runId = runId;
+        const context = buildContext({ chat, settings, summaries: await summaries() });
         const tools = buildToolList(await externalTools());
         const startedAt = now();
-        let modelCall = 0;
         const result = await runDecisionCycle({
             messages: context.messages,
             tools,
-            generate: async ({ messages, tools: list, toolChoice, stream, returnMessage }) => {
-                modelCall += 1;
-                const answer = await call('model.generate', {
-                    requestId: `${runId}:${modelCall}:${startedAt}`,
-                    ...deciderRequestParams(settings.decider),
-                    workerId: worker.id,
-                    messages, tools: list, toolChoice, stream: false, returnMessage,
-                });
-                return normalizeGenerateAnswer(answer);
-            },
-            handlers: handlers({ chat, runId, settings }),
+            generate: generateFor({ settings, worker, runId, prefix: '', startedAt }),
+            handlers: handlersFor(settings),
             callTool,
             maxSteps: settings.maxSteps,
             implicitAwait: Boolean(settings.implicitAwait),
@@ -239,10 +126,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         const cycle = createCycleRecord({
             event: type === 'normal' ? 'turn' : type,
             messages: result.messages.slice(context.messages.length),
-            toolCalls: result.trace,
-            thinking: thinking(),
-            warnings: result.warnings,
-            at: startedAt,
+            toolCalls: result.trace, thinking: thinking(), warnings: result.warnings, at: startedAt,
         });
         await store.appendCycle(cycle).catch(() => {});
 
@@ -261,5 +145,51 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
     }
 
-    return { run, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
+    const PASSIVE_TASK = `Some character plans have ended by RP time. Handle them in the order given, oldest first:
+- call resolve_character_plan for each: say what actually came of the plan, mark the record "important" if it must never be compressed, and give the next plan when one is due;
+- do not submit a turn in this cycle;
+- when the list is empty, call await.
+The user's turn does not wait for you.`;
+
+    let passiveTail = Promise.resolve();
+
+    /** Пассивный цикл: только если есть завершившиеся планы. Очередь — строго по одному. */
+    function runPassive({ runId, thinking = () => '' } = {}) {
+        const job = passiveTail.then(() => passiveRun({ runId, thinking }), () => passiveRun({ runId, thinking }));
+        passiveTail = job.then(() => {}, () => {});
+        return job;
+    }
+
+    async function passiveRun({ runId, thinking }) {
+        const clock = store.clock();
+        const due = duePlans(store.plans(), clock.minutes);
+        if (!due.length) return { skipped: true, due: 0 };
+        const settings = getSettings();
+        const worker = deciderWorker(settings);
+        state.runId = runId;
+        const context = buildContext({ settings, summaries: await summaries() });
+        const dueText = due.map(plan => `- ${plan.character} (level ${plan.level}): ${plan.summary}${plan.needsNewPlan ? ' [left the active roster — a new plan is needed]' : ''}`).join('\n');
+        const messages = [...context.messages, { role: 'user', content: `${PASSIVE_TASK}\n\n${dueText}` }];
+        const tools = buildToolList(await externalTools()).filter(tool => tool.name !== 'submit_turn');
+        const startedAt = now();
+        const result = await runDecisionCycle({
+            messages,
+            tools,
+            generate: generateFor({ settings, worker, runId, prefix: 'p', startedAt }),
+            handlers: handlersFor(settings),
+            callTool,
+            maxSteps: settings.maxSteps,
+            implicitAwait: true,
+            now,
+        });
+        const cycle = createCycleRecord({
+            event: 'time', messages: result.messages.slice(messages.length), toolCalls: result.trace,
+            thinking: thinking(), warnings: result.warnings, at: startedAt,
+        });
+        await store.appendCycle(cycle).catch(() => {});
+        publishEvent('decision.passive.ended', { runId, due: due.length, steps: result.steps, type: result.type });
+        return { skipped: false, due: due.length, steps: result.steps, type: result.type };
+    }
+
+    return { run, runPassive, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
 }

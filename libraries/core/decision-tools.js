@@ -179,6 +179,71 @@ export const CURRENT_STATE_TOOL = Object.freeze({
     },
 });
 
+export const SET_CHARACTER_LEVEL_TOOL = Object.freeze({
+    name: 'set_character_level',
+    displayName: 'Set a character level',
+    description: 'Put a character into the library with a level 1–5. Level 1 plans last 3–12 hours, level 2 several days, level 3 a detailed plan with no special details, level 4 has no plans, level 5 exists only while the character is in the active roster.',
+    parameters: {
+        type: 'object',
+        properties: {
+            character: { type: 'string' },
+            level: { type: 'number', description: '1–5.' },
+            comment: COMMENT,
+        },
+        required: ['character', 'level', 'comment'],
+    },
+});
+
+export const SET_CHARACTER_PLAN_TOOL = Object.freeze({
+    name: 'set_character_plan',
+    displayName: 'Set a character plan',
+    description: 'Give a library character a plan. Outside the active roster the plan runs for the level\'s duration; inside the roster it is interrupted and approximate, with no due time. Level 4 takes no plans.',
+    parameters: {
+        type: 'object',
+        properties: {
+            character: { type: 'string' },
+            summary: { type: 'string', description: 'What the character is doing and heading toward.' },
+            steps: { type: 'array', items: { type: 'string' } },
+            durationMinutes: { type: 'number', description: 'For a timed plan: level 1 180–720, level 2 1440–10080, level 3 720–4320.' },
+            comment: COMMENT,
+        },
+        required: ['character', 'summary', 'comment'],
+    },
+});
+
+export const RESOLVE_CHARACTER_PLAN_TOOL = Object.freeze({
+    name: 'resolve_character_plan',
+    displayName: 'Resolve a finished plan',
+    description: 'When a plan ends by RP time, write what came of it, mark it resolved and (optionally) give the next plan. The result goes into the memory bank; mark it "important" if it must never be compressed.',
+    parameters: {
+        type: 'object',
+        properties: {
+            character: { type: 'string' },
+            result: { type: 'string', description: 'What actually came of the plan.' },
+            important: { type: 'boolean', description: 'Never compress this record.' },
+            nextSummary: { type: 'string', description: 'Optional next plan.' },
+            nextSteps: { type: 'array', items: { type: 'string' } },
+            nextDurationMinutes: { type: 'number' },
+            comment: COMMENT,
+        },
+        required: ['character', 'result', 'comment'],
+    },
+});
+
+export const LIBRARY_TOOL = Object.freeze({
+    name: 'library',
+    displayName: 'Read the character library',
+    description: 'Read the library: levels, notes and current plans of characters. Read-only.',
+    parameters: {
+        type: 'object',
+        properties: {
+            character: { type: 'string', description: 'Optional: one character instead of the whole library.' },
+            comment: COMMENT,
+        },
+        required: ['comment'],
+    },
+});
+
 export const AWAIT_TOOL = Object.freeze({
     name: 'await',
     displayName: 'Await an event',
@@ -196,7 +261,10 @@ export const AWAIT_TOOL = Object.freeze({
 
 /** Все схемы движка, к которым добавляются чужие инструменты при включённом ядре. */
 export function buildToolList(externalSchemas = []) {
-    const own = [UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL, AWAIT_TOOL];
+    const own = [
+        UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL,
+        SET_CHARACTER_LEVEL_TOOL, SET_CHARACTER_PLAN_TOOL, RESOLVE_CHARACTER_PLAN_TOOL, LIBRARY_TOOL, AWAIT_TOOL,
+    ];
     const external = (Array.isArray(externalSchemas) ? externalSchemas : [])
         .filter(schema => schema && String(schema.name ?? '').trim())
         .map(withComment);
