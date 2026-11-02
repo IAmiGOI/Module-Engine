@@ -193,7 +193,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }
     }
 
-    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending });
+    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, banks });
 
     /** Предпросмотр раздела: собирает блок и плашки данных для окна промптов. */
     const preview = input => previewSection({ input, settings, call, store });

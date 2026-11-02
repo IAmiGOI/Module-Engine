@@ -9,7 +9,7 @@ import { createWriterProxy } from './writer-proxy.js';
  * подключения нет — прежний путь: подменяем тело запроса ST, адрес и ключ
  * остаются ST.
  */
-export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending }) {
+export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending, banks = null }) {
     const writerProxy = createWriterProxy({ host, getSettings, getWorkers });
     return async function rewrite(input = {}) {
         const payload = input.payload ?? input;
@@ -21,7 +21,9 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const worker = writerId ? getWorkers().find(item => item.id === writerId) : null;
         const model = worker && worker.id !== 'st-main' ? String(worker.model ?? '') : '';
         const writerBlock = (await assembleSectionFor({ sectionId: 'writer', settings, chat: pending.chat, call, model })).messages;
-        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision, writerBlock });
+        const bankText = banks ? banks.contextFor({ names: store.roster().active, all: false }).text : '';
+        const examples = banks ? banks.examplesForCards() : '';
+        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision, writerBlock, banksText: bankText, examples });
         if (writerId && writerId !== 'st-main') {
             const own = await writerProxy.respond({ payload, messages: context.messages, signal: input.signal });
             if (own) return own;

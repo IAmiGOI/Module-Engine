@@ -1,4 +1,4 @@
-import { bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady } from '../../libraries/core/decision-banks.js';
+import { bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection } from '../../libraries/core/decision-banks.js';
 import { createBankStore } from './bank-store.js';
 import { createBankTasks } from './bank-tasks.js';
 
@@ -196,8 +196,17 @@ export function createCharacterBanks({ call, callService, getSettings, store, re
         await bankStore.saveColdStart({ status: 'idle', total: 0, done: 0, errors: 0, startedAt: 0 });
     }
 
+    function contextFor({ names = [], all = false } = {}) {
+        const wanted = new Set((Array.isArray(names) ? names : []).map(keyOf));
+        const chosen = records().filter(record => all || wanted.has(keyOf(record.name)) || record.sourceKind === 'persona' || record.sourceKind === 'scene');
+        return { text: renderBankSection(chosen), examples: renderExampleSection(chosen.filter(record => record.sourceKind === 'card')), records: chosen };
+    }
+
+    function examplesForCards() { return renderExampleSection(records().filter(record => record.sourceKind === 'card')); }
+
     return {
         reload, reset, ensureColdStart, ensureName, noteRosterAdded,
+        contextFor, examplesForCards,
         read, write, rebuild, progress,
         records, recordsFor,
         scene: () => primary('scene'),

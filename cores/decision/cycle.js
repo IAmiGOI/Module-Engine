@@ -33,7 +33,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
     const live = createCycleLive({ publishEvent, getTurn: () => state.turnCounter, getClock: () => store.clock().minutes });
-    const context = createCycleContext({ call, store });
+    const context = createCycleContext({ call, store, banks });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
     const similarityScores = createSimilarity(call);

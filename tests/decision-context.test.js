@@ -98,3 +98,20 @@ test('past runs are ordered by message number, not by object insertion order', (
     const section = runsSection({ 9: { mesid: '9', decision: 'later' }, 2: { mesid: '2', decision: 'earlier' } });
     assert.ok(section.indexOf('Turn #2') < section.indexOf('Turn #9'));
 });
+
+
+test('the writer context puts example dialogues first, then all active banks, then summaries and notes', () => {
+    const context = buildWriterContext({
+        chat: [], decision: 'push', examples: 'EXAMPLE-DIALOGUES', banksText: 'ACTIVE-BANKS',
+        summaries: [{ startIndex: 1, endIndex: 2, text: 'SUMMARY-TEXT' }], notes: { lena: [{ title: 'Door', text: 'NOTE-TEXT' }] },
+    });
+    const text = context.messages.map(message => message.content).join('\n');
+    assert.ok(text.indexOf('EXAMPLE-DIALOGUES') < text.indexOf('ACTIVE-BANKS'));
+    assert.ok(text.indexOf('ACTIVE-BANKS') < text.indexOf('SUMMARY-TEXT'));
+    assert.ok(text.indexOf('SUMMARY-TEXT') < text.indexOf('NOTE-TEXT'));
+});
+
+test('the director context carries all banks in the stable part', () => {
+    const context = buildDeciderContext({ banksText: 'ALL-CHARACTER-BANKS' });
+    assert.match(context.messages.map(message => message.content).join('\n'), /ALL-CHARACTER-BANKS/);
+});

@@ -147,3 +147,23 @@ export function findBankSource(sources, name) {
     const exact = (Array.isArray(sources) ? sources : []).filter(source => source.name.toLowerCase() === wanted);
     return exact.find(source => source.sourceKind === 'card') ?? exact[0] ?? null;
 }
+
+
+/** Банки → стабильная часть контекста. Ошибка/недосборка отдаёт сырой источник. */
+export function renderBankSection(records) {
+    const list = (Array.isArray(records) ? records : []).filter(record => record && (text(record.text) || text(record.rawSource)));
+    if (!list.length) return '';
+    const body = list.map(record => {
+        const content = bankIsReady(record) ? text(record.text) : text(record.rawSource) || text(record.text);
+        const note = record.status === 'error' ? ' (bank rebuilding — the raw source is shown)' : record.status === 'short' ? ' (short bank — the full one is being built)' : '';
+        return `### ${text(record.name) || 'Character'}${note}\n${content}`;
+    }).join('\n\n');
+    return `CHARACTER DATA BANKS (compact cards for the Writer and the Director):\n\n${body}`;
+}
+
+/** Примеры диалогов — не события, а образцы речи; идут в самое начало контекста. */
+export function renderExampleSection(records) {
+    const list = (Array.isArray(records) ? records : []).filter(record => text(record?.examples));
+    if (!list.length) return '';
+    return `EXAMPLE DIALOGUES (how these characters speak; this is not what happened before):\n\n${list.map(record => `### ${text(record.name)}\n${text(record.examples)}`).join('\n\n')}`;
+}

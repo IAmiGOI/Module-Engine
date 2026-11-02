@@ -138,3 +138,24 @@ test('the source keys from a card, persona and scene are stable and hashed by co
     assert.equal(sources.find(source => source.sourceKey === 'persona:me.png').sourceKind, 'persona');
     assert.notEqual(hashText('one'), hashText('two'));
 });
+
+test('the writer sees only active banks, the persona and the scene; the director can see all', async () => {
+    const world = fakeWorld({ failName: null });
+    await world.banks.ensureColdStart();
+    const writer = world.banks.contextFor({ names: ['Aria'], all: false });
+    assert.match(writer.text, /Aria/);
+    assert.match(writer.text, /World \/ Scene/);
+    assert.match(writer.text, /Me/);
+    assert.doesNotMatch(writer.text, /Bram/);
+    const director = world.banks.contextFor({ all: true });
+    assert.match(director.text, /Bram/);
+});
+
+test('a card system prompt and mes_example never enter the bank source; examples travel separately', () => {
+    const card = { avatar: 'A.png', name: 'A', description: 'Body.', personality: '', scenario: '', system_prompt: 'SYSTEM-CARD', mes_example: '<START>\n{{char}}: "Hi."' };
+    const sources = bankSourcesForChat({ cards: [card] });
+    const cardSource = sources.find(source => source.sourceKind === 'card');
+    assert.equal(cardSource.source.includes('SYSTEM-CARD'), false);
+    assert.equal(cardSource.source.includes('{{char}}'), false);
+    assert.match(cardSource.examples, /\{\{char\}\}: "Hi\."/);
+});

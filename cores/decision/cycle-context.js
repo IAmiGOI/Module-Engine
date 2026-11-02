@@ -27,7 +27,7 @@ export function turnWake(type) {
     return wakeFor({ type, label: `The director runs again (${type})` });
 }
 
-export function createCycleContext({ call, store }) {
+export function createCycleContext({ call, store, banks = null }) {
     async function externalTools() {
         try {
             const tools = await call('generation.tools');
@@ -55,12 +55,12 @@ export function createCycleContext({ call, store }) {
         } catch { return ''; }
     }
 
-    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', directorBlock = [] }) {
+    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', directorBlock = [], banksText = '' }) {
         return buildDeciderContext({
             summaries: list, chat, runs: store.runs(),
             thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
-            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, task,
+            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, banksText, task,
         });
     }
 
@@ -68,7 +68,8 @@ export function createCycleContext({ call, store }) {
         const [list, lorebookText, directorBlock] = await Promise.all([
             summaries(), lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker),
         ]);
-        return buildContext({ chat, settings, task, summaries: list, lorebookText, directorBlock });
+        const bankText = banks ? banks.contextFor({ names: store.roster().active, all: true }).text : '';
+        return buildContext({ chat, settings, task, summaries: list, lorebookText, directorBlock, banksText: bankText });
     }
 
     function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {

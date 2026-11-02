@@ -179,11 +179,11 @@ function notesText(notes) {
  */
 export function buildDeciderContext({
     summaries = [], chat = [], runs = {}, thoughts = '', thoughtMessages = [], plan = null, arcs = [], notes = {},
-    roster = [], libraryText = '', lorebookText = '', planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
+    roster = [], libraryText = '', lorebookText = '', banksText = '', planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
     const history = directorHistory(chat, limit, directorBlock);
     const parts = [
-        String(lorebookText ?? '').trim(), summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(libraryText ?? '').trim(),
+        String(lorebookText ?? '').trim(), summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(banksText ?? '').trim(), String(libraryText ?? '').trim(),
         rosterSection(roster), runsSection(runs), String(thoughts ?? '').trim(),
     ].filter(Boolean);
     const thoughtList = (Array.isArray(thoughtMessages) ? thoughtMessages : [])
@@ -206,9 +206,9 @@ export function buildDeciderContext({
  * Контекст прозаика: заметки о персонажах + история с блоком @5 + Push в
  * хвосте. Push идёт после истории, как написано во встроенном промпте.
  */
-export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = writerHistory(chat, limit, writerBlock);
-    const parts = [WRITER_SYSTEM, summariesSection(summaries), notesText(notes)].filter(Boolean);
+    const parts = [WRITER_SYSTEM, String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries), notesText(notes)].filter(Boolean);
     const push = String(decision ?? '').trim() ? fillPrompt(WRITER_PUSH, { push: String(decision).trim() }) : '';
     const messages = [
         ...parts.map(content => ({ role: 'system', content })),
