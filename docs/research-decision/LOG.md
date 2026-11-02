@@ -856,3 +856,205 @@ master/trivial → 0.998, novice/impossible → 0.002, master/impossible →
 - Полный прогон: **3523** тестов, **3352** прошло, **167** упало, **4**
   пропущено; падают те же 23 файла, что и на базовой линии. Новую поломку
   `generation-core` (`[...Map]` вместо имён) нашли и починили до итога.
+
+## f0. Разведка части 3
+
+Ветка `research/decision`, поверх части 2. Живых запросов нет; все модели —
+фейки. `PART3.md` и `DIRECTOR-SPEC.md` (разделы от 2026-11-02) прочитаны
+целиком, расхождений нет.
+
+### Базовая линия тестов
+
+`node --test tests/*.test.js` (шаблон из `package.json` на node 18 по-прежнему
+не раскрывает `**`, см. часть 1):
+
+- тестов: **3523**
+- прошло: **3352**
+- упало: **167**
+- пропущено: **4**
+- код выхода: **1**
+
+Падающие файлы (23; в скобках — число упавших тестов):
+
+```
+tests/sync-runner.test.js (38)        tests/sync-core.test.js (31)
+tests/sync-pack.test.js (17)          tests/sync-cloud.test.js (17)
+tests/cloud-backup-core.test.js (10)  tests/module-installer.test.js (7)
+tests/card-fingerprint.test.js (7)    tests/sync-interrupted.test.js (6)
+tests/sync-github.test.js (6)         tests/sync-core-cloud.test.js (6)
+tests/sync-secrets.test.js (5)        tests/runner-core.test.js (4)
+tests/sync-copy-cleanup.test.js (2)   tests/request.test.js (2)
+tests/sync-plan.test.js (1)           tests/sync-oauth.test.js (1)
+tests/st-user-data-service.test.js (1) tests/module-runtime-libs.test.js (1)
+tests/memory-graph-orchestration.test.js (1) tests/memory-graph-library.test.js (1)
+tests/contract-bus.test.js (1)        tests/boot-screen.test.js (1)
+tests/backup-plan.test.js (1)
+```
+
+Это ровно линия части 2. Дальше сравниваем по падающим файлам: после удаления
+PM число тестов уменьшится, новых падений быть не должно.
+
+### Карта зависимостей от Prompt Manager
+
+Проверено по коду, не по памяти. Контракты `promptManager.*` живут на
+собственной шине PM и объявляются в `cores/prompt-manager/index.js:386-430`;
+снаружи их вызывают только четыре места: `promptManager.takesOver` /
+`promptManager.contribute` (шесть вкладчиков), `assembleForCard` (тест
+карточки) и UI/гид/бэкап.
+
+**Удалить целиком:**
+
+| Что | Где | Кто ещё использует |
+|---|---|---|
+| Ядро PM | `cores/prompt-manager/index.js`, `presets.js`, `contributions.js` | только UI, гид, бэкап и тесты PM |
+| 17 библиотек | `libraries/core/pm-assemble.js`, `pm-run.js`, `pm-trim.js`, `pm-wrap-join.js`, `pm-wrapper-groups.js`, `pm-finalize.js`, `pm-conditions.js`, `pm-cot.js`, `pm-dividers.js`, `pm-rules.js`, `pm-st-import.js`, `pm-st-export.js`, `pm-preset-format.js`, `pm-overrides.js`, `pm-plugins.js`, `pm-cache.js`, `pm-lorebook.js`, `pm-macros.js` | только PM/UI/гид-пресеты |
+| Пресеты в IndexedDB | `services/pm-presets.js` | только PM и провайдер `pmPresets` в `st-user-data` |
+| Перехват кнопки ST | `services/st-pm-ui.js` | только PM; после удаления возвращается родная панель ST |
+| UI | `cores/ui/prompt-manager-panel.js`, `cores/ui/prompt-manager/*` (12 файлов), `cores/ui/panel-cards/prompt-manager-card.js`, `styles/windows/prompt-manager-window.css`, импорт в `styles/index.css:31` | только PM |
+| Действия гида | `cores/guide/preset-actions.js`, `cores/guide/preset-context.js`, `libraries/core/guide-preset.js` | только гид и тест `guide-preset` |
+| Тесты | 23 `tests/pm-*.test.js` / `prompt-manager-*.test.js` / `st-pm-ui-service.test.js` / `guide-preset.test.js` + фикстура `tests/fixtures/pm-amigo-polished.st.json` | — |
+
+**Оставить общую часть (файл `pm-*` не удалять сразу, а вынести нужное):**
+
+| Функция | Где | Кто реально зовёт |
+|---|---|---|
+| `estimateTokens` | `libraries/core/pm-tokens.js:10` | `decision-bank.js:1`, `decision-log.js:1` |
+| `extractCachedTokens` | `libraries/core/pm-cache-hints.js:40` | `cores/decision/index.js:7,162` |
+| `chatToMessages` | `libraries/core/pm-history.js:23` | `libraries/core/decision-context.js:1,83` |
+| `hashText` | `libraries/core/jev-question.js:28` | `cores/classifier/index.js:3` |
+| `stPromptData.read` | `services/st-prompt-data.js:8` | `cores/guide/chat-actions.js:35`, `card-test.js:29` |
+| `stPromptData.functionCalling` | `services/st-prompt-data.js:71` | `cores/generation/index.js:266` (инструменты движка) |
+| Ядро classifier | `cores/classifier/index.js` | Модуль музыки (`modules/music/index.js:24,226`) |
+
+Остальное в `services/st-prompt-data.js` (`presets`, `chat`, `streaming` и
+поля `read`, нужные только PM: `systemPrompt`, `postHistoryInstructions`,
+`depthPrompt`, `persona`, `selectedPresetName`, `wiScanDepth`,
+`wiBudgetPercent`) удаляется вместе с PM.
+
+**Заменить вызов:**
+
+| Место | Было | Станет |
+|---|---|---|
+| `cores/character-cards/card-test.js:36` | `promptManager.assembleForCard` | контекст директора → ответ прозаика, как в игре (f1) |
+| `cores/decision/index.js:7,16,105,130-131,304-310` | `extractCachedTokens` из `pm-cache-hints`, `needs: ['prompt-manager:rewrite']`, перерегистрация по `stagesChanged` | функцию перенести в `decision-*`; `needs` и вся ветка PM удаляются |
+| `cores/backup/index.js:117-142` + `harness/wiring/data-cores.js:8,30` | источник `pmPresets` | убрать из состава; старый бэкап с этим разделом уже игнорируется (`importSnapshot` пропускает неизвестный id) |
+| `libraries/core/sync-config.js:10,15,29` + `libraries/core/sync-pack.js:35` + `services/st-user-data.js:22,33,69,413-436,480` | категория `pmPresets` и файлы `stmePmPresets/` | убрать провайдер и категорию; сохранённый список категорий должен пережить удаление (фильтр по `SYNC_CATEGORY_IDS`) |
+| `modules/time/index.js:21`, `modules/tools/notebook.js:17`, `modules/tools/secrets.js:16` | права `promptManager.takesOver/contribute` | убрать строки прав и комментарии |
+| `libraries/shared/prompt-contribution.js` | `deliverToPrompt` спрашивает PM | оставить функцию как запасной путь: без PM `takesOver` не отвечает, вызывается `legacy()` (уже проверено в части 2) |
+
+**Данные, которые останутся на диске:** `storage.settings` неймспейс
+`core.promptManager`, `storage.chatMemory` неймспейс `core.promptManager`
+(`state`, `cot`), `core.ui.promptManager` (`window`), IndexedDB
+`stme-beta-pm-presets`, файлы `stmePmPresets/` в синхронизации. Код их больше
+не читает; удалять их принудительно не нужно — лишнее игнорируется.
+
+### Ход без Prompt Manager
+
+1. ST начинает прогон → `generation.prepare`: саммари сворачиваются, PM
+   сбрасывал вклады — этого этапа больше нет.
+2. `generation.beforeSend`, уровень 0: саммари, Notebook, Secrets, время,
+   граф памяти и навигация правят **копию `chat`**; `decision:decide` идёт в
+   том же уровне и собирает контекст директора из `$input.chat` и своих
+   контрактов (`summary.list`, `decision.*`).
+3. ST сам собирает тело из уже изменённого `chat` — PM его больше не
+   переписывает.
+4. `generation.payload` (`fold`): единственный этап `decision:rewrite`
+   заменяет `messages`/`prompt` контекстом прозаика, снимает `tools`,
+   выключает ризонинг, применяет сэмплер. Неизвестное тело уходит нетронутым.
+5. Хук отправляет новое тело; ST принимает и рисует ответ как обычно.
+6. `generation.completed` → коммит лога, блоков, банка и остального.
+
+**Проверка `needs`:** во всём коде `needs` объявляет только
+`decision:rewrite` — и только когда этап PM уже существует
+(`cores/decision/index.js:105`). Других зависимостей от
+`prompt-manager:rewrite` нет (`grep "needs:" cores modules libraries`).
+После удаления PM `needs` не нужен: `decision:rewrite` остаётся единственным
+этапом `generation.payload`. Порядок загрузки в `harness/wiring/boot.js:19-22`
+(«строго после PM») тоже теряет смысл.
+
+**Что без PM ломается и чем заменяется:** ломается ровно тест карточки
+(`assembleForCard`) — заменяется связкой директор → прозаик, как в игре.
+Вклады модулей уходят в `legacy` (`chat.unshift/splice`) — это штатный путь,
+он уже работает при выключенном PM. Действия гида с пресетами уходят по
+решению владельца, замены нет. Бэкап и синхронизация теряют раздел PM, старые
+файлы игнорируются. **Незаменяемого нет — маркер остановки не срабатывает.**
+
+### Хранилище больших данных директора
+
+Замер на синтетике без ST: чат из 200 сообщений + `chatMetadata.stme_memory`
+с неймспейсом `core.decision`, размер метаданных доведён ровно до 1 / 3 / 6 МБ
+(лог ~5 КБ на цикл). Сохранение — как у ST: `JSON.stringify({ chat, metadata })`
+целиком + запись файла + чтение обратно, 5 прогонов, среднее.
+
+| Метаданные | Тело сохранения | На диске | Запись (среднее) | Разброс |
+|---|---|---|---|---|
+| 1,00 МБ | 1,10 МБ | 1,10 МБ | **5,1 мс** | 4,1–6,3 |
+| 3,00 МБ | 3,10 МБ | 3,10 МБ | **11,8 мс** | 11,0–13,8 |
+| 6,00 МБ | 6,10 МБ | 6,10 МБ | **24,1 мс** | 21,3–29,2 |
+
+Это только локальный JSON + диск; у ST сверху HTTP до `/api/chats/save` и
+запись на сервере, поэтому на живом чате цена выше. Сохраняется **весь файл
+чата**, а не изменённый ключ. Записи идут через `saveMetadataDebounced`
+(1 с), а не на каждый `set`, поэтому за ход — одно сохранение, но при
+нескольких ключах подряд (`log`, `runs`, `snapshots`, `blocks`, банк) всё
+равно переписывается одно и то же тело.
+
+Потолки части 2: лог 500 тыс. токенов ≈ 2,0–2,4 МБ, банк 0,2–0,25 МБ на
+персонажа (20 персонажей — до 5 МБ), плюс библиотека, планы, ростер, арки,
+имена и до 50 снимков. Худший случай — 7–8 МБ.
+
+**Решение: остаёмся в метаданных чата.** Причины:
+
+- синхронизация категории `chats` и источник бэкапа `chatMemory` уже
+  переносят метаданные **вместе с чатом**, без отдельного кода; данные не
+  теряются при восстановлении и не могут попасть в чужой чат — идентичность
+  даёт сам файл чата;
+- вынос в IndexedDB по ключу чата потребовал бы новой категории
+  синхронизации, нового источника бэкапа и обработки переименования,
+  дублирования и удаления чата; при этом данные всё равно терялись бы при
+  переносе на другое устройство, где чат есть, а IndexedDB нет;
+- измеренная цена приемлема: 5–24 мс на сохранение при 1–6 МБ, а типичный
+  чат держится у 2–3 МБ благодаря порогам лога и сжатию банка.
+
+Ограничение на будущее (f5): **нельзя снимать весь банк в каждый снимок**.
+Снимок сейчас хранит блоки/ростер/план/арки/заметки/библиотеку/планы/часы
+(`cores/decision/index.js:171-176`); если добавить туда банк (до 5 МБ) на
+каждый ход на 50 снимков, метаданные вырастут на порядки. Для откката банка и
+имён f5 должен хранить **дельту хода** (какие записи банка и какие имена
+выданы), а не копию банка.
+
+### Лорбук для директора
+
+Источник — Ядро лорбука: `lorebook.books` (активные книги),
+`lorebook.read { name }` (книга целиком, включая неактивную),
+`lorebook.entries` (полные записи активных книг), `lorebook.get { uid, book }`.
+Рендер детерминированный: `renderBookPage()` + `entryHeading()` из
+`libraries/core/lorebook-page.js` (`## #uid Название [ключи] [always on]`).
+
+Выбор с оглядкой на кеш префикса:
+
+- **маленькая книга** (ориентир — до ~4000 токенов на все активные книги,
+  порог — константа настройки) — целиком в **стабильную** часть контекста
+  директора, сразу после правил и перед саммари. Книга меняется только по
+  `st.worldinfoUpdated`/`chatChanged`, поэтому блок не ломает префикс между
+  ходами.
+- **большая книга** — в ту же стабильную часть только постоянные записи
+  (`constant && !disable`), остальное — инструментом `lorebook`
+  (`search` по содержимому и ключам, `read` одной записи). Результаты поиска
+  попадают в лог/сообщения инструментов текущего цикла, а не в стабильный
+  префикс.
+- **прозаик лорбук не видит** — в `buildWriterContext` его нет вовсе.
+
+Для поиска не хватает контракта: `lorebook.find` ищет только по имени и
+ключам, без содержимого. В f4 добавляется чистая `searchEntries(entries,
+query)` в `libraries/core/lorebook-sources.js` и контракт `lorebook.search`
+рядом с `find`; данные уже лежат в `summaries`/`byUid`, новых вызовов ST и
+сети нет. `lorebook.get` для полного текста уже есть. `pm-lorebook.js` (движок
+активации PM) не наследуется — он удаляется вместе с PM; директору нужен не
+триггерный отбор, а стабильный контекст и поиск.
+
+### Вывод f0
+
+Карта собрана, ход без PM прослежен по коду, `needs` проверен, хранилище
+измерено и решено, способ подключения лорбука выбран. Незаменяемого нет:
+блок f1 продолжается.
