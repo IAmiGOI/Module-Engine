@@ -2,6 +2,7 @@ import { h } from '../tree.js';
 import { signal, computed } from '../reactive.js';
 import { Card, Toggle, Select, Field, Row, Button, TextArea, Slider, Details } from '../../../libraries/shared/widgets.js';
 import { SAMPLER_PRESETS } from '../../models/generate-request.js';
+import { rosterView, planView, libraryView, bankView, arcsNotesView, researchView, forcedView, logView } from './decision-views.js';
 
 /**
  * Карточка «Director / Writer» на экране настроек движка. Читает и пишет
@@ -29,6 +30,22 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     const blocks = signal([]);
     const lastRun = signal(null);
     const presets = signal([]);
+    const maxSteps = signal(50);
+    const formTimeoutMs = signal(180000);
+    const logLimitTokens = signal(500000);
+    const compression = { workerId: signal(''), thresholdTokens: signal(50000) };
+    const researcherSettings = { workerId: signal(''), maxTasks: signal(2), maxSteps: signal(50) };
+    const roster = signal({ active: [] });
+    const plan = signal(null);
+    const arcs = signal([]);
+    const notes = signal({});
+    const library = signal({});
+    const plans = signal([]);
+    const bank = signal({});
+    const research = signal([]);
+    const clock = signal({ minutes: 0 });
+    const log = signal([]);
+    const forced = signal([]);
 
     const workerOptions = computed(() => [
         { value: '', label: 'Any connection (load-balanced)' },
@@ -76,6 +93,14 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
         writer.topP.set(Number(readWriter.topP ?? 1));
         writer.topK.set(Number(readWriter.topK ?? 0));
         writer.maxTokens.set(Number(readWriter.maxTokens ?? 1000));
+        maxSteps.set(Number(value.maxSteps ?? 50));
+        formTimeoutMs.set(Number(value.formTimeoutMs ?? 180000));
+        logLimitTokens.set(Number(value.logLimitTokens ?? 500000));
+        compression.workerId.set(String(value.compression?.workerId ?? ''));
+        compression.thresholdTokens.set(Number(value.compression?.thresholdTokens ?? 50000));
+        researcherSettings.workerId.set(String(value.researcher?.workerId ?? ''));
+        researcherSettings.maxTasks.set(Number(value.researcher?.maxTasks ?? 2));
+        researcherSettings.maxSteps.set(Number(value.researcher?.maxSteps ?? 50));
     }
 
     function collect() {
@@ -91,6 +116,12 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
             writer: {
                 workerId: writerWorkerId.peek(), samplerPreset: writer.samplerPreset.peek(), applySampler: writer.applySampler.peek(),
                 temperature: writer.temperature.peek(), topP: writer.topP.peek(), topK: writer.topK.peek(), maxTokens: writer.maxTokens.peek(),
+            },
+            maxSteps: maxSteps.peek(), formTimeoutMs: formTimeoutMs.peek(), logLimitTokens: logLimitTokens.peek(),
+            compression: { workerId: compression.workerId.peek(), thresholdTokens: compression.thresholdTokens.peek() },
+            researcher: {
+                workerId: researcherSettings.workerId.peek(),
+                maxTasks: researcherSettings.maxTasks.peek(), maxSteps: researcherSettings.maxSteps.peek(),
             },
         };
     }
@@ -125,13 +156,27 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     }
 
     async function loadDecision() {
-        const [settings, storedBlocks, run, savedPresets] = await Promise.all([
+        const [settings, storedBlocks, run, savedPresets, rosterAnswer, planAnswer, arcsAnswer, notesAnswer, libraryAnswer, plansAnswer, bankAnswer, researchAnswer, clockAnswer, logAnswer, forcedAnswer] = await Promise.all([
             call('decision.settings'), call('decision.blocks'), call('decision.lastRun'), call('model.presets.get'),
+            call('decision.roster'), call('decision.plan'), call('decision.arcs'), call('decision.notes'),
+            call('decision.library'), call('decision.plans'), call('decision.bank'), call('decision.research'),
+            call('decision.clock'), call('decision.log'), call('summary.forced'),
         ]);
         if (settings.ok) applySettings(settings.value);
         blocks.set(storedBlocks.ok ? storedBlocks.value ?? [] : []);
         lastRun.set(run.ok ? run.value ?? null : null);
         presets.set(savedPresets.ok ? savedPresets.value ?? [] : []);
+        roster.set(rosterAnswer.ok ? rosterAnswer.value ?? { active: [] } : { active: [] });
+        plan.set(planAnswer.ok ? planAnswer.value ?? null : null);
+        arcs.set(arcsAnswer.ok ? arcsAnswer.value ?? [] : []);
+        notes.set(notesAnswer.ok ? notesAnswer.value ?? {} : {});
+        library.set(libraryAnswer.ok ? libraryAnswer.value ?? {} : {});
+        plans.set(plansAnswer.ok ? plansAnswer.value ?? [] : []);
+        bank.set(bankAnswer.ok ? bankAnswer.value ?? {} : {});
+        research.set(researchAnswer.ok ? researchAnswer.value ?? [] : []);
+        clock.set(clockAnswer.ok ? clockAnswer.value ?? { minutes: 0 } : { minutes: 0 });
+        log.set(logAnswer.ok ? logAnswer.value ?? [] : []);
+        forced.set(forcedAnswer.ok ? forcedAnswer.value ?? [] : []);
     }
 
     function blockList() {
@@ -186,12 +231,44 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
                 ),
                 h('small', { class: 'stme-module-hint' }, 'The writer never reasons: reasoning is always disabled in its request.'),
             ),
+            Details('Limits and background workers',
+                Row(
+                    Slider('Max steps without await', maxSteps, { min: 1, max: 500, step: 1 }),
+                    Slider('Form timeout (ms)', formTimeoutMs, { min: 1000, max: 3600000, step: 1000 }),
+                    Slider('Log limit (tokens)', logLimitTokens, { min: 1000, max: 5000000, step: 10000 }),
+                ),
+                Row(
+                    Field('Compression connection', Select(compression.workerId, workerOptions), { hint: 'Separate model that compresses ordinary memory records. Important records are never compressed.' }),
+                    Slider('Compression threshold (tokens per character)', compression.thresholdTokens, { min: 1000, max: 500000, step: 1000 }),
+                ),
+                Row(
+                    Field('Researcher connection', Select(researcherSettings.workerId, workerOptions)),
+                    Slider('Research tasks at once', researcherSettings.maxTasks, { min: 1, max: 8, step: 1 }),
+                    Slider('Research steps before the report', researcherSettings.maxSteps, { min: 1, max: 200, step: 1 }),
+                ),
+            ),
+            Details('Director state',
+                h('small', { class: 'stme-module-hint' }, 'Active roster'),
+                computed(() => rosterView(roster())),
+                h('small', { class: 'stme-module-hint' }, 'Director plan'),
+                computed(() => planView(plan())),
+                h('small', { class: 'stme-module-hint' }, 'Character library'),
+                computed(() => libraryView(library(), plans(), clock())),
+            ),
+            Details('Memory bank', computed(() => bankView(bank()))),
+            Details('Arcs and character notes', computed(() => arcsNotesView(arcs(), notes()))),
+            Details('Researcher reports', computed(() => researchView(research()))),
+            Details('Forced summaries', computed(() => forcedView(forced()))),
             Details('Character blocks',
                 h('small', { class: 'stme-module-hint' }, 'Maintained by the director; the writer sees them every turn.'),
                 blockList(),
             ),
             Details('Last decision',
                 computed(() => lastRun()?.decision ?? 'No decision yet in this chat.'),
+            ),
+            Details('Director log (never shown in chat)',
+                h('small', { class: 'stme-module-hint' }, 'Cycles, tool calls with their comments, forms, push, researcher reports and warnings.'),
+                computed(() => logView(log())),
             ),
             Row(Button('Save', save)),
         );

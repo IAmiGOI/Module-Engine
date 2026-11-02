@@ -27,8 +27,12 @@ test('the decision card reads its state through the decision contracts and rende
     assert.equal(node.tag, 'details');
     assert.match(node.props.class, /stme-card/);
     const text = strings(node).join(' | ');
-    for (const expected of ['Director / Writer', 'Enabled', 'Director rules', 'Director model connection', 'Writer model connection', 'Character blocks', 'Last decision']) {
-        assert.match(text, new RegExp(expected.replace(/[/]/g, '\\$&')));
+    for (const expected of ['Director / Writer', 'Enabled', 'Director rules', 'Director model connection', 'Writer model connection', 'Limits and background workers', 'Director state', 'Memory bank', 'Arcs and character notes', 'Researcher reports', 'Forced summaries', 'Character blocks', 'Last decision', 'Director log (never shown in chat)']) {
+        assert.match(text, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
-    assert.deepEqual(calls.map(entry => entry.contract).sort(), ['decision.blocks', 'decision.lastRun', 'decision.settings', 'model.presets.get']);
+    assert.deepEqual(calls.map(entry => entry.contract).sort(), [
+        'decision.arcs', 'decision.bank', 'decision.blocks', 'decision.clock', 'decision.lastRun', 'decision.library',
+        'decision.log', 'decision.notes', 'decision.plan', 'decision.plans', 'decision.research', 'decision.roster',
+        'decision.settings', 'model.presets.get', 'summary.forced',
+    ]);
 });
