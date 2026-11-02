@@ -1363,3 +1363,102 @@ query)` в `libraries/core/lorebook-sources.js` и контракт `lorebook.se
 - Итоговый полный прогон совпадает с f5: **3293** теста, **3122** прошло,
   **167** упало, **4** пропущено; падают ровно те же 23 файла базовой линии.
 - В `Dev-Version`/`Main-Testing` ничего не вливалось и не пушилось.
+
+## g0. Разведка части 4
+
+### Что из старого PM нужно
+
+Интерфейс PM удалён в `ebec817`, исходники лежат в `a1e1bbc`. Для состава
+части 4 нужны:
+
+- окно и вкладки — `cores/ui/prompt-manager-panel.js` (плавающее окно,
+  сохранение позиции/размера, вкладки);
+- дерево порядка — `cores/ui/prompt-manager/tree-model.js` (пути, перенос,
+  сдвиг, группы, вкл/выкл);
+- список и редактор — `order-tab.js`, `editor.js`, `dropdown.js`;
+- условия — `condition-model.js`, `condition-builder.js` и вычисление из
+  `libraries/core/pm-conditions.js`;
+- группы-обёртки — `libraries/core/pm-wrapper-groups.js`,
+  `pm-wrap-join.js`;
+- макросы — `libraries/core/pm-macros.js`;
+- пресеты и обмен — `pm-preset-format.js`, `pm-st-import.js`,
+  `pm-st-export.js`;
+- предпросмотр — `preview-tab.js`;
+- перехват иконки ST — `services/st-pm-ui.js`;
+- стили — `styles/windows/prompt-manager-window.css`;
+- образец тестов окна — `tests/prompt-manager-panel.test.js`.
+
+Не нужны и не возвращаются: `cores/prompt-manager/*`, вкладки CoT, правил,
+журнала и настроек, лорбук, обрезка, бюджеты, параметры сэмплера и
+ризонинга, плагины, переопределения, разделители, заметки, выбор «одного
+из», вклады модулей, маркеры ST.
+
+### Чем заменить удалённое Ядро PM
+
+Старое окно ходило только через `promptManager.*`. Замены:
+
+| старое | теперь |
+|---|---|
+| `promptManager.settings` | `decision.settings` (поле `promptSections`) |
+| `promptManager.configure` | `decision.configure({ patch })` |
+| `promptManager.presets` / `preset` / `savePreset` / `duplicatePreset` / `deletePreset` | пресеты живут в `settings.promptSections[section].presets`; окно правит их и сохраняет тем же `decision.configure` |
+| `promptManager.importSt` | чистая библиотека `decision-prompt-presets.js`, выбор раздела — в окне |
+| `promptManager.exportNative/importNative` | экспорт/импорт JSON раздела там же |
+| `promptManager.preview` | новый контракт `decision.preview({ section })` |
+| `promptManager.conditionTypes` | типы условий — константы библиотеки, плагинов нет |
+| `promptManager.openRequested` | событие `decisionPrompts.openRequested` |
+| `stPmUi.install` | сервис `stDecisionUi.install` |
+
+### Условия: что имеет источник без PM
+
+| тип | источник | возвращаем |
+|---|---|---|
+| `all` / `any` / `not` | сам движок | да |
+| `keyword` | сообщения чата | да |
+| `messageLength` | сообщения чата | да |
+| `variable` | переменные макросов текущей сборки | да |
+| `chance` | `Math.random` | да |
+| `everyN` | длина чата | да |
+| `cooldown` | память чата, ключ `promptCooldowns` | да |
+| `tracker` | `tracking.value` (предзагрузка значений) | да |
+| `jev` | `classifier.decide` существует, но это ещё один вызов модели на критическом пути хода | **нет** |
+| типы плагинов PM | плагинов больше нет | **нет** |
+
+`chance` и `cooldown` меняют текст между ходами и ломают кеш префикса —
+это видно предупреждением в предпросмотре. `jev` можно вернуть позже тем же
+способом (вопросы и ответы классификатора предзагружаются до сборки), но в
+части 4 он не нужен и добавляет задержку.
+
+### Макросы
+
+Старый `pm-macros.js` подставлял свои значения (`user`, `char`, `persona`,
+`description`, `personality`, `scenario`, `group`, `lastMessage`,
+`lastUserMessage`, `lastCharMessage`, `summary`, `input`, `model`), свои
+макросы ME и ST-совместимые операции: `setvar/getvar/addvar/incvar/decvar`,
+`setglobalvar/getglobalvar/…`, `random/pick/roll`, `time/date/isotime/
+isodate/weekday`, `trim`, `newline`, `<USER>/<BOT>/<CHAR>`.
+
+Теперь то же делает `decision-prompt-macros.js`. Значения берутся из
+последних сообщений чата; пользовательские макросы ME — из
+`macros.snapshot`; неизвестные макросы остаются текстом и попадают в
+предупреждения предпросмотра. Переменные (`setvar`) и глобальные
+переменные живут в пределах одной сборки — как в PM, без скрытого
+состояния между ходами.
+
+### Хранение
+
+- `storage.settings`, namespace `core.decision`, ключ `settings`, поле
+  `promptSections` — блоки, деревья, пресеты обоих разделов. Отдельной
+  категории хранения нет: бэкап и синхронизация уже покрывают
+  `storage.settings`.
+- `storage.chatMemory`, namespace `core.decision`, ключ `promptCooldowns` —
+  состояние условий `cooldown`, потому что оно относится к чату.
+- Миграция: непустое `prompts.director` становится первым промптом блока
+  Director, непустое `prompts.writer` — первым промптом Writer. Пустые поля
+  блоков не создают; повторная загрузка миграцию не повторяет.
+
+### План
+
+Записан в `DESIGN.md`, раздел «Часть 4»: модель раздела, сборка, условия,
+макросы, хранение и миграция, предпросмотр, окно и карточка, тесты.
+Размещение блока (2 цикла / @5) и встроенные промпты не меняются.
