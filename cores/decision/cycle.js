@@ -1,15 +1,18 @@
 import { buildDeciderContext } from '../../libraries/core/decision-context.js';
-import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
-import { buildToolList, FORCED_MEMORY_TOOL, AWAIT_TOOL } from '../../libraries/core/decision-tools.js';
-import { DIRECTOR_PASSIVE, DIRECTOR_FORCED_MEMORY, DIRECTOR_ARC_SUMMARY, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
+import { buildToolList } from '../../libraries/core/decision-tools.js';
+import { DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { buildLorebookContext } from '../../libraries/core/decision-lorebook.js';
-import { createCycleRecord, thinkingMessages, compactLog, totalLogTokens } from '../../libraries/core/decision-log.js';
+import { createCycleRecord, thinkingMessages } from '../../libraries/core/decision-log.js';
 import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
 import { librarySection, duePlans } from '../../libraries/core/decision-library.js';
 import { bankIndex } from '../../libraries/core/decision-bank.js';
 import { researchSection } from '../../libraries/core/decision-researcher.js';
-import { createHandlers, createPlaceReader, createTimeReader, createSimilarity } from './handlers.js';
+import { createHandlers } from './handlers.js';
+import { createCompaction } from './compaction.js';
+import { createJudge } from './judge.js';
+import { createPlaceReader, createTimeReader, createSimilarity } from './readers.js';
 
 /**
  * Активный и пассивный циклы директора. Здесь только оркестровка: контекст,
@@ -17,12 +20,6 @@ import { createHandlers, createPlaceReader, createTimeReader, createSimilarity }
  */
 
 const OPENAI_FORMAT = 'openai';
-
-/** Строка от воркера — просто текст без вызова инструмента: директор получит напоминание. */
-function normalizeGenerateAnswer(value) {
-    if (typeof value !== 'string') return value;
-    return { text: value, toolCalls: [] };
-}
 
 /** Ошибка настройки: воркера директора нет или он не `openai`. От неё не помогает повтор. */
 export class DecisionConfigError extends Error {
@@ -56,6 +53,9 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         if (worker.format !== OPENAI_FORMAT) throw new DecisionConfigError(`Decision core: the director needs an "openai" worker with multi-turn tools; "${worker.id}" is "${worker.format}". Choose an openai connection in the Director / Writer card.`);
         return worker;
     }
+
+    const { maybeCompactLog } = createCompaction({ store, getSettings, deciderWorker, call, now, publishEvent });
+    const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
     async function externalTools() {
         try {
@@ -116,43 +116,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         });
     }
 
-    /**
-     * Порог лога (500 тыс. по умолчанию). Сначала директор отдельным
-     * запросом пишет сводку завершённых арок; только потом сырые старые
-     * циклы уходят в архив. Нет завершённых арок — предупреждение, лог не
-     * трогаем (лучше честный перегруз, чем потерянный контекст).
-     */
-    async function maybeCompactLog() {
-        const settings = getSettings();
-        const cycles = store.cycles();
-        const before = totalLogTokens(cycles);
-        if (before <= settings.logLimitTokens) return null;
-        const closed = store.arcs().filter(arc => arc.status === 'closed' && !arc.summary);
-        if (!closed.length) {
-            publishEvent('decision.log.warning', { reason: 'no closed arcs to summarize; the log is over the limit', tokens: before });
-            return null;
-        }
-        const worker = deciderWorker(settings);
-        const prompt = fillPrompt(DIRECTOR_ARC_SUMMARY, { arcs: closed.map(arc => `ARC: ${arc.title}\nStages: ${(arc.stages ?? []).map(stage => stage.note).filter(Boolean).join('; ') || 'none'}`).join('\n\n') });
-        let summary = '';
-        try {
-            summary = await call('model.generate', { workerId: worker.id, prompt, maxTokens: 1200, temperature: 0, stream: false });
-        } catch (error) {
-            publishEvent('decision.log.warning', { reason: `arc summary failed: ${error?.message ?? error}`, tokens: before });
-            return null;
-        }
-        if (!String(summary ?? '').trim()) {
-            publishEvent('decision.log.warning', { reason: 'the director returned an empty arc summary', tokens: before });
-            return null;
-        }
-        const arcs = store.arcs().map(arc => (closed.some(item => item.id === arc.id) ? { ...arc, summary: String(summary).trim(), summaryAt: now() } : arc));
-        await store.saveArcs(arcs);
-        const result = compactLog(cycles, { limitTokens: settings.logLimitTokens, archiveLimitTokens: settings.archiveLimitTokens, keepCurrent: true });
-        await store.saveLog(result.cycles, { archived: result.archived });
-        publishEvent('decision.log.compacted', { before, after: totalLogTokens(result.cycles), archived: result.archived.length });
-        return result;
-    }
-
     async function run({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
@@ -196,7 +159,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             const push = buildPush({ form, assessments });
             await store.saveDraft(null).catch(() => {});
             await store.appendCycle(createCycleRecord({
-                event: 'turn', messages: [], toolCalls: [], thinking: thinking(),
+                runId, event: 'turn', messages: [], toolCalls: [], thinking: thinking(),
                 warnings: ['the form timed out; the saved draft was used'], at: startedAt, usage: runUsage(),
             })).catch(() => {});
             awaiting = true;
@@ -205,12 +168,12 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         }
 
         const cycle = createCycleRecord({
-            event: type === 'normal' ? 'turn' : type,
+            runId, event: type === 'normal' ? 'turn' : type,
             messages: result.messages.slice(context.messages.length),
             toolCalls: result.trace, thinking: thinking(), warnings: result.warnings, at: startedAt, usage: runUsage(),
         });
         await store.appendCycle(cycle).catch(() => {});
-        await maybeCompactLog().catch(() => {});
+        await maybeCompactLog().catch(error => publishEvent('decision.log.warning', { reason: `log compaction failed: ${error?.message ?? error}` }));
 
         if (result.type !== 'submit') {
             awaiting = true;
@@ -258,11 +221,11 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             now,
         });
         const cycle = createCycleRecord({
-            event, messages: result.messages.slice(messages.length), toolCalls: result.trace,
+            runId, event, messages: result.messages.slice(messages.length), toolCalls: result.trace,
             thinking: thinking(), warnings: result.warnings, at: startedAt, usage: usage(),
         });
         await store.appendCycle(cycle).catch(() => {});
-        await maybeCompactLog().catch(() => {});
+        await maybeCompactLog().catch(error => publishEvent('decision.log.warning', { reason: `log compaction failed: ${error?.message ?? error}` }));
         awaiting = true;
         publishEvent('decision.passive.ended', { runId, event, steps: result.steps, type: result.type });
         return { skipped: false, steps: result.steps, type: result.type };
@@ -297,44 +260,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             event: 'researcher',
             task: fillPrompt(DIRECTOR_PASSIVE, { event: `A researcher reported:\n${String(payload.report ?? '')}` }),
         }));
-    }
-
-    /** Forced Memory: какие саммари батча не сворачивать. Без воркера — пусто, без вызова модели. */
-    async function judgeForcedMemory({ batch = [] } = {}) {
-        const settings = getSettings();
-        const list = (Array.isArray(batch) ? batch : []).filter(record => record?.id);
-        if (!list.length) return { keep: [] };
-        let worker;
-        try { worker = deciderWorker(settings); } catch (error) {
-            if (error?.code === 'decision-config') return { keep: [] };
-            throw error;
-        }
-        const ids = new Set(list.map(record => record.id));
-        const kept = new Set();
-        const prompt = fillPrompt(DIRECTOR_FORCED_MEMORY, {
-            summaries: list.map(record => `[${record.id}] (level ${record.level}, messages #${record.startIndex}–#${record.endIndex})\n${record.text}`).join('\n\n'),
-        });
-        await runDecisionCycle({
-            messages: [{ role: 'system', content: prompt }],
-            tools: [FORCED_MEMORY_TOOL, AWAIT_TOOL],
-            generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', {
-                workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 800, temperature: 0,
-            })),
-            handlers: {
-                forced_memory: async args => {
-                    if (args.op === 'keep' && ids.has(args.summaryId)) kept.add(args.summaryId);
-                    if (args.op === 'unkeep') kept.delete(args.summaryId);
-                    return { ok: true };
-                },
-                await: async () => ({ ok: true }),
-            },
-            maxSteps: 20,
-            implicitAwait: true,
-            now,
-        });
-        const keep = [...kept];
-        publishEvent('decision.forcedMemory.judged', { batch: list.length, keep: keep.length });
-        return { keep };
     }
 
     return { run, runPassive, runDraft, onResearcherReport, judgeForcedMemory, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };

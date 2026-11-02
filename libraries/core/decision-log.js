@@ -10,9 +10,10 @@ import { estimateTokens } from './token-estimate.js';
  * В чат и прозаику это не попадает ни при каких условиях.
  */
 
-export function createCycleRecord({ id, event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], usage = null, at = Date.now() } = {}) {
+export function createCycleRecord({ id, runId = '', event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], usage = null, at = Date.now() } = {}) {
     const cycle = {
         id: String(id ?? `cyc_${at.toString(36)}_${Math.random().toString(36).slice(2, 8)}`),
+        runId: String(runId ?? ''),
         at,
         event,
         messages: (Array.isArray(messages) ? messages : []).map(message => ({ role: String(message?.role ?? ''), content: String(message?.content ?? '') })),

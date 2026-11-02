@@ -21,7 +21,13 @@ export const REMINDER_AWAIT = 'You are close to the step limit. Finish the turn 
 
 const MAX_NO_TOOL = 2;
 
-function normalizeAnswer(answer) {
+/** Строка от воркера — просто текст без вызова инструмента. */
+export function normalizeGenerateAnswer(value) {
+    if (typeof value !== 'string') return value;
+    return { text: value, toolCalls: [] };
+}
+
+export function normalizeAnswer(answer) {
     if (typeof answer === 'string') return { text: answer, toolCalls: [] };
     return { text: String(answer?.text ?? ''), toolCalls: Array.isArray(answer?.toolCalls) ? answer.toolCalls : [] };
 }

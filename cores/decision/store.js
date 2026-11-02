@@ -1,5 +1,8 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { trimThinking, totalLogTokens } from '../../libraries/core/decision-log.js';
+import { createJournal } from './journal.js';
+import { loadChatMemory } from './store-load.js';
+import { sanitizeCycles } from './store-sanitize.js';
 
 /**
  * Хранение блоков и записей прогонов директора в памяти чата. Вынесено из
@@ -33,54 +36,34 @@ export function createDecisionStore({ call, publishEvent }) {
         return run;
     }
 
-    function sanitizeRuns(value) {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-        const out = {};
-        for (const [mesid, record] of Object.entries(value)) {
-            if (!record || typeof record !== 'object') continue;
-            if (!String(record.decision ?? '').trim()) continue;
-            out[mesid] = { ...record, mesid: String(record.mesid ?? mesid) };
-        }
-        return out;
-    }
-
-    function sanitizeCycles(value) {
-        return (Array.isArray(value) ? value : []).filter(cycle => cycle && typeof cycle === 'object');
-    }
+    const journal = createJournal({
+        enqueue,
+        call,
+        getBank: () => memoryBank,
+        setBank: value => { memoryBank = value; },
+        getNames: () => issuedNames,
+        setNames: value => { issuedNames = value; },
+        getLog: () => log,
+        setLog: value => { log = value; },
+    });
 
     async function reload() {
-        const [storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft] = await Promise.all([
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', fallback: [] }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'roster', fallback: { active: [] } }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'directorPlan', fallback: null }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'arcs', fallback: [] }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'notes', fallback: {} }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'library', fallback: {} }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'plans', fallback: [] }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'clock', fallback: { minutes: 0, updatedAt: 0 } }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'memoryBank', fallback: {} }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'research', fallback: [] }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'names', fallback: [] }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', fallback: {} }),
-            call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'draft', fallback: null }),
-        ]);
-        runs = sanitizeRuns(storedRuns);
-        log = sanitizeCycles(storedLog);
-        logArchive = sanitizeCycles(storedArchive);
-        roster = { active: Array.isArray(storedRoster?.active) ? storedRoster.active.map(String) : [] };
-        directorPlan = storedPlan && typeof storedPlan === 'object' ? storedPlan : null;
-        arcs = Array.isArray(storedArcs) ? storedArcs.filter(arc => arc && typeof arc === 'object') : [];
-        notes = storedNotes && typeof storedNotes === 'object' && !Array.isArray(storedNotes) ? storedNotes : {};
-        library = storedLibrary && typeof storedLibrary === 'object' && !Array.isArray(storedLibrary) ? storedLibrary : {};
-        plans = Array.isArray(storedPlans) ? storedPlans.filter(plan => plan && typeof plan === 'object') : [];
-        clock = Number.isFinite(storedClock?.minutes) ? { minutes: Number(storedClock.minutes), updatedAt: Number(storedClock.updatedAt) || 0 } : { minutes: 0, updatedAt: 0 };
-        memoryBank = storedBank && typeof storedBank === 'object' && !Array.isArray(storedBank) ? storedBank : {};
-        research = Array.isArray(storedResearch) ? storedResearch.filter(task => task && typeof task === 'object') : [];
-        issuedNames = Array.isArray(storedNames) ? storedNames.map(String) : [];
-        snapshots = storedSnapshots && typeof storedSnapshots === 'object' && !Array.isArray(storedSnapshots) ? storedSnapshots : {};
-        draft = storedDraft && typeof storedDraft === 'object' ? storedDraft : null;
+        const data = await loadChatMemory(call);
+        runs = data.runs;
+        log = data.log;
+        logArchive = data.logArchive;
+        roster = data.roster;
+        directorPlan = data.directorPlan;
+        arcs = data.arcs;
+        notes = data.notes;
+        library = data.library;
+        plans = data.plans;
+        clock = data.clock;
+        memoryBank = data.memoryBank;
+        research = data.research;
+        issuedNames = data.issuedNames;
+        snapshots = data.snapshots;
+        draft = data.draft;
         return { runs, log };
     }
 
@@ -163,6 +146,7 @@ export function createDecisionStore({ call, publishEvent }) {
 
     function saveBank(next) {
         return enqueue(async () => {
+            journal.rememberBank(memoryBank, next);
             memoryBank = next && typeof next === 'object' && !Array.isArray(next) ? next : {};
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'memoryBank', value: memoryBank });
             return memoryBank;
@@ -295,6 +279,9 @@ export function createDecisionStore({ call, publishEvent }) {
         research: () => research.map(task => ({ ...task })),
         saveResearch,
         addResearch,
+        beginTurn: journal.beginTurn,
+        restoreJournal: journal.restoreJournal,
+        markRejected: journal.markRejected,
         updateResearch,
         names: () => [...issuedNames],
         saveNames,

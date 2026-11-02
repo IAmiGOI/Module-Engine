@@ -2,12 +2,14 @@ import { request } from '../../libraries/shared/request.js';
 import { clampDecisionSettings, DECISION_NAMESPACE, DEFAULT_SETTINGS } from '../../libraries/core/decision-settings.js';
 import { buildWriterContext } from '../../libraries/core/decision-context.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
-import { extractReasoning } from '../../libraries/core/decision-reasoning.js';
-import { extractCachedTokens } from '../../libraries/core/decision-cache.js';
 import { createDecisionStore } from './store.js';
 import { createDecisionCycle } from './cycle.js';
 import { createCardTurn } from './card-turn.js';
 import { createResearcher } from '../../libraries/core/decision-researcher.js';
+import { captureReasoning } from './capture.js';
+import { createRollback } from './rollback.js';
+import { createDecisionEvents } from './events.js';
+import { registerDecisionContracts } from './contracts.js';
 
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
@@ -43,7 +45,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     let stagesRegistered = false;
     let registering = false;
     let runCounter = 0;
-    let typingActive = false;
     const attempts = new Map(); // runId -> шаги попыток (успешная и провалившиеся)
     const subscriptions = [];
     const unregisters = [];
@@ -77,6 +78,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         publishEvent,
     });
     const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
+    const rollback = createRollback({ store, getSettings: () => settings, publishEvent });
+    const { snapshotState, restoreState, restoreSnapshotFor } = rollback;
 
     async function reload() {
         await store.reload();
@@ -128,58 +131,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         await call('pipeline.stages.remove', { pipelineId: PAYLOAD_PIPELINE, stageId: REWRITE_STAGE });
     }
 
-    /**
-     * Захват ризонинга провайдера за ВЕСЬ цикл: у агента несколько вызовов,
-     * их requestId начинаются с `${runId}:`. Текст копится по порядку — это
-     * то, что лог хранит как thinking цикла.
-     */
-    function captureReasoning(prefix) {
-        const state = { value: '', usage: { prompt: 0, completion: 0, cached: 0, total: 0 } };
-        const unsubscribe = host.events.subscribe('model.generate.raw', payload => {
-            if (!String(payload?.requestId ?? '').startsWith(prefix)) return;
-            const extracted = extractReasoning(payload.format, payload.body);
-            if (extracted) state.value = state.value ? `${state.value}\n\n${extracted}` : extracted;
-            try {
-                const usage = JSON.parse(payload.body)?.usage;
-                if (usage) {
-                    state.usage.prompt += Number(usage.prompt_tokens ?? usage.input_tokens ?? 0) || 0;
-                    state.usage.completion += Number(usage.completion_tokens ?? usage.output_tokens ?? 0) || 0;
-                    state.usage.cached += Number(extractCachedTokens(usage) ?? 0) || 0;
-                    state.usage.total = state.usage.prompt + state.usage.completion;
-                }
-            } catch { /* тело без usage — не ошибка */ }
-        });
-        return { get value() { return state.value; }, get usage() { return { ...state.usage }; }, stop: unsubscribe };
-    }
-
-    /** Снимок состояния до хода: форма/решения, ростер, планы, заметки, библиотека, план, арки, часы. */
-    function snapshotState() {
-        return {
-            roster: store.roster(), plan: store.plan(), arcs: store.arcs(),
-            notes: store.notes(), library: store.library(), plans: store.plans(), clock: store.clock(),
-        };
-    }
-
-    async function restoreState(state) {
-        if (!state) return;
-        await Promise.all([
-            store.saveRoster(state.roster ?? { active: [] }),
-            store.savePlan(state.plan ?? null), store.saveArcs(state.arcs ?? []),
-            store.saveNotes(state.notes ?? {}), store.saveLibrary(state.library ?? {}),
-            store.savePlans(state.plans ?? []), store.saveClock(state.clock ?? { minutes: 0 }),
-        ]);
-    }
-
-    async function restoreSnapshotFor(mesid, { remove = false } = {}) {
-        if (!settings.snapshots || mesid === null || mesid === undefined) return false;
-        const state = store.snapshot(mesid);
-        if (!state) return false;
-        await restoreState(state);
-        if (remove) await store.deleteSnapshot(mesid);
-        publishEvent('decision.snapshot.restored', { mesid: String(mesid) });
-        return true;
-    }
-
     function recordStep(runId, step) {
         const list = attempts.get(runId) ?? [];
         list.push(step);
@@ -205,8 +156,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
-        const beforeSnapshot = settings.snapshots ? snapshotState() : null;
-        const captured = captureReasoning(`${runId}:`);
+        const journal = store.beginTurn(Boolean(settings.snapshots));
+        const beforeSnapshot = settings.snapshots ? snapshotState(runId, journal) : null;
+        const captured = captureReasoning(host, `${runId}:`);
         try {
             const result = await cycle.run({ chat, runId, type, thinking: () => captured.value, usage: () => captured.usage });
             if (!result.ok) throw new Error(`The director did not submit the turn: ${result.reason ?? 'no form'}.`);
@@ -246,127 +198,67 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;
     }
 
-    function onBeforeSend(payload) {
-        if (pending && payload?.runId && pending.runId !== payload.runId) {
-            pending = null;
-            attempts.clear();
-        }
-    }
-
     /** Отбросить ход и, если включены снимки, вернуть состояние до него. */
     function discardPending() {
         const record = pending;
         pending = null;
         attempts.clear();
+        if (record?.runId) store.markRejected(record.runId).catch(() => {});
         if (record?.snapshot) restoreState(record.snapshot).catch(() => {});
     }
 
-    function onCompleted(payload) {
-        if (!pending) return;
-        const mismatched = payload?.runId && pending.runId && payload.runId !== pending.runId;
-        if (mismatched || payload?.outcome !== 'ended') {
-            discardPending();
-            return;
-        }
-        const record = pending;
-        pending = null;
-        attempts.clear();
-        store.persist(record).catch(error => publishEvent('decision.failed', { runId: record.runId, message: `could not save the director run: ${error?.message ?? error}` }));
-    }
-
-    function onAborted(payload) {
-        if (payload?.stage === DECIDE_STAGE) {
-            if (lastFailure?.kind === 'config') {
-                notify('error', `Director: ${lastFailure.message} The generation was not sent.`);
-                request(host.own, 'ui.reveal', { params: { anchor: 'card:decision' } });
-            } else {
-                notify('error', 'Decision core: the director failed twice, so this generation was cancelled.');
-            }
-        }
-        if (!payload?.runId || !pending || pending.runId === payload.runId) discardPending();
-        attempts.delete(payload?.runId);
-    }
-
-    function onSuperseded(payload) {
-        if (!payload?.runId || !pending || pending.runId === payload.runId) discardPending();
-        attempts.delete(payload?.runId);
-    }
-
-    function onStagesChanged() {
-        if (registering) return;
-        if (!stagesRegistered) registerStages().catch(() => {});
-    }
-
-    function listen() {
-        subscriptions.push(
-            host.events.subscribe('generation.beforeSend', onBeforeSend),
-            host.events.subscribe('generation.completed', onCompleted),
-            host.events.subscribe('generation.superseded', onSuperseded),
-            host.events.subscribe('generation.aborted', onAborted),
-            host.events.subscribe('pipeline.stagesChanged', onStagesChanged),
-            host.events.subscribe('model.workers.changed', () => { reload().catch(() => {}); }),
-            host.events.subscribe('st.chatChanged', () => { pending = null; attempts.clear(); reload().catch(() => {}); }),
-            host.events.subscribe('decision.researcher.report', payload => {
-                cycle.onResearcherReport(payload).catch(error => publishEvent('decision.failed', { runId: null, message: `researcher wake: ${error?.message ?? error}` }));
-            }),
-            // Свайп и удаление: вернуть состояние к снимку до этого хода.
-            host.events.subscribe('st.messageSwiped', () => {
-                call('chatHistory.messages', { limit: 1, includeSystem: true }).then(messages => restoreSnapshotFor(messages?.at?.(-1)?.mesid)).catch(() => {});
-            }),
-            host.events.subscribe('st.messageDeleted', payload => {
-                restoreSnapshotFor(payload?.args?.[0], { remove: true }).catch(() => {});
-            }),
-            // Старт по набору текста — только когда включены и настройка, и заготовка.
-            host.events.subscribe('ui.inputBar.changed', payload => {
-                const active = Boolean(payload?.active);
-                if (!active) { typingActive = false; return; }
-                if (typingActive) return;
-                typingActive = true;
-                if (!settings.startOnTyping || !settings.turnDraft || pending) return;
-                cycle.runDraft({ runId: `typing_${(runCounter += 1)}` }).catch(error => publishEvent('decision.failed', { runId: null, message: `typing draft: ${error?.message ?? error}` }));
-            }),
-        );
-    }
+    const events = createDecisionEvents({
+        host,
+        getSettings: () => settings,
+        getPending: () => pending,
+        setPending: value => { pending = value; },
+        clearAttempts: () => attempts.clear(),
+        deleteAttempt: runId => attempts.delete(runId),
+        persist: record => store.persist(record),
+        discardPending,
+        getLastFailure: () => lastFailure,
+        notify,
+        revealCard: () => request(host.own, 'ui.reveal', { params: { anchor: 'card:decision' } }),
+        restoreSnapshotFor,
+        lastMesid: () => call('chatHistory.messages', { limit: 1, includeSystem: true }).then(messages => messages?.at?.(-1)?.mesid),
+        cycle,
+        reload,
+        startDraft: () => cycle.runDraft({ runId: `typing_${(runCounter += 1)}` }).catch(error => publishEvent('decision.failed', { runId: null, message: `typing draft: ${error?.message ?? error}` })),
+        canReregister: () => !registering && !stagesRegistered,
+        registerStages,
+        publishEvent,
+        decideStage: DECIDE_STAGE,
+    });
 
     async function load() {
         const stored = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'settings', fallback: null });
         settings = clampDecisionSettings(stored ?? DEFAULT_SETTINGS);
         await reload();
-        unregisters.push(
-            host.own.register('decision.settings', () => ({ ...settings, decider: { ...settings.decider }, writer: { ...settings.writer } })),
-            host.own.register('decision.configure', params => saveSettings(params?.patch ?? {})),
-            host.own.register('decision.runs', () => ({ ...store.runs() })),
-            host.own.register('decision.lastRun', () => store.lastRun()),
-            host.own.register('decision.roster', () => store.roster()),
-            host.own.register('decision.log', () => store.cycles()),
-            host.own.register('decision.archive', () => store.archive()),
-            host.own.register('decision.plan', () => store.plan()),
-            host.own.register('decision.arcs', () => store.arcs()),
-            host.own.register('decision.notes', () => store.notes()),
-            host.own.register('decision.library', () => store.library()),
-            host.own.register('decision.plans', () => store.plans()),
-            host.own.register('decision.clock', () => store.clock()),
-            host.own.register('decision.bank', () => store.bank()),
-            host.own.register('decision.forcedMemory', params => cycle.judgeForcedMemory(params)),
-            host.own.register('decision.research', () => researcher.tasks()),
-            host.own.register('decision.names', () => store.names()),
-            host.own.register('decision.draft', () => store.draft()),
-            host.own.register('decision.reload', () => reload()),
-            host.own.register('decision.cardTurn', params => cardTurn(params)),
-            host.own.register(DECIDE_CONTRACT, params => decide(params)),
-            host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
-        );
-        listen();
+        unregisters.push(...registerDecisionContracts(host, {
+            getSettings: () => settings,
+            configure: saveSettings,
+            store,
+            researcher,
+            cycle,
+            cardTurn,
+            decide,
+            rewrite,
+            reload,
+            decideContract: DECIDE_CONTRACT,
+            rewriteContract: REWRITE_CONTRACT,
+        }));
+        subscriptions.push(...events.listen());
         await registerStages();
         return settings;
     }
 
+    const publicSettings = () => ({ ...settings, decider: { ...settings.decider }, writer: { ...settings.writer }, prompts: { ...settings.prompts } });
     return {
         load,
         configure: saveSettings,
         decide,
         rewrite,
-        settings: () => ({ ...settings, decider: { ...settings.decider }, writer: { ...settings.writer } }),
+        settings: publicSettings,
         runs: () => ({ ...store.runs() }),
         roster: () => store.roster(),
         log: () => store.cycles(),
