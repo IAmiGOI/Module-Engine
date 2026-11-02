@@ -8,6 +8,7 @@ import {
     addRecord, searchRecords, canCompress, ordinaryRecords, buildCompressionPrompt,
     replaceOrdinaryWithSummary, COMPRESS_SYSTEM,
 } from '../../libraries/core/decision-bank.js';
+import { issueName } from '../../libraries/core/decision-names.js';
 
 /**
  * Исполнители инструментов директора — вынесены из цикла, чтобы цикл
@@ -211,6 +212,14 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
         spawn_researcher: async args => {
             if (!researcher) return { ok: false, error: 'The researcher is not available.' };
             return researcher.start({ task: args.task });
+        },
+
+        recall_name: async args => {
+            const issued = store.names();
+            const result = issueName({ issued, gender: args.gender, culture: args.culture, setting: args.setting });
+            if (!result.ok) return result;
+            await store.addName(result.key);
+            return { ok: true, name: result.name, surname: result.surname, full: result.full, remaining: result.remaining };
         },
 
         forced_memory: async args => {

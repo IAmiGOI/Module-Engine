@@ -296,6 +296,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             host.own.register('decision.bank', () => store.bank()),
             host.own.register('decision.forcedMemory', params => cycle.judgeForcedMemory(params)),
             host.own.register('decision.research', () => researcher.tasks()),
+            host.own.register('decision.names', () => store.names()),
             host.own.register('decision.reload', () => reload()),
             host.own.register(DECIDE_CONTRACT, params => decide(params)),
             host.own.register(REWRITE_CONTRACT, params => rewrite(params)),
@@ -324,6 +325,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         clock: () => store.clock(),
         bank: () => store.bank(),
         research: () => researcher.tasks(),
+        names: () => store.names(),
         unregister: async () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();

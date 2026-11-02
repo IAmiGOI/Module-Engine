@@ -259,6 +259,22 @@ export const FORCED_MEMORY_TOOL = Object.freeze({
     },
 });
 
+export const RECALL_NAME_TOOL = Object.freeze({
+    name: 'recall_name',
+    displayName: 'Issue an unused name',
+    description: 'Take a name from the built-in name library so names never repeat in this chat. Give gender, culture (germany, poland, czech, latvia, china, japan) and setting (modern, fictional). Returns the name and surname; if the list is exhausted, an honest refusal.',
+    parameters: {
+        type: 'object',
+        properties: {
+            gender: { type: 'string', enum: ['male', 'female'] },
+            culture: { type: 'string', enum: ['germany', 'poland', 'czech', 'latvia', 'china', 'japan'] },
+            setting: { type: 'string', enum: ['modern', 'fictional'] },
+            comment: COMMENT,
+        },
+        required: ['gender', 'culture', 'setting', 'comment'],
+    },
+});
+
 export const SPAWN_RESEARCHER_TOOL = Object.freeze({
     name: 'spawn_researcher',
     displayName: 'Start a web researcher',
@@ -312,7 +328,7 @@ export function buildToolList(externalSchemas = []) {
     const own = [
         UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL,
         SET_CHARACTER_LEVEL_TOOL, SET_CHARACTER_PLAN_TOOL, RESOLVE_CHARACTER_PLAN_TOOL, LIBRARY_TOOL, MEMORY_TOOL,
-        FORCED_MEMORY_TOOL, SPAWN_RESEARCHER_TOOL, AWAIT_TOOL,
+        FORCED_MEMORY_TOOL, SPAWN_RESEARCHER_TOOL, RECALL_NAME_TOOL, AWAIT_TOOL,
     ];
     const external = (Array.isArray(externalSchemas) ? externalSchemas : [])
         .filter(schema => schema && String(schema.name ?? '').trim())
