@@ -52,7 +52,7 @@ export function createTurnPrefix({ store, getSettings, deciderWorker, call, publ
         const known = new Set(digests.map(record => record.key));
         const appended = [];
         for (const turn of drop) {
-            if (turn.cycles.every(cycle => cycle.rejected)) continue;
+            if (turn.cycles.some(cycle => cycle.rejected)) continue;
             const record = buildTurnDigest(turn, { index: digests.length + appended.length, now });
             if (known.has(record.key)) continue;
             known.add(record.key);

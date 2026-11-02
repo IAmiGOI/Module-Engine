@@ -182,10 +182,10 @@ export function buildTurnDigest(turn, { index = 0, now = () => Date.now() } = {}
     if (pushes.length) lines.push('PUSH:', ...pushes);
 
     for (const cycle of cycles) {
-        if (cycle?.message?.text) lines.push(`User: ${oneLine(cycle.message.text, 400)}`);
+        if (cycle?.message?.text) lines.push(`User: ${text(cycle.message.text)}`);
         if (cycle?.event !== 'message' && !cycle?.message) continue;
         for (const message of Array.isArray(cycle?.messages) ? cycle.messages : []) {
-            if (message?.role === 'assistant' && text(message?.content)) lines.push(`Director: ${oneLine(message.content, 400)}`);
+            if (message?.role === 'assistant' && text(message?.content)) lines.push(`Director: ${text(message.content)}`);
         }
     }
 
@@ -205,7 +205,7 @@ export function buildTurnDigest(turn, { index = 0, now = () => Date.now() } = {}
         const task = text(cycle.wake.task);
         const report = text(cycle.wake.report ?? cycle.wake.detail);
         lines.push(`Researcher task: ${oneLine(task, 200) || '(no task)'}`);
-        lines.push(`${oneLine(report, 300)}${report.length > 300 ? ' … (the full report is in the archive)' : ''}`);
+        lines.push(`${oneLine(report, 300)} … (the full report is in the archive)`);
     }
 
     for (const cycle of cycles) {
