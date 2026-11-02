@@ -4,7 +4,7 @@ import { createEngine } from '../libraries/shared/engine.js';
 import { request } from '../libraries/shared/request.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createDecisionCore } from '../cores/decision/index.js';
-import { buildLorebookContext, LOREBOOK_SMALL_TOKENS } from '../libraries/core/decision-lorebook.js';
+import { buildLorebookContext, buildWriterLorebook, withoutCharacterEntries, LOREBOOK_SMALL_TOKENS } from '../libraries/core/decision-lorebook.js';
 import { searchEntries } from '../libraries/core/lorebook-sources.js';
 
 const long = text => `${text} ${'detail '.repeat(2000)}`;
@@ -94,7 +94,7 @@ function build({ bookEntries = entries, worker = 'director' } = {}) {
     })();
 }
 
-test('the director sees the book and can search it; the writer body never contains the lorebook', async () => {
+test('the director sees the book and can search it; the writer body gets the book as is', async () => {
     const { pipelineCore, core, calls, searches } = await build();
     const chat = [{ mes: 'Where is the mill?', is_user: true }];
     const before = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { runId: 'run_1', chat, type: 'normal' } });
@@ -110,8 +110,8 @@ test('the director sees the book and can search it; the writer body never contai
 
     const sent = await pipelineCore.run({ pipelineId: 'generation.payload', input: { messages: [{ role: 'system', content: 'ST' }] } });
     const writerText = JSON.stringify(sent.value.messages);
-    assert.doesNotMatch(writerText, /THE LOREBOOK/);
-    assert.doesNotMatch(writerText, /Old Mill/);
+    assert.match(writerText, /THE LOREBOOK/);
+    assert.match(writerText, /Old Mill/);
     assert.match(writerText, /PUSH — what happens this turn:/);
 });
 
@@ -129,4 +129,38 @@ test('a large book reaches the director only by its always-on entries, and the s
     assert.match(text, /Always true/);
     assert.doesNotMatch(text, /Ordinary fact/);
     assert.deepEqual(searches, [{ query: 'mill', limit: undefined }]);
+});
+
+const withCharacters = [
+    { uid: 1, book: 'World', comment: '-- LOCATIONS --', content: '' },
+    { uid: 2, book: 'World', comment: 'Old Mill', key: ['mill'], content: 'The mill stands by the river.' },
+    { uid: 3, book: 'World', comment: '-- CHARACTERS --', content: '' },
+    { uid: 4, book: 'World', comment: 'Lena', key: ['lena'], content: 'Lena runs the ferry and trusts nobody.' },
+    { uid: 5, book: 'World', comment: '-- PAST EVENTS --', content: '' },
+    { uid: 6, book: 'World', comment: 'The Flood', key: ['flood'], content: 'The flood took the old bridge.' },
+];
+
+test('character entries of the lorebook become data banks, so neither the director nor the writer gets them twice', () => {
+    assert.deepEqual(withoutCharacterEntries(withCharacters).map(entry => entry.comment), ['-- LOCATIONS --', 'Old Mill', '-- CHARACTERS --', '-- PAST EVENTS --', 'The Flood']);
+    const director = buildLorebookContext(withCharacters).text;
+    const writer = buildWriterLorebook(withCharacters).text;
+    for (const text of [director, writer]) {
+        assert.match(text, /Old Mill/);
+        assert.match(text, /The Flood/);
+        assert.doesNotMatch(text, /trusts nobody/);
+    }
+});
+
+test('a large book reaches the writer by its always-on entries and the entries whose keys appear in the scene', () => {
+    const large = [
+        { uid: 1, book: 'World', comment: 'Ordinary', key: ['granary'], content: long('Ordinary fact.') },
+        { uid: 2, book: 'World', comment: 'Always', key: ['x'], content: 'Always-on fact.', constant: true },
+        { uid: 3, book: 'World', comment: 'Mentioned', key: ['Lighthouse'], content: long('The lighthouse fact.') },
+    ];
+    const built = buildWriterLorebook(large, { scanText: 'They walk to the lighthouse at dusk.' });
+    assert.equal(built.large, true);
+    assert.match(built.text, /Always-on fact/);
+    assert.match(built.text, /The lighthouse fact/);
+    assert.doesNotMatch(built.text, /Ordinary fact/);
+    assert.doesNotMatch(built.text, /search/i, 'the writer has no tools, so the text never points at one');
 });

@@ -1,4 +1,5 @@
-import { buildWriterContext } from '../../libraries/core/decision-context.js';
+import { buildWriterContext, selectRecentChat } from '../../libraries/core/decision-context.js';
+import { buildWriterLorebook } from '../../libraries/core/decision-lorebook.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createWriterProxy } from './writer-proxy.js';
@@ -23,11 +24,23 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const writerBlock = (await assembleSectionFor({ sectionId: 'writer', settings, chat: pending.chat, call, model })).messages;
         const bankText = banks ? banks.contextFor({ names: store.roster().active, all: false }).text : '';
         const examples = banks ? banks.examplesForCards() : '';
-        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision: pending.push ?? pending.decision, writerBlock, banksText: bankText, examples });
+        const decision = pending.push ?? pending.decision;
+        const lorebookText = await writerLorebookText(call, pending.chat, decision);
+        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText, examples, lorebookText });
         if (writerId && writerId !== 'st-main') {
             const own = await writerProxy.respond({ payload, messages: context.messages, signal: input.signal });
             if (own) return own;
         }
         return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;
     };
+}
+
+/** Лорбук прозаика как есть; ключи большой книги ищутся в его окне истории и в Push. Ошибка чтения не ломает ход. */
+async function writerLorebookText(call, chat, decision) {
+    try {
+        const books = await call('lorebook.books');
+        if (!Array.isArray(books) || !books.length) return '';
+        const scanText = [...selectRecentChat(chat ?? []).map(message => String(message?.mes ?? '')), String(decision ?? '')].join('\n');
+        return buildWriterLorebook((await call('lorebook.entries')) ?? [], { scanText }).text;
+    } catch { return ''; }
 }
