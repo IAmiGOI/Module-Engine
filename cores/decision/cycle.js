@@ -28,7 +28,7 @@ export class DecisionConfigError extends Error {
     }
 }
 
-export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, researcher = null, publishEvent, usage = () => null, now = () => Date.now() }) {
+export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, now = () => Date.now() }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
@@ -51,7 +51,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
     function handlersFor(settings) {
-        return createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher });
+        return createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks });
     }
 
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {

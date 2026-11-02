@@ -50,9 +50,45 @@ export function registerStCharacterService(bus, { getContext } = {}) {
         };
     }
 
+
+    /** Карточки, которые сейчас в чате: один персонаж или участники группы. Только чтение. */
+    function chatCharacters() {
+        const context = getContext() ?? {};
+        const characters = context.characters ?? [];
+        const group = context.groupId != null ? (context.groups ?? []).find(item => String(item.id) === String(context.groupId)) : null;
+        const files = group ? (group.members ?? []) : [characters[context.characterId]?.avatar].filter(Boolean);
+        return files.map(file => characters.find(character => character.avatar === file) ?? { avatar: file, name: String(file).replace(/\.[a-z]+$/i, '') })
+            .filter(character => character && character.name)
+            .map(character => {
+                const data = character.data ?? {};
+                return {
+                    avatar: character.avatar ?? null,
+                    name: character.name ?? data.name ?? null,
+                    description: character.description ?? data.description ?? '',
+                    personality: character.personality ?? data.personality ?? '',
+                    scenario: character.scenario ?? data.scenario ?? '',
+                    mes_example: character.mes_example ?? data.mes_example ?? '',
+                    post_history_instructions: data.post_history_instructions ?? character.post_history_instructions ?? '',
+                };
+            });
+    }
+
+    /** Персона пользователя: имя и описание из настроек ST. */
+    function persona() {
+        const context = getContext() ?? {};
+        const avatar = context.user_avatar ?? null;
+        const power = context.power_user ?? {};
+        const name = power.personas?.[avatar] ?? context.name1 ?? 'User';
+        const record = power.persona_descriptions?.[avatar] ?? {};
+        const description = typeof record === 'string' ? record : (record.description ?? power.persona_description ?? '');
+        return { avatar, name, description: String(description ?? '') };
+    }
+
     const unregisters = [
         bus.register('stCharacter.current', () => current(), { loadMetric: () => 0 }),
         bus.register('stCharacter.avatars', () => avatars(), { loadMetric: () => 0 }),
+        bus.register('stCharacter.chatCharacters', () => chatCharacters(), { loadMetric: () => 0 }),
+        bus.register('stCharacter.persona', () => persona(), { loadMetric: () => 0 }),
     ];
 
     return () => { for (const unregister of unregisters) unregister(); };

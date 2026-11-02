@@ -9,8 +9,8 @@ import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
 import { registerDecisionContracts } from './contracts.js';
 import { previewSection } from './prompt-sections.js';
-import { createWriterProxy } from './writer-proxy.js';
 import { createWriterRewrite } from './rewrite.js';
+import { createCharacterBanks } from './banks.js';
 import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
 
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
@@ -21,23 +21,7 @@ const DECIDE_CONTRACT = 'decision.decide';
 const REWRITE_CONTRACT = 'decision.rewrite';
 const RETRY_DELAY_MS = 500;
 
-/**
- * Ядро «директор + прозаик» (docs/research-decision/DESIGN.md).
- *
- * Директор думает и решает на `generation.beforeSend`; прозаик пишет тот же
- * основной запрос ST на `generation.payload`, но с телом, заменённым его
- * контекстом. Ядро всегда включено: выключателя нет, запасного пути через
- * сборку ST тоже. Без воркера директора генерация не отправляется — вместо
- * этого пользователь получает понятное уведомление и карточку настройки.
- *
- * На `generation.payload` `decision:rewrite` — единственный этап: тело ST
- * целиком заменяется контекстом прозаика. Prompt Manager удалён (часть 3),
- * поэтому зависимостей по `needs` у этапа больше нет.
- *
- * Запись прогона живёт в памяти до успешного конца прогона
- * (`generation.completed` с `outcome: 'ended'`). Вытесненный/отменённый/
- * остановленный прогон ничего не коммитит — полузаписанных ходов не бывает.
- */
+/** Ядро «директор + прозаик»: директива перед отправкой, прозаик на `generation.payload`, банки персонажей. */
 export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_MS } = {}) {
     const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
     let settings = clampDecisionSettings(DEFAULT_SETTINGS);
@@ -63,7 +47,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return result.value;
     };
     const store = createDecisionStore({ call, publishEvent });
-    const writerProxy = createWriterProxy({ host, getSettings: () => settings, getWorkers: () => workers });
     const researcher = createResearcher({
         call: callStrict,
         getSettings: () => settings,
@@ -71,6 +54,12 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         store,
         publishEvent,
     });
+    const callService = async (contract, params) => {
+        const result = await request(host.services, contract, { params });
+        if (!result.ok) throw new Error(result.error.message);
+        return result.value;
+    };
+    const banks = createCharacterBanks({ call, callService, getSettings: () => settings, store, researcher, publishEvent });
     const cycle = createDecisionCycle({
         call: callStrict,
         callTool: async (name, args) => callStrict('generation.callTool', { name, args }),
@@ -78,6 +67,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         getWorkers: () => workers,
         store,
         researcher,
+        banks,
         publishEvent,
     });
     const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
@@ -86,6 +76,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
 
     async function reload() {
         await store.reload();
+        await banks.reload().catch(() => {});
         workers = (await call('model.workers.get')) ?? [];
         return { runs: store.runs() };
     }
@@ -163,6 +154,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 return { reused: true, decision: push };
             }
         }
+        await banks.ensureColdStart().catch(error => publishEvent('decision.bank.failed', { runId, message: error?.message ?? String(error) }));
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
@@ -201,7 +193,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }
     }
 
-    const rewrite = createWriterRewrite({ call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, writerProxy });
+    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending });
 
     /** Предпросмотр раздела: собирает блок и плашки данных для окна промптов. */
     const preview = input => previewSection({ input, settings, call, store });
@@ -247,6 +239,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             configure: saveSettings,
             store,
             researcher,
+            banks,
             cycle,
             cardTurn,
             decide,
@@ -288,6 +281,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         draft: () => store.draft(),
         message: params => cycle.sendMessage(params),
         waiting: () => cycle.waiting(),
+        banks: () => banks.records(),
+        bankProgress: () => banks.progress(),
         unregister: async () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();

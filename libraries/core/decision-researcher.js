@@ -91,12 +91,14 @@ export function createResearcher({ call, getSettings, getWorkers, store, publish
         return workers[0] ?? null;
     }
 
-    async function runTask(task, settings) {
+    async function runTask(task, settings, { system = null } = {}) {
         const worker = workerFor(settings);
         let report = '';
         let steps = 0;
+        let failure = null;
         const trace = [];
-        const messages = [{ role: 'system', content: fillPrompt(RESEARCHER_SYSTEM, { steps: settings.researcher.maxSteps }) }, { role: 'user', content: `RESEARCH TASK:\n\n${task.task}` }];
+        const systemPrompt = system || fillPrompt(RESEARCHER_SYSTEM, { steps: settings.researcher.maxSteps });
+        const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: `RESEARCH TASK:\n\n${task.task}` }];
         try {
             if (!worker) throw new Error('no researcher worker is configured');
             if (worker.format !== 'openai') throw new Error(`the researcher needs an "openai" worker, "${worker.id}" is "${worker.format}"`);
@@ -126,26 +128,27 @@ export function createResearcher({ call, getSettings, getWorkers, store, publish
             }
             if (!report) report = `The researcher reached the ${settings.researcher.maxSteps}-step limit without a report.`;
         } catch (error) {
-            report = `The researcher failed: ${error?.message ?? error}`;
+            failure = error?.message ?? String(error);
+            report = `The researcher failed: ${failure}`;
         }
-        const finished = { ...task, status: 'done', report, steps, finishedAt: now(), trace };
+        const finished = { ...task, status: 'done', report, steps, finishedAt: now(), trace, error: failure };
         await store.updateResearch(task.id, finished).catch(() => {});
         running.delete(task.id);
-        publishEvent('decision.researcher.report', { taskId: task.id, task: task.task, report, steps });
+        if (task.notify !== false) publishEvent('decision.researcher.report', { taskId: task.id, task: task.task, report, steps });
         return finished;
     }
 
     /** Ставит задачу и сразу возвращает id. Третья задача — отказ, не ожидание. */
-    function start({ task } = {}) {
+    function start({ task, system = null, kind = 'research', notify = true } = {}) {
         const settings = getSettings();
         const text = String(task ?? '').trim();
         if (!text) return { ok: false, error: 'A researcher task needs text.' };
         if (running.size >= settings.researcher.maxTasks) return { ok: false, error: 'Two research tasks are already running — wait for their reports, do not queue a third.' };
-        const record = { id: taskId(now(), rid), task: text, status: 'running', steps: 0, startedAt: now(), report: null };
+        const record = { id: taskId(now(), rid), task: text, kind, notify: notify !== false, status: 'running', steps: 0, startedAt: now(), report: null };
         running.set(record.id, record);
         store.addResearch(record).catch(() => {});
-        runTask(record, settings).catch(() => {});
-        return { ok: true, taskId: record.id };
+        const done = runTask(record, settings, { system });
+        return { ok: true, taskId: record.id, done };
     }
 
     return { start, running: () => running.size, tasks: () => store.research() };

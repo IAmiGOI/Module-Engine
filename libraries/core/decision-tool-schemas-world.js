@@ -152,6 +152,23 @@ export const LOREBOOK_TOOL = Object.freeze({
     },
 });
 
+
+export const CHARACTER_BANK_TOOL = Object.freeze({
+    name: 'character_bank',
+    displayName: 'Read, edit or rebuild a character bank',
+    description: 'A character bank is the compact card the Writer and the Director read. Read it before writing a character into a scene, edit it when the story changes something lasting, or rebuild it from its source with the subagent.',
+    parameters: {
+        type: 'object',
+        properties: {
+            op: { type: 'string', enum: ['read', 'write', 'rebuild'] },
+            character: { type: 'string', description: 'Whose bank.' },
+            text: { type: 'string', description: 'For write: the full new bank text.' },
+            comment: COMMENT,
+        },
+        required: ['op', 'character', 'comment'],
+    },
+});
+
 export const SAVE_DRAFT_TOOL = Object.freeze({
     name: 'save_draft',
     displayName: 'Save a draft turn',

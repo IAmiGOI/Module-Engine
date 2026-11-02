@@ -1,0 +1,207 @@
+import { bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady } from '../../libraries/core/decision-banks.js';
+import { createBankStore } from './bank-store.js';
+import { createBankTasks } from './bank-tasks.js';
+
+/**
+ * Дата-банки персонажей: два слоя (общий и копия чата), холодный запуск перед
+ * первым ходом, короткий банк для нового ростера, инструменты директора.
+ * Модель зовётся только субагентом через `bank-tasks.js`.
+ */
+export function createCharacterBanks({ call, callService, getSettings, store, researcher, publishEvent, now = () => Date.now() }) {
+    const bankStore = createBankStore({ call });
+    const tasks = createBankTasks({ getSettings, researcher, publishEvent });
+    let coldStartPromise = null;
+    let sourcesCache = [];
+
+    function keyOf(name) { return String(name ?? '').trim().toLowerCase(); }
+
+    function sizeFor(source) {
+        const record = Object.values(store.library()).find(item => keyOf(item.name) === keyOf(source.name));
+        return bankSizeBand({ level: record?.level, isMain: source.sourceKind === 'card' && source.sizeBand === 'key' });
+    }
+
+    async function collectSources() {
+        const [cards, persona, entries] = await Promise.all([
+            callService('stCharacter.chatCharacters').catch(() => []),
+            callService('stCharacter.persona').catch(() => null),
+            call('lorebook.entries').catch(() => []),
+        ]);
+        sourcesCache = bankSourcesForChat({ cards, persona, lorebookEntries: entries });
+        return sourcesCache;
+    }
+
+    function historySource(name) {
+        return {
+            sourceKey: `history:${keyOf(name)}`, sourceKind: 'history', name,
+            source: `Name: ${name}\nThe character is known only from the story so far.`, sizeBand: 'minor', examples: '',
+        };
+    }
+
+    async function saveReady(source, text) {
+        const record = createBankRecord({
+            sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
+            sourceHash: hashText(source.source), text, sizeBand: sizeFor(source), rawSource: source.source,
+            examples: source.examples ?? '', status: 'ready',
+        });
+        await bankStore.putBase({ ...record, rawSource: '' });
+        await bankStore.putChat(record);
+        return record;
+    }
+
+    async function markError(source, error) {
+        const previous = bankStore.chat()[source.sourceKey];
+        const record = createBankRecord({
+            sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
+            sourceHash: hashText(source.source), text: previous?.text ?? '', sizeBand: sizeFor(source),
+            rawSource: source.source, examples: source.examples ?? '', status: 'error', error: error?.message ?? String(error),
+        });
+        await bankStore.putChat(record);
+        publishEvent('decision.bank.failed', { sourceKey: source.sourceKey, name: source.name, message: record.error });
+        return record;
+    }
+
+    function progress(extra = {}) {
+        const state = bankStore.coldStart();
+        const records = Object.values(bankStore.chat());
+        return {
+            ...state,
+            done: records.filter(record => record.status !== 'pending').length,
+            total: Math.max(state.total, records.length),
+            errors: records.filter(record => record.status === 'error').length,
+            ...extra,
+        };
+    }
+
+    async function runColdStart() {
+        const sources = await collectSources();
+        const base = bankStore.base();
+        const chat = { ...bankStore.chat() };
+        const pending = [];
+        for (const source of sources) {
+            const hash = hashText(source.source);
+            const own = chat[source.sourceKey];
+            if (bankIsReady(own) && own.sourceHash === hash) continue;
+            const cached = base[source.sourceKey];
+            if (bankIsReady(cached) && cached.sourceHash === hash) {
+                chat[source.sourceKey] = createBankRecord({ ...cached, rawSource: source.source, examples: source.examples ?? '', status: 'ready' });
+                continue;
+            }
+            chat[source.sourceKey] = createBankRecord({
+                sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
+                sourceHash: hash, sizeBand: sizeFor(source), rawSource: source.source, examples: source.examples ?? '', status: 'pending',
+            });
+            pending.push(source);
+        }
+        await bankStore.saveChat(chat);
+        await bankStore.saveColdStart({ status: 'running', total: sources.length, done: progress().done, errors: 0, startedAt: now() });
+        if (!pending.length) {
+            await bankStore.saveColdStart({ status: 'ready', done: sources.length, total: sources.length, errors: 0 });
+            return progress({ timedOut: false, sources: sources.length });
+        }
+        const running = tasks.runQueue(pending, {
+            concurrency: 2,
+            onDone: async (source, text) => { await saveReady(source, text); await bankStore.saveColdStart(progress()); },
+            onError: async (source, error) => { await markError(source, error); await bankStore.saveColdStart(progress()); },
+        });
+        const timeoutMs = Math.max(1, Number(getSettings().bankColdStartTimeoutMs) || 120000);
+        let timer = null;
+        const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(true), timeoutMs); });
+        const timedOut = await Promise.race([running.then(() => false, () => false), timeout]);
+        if (timer) clearTimeout(timer);
+        if (timedOut) {
+            await bankStore.saveColdStart(progress({ status: 'partial', timedOut: true }));
+            publishEvent('decision.bank.timeout', { done: progress().done, total: sources.length, timeoutMs });
+            return progress({ timedOut: true, sources: sources.length });
+        }
+        await bankStore.saveColdStart(progress({ status: 'ready' }));
+        return progress({ timedOut: false, sources: sources.length });
+    }
+
+    function ensureColdStart() {
+        if (coldStartPromise) return coldStartPromise;
+        const state = bankStore.coldStart();
+        if (state.status === 'ready' || state.status === 'partial') return Promise.resolve(progress());
+        coldStartPromise = runColdStart().finally(() => { coldStartPromise = null; });
+        return coldStartPromise;
+    }
+
+    /** Новый персонаж в ростере: короткий банк сразу, полный — фоновой задачей. */
+    async function ensureName(name) {
+        const clean = String(name ?? '').trim();
+        if (!clean) return null;
+        const sources = sourcesCache.length ? sourcesCache : await collectSources();
+        const source = findBankSource(sources, clean) ?? historySource(clean);
+        const chat = bankStore.chat();
+        const existing = chat[source.sourceKey];
+        if (bankIsReady(existing) && existing.sourceHash === hashText(source.source)) return existing;
+        const shortText = `***${source.name || clean}***\n${source.source.slice(0, 1200)}`;
+        const short = createBankRecord({
+            sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name || clean,
+            sourceHash: hashText(source.source), text: shortText, sizeBand: sizeFor(source),
+            rawSource: source.source, examples: source.examples ?? '', status: 'short',
+        });
+        await bankStore.putChat(short);
+        publishEvent('decision.bank.short', { sourceKey: source.sourceKey, name: short.name });
+        tasks.build(source).then(text => saveReady(source, text)).catch(error => markError(source, error));
+        return short;
+    }
+
+    async function noteRosterAdded(names) {
+        for (const name of Array.isArray(names) ? names : []) await ensureName(name);
+    }
+
+    function records() { return Object.values(bankStore.chat()); }
+    function recordsFor(names) {
+        const wanted = new Set((Array.isArray(names) ? names : []).map(keyOf));
+        return records().filter(record => wanted.has(keyOf(record.name)));
+    }
+    function primary(kind) { return records().find(record => record.sourceKind === kind) ?? null; }
+
+    async function read({ name } = {}) {
+        return name ? records().filter(record => keyOf(record.name) === keyOf(name)) : records();
+    }
+
+    async function write({ name, text: bankText } = {}) {
+        const clean = String(name ?? '').trim();
+        const value = String(bankText ?? '').trim();
+        if (!clean || !value) return { ok: false, error: 'A bank needs a name and text.' };
+        const existing = records().find(record => keyOf(record.name) === keyOf(clean));
+        const record = createBankRecord({
+            ...(existing ?? { sourceKey: `manual:${keyOf(clean)}`, sourceKind: 'manual', name: clean, sourceHash: hashText(value), examples: '' }),
+            text: value, status: 'ready', error: null, name: existing?.name ?? clean,
+            sourceHash: existing?.sourceHash ?? hashText(value),
+        });
+        await bankStore.putChat(record);
+        publishEvent('decision.bank.edited', { sourceKey: record.sourceKey, name: record.name });
+        return { ok: true, bank: record };
+    }
+
+    async function rebuild({ name } = {}) {
+        const clean = String(name ?? '').trim();
+        if (!sourcesCache.length) await collectSources();
+        const source = findBankSource(sourcesCache, clean) ?? historySource(clean);
+        tasks.build(source).then(text => saveReady(source, text)).catch(error => markError(source, error));
+        return { ok: true, queued: true, sourceKey: source.sourceKey, name: source.name };
+    }
+
+    async function reload() {
+        coldStartPromise = null;
+        sourcesCache = [];
+        return bankStore.load();
+    }
+
+    async function reset() {
+        coldStartPromise = null;
+        sourcesCache = [];
+        await bankStore.saveColdStart({ status: 'idle', total: 0, done: 0, errors: 0, startedAt: 0 });
+    }
+
+    return {
+        reload, reset, ensureColdStart, ensureName, noteRosterAdded,
+        read, write, rebuild, progress,
+        records, recordsFor,
+        scene: () => primary('scene'),
+        persona: () => primary('persona'),
+        examplesFor: names => recordsFor(names).map(record => record.examples).filter(Boolean),
+    };
+}

@@ -1,6 +1,7 @@
 import { buildWriterContext } from '../../libraries/core/decision-context.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { assembleSectionFor } from './prompt-sections.js';
+import { createWriterProxy } from './writer-proxy.js';
 
 /**
  * Тело запроса прозаика. Если у прозаика выбрано подключение ME, запрос
@@ -8,7 +9,8 @@ import { assembleSectionFor } from './prompt-sections.js';
  * подключения нет — прежний путь: подменяем тело запроса ST, адрес и ключ
  * остаются ST.
  */
-export function createWriterRewrite({ call, getSettings, getWorkers, store, getPending, writerProxy }) {
+export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending }) {
+    const writerProxy = createWriterProxy({ host, getSettings, getWorkers });
     return async function rewrite(input = {}) {
         const payload = input.payload ?? input;
         const pending = getPending();

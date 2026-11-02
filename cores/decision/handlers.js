@@ -23,7 +23,7 @@ const key = value => String(value ?? '').trim().toLowerCase();
  *           state: { assessments: Map, assessmentCounter: number, turnCounter: number },
  *           resolvePlace: Function, lastTimeMark: Function, similarityScores: Function }} input
  */
-export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher }) {
+export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks = null }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -76,6 +76,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
                     : plan));
             }
             if (added.length || removed.length) { await store.saveLibrary(library); await store.savePlans(plans); }
+            if (added.length && banks) await banks.noteRosterAdded(added).catch(() => {});
             return { ok: true, active: next, added: added.length, removed: removed.length };
         },
 
@@ -263,6 +264,14 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             state.turnCounter += 1;
             publishEvent('decision.timeShift', { runId: state.runId, minutes, timeBefore, timeAfter, clockMinutes: nextClock.minutes });
             return { ok: true, turnId: `turn_${state.turnCounter}`, form };
+        },
+
+
+        character_bank: async args => {
+            if (!banks) return { ok: false, error: 'Character banks are not available.' };
+            if (args.op === 'write') return banks.write({ name: args.character, text: args.text });
+            if (args.op === 'rebuild') return banks.rebuild({ name: args.character });
+            return { ok: true, banks: await banks.read({ name: args.character }) };
         },
 
         await: args => ({ ok: true, reason: String(args.reason ?? '') }),

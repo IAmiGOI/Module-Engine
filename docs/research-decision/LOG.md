@@ -1707,3 +1707,30 @@ isodate/weekday`, `trim`, `newline`, `<USER>/<BOT>/<CHAR>`.
   персонажа карточки и уровней библиотеки 1–2, `minor` для остальных.
 - Тест `tests/decision-bank-prompt.test.js` сверяет промпт с разделом 10
   `PROMPTS.md` посимвольно, заполняет все подстановки и проверяет полосы.
+
+## j2. Банки
+
+- `libraries/core/decision-banks.js` — ключи источников, FNV-хеш, форма
+  записи, полосы размера, выделение записей-персонажей лорбука по разделу
+  `-- CHARACTERS --` (и явному `Character:`), сбор источников чата.
+- `cores/decision/bank-store.js` — два слоя: базовый в
+  `storage.settings` (`characterBanks`) и копия чата в `storage.chatMemory`
+  (`characterBanks`, `bankColdStart`).
+- `cores/decision/bank-tasks.js` — задачи субагенту, не больше двух
+  одновременно; без настроенного `researcher.workerId` банк не тратит
+  модель, а остаётся с сырым источником.
+- `cores/decision/banks.js` — холодный запуск (копирование по хешу, задачи,
+  таймаут с `partial`, ошибки по одному), короткий банк для нового ростера,
+  ручная правка/пересборка; `ensureColdStart()` вызывается в `decide()` до
+  первого цикла.
+- Инструмент `character_bank` (`read` / `write` / `rebuild`) с обязательным
+  комментарием; строка о нём добавлена в системный промпт директора и
+  `PROMPTS.md` (иначе тест «промпт называет ровно те инструменты» падал).
+  `update_roster` зовёт `banks.noteRosterAdded()`.
+- Персона: `stCharacter.persona` и `stCharacter.chatCharacters` в
+  `services/st-character.js`.
+- Тесты: `tests/decision-banks.test.js` — 8 проверок (холодный запуск всех
+  источников, не больше двух задач, второй чат без запросов, изменение
+  источника, ошибка одного банка, ручная правка, короткий банк, ключи и
+  хеши); `st-character-service` — персона и поля карточки.
+- Все тесты решений и сервиса: **198/198**; typecheck чистый.
