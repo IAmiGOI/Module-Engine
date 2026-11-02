@@ -2,7 +2,7 @@ import { createSyncToastsCore } from '../../cores/ui/sync-toasts.js';
 
 /** Запуск: восстановление сохранённого, открытие окон и панели, подключение пайплайна генерации — строго в этом порядке. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireBoot(ctx) {
-    const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, promptManagerCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, promptManagerPanel, picturePanel, notifications, firstLoad, messageFooter, updateOverlay, modules, guide, enginePanel } = ctx;
+    const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, promptManagerCore, decisionCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, promptManagerPanel, picturePanel, notifications, firstLoad, messageFooter, updateOverlay, modules, guide, enginePanel } = ctx;
 
     // Every Ядро is constructed by now (Settings Core included) — safe to
     // actually read back whatever was persisted last time.
@@ -16,6 +16,10 @@ export async function wireBoot(ctx) {
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
     await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), classifierCore.load(), summaryCore.load(), promptManagerCore.load()]);
+    // Строго после PM: этап прозаика объявляет `needs: ['prompt-manager:rewrite']`,
+    // и к моменту регистрации этот этап уже должен существовать. Выключенное
+    // ядро здесь ничего не регистрирует.
+    await decisionCore.load();
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
     // отдельно" — при большом Lorebook эмбединг каждой записи по

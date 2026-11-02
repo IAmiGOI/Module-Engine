@@ -16,6 +16,7 @@ import { createCharacterCardsCore } from '../../cores/character-cards/index.js';
 import { createClassifierCore } from '../../cores/classifier/index.js';
 import { createBasicSummaryCore } from '../../cores/summary/index.js';
 import { createMemoryGraphCore } from '../../cores/memory-graph/index.js';
+import { createDecisionCore } from '../../cores/decision/index.js';
 
 /** Ядра данных и логики: события, модели, пайплайн, генерация, Prompt Manager, макросы, трекинг, карта, лорбук, память. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireDataCores(ctx) {
@@ -133,6 +134,11 @@ export async function wireDataCores(ctx) {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.memoryGraph' }),
     });
 
+    // «Директор + прозаик» (docs/research-decision/DESIGN.md). По умолчанию
+    // выключено: этапы не регистрируются до `decision.configure({ enabled: true })`.
+    const decisionCore = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.decision' }),
+    });
 
-    return { backupHost, backupCore, eventsCore, modelsHost, modelsCore, diffusionHost, diffusionCore, pipelineCore, generationCore, promptManagerCore, drawerGuardCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, characterCardsCore, summaryCore, memoryGraphCore };
+    return { backupHost, backupCore, eventsCore, modelsHost, modelsCore, diffusionHost, diffusionCore, pipelineCore, generationCore, promptManagerCore, drawerGuardCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, characterCardsCore, summaryCore, memoryGraphCore, decisionCore };
 }

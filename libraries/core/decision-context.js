@@ -1,0 +1,153 @@
+import { chatToMessages } from './pm-history.js';
+
+/**
+ * Сборка контекстов директора и прозаика — чистые функции над уже
+ * прочитанными данными, без DOM, сети и шин. Оба контекста собираются из
+ * одних и тех же частей, поэтому порядок и форматирование живут в одном
+ * месте.
+ *
+ * **Порядок — от стабильного к меняющемуся** (PROMPT_MANAGER_PLAN.md, раздел
+ * про кэш префикса): правила и саммари меняются редко; блоки о персонаже
+ * правит директор каждый ход; история дописывается; задание на ход —
+ * последнее. Для `openai`-воркера это `messages`; для `anthropic`/`google`
+ * те же части плющатся в `systemPrompt` + `prompt`, потому что multi-turn
+ * `model.generate` поддерживает только `openai`.
+ */
+
+export const RECENT_MESSAGE_LIMIT = 20;
+
+const DECIDER_ROLE = `You are the director of a roleplay. You decide what the character does next; another model writes the prose from your decision. You see the character blocks you maintain, every summary, your own past decisions and the recent history. You never write the reply itself.`;
+const WRITER_ROLE = `You write the character's next reply. Follow the decision for this turn exactly and do not invent plans of your own. Write in the voice of the character, in the language of the latest messages. Never mention the decision, the character blocks or this instruction.`;
+
+const DECIDER_TASK = `Decide what the character does next, based on the character blocks, the summaries, your past decisions and the latest messages.
+Answer with ONLY a JSON object:
+{"decision":"one to four sentences: what the character does, says and wants this turn","blocks":[{"op":"add|update|remove","id":"an existing block id when you know it","title":"short title","text":"block text"}]}
+Keep blocks short, factual and useful for the writer. Omit "blocks" when nothing changes.`;
+
+function isToolCallEntry(entry) {
+    return Array.isArray(entry?.extra?.tool_invocations) && entry.extra.tool_invocations.length > 0;
+}
+
+/** Скрытые вставки саммари не должны попасть в историю дважды: саммари идут отдельной частью. */
+function isSummaryEntry(entry) {
+    return Boolean(entry?.is_system) && String(entry?.name ?? '') === 'Summary';
+}
+
+/**
+ * Последние `limit` ЛОГИЧЕСКИХ единиц истории. Единица — обычное сообщение
+ * либо серия `isToolCall`-сообщений вместе со следующим за ней настоящим
+ * ответом: так пара «вызов инструмента + результат» никогда не разрезается
+ * (PROMPT_MANAGER_PLAN.md, раздел про историю ST).
+ */
+export function selectRecentChat(chat, limit = RECENT_MESSAGE_LIMIT) {
+    const entries = (Array.isArray(chat) ? chat : []).filter(entry => !isSummaryEntry(entry));
+    const units = [];
+    for (let index = 0; index < entries.length;) {
+        if (isToolCallEntry(entries[index])) {
+            let end = index;
+            while (end < entries.length && isToolCallEntry(entries[end])) end += 1;
+            if (end < entries.length) end += 1; // настоящий ответ после цепочки
+            units.push(entries.slice(index, end));
+            index = end;
+        } else {
+            units.push([entries[index]]);
+            index += 1;
+        }
+    }
+    return units.slice(-Math.max(1, Number(limit) || RECENT_MESSAGE_LIMIT)).flat();
+}
+
+function stripPrivateFields(message) {
+    return Object.fromEntries(Object.entries(message).filter(([key]) => !key.startsWith('_')));
+}
+
+/** Те же API-сообщения, что PM отправляет модели: `assistant + tool_calls` → `tool`-результаты. */
+export function historyMessages(chat, limit = RECENT_MESSAGE_LIMIT) {
+    return chatToMessages(selectRecentChat(chat, limit), { namesBehavior: 0 }).map(stripPrivateFields);
+}
+
+/** Плоский текст для `anthropic`/`google` и Text Completion, где multi-turn `messages` нет. */
+export function renderHistory(messages) {
+    return (messages ?? []).map(message => {
+        if (message?.role === 'tool') return `Tool result: ${message.content}`;
+        if (Array.isArray(message?.tool_calls) && message.tool_calls.length) {
+            return `Assistant calls: ${message.tool_calls.map(call => `${call.function?.name ?? 'tool'}(${call.function?.arguments ?? ''})`).join(', ')}`;
+        }
+        return `${message?.role === 'user' ? 'User' : 'Character'}: ${String(message?.content ?? '')}`;
+    }).join('\n\n');
+}
+
+export function summariesSection(summaries) {
+    const list = Array.isArray(summaries) ? summaries : [];
+    if (!list.length) return '';
+    const body = list.map(record => {
+        const from = Number(record?.startIndex);
+        const to = Number(record?.endIndex);
+        const header = Number.isFinite(from) && Number.isFinite(to)
+            ? `[Summary of earlier messages #${from}–#${to}]`
+            : '[Summary of earlier messages]';
+        return `${header}\n${String(record?.text ?? '').trim()}`;
+    }).join('\n\n');
+    return `LONG-TERM SUMMARIES (oldest first):\n\n${body}`;
+}
+
+export function blocksSection(blocks) {
+    const list = Array.isArray(blocks) ? blocks : [];
+    if (!list.length) return '';
+    const body = list.map(block => `### ${String(block?.title ?? 'Untitled').trim() || 'Untitled'}\n${String(block?.text ?? '').trim()}`).join('\n\n');
+    return `CHARACTER BLOCKS (maintained by the director):\n\n${body}`;
+}
+
+export function runsSection(runs) {
+    const list = Object.values(runs && typeof runs === 'object' ? runs : {})
+        .filter(record => record && typeof record === 'object')
+        .sort((a, b) => (Number(a.mesid) || 0) - (Number(b.mesid) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0));
+    if (!list.length) return '';
+    const body = list.map(record => {
+        const heading = record.mesid === undefined ? 'Earlier turn' : `Turn #${record.mesid}`;
+        const reasoning = String(record.reasoning ?? '').trim();
+        return `${heading}\nDecision: ${String(record.decision ?? '').trim()}${reasoning ? `\nReasoning: ${reasoning}` : ''}`;
+    }).join('\n\n');
+    return `PAST DIRECTOR RUNS (oldest first):\n\n${body}`;
+}
+
+function rulesSection(rules) {
+    const value = String(rules ?? '').trim();
+    return value ? `DIRECTOR RULES (written by the user — always follow them):\n\n${value}` : '';
+}
+
+/**
+ * Контекст директора. `messages` — для `openai`/`st-main`; `systemPrompt` +
+ * `prompt` — эквивалент для `anthropic`/`google`. Оба варианта собираются из
+ * одного и того же порядка частей.
+ */
+export function buildDeciderContext({ rules = '', blocks = [], summaries = [], chat = [], runs = {}, limit = RECENT_MESSAGE_LIMIT } = {}) {
+    const history = historyMessages(chat, limit);
+    const parts = [summariesSection(summaries), runsSection(runs), blocksSection(blocks)].filter(Boolean);
+    const systemPrompt = [DECIDER_ROLE, rulesSection(rules)].filter(Boolean).join('\n\n');
+    const messages = [
+        { role: 'system', content: systemPrompt },
+        ...parts.map(content => ({ role: 'system', content })),
+        ...history,
+        { role: 'user', content: DECIDER_TASK },
+    ];
+    const prompt = [systemPrompt, ...parts, renderHistory(history), DECIDER_TASK].filter(Boolean).join('\n\n');
+    return { systemPrompt, messages, prompt };
+}
+
+/**
+ * Контекст прозаика: блоки + последние 20 + все саммари + решение текущего
+ * хода. Дополнительного `user`-сообщения нет — последним остаётся хвост
+ * истории, иначе прозаик ответил бы не на ту реплику.
+ */
+export function buildWriterContext({ blocks = [], summaries = [], chat = [], decision = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+    const history = historyMessages(chat, limit);
+    const parts = [
+        WRITER_ROLE,
+        summariesSection(summaries),
+        blocksSection(blocks),
+        String(decision ?? '').trim() ? `DECISION FOR THIS TURN:\n\n${String(decision).trim()}` : '',
+    ].filter(Boolean);
+    const messages = [...parts.map(content => ({ role: 'system', content })), ...history];
+    return { messages, prompt: [...parts, renderHistory(history)].filter(Boolean).join('\n\n') };
+}

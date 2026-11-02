@@ -1,0 +1,90 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { resolveBodyFormat, disableReasoning, computeWriterPayload } from '../libraries/core/decision-body.js';
+import { clampDecisionSettings, DEFAULT_SETTINGS } from '../libraries/core/decision-settings.js';
+
+const context = {
+    messages: [{ role: 'system', content: 'write' }, { role: 'user', content: 'hi' }],
+    prompt: 'write\n\nUser: hi',
+};
+
+test('body format is Chat Completion / Text Completion, with the source choosing the dialect', () => {
+    assert.equal(resolveBodyFormat({ messages: [] }), 'openai');
+    assert.equal(resolveBodyFormat({ messages: [], chat_completion_source: 'openrouter' }), 'openai');
+    assert.equal(resolveBodyFormat({ messages: [], chat_completion_source: 'claude' }), 'anthropic');
+    assert.equal(resolveBodyFormat({ messages: [], chat_completion_source: 'makersuite' }), 'google');
+    assert.equal(resolveBodyFormat({ prompt: 'text' }), 'text');
+    assert.equal(resolveBodyFormat({}), null);
+});
+
+test('reasoning is removed for every format provider-request.js knows; OpenRouter, Anthropic and Google get an explicit off switch', () => {
+    const base = { temperature: 0.5, messages: [], reasoning_effort: 'high', include_reasoning: true, thinking_budget: 400, stream: true };
+
+    const openai = disableReasoning({ ...base, chat_completion_source: 'openai' }, 'openai');
+    assert.equal('reasoning_effort' in openai, false);
+    assert.equal('include_reasoning' in openai, false);
+    assert.equal('reasoning' in openai, false);
+    assert.equal(openai.temperature, 0.5);
+    assert.equal(openai.stream, true);
+
+    const openrouter = disableReasoning({ ...base, chat_completion_source: 'openrouter' }, 'openai');
+    assert.deepEqual(openrouter.reasoning, { enabled: false });
+
+    const anthropic = disableReasoning({ ...base, chat_completion_source: 'claude', thinking: { type: 'enabled' } }, 'anthropic');
+    assert.equal('thinking_budget' in anthropic, false);
+    assert.deepEqual(anthropic.thinking, { type: 'disabled' });
+
+    const google = disableReasoning({ ...base, chat_completion_source: 'makersuite', generationConfig: { thinkingConfig: { thinkingBudget: 9 }, temperature: 1 } }, 'google');
+    assert.deepEqual(google.thinkingConfig, { thinkingBudget: 0 });
+    assert.equal('thinkingConfig' in google.generationConfig, false);
+    assert.equal(google.generationConfig.temperature, 1);
+
+    const text = disableReasoning({ ...base, prompt: 'x' }, 'text');
+    assert.equal('reasoning_effort' in text, false);
+    assert.equal('reasoning' in text, false);
+});
+
+test('a Chat Completion body gets the writer messages, keeps every other field, and never touches stream', () => {
+    const body = computeWriterPayload({ model: 'st', temperature: 1, stream: true, max_tokens: 500, messages: [{ role: 'system', content: 'ST assembled' }] }, context, { writer: {} });
+    assert.deepEqual(body.messages, context.messages);
+    assert.equal(body.stream, true);
+    assert.equal(body.max_tokens, 500);
+    assert.equal(body.temperature, 1);
+});
+
+test('a Text Completion body gets the flat writer prompt instead of messages', () => {
+    const body = computeWriterPayload({ prompt: 'ST prompt', max_new_tokens: 300, stream: true }, context, { writer: {} });
+    assert.equal(body.prompt, context.prompt);
+    assert.equal('messages' in body, false);
+    assert.equal(body.max_new_tokens, 300);
+});
+
+test('an unknown body is left to the caller (null), so the send hook can pass it through untouched', () => {
+    assert.equal(computeWriterPayload({ foo: 1 }, context, {}), null);
+});
+
+test('the writer sampler is applied only when the setting asks for it, and model is overridden only when a real model is given', () => {
+    const untouched = computeWriterPayload({ messages: [], temperature: 1, max_tokens: 500 }, context, { writer: { applySampler: false, temperature: 0.1, maxTokens: 100 }, model: 'writer/model' });
+    assert.equal(untouched.temperature, 1);
+    assert.equal(untouched.max_tokens, 500);
+    assert.equal(untouched.model, 'writer/model');
+
+    const applied = computeWriterPayload({ messages: [], temperature: 1, max_tokens: 500 }, context, { writer: { applySampler: true, temperature: 0.1, topP: 0.8, topK: 20, maxTokens: 100 } });
+    assert.equal(applied.temperature, 0.1);
+    assert.equal(applied.top_p, 0.8);
+    assert.equal(applied.top_k, 20);
+    assert.equal(applied.max_tokens, 100);
+});
+
+test('settings clamp to safe defaults, and an explicit enable/regen choice survives', () => {
+    const clamped = clampDecisionSettings({ enabled: true, regen: 'writer', rules: 'Be brief.', decider: { temperature: 99, topP: -1, maxTokens: 0, reasoningMode: 'sometimes' }, writer: { topK: 'lots' } });
+    assert.equal(clamped.enabled, true);
+    assert.equal(clamped.regen, 'writer');
+    assert.equal(clamped.rules, 'Be brief.');
+    assert.equal(clamped.decider.temperature, 2);
+    assert.equal(clamped.decider.topP, 0);
+    assert.equal(clamped.decider.maxTokens, 1);
+    assert.equal(clamped.decider.reasoningMode, 'inherit');
+    assert.equal(clamped.writer.topK, 0);
+    assert.equal(clampDecisionSettings({}).enabled, DEFAULT_SETTINGS.enabled, 'off by default');
+});

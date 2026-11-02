@@ -155,3 +155,43 @@ tests/sync-secrets.test.js (5)
 Дальше сравниваем только с этой линией: новых падений относительно неё быть
 не должно. Падения существуют и без наших правок (node 18: `crypto.subtle`,
 `structuredClone`/таймеры и т. п. в перечисленных файлах).
+
+## d1. Ядро и контекст директора
+
+Сделано:
+
+- `cores/decision/index.js` — ядро, по умолчанию выключено. Пока
+  `enabled` false, этапы не регистрируются. Включение/выключение на ходу
+  добавляет/снимает `decision:decide` (`generation.beforeSend`) и
+  `decision:rewrite` (`generation.payload`).
+- `cores/decision/store.js` — блоки и записи прогонов в памяти чата, своя
+  очередь записи, чтобы два одновременных завершения не затирали друг друга.
+- `libraries/core/decision-context.js` — сборка обоих контекстов, выбор
+  последних 20 логических единиц (цепочки инструментов не рвутся), порядок
+  «стабильное → изменчивое», плоская форма для `anthropic`/`google`.
+- `libraries/core/decision-format.js` — разбор ответа директора и правки
+  блоков; мусор/неполный JSON/пустой ответ — ошибка, отдельная кривая
+  правка — предупреждение, а не падение.
+- `libraries/core/decision-settings.js` — настройки и защитные клэмпы.
+- `libraries/core/decision-body.js` — замена тела и выключение ризонинга
+  (d2 использует; чистая часть готова здесь).
+- `libraries/core/decision-reasoning.js` — ризонинг провайдера из
+  `model.generate.raw`.
+- Проводка: `harness/wiring/data-cores.js` (ядро `core.decision`),
+  `harness/wiring/boot.js` (`load()` строго после PM), `engine-wiring.js`
+  (возврат наружу).
+- Тесты: `tests/decision-context.test.js`, `tests/decision-format.test.js`,
+  `tests/decision-body.test.js`, `tests/decision-core.test.js`.
+
+Проверки:
+
+- новый набор тестов: **32/32**;
+- полный прогон после d1: **3408** тестов, **3237** прошло, **167** упало,
+  **4** пропущено. Падающие — ровно те же 23 файла базовой линии; новых
+  падений нет.
+
+Механика порядка подтверждена тестом: `decision:rewrite` получает
+`needs: ['prompt-manager:rewrite']`, а если PM появится позже —
+перерегистрируется по `pipeline.stagesChanged`. Директор вызывается с
+`stream: false` (нужен цельный JSON и ризонинг из тела), `priority:
+'pipeline'`.
