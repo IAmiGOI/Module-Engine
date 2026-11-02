@@ -204,7 +204,8 @@ Drop repetition and moment-to-moment detail. Never invent anything. Records mark
 - `{{name}}` — имя персонажа;
 - `{{source_kind}}` — card / lorebook entry / persona / history;
 - `{{source}}` — текст источника;
-- `{{canon_hint}}` — франшиза, если известна, иначе пусто;
+- `{{canon_hint}}` — франшиза, если известна, иначе пусто (франшизы может не быть вовсе — оригинальный мир);
+- `{{aliases}}` — другие имена персонажа (ключи записи), иначе пусто;
 - `{{size_band}}` — «key» (до ~800 токенов) или «minor» (до ~400);
 - `{{steps}}` — лимит шагов.
 
@@ -215,10 +216,12 @@ CHARACTER: {{name}}
 SOURCE ({{source_kind}}):
 {{source}}
 FRANCHISE: {{canon_hint}}
+ALSO KNOWN AS: {{aliases}}
 SIZE: {{size_band}} — "key" stays under about 800 tokens, "minor" under about 400. These are ceilings, not targets.
 
 CANON DISCIPLINE
 If the character comes from a book, game, anime or any world that exists outside this chat, look the canon up instead of trusting memory: names, titles, ages, numbers, relations and appearance are exactly what models get wrong. For anime, manga, games and visual novels start with the character databases and the franchise wiki: read Appearance, Personality and the speech or quotes sections, not the whole plot. Take exact names and numbers from the source. What follows plainly from what you found is allowed; specifics you would be making up from nothing are not. The SOURCE above is the user's version of the character: where it differs from canon, the SOURCE wins.
+If FRANCHISE is empty, the character may be original. Do not guess a franchise: build from the SOURCE alone, and search only if the SOURCE itself clearly names an existing work or a canon character.
 
 THE SKELETON — always these sections, in this order:
 ***{{name}}***  (one line of identity in the world's own terms, if useful)
@@ -242,4 +245,28 @@ RULES OF WRITING
 For a persona (the user's own character): write only what others can see and know — appearance, manner, how they come across, what is publicly known. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
 
 When the bank is ready and inside its size, call finish with the bank as the report. You have at most {{steps}} steps. Every call must carry "comment": at least one full sentence saying why you are making it.
+```
+
+## 11. Директор — разметка лорбука при холодном запуске (какие записи — персонажи)
+
+Один запрос на книгу. Подстановки: `{{book}}` — название книги, `{{card_hint}}` — имя и теги карточки чата (подсказка о франшизе, может быть пусто), `{{entries}}` — список записей строками `uid | название | ключи | первые ~200 символов текста`, `{{sections}}` — найденные разделители книги (`-- CHARACTERS --` и т. п.), может быть пусто.
+
+```text
+You are preparing the Director's character data banks. Below is the list of entries of one lorebook. Decide which entries describe a single character — a person or a creature with a will of their own — and which describe anything else: places, events, families, factions, magic, items, rules of the world.
+
+BOOK: {{book}}
+CHAT CHARACTER: {{card_hint}}
+SECTIONS OF THE BOOK: {{sections}}
+ENTRIES (uid | title | keys | beginning of the text):
+{{entries}}
+
+The book's sections are a hint, not a rule: a character can sit in any section, and a "characters" section can hold a family or a group entry. An entry about a group, a family or a pair of characters is not a single character.
+
+Call mark_lorebook_characters once, with every character entry:
+- uid — the entry;
+- name — the character's clean name as people in the story call them, without jokes, notes or status remarks from the title ("Rem (Still comatose lmao)" → "Rem");
+- aliases — other names, titles and nicknames from the title, the keys and the text;
+- importance — "key" for characters central to the story or to the chat character, "minor" for the rest;
+- franchise — the existing work this character comes from, only if the entries or the chat character make it clear; leave it empty if the world may be original. Never guess.
+Entries you do not list are treated as not characters. The call needs a comment of at least one sentence.
 ```
