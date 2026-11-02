@@ -85,7 +85,7 @@ export function logView(cycles) {
     const list = Array.isArray(cycles) ? cycles.slice(-12).reverse() : [];
     if (!list.length) return hint('The director has not run a cycle yet.');
     return h('div', { class: 'stme-decision-log' }, list.map(cycle => h('div', { class: 'stme-decision-cycle' },
-        h('strong', {}, `${cycle.event ?? 'turn'} · ${new Date(Number(cycle.at) || 0).toLocaleTimeString()} · ${cycle.tokens ?? 0} tokens`),
+        h('strong', {}, `${cycle.event ?? 'turn'} · ${new Date(Number(cycle.at) || 0).toLocaleTimeString()} · ${cycle.tokens ?? 0} tokens${cycle.usage ? ` · ${cycle.usage.prompt ?? 0} in / ${cycle.usage.completion ?? 0} out, ${cycle.usage.cached ?? 0} cached` : ''}`),
         ...(cycle.toolCalls ?? []).map(call => h('div', { class: 'stme-decision-row' },
             h('code', {}, call.name ?? '?'),
             h('div', {}, line(call.comment) || '(no comment)'),

@@ -35,6 +35,12 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
     const logLimitTokens = signal(500000);
     const compression = { workerId: signal(''), thresholdTokens: signal(50000) };
     const researcherSettings = { workerId: signal(''), maxTasks: signal(2), maxSteps: signal(50) };
+    const snapshots = signal(true);
+    const adaptiveReasoning = signal(true);
+    const turnDraft = signal(false);
+    const costCounter = signal(true);
+    const startOnTyping = signal(false);
+    const implicitAwait = signal(false);
     const roster = signal({ active: [] });
     const plan = signal(null);
     const arcs = signal([]);
@@ -101,6 +107,12 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
         researcherSettings.workerId.set(String(value.researcher?.workerId ?? ''));
         researcherSettings.maxTasks.set(Number(value.researcher?.maxTasks ?? 2));
         researcherSettings.maxSteps.set(Number(value.researcher?.maxSteps ?? 50));
+        snapshots.set(value.snapshots !== false);
+        adaptiveReasoning.set(value.adaptiveReasoning !== false);
+        turnDraft.set(Boolean(value.turnDraft));
+        costCounter.set(value.costCounter !== false);
+        startOnTyping.set(Boolean(value.startOnTyping));
+        implicitAwait.set(Boolean(value.implicitAwait));
     }
 
     function collect() {
@@ -123,6 +135,9 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
                 workerId: researcherSettings.workerId.peek(),
                 maxTasks: researcherSettings.maxTasks.peek(), maxSteps: researcherSettings.maxSteps.peek(),
             },
+            snapshots: snapshots.peek(), adaptiveReasoning: adaptiveReasoning.peek(),
+            turnDraft: turnDraft.peek(), costCounter: costCounter.peek(),
+            startOnTyping: startOnTyping.peek(), implicitAwait: implicitAwait.peek(),
         };
     }
 
@@ -246,6 +261,14 @@ export function createDecisionCard({ call, collapse, notify, workers }) {
                     Slider('Research tasks at once', researcherSettings.maxTasks, { min: 1, max: 8, step: 1 }),
                     Slider('Research steps before the report', researcherSettings.maxSteps, { min: 1, max: 200, step: 1 }),
                 ),
+            ),
+            Details('Turn behaviour',
+                Toggle('Snapshots and rollback', snapshots, { hint: 'On: state before every turn is saved; swipe or delete restores it. Off: the state follows every applied form.' }),
+                Toggle('Low reasoning on the turn, high between turns', adaptiveReasoning, { hint: 'On: the active cycle asks for low effort, the passive one for high.' }),
+                Toggle('Turn draft', turnDraft, { hint: 'On: the passive cycle may save a draft; if the real form times out, the writer uses the draft instead of cancelling.' }),
+                Toggle('Cost counter in the log', costCounter, { hint: 'Show prompt/completion/cached tokens per cycle.' }),
+                Toggle('Start on typing', startOnTyping, { hint: 'Off by default. Starts a background draft when the user begins typing; needs Turn draft.' }),
+                Toggle('Implicit await', implicitAwait, { hint: 'On: an answer without a tool call ends the cycle as await. Off: the director is reminded to call a tool.' }),
             ),
             Details('Director state',
                 h('small', { class: 'stme-module-hint' }, 'Active roster'),

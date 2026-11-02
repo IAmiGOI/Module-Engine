@@ -214,6 +214,14 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             return researcher.start({ task: args.task });
         },
 
+        save_draft: async args => {
+            if (!getSettings().turnDraft) return { ok: false, error: 'Turn drafting is off.' };
+            const draft = args.draft && typeof args.draft === 'object' ? args.draft : null;
+            if (!draft) return { ok: false, error: 'A draft needs an object.' };
+            await store.saveDraft(draft);
+            return { ok: true };
+        },
+
         recall_name: async args => {
             const issued = store.names();
             const result = issueName({ issued, gender: args.gender, culture: args.culture, setting: args.setting });

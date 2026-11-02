@@ -54,7 +54,7 @@ function fallbackDecision(form) {
     return [String(form?.resolution ?? '').trim(), ...lines].filter(Boolean).join('\n') || 'The turn is decided.';
 }
 
-export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, researcher = null, publishEvent, now = () => Date.now() }) {
+export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, researcher = null, publishEvent, usage = () => null, now = () => Date.now() }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     let awaiting = false; // директор между циклами: отчёт субагента может его разбудить
@@ -93,18 +93,28 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         });
     }
 
-    function generateFor({ settings, worker, runId, prefix, startedAt }) {
+    function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {
         let modelCall = 0;
         return async ({ messages, tools, toolChoice, returnMessage }) => {
             modelCall += 1;
             const answer = await call('model.generate', {
                 requestId: `${runId}:${prefix}${modelCall}:${startedAt}`,
                 ...deciderRequestParams(settings.decider),
+                ...(effort ? { reasoningEffort: effort } : {}),
                 workerId: worker.id,
                 messages, tools, toolChoice, stream: false, returnMessage,
+                ...(signal ? { signal } : {}),
             });
             return normalizeGenerateAnswer(answer);
         };
+    }
+
+    async function toolsFor(settings, { background = false } = {}) {
+        return buildToolList(await externalTools()).filter(tool => {
+            if (background && tool.name === 'submit_turn') return false;
+            if (!settings.turnDraft && tool.name === 'save_draft') return false;
+            return true;
+        });
     }
 
     const ARC_SUMMARY_SYSTEM = `You compact the director's own log. Summarize the completed arcs into a short, factual record: what happened, what changed, what is still open. Keep names and causal links, drop scene detail. Output ONLY the summary text, no preamble.`;
@@ -146,29 +156,61 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return result;
     }
 
-    async function run({ chat, runId, type = 'normal', thinking = () => '' }) {
+    async function run({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
         awaiting = false;
         const context = buildContext({ chat, settings, summaries: await summaries() });
-        const tools = buildToolList(await externalTools());
+        const tools = await toolsFor(settings);
         const startedAt = now();
-        const result = await runDecisionCycle({
+        const controller = new AbortController();
+        const agent = runDecisionCycle({
             messages: context.messages,
             tools,
-            generate: generateFor({ settings, worker, runId, prefix: '', startedAt }),
+            generate: generateFor({ settings, worker, runId, prefix: '', startedAt, effort: settings.adaptiveReasoning ? 'low' : null, signal: controller.signal }),
             handlers: handlersFor(settings),
             callTool,
             maxSteps: settings.maxSteps,
             implicitAwait: Boolean(settings.implicitAwait),
             now,
         });
+        let timer = null;
+        const timeout = new Promise(resolve => { timer = setTimeout(() => resolve({ type: 'timeout', reason: 'form timeout', trace: [], warnings: [], steps: 0, messages: context.messages }), settings.formTimeoutMs); });
+        let result;
+        try {
+            result = await Promise.race([agent, timeout]);
+        } finally {
+            // Даже если агент упал, таймер не должен держать процесс живым.
+            if (timer) clearTimeout(timer);
+        }
+
+        if (result.type === 'timeout') {
+            controller.abort(new Error('form timeout'));
+            agent.catch(() => {});
+            const draft = store.draft();
+            if (!settings.turnDraft || !draft) throw new Error(`The director did not submit the turn within ${settings.formTimeoutMs} ms.`);
+            const form = {
+                ...draft,
+                scene: { minutes: Number(draft.scene?.minutes) || 0, ...(draft.scene ?? {}) },
+                characters: Array.isArray(draft.characters) ? draft.characters : [],
+                meta: { place: draft.scene?.place ?? '', timeBefore: '', timeAfter: '', clockMinutes: store.clock().minutes },
+            };
+            const push = buildPush({ form, assessments });
+            await store.saveDraft(null).catch(() => {});
+            await store.appendCycle(createCycleRecord({
+                event: 'turn', messages: [], toolCalls: [], thinking: thinking(),
+                warnings: ['the form timed out; the saved draft was used'], at: startedAt, usage: runUsage(),
+            })).catch(() => {});
+            awaiting = true;
+            publishEvent('decision.cycle.draft_used', { runId, minutes: form.scene.minutes });
+            return { ok: true, form, push, decision: fallbackDecision(form), trace: [], warnings: ['form timeout; draft used'], steps: 0, workerId: worker.id, draft: true };
+        }
 
         const cycle = createCycleRecord({
             event: type === 'normal' ? 'turn' : type,
             messages: result.messages.slice(context.messages.length),
-            toolCalls: result.trace, thinking: thinking(), warnings: result.warnings, at: startedAt,
+            toolCalls: result.trace, thinking: thinking(), warnings: result.warnings, at: startedAt, usage: runUsage(),
         });
         await store.appendCycle(cycle).catch(() => {});
         await maybeCompactLog().catch(() => {});
@@ -216,12 +258,12 @@ Report:
         awaiting = false;
         const context = buildContext({ settings, summaries: await summaries() });
         const messages = [...context.messages, { role: 'user', content: task }];
-        const tools = buildToolList(await externalTools()).filter(tool => tool.name !== 'submit_turn');
+        const tools = await toolsFor(settings, { background: true });
         const startedAt = now();
         const result = await runDecisionCycle({
             messages,
             tools,
-            generate: generateFor({ settings, worker, runId, prefix: 'p', startedAt }),
+            generate: generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null }),
             handlers: handlersFor(settings),
             callTool,
             maxSteps: settings.maxSteps,
@@ -230,7 +272,7 @@ Report:
         });
         const cycle = createCycleRecord({
             event, messages: result.messages.slice(messages.length), toolCalls: result.trace,
-            thinking: thinking(), warnings: result.warnings, at: startedAt,
+            thinking: thinking(), warnings: result.warnings, at: startedAt, usage: usage(),
         });
         await store.appendCycle(cycle).catch(() => {});
         await maybeCompactLog().catch(() => {});
@@ -246,8 +288,18 @@ Report:
             const due = duePlans(store.plans(), clock.minutes);
             if (!due.length) return { skipped: true, due: 0 };
             const dueText = due.map(plan => `- ${plan.character} (level ${plan.level}): ${plan.summary}${plan.needsNewPlan ? ' [left the active roster — a new plan is needed]' : ''}`).join('\n');
-            return backgroundRun({ runId, event: 'time', task: `${PASSIVE_TASK}\n\n${dueText}`, thinking });
+            const draftLine = getSettings().turnDraft ? '\nBefore await, if you can guess the likely next turn, call save_draft with it.' : '';
+            return backgroundRun({ runId, event: 'time', task: `${PASSIVE_TASK}${draftLine}\n\n${dueText}`, thinking });
         });
+    }
+
+    /** Старт по набору текста: подготовить заготовку хода заранее (настройка, по умолчанию выключена). */
+    function runDraft({ runId } = {}) {
+        return enqueueBackground(() => backgroundRun({
+            runId: runId ?? `typing_${now()}`,
+            event: 'turn',
+            task: 'The user is typing. Prepare a draft of the likely next decisions. If turn drafting is on, call save_draft with it, then await. Do not submit a turn.',
+        }));
     }
 
     /** Отчёт субагента будит директора, только если он между циклами. */
@@ -280,5 +332,5 @@ Reply with ONLY a JSON object: {"keep":["summary id", …]}. An empty list means
         return { keep };
     }
 
-    return { run, runPassive, onResearcherReport, judgeForcedMemory, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
+    return { run, runPassive, runDraft, onResearcherReport, judgeForcedMemory, assessments: () => new Map(assessments), resetAssessments: () => assessments.clear() };
 }

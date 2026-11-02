@@ -10,7 +10,7 @@ import { estimateTokens } from './pm-tokens.js';
  * В чат и прозаику это не попадает ни при каких условиях.
  */
 
-export function createCycleRecord({ id, event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], at = Date.now() } = {}) {
+export function createCycleRecord({ id, event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], usage = null, at = Date.now() } = {}) {
     const cycle = {
         id: String(id ?? `cyc_${at.toString(36)}_${Math.random().toString(36).slice(2, 8)}`),
         at,
@@ -22,6 +22,7 @@ export function createCycleRecord({ id, event = 'turn', messages = [], toolCalls
         })),
         thinking: String(thinking ?? ''),
         warnings: (Array.isArray(warnings) ? warnings : []).map(String),
+        usage: usage && typeof usage === 'object' ? { ...usage } : null,
         tokens: 0,
     };
     cycle.tokens = cycleTokens(cycle);

@@ -308,6 +308,28 @@ export const MEMORY_TOOL = Object.freeze({
     },
 });
 
+export const SAVE_DRAFT_TOOL = Object.freeze({
+    name: 'save_draft',
+    displayName: 'Save a draft turn',
+    description: 'Prepare a draft of the likely next turn without submitting it. If the real turn times out, the writer can use this draft instead of cancelling. Only available when turn drafting is on.',
+    parameters: {
+        type: 'object',
+        properties: {
+            draft: {
+                type: 'object',
+                properties: {
+                    scene: { type: 'object', properties: { minutes: { type: 'number' } } },
+                    resolution: { type: 'string' },
+                    userResult: { type: 'string' },
+                    characters: { type: 'array', items: { type: 'object' } },
+                },
+            },
+            comment: COMMENT,
+        },
+        required: ['draft', 'comment'],
+    },
+});
+
 export const AWAIT_TOOL = Object.freeze({
     name: 'await',
     displayName: 'Await an event',
@@ -328,7 +350,7 @@ export function buildToolList(externalSchemas = []) {
     const own = [
         UPDATE_ROSTER_TOOL, ASSESS_TOOL, SUBMIT_TURN_TOOL, SET_PLAN_TOOL, CHARACTER_NOTE_TOOL, ARC_TOOL, CURRENT_STATE_TOOL,
         SET_CHARACTER_LEVEL_TOOL, SET_CHARACTER_PLAN_TOOL, RESOLVE_CHARACTER_PLAN_TOOL, LIBRARY_TOOL, MEMORY_TOOL,
-        FORCED_MEMORY_TOOL, SPAWN_RESEARCHER_TOOL, RECALL_NAME_TOOL, AWAIT_TOOL,
+        FORCED_MEMORY_TOOL, SPAWN_RESEARCHER_TOOL, RECALL_NAME_TOOL, SAVE_DRAFT_TOOL, AWAIT_TOOL,
     ];
     const external = (Array.isArray(externalSchemas) ? externalSchemas : [])
         .filter(schema => schema && String(schema.name ?? '').trim())
