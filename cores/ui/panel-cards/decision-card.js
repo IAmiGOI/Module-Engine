@@ -60,6 +60,10 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
             return { value: id, label: model ? `${id} — ${model}` : id };
         }),
     ]);
+    const writerOptions = computed(() => [
+        { value: '', label: 'SillyTavern connection (no override)' },
+        ...workerOptions().slice(1),
+    ]);
     const presetOptions = computed(() => [
         { value: '', label: 'Custom (do not change on pick)' },
         ...presets().map(preset => ({ value: preset.id, label: preset.name })),
@@ -200,8 +204,8 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
             }),
             Row(
                 Field('Director model connection', Select(deciderWorkerId, workerOptions)),
-                Field('Writer model connection', Select(writerWorkerId, workerOptions), {
-                    hint: 'The writer model id is applied inside the SillyTavern request; the endpoint and key still belong to that connection.',
+                Field('Writer model connection', Select(writerWorkerId, writerOptions), {
+                    hint: 'The writer request goes to this connection: its endpoint, key and model. Leave it on SillyTavern to keep the ST source.',
                 }),
             ),
             Details('Director generation settings',

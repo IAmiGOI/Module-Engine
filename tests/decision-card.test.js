@@ -26,7 +26,7 @@ test('the decision card reads its state through the decision contracts and rende
     assert.equal(node.tag, 'details');
     assert.match(node.props.class, /stme-card/);
     const text = strings(node).join(' | ');
-    for (const expected of ['Director / Writer', 'Always on', 'Open prompts', 'Director model connection', 'Writer model connection', 'Limits and background workers', 'Director state', 'Memory bank', 'Arcs and character notes', 'Forced summaries', 'Last decision', 'Open director']) {
+    for (const expected of ['Director / Writer', 'Always on', 'Open prompts', 'Director model connection', 'Writer model connection', 'Limits and background workers', 'Director state', 'Memory bank', 'Arcs and character notes', 'Forced summaries', 'Last decision', 'Open director', 'The writer request goes to this connection: its endpoint, key and model.']) {
         assert.match(text, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     assert.deepEqual(calls.map(entry => entry.contract).sort(), [
@@ -35,6 +35,16 @@ test('the decision card reads its state through the decision contracts and rende
         'decision.settings', 'model.presets.get', 'summary.forced',
     ]);
 });
+
+function optionEntries(node, out = []) {
+    if (typeof node === 'function') return optionEntries(node(), out);
+    if (Array.isArray(node)) { for (const child of node) optionEntries(child, out); return out; }
+    if (node && typeof node === 'object') {
+        if (node.tag === 'option') out.push({ value: node.props?.value, label: (node.children ?? []).join('') });
+        optionEntries(node.children, out);
+    }
+    return out;
+}
 
 function optionValues(node, out = []) {
     if (typeof node === 'function') return optionValues(node(), out);
@@ -56,4 +66,14 @@ test('every model connection is a separate pick in the director card when connec
     const values = optionValues(card.decisionCard());
     for (const id of ['connection_1', 'connection_2', 'connection_3']) assert.ok(values.includes(id), `no option for ${id}`);
     assert.ok(values.every(value => typeof value === 'string'), 'option values must be plain strings');
+});
+
+
+test('the writer pick says SillyTavern explicitly, while the director pick stays load-balanced', async () => {
+    const call = async contract => (contract === 'decision.settings' ? { ok: true, value: {} } : { ok: true, value: null });
+    const card = createDecisionCard({ call, collapse: { bind: () => ({}) }, notify: async () => ({ ok: true }), workers: signal([{ id: 'writer', name: 'Writer' }]) });
+    await card.loadDecision();
+    const entries = optionEntries(card.decisionCard());
+    assert.ok(entries.some(entry => entry.value === '' && entry.label === 'SillyTavern connection (no override)'));
+    assert.ok(entries.some(entry => entry.label === 'Any connection (load-balanced)'));
 });
