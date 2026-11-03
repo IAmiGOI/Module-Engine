@@ -8,6 +8,10 @@ import { librarySection } from '../../libraries/core/decision-library.js';
 import { bankIndex } from '../../libraries/core/decision-bank.js';
 import { researchSection } from '../../libraries/core/decision-researcher.js';
 import { assembleSectionFor } from './prompt-sections.js';
+import { createKnowledge } from './knowledge.js';
+
+/** Чужие инструменты, которые директору не отдаются: Secrets директор не использует (решение владельца — отключить). */
+const DIRECTOR_EXCLUDED_TOOLS = new Set(['Secrets']);
 
 /** Контекст и запрос директора — вынесено из цикла, чтобы файл цикла оставался циклом. */
 
@@ -28,10 +32,11 @@ export function turnWake(type) {
 }
 
 export function createCycleContext({ call, store, banks = null }) {
+    const knowledge = createKnowledge({ call, store, banks });
     async function externalTools() {
         try {
             const tools = await call('generation.tools');
-            return Array.isArray(tools) ? tools : [];
+            return Array.isArray(tools) ? tools.filter(tool => !DIRECTOR_EXCLUDED_TOOLS.has(String(tool?.name ?? ''))) : [];
         } catch { return []; }
     }
 
@@ -64,23 +69,23 @@ export function createCycleContext({ call, store, banks = null }) {
         } catch { return { head: '', changes: '' }; }
     }
 
-    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', lorebookChanges = '', directorBlock = [], banksText = '' }) {
+    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', lorebookChanges = '', knowledgeText = '', directorBlock = [], banksText = '' }) {
         return buildDeciderContext({
             summaries: list, chat, plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: librarySection(store.library(), store.plans(), store.clock().minutes),
             bankText: bankIndex(store.bank()), researchText: researchSection(store.research()),
-            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, lorebookChanges, banksText, task,
+            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, lorebookChanges, knowledgeText, banksText, task,
             digests: typeof store.digests === 'function' ? store.digests() : [],
             turns: fullTurns(store.cycles()),
         });
     }
 
     async function runContext({ settings, chat = [], task = '', lorebook = true, worker }) {
-        const [list, lorebookParts, directorBlock] = await Promise.all([
-            summaries(), lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker),
+        const [list, lorebookParts, directorBlock, knowledgeText] = await Promise.all([
+            summaries(), lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null),
         ]);
         const bankText = banks ? banks.contextFor({ names: store.roster().active, all: true }).text : '';
-        return buildContext({ chat, settings, task, summaries: list, lorebookText: lorebookParts.head, lorebookChanges: lorebookParts.changes, directorBlock, banksText: bankText });
+        return buildContext({ chat, settings, task, summaries: list, lorebookText: lorebookParts.head, lorebookChanges: lorebookParts.changes, knowledgeText, directorBlock, banksText: bankText });
     }
 
     function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {

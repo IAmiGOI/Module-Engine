@@ -1,3 +1,4 @@
+import { createKnowledge } from './knowledge.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
@@ -47,11 +48,12 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return worker;
     }
 
+    const knowledge = createKnowledge({ call, store, banks, now });
     const prefix = createTurnPrefix({ store, getSettings, deciderWorker, call, now, publishEvent });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
     function handlersFor(settings) {
-        return createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks });
+        return { ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks }), ...knowledge.handlers };
     }
 
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {

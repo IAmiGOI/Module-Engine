@@ -170,7 +170,7 @@ function notesText(notes) {
  */
 export function buildDeciderContext({
     summaries = [], chat = [], plan = null, arcs = [], notes = {}, roster = [],
-    libraryText = '', bankText = '', researchText = '', lorebookText = '', lorebookChanges = '', banksText = '',
+    libraryText = '', bankText = '', researchText = '', lorebookText = '', lorebookChanges = '', knowledgeText = '', banksText = '',
     digests = [], turns = [], planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
     const history = directorHistory(chat, limit, directorBlock);
@@ -180,7 +180,7 @@ export function buildDeciderContext({
     const head = [String(banksText ?? '').trim(), String(lorebookText ?? '').trim()].filter(Boolean);
     const state = [
         String(lorebookChanges ?? '').trim(),
-        planSection(plan), arcsSection(arcs), notesSection(notes), rosterSection(roster),
+        planSection(plan), arcsSection(arcs), notesSection(notes), String(knowledgeText ?? '').trim(), rosterSection(roster),
         String(libraryText ?? '').trim(), String(bankText ?? '').trim(),
         summariesSection(summaries), String(researchText ?? '').trim(),
     ].filter(Boolean);
@@ -209,13 +209,13 @@ export function buildDeciderContext({
  * Контекст прозаика: заметки о персонажах + история с блоком @5 + Push в
  * хвосте. Push идёт после истории, как написано во встроенном промпте.
  */
-export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = writerHistory(chat, limit, writerBlock);
     // История прозаика — скользящее окно, поэтому кешируется только то, что стоит ДО неё: туда — редко меняющееся
     // (система, примеры, банки активных, саммари). Лорбук по ключам и заметки меняются почти каждый ход — они после
     // истории, рядом с Push, чтобы не обрывать кеш в начале запроса.
     const parts = [WRITER_SYSTEM, String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
-    const tail = [String(lorebookText ?? '').trim(), notesText(notes)].filter(Boolean);
+    const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim()].filter(Boolean);
     const push = String(decision ?? '').trim() ? fillPrompt(WRITER_PUSH, { push: String(decision).trim() }) : '';
     const messages = [
         ...parts.map(content => ({ role: 'system', content })),
