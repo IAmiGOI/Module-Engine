@@ -186,7 +186,7 @@ export function windowHistory(entries, block, keepTurns = DIRECTOR_BLOCK_CYCLES)
 export function buildDeciderContext({
     plan = null, arcs = [], notes = {}, roster = [],
     banksText = '', lorebookText = '', chatBriefText = '', libraryText = '', plansText = '', activeBanksText = '',
-    frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '',
+    frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '', sceneText = '',
     planMissing = false, directorBlock = '', task = '',
     digests = [], turns = [], chat = [], summaries = [], researchText = '', bankText = '', lorebookChanges = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
@@ -206,7 +206,8 @@ export function buildDeciderContext({
     ].filter(Boolean);
     const middleMessages = middle.map(entry => (typeof entry === 'string' ? { role: 'system', content: entry } : entry));
     const windowPart = usingWindow ? [] : [...compressedDigestMessages(digests), ...fullTurnMessages(turns)];
-    const state = [String(knowledgeText ?? '').trim(), notesSection(notes)].filter(Boolean);
+    // «Что сейчас» — в изменяемом хвосте, последним перед планом: ближе к заданию, и кеш до окна не трогает.
+    const state = [String(knowledgeText ?? '').trim(), notesSection(notes), String(sceneText ?? '').trim()].filter(Boolean);
     const planContent = planSection(plan) || 'YOUR PLAN: none yet — call set_plan before submit_turn.';
     const baseTask = String(task ?? '').trim() || DIRECTOR_TURN;
     const taskText = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
@@ -235,13 +236,13 @@ export function buildDeciderContext({
  * Контекст прозаика: заметки о персонажах + история с блоком @5 + Push в
  * хвосте. Push идёт после истории, как написано во встроенном промпте.
  */
-export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', sceneText = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = writerHistory(chat, limit, writerBlock);
     // История прозаика — скользящее окно, поэтому кешируется только то, что стоит ДО неё: туда — редко меняющееся
     // (система, примеры, банки активных, саммари). Лорбук по ключам и заметки меняются почти каждый ход — они после
     // истории, рядом с Push, чтобы не обрывать кеш в начале запроса.
     const parts = [WRITER_SYSTEM, String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
-    const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim()].filter(Boolean);
+    const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim(), String(sceneText ?? '').trim()].filter(Boolean);
     const push = String(decision ?? '').trim() ? fillPrompt(WRITER_PUSH, { push: String(decision).trim() }) : '';
     const messages = [
         ...parts.map(content => ({ role: 'system', content })),

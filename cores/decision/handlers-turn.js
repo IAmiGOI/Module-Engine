@@ -1,4 +1,5 @@
 import { validateTurn } from '../../libraries/core/decision-turn.js';
+import { departedFrom, lastAcceptedForm } from '../../libraries/core/decision-scene.js';
 import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
 import { advanceClock, clockFromLabel } from '../../libraries/core/decision-clock.js';
 
@@ -8,6 +9,16 @@ export function createSubmitTurnHandler({ store, publishEvent, state, resolvePla
         if (!store.plan()) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };
         const validation = validateTurn({ form: args, roster: store.roster().active, assessments: state.assessments, user: userName() });
         if (!validation.ok) return { ok: false, missing: validation.missing };
+        // Ушедший в прошлом исходе снова действует, а из ростера не убран — один раз напомнить (стражник «уходил» и возвращался).
+        if (!state.departureWarned) {
+            const previous = lastAcceptedForm(typeof store.cycles === 'function' ? store.cycles() : []);
+            const departed = previous ? departedFrom(previous.resolution, store.roster().active, { user: userName() }) : [];
+            const back = validation.normalized.characters.filter(character => character.idle !== true && departed.some(name => name.toLowerCase() === String(character.name).toLowerCase()));
+            if (back.length) {
+                state.departureWarned = true;
+                return { ok: false, missing: back.map(character => `characters: "${character.name}" left the scene at the end of the previous turn — remove them with update_roster (or list them as idle). If they really come back now, say how in their action and submit again.`) };
+            }
+        }
         if (validation.warnings?.length) state.formWarnings = [...(state.formWarnings ?? []), ...validation.warnings];
         if (formChecker) {
             const verdict = await formChecker.check({

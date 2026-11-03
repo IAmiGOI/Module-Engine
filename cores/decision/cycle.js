@@ -112,6 +112,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.sceneText = context.sceneText(chat);
         state.formWarnings = [];
         state.knowledgeReturns = new Set();
+        state.departureWarned = false;
         const lastUser = [...(Array.isArray(chat) ? chat : [])].reverse().find(entry => entry?.is_user === true);
         state.canAsk = /\(\s*ooc\s*:/i.test(String(lastUser?.mes ?? lastUser?.content ?? ''));
         state.canWriteBrief = state.canAsk;

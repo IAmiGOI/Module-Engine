@@ -1,4 +1,5 @@
 import { buildWriterContext, selectRecentChat } from '../../libraries/core/decision-context.js';
+import { lastAcceptedForm, renderCurrentScene } from '../../libraries/core/decision-scene.js';
 import { buildWriterLorebook } from '../../libraries/core/decision-lorebook.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { assembleSectionFor } from './prompt-sections.js';
@@ -32,7 +33,13 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const lorebookText = await writerLorebookText(call, pending.chat, decision, banks);
         // Прозаику — знания только активных: чтобы персонаж в сцене не выдал того, чего не знает.
         const knowledgeText = await knowledge.textFor(store.roster().active);
-        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText, examples, lorebookText, knowledgeText });
+        // Писателю — где закончился прошлый ответ: кто где стоит и кто ушёл, чтобы новый ответ начинался оттуда.
+        const cycles = store.cycles?.() ?? [];
+        const currentTurn = Number(cycles.find(cycle => cycle?.runId === pending.runId)?.turn);
+        const sceneText = renderCurrentScene({ form: lastAcceptedForm(cycles, { beforeTurn: Number.isFinite(currentTurn) ? currentTurn : null }), roster: store.roster().active, user: banks?.persona?.()?.name || '' })
+            .replace('CURRENT SCENE (where the previous turn left things — start from here):', 'WHERE THE PREVIOUS REPLY LEFT THINGS (start from here; the push says what happens next):')
+            .split('\n').filter(line => !line.startsWith('- Left the scene in that ending:')).join('\n');
+        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText, examples, lorebookText, knowledgeText, sceneText });
         if (writerId && writerId !== 'st-main') {
             const own = await writerProxy.respond({
                 payload, messages: context.messages, signal: input.signal,

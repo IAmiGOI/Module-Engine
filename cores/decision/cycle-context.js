@@ -8,6 +8,7 @@ import { createBoundary, normalizeBoundary, windowTurnCount } from '../../librar
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import { DIRECTOR_CONCRETE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
+import { lastAcceptedForm, renderCurrentScene } from '../../libraries/core/decision-scene.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createKnowledge } from './knowledge.js';
 
@@ -123,6 +124,16 @@ export function createCycleContext({ call, store, banks = null, capture = null }
         return sameMessage ? entries.slice(0, last) : entries;
     }
 
+    // Переигровка: «что сейчас» — по ходу ДО отброшенного (сам отброшенный в журнале помечен rejected после свайпа).
+    function currentSceneText({ beforeTurn = null } = {}) {
+        const cycles = typeof store.cycles === 'function' ? store.cycles() : [];
+        return renderCurrentScene({
+            form: lastAcceptedForm(cycles, { beforeTurn }),
+            roster: typeof store.roster === 'function' ? store.roster().active ?? [] : [],
+            user: String(banks?.persona?.()?.name ?? '').trim(),
+        });
+    }
+
     function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false }) {
         const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '', chatBriefText: '' };
         const win = typeof store.window === 'function' ? store.window() : null;
@@ -133,6 +144,7 @@ export function createCycleContext({ call, store, banks = null, capture = null }
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
             chatBriefText: safe.chatBriefText ?? '', planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
             windowEntries: [...entries, ...pendingTurn(entries, currentUser, reroll)],
+            sceneText: currentSceneText({ beforeTurn: reroll && entries.length < all.length ? Number(all.filter(entry => entry.kind === 'turn').at(-1)?.turn) : null }),
             frozenWindows: typeof store.frozen === 'function' ? store.frozen() : [],
             windowMode: true,
         });
