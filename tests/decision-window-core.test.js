@@ -213,3 +213,29 @@ test('deleting an old message appends a correction instead of rewriting the wind
     assert.equal(turnWindow.entries()[0].text, before);
     assert.match(turnWindow.entries().at(-1).text, /turn 2: message deleted by the user/);
 });
+
+test('a window wiped by the old turn-count bug is rebuilt from the runs and the chat text', async () => {
+    let saved = { entries: [{ kind: 'fact', turn: 0, text: 'FACT\nupdate_roster: + Emilia' }, { kind: 'turn', turn: 1, text: 'TURN 1 (compressed)\nUser: last' }] };
+    const runs = {
+        2: { push: 'Resolution: Emilia greets Sasha.', form: { scene: { place: 'fountain' } } },
+        4: { push: 'Resolution: Felt runs.', form: {} },
+        6: { push: 'Resolution: the guard leaves.', form: {} },
+    };
+    const messages = [
+        { mesid: '0', isUser: false, text: 'Greeting.' }, { mesid: '1', isUser: true, text: 'Walk to the fountain.' }, { mesid: '2', isUser: false, text: 'Emilia turns.' },
+        { mesid: '3', isUser: true, text: 'Warn her.' }, { mesid: '4', isUser: false, text: 'Felt bolts.' },
+        { mesid: '5', isUser: true, text: 'Whisper.' }, { mesid: '6', isUser: false, text: 'He walks off.' },
+    ];
+    const store = {
+        window: () => saved, saveWindow: async value => { saved = value; return value; }, runs: () => runs, frozen: () => [],
+        cycles: () => [], boundary: () => null, saveBoundary: async () => {}, roster: () => ({ active: [] }), library: () => ({}), plans: () => [],
+    };
+    const win = createTurnWindow({ store, call: async contract => (contract === 'chatHistory.messages' ? messages : null), getSettings: () => ({}), deciderWorker: () => null, publishEvent: () => {} });
+    assert.equal(await win.rebuildFromRuns(), true);
+    const turns = saved.entries.filter(entry => entry.kind === 'turn');
+    assert.deepEqual(turns.map(entry => entry.turn), [1, 2, 3]);
+    assert.match(turns[0].text, /User: Walk to the fountain\.[\s\S]*Emilia greets Sasha[\s\S]*Writer: Emilia turns\./);
+    assert.match(turns[2].text, /User: Whisper\.[\s\S]*the guard leaves/);
+    assert.equal(saved.entries[0].kind, 'fact', 'the bootstrap facts before the turns are kept');
+    assert.equal(await win.rebuildFromRuns(), false, 'a whole window is left alone');
+});

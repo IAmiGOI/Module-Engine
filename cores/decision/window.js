@@ -64,9 +64,11 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
         });
         // Свайп/регенерация: успешный новый цикл заменяет прежний цикл того же
         // хода. Если генерация сорвалась, старый цикл остаётся в окне.
+        // Заменяется только ПОСЛЕДНИЙ ход окна и только при том же номере. Раньше искался любой ход с этим номером,
+        // и сброшенный после перезагрузки счётчик («ход 1») обрезал окно до первого хода — история стиралась.
         const win = current();
-        const existing = win.entries.findIndex(item => item.kind === 'turn' && Number(item.turn) === turn);
-        if (existing >= 0) await save({ ...win, entries: win.entries.slice(0, existing) });
+        const lastTurn = win.entries.map((item, index) => (item.kind === 'turn' ? index : -1)).filter(index => index >= 0).at(-1);
+        if (lastTurn !== undefined && Number(win.entries[lastTurn].turn) === turn) await save({ ...win, entries: win.entries.slice(0, lastTurn) });
         await append(entry);
         await maybeSwitch();
         return true;
@@ -178,6 +180,40 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
         return true;
     }
 
+    /**
+     * Ремонт окна, стёртого старой ошибкой (сброшенный счётчик ходов обрезал окно до «хода 1»): ходы собираются заново
+     * из записей `runs` (Push и форма принятой версии каждого ответа) и текста чата. Только если окно не переключалось
+     * и ходов в нём меньше, чем ответов с записью; без загруженного чата — не трогаем.
+     */
+    async function rebuildFromRuns() {
+        const runs = typeof store.runs === 'function' ? store.runs() : {};
+        const keys = Object.keys(runs).filter(key => String(runs[key]?.push ?? '').trim()).sort((a, b) => Number(a) - Number(b));
+        const win = current();
+        const turns = win.entries.filter(entry => entry.kind === 'turn');
+        if (!keys.length || turns.length >= keys.length) return false;
+        if ((typeof store.frozen === 'function' ? store.frozen() : []).length) return false;
+        const messages = await call('chatHistory.messages', { limit: 100000 }).catch(() => []);
+        const list = Array.isArray(messages) ? messages : [];
+        const byId = new Map(list.map(message => [String(message.mesid), message]));
+        if (!keys.every(key => byId.has(String(key)))) return false;
+        const userBefore = mesid => {
+            for (let index = Number(mesid) - 1; index >= 0; index -= 1) {
+                const message = byId.get(String(index));
+                if (message?.isUser) return String(message.text ?? '');
+            }
+            return '';
+        };
+        const firstTurn = win.entries.findIndex(entry => entry.kind === 'turn');
+        const head = firstTurn >= 0 ? win.entries.slice(0, firstTurn) : win.entries;
+        const rebuilt = keys.map((key, index) => buildCycleDigest(
+            { push: runs[key].push, form: runs[key].form, turn: index + 1 },
+            { kind: 'turn', turn: index + 1, userText: userBefore(key), writerText: String(byId.get(String(key))?.text ?? ''), index, now },
+        ));
+        await save({ ...win, entries: [...head, ...rebuilt] });
+        publishEvent('decision.window.rebuilt', { turns: rebuilt.length, before: turns.length });
+        return true;
+    }
+
     /** Свайп и перегенерация меняют только последний цикл окна. */
     async function removeLastTurn() {
         const win = current();
@@ -203,7 +239,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
     }
 
     return {
-        recordTurn, recordBackground, addFact, maybeSwitch, switchWindow,
+        recordTurn, recordBackground, addFact, maybeSwitch, switchWindow, rebuildFromRuns,
         removeLastTurn, noteCorrection, refreshBoundary, rebuildBoundary,
         entries: () => current().entries, frozen: () => (typeof store.frozen === 'function' ? store.frozen() : []),
     };

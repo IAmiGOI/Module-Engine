@@ -74,6 +74,22 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         });
     }
 
+    /** Номер последнего хода: из окна (а без ходов в окне — из журнала). При переигровке того же сообщения — на один меньше. */
+    function turnBase({ reroll = false, userText = '' } = {}) {
+        const entries = Array.isArray(store.window?.()?.entries) ? store.window().entries : [];
+        const turns = entries.filter(entry => entry.kind === 'turn');
+        const last = turns.at(-1);
+        const fromLog = Math.max(0, ...(typeof store.cycles === 'function' ? store.cycles() : [])
+            .filter(cycle => ['turn', 'regenerate', 'swipe'].includes(cycle?.event) && !cycle?.rejected && cycle?.form)
+            .map(cycle => Number(cycle.turn) || 0));
+        const base = last ? Number(last.turn) || 0 : fromLog;
+        if (!reroll || !last) return base;
+        const firstLine = String(userText).split('\n').map(line => line.trim()).find(Boolean) ?? '';
+        const userLine = String(last.text ?? '').split('\n').find(line => line.startsWith('User: ')) ?? '';
+        const same = Boolean(firstLine) && userLine.slice('User: '.length).trim().startsWith(firstLine.slice(0, 120));
+        return same ? Math.max(0, base - 1) : base;
+    }
+
     // Не больше двух вопросов подряд: третий ask_user без другой работы между ними — отказ инструмента.
     // Счётчик сбрасывает любой другой вызов.
     const MAX_QUESTIONS_IN_A_ROW = 2;
@@ -114,6 +130,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.knowledgeReturns = new Set();
         state.departureWarned = false;
         const lastUser = [...(Array.isArray(chat) ? chat : [])].reverse().find(entry => entry?.is_user === true);
+        // Номер хода — из сохранённого окна, а не из памяти вкладки: счётчик сбрасывался при каждой перезагрузке страницы.
+        state.turnCounter = turnBase({ reroll: type === 'regenerate' || type === 'swipe', userText: String(lastUser?.mes ?? lastUser?.content ?? '') });
         state.canAsk = /\(\s*ooc\s*:/i.test(String(lastUser?.mes ?? lastUser?.content ?? ''));
         state.canWriteBrief = state.canAsk;
         state.questionCount = 0;
@@ -340,6 +358,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         askUser: ({ question, options, why = '' }) => questions.ask({ question, options, why, allowed: true, asked: 0, limit: 1 }),
         question: () => questions.pending(),
         recordTurn: params => turnWindow.recordTurn(params),
+        rebuildWindow: () => turnWindow.rebuildFromRuns(),
         removeLastWindowTurn: () => turnWindow.removeLastTurn(),
         syncWindow: () => turnWindow.maybeSwitch(),
         noteCorrection: params => turnWindow.noteCorrection(params),

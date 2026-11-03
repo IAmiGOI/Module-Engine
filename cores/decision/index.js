@@ -110,6 +110,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
 
     async function reload() {
         await store.reload();
+        await cycle.rebuildWindow().catch(error => publishEvent('decision.log.warning', { reason: `window rebuild failed: ${error?.message ?? error}` }));
         await banks.reload().catch(() => {});
         workers = (await call('model.workers.get')) ?? [];
         await bootstrap.load().catch(() => {});

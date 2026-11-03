@@ -34,7 +34,7 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
             const list = Array.isArray(messages) ? messages : [];
             // Ровно одно сообщение — приветствие карточки. Ноль — чат ещё не загружен (перезагрузка страницы):
             // раньше это принималось за новый чат, и bootstrap запускался заново по пустым данным.
-            return list.length === 1 && list[0]?.is_user !== true && (typeof store.cycles === 'function' ? store.cycles().length : 0) === 0;
+            return list.length === 1 && list[0]?.is_user !== true && list[0]?.isUser !== true && (typeof store.cycles === 'function' ? store.cycles().length : 0) === 0;
         } catch { return false; }
     }
 

@@ -13,10 +13,9 @@ const form = () => call('submit_turn', {
     scene: { minutes: 5 }, characters: [],
 });
 
-async function build({ settings = {} } = {}) {
+async function build({ settings = {}, memory = new Map() } = {}) {
     const engine = createEngine();
     const storedSettings = new Map();
-    const memory = new Map();
     const calls = [];
     const events = [];
     let lastMesid = null;
@@ -79,4 +78,16 @@ test('a small window limit switches the window, freezes the summary and puts it 
     assert.match(lastContext, /PREVIOUS WINDOWS \(summaries\):/);
     assert.match(lastContext, /The first cycles are over/);
     assert.doesNotMatch(lastContext, /TURN 1 \(compressed\)/, 'the dropped cycles are gone from the context');
+});
+
+test('a page reload does not restart the turn count: the next turn is appended, the history in the window is kept', async () => {
+    const memory = new Map();
+    const first = await build({ memory });
+    for (let number = 1; number <= 3; number += 1) await first.turn(number);
+    assert.deepEqual(first.core.window().entries.filter(entry => entry.kind === 'turn').map(entry => entry.turn), [1, 2, 3]);
+    const reloaded = await build({ memory });
+    await reloaded.turn(4);
+    const turns = reloaded.core.window().entries.filter(entry => entry.kind === 'turn');
+    assert.deepEqual(turns.map(entry => entry.turn), [1, 2, 3, 4], 'turns 2–3 are not wiped by a restarted counter');
+    assert.match(turns.at(-1).text, /User: user 4/);
 });
