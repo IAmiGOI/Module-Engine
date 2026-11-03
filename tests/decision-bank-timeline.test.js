@@ -97,3 +97,23 @@ test('a bank still being built is adjusted when it becomes ready', async () => {
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(world.adjustCalls.some(params => /Nobody/.test(params.prompt)), 'the queued name is adjusted when its bank is ready');
 });
+
+test('timeline adjustments run a few at a time instead of strictly one by one', async () => {
+    const { createTimelineAdjust } = await import('../cores/decision/bank-timeline.js');
+    let active = 0;
+    let peak = 0;
+    const list = ['A', 'B', 'C', 'D', 'E'].map(name => ({ sourceKey: `k:${name}`, name, status: 'ready', text: `***${name}***`, sourceKind: 'lorebook entry' }));
+    const adjust = createTimelineAdjust({
+        call: async () => { active += 1; peak = Math.max(peak, active); await new Promise(resolve => setTimeout(resolve, 5)); active -= 1; return '***X***\nAdjusted.'; },
+        getSettings: () => ({ decider: { workerId: 'director' } }),
+        publishEvent: () => {},
+        bankStore: { putBase: async () => {}, putChat: async () => {} },
+        records: () => list,
+        matchesName: (record, name) => record.name === name,
+        currentTimeline: () => 'Arc 1',
+        queue: { add: () => {} },
+    });
+    const result = await adjust.applyTimeline({ timeline: 'Arc 1', timelineBanks: list.map(record => ({ name: record.name, note: '' })) });
+    assert.equal(result.adjusted, 5);
+    assert.equal(peak, 3);
+});

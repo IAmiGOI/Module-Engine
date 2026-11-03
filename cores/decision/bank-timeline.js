@@ -2,6 +2,8 @@ import { splitBankImportance, createBankRecord, hashText, BANK_BUILDER_VERSION }
 import { BANK_TIMELINE_ADJUST, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { normalizeTimelineBanks } from '../../libraries/core/decision-brief.js';
 
+const TIMELINE_CONCURRENCY = 3;
+
 /** Правка готовых банков под таймлайн: один запрос модели директора, без поиска. */
 export function createTimelineAdjust({ call, getSettings, publishEvent, bankStore, records, matchesName, currentTimeline, queue }) {
     async function adjustOne(record, timeline, note = '') {
@@ -18,7 +20,7 @@ export function createTimelineAdjust({ call, getSettings, publishEvent, bankStor
             const updated = createBankRecord({ ...record, text, timelineHash: hashText(timeline), status: 'ready', builderVersion: BANK_BUILDER_VERSION });
             await bankStore.putBase({ ...updated, rawSource: '' });
             await bankStore.putChat(updated);
-            publishEvent('decision.bank.timeline', { name: record.name });
+            publishEvent('decision.bank.timeline', { sourceKey: record.sourceKey, name: record.name });
             return updated;
         } catch (error) {
             publishEvent('decision.bank.warning', { name: record.name, message: `Timeline adjust failed: ${error?.message ?? error}` });
@@ -32,12 +34,23 @@ export function createTimelineAdjust({ call, getSettings, publishEvent, bankStor
         const hash = hashText(value);
         const adjusted = [];
         const queued = [];
+        const jobs = [];
         for (const item of normalizeTimelineBanks(timelineBanks)) {
             const record = records().find(entry => matchesName(entry, item.name));
             if (!record || record.status !== 'ready') { queue.add(item.name); queued.push(item.name); continue; }
             if (record.timelineHash === hash) continue;
-            if (await adjustOne(record, value, item.note)) adjusted.push(item.name);
+            jobs.push({ record, item });
         }
+        // По несколько банков сразу, а не строго по одному: каждый — отдельный запрос модели.
+        const next = async () => {
+            while (jobs.length) {
+                const { record, item } = jobs.shift();
+                publishEvent('decision.bank.started', { sourceKey: record.sourceKey, name: record.name });
+                if (await adjustOne(record, value, item.note)) adjusted.push(item.name);
+                else publishEvent('decision.bank.failed', { sourceKey: record.sourceKey, name: record.name, message: 'Timeline adjust failed.' });
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(TIMELINE_CONCURRENCY, jobs.length) }, next));
         return { ok: true, adjusted: adjusted.length, queued: queued.length };
     }
 

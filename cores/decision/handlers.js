@@ -290,7 +290,8 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             else if (typeof store.boundary === 'function' && store.boundary()) {
                 await store.saveBoundary({ ...store.boundary(), chatBriefText: renderChatBrief(brief) });
             }
-            if (banks?.applyTimeline) await banks.applyTimeline({ timeline: brief.timeline, timelineBanks: brief.timelineBanks }).catch(() => {});
+            // Правка банков под таймлайн — в фоне: это запрос модели на каждый банк, и bootstrap (а за ним ход и сообщения) ждал её минутами.
+            if (banks?.applyTimeline) banks.applyTimeline({ timeline: brief.timeline, timelineBanks: brief.timelineBanks }).catch(() => {});
             publishEvent('decision.brief.written', { at: brief.at, timelineBanks: brief.timelineBanks.length });
             return { ok: true };
         },
