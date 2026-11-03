@@ -146,7 +146,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const runId = input.runId ?? `decision_${(runCounter += 1)}`;
         const type = input.type ?? 'normal';
         const chat = Array.isArray(input.chat) ? input.chat : [];
-        if (type === 'regenerate' || type === 'swipe') await cycle.removeLastWindowTurn?.().catch(() => {});
         if ((type === 'regenerate' || type === 'swipe') && settings.regen === 'writer') {
             const last = store.lastRun();
             if (last) {

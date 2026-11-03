@@ -158,6 +158,26 @@ test('a swipe removes only the last window turn, together with its facts', async
     assert.equal(turnWindow.entries().every(entry => entry.turn <= 2), true);
 });
 
+test('a regenerated turn replaces the last cycle instead of appending a duplicate', async () => {
+    const cycles = [];
+    const store = makeStore({ cycles });
+    const { turnWindow } = makeWindow(store);
+    for (let number = 1; number <= 2; number += 1) {
+        cycles.push(cycle(number));
+        await turnWindow.recordTurn({ pending: { chat: [{ mes: `user ${number}`, is_user: true }] }, stored: { id: `run_${number}`, writerText: `first writer ${number}` } });
+    }
+    await turnWindow.addFact('roster: + Rem', { turn: 2 });
+    assert.equal(turnWindow.entries().length, 3);
+
+    await turnWindow.recordTurn({ pending: { chat: [{ mes: 'user 2', is_user: true }] }, stored: { id: 'run_2b', writerText: 'second writer 2', sourceRunId: 'run_2' } });
+
+    const turns = turnWindow.entries().filter(entry => entry.kind === 'turn');
+    assert.equal(turns.length, 2, 'the regenerated turn does not add a third cycle');
+    assert.match(turns[1].text, /second writer 2/);
+    assert.doesNotMatch(turns[1].text, /first writer 2/);
+    assert.equal(turnWindow.entries().some(entry => /roster: \+ Rem/.test(entry.text)), false, 'facts after the replaced cycle are gone');
+});
+
 test('passive cycles and messages to the director go into the window between turn cycles', async () => {
     const cycles = [];
     const store = makeStore({ cycles });

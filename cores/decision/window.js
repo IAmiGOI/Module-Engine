@@ -54,13 +54,18 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
     }
 
     async function recordTurn({ pending = null, stored = null } = {}) {
-        const cycle = lastCycleFor(pending?.sourceRunId ?? stored?.id ?? pending?.runId);
+        const cycle = lastCycleFor(pending?.sourceRunId ?? stored?.sourceRunId ?? stored?.id ?? pending?.runId);
         if (!cycle) return false;
         const turn = Number(cycle.turn) || windowTurnCount(current().entries) + 1;
         const entry = buildCycleDigest(cycle, {
             kind: 'turn', turn, userText: lastUserText(pending?.chat),
             writerText: stored?.writerText ?? '', index: windowTurnCount(current().entries), now,
         });
+        // Свайп/регенерация: успешный новый цикл заменяет прежний цикл того же
+        // хода. Если генерация сорвалась, старый цикл остаётся в окне.
+        const win = current();
+        const existing = win.entries.findIndex(item => item.kind === 'turn' && Number(item.turn) === turn);
+        if (existing >= 0) await save({ ...win, entries: win.entries.slice(0, existing) });
         await append(entry);
         await maybeSwitch();
         return true;
