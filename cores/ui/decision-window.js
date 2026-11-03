@@ -177,6 +177,9 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 scheduleScroll();
             }));
         }
+        // Смена чата: ядро перечитало память — лента и банки этого чата сразу, без переоткрытия окна. Живые циклы старого чата не тащим.
+        subscriptions.push(host.events.subscribe('st.chatChanged', () => { feed.set(createFeedState({ cycles: [], archive: [] })); }));
+        subscriptions.push(host.events.subscribe('decision.reloaded', () => { refresh().catch(() => {}); }));
         for (const name of ['decision.bank.ready', 'decision.bank.failed', 'decision.bank.short', 'decision.bank.edited', 'decision.bank.timeout']) {
             subscriptions.push(host.events.subscribe(name, () => banksView.refresh()));
         }

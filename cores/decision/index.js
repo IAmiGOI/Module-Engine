@@ -122,6 +122,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
             await banks.ensureColdStart();
         }).catch(error => publishEvent('decision.bank.failed', { message: error?.message ?? String(error) }));
+        publishEvent('decision.reloaded', { at: Date.now() });
         return { runs: store.runs() };
     }
 
