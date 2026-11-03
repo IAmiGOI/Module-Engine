@@ -8,7 +8,34 @@ import { extractCachedTokens } from '../../libraries/core/decision-cache.js';
  * данные приходят дельтами (`model.generate.reasoning`/`.chunk`), поэтому
  * окно показывает thinking по мере прихода, а не только после ответа.
  */
-export function captureReasoning(host, prefix, { onThinking = () => {}, onAnswer = () => {} } = {}) {
+// Мысли идут из потока десятками порций в секунду, а окно директора на каждую перестраивало ленту — страница
+// вставала на каждом ходе. Наружу — не чаще раза в THROTTLE_MS, всегда последняя версия, финальная — при stop().
+const THROTTLE_MS = 300;
+
+function throttled(fn) {
+    let timer = null;
+    let pending = null;
+    const flush = () => {
+        timer = null;
+        if (pending === null) return;
+        const value = pending;
+        pending = null;
+        fn(value);
+    };
+    return {
+        push(value) {
+            pending = value;
+            if (!timer) timer = setTimeout(flush, THROTTLE_MS);
+        },
+        flush() { if (timer) clearTimeout(timer); flush(); },
+    };
+}
+
+export function captureReasoning(host, prefix, { onThinking: rawThinking = () => {}, onAnswer: rawAnswer = () => {}, throttle = true } = {}) {
+    const thinkingOut = throttle ? throttled(rawThinking) : { push: rawThinking, flush() {} };
+    const answerOut = throttle ? throttled(rawAnswer) : { push: rawAnswer, flush() {} };
+    const onThinking = value => thinkingOut.push(value);
+    const onAnswer = value => answerOut.push(value);
     const state = { value: '', usage: { prompt: 0, completion: 0, cached: 0, total: 0 } };
     const matches = payload => String(payload?.requestId ?? '').startsWith(prefix);
     const addUsage = usage => {
@@ -41,6 +68,6 @@ export function captureReasoning(host, prefix, { onThinking = () => {}, onAnswer
     return {
         get value() { return state.value; },
         get usage() { return { ...state.usage }; },
-        stop: () => { for (const unsubscribe of subscriptions) unsubscribe(); },
+        stop: () => { thinkingOut.flush(); answerOut.flush(); for (const unsubscribe of subscriptions) unsubscribe(); },
     };
 }

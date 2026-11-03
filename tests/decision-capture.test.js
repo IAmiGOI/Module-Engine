@@ -21,7 +21,7 @@ test('streamed reasoning and text reach the window as they arrive, in order', ()
     const { host, emit } = fakeHost();
     const thinking = [];
     const answer = [];
-    const captured = captureReasoning(host, 'run_1:', { onThinking: text => thinking.push(text), onAnswer: text => answer.push(text) });
+    const captured = captureReasoning(host, 'run_1:', { onThinking: text => thinking.push(text), onAnswer: text => answer.push(text), throttle: false });
     emit('model.generate.reasoning', { requestId: 'run_1:1', delta: 'the guard ' });
     emit('model.generate.reasoning', { requestId: 'run_1:1', delta: 'is tired' });
     emit('model.generate.chunk', { requestId: 'run_1:1', text: 'He looks' });
@@ -50,4 +50,18 @@ test('a streamed usage blob is counted once, without parsing the SSE body as JSO
     emit('model.generate.raw', { requestId: 'run_1:1', format: 'openai', body: 'data: {...}\\n\\ndata: [DONE]\\n\\n', usage: { prompt_tokens: 7, completion_tokens: 3 } });
     assert.deepEqual(captured.usage, { prompt: 7, completion: 3, cached: 0, total: 10 });
     captured.stop();
+});
+
+test('a flood of thinking deltas reaches the window only a few times, with the latest text, and the last one on stop', async () => {
+    const { host, emit } = fakeHost();
+    const seen = [];
+    const captured = captureReasoning(host, 'run_1:', { onThinking: text => seen.push(text) });
+    for (let index = 0; index < 200; index += 1) emit('model.generate.reasoning', { requestId: 'run_1:1:0', delta: 'x' });
+    assert.equal(seen.length, 0, 'nothing is pushed per delta');
+    await new Promise(resolve => setTimeout(resolve, 350));
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].length, 200, 'the latest accumulated text');
+    emit('model.generate.reasoning', { requestId: 'run_1:1:0', delta: 'y' });
+    captured.stop();
+    assert.equal(seen.at(-1).length, 201, 'stop() flushes the final text');
 });

@@ -101,7 +101,10 @@ function rowNode(row) {
 }
 function cycleNode(entry, now) {
     const classes = ['stme-dw-cycle', entry.running ? 'stme-dw-live' : '', entry.rejected ? 'stme-dw-rejected' : ''].filter(Boolean).join(' ');
-    const waiting = entry.waiting && entry.waitingSince ? `thinking… ${Math.max(0, Math.round((now - entry.waitingSince) / 1000))} s` : '';
+    // Таймер — свой маленький computed: раз в секунду меняется только эта строка, а не вся лента.
+    const waiting = entry.waiting && entry.waitingSince
+        ? computed(() => `thinking… ${Math.max(0, Math.round(((typeof now === 'function' ? now() : now) - entry.waitingSince) / 1000))} s`)
+        : '';
     return h('div', { class: classes },
         h('div', { class: 'stme-dw-head' }, h('strong', {}, entry.title), h('span', { class: 'stme-dw-meta' }, cycleMeta(entry))),
         entry.detail ? h('div', { class: 'stme-dw-detail' }, entry.detail) : null,
@@ -221,10 +224,10 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 hiddenCount() > 0
                     ? h('div', { class: 'stme-dw-more' }, Button(`Load ${Math.min(PAGE, hiddenCount())} older`, () => limit.update(value => value + PAGE)))
                     : null,
-                ...shown().map(entry => cycleNode(entry, now()))),
+                ...shown().map(entry => cycleNode(entry, now))),
             computed(() => (filtered().archive.length
                 ? h('details', { class: 'stme-dw-archive' }, h('summary', {}, `Archived arcs (${filtered().archive.length})`),
-                    ...filtered().archive.map(entry => cycleNode(entry, now())))
+                    ...filtered().archive.map(entry => cycleNode(entry, now)))
                 : null)),
             h('div', { class: 'stme-dw-compose' },
                 h('div', { class: 'stme-dw-compose-title' }, 'Message the director'),
