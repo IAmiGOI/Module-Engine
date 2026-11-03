@@ -2162,3 +2162,31 @@ keep 20), 70 (арка, drop 24, keep 16), 104 (снова 50). Сравнени
 (план, знания, заметки, задание).
 
 Раздел «Часть 10» в `REPORT.md` — после w5, вместе с assess.
+
+## m5. Уровни вместо e5 и бросок только для попыток
+
+- `libraries/core/decision-probability.js` переписан: два списка уровней
+  (`trivial…nearly impossible`, `none…master`) и таблица 6×6. Эмбеддинги,
+  опорные фразы, мягкий максимум и `effectiveDifficulty` удалены. Таблица
+  в `DESIGN.md`; контрольные точки — 0,150 / 0,100 / 0,750.
+- `cores/decision/handlers-assess.js` — `why` обязательно; неизвестный
+  уровень — отказ со списком допустимых, без догадки. e5-близость из
+  `readers.js` и `cycle.js` убрана.
+- `libraries/core/decision-tool-schemas-turn.js` — `assess`: enum
+  `difficulty`/`experience`, обязательное `why`; `submit_turn`: `assessId`
+  необязателен, добавлен `noCheck`.
+- `libraries/core/decision-turn.js` — форма требует `assessId` **или**
+  `noCheck`; выдуманный `assessId` отклоняется даже при наличии `noCheck`.
+- `libraries/core/decision-prompts.js` — строка `assess` в системном
+  промпте и раздел 2 (`DIRECTOR_TURN`) перенесены дословно из `PROMPTS.md`.
+- Push без броска слов степени не пишет — уже обеспечивал
+  `decision-push.js`, добавлен тест формы без `assessId`.
+- Тесты: `decision-probability` переписан (таблица, монотонность,
+  контрольные точки, неизвестный уровень); `decision-assess` — 4 проверки
+  (валидный бросок, неизвестная сложность/опыт, отсутствие `why`);
+  `decision-prompts` — 2 проверки (разделы 1 и 2 дословно);
+  `decision-turn` — `noCheck` вместо `assessId`; обновлены формы в
+  `decision-e2`, `decision-e1`, `decision-e4`, `decision-e11`,
+  `decision-card-turn`.
+
+Все тесты решений: **261/261**. Typecheck — на итоге.

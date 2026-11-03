@@ -65,11 +65,11 @@ async function build({ replies }) {
     return { engine, pipelineCore, core, calls, memory, timeShifts };
 }
 
-test('assess uses the embedding service, the form validates, the place is read from the map and the minute count shifts RP Time', async () => {
+test('assess uses the two-level table, the form validates, the place is read from the map and the minute count shifts RP Time', async () => {
     const { pipelineCore, calls, memory, timeShifts } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
-            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'master', comment: 'I need the chance before writing the outcome.' }),
+            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'master', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', {
                 comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
@@ -85,6 +85,8 @@ test('assess uses the embedding service, the form validates, the place is read f
     const log = memory.get(memoryKey('core.decision', 'log'));
     const assess = log[0].toolCalls.find(entry => entry.name === 'assess');
     assert.ok(assess.result.probability > 0.9, `trivial + master is very likely, got ${assess.result.probability}`);
+    assert.equal(assess.result.difficulty, 'trivial');
+    assert.equal(assess.result.experience, 'master');
     assert.ok(assess.result.words.length > 0);
     assert.equal(log[0].toolCalls.find(entry => entry.name === 'submit_turn').result.ok, true);
 
@@ -96,7 +98,7 @@ test('the writer receives a Push with place, time, the user result and the degre
     const { pipelineCore } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
-            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'master', comment: 'I need the chance before writing the outcome.' }),
+            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'master', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', {
                 comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
@@ -124,7 +126,7 @@ test('an incomplete form is refused with the list of missing fields, and the dir
     const { pipelineCore, calls } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
-            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the outcome.' }),
+            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [] }),
             call('submit_turn', {
@@ -142,7 +144,7 @@ test('a form that omits an active roster member is refused, and the missing name
     const { pipelineCore, memory } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }, { name: 'Marek' }], comment: 'Both are in the scene now.' }),
-            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the outcome.' }),
+            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [lena()] }),
             call('submit_turn', {

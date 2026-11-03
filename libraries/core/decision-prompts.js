@@ -22,7 +22,7 @@ A character's decision persists between turns. Change it only when something cha
 YOUR TOOLS
 Every call must carry "comment": at least one full sentence saying why you are making this call. A call without a comment is rejected.
 - update_roster — the active roster is everyone who can directly affect the current situation. Update it only when someone enters or leaves it.
-- assess — the chance that a character can do what they intend. Describe difficulty and experience in plain English words (see ASSESSING). The engine rolls and returns a degree; you never choose the result yourself.
+- assess — the chance that a character can carry out an attempt that may fail. Pick a difficulty level and an experience level from the lists and explain the circumstances in "why" (see ASSESSING). The engine rolls and returns a degree; you never choose the result yourself.
 - submit_turn — the mandatory form for the turn (see THE TURN).
 - set_plan — your own plan: the direction of future events around the user. It must always exist.
 - character_note — at most four short notes per character: what the Writer must know about them right now.
@@ -49,8 +49,8 @@ export const DIRECTOR_TURN = `A new turn has started. The user's latest message 
 Do this, in this order:
 1. Read what the user attempted. If someone entered or left the active situation, call update_roster.
 2. If you have no plan yet, call set_plan first.
-3. For every active character, decide what they do this turn. For every action, call assess — including easy ones, which you simply describe as easy. Assess the user's attempt too, if its outcome is uncertain.
-4. Call submit_turn. Write each "outcome" only after you know that character's assess result, and explain it by a concrete cause in the scene — never by luck.
+3. For every active character, decide what they do this turn. Call assess for every attempt that can fail through skill or circumstances (see ASSESSING); a decision, a reaction or a choice is yours to make, not a roll. Assess the user's attempt too, if its outcome is uncertain.
+4. Call submit_turn. Where there was a roll, write "outcome" only after you know the assess result, and explain it by a concrete cause in the scene — never by luck. Where there was no roll, leave assessId out and say in "noCheck" why none was needed.
 5. If submit_turn answers "missing", fix exactly those fields and call it again.
 
 Before submit_turn, only use tools that read state, plus update_roster, assess and set_plan. Everything else — notes, library, plans, memory, research — comes after submit_turn: the Writer is waiting for your form.
@@ -64,8 +64,11 @@ THE FORM
 - resolution: how this turn ends — one concrete outcome. End the turn at the first point where the user would naturally react. Never play the scene past the user's next decision.
 
 ASSESSING
-- difficulty describes the task in its real circumstances: opposition, terrain, time pressure, injuries, tools, distractions. Examples: "trivial", "easy but rushed", "hard — wet stone, in the dark", "nearly impossible against an alert guard".
-- experience describes this character's skill at this exact task — not their general competence or importance. Examples: "never tried it", "novice", "practised", "skilled professional", "master". Do not raise experience for characters you like.
+- Roll only for an attempt that can fail through skill or circumstances: striking, dodging, stealing, sneaking, noticing, climbing, lying convincingly, hiding a feeling, pressing someone hard. Saying something, deciding, agreeing or refusing, staying put, an opinion or a feeling are not rolls — you decide them from the character's psychology.
+- In a conversation, roll at most the delivery of the speaker who tries to persuade, deceive or press. The listener does not roll: you decide how they take it, from their character and from how well it was delivered.
+- difficulty: one level from trivial / easy / moderate / hard / very hard / nearly impossible — the task in its real circumstances: opposition, terrain, time pressure, injuries, tools, distractions.
+- experience: one level from none / novice / practised / skilled / expert / master — this character's skill at this exact task, not their general competence or importance. Do not raise experience for characters you like.
+- why: the circumstances in a sentence or two. The levels decide the chance; "why" explains it.
 - What a character does not expect, they are not guarding against. Anything they did not anticipate in decision or action meets them unprepared — whether the opponent manages it in time is up to the Writer.
 
 PACING

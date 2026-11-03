@@ -44,8 +44,10 @@ export function validateTurn({ form, roster = [], assessments = new Map() } = {}
         for (const field of TEXT_FIELDS) {
             if (!nonEmpty(character?.[field])) missing.push(`characters[${name || '?'}].${field}`);
         }
-        if (!nonEmpty(character?.assessId)) missing.push(`characters[${name || '?'}].assessId`);
-        else if (!hasAssessment(assessments, character.assessId)) missing.push(`characters[${name || '?'}].assessId: "${character.assessId}" was not returned by assess`);
+        const rolled = nonEmpty(character?.assessId);
+        const noCheck = nonEmpty(character?.noCheck);
+        if (!rolled && !noCheck) missing.push(`characters[${name || '?'}].noCheck (or assessId): say why no roll was needed`);
+        else if (rolled && !hasAssessment(assessments, character.assessId)) missing.push(`characters[${name || '?'}].assessId: "${character.assessId}" was not returned by assess`);
     }
 
     const normalized = {

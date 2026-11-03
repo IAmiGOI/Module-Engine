@@ -7,7 +7,7 @@ import { duePlans } from '../../libraries/core/decision-library.js';
 import { createHandlers } from './handlers.js';
 import { createTurnWindow } from './window.js';
 import { createJudge } from './judge.js';
-import { createPlaceReader, createTimeReader, createSimilarity } from './readers.js';
+import { createPlaceReader, createTimeReader } from './readers.js';
 import { createCycleLive } from './live.js';
 import { createWakeQueue } from './queue.js';
 import { createCycleContext, fallbackDecision, turnWake, wakeFor } from './cycle-context.js';
@@ -37,7 +37,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     const context = createCycleContext({ call, store, banks });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
-    const similarityScores = createSimilarity(call);
 
     function deciderWorker(settings) {
         const id = String(settings.decider.workerId ?? '').trim();
@@ -54,7 +53,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
 
     function handlersFor(settings) {
         return {
-            ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks, window: turnWindow }),
+            ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow }),
             ...knowledge.handlers,
         };
     }

@@ -81,7 +81,7 @@ test('update_roster is persisted and reaches the next context', async () => {
     const { pipelineCore, memory, calls } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena walks into the scene and can affect it.' }),
-            call('assess', { character: 'Lena', action: 'arrives', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the form.' }),
+            call('assess', { character: 'Lena', action: 'arrives', difficulty: 'easy', experience: 'skilled', why: 'The door is open and nobody blocks her.', comment: 'I need the chance before writing the form.' }),
             call('set_plan', { direction: 'Bring Lena into the scene.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', {
                 comment: 'The turn is ready for the writer.',

@@ -1,47 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    DIFFICULTY_ANCHORS, EXPERIENCE_ANCHORS, DEGREE_BANDS,
-    lexicalSimilarity, projectPhrase, effectiveDifficulty, computeProbability,
-    rollFromSeed, degreeFor, assessAction,
+    DIFFICULTY_LEVELS, EXPERIENCE_LEVELS, PROBABILITY_TABLE, DEGREE_BANDS,
+    computeProbability, rollFromSeed, degreeFor, assessAction, levelProblem,
 } from '../libraries/core/decision-probability.js';
 
 const near = (actual, expected, tolerance = 0.02) => assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} is within ${tolerance} of ${expected}`);
 
-test('the reference scales cover both ends and every band of the outcome dictionary is reachable', () => {
-    assert.equal(DIFFICULTY_ANCHORS[0].value, 0);
-    assert.equal(DIFFICULTY_ANCHORS.at(-1).value, 1);
-    assert.equal(EXPERIENCE_ANCHORS[0].value, 0);
-    assert.equal(EXPERIENCE_ANCHORS.at(-1).value, 1);
+test('the two level lists are the only levels the engine accepts', () => {
+    assert.deepEqual(DIFFICULTY_LEVELS, ['trivial', 'easy', 'moderate', 'hard', 'very hard', 'nearly impossible']);
+    assert.deepEqual(EXPERIENCE_LEVELS, ['none', 'novice', 'practised', 'skilled', 'expert', 'master']);
+    assert.equal(PROBABILITY_TABLE.length, 6);
+    assert.equal(PROBABILITY_TABLE.every(row => row.length === 6), true);
     assert.deepEqual(DEGREE_BANDS.map(band => band.id), ['flawless', 'clean', 'barely', 'clumsy', 'botched']);
 });
 
-test('lexicalSimilarity() matches whole phrases and shared words, and gives zero for unrelated text', () => {
-    near(lexicalSimilarity('trivial', 'trivial'), 1);
-    assert.ok(lexicalSimilarity('very hard', 'hard') > 0.3);
-    assert.equal(lexicalSimilarity('weather', 'impossible'), 0);
+test('the documented examples land where the owner asked', () => {
+    near(computeProbability('novice', 'hard'), 0.15, 0.001);
+    near(computeProbability('master', 'nearly impossible'), 0.10, 0.001);
+    near(computeProbability('skilled', 'moderate'), 0.75, 0.001);
 });
 
-test('projectPhrase() lands a word near its own anchor, and the middle of the scale when nothing matches', () => {
-    near(projectPhrase('trivial', DIFFICULTY_ANCHORS), 0, 0.05);
-    near(projectPhrase('impossible', DIFFICULTY_ANCHORS), 1, 0.05);
-    near(projectPhrase('master', EXPERIENCE_ANCHORS), 1, 0.05);
-    near(projectPhrase('novice', EXPERIENCE_ANCHORS), 0, 0.05);
-    assert.equal(projectPhrase('zzz qqq', DIFFICULTY_ANCHORS), 0.5);
+test('experience and difficulty actually move the chance, instead of collapsing to 0.5', () => {
+    assert.ok(computeProbability('novice', 'hard') < computeProbability('master', 'hard') / 3, 'a master on the same hard task is far above a novice');
+    assert.ok(computeProbability('master', 'nearly impossible') < computeProbability('novice', 'trivial'), 'the impossible stays out of reach even for a master');
+    for (let index = 1; index < EXPERIENCE_LEVELS.length; index += 1) {
+        for (let column = 0; column < DIFFICULTY_LEVELS.length; column += 1) {
+            assert.ok(PROBABILITY_TABLE[index][column] >= PROBABILITY_TABLE[index - 1][column], 'more experience never lowers the chance');
+        }
+    }
 });
 
-test('difficulty sits on an absolute scale: trivial is below a novice, impossible is above a master', () => {
-    assert.equal(effectiveDifficulty(0), -0.5);
-    assert.equal(effectiveDifficulty(0.5), 0.5);
-    assert.equal(effectiveDifficulty(1), 1.5);
-});
-
-test('probability is 0.5 at parity, high for a master on a trivial task, low for a novice on an impossible one', () => {
-    near(computeProbability(0.5, 0.5), 0.5, 0.001);
-    assert.ok(computeProbability(0, 0) > 0.85, 'novice on a trivial task still succeeds most of the time');
-    assert.ok(computeProbability(1, 1) < 0.15, 'a master cannot do the impossible');
-    assert.ok(computeProbability(1, 0) > 0.99);
-    assert.ok(computeProbability(0, 1) < 0.01);
+test('an unknown level is refused with the list of allowed levels, never guessed', () => {
+    assert.equal(computeProbability('legendary', 'hard'), null);
+    assert.equal(computeProbability('novice', 'impossible'), null);
+    assert.match(levelProblem({ difficulty: 'hard', experience: 'legendary' }), /none, novice, practised, skilled, expert, master/);
+    assert.match(levelProblem({ difficulty: 'impossible', experience: 'novice' }), /trivial, easy, moderate, hard, very hard, nearly impossible/);
+    assert.equal(levelProblem({ difficulty: 'hard', experience: 'novice' }), '');
 });
 
 test('the same seed always produces the same roll — tests never depend on Math.random', () => {
@@ -58,18 +53,15 @@ test('degree bands turn probability minus roll into the words the Push carries',
     assert.match(degreeFor(0.8, 0.1).words, /flawless/);
 });
 
-test('assessAction() gives the documented examples: a trivial task and an impossible one are far apart', () => {
-    const trivial = assessAction({ character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'novice', seed: 1 });
-    const impossible = assessAction({ character: 'Lena', action: 'stops time', difficulty: 'impossible', experience: 'novice', seed: 1 });
-    assert.ok(trivial.probability > 0.8);
-    assert.ok(impossible.probability < 0.05);
-    assert.equal(trivial.roll, Math.round(rollFromSeed(1) * 1000) / 1000);
-    assert.ok(['flawless', 'clean'].includes(trivial.degree));
-    assert.equal(impossible.degree, 'botched');
-});
-
-test('a fully seeded assessment is reproducible — the engine, not the model, owns the dice', () => {
-    const first = assessAction({ character: 'Lena', action: 'picks the lock', difficulty: 'hard', experience: 'skilled', seed: 7 });
-    const second = assessAction({ character: 'Lena', action: 'picks the lock', difficulty: 'hard', experience: 'skilled', seed: 7 });
-    assert.deepEqual(first, second);
+test('assessAction() uses the table, keeps the seed reproducible and refuses unknown levels', () => {
+    const hardNovice = assessAction({ character: 'Lena', action: 'picks the lock', difficulty: 'hard', experience: 'novice', why: 'Wet stone and no tools.', seed: 7 });
+    const hardMaster = assessAction({ character: 'Lena', action: 'picks the lock', difficulty: 'hard', experience: 'master', why: 'Wet stone and no tools.', seed: 7 });
+    assert.equal(hardNovice.ok, true);
+    assert.ok(hardMaster.probability > hardNovice.probability);
+    assert.deepEqual(hardNovice, assessAction({ character: 'Lena', action: 'picks the lock', difficulty: 'hard', experience: 'novice', why: 'Wet stone and no tools.', seed: 7 }));
+    assert.equal(hardNovice.difficulty, 'hard');
+    assert.equal(hardNovice.experience, 'novice');
+    const refused = assessAction({ character: 'Lena', action: 'picks the lock', difficulty: 'legendary', experience: 'novice', why: 'x', seed: 1 });
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /Unknown difficulty/);
 });

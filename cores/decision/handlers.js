@@ -24,7 +24,7 @@ const key = value => String(value ?? '').trim().toLowerCase();
  *           state: { assessments: Map, assessmentCounter: number, turnCounter: number },
  *           resolvePlace: Function, lastTimeMark: Function, similarityScores: Function }} input
  */
-export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks = null, window: turnWindow = null }) {
+export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -257,7 +257,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             };
         },
 
-        assess: createAssessHandler({ state, similarityScores, getSettings }),
+        assess: createAssessHandler({ state, getSettings }),
 
         submit_turn: async args => {
             if (!store.plan()) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };

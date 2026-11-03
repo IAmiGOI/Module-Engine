@@ -1,23 +1,24 @@
-import { assessAction, DIFFICULTY_ANCHORS, EXPERIENCE_ANCHORS, lexicalSimilarity } from '../../libraries/core/decision-probability.js';
+import { assessAction } from '../../libraries/core/decision-probability.js';
 
-/** Оценка действия: слова директора проецируются на шкалы, движок бросает кость. */
-export function createAssessHandler({ state, similarityScores, getSettings }) {
+/**
+ * Оценка действия: два уровня из списков → таблица вероятностей → бросок
+ * движка. Неизвестный уровень — отказ со списком допустимых, не догадка.
+ * `why` обязательно: уровни решают шанс, `why` объясняет обстоятельства.
+ */
+export function createAssessHandler({ state, getSettings }) {
     return async args => {
+        if (!String(args.why ?? '').trim()) {
+            return { ok: false, error: 'assess needs "why": the circumstances of the attempt in a sentence or two.' };
+        }
         state.assessmentCounter += 1;
         const id = `asm_${state.runId}_${state.assessmentCounter}`;
-        const [difficultyScores, experienceScores] = await Promise.all([
-            similarityScores(args.difficulty, DIFFICULTY_ANCHORS),
-            similarityScores(args.experience, EXPERIENCE_ANCHORS),
-        ]);
-        const similarity = (text, anchorPhrase) => difficultyScores?.get(anchorPhrase)
-            ?? experienceScores?.get(anchorPhrase)
-            ?? lexicalSimilarity(text, anchorPhrase);
         const settings = getSettings();
         const seed = Number.isFinite(settings.assessSeed) ? settings.assessSeed + state.assessmentCounter : undefined;
         const result = assessAction({
-            character: args.character, action: args.action, difficulty: args.difficulty, experience: args.experience, seed, similarity,
+            character: args.character, action: args.action, difficulty: args.difficulty, experience: args.experience, why: args.why, seed,
         });
+        if (!result.ok) return result;
         state.assessments.set(id, { ...result, id });
-        return { ok: true, id, ...result };
+        return { ...result, id };
     };
 }
