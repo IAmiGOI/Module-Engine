@@ -1,6 +1,6 @@
 import { createKnowledge } from './knowledge.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
-import { ASK_USER_STREAK, DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { ASK_USER_STREAK, DIRECTOR_PASSIVE, DIRECTOR_REROLL, DIRECTOR_TURN, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
@@ -123,7 +123,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const startedWake = wake ?? turnWake(type);
         const startedAt = now();
         live.started({ runId, event: type === 'normal' ? 'turn' : type, wake: startedWake, at: startedAt, type });
-        const built = await context.runContext({ settings, chat, lorebook, worker });
+        const reroll = type === 'regenerate' || type === 'swipe';
+        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, task: reroll ? `${DIRECTOR_TURN}\n\n${DIRECTOR_REROLL}` : '' });
         const tools = await context.toolsFor(settings, { filter: toolFilter });
         const controller = new AbortController();
         const hooks = live.hooks({ runId, thinking });

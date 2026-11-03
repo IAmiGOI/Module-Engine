@@ -30,12 +30,13 @@ export const ASSESS_TOOL = Object.freeze({
         properties: {
             character: { type: 'string', description: 'Who is attempting it.' },
             action: { type: 'string', description: 'What exactly they are trying to do.' },
+            kind: { type: 'string', enum: ['body', 'stealth', 'perception', 'craft', 'magic', 'social'], description: 'What sort of attempt it is. Talk (persuading, lying, pressing, asking) is "social" and is never rolled — you decide it.' },
             difficulty: { type: 'string', enum: DIFFICULTY_LEVELS, description: 'The task in its real circumstances: opposition, terrain, time pressure, injuries, tools, distractions.' },
             experience: { type: 'string', enum: EXPERIENCE_LEVELS, description: 'This character\'s skill at this exact task, not their general competence or importance.' },
             why: { type: 'string', description: 'The circumstances of the attempt in a sentence or two. The levels decide the chance; "why" explains it.' },
             comment: COMMENT,
         },
-        required: ['character', 'action', 'difficulty', 'experience', 'why', 'comment'],
+        required: ['character', 'action', 'kind', 'difficulty', 'experience', 'why', 'comment'],
     },
 });
 

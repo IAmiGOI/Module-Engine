@@ -97,7 +97,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     };
     for (const name of ['decision.bootstrap.finished', 'decision.bank.ready', 'decision.bank.timeline']) host.events.subscribe(name, scheduleSnapshot);
     const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
-    const rollback = createRollback({ store, getSettings: () => settings, publishEvent });
+    const rollback = createRollback({ store, getSettings: () => settings, publishEvent, call: callStrict });
     const { snapshotState, restoreState, restoreSnapshotFor } = rollback;
 
     // Смена чата: всё, что делалось для старого, отменяется и больше ничего не пишет в новый —
@@ -197,7 +197,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
         const journal = store.beginTurn(Boolean(settings.snapshots));
-        const beforeSnapshot = settings.snapshots ? snapshotState(runId, journal) : null;
+        const beforeSnapshot = settings.snapshots ? await snapshotState(runId, journal) : null;
         const captured = captureReasoning(host, `${runId}:`, {
             onThinking: text => publishEvent('decision.cycle.thinking', { runId, text }),
             onAnswer: text => publishEvent('decision.cycle.answer', { runId, text }),

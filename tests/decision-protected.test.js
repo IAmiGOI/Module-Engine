@@ -66,3 +66,26 @@ test('the lorebook snapshot is frozen: new entries wait for the window switch', 
     assert.doesNotMatch(text, /New Alley/, 'the snapshot is not refreshed inside the window');
     assert.doesNotMatch(text, /LOREBOOK CHANGES/);
 });
+
+test('a reroll hides the discarded version of the turn, marks the turn as REROLL and adds the reroll rule', async () => {
+    memory.clear();
+    const store = makeStore();
+    const entries = [
+        { kind: 'turn', turn: 1, text: 'TURN 1 (compressed)\nUser: Hello there.\nPush: Emilia waves.' },
+        { kind: 'turn', turn: 2, text: 'TURN 2 (compressed)\nUser: I whisper to Puck.\nassess Sasha: 0.15 → botched\nWriter: Emilia hears everything.' },
+        { kind: 'fact', turn: 2, text: 'character_knowledge Puck: learned the secret' },
+    ];
+    store.window = () => ({ entries });
+    const context = createCycleContext({ call, store, banks: null });
+    const chat = [{ mes: 'I whisper to Puck.', is_user: true }];
+    const { DIRECTOR_REROLL } = await import('../libraries/core/decision-prompts.js');
+    const reroll = await context.runContext({ settings: { promptSections: {} }, chat, worker: { id: 'director' }, reroll: true, task: `Play the turn.\n\n${DIRECTOR_REROLL}` });
+    const text = reroll.messages.map(message => message.content).join('\n');
+    assert.doesNotMatch(text, /Emilia hears everything|learned the secret|0\.15 → botched/, 'nothing of the discarded version is shown');
+    assert.match(text, /TURN 2 — REROLL: your earlier version of this turn was discarded, none of it happened\nUser: I whisper to Puck\./);
+    assert.match(text, /Emilia waves/, 'the turns before it stay');
+    assert.match(reroll.messages.at(-1).content, /REROLL: the user discarded your previous version/);
+
+    const failedFirst = await context.runContext({ settings: { promptSections: {} }, chat: [{ mes: 'A brand new message.', is_user: true }], worker: { id: 'director' }, reroll: true });
+    assert.match(failedFirst.messages.map(message => message.content).join('\n'), /Emilia hears everything/, 'a turn with another message is a real past turn and stays');
+});

@@ -28,7 +28,7 @@ function cycle(overrides = {}) {
         wake: { type: 'turn', label: 'A new turn has started' }, turn: 2, clockMinutes: 125,
         thinking: 'the guard is tired', warnings: ['close to the step limit'],
         toolCalls: [
-            { name: 'assess', comment: 'I need the chance first.', args: { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled' }, result: { ok: true, character: 'Lena', action: 'opens the door', probability: 0.8, roll: 0.3, degree: 'flawless', words: 'flawlessly' } },
+            { name: 'assess', comment: 'I need the chance first.', args: { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled' }, result: { ok: true, character: 'Lena', action: 'opens the door', probability: 0.8, roll: 0.3, degree: 'flawless', words: 'flawlessly' } },
             { name: 'character_note', comment: 'The writer must know this.', args: { character: 'Lena' }, result: { ok: true } },
         ],
         form: { resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 2 }, characters: [{ name: 'Lena', decision: 'Leave', action: 'opens the door', outcome: 'It opens' }], meta: { place: 'Hall', timeBefore: 'noon', timeAfter: 'noon' } },

@@ -69,7 +69,7 @@ test('assess uses the two-level table, the form validates, the place is read fro
     const { pipelineCore, calls, memory, timeShifts } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
-            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'master', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
+            call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'trivial', experience: 'master', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', {
                 comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
@@ -98,7 +98,7 @@ test('the writer receives a Push with place, time, the user result and the degre
     const { pipelineCore } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
-            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'trivial', experience: 'master', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
+            call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'trivial', experience: 'master', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', {
                 comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
@@ -126,7 +126,7 @@ test('an incomplete form is refused with the list of missing fields, and the dir
     const { pipelineCore, calls } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
-            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
+            call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [] }),
             call('submit_turn', {
@@ -144,7 +144,7 @@ test('a form that omits an active roster member is refused, and the missing name
     const { pipelineCore, memory } = await build({
         replies: [
             call('update_roster', { add: [{ name: 'Lena' }, { name: 'Marek' }], comment: 'Both are in the scene now.' }),
-            call('assess', { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
+            call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
             call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [lena()] }),
             call('submit_turn', {

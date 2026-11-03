@@ -1,12 +1,20 @@
 import { assessAction } from '../../libraries/core/decision-probability.js';
+import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js';
 
 /**
  * Оценка действия: два уровня из списков → таблица вероятностей → бросок
  * движка. Неизвестный уровень — отказ со списком допустимых, не догадка.
  * `why` обязательно: уровни решают шанс, `why` объясняет обстоятельства.
  */
+export const ASSESS_KINDS = Object.freeze(['body', 'stealth', 'perception', 'craft', 'magic', 'social']);
+
 export function createAssessHandler({ state, getSettings }) {
     return async args => {
+        // Разговор не бросается: убедить, соврать, надавить — и как это примет слушатель — решает директор.
+        // Обязательный вид попытки не даёт тихо превратить уговоры в бросок «на подачу».
+        const kind = String(args.kind ?? '').trim().toLowerCase();
+        if (!ASSESS_KINDS.includes(kind)) return { ok: false, error: `assess needs "kind": one of ${ASSESS_KINDS.join(' / ')}.` };
+        if (kind === 'social') return { ok: false, error: ASSESS_SOCIAL_REFUSAL };
         if (!String(args.why ?? '').trim()) {
             return { ok: false, error: 'assess needs "why": the circumstances of the attempt in a sentence or two.' };
         }

@@ -1,16 +1,23 @@
+import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
+
 /**
  * Снимки состояния директора и откат. Снимок снимается до хода: ростер,
  * планы, заметки, библиотека, план, арки, часы и журнал банка/имён. Лог
  * директора не откатывается никогда — это история размышлений; отвергнутый
  * ход в нём помечается (`store.markRejected`).
  */
-export function createRollback({ store, getSettings, publishEvent }) {
-    function snapshotState(runId, journal) {
+// Знания персонажей тоже откатываются: иначе «Пак узнал…» из отброшенной попытки хода оставалось навсегда.
+const KNOWLEDGE = { namespace: DECISION_MEMORY_NAMESPACE, key: 'knowledge' };
+
+export function createRollback({ store, getSettings, publishEvent, call = null }) {
+    async function snapshotState(runId, journal) {
+        const knowledge = call ? await call('storage.chatMemory.get', { ...KNOWLEDGE, fallback: {} }).catch(() => null) : null;
         return {
             runId,
             journal,
             roster: store.roster(), plan: store.plan(), arcs: store.arcs(),
             notes: store.notes(), library: store.library(), plans: store.plans(), clock: store.clock(),
+            ...(knowledge && typeof knowledge === 'object' ? { knowledge: JSON.parse(JSON.stringify(knowledge)) } : {}),
         };
     }
 
@@ -23,6 +30,7 @@ export function createRollback({ store, getSettings, publishEvent }) {
             store.savePlans(state.plans ?? []), store.saveClock(state.clock ?? { minutes: 0 }),
         ]);
         if (state.journal) await store.restoreJournal(state.journal).catch(() => {});
+        if (call && state.knowledge && typeof state.knowledge === 'object') await call('storage.chatMemory.set', { ...KNOWLEDGE, value: state.knowledge }).catch(() => {});
     }
 
     async function restoreSnapshotFor(mesid, { remove = false } = {}) {

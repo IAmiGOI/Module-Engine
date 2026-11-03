@@ -83,3 +83,13 @@ test('HOW TO THINK is PROMPTS.md section 18 and sits at the very end of the dire
     const background = buildDeciderContext({ task: 'A researcher reported.' });
     assert.ok(background.messages.at(-1).content.endsWith(DIRECTOR_REASONING), 'background cycles too');
 });
+
+test('the reroll rule is PROMPTS.md section 19 word for word', async () => {
+    const { DIRECTOR_REROLL } = await import('../libraries/core/decision-prompts.js');
+    assert.equal(DIRECTOR_REROLL, blockFromDoc('## 19. Директор — переигровка хода'));
+});
+
+test('the social assess refusal is PROMPTS.md section 20 word for word', async () => {
+    const { ASSESS_SOCIAL_REFUSAL } = await import('../libraries/core/decision-prompts.js');
+    assert.equal(ASSESS_SOCIAL_REFUSAL, blockFromDoc('## 20. Директор — отказ assess на разговор'));
+});

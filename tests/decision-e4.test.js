@@ -90,7 +90,7 @@ test('entering the roster interrupts an existing plan: it becomes approximate an
             call('set_character_level', { character: 'A', level: 1, comment: 'A matters to the story.' }),
             call('set_character_plan', { character: 'A', summary: 'Find the key.', durationMinutes: 180, comment: 'A has a plan outside the scene.' }),
             call('update_roster', { add: [{ name: 'A' }], comment: 'A walks into the scene.' }),
-            call('assess', { character: 'A', action: 'arrives', difficulty: 'easy', experience: 'skilled', why: 'The road is clear.', comment: 'The chance matters for the form.' }),
+            call('assess', { character: 'A', action: 'arrives', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The road is clear.', comment: 'The chance matters for the form.' }),
             form([{ name: 'A', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }], 5),
         ],
     });

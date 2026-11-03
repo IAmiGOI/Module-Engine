@@ -43,7 +43,7 @@ test('a comment needs at least one full sentence, not just a word', async () => 
 
 test('assess then submit runs in order and the trace keeps both calls with their comments', async () => {
     const script = scripted([
-        { text: '', toolCalls: [{ id: 'a1', name: 'assess', arguments: { character: 'Lena', action: 'opens the door', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the outcome.' } }] },
+        { text: '', toolCalls: [{ id: 'a1', name: 'assess', arguments: { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled', comment: 'I need the chance before writing the outcome.' } }] },
         submit({ characters: [{ name: 'Lena', assessId: 'a1' }] }),
     ]);
     const result = await runDecisionCycle({

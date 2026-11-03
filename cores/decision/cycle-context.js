@@ -99,33 +99,49 @@ export function createCycleContext({ call, store, banks = null }) {
     }
 
     /** Текущее сообщение пользователя — последняя (ещё не сохранённая) запись окна. */
-    function pendingTurn(entries, currentUser) {
+    function pendingTurn(entries, currentUser, reroll = false) {
         const body = String(currentUser ?? '').trim();
         if (!body) return [];
         const turn = windowTurnCount(entries) + 1;
-        return [{ kind: 'turn', turn, at: Date.now(), text: `TURN ${turn} (compressed)\nUser: ${body}` }];
+        const head = reroll ? `TURN ${turn} — REROLL: your earlier version of this turn was discarded, none of it happened` : `TURN ${turn} (compressed)`;
+        return [{ kind: 'turn', turn, at: Date.now(), text: `${head}\nUser: ${body}` }];
     }
 
-    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '' }) {
+    // Переигровка: отброшенная версия хода и всё, что легло после неё, в окно директора не попадают —
+    // иначе он видел ход случившимся и следом то же сообщение «новым ходом».
+    // Убирается, только если последний ход — это ход с тем же сообщением пользователя: прошлая попытка могла
+    // упасть и не записаться, и тогда последний ход в окне — настоящий предыдущий.
+    function withoutRejectedTurn(entries, currentUser) {
+        const last = entries.map((entry, index) => (entry.kind === 'turn' ? index : -1)).filter(index => index >= 0).at(-1);
+        if (last === undefined) return entries;
+        const body = String(currentUser ?? '').trim();
+        const userLine = String(entries[last].text ?? '').split('\n').find(line => line.startsWith('User: ')) ?? '';
+        const firstLine = body.split('\n').map(line => line.trim()).find(Boolean) ?? '';
+        const sameMessage = Boolean(firstLine) && userLine.slice('User: '.length).trim().startsWith(firstLine.slice(0, 120));
+        return sameMessage ? entries.slice(0, last) : entries;
+    }
+
+    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false }) {
         const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '', chatBriefText: '' };
         const win = typeof store.window === 'function' ? store.window() : null;
-        const entries = Array.isArray(win?.entries) ? win.entries : [];
+        const all = Array.isArray(win?.entries) ? win.entries : [];
+        const entries = reroll ? withoutRejectedTurn(all, currentUser) : all;
         return buildDeciderContext({
             plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
             chatBriefText: safe.chatBriefText ?? '', planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
-            windowEntries: [...entries, ...pendingTurn(entries, currentUser)],
+            windowEntries: [...entries, ...pendingTurn(entries, currentUser, reroll)],
             frozenWindows: typeof store.frozen === 'function' ? store.frozen() : [],
             windowMode: true,
         });
     }
 
-    async function runContext({ settings, chat = [], task = '', lorebook = true, worker }) {
+    async function runContext({ settings, chat = [], task = '', lorebook = true, worker, reroll = false }) {
         const [lorebookText, directorBlock, knowledgeText, boundary] = await Promise.all([
             lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(),
         ]);
         const banksText = banks ? banks.contextFor({ all: true }).text : '';
-        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat) });
+        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat), reroll });
     }
 
     function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {

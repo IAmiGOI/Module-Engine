@@ -14,7 +14,7 @@ function handlers() {
 }
 
 const args = (overrides = {}) => ({
-    character: 'Lena', action: 'picks the lock', difficulty: 'hard', experience: 'novice',
+    character: 'Lena', action: 'picks the lock', kind: 'body', difficulty: 'hard', experience: 'novice',
     why: 'Wet stone and no tools.', comment: 'The chance decides the outcome.', ...overrides,
 });
 
@@ -31,7 +31,7 @@ test('a valid assess returns the table probability and stores the id for the for
 
 test('an unknown difficulty is refused with the allowed list, not guessed into 0.5', async () => {
     const { state, assess } = handlers();
-    const result = await assess(args({ difficulty: 'legendary' }));
+    const result = await assess(args({ kind: 'body', difficulty: 'legendary' }));
     assert.equal(result.ok, false);
     assert.match(result.error, /Unknown difficulty "legendary"/);
     assert.match(result.error, /trivial, easy, moderate, hard, very hard, nearly impossible/);
@@ -50,4 +50,17 @@ test('assess without "why" is refused: the levels decide the chance, why explain
     const result = await assess(args({ why: '   ' }));
     assert.equal(result.ok, false);
     assert.match(result.error, /needs "why"/);
+});
+
+test('talk is never rolled: a social assess is refused with the rule, and a missing kind is refused with the list', async () => {
+    const { ASSESS_SOCIAL_REFUSAL } = await import('../libraries/core/decision-prompts.js');
+    const { assess } = handlers();
+    const social = await assess(args({ kind: 'social', action: 'convince Puck that the warning is true' }));
+    assert.equal(social.ok, false);
+    assert.equal(social.error, ASSESS_SOCIAL_REFUSAL);
+    const missing = await assess(args({ kind: undefined }));
+    assert.equal(missing.ok, false);
+    assert.match(missing.error, /body \/ stealth \/ perception \/ craft \/ magic \/ social/);
+    const stealth = await assess(args({ kind: 'stealth', action: 'whisper so that Emilia does not overhear' }));
+    assert.equal(stealth.ok, true, 'not being overheard is stealth and may be rolled');
 });
