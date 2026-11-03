@@ -79,3 +79,33 @@ test('two questions in one model answer: after the first is answered the toast s
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.match(strings(view.tree()).join(' | '), /How did they arrive\?/, 'the second question is on screen');
 });
+
+test('a running bootstrap retry does not disable the question buttons', async () => {
+    const subscriptions = {};
+    const host = { events: { subscribe: (name, handler) => { subscriptions[name] = handler; return () => {}; } } };
+    let current = null;
+    let releaseRetry = null;
+    const call = async contract => {
+        if (contract === 'decision.question') return { ok: true, value: current };
+        if (contract === 'decision.bootstrap') return { ok: true, value: { status: 'failed', error: 'Bootstrap failed: Failed to fetch' } };
+        if (contract === 'decision.bootstrapRetry') return new Promise(resolve => { releaseRetry = () => resolve({ ok: true, value: { ok: true } }); });
+        return { ok: true, value: null };
+    };
+    const view = createQuestionView({ host, call });
+    view.subscribe();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const find = (node, label) => {
+        if (!node || typeof node !== 'object') return null;
+        if (node.props?.['on:click'] && strings(node.children ?? []).join('').includes(label)) return node;
+        for (const child of node.children ?? []) { const hit = find(child, label); if (hit) return hit; }
+        return null;
+    };
+    find(view.tree(), 'Retry bootstrap').props['on:click']();
+    current = { id: 'q1', question: 'When?', options: ['Early', 'Late'], index: 1, total: 1 };
+    subscriptions['decision.question.asked'](current);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const option = find(view.tree(), 'Early');
+    const disabled = option.props.disabled;
+    assert.equal(typeof disabled === 'function' ? disabled() : disabled, false, 'the options stay clickable while the retry is pending');
+    releaseRetry?.();
+});

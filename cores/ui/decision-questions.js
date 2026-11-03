@@ -5,7 +5,8 @@ import { computed, signal } from './reactive.js';
 export function createQuestionView({ host, call }) {
     const question = signal(null);
     const own = signal('');
-    const busy = signal(false);
+    const busy = signal(false); // только ответ на вопрос
+    const retrying = signal(false); // только кнопка повтора bootstrap — раньше делила busy с вопросами и гасила их кнопки
     const failure = signal(''); // причина неудачного bootstrap: тост с повтором
     const subscriptions = [];
 
@@ -25,10 +26,13 @@ export function createQuestionView({ host, call }) {
         const current = question.peek();
         if (!current || busy.peek()) return;
         busy.set(true);
+        // Страховка: «занято» не залипает, даже если ответ ядра не вернулся.
+        const release = setTimeout(() => busy.set(false), 8000);
         try {
             await call('decision.answerQuestion', { id: current.id, answer: skipped ? '' : String(value ?? ''), skipped });
             await sync();
         } finally {
+            clearTimeout(release);
             busy.set(false);
         }
     }
@@ -43,14 +47,14 @@ export function createQuestionView({ host, call }) {
     }
 
     async function retry() {
-        if (busy.peek()) return;
-        busy.set(true);
+        if (retrying.peek()) return;
+        retrying.set(true);
         try {
             failure.set('');
             const result = await call('decision.bootstrapRetry');
             if (result?.ok === false || result?.value?.ok === false) failure.set(String(result?.value?.error ?? result?.error?.message ?? 'The retry did not start.'));
         } finally {
-            busy.set(false);
+            retrying.set(false);
         }
     }
 
@@ -63,7 +67,7 @@ export function createQuestionView({ host, call }) {
                 h('span', { class: 'stme-dq-title' }, 'Chat bootstrap failed')),
             h('div', { class: 'stme-dq-why' }, reason),
             h('div', { class: 'stme-dq-own' },
-                h('button', { type: 'button', class: 'stme-dq-send', disabled: busy, 'on:click': retry }, 'Retry bootstrap'),
+                h('button', { type: 'button', class: 'stme-dq-send', disabled: retrying, 'on:click': retry }, 'Retry bootstrap'),
                 h('button', { type: 'button', class: 'stme-dq-skip', 'on:click': () => failure.set('') }, 'Go on without it')));
     }
 

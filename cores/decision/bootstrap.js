@@ -110,8 +110,10 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
         if (!loaded) await load();
         if (promise) return { ok: false, error: 'The bootstrap is already running.' };
         if (state.status !== 'failed') return { ok: false, error: 'There is no failed bootstrap to retry.' };
+        // Возврат сразу после запуска: кнопка повтора не должна держать «занято», пока bootstrap задаёт вопросы.
         promise = start();
-        return { ok: true, state: await promise };
+        promise.catch(() => {});
+        return { ok: true, started: true };
     }
 
     // Завершение старого запуска не должно обнулить запуск нового чата.

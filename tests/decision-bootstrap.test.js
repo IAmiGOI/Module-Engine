@@ -78,6 +78,8 @@ test('a failed bootstrap is retried only by the user, and the retry can succeed'
     brief = true;
     const retried = await world.bootstrap.retry();
     assert.equal(retried.ok, true);
+    assert.equal(retried.started, true, 'the retry returns at once — the button must not stay busy while bootstrap asks questions');
+    await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(world.bootstrap.state().status, 'done');
     assert.equal((await world.bootstrap.retry()).ok, false, 'nothing to retry after success');
 });
