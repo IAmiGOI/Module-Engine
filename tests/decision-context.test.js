@@ -85,8 +85,10 @@ test('the writer context puts the push after the history, and the history tail s
         chat: [message('older'), message('Where is the exit?', { is_user: true })],
         decision: 'She points at the eastern door and starts walking.',
     });
-    assert.equal(context.messages.at(-2).role, 'user');
-    assert.equal(context.messages.at(-2).content, 'Where is the exit?');
+    const story = context.messages.filter(item => item.role !== 'system');
+    assert.equal(story.at(-1).role, 'user');
+    assert.equal(story.at(-1).content, 'Where is the exit?', 'the last story line is still the user message');
+    assert.ok(context.messages.slice(context.messages.lastIndexOf(story.at(-1)) + 1).every(item => item.role === 'system'), 'only the volatile notes and the push follow it');
     assert.equal(context.messages.filter(item => item.role === 'user').length, 1, 'no synthetic user turn after the real one');
     assert.equal(context.messages.at(-1).role, 'system');
     assert.match(context.messages.at(-1).content, /^PUSH — what happens this turn:/);
@@ -118,4 +120,19 @@ test('the writer context puts example dialogues first, then all active banks, th
 test('the director context carries all banks in the stable part', () => {
     const context = buildDeciderContext({ banksText: 'ALL-CHARACTER-BANKS' });
     assert.match(context.messages.map(message => message.content).join('\n'), /ALL-CHARACTER-BANKS/);
+});
+
+test('the writer keeps only rarely changing parts before its sliding history; lorebook matches and notes come after it, before the push', () => {
+    const chat = [{ mes: 'Hello', is_user: true }, { mes: 'Hi.' }];
+    const { messages } = buildWriterContext({
+        chat, decision: 'Lena opens the door.', banksText: 'BANKS', examples: 'EXAMPLES', lorebookText: 'LORE MATCH',
+        summaries: [{ id: 's1', text: 'Earlier things.', level: 1 }], notes: { Lena: [{ id: 'n1', title: 'Wound', text: 'Left arm.' }] },
+    });
+    const at = needle => messages.findIndex(message => String(message.content).includes(needle));
+    const firstHistory = messages.findIndex(message => message.role === 'user' || message.role === 'assistant');
+    assert.ok(at('BANKS') < firstHistory && at('EXAMPLES') < firstHistory, 'stable parts stay in the cacheable prefix');
+    assert.ok(at('LORE MATCH') > firstHistory, 'keyword lorebook matches change every turn, so they come after the history');
+    assert.ok(at('Left arm') > firstHistory, 'notes change every turn, so they come after the history');
+    assert.ok(at('Lena opens the door') > at('LORE MATCH') && at('Lena opens the door') > at('Left arm'), 'the push stays last');
+    assert.equal(at('Lena opens the door'), messages.length - 1);
 });
