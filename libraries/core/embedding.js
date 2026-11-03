@@ -54,7 +54,53 @@ function truncate(text) {
  * — то, чем граф опрашивают (новый кусок разговора при отборе региона/маяков).
  * Разные префиксы — часть протокола E5, не опционально.
  */
+// --- Воркер: расчёт вне главного потока ------------------------------------------------------------
+let worker = null;
+let workerBroken = false;
+let sequence = 0;
+const waiting = new Map();
+
+function canUseWorker() {
+    return !workerBroken && typeof Worker === 'function' && typeof window !== 'undefined';
+}
+
+function failAll(message) {
+    for (const entry of waiting.values()) entry.reject(new Error(message));
+    waiting.clear();
+}
+
+function workerEmbed(text, kind) {
+    if (!worker) {
+        worker = new Worker(new URL('./embedding-worker.js', import.meta.url), { type: 'module' });
+        worker.onmessage = event => {
+            const { id, vector, error } = event.data ?? {};
+            const entry = waiting.get(id);
+            if (!entry) return;
+            waiting.delete(id);
+            if (error) entry.reject(new Error(error)); else entry.resolve(vector);
+        };
+        worker.onerror = event => {
+            // Воркер не поднялся (политика страницы, браузер): дальше — в главном потоке, как раньше.
+            workerBroken = true;
+            worker = null;
+            failAll(event?.message || 'The embedding worker failed.');
+        };
+    }
+    return new Promise((resolve, reject) => {
+        sequence += 1;
+        waiting.set(sequence, { resolve, reject });
+        worker.postMessage({ id: sequence, text, kind, model: MODEL_ID, cdn: TRANSFORMERS_CDN_URL });
+    });
+}
+
 export async function embed(text, { kind = 'passage', importer } = {}) {
+    if (!importer && canUseWorker()) {
+        try {
+            return await workerEmbed(truncate(text), kind);
+        } catch (error) {
+            if (!workerBroken) throw error;
+        }
+    }
     const prefix = kind === 'query' ? 'query: ' : 'passage: ';
     const extractor = await getExtractor({ importer });
     const output = await extractor(prefix + truncate(text), { pooling: 'mean', normalize: true });

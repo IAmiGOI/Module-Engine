@@ -967,7 +967,12 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         return true;
     }
 
+    // Ядро работает только после load(): без него (саммари выключены в boot.js) смена чата не читает саммари
+    // и не запускает проверку моделью — ни создания, ни расхода.
+    let active = false;
+
     async function load() {
+        active = true;
         await loadSettings();
         await loadSummaries();
         await loadLedger();
@@ -1000,7 +1005,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
         host.own.register('summary.forced', () => summaries.filter(record => record.forced).map(record => record.id)),
     ];
 
-    const unsubscribeChatChanged = host.events.subscribe('st.chatChanged', () => { reloadSummariesForChat(); });
+    const unsubscribeChatChanged = host.events.subscribe('st.chatChanged', () => { if (active) reloadSummariesForChat(); });
 
     return {
         load,

@@ -2,6 +2,13 @@ import { createSyncToastsCore } from '../../cores/ui/sync-toasts.js';
 
 /** Граф памяти выключен целиком, код сохранён (см. комментарий у `memoryGraphCore.load()` ниже). */
 export const MEMORY_GRAPH_ENABLED = false;
+/**
+ * Саммари выключены (решение владельца, 2026-11-04): историю держит директор — окно, сводки окон, банки, знания.
+ * Без `load()` ядро не ставит этапы сворачивания и вставки в промпт, не читает саммари при смене чата и не зовёт
+ * модель. Контракты (`summary.list` и др.) живы и отдают пусто — писатель и карточка не ломаются. Код и данные
+ * не тронуты: включить — `SUMMARY_ENABLED = true`.
+ */
+export const SUMMARY_ENABLED = false;
 
 /** Запуск: восстановление сохранённого, открытие окон и панели, подключение пайплайна генерации — строго в этом порядке. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireBoot(ctx) {
@@ -18,7 +25,7 @@ export async function wireBoot(ctx) {
     // silently leaving a real, non-empty Lorebook's graph bootstrap empty
     // (found live in the harness: `lorebook.find()` returned real entries
     // right after boot, but `memoryGraphCore.nodes()` stayed `[]`).
-    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), classifierCore.load(), summaryCore.load()]);
+    await Promise.all([modelsCore.restoreWorkers().then(list => { modelsCore.startMonitoring(); return list; }), modelsCore.restorePresets(), diffusionCore.restoreWorkers(), trackingCore.restoreTrackers(), macrosCore.restorePrograms(), speakerCore.restore(), mapCore.restore(), mapNarrationCore.load(), lorebookCore.scan(), classifierCore.load(), ...(SUMMARY_ENABLED ? [summaryCore.load()] : [])]);
     await decisionCore.load();
     // `memoryGraphCore.load()` сама больше НЕ ждёт бутстрап из Lorebook
     // (решено с пользователем: "зависание при bootstrap... вынеси его
