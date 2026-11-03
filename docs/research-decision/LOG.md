@@ -2190,4 +2190,4 @@ keep 20), 70 (арка, drop 24, keep 16), 104 (снова 50). Сравнени
   `decision-e2`, `decision-e1`, `decision-e4`, `decision-e11`,
   `decision-card-turn`.
 
-Все тесты решений: **261/261**. Typecheck — на итоге.
+Все тесты решений: **262/262**. Typecheck — на итоге.
