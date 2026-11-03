@@ -32,17 +32,28 @@ export function applyCharacterNote(notes, { character, op, id, title, text: body
     const name = key(character);
     if (!name) return { ok: false, error: 'A character note needs a character.', notes };
     const current = notesFor(notes, character);
+    // Заметку находят по id или по названию — директор видит названия («Sasha: What Sasha has on them»), а не id.
+    // Раньше remove по названию молча отвечал «ok», ничего не удаляя, и директор ходил по кругу, а старая заметка оставалась.
+    const bare = value => text(value).toLowerCase().replace(new RegExp(`^${text(character).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*`), '').trim();
+    const find = (wanted, wantedTitle) => {
+        const byId = current.find(note => note.id === text(wanted));
+        if (byId) return byId;
+        const label = bare(wanted) || bare(wantedTitle);
+        return label ? current.find(note => bare(note.title) === label) ?? null : null;
+    };
+    const known = () => current.map(note => `"${note.title}"`).join(', ') || 'none';
     let next;
     if (op === 'remove') {
-        if (!id) return { ok: false, error: 'Remove needs the note id.', notes };
-        next = current.filter(note => note.id !== id);
+        const target = find(id, title);
+        if (!target) return { ok: false, error: `There is no note "${text(id) || text(title)}" for ${text(character)}. Notes: ${known()}.`, notes };
+        next = current.filter(note => note.id !== target.id);
     } else if (op === 'set') {
-        if (!id) return { ok: false, error: 'Set needs the note id.', notes };
-        if (!current.some(note => note.id === id)) return { ok: false, error: `There is no note "${id}" for ${text(character)}.`, notes };
-        next = current.map(note => (note.id === id ? { ...note, title: text(title) || note.title, text: text(body) || note.text, updatedAt: now() } : note));
+        const target = find(id, title);
+        if (!target) return { ok: false, error: `There is no note "${text(id) || text(title)}" for ${text(character)}. Notes: ${known()}.`, notes };
+        next = current.map(note => (note.id === target.id ? { ...note, title: text(title) || note.title, text: text(body) || note.text, updatedAt: now() } : note));
     } else if (op === 'add') {
         if (!text(title) || !text(body)) return { ok: false, error: 'A new note needs both a title and text.', notes };
-        if (current.length >= MAX_NOTES_PER_CHARACTER) return { ok: false, error: `${text(character)} already has ${MAX_NOTES_PER_CHARACTER} notes — replace or delete one first.`, notes };
+        if (current.length >= MAX_NOTES_PER_CHARACTER) return { ok: false, error: `${text(character)} already has ${MAX_NOTES_PER_CHARACTER} notes (${known()}) — "set" one of them by its title instead, or "remove" one first.`, notes };
         next = [...current, { id: `note_${now().toString(36)}_${rid()}`, character: text(character), title: text(title), text: text(body), updatedAt: now() }];
     } else return { ok: false, error: `Unknown note operation "${op}".`, notes };
     return { ok: true, notes: { ...notes, [name]: next } };

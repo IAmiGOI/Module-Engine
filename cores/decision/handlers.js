@@ -286,7 +286,8 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             state.briefWritten = true;
             const win = typeof store.window === 'function' ? store.window() : null;
             const hasTurns = Array.isArray(win?.entries) && win.entries.some(entry => entry.kind === 'turn');
-            if (hasTurns) await turnWindow?.addFact(`write_chat_brief: ${brief.text.split('\n')[0].slice(0, 240)}`);
+            // Новая сводка — целиком: в первой строке только таймлайн, а правка (редкон) обычно ниже — она терялась.
+            if (hasTurns) await turnWindow?.addFact(`write_chat_brief — the chat brief now reads:\n${brief.text}`);
             else if (typeof store.boundary === 'function' && store.boundary()) {
                 await store.saveBoundary({ ...store.boundary(), chatBriefText: renderChatBrief(brief) });
             }

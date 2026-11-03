@@ -14,7 +14,7 @@ test('a character can hold at most four notes; the fifth add is refused with a c
     }
     const fifth = applyCharacterNote(notes, { character: 'Lena', op: 'add', title: 'One more', text: 'No room.' }, { now, rid });
     assert.equal(fifth.ok, false);
-    assert.match(fifth.error, /replace or delete one first/);
+    assert.match(fifth.error, /"set" one of them by its title instead, or "remove" one first/);
     assert.equal(notesFor(notes, 'lena').length, MAX_NOTES_PER_CHARACTER);
 });
 
@@ -52,4 +52,15 @@ test('arcs open, take stages and close; a closed arc takes no new stages and is 
     assert.equal(applyArc(closed.arcs, { op: 'stage', id, note: 'Too late.' }, { now, rid }).ok, false);
     assert.equal(applyArc(closed.arcs, { op: 'close', id }, { now, rid }).ok, false);
     assert.match(arcsSection(closed.arcs), /\[closed\] The escape/);
+});
+
+test('a character note is found by its title, and removing a note that does not exist is an honest error', async () => {
+    const { applyCharacterNote } = await import('../libraries/core/decision-state.js');
+    const notes = { sasha: [{ id: 'note_a', character: 'Sasha', title: 'What Sasha has on them', text: 'no gate' }] };
+    const set = applyCharacterNote(notes, { character: 'Sasha', op: 'set', id: 'Sasha: What Sasha has on them', text: 'a large gate' });
+    assert.equal(set.ok, true);
+    assert.equal(set.notes.sasha[0].text, 'a large gate');
+    const missing = applyCharacterNote(notes, { character: 'Sasha', op: 'remove', id: 'nope' });
+    assert.equal(missing.ok, false);
+    assert.match(missing.error, /Notes: "What Sasha has on them"/);
 });

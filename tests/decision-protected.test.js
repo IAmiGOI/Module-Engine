@@ -89,3 +89,21 @@ test('a reroll hides the discarded version of the turn, marks the turn as REROLL
     const failedFirst = await context.runContext({ settings: { promptSections: {} }, chat: [{ mes: 'A brand new message.', is_user: true }], worker: { id: 'director' }, reroll: true });
     assert.match(failedFirst.messages.map(message => message.content).join('\n'), /Emilia hears everything/, 'a turn with another message is a real past turn and stays');
 });
+
+test('a reroll keeps the message to the director written after the discarded turn', async () => {
+    memory.clear();
+    const store = makeStore();
+    store.window = () => ({ entries: [
+        { kind: 'turn', turn: 1, text: 'TURN 1 (compressed)\nUser: Hello there.' },
+        { kind: 'turn', turn: 2, text: 'TURN 2 (compressed)\nUser: I ask for help.\nWriter: no gate.' },
+        { kind: 'fact', turn: 2, text: 'update_roster: + Kadomon' },
+        { kind: 'message', turn: 2, text: 'MESSAGE TO THE DIRECTOR (compressed)\nUser: My gate works — write it, I will reroll.' },
+        { kind: 'fact', turn: 2, text: 'write_chat_brief — the chat brief now reads:\nSasha has a large gate.' },
+    ] });
+    const context = createCycleContext({ call, store, banks: null });
+    const built = await context.runContext({ settings: { promptSections: {} }, chat: [{ mes: 'I ask for help.', is_user: true }], worker: { id: 'director' }, reroll: true });
+    const text = built.messages.map(message => message.content).join('\n');
+    assert.doesNotMatch(text, /Writer: no gate|\+ Kadomon/, 'the discarded turn and its own facts are gone');
+    assert.match(text, /My gate works — write it/, 'the retcon message stays');
+    assert.match(text, /Sasha has a large gate/, 'and so does the new brief');
+});

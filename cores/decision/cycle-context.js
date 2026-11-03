@@ -121,7 +121,12 @@ export function createCycleContext({ call, store, banks = null, capture = null }
         const userLine = String(entries[last].text ?? '').split('\n').find(line => line.startsWith('User: ')) ?? '';
         const firstLine = body.split('\n').map(line => line.trim()).find(Boolean) ?? '';
         const sameMessage = Boolean(firstLine) && userLine.slice('User: '.length).trim().startsWith(firstLine.slice(0, 120));
-        return sameMessage ? entries.slice(0, last) : entries;
+        if (!sameMessage) return entries;
+        // Уходит только сам отброшенный ход и факты его цикла (они идут сразу за ним). Сообщения директору и фоновые
+        // циклы после него остаются: так пропадал редкон, написанный директору между ходом и его переигровкой.
+        let end = last + 1;
+        while (end < entries.length && entries[end].kind === 'fact') end += 1;
+        return [...entries.slice(0, last), ...entries.slice(end)];
     }
 
     // Переигровка: «что сейчас» — по ходу ДО отброшенного (сам отброшенный в журнале помечен rejected после свайпа).
