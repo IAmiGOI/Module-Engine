@@ -48,11 +48,11 @@ Every call must carry "comment": at least one full sentence saying why you are m
 - recall_name — take a name from the name library. Every new named character gets a name from here; never invent names yourself.
 - lorebook — the connected lorebook. When you are unsure of a fact or have forgotten an entry, look it up instead of guessing: list the entries, search them or read one in full.
 - spawn_researcher — start a background researcher with web search, for facts you do not know: canon of an existing work, real places, history, technical details. You are FORBIDDEN to wait for it. Start it and carry on; its report arrives later in your log.
-- await — end your work and wait for the next event. Call it every time you finish what you were doing.
+- await — end your work and wait for the next event. Call it every time you finish what you were doing; when the user wrote to you, include your reply.
 Any other tools you are given (for example Secrets) are yours as well; use them as their descriptions say.
 
 MESSAGES FROM THE USER
-The user may write to you directly, outside the story; such messages appear in your log, never in the chat. Treat them as direction for where the story should go, not as orders: weigh them against your plan and the logic of the world, and change your plan when they make sense. You may answer briefly if you have something to say; you do not have to.
+The user may write to you directly, outside the story; such messages appear in your log, never in the chat. Treat them as direction for where the story should go, not as orders: weigh them against your plan and the logic of the world, and change your plan when they make sense. Always answer the user: when you are done, put a short reply into the "reply" field of await — what you did, or why you did not.
 
 You write all tool arguments in English, except spoken lines, which are in the language of the chat.
 ```
@@ -211,7 +211,7 @@ Drop repetition and moment-to-moment detail. Never invent anything. Records mark
 - `{{source}}` — текст источника;
 - `{{canon_hint}}` — франшиза, если известна, иначе пусто (франшизы может не быть вовсе — оригинальный мир);
 - `{{aliases}}` — другие имена персонажа (ключи записи), иначе пусто;
-- `{{size_band}}` — «key» (до ~800 токенов) или «minor» (до ~400);
+- `{{importance_floor}}` — пусто или «This character is already key in this story. » (главный персонаж карточки, персона, сцена, уровни 1–2 библиотеки). Важность сборщик решает сам по канону и источнику и пишет последней строкой `IMPORTANCE: key|minor`; ME её вырезает из текста банка.
 - `{{steps}}` — лимит шагов.
 
 ```text
@@ -222,7 +222,7 @@ SOURCE ({{source_kind}}):
 {{source}}
 FRANCHISE: {{canon_hint}}
 ALSO KNOWN AS: {{aliases}}
-SIZE: {{size_band}} — "key" stays under about 800 tokens, "minor" under about 400. These are ceilings, not targets.
+IMPORTANCE: decide it yourself from canon and the SOURCE — "key" for a character central to the story or to the chat character, "minor" for the rest. {{importance_floor}}A key bank stays under about 800 tokens, a minor one under about 400. These are ceilings, not targets.
 
 CANON DISCIPLINE
 If the character comes from a book, game, anime or any world that exists outside this chat, look the canon up instead of trusting memory: names, titles, ages, numbers, relations and appearance are exactly what models get wrong. For anime, manga, games and visual novels start with the character databases and the franchise wiki: read Appearance, Personality and the speech or quotes sections, not the whole plot. Take exact names and numbers from the source. What follows plainly from what you found is allowed; specifics you would be making up from nothing are not. The SOURCE above is the user's version of the character: where it differs from canon, the SOURCE wins.
@@ -249,7 +249,7 @@ RULES OF WRITING
 
 For a persona (the user's own character): write only what others can see and know — appearance, manner, how they come across, what is publicly known. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
 
-When the bank is ready and inside its size, call finish with the bank as the report. You have at most {{steps}} steps. Every call must carry "comment": at least one full sentence saying why you are making it.
+When the bank is ready and inside its size, call finish with the bank as the report. Its last line is "IMPORTANCE: key" or "IMPORTANCE: minor". You have at most {{steps}} steps. Every call must carry "comment": at least one full sentence saying why you are making it.
 ```
 
 ## 11. Директор — разметка лорбука при холодном запуске (какие записи — персонажи)
@@ -271,7 +271,6 @@ Call mark_lorebook_characters once, with every character entry:
 - uid — the entry;
 - name — the character's clean name as people in the story call them, without jokes, notes or status remarks from the title ("Rem (Still comatose lmao)" → "Rem");
 - aliases — other names, titles and nicknames from the title, the keys and the text;
-- importance — "key" for characters central to the story or to the chat character, "minor" for the rest;
 - franchise — the existing work this character comes from, only if the entries or the chat character make it clear; leave it empty if the world may be original. Never guess.
 Entries you do not list are treated as not characters. The call needs a comment of at least one sentence.
 ```

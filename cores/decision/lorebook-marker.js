@@ -43,7 +43,7 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
         const marks = [];
         const ignored = [];
         let called = false;
-        await runDecisionCycle({
+        const outcome = await runDecisionCycle({
             messages: [{ role: 'system', content: prompt }],
             tools: [MARK_LOREBOOK_CHARACTERS_TOOL, AWAIT_TOOL],
             generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', {
@@ -59,20 +59,26 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
                         const entry = byUid.get(uid);
                         if (!entry || seen.has(uid)) { ignored.push({ uid, reason: !entry ? 'there is no such entry' : 'listed twice' }); continue; }
                         if (!name) { ignored.push({ uid, reason: 'the name is empty' }); continue; }
-                        const importance = item?.importance === 'key' ? 'key' : 'minor';
                         const aliases = (Array.isArray(item.aliases) ? item.aliases : String(item.aliases ?? '').split(','))
                             .map(text).filter(Boolean);
                         seen.add(uid);
-                        marks.push({ uid, name, aliases, importance, franchise: text(item.franchise) });
+                        marks.push({ uid, name, aliases, franchise: text(item.franchise) });
                     }
                     return { ok: true, marked: marks.length, ignored };
                 },
                 await: () => ({ ok: true }),
             },
-            maxSteps: 1,
+            // Отклонённый вызов (нет комментария, плохая форма) модель может исправить; удачная разметка завершает цикл.
+            maxSteps: 3,
+            stopAfter: ['mark_lorebook_characters'],
             implicitAwait: true,
         });
-        if (!called) throw new Error('The director did not mark the lorebook characters.');
+        if (!called) {
+            // Причина видна в окне директора: последняя ошибка вызова или чем кончился цикл.
+            const lastError = [...(outcome?.trace ?? [])].reverse().find(step => step?.error)?.error;
+            const why = lastError || outcome?.reason || (outcome?.warnings ?? []).join('; ');
+            throw new Error(`The director did not mark the lorebook characters${why ? `: ${why}` : ''}.`);
+        }
         publishEvent('decision.lorebook.marked', { book, entries: list.length, marked: marks.length, ignored: ignored.length });
         return { marks, ignored };
     }

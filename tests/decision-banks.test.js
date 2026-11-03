@@ -13,7 +13,7 @@ const LOREBOOK = [
     { book: 'World', uid: 5, comment: 'The Port', content: 'A wet harbour.' },
 ];
 
-function fakeWorld({ cards = [CARD], persona = PERSONA, entries = LOREBOOK, settings = {}, failName = 'Bram', markReply = null } = {}) {
+function fakeWorld({ cards = [CARD], persona = PERSONA, entries = LOREBOOK, settings = {}, failName = 'Bram', markReply = null, importances = {} } = {}) {
     const settingsStore = new Map();
     const chatMemory = new Map();
     const base = {};
@@ -44,7 +44,7 @@ function fakeWorld({ cards = [CARD], persona = PERSONA, entries = LOREBOOK, sett
             const done = new Promise(resolve => setTimeout(() => {
                 active -= 1;
                 const failed = failName !== null && name === failName;
-                resolve(failed ? { error: 'canon lookup failed', report: '', status: 'done' } : { error: null, report: `***${name}***\nBuilt bank.`, status: 'done' });
+                resolve(failed ? { error: 'canon lookup failed', report: '', status: 'done' } : { error: null, report: `***${name}***\nBuilt bank.${importances[name] ? `\nIMPORTANCE: ${importances[name]}` : ''}`, status: 'done' });
             }, 5));
             return { ok: true, taskId: `task_${calls.length}`, done };
         },
@@ -167,17 +167,18 @@ test('a card system prompt and mes_example never enter the bank source; examples
 });
 
 
-test('the director marks a villain outside the characters section; the marked entry becomes a bank with a clean name, aliases, key size and franchise', async () => {
+test('the director marks a villain outside the characters section; the marked entry becomes a bank with a clean name and aliases; the builder decides the key size', async () => {
     const entries = [
         { book: 'Story', uid: 1, comment: '-- VILLAINS AND SIN ARCHBISHOPS --', content: '' },
         { book: 'Story', uid: 2, comment: 'Rem (Still comatose lmao)', keys: ['Rem-tan'], content: 'A demon maid.' },
         { book: 'Story', uid: 3, comment: 'The family', content: 'A whole family entry.' },
     ];
-    const world = fakeWorld({ entries, markReply: [{ uid: 2, name: 'Rem', aliases: ['Rem-tan'], importance: 'key', franchise: '' }], failName: null });
+    const world = fakeWorld({ entries, markReply: [{ uid: 2, name: 'Rem', aliases: ['Rem-tan'], franchise: '' }], failName: null, importances: { Rem: 'key' } });
     await world.banks.ensureColdStart();
     const rem = world.banks.records().find(record => record.sourceKey === 'lorebook:Story:2');
     assert.equal(rem.name, 'Rem');
     assert.equal(rem.sizeBand, 'key');
+    assert.equal(rem.text, '***Rem***\nBuilt bank.', 'the IMPORTANCE line is cut from the bank');
     assert.deepEqual(rem.aliases, ['Rem-tan']);
     assert.equal(world.banks.records().some(record => record.sourceKey === 'lorebook:Story:3'), false, 'an unmarked group entry is not a character');
 });
@@ -272,4 +273,31 @@ test('a bank built before the current builder version is not ready, so the broke
     assert.equal(bankIsReady(old), false);
     assert.equal(bankIsReady({ ...old, builderVersion: BANK_BUILDER_VERSION, text: '***A***' }), true);
     assert.equal(bankIsReady(createBankRecord({ sourceKey: 'manual:a', sourceKind: 'manual', name: 'A', text: 'by hand', status: 'ready' })), true);
+});
+
+test('the persona and the scene are always key; without an IMPORTANCE line an ordinary character stays minor', async () => {
+    const world = fakeWorld({ failName: null });
+    await world.banks.ensureColdStart();
+    const records = world.banks.records();
+    assert.equal(records.find(record => record.sourceKind === 'persona').sizeBand, 'key');
+    const scene = records.find(record => record.sourceKind === 'scene');
+    if (scene) assert.equal(scene.sizeBand, 'key');
+    assert.ok(records.filter(record => record.sourceKind === 'lorebook entry').every(record => record.sizeBand === 'minor'));
+});
+
+test('a cold start finished by an older bank builder runs again once, and a current one does not', async () => {
+    const world = fakeWorld({ failName: null });
+    await world.banks.ensureColdStart();
+    const built = world.calls.length;
+    await world.banks.ensureColdStart();
+    assert.equal(world.calls.length, built, 'a current cold start is not repeated');
+    for (const [name, value] of world.chatMemory) {
+        if (value && typeof value === 'object' && 'builderVersion' in value && 'status' in value && !('sourceKey' in value)) world.chatMemory.set(name, { ...value, builderVersion: 2 });
+    }
+    const chatBanks = [...world.chatMemory].find(([, value]) => value && typeof value === 'object' && Object.values(value).some(record => record?.sourceKey));
+    world.chatMemory.set(chatBanks[0], Object.fromEntries(Object.entries(chatBanks[1]).map(([sourceKey, record]) => [sourceKey, { ...record, builderVersion: 2 }])));
+    world.settingsStore.clear();
+    await world.banks.reload();
+    await world.banks.ensureColdStart();
+    assert.ok(world.calls.length > built, 'banks of the old builder are rebuilt');
 });

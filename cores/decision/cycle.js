@@ -51,6 +51,16 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     const turnWindow = createTurnWindow({ store, banks, call, getSettings, deciderWorker, publishEvent, now });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
+    /** Цикл, разбуженный сообщением пользователя, не закрывается без ответа ему (поле `reply` у await). */
+    function withRequiredReply(handlers) {
+        return {
+            ...handlers,
+            await: (args, extra) => (String(args?.reply ?? '').trim()
+                ? handlers.await(args, extra)
+                : { ok: false, error: 'The user wrote to you. Put a short answer into "reply" — what you did, or why you did not — and call await again.' }),
+        };
+    }
+
     function handlersFor(settings) {
         return {
             ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow }),
@@ -188,7 +198,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             messages: built.messages,
             tools,
             generate: context.generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null }),
-            handlers: handlersFor(settings),
+            handlers: event === 'message' ? withRequiredReply(handlersFor(settings)) : handlersFor(settings),
             callTool,
             maxSteps: settings.maxSteps,
             implicitAwait: true,

@@ -55,7 +55,7 @@ export function lorebookSourceText(entry = {}) {
  * Версия сборщика банков. Банк старее этой версии не считается готовым и пересобирается: так банки, собранные, пока
  * веб-поиск субагента был сломан (в них лежала служебная строка «The researcher returned no report.»), уходят сами.
  */
-export const BANK_BUILDER_VERSION = 2;
+export const BANK_BUILDER_VERSION = 3;
 
 export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0 }) {
     return {
@@ -78,11 +78,22 @@ export function bankMatches(record, sourceHash) {
     return Boolean(record && record.sourceHash === sourceHash);
 }
 
-/** Готовый промпт субагента для одного источника. */
+/** Последняя строка банка `IMPORTANCE: key|minor` — решение сборщика; из текста она вырезается. */
+export function splitBankImportance(value) {
+    const lines = String(value ?? '').trimEnd().split('\n');
+    for (let index = lines.length - 1; index >= Math.max(0, lines.length - 3); index -= 1) {
+        const match = /^\W*importance\W*:\W*(key|minor)\W*$/i.exec(lines[index].trim());
+        if (match) return { text: lines.filter((_, at) => at !== index).join('\n').trimEnd(), importance: match[1].toLowerCase() };
+    }
+    return { text: String(value ?? '').trim(), importance: null };
+}
+
+/** Готовый промпт субагента для одного источника; `sizeBand: 'key'` — нижняя граница важности. */
 export function bankPromptFor({ name, sourceKind, source, canonHint = '', aliases = '', sizeBand = 'minor', steps = 20 }) {
     return fillPrompt(CHARACTER_BANK_BUILDER, {
         name: text(name) || 'Unknown', source_kind: sourceKind || 'card', source: text(source),
-        canon_hint: text(canonHint), aliases: text(aliases), size_band: sizeBand === 'key' ? 'key' : 'minor', steps,
+        canon_hint: text(canonHint), aliases: text(aliases), steps,
+        importance_floor: sizeBand === 'key' ? 'This character is already key in this story. ' : '',
         // Name Literal в промпте называет сам макрос — он должен остаться буквальным.
         char: '{{char}}',
     });
@@ -225,7 +236,7 @@ export function bankSourcesForChat({ cards = [], persona = null, lorebookEntries
             sourceKey: lorebookSourceKey(entry.book, entry.uid), sourceKind: 'lorebook entry',
             name: text(mark?.name) || text(entry.comment) || `Entry ${entry.uid}`,
             canonicalName: text(entry.comment), aliases, canonHint: text(mark?.franchise),
-            source, sizeBand: mark?.importance === 'key' ? 'key' : 'minor',
+            source, sizeBand: 'minor',
         });
     }
     const seen = new Set();

@@ -256,6 +256,6 @@ test('a director worker that is not openai is a configuration error too, not a s
 
 
 test('the MESSAGES FROM THE USER paragraph is in the built-in director prompt word for word', () => {
-    const paragraph = 'MESSAGES FROM THE USER\nThe user may write to you directly, outside the story; such messages appear in your log, never in the chat. Treat them as direction for where the story should go, not as orders: weigh them against your plan and the logic of the world, and change your plan when they make sense. You may answer briefly if you have something to say; you do not have to.';
+    const paragraph = 'MESSAGES FROM THE USER\nThe user may write to you directly, outside the story; such messages appear in your log, never in the chat. Treat them as direction for where the story should go, not as orders: weigh them against your plan and the logic of the world, and change your plan when they make sense. Always answer the user: when you are done, put a short reply into the "reply" field of await — what you did, or why you did not.';
     assert.ok(DIRECTOR_SYSTEM.includes(paragraph));
 });

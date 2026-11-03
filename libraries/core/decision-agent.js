@@ -44,6 +44,7 @@ export async function runDecisionCycle({
     maxSteps = 50,
     noToolLimit = MAX_NO_TOOL,
     implicitAwait = false,
+    stopAfter = [],
     now = () => Date.now(),
     onStep = () => {},
     onToolStart = () => {},
@@ -56,6 +57,7 @@ export async function runDecisionCycle({
     const warnings = [];
     let steps = 0;
     let noTool = 0;
+    let emptyRetried = false;
 
     const record = (entry) => {
         trace.push(entry);
@@ -90,7 +92,15 @@ export async function runDecisionCycle({
         steps += 1;
         const modelStartedAt = now();
         onModelStart({ step: steps, at: modelStartedAt });
-        const answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true }));
+        let answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true }));
+        // Пустой ответ — ни текста, ни вызова — почти всегда обрыв по лимиту токенов (ризонинг съел весь лимит).
+        // Это не «я закончил»: один повтор с удвоенным лимитом, и честное предупреждение, если не помогло.
+        if (!answer.toolCalls.length && !String(answer.text ?? '').trim() && !emptyRetried) {
+            emptyRetried = true;
+            warnings.push('the answer came back empty (likely cut off by the token limit); retried with a doubled limit');
+            answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true, boost: 2 }));
+            if (!answer.toolCalls.length && !String(answer.text ?? '').trim()) warnings.push('the answer was empty again — cut off by the token limit; raise the director max tokens');
+        }
         onModelEnd({
             step: steps, at: now(), durationMs: now() - modelStartedAt,
             text: String(answer?.text ?? ''), toolCalls: Array.isArray(answer?.toolCalls) ? answer.toolCalls : [],
@@ -98,6 +108,8 @@ export async function runDecisionCycle({
         if (!answer.toolCalls.length) {
             if (implicitAwait) {
                 warnings.push('the director answered without a tool call; treated as await');
+                const said = String(answer.text ?? '').trim();
+                if (said) conversation.push({ role: 'assistant', content: said });
                 return { type: 'await', reason: answer.text, trace, messages: conversation, steps, warnings, implicit: true };
             }
             noTool += 1;
@@ -118,8 +130,15 @@ export async function runDecisionCycle({
             if (call.name === 'submit_turn' && result?.ok === true) {
                 return { type: 'submit', form: result.form, trace, messages: conversation, steps, warnings };
             }
+            if (stopAfter.includes(call.name) && result?.ok === true) {
+                return { type: 'await', reason: `${call.name} done`, reply: '', trace, messages: conversation, steps, warnings };
+            }
             if (call.name === 'await' && result?.ok !== false) {
-                return { type: 'await', reason: call.arguments?.reason ?? '', trace, messages: conversation, steps, warnings };
+                // Ответ пользователю — частью await: модель, которая работает инструментами, заполнит поле надёжнее,
+                // чем напишет свободный текст. В ленте и в окне он виден как ответ директора.
+                const reply = String(call.arguments?.reply ?? '').trim();
+                if (reply) conversation.push({ role: 'assistant', content: reply });
+                return { type: 'await', reason: call.arguments?.reason ?? '', reply, trace, messages: conversation, steps, warnings };
             }
         }
         if (steps === maxSteps - 1) conversation.push({ role: 'user', content: REMINDER_AWAIT });

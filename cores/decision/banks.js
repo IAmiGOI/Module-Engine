@@ -1,4 +1,4 @@
-import { bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking, BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
+import { splitBankImportance, bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking, BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
 import { createBankStore } from './bank-store.js';
 import { createBankTasks, bankConcurrency } from './bank-tasks.js';
 import { createLorebookMarker } from './lorebook-marker.js';
@@ -23,10 +23,14 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         return [record?.name, record?.canonicalName, ...(record?.aliases ?? [])].some(value => keyOf(value) === wanted);
     }
 
-    function sizeFor(source) {
+    // Нижняя граница важности: главный персонаж карточки, персона, сцена, уровни 1–2 библиотеки.
+    // Выше неё важность решает сборщик (строка IMPORTANCE в банке).
+    function sizeFor(source, importance = null) {
         const record = Object.values(store.library()).find(item => keyOf(item.name) === keyOf(source.name));
-        return bankSizeBand({ level: record?.level, isMain: !['scene', 'persona'].includes(source.sourceKind) && source.sizeBand === 'key' });
+        const floor = bankSizeBand({ level: record?.level, isMain: source.sizeBand === 'key' || ['scene', 'persona'].includes(source.sourceKind) });
+        return importance === 'key' ? 'key' : floor;
     }
+    const withFloor = source => ({ ...source, sizeBand: sizeFor(source) });
 
     async function markLorebooks(entries, cards) {
         markWarnings = [];
@@ -76,10 +80,11 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         };
     }
 
-    async function saveReady(source, text) {
+    async function saveReady(source, answer) {
+        const { text, importance } = splitBankImportance(answer);
         const record = createBankRecord({
             sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
-            sourceHash: hashText(source.source), text, sizeBand: sizeFor(source), rawSource: source.source,
+            sourceHash: hashText(source.source), text, sizeBand: sizeFor(source, importance), rawSource: source.source,
             examples: source.examples ?? '', aliases: source.aliases ?? [], canonicalName: source.canonicalName ?? '', status: 'ready',
             builderVersion: BANK_BUILDER_VERSION,
         });
@@ -134,12 +139,12 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             pending.push(source);
         }
         await bankStore.saveChat(chat);
-        await bankStore.saveColdStart({ status: 'running', total: sources.length, done: progress().done, errors: 0, startedAt: now(), warnings: markWarnings });
+        await bankStore.saveColdStart({ status: 'running', builderVersion: BANK_BUILDER_VERSION, total: sources.length, done: progress().done, errors: 0, startedAt: now(), warnings: markWarnings });
         if (!pending.length) {
             await bankStore.saveColdStart({ status: 'ready', done: sources.length, total: sources.length, errors: 0, warnings: markWarnings });
             return progress({ timedOut: false, sources: sources.length });
         }
-        const running = tasks.runQueue(pending, {
+        const running = tasks.runQueue(pending.map(withFloor), {
             concurrency: bankConcurrency(getSettings()),
             onDone: async (source, text) => { await saveReady(source, text); await bankStore.saveColdStart(progress()); },
             onError: async (source, error) => { await markError(source, error); await bankStore.saveColdStart(progress()); },
@@ -161,7 +166,9 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     function ensureColdStart() {
         if (coldStartPromise) return coldStartPromise;
         const state = bankStore.coldStart();
-        if (state.status === 'ready' || state.status === 'partial') return Promise.resolve(progress());
+        // Новая версия сборщика: старый холодный старт не считается — банки пересоберутся один раз.
+        const current = Number(state.builderVersion) === BANK_BUILDER_VERSION;
+        if (current && (state.status === 'ready' || state.status === 'partial')) return Promise.resolve(progress());
         coldStartPromise = runColdStart().finally(() => { coldStartPromise = null; });
         return coldStartPromise;
     }
@@ -184,7 +191,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         });
         await bankStore.putChat(short);
         publishEvent('decision.bank.short', { sourceKey: source.sourceKey, name: short.name });
-        tasks.build(source).then(text => saveReady(source, text)).catch(error => markError(source, error));
+        tasks.build(withFloor(source)).then(text => saveReady(source, text)).catch(error => markError(source, error));
         return short;
     }
 
@@ -222,7 +229,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         const clean = String(name ?? '').trim();
         if (!sourcesCache.length) await collectSources();
         const source = findBankSource(sourcesCache, clean) ?? historySource(clean);
-        tasks.build(source).then(text => saveReady(source, text)).catch(error => markError(source, error));
+        tasks.build(withFloor(source)).then(text => saveReady(source, text)).catch(error => markError(source, error));
         return { ok: true, queued: true, sourceKey: source.sourceKey, name: source.name };
     }
 

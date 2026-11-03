@@ -119,11 +119,13 @@ export function createCycleContext({ call, store, banks = null }) {
 
     function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {
         let modelCall = 0;
-        return async ({ messages, tools, toolChoice, returnMessage }) => {
+        return async ({ messages, tools, toolChoice, returnMessage, boost = 1 }) => {
             modelCall += 1;
+            const params = deciderRequestParams(settings.decider);
+            if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
             const answer = await call('model.generate', {
                 requestId: `${runId}:${prefix}${modelCall}:${startedAt}`,
-                ...deciderRequestParams(settings.decider),
+                ...params,
                 ...(effort ? { reasoningEffort: effort } : {}),
                 workerId: worker.id,
                 messages, tools, toolChoice, stream: true, returnMessage,

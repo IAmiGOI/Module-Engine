@@ -170,7 +170,6 @@ export const MARK_LOREBOOK_CHARACTERS_TOOL = Object.freeze({
                         uid: { type: 'number' },
                         name: { type: 'string', description: 'The clean name people in the story use.' },
                         aliases: { type: 'array', items: { type: 'string' }, description: 'Other names, titles and nicknames.' },
-                        importance: { type: 'string', enum: ['key', 'minor'] },
                         franchise: { type: 'string', description: 'The existing work, only if the entries make it clear; otherwise empty.' },
                     },
                     required: ['uid', 'name'],
@@ -223,12 +222,13 @@ export const SAVE_DRAFT_TOOL = Object.freeze({
 export const AWAIT_TOOL = Object.freeze({
     name: 'await',
     displayName: 'Await an event',
-    description: 'End this cycle and sleep until an event wakes you: the next turn, a plan ending by RP time, a roster change, or a researcher report. Nothing happens between cycles.',
+    description: 'End this cycle and sleep until an event wakes you: the next turn, a plan ending by RP time, a roster change, or a researcher report. Nothing happens between cycles. If the user wrote to you, put your answer into "reply".',
     parameters: {
         type: 'object',
         properties: {
             reason: { type: 'string', description: 'What you are waiting for.' },
             wakeOn: { type: 'string', enum: ['turn', 'time', 'roster', 'researcher', 'any'], description: 'Which event should wake you; "any" by default.' },
+            reply: { type: 'string', description: 'Your answer to the user when the user wrote to you: one to three sentences — what you did, or why you did not. Required in a cycle started by the user\'s message.' },
             comment: COMMENT,
         },
         required: ['reason', 'comment'],

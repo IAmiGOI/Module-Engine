@@ -15,17 +15,18 @@ test('the bank subagent prompt is the PROMPTS.md section 10 text word for word',
     assert.equal(CHARACTER_BANK_BUILDER, promptFromDoc());
 });
 
-test('every bank placeholder is filled, including the size band', () => {
+test('every bank placeholder is filled, including the importance floor', () => {
     const filled = fillPrompt(CHARACTER_BANK_BUILDER, {
         name: 'Lena', source_kind: 'card', source: 'A traveller.', canon_hint: '', aliases: '',
-        size_band: 'key', steps: 12,
+        importance_floor: 'This character is already key in this story. ', steps: 12,
         // Name Literal mentions the literal macro on purpose; it must stay in the prompt.
         char: '{{char}}',
     });
     assert.deepEqual([...filled.matchAll(/\{\{[a-z0-9_]+\}\}/gi)].map(match => match[0]), ['{{char}}'], 'only the literal macro named by Name Literal remains');
     assert.match(filled, /CHARACTER: Lena/);
     assert.match(filled, /SOURCE \(card\):\nA traveller\./);
-    assert.match(filled, /SIZE: key/);
+    assert.match(filled, /IMPORTANCE: decide it yourself.*This character is already key in this story\. A key bank/);
+    assert.match(filled, /Its last line is "IMPORTANCE: key" or "IMPORTANCE: minor"\./);
     assert.match(filled, /at most 12 steps/);
 });
 
@@ -45,4 +46,11 @@ test('the lorebook marking prompt is the PROMPTS.md section 11 text word for wor
     const fence = doc.indexOf('```text', start);
     const body = doc.indexOf('\n', fence) + 1;
     assert.equal(LOREBOOK_MARKER, doc.slice(body, doc.indexOf('```', body)).trimEnd());
+});
+
+test('the IMPORTANCE line is split from the bank text; without it the importance is unknown', async () => {
+    const { splitBankImportance } = await import('../libraries/core/decision-banks.js');
+    assert.deepEqual(splitBankImportance('***Rem***\nA maid.\n\n**IMPORTANCE: key**\n'), { text: '***Rem***\nA maid.', importance: 'key' });
+    assert.deepEqual(splitBankImportance('***Rem***\nA maid.\nIMPORTANCE: Minor'), { text: '***Rem***\nA maid.', importance: 'minor' });
+    assert.deepEqual(splitBankImportance('***Rem***\nA maid.'), { text: '***Rem***\nA maid.', importance: null });
 });

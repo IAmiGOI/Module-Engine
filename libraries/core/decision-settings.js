@@ -19,7 +19,7 @@ export const DEFAULT_DECIDER = Object.freeze({
     temperature: 0.7,
     topP: 1,
     topK: 0,
-    maxTokens: 2000,
+    maxTokens: 8000,
     reasoningMode: 'inherit',
     reasoningEffort: 'medium',
     reasoningBudget: 0,
@@ -146,14 +146,19 @@ export function clampDecisionSettings(values = {}) {
 }
 
 /** Параметры `model.generate` из настроек директора — только те поля, которые Ядру моделей действительно нужны. */
+/** С включённым ризонингом размышления тратят тот же лимит, что и ответ: меньше — и ответ обрезается пустым. */
+export const DECIDER_MIN_TOKENS_WITH_REASONING = 6000;
+
 export function deciderRequestParams(decider = {}) {
     const values = decider && typeof decider === 'object' ? decider : {};
+    const reasoning = values.reasoningMode && values.reasoningMode !== 'disabled';
+    const maxTokens = reasoning && Number.isFinite(values.maxTokens) ? Math.max(values.maxTokens, DECIDER_MIN_TOKENS_WITH_REASONING) : values.maxTokens;
     return {
         ...(values.workerId ? { workerId: values.workerId } : {}),
         temperature: values.temperature,
         topP: values.topP,
         topK: values.topK,
-        maxTokens: values.maxTokens,
+        maxTokens,
         reasoningMode: values.reasoningMode,
         reasoningEffort: values.reasoningEffort,
         reasoningBudget: values.reasoningBudget,
