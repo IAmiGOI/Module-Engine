@@ -313,3 +313,8 @@ Your reasoning is a working note, not prose. Keep it short and to the point: the
 - A few hundred words of reasoning is enough for an ordinary turn. A hard turn may take more; a quiet one should take less.`;
 export const DIRECTOR_REROLL = `REROLL: the user discarded your previous version of this turn and asked for it again. Nothing of that version happened — not its rolls, outcomes, decisions, spoken lines or the Writer's reply, and the characters remember none of it. Decide the turn again from the user's message, as if for the first time, and roll again where a roll is needed.`;
 export const ASSESS_SOCIAL_REFUSAL = `Talk is not rolled. Decide yourself how the listener takes it — from their character, what they know and want, and what was actually said — and write it into the form with noCheck. If the speaker also needs not to be overheard, assess that as stealth.`;
+export const DIRECTOR_CONCRETE = `You have been thinking for too long, and your reasoning was cut off here:
+
+{{thinking}}
+
+Stop weighing options. Take the most natural reading of the scene and act now: call the next tool with concrete values — names, actions, levels, the exact outcome. Do not restate the situation, and do not reopen anything you have already decided.`;

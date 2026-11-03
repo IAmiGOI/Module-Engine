@@ -93,3 +93,8 @@ test('the social assess refusal is PROMPTS.md section 20 word for word', async (
     const { ASSESS_SOCIAL_REFUSAL } = await import('../libraries/core/decision-prompts.js');
     assert.equal(ASSESS_SOCIAL_REFUSAL, blockFromDoc('## 20. Директор — отказ assess на разговор'));
 });
+
+test('the thinking-cut prompt is PROMPTS.md section 21 word for word', async () => {
+    const { DIRECTOR_CONCRETE } = await import('../libraries/core/decision-prompts.js');
+    assert.equal(DIRECTOR_CONCRETE, blockFromDoc('## 21. Директор — обрыв долгого размышления'));
+});

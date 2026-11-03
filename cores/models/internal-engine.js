@@ -278,6 +278,11 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             const requestId = params?.requestId ?? generateRequestId();
             const controller = new AbortController();
             cancellers.set(requestId, controller);
+            // `signal` вызывающего (таймаут хода, обрыв долгого размышления, смена чата) обрывает и сам запрос к провайдеру,
+            // а не только ожидание: раньше он не слушался, и оборванный запрос продолжал тратить токены.
+            const external = params?.signal;
+            if (external?.aborted) controller.abort(external.reason ?? new Error('The request was stopped.'));
+            else external?.addEventListener?.('abort', () => controller.abort(external.reason ?? new Error('The request was stopped.')), { once: true });
             // Пулы — функции: очередь читает их в момент запуска, и воркер, удалённый из настроек, пока запрос ждал, его уже не получит.
             const resolvePrimaryPool = () => (params?.workerId ? workers.filter(worker => worker.id === params.workerId) : workers);
             let primaryPool = resolvePrimaryPool();

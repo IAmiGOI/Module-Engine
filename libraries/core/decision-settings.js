@@ -74,6 +74,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // e11: предложения Claude, каждое — отдельной настройкой.
     snapshots: true,
     adaptiveReasoning: true,
+    thinkingLimitTokens: 2000,
     turnDraft: false,
     costCounter: true,
     startOnTyping: false,
@@ -125,6 +126,7 @@ export function clampDecisionSettings(values = {}) {
         assessSeed: Number.isFinite(source.assessSeed) ? Number(source.assessSeed) : null,
         snapshots: source.snapshots === undefined ? DEFAULT_SETTINGS.snapshots : Boolean(source.snapshots),
         adaptiveReasoning: source.adaptiveReasoning === undefined ? DEFAULT_SETTINGS.adaptiveReasoning : Boolean(source.adaptiveReasoning),
+        thinkingLimitTokens: Number.isFinite(Number(source.thinkingLimitTokens)) ? Math.max(0, Number(source.thinkingLimitTokens)) : DEFAULT_SETTINGS.thinkingLimitTokens,
         turnDraft: source.turnDraft === undefined ? DEFAULT_SETTINGS.turnDraft : Boolean(source.turnDraft),
         costCounter: source.costCounter === undefined ? DEFAULT_SETTINGS.costCounter : Boolean(source.costCounter),
         startOnTyping: source.startOnTyping === undefined ? DEFAULT_SETTINGS.startOnTyping : Boolean(source.startOnTyping),

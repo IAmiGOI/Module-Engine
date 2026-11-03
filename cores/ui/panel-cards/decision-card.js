@@ -36,6 +36,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
     const researcherSettings = { workerId: signal(''), maxTasks: signal(2), maxSteps: signal(50), bankMaxSteps: signal(20), bankConcurrency: signal(4) };
     const snapshots = signal(true);
     const adaptiveReasoning = signal(true);
+    const thinkingLimitTokens = signal(2000);
     const turnDraft = signal(false);
     const costCounter = signal(true);
     const startOnTyping = signal(false);
@@ -122,6 +123,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
         researcherSettings.bankConcurrency.set(Number(value.researcher?.bankConcurrency ?? 4));
         snapshots.set(value.snapshots !== false);
         adaptiveReasoning.set(value.adaptiveReasoning !== false);
+        thinkingLimitTokens.set(Number(value.thinkingLimitTokens ?? 2000));
         turnDraft.set(Boolean(value.turnDraft));
         costCounter.set(value.costCounter !== false);
         startOnTyping.set(Boolean(value.startOnTyping));
@@ -152,7 +154,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
                 maxTasks: researcherSettings.maxTasks.peek(), maxSteps: researcherSettings.maxSteps.peek(),
                 bankMaxSteps: researcherSettings.bankMaxSteps.peek(), bankConcurrency: researcherSettings.bankConcurrency.peek(),
             },
-            snapshots: snapshots.peek(), adaptiveReasoning: adaptiveReasoning.peek(),
+            snapshots: snapshots.peek(), adaptiveReasoning: adaptiveReasoning.peek(), thinkingLimitTokens: thinkingLimitTokens.peek(),
             turnDraft: turnDraft.peek(), costCounter: costCounter.peek(),
             startOnTyping: startOnTyping.peek(), implicitAwait: implicitAwait.peek(),
             classifier: {
@@ -279,6 +281,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
             Details('Turn behaviour',
                 Toggle('Snapshots and rollback', snapshots, { hint: 'On: state before every turn is saved; swipe or delete restores it. Off: the state follows every applied form.' }),
                 Toggle('Low reasoning on the turn, high between turns', adaptiveReasoning, { hint: 'On: the active cycle asks for low effort, the passive one for high.' }),
+                Slider('Cut the turn\'s thinking after (tokens, 0 = never)', thinkingLimitTokens, { min: 0, max: 8000, step: 250 }),
                 Toggle('Turn draft', turnDraft, { hint: 'On: the passive cycle may save a draft; if the real form times out, the writer uses the draft instead of cancelling.' }),
                 Toggle('Cost counter in the log', costCounter, { hint: 'Show prompt/completion/cached tokens per cycle.' }),
                 Toggle('Start on typing', startOnTyping, { hint: 'Off by default. Starts a background draft when the user begins typing; needs Turn draft.' }),

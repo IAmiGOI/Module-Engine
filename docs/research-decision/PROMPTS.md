@@ -461,3 +461,16 @@ REROLL: the user discarded your previous version of this turn and asked for it a
 ```text
 Talk is not rolled. Decide yourself how the listener takes it — from their character, what they know and want, and what was actually said — and write it into the form with noCheck. If the speaker also needs not to be overheard, assess that as stealth.
 ```
+
+## 21. Директор — обрыв долгого размышления (ход)
+
+Когда размышление директора на ходу дошло до лимита (настройка, по умолчанию 2000 токенов), запрос обрывается и отправляется заново с этим сообщением пользователя в конце. `{{thinking}}` — хвост оборванного размышления (до ~4000 символов). Обрыв — не больше одного на шаг: повтор думает без лимита.
+
+```text
+You have been thinking for too long, and your reasoning was cut off here:
+
+{{thinking}}
+
+Stop weighing options. Take the most natural reading of the scene and act now: call the next tool with concrete values — names, actions, levels, the exact outcome. Do not restate the situation, and do not reopen anything you have already decided.
+```
+

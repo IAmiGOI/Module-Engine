@@ -37,7 +37,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
     const live = createCycleLive({ publishEvent, getTurn: () => state.turnCounter, getClock: () => store.clock().minutes });
-    const context = createCycleContext({ call, store, banks });
+    const context = createCycleContext({ call, store, banks, capture });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
 
@@ -131,7 +131,14 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const agent = runDecisionCycle({
             messages: built.messages,
             tools,
-            generate: context.generateFor({ settings, worker, runId, prefix: '', startedAt, effort: settings.adaptiveReasoning ? 'low' : null, signal: controller.signal }),
+            generate: context.generateFor({
+                settings, worker, runId, prefix: '', startedAt, effort: settings.adaptiveReasoning ? 'low' : null, signal: controller.signal,
+                thinkLimit: Number(settings.thinkingLimitTokens) || 0,
+                onCut: ({ tokens }) => {
+                    state.formWarnings = [...(state.formWarnings ?? []), `the director thought for ${tokens} tokens and was asked to decide concretely`];
+                    publishEvent('decision.cycle.thinkingCut', { runId, tokens });
+                },
+            }),
             handlers: handlersFor(settings),
             callTool,
             maxSteps: settings.maxSteps,

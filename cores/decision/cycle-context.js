@@ -6,6 +6,8 @@ import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
 import { createBoundary, normalizeBoundary, windowTurnCount } from '../../libraries/core/decision-window.js';
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
+import { DIRECTOR_CONCRETE, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { estimateTokens } from '../../libraries/core/token-estimate.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createKnowledge } from './knowledge.js';
 
@@ -30,7 +32,7 @@ export function turnWake(type) {
     return wakeFor({ type, label: `The director runs again (${type})` });
 }
 
-export function createCycleContext({ call, store, banks = null }) {
+export function createCycleContext({ call, store, banks = null, capture = null }) {
     const knowledge = createKnowledge({ call, store, banks });
     async function externalTools() {
         try {
@@ -144,21 +146,49 @@ export function createCycleContext({ call, store, banks = null }) {
         return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat), reroll });
     }
 
-    function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {
+    /**
+     * `thinkLimit` (токены) — размышление дошло до лимита: запрос обрывается и уходит заново с хвостом размышления
+     * и требованием конкретики (PROMPTS §21). Обрыв — один на шаг: повтор думает без лимита, иначе ход не дойдёт до формы.
+     */
+    function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null, thinkLimit = 0, onCut = () => {} }) {
         let modelCall = 0;
         return async ({ messages, tools, toolChoice, returnMessage, boost = 1 }) => {
             modelCall += 1;
             const params = deciderRequestParams(settings.decider, { floor: prefix !== '' });
             if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
-            const answer = await call('model.generate', {
-                requestId: `${runId}:${prefix}${modelCall}:${startedAt}`,
-                ...params,
+            const request = (requestId, list, requestSignal) => call('model.generate', {
+                requestId, ...params,
                 ...(effort ? { reasoningEffort: effort } : {}),
                 workerId: worker.id,
-                messages, tools, toolChoice, stream: true, returnMessage,
-                ...(signal ? { signal } : {}),
+                messages: list, tools, toolChoice, stream: true, returnMessage,
+                ...(requestSignal ? { signal: requestSignal } : {}),
             });
-            return normalizeGenerateAnswer(answer);
+            const requestId = `${runId}:${prefix}${modelCall}:${startedAt}`;
+            if (!(thinkLimit > 0) || typeof capture !== 'function') return normalizeGenerateAnswer(await request(requestId, messages, signal));
+
+            const local = new AbortController();
+            const forward = () => local.abort(signal?.reason);
+            if (signal?.aborted) forward(); else signal?.addEventListener?.('abort', forward, { once: true });
+            let cutText = '';
+            const watch = capture(requestId, {
+                onThinking: text => {
+                    if (cutText || estimateTokens(text) < thinkLimit) return;
+                    cutText = String(text);
+                    local.abort(new Error('thinking limit'));
+                },
+            });
+            try {
+                return normalizeGenerateAnswer(await request(requestId, messages, local.signal));
+            } catch (error) {
+                if (!cutText || signal?.aborted) throw error;
+            } finally {
+                watch?.stop?.();
+                signal?.removeEventListener?.('abort', forward);
+            }
+            onCut({ tokens: estimateTokens(cutText) });
+            const tail = cutText.length > 4000 ? `…${cutText.slice(-4000)}` : cutText;
+            const pushed = [...messages, { role: 'user', content: fillPrompt(DIRECTOR_CONCRETE, { thinking: tail }) }];
+            return normalizeGenerateAnswer(await request(`${requestId}:c`, pushed, signal));
         };
     }
 

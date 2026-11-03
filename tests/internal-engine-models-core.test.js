@@ -735,3 +735,25 @@ test('a network failure before any byte ("Failed to fetch") is retried on a fres
     assert.match(lost.result.error.message, /Failed to fetch/);
     assert.equal(lost.sent, 3, 'one request and two retries');
 });
+
+test('the caller\'s signal cuts the provider request itself, not only the wait for it', async () => {
+    const engine = createEngine();
+    let cut = false;
+    registerHttpService(engine.buses.network, {
+        fetch: async (url, options) => new Promise((resolve, reject) => {
+            options.signal?.addEventListener('abort', () => { cut = true; reject(new Error('aborted')); });
+        }),
+    });
+    const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
+    registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
+    createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
+    const modelsCore = createInternalEngineModelsCore(engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true }), { sleep: async () => {} });
+    modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com', model: 'gpt-test', format: 'openai' }]);
+    const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+    const controller = new AbortController();
+    const pending = new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hi', stream: false, signal: controller.signal } }, resolve));
+    setTimeout(() => controller.abort(new Error('thinking limit')), 5);
+    const result = await pending;
+    assert.equal(result.ok, false);
+    assert.equal(cut, true, 'the fetch to the provider was aborted');
+});
