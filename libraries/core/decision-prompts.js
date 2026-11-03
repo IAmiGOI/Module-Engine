@@ -27,7 +27,7 @@ Every call must carry "comment": at least one full sentence saying why you are m
 - set_plan — your own plan: the direction of future events around the user. It must always exist.
 - character_note — at most four short notes per character: what the Writer must know about them right now.
 - character_bank — read, edit or rebuild a character's data bank: the compact card you and the Writer read.
-- character_knowledge — the Knowledge section of a character's data bank: what they have learned in this story. Whenever a character sees, hears, is told or works out something that matters, add it; revise it when they learn it was wrong. A character acts only on their bank and their knowledge. The user's character has no knowledge record.
+- character_knowledge — the Knowledge section of a character's data bank: what they have learned in this story. Whenever a character sees, hears, is told or works out something that matters, add it; extend an entry they already have when they learn more about it (update) instead of adding a duplicate; revise it when they learn it was wrong. A character acts only on their bank and their knowledge. The user's character has no knowledge record.
 - arc — the stages of the roleplay and which sections are finished.
 - current_state — where the scene is and where your plan stands.
 - set_character_level, set_character_plan, resolve_character_plan, library — the character library and off-screen plans (see BETWEEN TURNS).

@@ -1,7 +1,7 @@
 /**
  * Знания персонажей — секция Knowledge дата-банка: что персонаж узнал по ходу этой истории. Ведёт её сам директор
- * инструментом `character_knowledge` (решение владельца): только дописыванием — новое знание добавляется, устаревшее
- * помечается, а не стирается (персонаж помнит, что раньше думал иначе). Хранится только в чате: в другом чате
+ * инструментом `character_knowledge` (решение владельца): только дописыванием — новое знание добавляется, записанное
+ * можно расширить подробностями (update), устаревшее помечается, а не стирается (персонаж помнит, что раньше думал иначе). Хранится только в чате: в другом чате
  * персонаж этого не знает. Для персонажа пользователя знания не ведутся (решение владельца).
  *
  * Банк в начале контекста остаётся статичным ради кеша, а эта секция рисуется отдельно — в изменяемой части.
@@ -53,6 +53,22 @@ export function applyKnowledge(state, args = {}, { minutes = null, at = Date.now
         next[key] = record;
         return { ok: true, state: next, item };
     }
+    if (args.op === 'update') {
+        // Расширить уже записанное знание новыми подробностями того же факта — без пометки «раньше думал иначе».
+        const addition = text(args.fact);
+        const index = find();
+        if (index < 0) return { ok: false, error: `There is no current knowledge "${text(args.id)}" for ${name}. Use the ids shown in WHAT CHARACTERS KNOW.` };
+        if (!addition) return { ok: false, error: 'To update knowledge, give the new detail in "fact".' };
+        const previous = record.items[index];
+        const item = {
+            ...previous,
+            fact: `${previous.fact.replace(/[.\s]+$/, '')}; ${addition}`,
+            updates: [...(previous.updates ?? []), { fact: addition, source, from: text(args.from), minutes, at }],
+        };
+        record.items[index] = item;
+        next[key] = record;
+        return { ok: true, state: next, item };
+    }
     if (args.op === 'forget') {
         const index = find();
         if (index < 0) return { ok: false, error: `There is no current knowledge "${text(args.id)}" for ${name}.` };
@@ -60,7 +76,7 @@ export function applyKnowledge(state, args = {}, { minutes = null, at = Date.now
         next[key] = record;
         return { ok: true, state: next, item: record.items[index] };
     }
-    return { ok: false, error: 'character_knowledge needs op "add", "revise" or "forget".' };
+    return { ok: false, error: 'character_knowledge needs op "add", "update", "revise" or "forget".' };
 }
 
 function itemLine(item, byId) {

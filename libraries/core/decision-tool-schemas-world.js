@@ -238,16 +238,16 @@ export const AWAIT_TOOL = Object.freeze({
 export const CHARACTER_KNOWLEDGE_TOOL = Object.freeze({
     name: 'character_knowledge',
     displayName: 'Record what a character knows',
-    description: 'The Knowledge section of a character\'s data bank: what they have learned in this story. Whenever a character sees, hears, is told, reads or works out something that matters, add it (op "add"). When they learn that something they knew is wrong or has changed, revise it (op "revise" with its id and the new fact) — the old belief is kept as "used to believe". Use "forget" only when their memory is really lost. The user\'s character has no knowledge record.',
+    description: 'The Knowledge section of a character\'s data bank: what they have learned in this story. Whenever a character sees, hears, is told, reads or works out something that matters, add it (op "add"). When they learn more about something they already know, extend that entry (op "update" with its id and the new detail) instead of adding a duplicate. When they learn that something they knew is wrong or has changed, revise it (op "revise" with its id and the new fact) — the old belief is kept as "used to believe". Use "forget" only when their memory is really lost. The user\'s character has no knowledge record.',
     parameters: {
         type: 'object',
         properties: {
-            op: { type: 'string', enum: ['add', 'revise', 'forget'] },
+            op: { type: 'string', enum: ['add', 'update', 'revise', 'forget'] },
             character: { type: 'string', description: 'Whose knowledge this is.' },
-            fact: { type: 'string', description: 'For add and revise: what the character now knows, as one short fact.' },
+            fact: { type: 'string', description: 'For add and revise: what the character now knows, as one short fact. For update: the new detail to add to the entry.' },
             source: { type: 'string', enum: ['saw', 'heard', 'told', 'read', 'worked out'], description: 'How they learned it.' },
             from: { type: 'string', description: 'Optional: who told them, or where they read or saw it.' },
-            id: { type: 'string', description: 'For revise and forget: the knowledge id shown in WHAT CHARACTERS KNOW.' },
+            id: { type: 'string', description: 'For update, revise and forget: the knowledge id shown in WHAT CHARACTERS KNOW.' },
             comment: COMMENT,
         },
         required: ['op', 'character', 'comment'],

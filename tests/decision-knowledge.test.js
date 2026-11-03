@@ -71,3 +71,16 @@ test('the director gets the knowledge tool and never the Secrets tool', async ()
     assert.ok(names.includes('Notebook'));
     assert.equal(names.includes('Secrets'), false);
 });
+
+test('update extends an existing knowledge entry with a new detail, keeps its id and does not mark it outdated', () => {
+    const added = applyKnowledge({}, { op: 'add', character: 'Rom', fact: 'Elsa is dangerous.', source: 'heard' }, { rid });
+    const updated = applyKnowledge(added.state, { op: 'update', character: 'Rom', id: added.item.id, fact: 'she fights with a kukri', source: 'saw' }, { rid });
+    assert.equal(updated.ok, true);
+    assert.equal(updated.item.id, added.item.id);
+    assert.equal(updated.item.status, 'known');
+    const text = renderKnowledge(updated.state);
+    assert.match(text, /Elsa is dangerous; she fights with a kukri/);
+    assert.doesNotMatch(text, /used to believe/);
+    assert.equal(text.match(/\[k_/g).length, 1, 'no duplicate entry');
+    assert.equal(applyKnowledge(updated.state, { op: 'update', character: 'Rom', id: 'k_none', fact: 'x' }).ok, false);
+});
