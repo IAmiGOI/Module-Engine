@@ -1,13 +1,15 @@
 import { buildDeciderContext } from '../../libraries/core/decision-context.js';
 import { normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildToolList } from '../../libraries/core/decision-tools.js';
-import { buildLorebookContext } from '../../libraries/core/decision-lorebook.js';
-import { thinkingMessages } from '../../libraries/core/decision-log.js';
-import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
-import { librarySection } from '../../libraries/core/decision-library.js';
-import { bankIndex } from '../../libraries/core/decision-bank.js';
-import { researchSection } from '../../libraries/core/decision-researcher.js';
+import { staticDirectorLorebook } from '../../libraries/core/decision-lorebook-static.js';
+import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
+import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
+import { createBoundary, normalizeBoundary, windowTurnCount } from '../../libraries/core/decision-window.js';
 import { assembleSectionFor } from './prompt-sections.js';
+import { createKnowledge } from './knowledge.js';
+
+/** Чужие инструменты, которые директору не отдаются: Secrets директор не использует (решение владельца — отключить). */
+const DIRECTOR_EXCLUDED_TOOLS = new Set(['Secrets']);
 
 /** Контекст и запрос директора — вынесено из цикла, чтобы файл цикла оставался циклом. */
 
@@ -28,15 +30,12 @@ export function turnWake(type) {
 }
 
 export function createCycleContext({ call, store, banks = null }) {
+    const knowledge = createKnowledge({ call, store, banks });
     async function externalTools() {
         try {
             const tools = await call('generation.tools');
-            return Array.isArray(tools) ? tools : [];
+            return Array.isArray(tools) ? tools.filter(tool => !DIRECTOR_EXCLUDED_TOOLS.has(String(tool?.name ?? ''))) : [];
         } catch { return []; }
-    }
-
-    async function summaries() {
-        try { return (await call('summary.list')) ?? []; } catch { return []; }
     }
 
     /** Пользовательский блок директора — тот же, что раньше брался из `prompts.director`, но собранный из раздела. */
@@ -45,31 +44,77 @@ export function createCycleContext({ call, store, banks = null }) {
         return block.messages;
     }
 
-    /** Лорбук — только директору: стабильный текст книги. Ошибка чтения не ломает ход. */
+    /**
+     * Лорбук — только директору и статичный: снимок книги берётся один раз и
+     * меняется только при переключении окна (`windowBoundary`/сброс снимка).
+     * Изменений отдельным блоком больше нет — правки пользователя ждут
+     * переключения. Ошибка чтения не ломает ход.
+     */
+    const LOREBOOK_SNAPSHOT_KEY = 'lorebookSnapshot';
     async function lorebookTextFor(enabled) {
         if (!enabled) return '';
         try {
             const books = await call('lorebook.books');
             if (!Array.isArray(books) || !books.length) return '';
-            return buildLorebookContext((await call('lorebook.entries')) ?? [], { marks: banks?.marksForLorebook() ?? null }).text;
+            const saved = await call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: LOREBOOK_SNAPSHOT_KEY, fallback: null });
+            const result = staticDirectorLorebook(saved, (await call('lorebook.entries')) ?? [], { marks: banks?.marksForLorebook() ?? null, refreshTokens: Infinity });
+            if (result.refreshed) await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: LOREBOOK_SNAPSHOT_KEY, value: result.snapshot });
+            return result.head;
         } catch { return ''; }
     }
 
-    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', directorBlock = [], banksText = '' }) {
+    /** Граница окна: блоки 4, 6, 7 и 8. Нет сохранённой — снимается один раз и живёт до переключения. */
+    async function ensureBoundary() {
+        const saved = typeof store.boundary === 'function' ? normalizeBoundary(store.boundary()) : null;
+        if (saved) return saved;
+        const roster = store.roster().active;
+        const fresh = createBoundary({
+            roster,
+            libraryText: libraryLevelsSection(store.library()),
+            plansText: longPlansSection(store.plans(), store.clock().minutes),
+            activeBanksText: banks ? banks.contextFor({ names: roster, all: false }).text : '',
+            at: Date.now(),
+        });
+        if (typeof store.saveBoundary === 'function') await store.saveBoundary(fresh);
+        return fresh;
+    }
+
+    function lastUserText(chat) {
+        const list = Array.isArray(chat) ? chat : [];
+        for (let index = list.length - 1; index >= 0; index -= 1) {
+            if (list[index]?.is_user === true) return String(list[index].mes ?? list[index].content ?? '').trim();
+        }
+        return '';
+    }
+
+    /** Текущее сообщение пользователя — последняя (ещё не сохранённая) запись окна. */
+    function pendingTurn(entries, currentUser) {
+        const body = String(currentUser ?? '').trim();
+        if (!body) return [];
+        const turn = windowTurnCount(entries) + 1;
+        return [{ kind: 'turn', turn, at: Date.now(), text: `TURN ${turn} (compressed)\nUser: ${body}` }];
+    }
+
+    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '' }) {
+        const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '' };
+        const win = typeof store.window === 'function' ? store.window() : null;
+        const entries = Array.isArray(win?.entries) ? win.entries : [];
         return buildDeciderContext({
-            summaries: list, chat, runs: store.runs(),
-            thoughtMessages: thinkingMessages(store.cycles()), plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
-            libraryText: [librarySection(store.library(), store.plans(), store.clock().minutes), bankIndex(store.bank()), researchSection(store.research())].filter(Boolean).join('\n\n'),
-            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, banksText, task,
+            plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
+            libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
+            planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
+            windowEntries: [...entries, ...pendingTurn(entries, currentUser)],
+            frozenWindows: typeof store.frozen === 'function' ? store.frozen() : [],
+            windowMode: true,
         });
     }
 
     async function runContext({ settings, chat = [], task = '', lorebook = true, worker }) {
-        const [list, lorebookText, directorBlock] = await Promise.all([
-            summaries(), lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker),
+        const [lorebookText, directorBlock, knowledgeText, boundary] = await Promise.all([
+            lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(),
         ]);
-        const bankText = banks ? banks.contextFor({ names: store.roster().active, all: true }).text : '';
-        return buildContext({ chat, settings, task, summaries: list, lorebookText, directorBlock, banksText: bankText });
+        const banksText = banks ? banks.contextFor({ all: true }).text : '';
+        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat) });
     }
 
     function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {
@@ -97,5 +142,5 @@ export function createCycleContext({ call, store, banks = null }) {
         });
     }
 
-    return { summaries, buildContext, runContext, generateFor, toolsFor };
+    return { buildContext, runContext, generateFor, toolsFor };
 }

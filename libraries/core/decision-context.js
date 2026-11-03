@@ -1,6 +1,10 @@
 import { chatToMessages } from './chat-to-messages.js';
 import { planSection, arcsSection, notesSection, notesAsBlocks } from './decision-state.js';
 import { DIRECTOR_SYSTEM, DIRECTOR_TURN, WRITER_SYSTEM, WRITER_PUSH, fillPrompt } from './decision-prompts.js';
+import {
+    compressedDigestMessages, fullTurnMessages, renderCompressedDigests, renderFullTurns,
+} from './decision-turn-digest.js';
+import { frozenWindowMessages, renderFrozenWindows, renderWindow, windowMessages } from './decision-window.js';
 
 /**
  * Сборка контекстов директора и прозаика — чистые функции над уже
@@ -8,9 +12,10 @@ import { DIRECTOR_SYSTEM, DIRECTOR_TURN, WRITER_SYSTEM, WRITER_PUSH, fillPrompt 
  * одних и тех же частей, поэтому порядок и форматирование живут в одном
  * месте.
  *
- * **Порядок — от стабильного к меняющемуся** (кеш префикса у провайдера):
- * правила и саммари меняются редко; заметки о персонажах правит директор
- * каждый ход; история дописывается; задание на ход — последнее. Для
+ * **Порядок — от неизменного к меняющемуся** (кеш префикса у провайдера):
+ * system, дата-банки и лорбук почти не меняются; сжатые ходы только
+ * дописываются в конец; два последних хода идут полностью; план, заметки,
+ * ростер, библиотека, саммари и отчёты правятся каждый ход. Для
  * `openai`-воркера это `messages`; для `anthropic`/`google` те же части
  * плющатся в `systemPrompt` + `prompt`, потому что multi-turn `model.generate`
  * поддерживает только `openai`.
@@ -153,19 +158,6 @@ export function rosterSection(roster) {
     return `ACTIVE ROSTER (everyone who can affect the scene right now; the form must cover each of them):\n\n${active.map(name => `- ${name}`).join('\n')}`;
 }
 
-export function runsSection(runs) {
-    const list = Object.values(runs && typeof runs === 'object' ? runs : {})
-        .filter(record => record && typeof record === 'object')
-        .sort((a, b) => (Number(a.mesid) || 0) - (Number(b.mesid) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0));
-    if (!list.length) return '';
-    const body = list.map(record => {
-        const heading = record.mesid === undefined ? 'Earlier turn' : `Turn #${record.mesid}`;
-        const reasoning = String(record.reasoning ?? '').trim();
-        return `${heading}\nDecision: ${String(record.decision ?? '').trim()}${reasoning ? `\nReasoning: ${reasoning}` : ''}`;
-    }).join('\n\n');
-    return `PAST DIRECTOR RUNS (oldest first):\n\n${body}`;
-}
-
 function notesText(notes) {
     const blocks = notesAsBlocks(notes);
     if (!blocks.length) return '';
@@ -173,32 +165,64 @@ function notesText(notes) {
 }
 
 /**
- * Контекст директора. `messages` — для `openai`/`st-main`; `systemPrompt` +
- * `prompt` — эквивалент для `anthropic`/`google`. `task` заменяет задание на
- * ход (пассивный цикл и заготовка), по умолчанию — начало хода.
+ * Блок пользователя внутри плавающего окна: перед последними двумя циклами
+ * хода. Окно — уже сообщения, поэтому вставка идёт по индексу записи.
+ */
+export function windowHistory(entries, block, keepTurns = DIRECTOR_BLOCK_CYCLES) {
+    const list = Array.isArray(entries) ? entries : [];
+    const messages = windowMessages(list);
+    const turns = list.map((entry, index) => (entry?.kind === 'turn' ? index : -1)).filter(index => index >= 0);
+    const at = turns.length >= keepTurns ? turns[turns.length - keepTurns] : 0;
+    return insertBlock(messages, block, at);
+}
+
+/**
+ * Контекст директора части 10: защищённая часть (банки → лорбук → арки →
+ * библиотека → замороженные окна → длинные планы → ростер → дубли банков)
+ * → плавающее окно → изменения активных (знания и заметки) → план на @2 →
+ * задание. Блок 9 (окно) только дописывается; прежний путь части 9
+ * (`digests` + `turns` + история) остаётся до w2.
  */
 export function buildDeciderContext({
-    summaries = [], chat = [], runs = {}, thoughts = '', thoughtMessages = [], plan = null, arcs = [], notes = {},
-    roster = [], libraryText = '', lorebookText = '', banksText = '', planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
+    plan = null, arcs = [], notes = {}, roster = [],
+    banksText = '', lorebookText = '', libraryText = '', plansText = '', activeBanksText = '',
+    frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '',
+    planMissing = false, directorBlock = '', task = '',
+    digests = [], turns = [], chat = [], summaries = [], researchText = '', bankText = '', lorebookChanges = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
-    const history = directorHistory(chat, limit, directorBlock);
-    const parts = [
-        String(lorebookText ?? '').trim(), summariesSection(summaries), planSection(plan), arcsSection(arcs), notesSection(notes), String(banksText ?? '').trim(), String(libraryText ?? '').trim(),
-        rosterSection(roster), runsSection(runs), String(thoughts ?? '').trim(),
+    const usingWindow = windowMode || (Array.isArray(windowEntries) && windowEntries.length > 0);
+    const history = usingWindow
+        ? windowHistory(windowEntries, directorBlock)
+        : directorHistory(chat, limit, directorBlock);
+    const head = [String(banksText ?? '').trim(), String(lorebookText ?? '').trim(), arcsSection(arcs), String(libraryText ?? '').trim()].filter(Boolean);
+    const middle = [
+        ...frozenWindowMessages(frozenWindows),
+        String(plansText ?? '').trim(),
+        rosterSection(roster),
+        String(activeBanksText ?? '').trim(),
     ].filter(Boolean);
-    const thoughtList = (Array.isArray(thoughtMessages) ? thoughtMessages : [])
-        .filter(message => String(message?.content ?? '').trim())
-        .map(message => ({ role: 'system', content: String(message.content) }));
+    const middleMessages = middle.map(entry => (typeof entry === 'string' ? { role: 'system', content: entry } : entry));
+    const windowPart = usingWindow ? [] : [...compressedDigestMessages(digests), ...fullTurnMessages(turns)];
+    const state = [String(knowledgeText ?? '').trim(), notesSection(notes)].filter(Boolean);
+    const planContent = planSection(plan) || 'YOUR PLAN: none yet — call set_plan before submit_turn.';
     const baseTask = String(task ?? '').trim() || DIRECTOR_TURN;
     const turnTask = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
     const messages = [
         { role: 'system', content: DIRECTOR_SYSTEM },
-        ...parts.map(content => ({ role: 'system', content })),
-        ...thoughtList,
+        ...head.map(content => ({ role: 'system', content })),
+        ...middleMessages,
+        ...windowPart,
         ...history,
+        ...state.map(content => ({ role: 'system', content })),
+        { role: 'system', content: planContent },
         { role: 'user', content: turnTask },
     ];
-    const prompt = [DIRECTOR_SYSTEM, ...parts, ...thoughtList.map(message => message.content), renderHistory(history), turnTask].filter(Boolean).join('\n\n');
+    const prompt = [
+        DIRECTOR_SYSTEM, ...head, renderFrozenWindows(frozenWindows),
+        String(plansText ?? '').trim(), rosterSection(roster), String(activeBanksText ?? '').trim(),
+        usingWindow ? renderWindow(windowEntries) : `${renderCompressedDigests(digests)}\n${renderFullTurns(turns)}`,
+        renderHistory(history), ...state, planContent, turnTask,
+    ].filter(Boolean).join('\n\n');
     return { systemPrompt: DIRECTOR_SYSTEM, messages, prompt };
 }
 
@@ -206,14 +230,19 @@ export function buildDeciderContext({
  * Контекст прозаика: заметки о персонажах + история с блоком @5 + Push в
  * хвосте. Push идёт после истории, как написано во встроенном промпте.
  */
-export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = writerHistory(chat, limit, writerBlock);
-    const parts = [WRITER_SYSTEM, String(examples ?? '').trim(), String(banksText ?? '').trim(), String(lorebookText ?? '').trim(), summariesSection(summaries), notesText(notes)].filter(Boolean);
+    // История прозаика — скользящее окно, поэтому кешируется только то, что стоит ДО неё: туда — редко меняющееся
+    // (система, примеры, банки активных, саммари). Лорбук по ключам и заметки меняются почти каждый ход — они после
+    // истории, рядом с Push, чтобы не обрывать кеш в начале запроса.
+    const parts = [WRITER_SYSTEM, String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
+    const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim()].filter(Boolean);
     const push = String(decision ?? '').trim() ? fillPrompt(WRITER_PUSH, { push: String(decision).trim() }) : '';
     const messages = [
         ...parts.map(content => ({ role: 'system', content })),
         ...history,
+        ...tail.map(content => ({ role: 'system', content })),
         ...(push ? [{ role: 'system', content: push }] : []),
     ];
-    return { messages, prompt: [...parts, renderHistory(history), push].filter(Boolean).join('\n\n') };
+    return { messages, prompt: [...parts, renderHistory(history), ...tail, push].filter(Boolean).join('\n\n') };
 }

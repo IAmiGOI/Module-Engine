@@ -69,3 +69,25 @@ test('a form that names the same active character twice is rejected rather than 
     assert.equal(result.ok, false);
     assert.match(result.missing.join('\n'), /more than once/);
 });
+
+test('without an assessId the form needs a noCheck reason; with it the form is accepted', () => {
+    const form = valid();
+    delete form.characters[0].assessId;
+    form.characters[0].noCheck = 'She only decides whether to accept the apology.';
+    const accepted = validateTurn({ form, roster: ['Lena'], assessments: new Map() });
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.normalized.characters[0].noCheck, 'She only decides whether to accept the apology.');
+
+    const missing = validateTurn({ form: { ...form, characters: [{ ...form.characters[0], noCheck: '' }] }, roster: ['Lena'], assessments: new Map() });
+    assert.equal(missing.ok, false);
+    assert.match(missing.missing.join('\n'), /noCheck.*assessId/);
+});
+
+test('a made-up assessId is still rejected even when noCheck is also present', () => {
+    const form = valid();
+    form.characters[0].assessId = 'made-up';
+    form.characters[0].noCheck = 'A decision, not a roll.';
+    const result = validateTurn({ form, roster: ['Lena'], assessments: new Map() });
+    assert.equal(result.ok, false);
+    assert.match(result.missing.join('\n'), /was not returned by assess/);
+});

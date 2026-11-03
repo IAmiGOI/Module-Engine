@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     buildDeciderContext, buildWriterContext, historyMessages, selectRecentChat,
-    summariesSection, runsSection, RECENT_MESSAGE_LIMIT,
+    summariesSection, RECENT_MESSAGE_LIMIT,
 } from '../libraries/core/decision-context.js';
 
 function message(text, extra = {}) {
@@ -43,28 +43,42 @@ test('historyMessages expands a tool call into the same assistant + tool pair PM
     assert.equal('_hid' in messages[0], false);
 });
 
-test('the director context puts stable rules and summaries first, volatile notes last before the task, and ends with a user message', () => {
+test('the director context puts the protected part first, then the window, mutable changes, the plan at @2 and the task', () => {
     const context = buildDeciderContext({
+        banksText: 'ALL-CHARACTER-BANKS',
+        lorebookText: 'THE LOREBOOK',
+        libraryText: 'CHARACTER LIBRARY',
+        plansText: 'LONG PLANS',
+        roster: ['Aria'],
+        activeBanksText: 'ACTIVE-BANKS',
+        windowEntries: [{ kind: 'turn', turn: 1, text: 'TURN 1 (compressed) — they left the keep.' }],
+        plan: { direction: 'Find the way out.', stages: [], currentStage: 0 },
+        arcs: [{ status: 'open', title: 'The escape' }],
         directorBlock: 'Never kill a named character.',
         notes: { aria: [{ id: 'n1', character: 'Aria', title: 'Goal', text: 'Find the exit.' }] },
+        knowledgeText: 'WHAT CHARACTERS KNOW',
         summaries: [{ startIndex: 1, endIndex: 9, text: 'They arrived at the keep.' }],
-        runs: { 5: { mesid: '5', decision: 'She trusted the guard.' } },
         chat: [message('older'), message('Where is the exit?', { is_user: true })],
     });
     const contents = context.messages.map(item => item.content);
-    assert.match(contents.join('\n'), /Never kill a named character/, 'the custom block is in the history');
     assert.match(contents[0], /You are the Director of a living roleplay world/);
-    assert.match(contents[1], /LONG-TERM SUMMARIES/);
-    assert.match(contents[2], /CHARACTER NOTES/);
-    assert.match(contents[2], /Find the exit/);
-    assert.match(contents[3], /PAST DIRECTOR RUNS/);
-    assert.equal(contents[4], 'Never kill a named character.', 'two cycles before the end is before both history turns');
-    assert.equal(context.messages.at(-2).role, 'user');
-    assert.equal(context.messages.at(-2).content, 'Where is the exit?');
-    assert.equal(context.messages.at(-1).role, 'user');
-    assert.match(context.messages.at(-1).content, /A new turn has started/);
-    assert.match(context.prompt, /Where is the exit\?/);
+    assert.match(contents[1], /ALL-CHARACTER-BANKS/);
+    assert.match(contents[2], /THE LOREBOOK/);
+    assert.match(contents[3], /ARCS/);
+    assert.match(contents[4], /CHARACTER LIBRARY/);
+    assert.match(contents[5], /LONG PLANS/);
+    assert.match(contents[6], /ACTIVE ROSTER/);
+    assert.match(contents[7], /ACTIVE-BANKS/);
+    assert.equal(contents[8], 'Never kill a named character.', 'the custom block sits inside the window history');
+    assert.match(contents[9], /TURN 1 \(compressed\)/);
+    assert.match(contents.at(-4), /WHAT CHARACTERS KNOW/);
+    assert.match(contents.at(-3), /CHARACTER NOTES/);
+    assert.match(contents.at(-2), /^YOUR PLAN/);
+    assert.match(contents.at(-2), /Find the way out/);
+    assert.match(contents.at(-1), /A new turn has started/);
+    assert.equal(contents.some(item => /LONG-TERM SUMMARIES/.test(item)), false, 'summaries no longer reach the director');
     assert.match(context.prompt, /Find the exit/);
+    assert.doesNotMatch(context.prompt, /LONG-TERM SUMMARIES/);
 });
 
 test('the writer context puts the push after the history, and the history tail stays the last story line', () => {
@@ -74,8 +88,10 @@ test('the writer context puts the push after the history, and the history tail s
         chat: [message('older'), message('Where is the exit?', { is_user: true })],
         decision: 'She points at the eastern door and starts walking.',
     });
-    assert.equal(context.messages.at(-2).role, 'user');
-    assert.equal(context.messages.at(-2).content, 'Where is the exit?');
+    const story = context.messages.filter(item => item.role !== 'system');
+    assert.equal(story.at(-1).role, 'user');
+    assert.equal(story.at(-1).content, 'Where is the exit?', 'the last story line is still the user message');
+    assert.ok(context.messages.slice(context.messages.lastIndexOf(story.at(-1)) + 1).every(item => item.role === 'system'), 'only the volatile notes and the push follow it');
     assert.equal(context.messages.filter(item => item.role === 'user').length, 1, 'no synthetic user turn after the real one');
     assert.equal(context.messages.at(-1).role, 'system');
     assert.match(context.messages.at(-1).content, /^PUSH — what happens this turn:/);
@@ -89,16 +105,9 @@ test('the writer context puts the push after the history, and the history tail s
 
 test('empty parts are omitted instead of producing empty system messages', () => {
     assert.equal(summariesSection([]), '');
-    assert.equal(runsSection({}), '');
     const context = buildWriterContext({ chat: [message('hi', { is_user: true })], decision: '' });
     assert.equal(context.messages.filter(item => item.role === 'system').length, 1, 'only the writer role');
 });
-
-test('past runs are ordered by message number, not by object insertion order', () => {
-    const section = runsSection({ 9: { mesid: '9', decision: 'later' }, 2: { mesid: '2', decision: 'earlier' } });
-    assert.ok(section.indexOf('Turn #2') < section.indexOf('Turn #9'));
-});
-
 
 test('the writer context puts example dialogues first, then all active banks, then summaries and notes', () => {
     const context = buildWriterContext({
@@ -114,4 +123,30 @@ test('the writer context puts example dialogues first, then all active banks, th
 test('the director context carries all banks in the stable part', () => {
     const context = buildDeciderContext({ banksText: 'ALL-CHARACTER-BANKS' });
     assert.match(context.messages.map(message => message.content).join('\n'), /ALL-CHARACTER-BANKS/);
+});
+
+test('the writer keeps only rarely changing parts before its sliding history; lorebook matches and notes come after it, before the push', () => {
+    const chat = [{ mes: 'Hello', is_user: true }, { mes: 'Hi.' }];
+    const { messages } = buildWriterContext({
+        chat, decision: 'Lena opens the door.', banksText: 'BANKS', examples: 'EXAMPLES', lorebookText: 'LORE MATCH',
+        summaries: [{ id: 's1', text: 'Earlier things.', level: 1 }], notes: { Lena: [{ id: 'n1', title: 'Wound', text: 'Left arm.' }] },
+    });
+    const at = needle => messages.findIndex(message => String(message.content).includes(needle));
+    const firstHistory = messages.findIndex(message => message.role === 'user' || message.role === 'assistant');
+    assert.ok(at('BANKS') < firstHistory && at('EXAMPLES') < firstHistory, 'stable parts stay in the cacheable prefix');
+    assert.ok(at('LORE MATCH') > firstHistory, 'keyword lorebook matches change every turn, so they come after the history');
+    assert.ok(at('Left arm') > firstHistory, 'notes change every turn, so they come after the history');
+    assert.ok(at('Lena opens the door') > at('LORE MATCH') && at('Lena opens the door') > at('Left arm'), 'the push stays last');
+    assert.equal(at('Lena opens the door'), messages.length - 1);
+});
+
+test('the frozen lorebook is the whole book in the protected part, with no changes block', () => {
+    const { messages } = buildDeciderContext({
+        lorebookText: 'THE LOREBOOK frozen', lorebookChanges: 'LOREBOOK CHANGES new entry',
+        windowEntries: [{ kind: 'turn', turn: 2, text: 'TURN 2 (compressed)' }],
+        plan: { direction: 'p' },
+    });
+    const at = needle => messages.findIndex(message => String(message.content).includes(needle));
+    assert.ok(at('THE LOREBOOK frozen') < at('TURN 2 (compressed)'));
+    assert.equal(at('LOREBOOK CHANGES'), -1);
 });

@@ -188,7 +188,7 @@ test('the user block keeps its automatic depth: two cycles for the director, fiv
     const writerBlock = [{ role: 'system', content: 'WRITER BLOCK' }];
     const director = buildDeciderContext({ chat, directorBlock });
     const writer = buildWriterContext({ chat, decision: 'push', writerBlock });
-    const directorHistory = director.messages.slice(1, -1);
+    const directorHistory = director.messages.slice(1, -2);
     const writerHistory = writer.messages.slice(1, -1);
     const directorIndex = directorHistory.findIndex(message => message.content === 'DIRECTOR BLOCK');
     const writerIndex = writerHistory.findIndex(message => message.content === 'WRITER BLOCK');

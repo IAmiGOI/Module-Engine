@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCharacterBanks } from '../cores/decision/banks.js';
-import { characterLorebookEntries, bankSourcesForChat, hashText, planLorebookMarking, lorebookHash } from '../libraries/core/decision-banks.js';
+import { characterLorebookEntries, bankSourcesForChat, hashText, planLorebookMarking, lorebookHash, bankIsReady, createBankRecord, BANK_BUILDER_VERSION } from '../libraries/core/decision-banks.js';
 
 const CARD = { avatar: 'Aria.png', name: 'Aria', description: 'A courier.', personality: 'Quiet.', scenario: 'A rain-soaked port.', mes_example: '<START>\n{{char}}: "Rain."' };
 const PERSONA = { avatar: 'me.png', name: 'Me', description: 'A traveller in a grey coat.' };
@@ -70,14 +70,14 @@ test('lorebook characters are separated by the -- CHARACTERS -- section, not tak
     assert.equal(entries.some(entry => entry.comment === 'The Port'), false);
 });
 
-test('cold start builds a bank for every source, at most two subagents at once, and the first turn waits for it', async () => {
+test('cold start builds a bank for every source, at most four bank builders at once, and the first turn waits for it', async () => {
     const world = fakeWorld();
     const result = await world.banks.ensureColdStart();
     assert.equal(result.status, 'ready');
     const keys = world.banks.records().map(record => record.sourceKey).sort();
     assert.deepEqual(keys, ['card:Aria.png', 'lorebook:World:2', 'lorebook:World:3', 'persona:me.png', 'scene:Aria.png']);
     assert.ok(world.calls.length >= 4, 'one task per character source');
-    assert.ok(world.maxActive() <= 2, 'no more than two subagent tasks at once');
+    assert.ok(world.maxActive() <= 4, 'no more than four bank builders at once');
     const lena = world.banks.records().find(record => record.name === 'Lena');
     assert.equal(lena.status, 'ready');
     assert.match(lena.text, /Built bank/);
@@ -265,4 +265,11 @@ test('the marking plan drops marks of removed and changed entries and treats a m
     const plan = planLorebookMarking(stored, list);
     assert.deepEqual(plan.toMark.map(entry => entry.uid), [2], 'only the changed entry is marked again');
     assert.deepEqual(plan.kept.map(mark => mark.uid), [1], 'the changed and the removed entries lose their old marks');
+});
+
+test('a bank built before the current builder version is not ready, so the broken banks are rebuilt; a manual bank stays', () => {
+    const old = createBankRecord({ sourceKey: 'card:A', sourceKind: 'card', name: 'A', text: 'The researcher returned no report.', status: 'ready' });
+    assert.equal(bankIsReady(old), false);
+    assert.equal(bankIsReady({ ...old, builderVersion: BANK_BUILDER_VERSION, text: '***A***' }), true);
+    assert.equal(bankIsReady(createBankRecord({ sourceKey: 'manual:a', sourceKind: 'manual', name: 'A', text: 'by hand', status: 'ready' })), true);
 });

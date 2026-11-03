@@ -1,12 +1,13 @@
+import { createKnowledge } from './knowledge.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
 import { duePlans } from '../../libraries/core/decision-library.js';
 import { createHandlers } from './handlers.js';
-import { createCompaction } from './compaction.js';
+import { createTurnWindow } from './window.js';
 import { createJudge } from './judge.js';
-import { createPlaceReader, createTimeReader, createSimilarity } from './readers.js';
+import { createPlaceReader, createTimeReader } from './readers.js';
 import { createCycleLive } from './live.js';
 import { createWakeQueue } from './queue.js';
 import { createCycleContext, fallbackDecision, turnWake, wakeFor } from './cycle-context.js';
@@ -36,7 +37,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     const context = createCycleContext({ call, store, banks });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
-    const similarityScores = createSimilarity(call);
 
     function deciderWorker(settings) {
         const id = String(settings.decider.workerId ?? '').trim();
@@ -47,11 +47,15 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return worker;
     }
 
-    const { maybeCompactLog } = createCompaction({ store, getSettings, deciderWorker, call, now, publishEvent });
+    const knowledge = createKnowledge({ call, store, banks, now });
+    const turnWindow = createTurnWindow({ store, banks, call, getSettings, deciderWorker, publishEvent, now });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
     function handlersFor(settings) {
-        return createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks });
+        return {
+            ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow }),
+            ...knowledge.handlers,
+        };
     }
 
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {
@@ -137,7 +141,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, contextMessages: built.messages,
         });
         await store.appendCycle(cycle).catch(() => {});
-        await maybeCompactLog().catch(error => publishEvent('decision.log.warning', { reason: `log compaction failed: ${error?.message ?? error}` }));
         if (form) live.form({ runId, form, push });
         live.finished({ cycle });
         wakeQueue.rest();
@@ -197,7 +200,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             workerId: worker.id, usage: usage(), contextMessages: built.messages,
         });
         await store.appendCycle(cycle).catch(() => {});
-        await maybeCompactLog().catch(error => publishEvent('decision.log.warning', { reason: `log compaction failed: ${error?.message ?? error}` }));
+        await turnWindow.recordBackground(cycle).catch(error => publishEvent('decision.log.warning', { reason: `window append failed: ${error?.message ?? error}` }));
         live.finished({ cycle });
         wakeQueue.rest();
         publishEvent('decision.passive.ended', { runId, event, steps: result.steps, type: result.type });
@@ -268,6 +271,11 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
 
     return {
         run, runPassive, runDraft, onResearcherReport, sendMessage, judgeForcedMemory,
+        recordTurn: params => turnWindow.recordTurn(params),
+        removeLastWindowTurn: () => turnWindow.removeLastTurn(),
+        syncWindow: () => turnWindow.maybeSwitch(),
+        noteCorrection: params => turnWindow.noteCorrection(params),
+        window: turnWindow,
         assessments: () => new Map(assessments), resetAssessments: () => assessments.clear(),
         waiting: () => ({ awaiting: wakeQueue.isAwaiting(), queued: wakeQueue.queued() }),
     };

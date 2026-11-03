@@ -47,22 +47,34 @@ export function withoutCharacterEntries(entries, marks = null) {
     return list.filter(entry => !characters.has(`${text(entry?.book) || 'Lorebook'}:${text(entry?.uid)}`));
 }
 
-export function buildLorebookContext(entries, { smallTokens = LOREBOOK_SMALL_TOKENS, marks = null } = {}) {
+/**
+ * Какие записи лорбука директор держит в контексте: маленькая книга — все, большая — только постоянные.
+ * @returns {{ included: object[], large: boolean, active: object[] }}
+ */
+export function directorLorebookSelection(entries, { smallTokens = LOREBOOK_SMALL_TOKENS, marks = null } = {}) {
     const active = withoutCharacterEntries(entries, marks).filter(entry => entry && !entry.disable && text(entry.content));
-    if (!active.length) return { text: '', large: false, entries: 0, constants: 0 };
     const total = active.reduce((sum, entry) => sum + estimateTokens(renderEntry(entry)), 0);
-    if (total <= Number(smallTokens)) {
-        return { text: `THE LOREBOOK (connected books; always true in this world):\n\n${renderEntries(active)}`, large: false, entries: active.length, constants: active.filter(entry => entry.constant).length };
-    }
-    const constants = active.filter(entry => entry.constant);
-    const body = constants.length
-        ? renderEntries(constants)
-        : 'No always-on entries. Search the connected books with the lorebook tool.';
+    const large = total > Number(smallTokens);
+    return { included: large ? active.filter(entry => entry.constant) : active, large, active };
+}
+
+export function renderDirectorLorebook({ included, large }) {
+    if (!large) return included.length ? `THE LOREBOOK (connected books; always true in this world):\n\n${renderEntries(included)}` : '';
+    const body = included.length ? renderEntries(included) : 'No always-on entries. Search the connected books with the lorebook tool.';
+    return `THE LOREBOOK (large; only always-on entries are here — search the rest with the lorebook tool):\n\n${body}`;
+}
+
+export function renderLorebookEntries(entries) { return renderEntries(entries); }
+
+/**
+ * @returns {{ text: string, large: boolean, entries: number, constants: number }}
+ */
+export function buildLorebookContext(entries, options = {}) {
+    const selection = directorLorebookSelection(entries, options);
+    if (!selection.active.length) return { text: '', large: false, entries: 0, constants: 0 };
     return {
-        text: `THE LOREBOOK (large; only always-on entries are here — search the rest with the lorebook tool):\n\n${body}`,
-        large: true,
-        entries: active.length,
-        constants: constants.length,
+        text: renderDirectorLorebook(selection), large: selection.large,
+        entries: selection.active.length, constants: selection.active.filter(entry => entry.constant).length,
     };
 }
 

@@ -203,13 +203,14 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
     }
 
     /**
-     * Вставка памяти и «ядра сюжета» в промпт: общий `deliverToPrompt`, который после удаления Prompt Manager всегда
-     * делает прежнюю вставку в `chat`. Порядок сохранён: сначала сюжет, потом память (она выше).
+     * Вклады графа в промпт выключены (часть 10: «граф памяти отключён»).
+     * Граф продолжает считать ретрив и публиковать его в окно, но не
+     * вставляет «ядро сюжета» и «память» в исходящий `chat`. Код ретрива не
+     * удалён: вернуть вставку — значит убрать этот ранний выход.
      */
     async function deliverMemory(chat, plotText, memoryText) {
-        const legacy = (name, mes) => () => chat.unshift({ is_user: false, is_system: true, name, mes });
-        await deliverToPrompt({ call, contribution: { id: 'memory-graph-plot', name: 'Plot core', role: 'assistant', content: plotText ?? '', defaultPlacement: { mode: 'depth', depth: 0, order: 100 } }, legacy: plotText ? legacy('Plot core', plotText) : undefined });
-        await deliverToPrompt({ call, contribution: { id: 'memory-graph', name: 'Memory graph', role: 'assistant', content: memoryText ?? '', defaultPlacement: { mode: 'depth', depth: 0, order: 101 } }, legacy: memoryText ? legacy('Memory', memoryText) : undefined });
+        void chat; void plotText; void memoryText; void deliverToPrompt;
+        return;
     }
 
     let writeTail = Promise.resolve();
@@ -1554,13 +1555,12 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 // блокирует и не откатывает саму ноду — WI-запись лишь
                 // зеркало, не источник истины для графа.
                 const node = nodes[placed.nodeId];
-                // stillSameChat() — Этап 5: между эмбедингом ноды выше и этой точкой был ещё один await (`readGameTime()`);
-                // `lorebook.createEntry()` пишет в АКТИВНЫЙ Lorebook без явной привязки к чату — при смене чата ушло бы в
-                // Lorebook уже нового чата с содержимым старого.
-                if (node && stillSameChat(epoch)) {
-                    const wiResult = await call('lorebook.createEntry', { patch: { comment: fact.label, content: fact.content, disable: true } });
-                    if (wiResult.ok) { node.wiUid = wiResult.value.uid; node.wiBook = wiResult.value.book; }
-                }
+                // Зеркало в Lorebook выключено (часть 10: «граф больше не
+                // пишет в лорбук»). Нода остаётся только в графе; уже
+                // записанные графом записи в книге живут как обычные записи
+                // лорбука. Код зеркала не удалён: вернуть — вернуть вызов
+                // `lorebook.createEntry` здесь.
+                void node;
                 results.push({ ...placed, label: fact.label, capacity: capacityInfo, structured: structuredInfo });
             }
             if (!results.length || results.every(entry => entry.status === 'skipped')) {
@@ -2769,6 +2769,9 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         host.own.register('memoryGraph.retrievals', () => retrievalHistory),
         host.own.register('memoryGraph.retrievalStatus', () => ({ lastRetrievalAt: lastRetrieval?.at ?? null, lastSkip: lastRetrievalSkip })),
         host.own.register('memoryGraph.lastRetrieval', () => lastRetrieval),
+        // Последний вычисленный блок памяти. В промпт он больше не вставляется (часть 10), но окно графа и тесты
+        // видят, что ретрив действительно посчитан.
+        host.own.register('memoryGraph.retrievalText', () => stickyRetrieval?.text ?? ''),
         host.own.register('memoryGraph.check', params => manualCheck(extractRecentText(params?.chat, { count: settings.extractionContextMessages, maxChars: settings.extractionContextChars }), params?.chat?.length)),
         // Ручное редактирование графа (UI-редактор) — CRUD нод/рёбер.
         host.own.register('memoryGraph.nodes.create', params => createNodeManually(params ?? {})),

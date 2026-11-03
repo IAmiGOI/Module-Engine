@@ -1,4 +1,5 @@
 import { COMMENT } from './decision-tool-comment.js';
+import { DIFFICULTY_LEVELS, EXPERIENCE_LEVELS } from './decision-probability.js';
 
 /**
  * Схемы хода: ростер, оценка, форма, план, заметки, арки и текущее
@@ -23,24 +24,25 @@ export const UPDATE_ROSTER_TOOL = Object.freeze({
 export const ASSESS_TOOL = Object.freeze({
     name: 'assess',
     displayName: 'Assess an action',
-    description: 'Ask the engine for the chance that a character can do what they intend. Describe difficulty and experience in words (trivial … impossible, novice … master); the engine projects them, rolls the dice and returns the degree words for the Push. Call it BEFORE submit_turn and cite the returned id there.',
+    description: 'Ask the engine for the chance that a character can carry out an attempt that may fail. Pick a difficulty level and an experience level from the lists and explain the circumstances in "why". The engine rolls and returns a degree; you never choose the result yourself. Call it BEFORE submit_turn and cite the returned id there.',
     parameters: {
         type: 'object',
         properties: {
             character: { type: 'string', description: 'Who is attempting it.' },
             action: { type: 'string', description: 'What exactly they are trying to do.' },
-            difficulty: { type: 'string', description: 'The difficulty in words, e.g. "hard, against the odds".' },
-            experience: { type: 'string', description: 'Their relevant experience in words, e.g. "skilled, practised".' },
+            difficulty: { type: 'string', enum: DIFFICULTY_LEVELS, description: 'The task in its real circumstances: opposition, terrain, time pressure, injuries, tools, distractions.' },
+            experience: { type: 'string', enum: EXPERIENCE_LEVELS, description: 'This character\'s skill at this exact task, not their general competence or importance.' },
+            why: { type: 'string', description: 'The circumstances of the attempt in a sentence or two. The levels decide the chance; "why" explains it.' },
             comment: COMMENT,
         },
-        required: ['character', 'action', 'difficulty', 'experience', 'comment'],
+        required: ['character', 'action', 'difficulty', 'experience', 'why', 'comment'],
     },
 });
 
 export const SUBMIT_TURN_TOOL = Object.freeze({
     name: 'submit_turn',
     displayName: 'Submit the turn',
-    description: 'The mandatory form for this turn. Every active roster member must appear exactly once; every listed assess id must exist. Without a valid form the writer does not write. If the engine returns "missing", fix those fields and call again.',
+    description: 'The mandatory form for this turn. Every active roster member must appear exactly once; every listed assess id must exist. Where there was no roll, leave assessId out and say in "noCheck" why none was needed. Without a valid form the writer does not write. If the engine returns "missing", fix those fields and call again.',
     parameters: {
         type: 'object',
         properties: {
@@ -65,10 +67,11 @@ export const SUBMIT_TURN_TOOL = Object.freeze({
                         action: { type: 'string', description: 'What they do in this turn, including the line they speak.' },
                         actionReason: { type: 'string' },
                         speech: { type: 'string' },
-                        assessId: { type: 'string', description: 'Id returned by assess.' },
+                        assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
+                        noCheck: { type: 'string', description: 'Why no roll was needed, when assessId is absent: a decision, a reaction, agreeing or refusing, staying put.' },
                         outcome: { type: 'string', description: 'Why it succeeded or failed, written after the assess result is known.' },
                     },
-                    required: ['name', 'decision', 'decisionReason', 'action', 'actionReason', 'assessId', 'outcome'],
+                    required: ['name', 'decision', 'decisionReason', 'action', 'actionReason', 'outcome'],
                 },
             },
             comment: COMMENT,

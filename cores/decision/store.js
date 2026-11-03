@@ -1,20 +1,13 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
-import { trimThinking, totalLogTokens } from '../../libraries/core/decision-log.js';
 import { createJournal } from './journal.js';
+import { createLogStore } from './store-log.js';
+import { createWindowStore } from './store-window.js';
 import { loadChatMemory } from './store-load.js';
-import { sanitizeCycles } from './store-sanitize.js';
 
-/**
- * Хранение блоков и записей прогонов директора в памяти чата. Вынесено из
- * самого ядра, чтобы у него осталась только логика хода (и файл не рос за
- * 300 строк). Запись сериализована собственной очередью: `persist()`
- * читает-меняет-пишет и `runs`, и `blocks`, поэтому два одновременных
- * завершения не должны затирать друг друга.
- */
+/** Хранение состояния директора в памяти чата; запись сериализована очередью,
+ * чтобы `persist()` и правки блоков не затирали друг друга. */
 export function createDecisionStore({ call, publishEvent }) {
     let runs = {};
-    let log = [];
-    let logArchive = [];
     let roster = { active: [] };
     let directorPlan = null;
     let arcs = [];
@@ -27,7 +20,6 @@ export function createDecisionStore({ call, publishEvent }) {
     let issuedNames = [];
     let snapshots = {};
     let draft = null;
-    let appendCount = 0;
     let tail = Promise.resolve();
 
     function enqueue(task) {
@@ -36,6 +28,8 @@ export function createDecisionStore({ call, publishEvent }) {
         return run;
     }
 
+    const logs = createLogStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
+
     const journal = createJournal({
         enqueue,
         call,
@@ -43,15 +37,17 @@ export function createDecisionStore({ call, publishEvent }) {
         setBank: value => { memoryBank = value; },
         getNames: () => issuedNames,
         setNames: value => { issuedNames = value; },
-        getLog: () => log,
-        setLog: value => { log = value; },
+        getLog: logs.log,
+        setLog: logs.setLog,
+        getArchive: logs.archive,
+        setArchive: logs.setArchive,
     });
+    const windows = createWindowStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
 
     async function reload() {
         const data = await loadChatMemory(call);
         runs = data.runs;
-        log = data.log;
-        logArchive = data.logArchive;
+        logs.load(data);
         roster = data.roster;
         directorPlan = data.directorPlan;
         arcs = data.arcs;
@@ -64,28 +60,8 @@ export function createDecisionStore({ call, publishEvent }) {
         issuedNames = data.issuedNames;
         snapshots = data.snapshots;
         draft = data.draft;
-        return { runs, log };
-    }
-
-    /**
-     * Дописать цикл в лог. Через ту же очередь, что и прогоны: лог не должен
-     * терять запись, если рядом сохраняется решение.
-     */
-    function appendCycle(cycle) {
-        return enqueue(async () => {
-            log = [...log, cycle];
-            appendCount += 1;
-            // Thinking — за текущий цикл и два предыдущих. Чистим ПАЧКОЙ на
-            // границе трёх циклов (e0: так платится одно падение префикса раз
-            // в три хода, а не каждый).
-            if (appendCount % 3 === 0) log = trimThinking(log, 2);
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
-            return cycle;
-        });
-    }
-
-    function logTokens() {
-        return totalLogTokens(log);
+        windows.load({ window: data.window, frozenWindows: data.frozenWindows, windowBoundary: data.windowBoundary });
+        return { runs, log: logs.log() };
     }
 
     function saveRoster(next) {
@@ -216,17 +192,6 @@ export function createDecisionStore({ call, publishEvent }) {
         });
     }
 
-    /** Заменить лог (после хранения thinking/архива). Архив — отдельным ключом, чтобы он не искал старые записи. */
-    function saveLog(next, { archived = [] } = {}) {
-        return enqueue(async () => {
-            log = sanitizeCycles(next);
-            if (archived.length) logArchive = [...logArchive, ...sanitizeCycles(archived)];
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
-            if (archived.length) await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', value: logArchive });
-            return log;
-        });
-    }
-
     function lastRun() {
         const list = Object.values(runs).sort((a, b) => (Number(a.mesid) || 0) - (Number(b.mesid) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0));
         return list.at(-1) ?? null;
@@ -240,6 +205,8 @@ export function createDecisionStore({ call, publishEvent }) {
             const stored = {
                 id: record.runId, mesid, at: Date.now(), type: record.type, decision: record.decision,
                 push: record.push ?? record.decision ?? '', form: record.form ?? null,
+                sourceRunId: record.sourceRunId ?? null,
+                writerText: String(last?.mes ?? last?.content ?? '').trim(),
                 reasoning: record.reasoning ?? '', steps: record.steps ?? [], workerId: record.workerId ?? null,
                 warnings: record.warnings ?? [],
             };
@@ -258,8 +225,8 @@ export function createDecisionStore({ call, publishEvent }) {
     return {
         reload, persist, lastRun,
         runs: () => runs,
-        cycles: () => log,
-        archive: () => logArchive,
+        cycles: logs.log,
+        archive: logs.archive,
         roster: () => ({ active: [...roster.active] }),
         saveRoster,
         plan: () => (directorPlan ? { ...directorPlan, stages: [...(directorPlan.stages ?? [])] } : null),
@@ -290,8 +257,14 @@ export function createDecisionStore({ call, publishEvent }) {
         deleteSnapshot,
         draft: () => (draft ? JSON.parse(JSON.stringify(draft)) : null),
         saveDraft,
-        appendCycle,
-        saveLog,
-        logTokens,
+        boundary: windows.boundary,
+        saveBoundary: windows.saveBoundary,
+        window: windows.window,
+        saveWindow: windows.saveWindow,
+        frozen: windows.frozen,
+        saveFrozen: windows.saveFrozen,
+        appendCycle: logs.appendCycle,
+        saveLog: logs.saveLog,
+        logTokens: logs.logTokens,
     };
 }

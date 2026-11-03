@@ -137,13 +137,14 @@ export const MEMORY_TOOL = Object.freeze({
 export const LOREBOOK_TOOL = Object.freeze({
     name: 'lorebook',
     displayName: 'Search or read the lorebook',
-    description: 'Search the connected lorebook for a fact (op "search" with "query"), or read one entry (op "read" with "uid" and "book"). Always-on entries are already in your context; this tool finds the rest. The Writer never sees the lorebook.',
+    description: 'Look into the connected lorebook whenever you are unsure or have forgotten something: op "list" shows the titles and uids of all entries, op "search" with "query" finds entries about a fact, op "read" with "uid" (or "title") returns the full entry. Re-reading an entry is cheap; do it instead of guessing.',
     parameters: {
         type: 'object',
         properties: {
-            op: { type: 'string', enum: ['search', 'read'] },
+            op: { type: 'string', enum: ['list', 'search', 'read'] },
             query: { type: 'string', description: 'For search: what to look for.' },
             uid: { type: 'number', description: 'For read: the entry uid.' },
+            title: { type: 'string', description: 'For read: the entry title, when you do not know the uid.' },
             book: { type: 'string', description: 'Optional book name.' },
             limit: { type: 'number', description: 'How many entries to return (default 8).' },
             comment: COMMENT,
@@ -231,5 +232,24 @@ export const AWAIT_TOOL = Object.freeze({
             comment: COMMENT,
         },
         required: ['reason', 'comment'],
+    },
+});
+
+export const CHARACTER_KNOWLEDGE_TOOL = Object.freeze({
+    name: 'character_knowledge',
+    displayName: 'Record what a character knows',
+    description: 'The Knowledge section of a character\'s data bank: what they have learned in this story. Whenever a character sees, hears, is told, reads or works out something that matters, add it (op "add"). When they learn more about something they already know, extend that entry (op "update" with its id and the new detail) instead of adding a duplicate. When they learn that something they knew is wrong or has changed, revise it (op "revise" with its id and the new fact) — the old belief is kept as "used to believe". Use "forget" only when their memory is really lost. The user\'s character has no knowledge record.',
+    parameters: {
+        type: 'object',
+        properties: {
+            op: { type: 'string', enum: ['add', 'update', 'revise', 'forget'] },
+            character: { type: 'string', description: 'Whose knowledge this is.' },
+            fact: { type: 'string', description: 'For add and revise: what the character now knows, as one short fact. For update: the new detail to add to the entry.' },
+            source: { type: 'string', enum: ['saw', 'heard', 'told', 'read', 'worked out'], description: 'How they learned it.' },
+            from: { type: 'string', description: 'Optional: who told them, or where they read or saw it.' },
+            id: { type: 'string', description: 'For update, revise and forget: the knowledge id shown in WHAT CHARACTERS KNOW.' },
+            comment: COMMENT,
+        },
+        required: ['op', 'character', 'comment'],
     },
 });

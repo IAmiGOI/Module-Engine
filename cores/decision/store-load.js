@@ -3,7 +3,7 @@ import { sanitizeCycles, sanitizeRuns } from './store-sanitize.js';
 
 /** Прочитать всё состояние директора из памяти чата; мусор приводится к безопасной форме. */
 export async function loadChatMemory(call) {
-    const [storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft] = await Promise.all([
+    const [storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft, storedBoundary, storedWindow, storedFrozen] = await Promise.all([
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', fallback: [] }),
@@ -19,6 +19,9 @@ export async function loadChatMemory(call) {
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'names', fallback: [] }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', fallback: {} }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'draft', fallback: null }),
+        call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'windowBoundary', fallback: null }),
+        call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'window', fallback: null }),
+        call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'frozenWindows', fallback: [] }),
     ]);
     return {
         runs: sanitizeRuns(storedRuns),
@@ -36,5 +39,8 @@ export async function loadChatMemory(call) {
         issuedNames: Array.isArray(storedNames) ? storedNames.map(String) : [],
         snapshots: storedSnapshots && typeof storedSnapshots === 'object' && !Array.isArray(storedSnapshots) ? storedSnapshots : {},
         draft: storedDraft && typeof storedDraft === 'object' ? storedDraft : null,
+        windowBoundary: storedBoundary && typeof storedBoundary === 'object' && !Array.isArray(storedBoundary) ? storedBoundary : null,
+        window: storedWindow && typeof storedWindow === 'object' && !Array.isArray(storedWindow) ? storedWindow : null,
+        frozenWindows: Array.isArray(storedFrozen) ? storedFrozen.filter(record => record && typeof record === 'object') : [],
     };
 }

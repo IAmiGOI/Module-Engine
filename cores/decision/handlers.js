@@ -1,4 +1,4 @@
-import { assessAction, DIFFICULTY_ANCHORS, EXPERIENCE_ANCHORS, lexicalSimilarity } from '../../libraries/core/decision-probability.js';
+import { createAssessHandler } from './handlers-assess.js';
 import { validateTurn } from '../../libraries/core/decision-turn.js';
 import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
 import { applyArc, applyCharacterNote, applyPlan, notesFor } from '../../libraries/core/decision-state.js';
@@ -9,6 +9,7 @@ import {
     replaceOrdinaryWithSummary,
 } from '../../libraries/core/decision-bank.js';
 import { issueName } from '../../libraries/core/decision-names.js';
+import { isFrequentCharacter } from '../../libraries/core/decision-window.js';
 
 /**
  * Исполнители инструментов директора — вынесены из цикла, чтобы цикл
@@ -23,7 +24,7 @@ const key = value => String(value ?? '').trim().toLowerCase();
  *           state: { assessments: Map, assessmentCounter: number, turnCounter: number },
  *           resolvePlace: Function, lastTimeMark: Function, similarityScores: Function }} input
  */
-export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks = null }) {
+export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -77,6 +78,12 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             }
             if (added.length || removed.length) { await store.saveLibrary(library); await store.savePlans(plans); }
             if (added.length && banks) await banks.noteRosterAdded(added).catch(() => {});
+            if (added.length || removed.length) {
+                const parts = [];
+                if (added.length) parts.push(`+ ${added.join(', ')}`);
+                if (removed.length) parts.push(`− ${removed.join(', ')}`);
+                await turnWindow?.addFact(`update_roster: ${parts.join(', ')}`, { turn: state.turnCounter });
+            }
             return { ok: true, active: next, added: added.length, removed: removed.length };
         },
 
@@ -109,6 +116,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             if (!applied.ok) return { ok: false, error: applied.error };
             await store.saveLibrary(applied.library);
             const record = Object.values(applied.library).find(item => key(item.name) === key(args.character));
+            await turnWindow?.addFact(`set_character_level ${record?.name ?? args.character}: ${record?.level}`, { turn: state.turnCounter });
             return { ok: true, character: record?.name ?? args.character, level: record?.level };
         },
 
@@ -122,6 +130,9 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             });
             if (!applied.ok) return { ok: false, error: applied.error };
             await store.savePlans(applied.plans);
+            if (isFrequentCharacter(store.library(), record.name)) {
+                await turnWindow?.addFact(`set_character_plan ${record.name}: "${String(args.summary ?? '').trim()}"`, { turn: state.turnCounter });
+            }
             return { ok: true, plan: applied.plan };
         },
 
@@ -147,6 +158,9 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             }
             await store.saveBank(banked.bank);
             await store.savePlans(plans);
+            if (isFrequentCharacter(store.library(), record.name)) {
+                await turnWindow?.addFact(`resolve_character_plan ${record.name}: ${String(args.result ?? '').trim()}${nextPlan ? `; next: "${nextPlan.summary}"` : ''}`, { turn: state.turnCounter });
+            }
             const finalBank = await compressIfNeeded(record.name, banked.bank);
             return { ok: true, record: banked.record, nextPlan, compressed: finalBank !== banked.bank };
         },
@@ -191,11 +205,29 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
                 const results = await call('lorebook.search', { query: args.query, book: args.book, limit: args.limit });
                 return { ok: true, results: Array.isArray(results) ? results : [] };
             }
-            if (args.op === 'read') {
-                const entry = await call('lorebook.get', { uid: args.uid, book: args.book });
-                return entry ? { ok: true, entry } : { ok: false, error: 'There is no such lorebook entry.' };
+            if (args.op === 'list') {
+                // Оглавление книги: названия и номера, без текста — чтобы найти забытую запись и прочитать её.
+                const all = (await call('lorebook.entries')) ?? [];
+                const book = String(args.book ?? '').trim();
+                const entries = all.filter(entry => !entry?.disable && (!book || entry.book === book))
+                    .map(entry => ({ uid: entry.uid, book: entry.book, title: String(entry.comment ?? '').trim() || `Entry ${entry.uid}`, constant: Boolean(entry.constant) }));
+                return { ok: true, entries };
             }
-            return { ok: false, error: 'The lorebook tool needs op "search" or "read".' };
+            if (args.op === 'read') {
+                let { uid, book } = args;
+                const title = String(args.title ?? '').trim().toLowerCase();
+                if ((uid === undefined || uid === null || uid === '') && title) {
+                    const all = (await call('lorebook.entries')) ?? [];
+                    const found = all.find(entry => String(entry.comment ?? '').trim().toLowerCase() === title)
+                        ?? all.find(entry => String(entry.comment ?? '').toLowerCase().includes(title));
+                    if (!found) return { ok: false, error: `There is no lorebook entry titled "${args.title}". Use op "list" or "search".` };
+                    uid = found.uid;
+                    book = found.book;
+                }
+                const entry = await call('lorebook.get', { uid, book });
+                return entry ? { ok: true, entry } : { ok: false, error: 'There is no such lorebook entry. Use op "list" or "search".' };
+            }
+            return { ok: false, error: 'The lorebook tool needs op "list", "search" or "read".' };
         },
 
         memory: async args => {
@@ -225,24 +257,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             };
         },
 
-        assess: async args => {
-            state.assessmentCounter += 1;
-            const id = `asm_${state.runId}_${state.assessmentCounter}`;
-            const [difficultyScores, experienceScores] = await Promise.all([
-                similarityScores(args.difficulty, DIFFICULTY_ANCHORS),
-                similarityScores(args.experience, EXPERIENCE_ANCHORS),
-            ]);
-            const similarity = (text, anchorPhrase) => difficultyScores?.get(anchorPhrase)
-                ?? experienceScores?.get(anchorPhrase)
-                ?? lexicalSimilarity(text, anchorPhrase);
-            const settings = getSettings();
-            const seed = Number.isFinite(settings.assessSeed) ? settings.assessSeed + state.assessmentCounter : undefined;
-            const result = assessAction({
-                character: args.character, action: args.action, difficulty: args.difficulty, experience: args.experience, seed, similarity,
-            });
-            state.assessments.set(id, { ...result, id });
-            return { ok: true, id, ...result };
-        },
+        assess: createAssessHandler({ state, getSettings }),
 
         submit_turn: async args => {
             if (!store.plan()) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };

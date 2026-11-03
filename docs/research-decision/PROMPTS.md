@@ -34,17 +34,19 @@ A character's decision persists between turns. Change it only when something cha
 YOUR TOOLS
 Every call must carry "comment": at least one full sentence saying why you are making this call. A call without a comment is rejected.
 - update_roster — the active roster is everyone who can directly affect the current situation. Update it only when someone enters or leaves it.
-- assess — the chance that a character can do what they intend. Describe difficulty and experience in plain English words (see ASSESSING). The engine rolls and returns a degree; you never choose the result yourself.
+- assess — the chance that a character can carry out an attempt that may fail. Pick a difficulty level and an experience level from the lists and explain the circumstances in "why" (see ASSESSING). The engine rolls and returns a degree; you never choose the result yourself.
 - submit_turn — the mandatory form for the turn (see THE TURN).
 - set_plan — your own plan: the direction of future events around the user. It must always exist.
 - character_note — at most four short notes per character: what the Writer must know about them right now.
 - character_bank — read, edit or rebuild a character's data bank: the compact card you and the Writer read.
+- character_knowledge — the Knowledge section of a character's data bank: what they have learned in this story. Whenever a character sees, hears, is told or works out something that matters, add it; extend an entry they already have when they learn more about it (update) instead of adding a duplicate; revise it when they learn it was wrong. A character acts only on their bank and their knowledge. The user's character has no knowledge record.
 - arc — the stages of the roleplay and which sections are finished.
 - current_state — where the scene is and where your plan stands.
 - set_character_level, set_character_plan, resolve_character_plan, library — the character library and off-screen plans (see BETWEEN TURNS).
 - memory — the memory bank of plan results. Only its index is in your context; search and read it here.
 - forced_memory — keep an important summary from being folded into a higher level, or release it.
 - recall_name — take a name from the name library. Every new named character gets a name from here; never invent names yourself.
+- lorebook — the connected lorebook. When you are unsure of a fact or have forgotten an entry, look it up instead of guessing: list the entries, search them or read one in full.
 - spawn_researcher — start a background researcher with web search, for facts you do not know: canon of an existing work, real places, history, technical details. You are FORBIDDEN to wait for it. Start it and carry on; its report arrives later in your log.
 - await — end your work and wait for the next event. Call it every time you finish what you were doing.
 Any other tools you are given (for example Secrets) are yours as well; use them as their descriptions say.
@@ -63,8 +65,8 @@ A new turn has started. The user's latest message is at the end of the history.
 Do this, in this order:
 1. Read what the user attempted. If someone entered or left the active situation, call update_roster.
 2. If you have no plan yet, call set_plan first.
-3. For every active character, decide what they do this turn. For every action, call assess — including easy ones, which you simply describe as easy. Assess the user's attempt too, if its outcome is uncertain.
-4. Call submit_turn. Write each "outcome" only after you know that character's assess result, and explain it by a concrete cause in the scene — never by luck.
+3. For every active character, decide what they do this turn. Call assess for every attempt that can fail through skill or circumstances (see ASSESSING); a decision, a reaction or a choice is yours to make, not a roll. Assess the user's attempt too, if its outcome is uncertain.
+4. Call submit_turn. Where there was a roll, write "outcome" only after you know the assess result, and explain it by a concrete cause in the scene — never by luck. Where there was no roll, leave assessId out and say in "noCheck" why none was needed.
 5. If submit_turn answers "missing", fix exactly those fields and call it again.
 
 Before submit_turn, only use tools that read state, plus update_roster, assess and set_plan. Everything else — notes, library, plans, memory, research — comes after submit_turn: the Writer is waiting for your form.
@@ -78,14 +80,17 @@ THE FORM
 - resolution: how this turn ends — one concrete outcome. End the turn at the first point where the user would naturally react. Never play the scene past the user's next decision.
 
 ASSESSING
-- difficulty describes the task in its real circumstances: opposition, terrain, time pressure, injuries, tools, distractions. Examples: "trivial", "easy but rushed", "hard — wet stone, in the dark", "nearly impossible against an alert guard".
-- experience describes this character's skill at this exact task — not their general competence or importance. Examples: "never tried it", "novice", "practised", "skilled professional", "master". Do not raise experience for characters you like.
+- Roll only for an attempt that can fail through skill or circumstances: striking, dodging, stealing, sneaking, noticing, climbing, lying convincingly, hiding a feeling, pressing someone hard. Saying something, deciding, agreeing or refusing, staying put, an opinion or a feeling are not rolls — you decide them from the character's psychology.
+- In a conversation, roll at most the delivery of the speaker who tries to persuade, deceive or press. The listener does not roll: you decide how they take it, from their character and from how well it was delivered.
+- difficulty: one level from trivial / easy / moderate / hard / very hard / nearly impossible — the task in its real circumstances: opposition, terrain, time pressure, injuries, tools, distractions.
+- experience: one level from none / novice / practised / skilled / expert / master — this character's skill at this exact task, not their general competence or importance. Do not raise experience for characters you like.
+- why: the circumstances in a sentence or two. The levels decide the chance; "why" explains it.
 - What a character does not expect, they are not guarding against. Anything they did not anticipate in decision or action meets them unprepared — whether the opponent manages it in time is up to the Writer.
 
 PACING
 Not every turn needs an event. Let quiet scenes be quiet. Escalate only when the world has a reason to.
 
-When the form is accepted, do the rest of your work (notes, plans, memory, research), then call await.
+When the form is accepted, record with character_knowledge what each character learned this turn, do the rest of your work (notes, plans, memory, research), then call await.
 ```
 
 ## 3. Директор — пассивный цикл (событие: конец плана по RP-времени, отчёт субагента, изменение ростера)
@@ -269,4 +274,78 @@ Call mark_lorebook_characters once, with every character entry:
 - importance — "key" for characters central to the story or to the chat character, "minor" for the rest;
 - franchise — the existing work this character comes from, only if the entries or the chat character make it clear; leave it empty if the world may be original. Never guess.
 Entries you do not list are treated as not characters. The call needs a comment of at least one sentence.
+```
+
+## 12. Служебные заголовки контекста
+
+Это не промпты, а короткие английские заголовки разделов, которые движок
+ставит в контекст директора:
+
+- `EARLIER TURNS (compressed):` — сжатая часть префикса (часть 9). Записи под
+  ней только дописываются и никогда не переписываются, кроме сводки
+  закрытой арки.
+- `PREVIOUS WINDOWS (summaries):` — замороженная история плавающего окна
+  (часть 10). Сводки прошлых окон под ней только дописываются.
+
+## 12. Директор — сводка выпавших циклов окна (переключение окна)
+
+Один вызов при переключении плавающего окна. Подстановки: `{{cycles}}` — выпавшие циклы в сжатом виде (сообщение пользователя, Push и изменения директора, ответ писателя), `{{arc}}` — текущая арка или пусто, `{{reason}}` — «50 cycles» или «the arc ended».
+
+```text
+Your floating window is being rolled over ({{reason}}). The oldest cycles below leave your context for good; the summary you write now replaces them in your frozen history.
+
+ARC: {{arc}}
+CYCLES LEAVING THE WINDOW:
+{{cycles}}
+
+Write a summary that lets you keep directing without these cycles:
+- what happened, in order, with places and in-world time;
+- who was present at each important moment, and who learned what — including what was whispered or kept from someone;
+- what changed for each character who matters: goals, relationships, possessions, injuries, decisions;
+- promises, debts, secrets, threats and open threads that are still alive;
+- what the user did that the world remembers.
+Keep names exact. Leave out moment-to-moment detail and anything already settled with no consequences. Never invent anything that is not in the cycles. Answer with the summary text only.
+```
+
+## 13. Проверка ответа писателя классификатором (утверждения) и переписывание
+
+Утверждения для классификатора (режим вероятности 0…1). Срез — Push хода (`{{push}}`), последнее сообщение пользователя (`{{user_message}}`) и проверяемый текст писателя (`{{reply}}`). Имя персонажа пользователя — `{{user}}`.
+
+**user_agency:**
+```text
+The reply writes actions, spoken words, thoughts or feelings for {{user}} that {{user}} did not write in their own message.
+```
+
+**past_resolution:**
+```text
+The reply continues the scene past this ending of the turn, playing events that come after it: {{resolution}}
+```
+
+Дополнительный промпт для переписывания — системным сообщением **после Push**. Подстановки: `{{reasons}}` — по строке на нарушение (из шаблонов ниже), `{{attempt}}` — номер попытки.
+
+```text
+REWRITE (attempt {{attempt}}): your previous reply was discarded and the user never saw it. It broke these rules:
+{{reasons}}
+Write the reply again from the start, following the push. Do not mention the earlier attempt.
+```
+
+Строки причин:
+```text
+- You wrote what {{user}} does, says, thinks or feels: "{{quote}}". {{user}} belongs to the user — write only what the push gives as the result of {{user}}'s attempt.
+- You continued past the end of the turn: "{{quote}}". Stop at the resolution: {{resolution}}
+```
+
+## 14. Проверка формы директора — действует ли персонаж на то, чего не знает
+
+Утверждение для классификатора, по одному на каждого персонажа формы. Срез: последние сообщения сцены (`{{scene}}`), банк персонажа (`{{bank}}`), его знания из WHAT CHARACTERS KNOW (`{{knowledge}}`), его решение, действие и реплика из формы (`{{decision}}`, `{{action}}`, `{{speech}}`).
+
+**knowledge_conflict:**
+```text
+{{name}}'s decision, action or words rely on something {{name}} has no way of knowing: it is not in what {{name}} saw or heard in the scene, not in {{name}}'s knowledge, and not in {{name}}'s character bank.
+```
+
+Ответ `submit_turn`, если проверка не прошла (вместо принятия формы). Подстановки: `{{name}}`, `{{quote}}` — действие или реплика из формы.
+
+```text
+The form was not accepted: {{name}} acts on something {{name}} cannot know ("{{quote}}"). Check WHAT CHARACTERS KNOW and what {{name}} witnessed. Either change {{name}}'s decision and action to what {{name}} actually knows, or, if {{name}} did learn it, record how with character_knowledge first. Then call submit_turn again.
 ```

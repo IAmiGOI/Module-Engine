@@ -1,5 +1,8 @@
 import { createSyncToastsCore } from '../../cores/ui/sync-toasts.js';
 
+/** Граф памяти выключен целиком, код сохранён (см. комментарий у `memoryGraphCore.load()` ниже). */
+export const MEMORY_GRAPH_ENABLED = false;
+
 /** Запуск: восстановление сохранённого, открытие окон и панели, подключение пайплайна генерации — строго в этом порядке. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireBoot(ctx) {
     const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, decisionCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, decisionPromptsPanel, decisionWindow, notifications, firstLoad, messageFooter, updateOverlay, modules, guide, enginePanel } = ctx;
@@ -26,7 +29,12 @@ export async function wireBoot(ctx) {
     // в фон — см. `memoryGraphCore.waitForBootstrap()`'s doc-comment в
     // `cores/memory-graph/index.js`, если где-то ДЕЙСТВИТЕЛЬНО нужно
     // дождаться его результата (а не просто не блокировать остальных).
-    await memoryGraphCore.load();
+    // Граф памяти ВЫКЛЮЧЕН (решение владельца, 2026-11-03: «выключи, но не удаляй»). Его заменила память
+    // директора — статичный лорбук, дата-банки, знания и окна (docs/research-decision/DIRECTOR-SPEC.md). Без
+    // `load()` граф не регистрирует этапы пайплайна, не подписывается на смену чата, не строит бутстрап и не
+    // считает ретрив и эмбеддинги — то есть не работает вовсе. Код и данные графа не тронуты: включить обратно —
+    // поставить `MEMORY_GRAPH_ENABLED = true`.
+    if (MEMORY_GRAPH_ENABLED) await memoryGraphCore.load();
 
     // Инкремент счётчика запусков — после того как ВСЯ конфигурация на диске
     // восстановлена: событие `firstLoad.firstLaunch` обязано прийти к

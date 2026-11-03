@@ -3,6 +3,7 @@ import { buildWriterLorebook } from '../../libraries/core/decision-lorebook.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createWriterProxy } from './writer-proxy.js';
+import { createKnowledge } from './knowledge.js';
 
 /**
  * Тело запроса прозаика. Если у прозаика выбрано подключение ME, запрос
@@ -12,6 +13,7 @@ import { createWriterProxy } from './writer-proxy.js';
  */
 export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending, banks = null }) {
     const writerProxy = createWriterProxy({ host, getSettings, getWorkers });
+    const knowledge = createKnowledge({ call, store, banks });
     return async function rewrite(input = {}) {
         const payload = input.payload ?? input;
         const pending = getPending();
@@ -26,7 +28,9 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const examples = banks ? banks.examplesForCards() : '';
         const decision = pending.push ?? pending.decision;
         const lorebookText = await writerLorebookText(call, pending.chat, decision, banks);
-        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText, examples, lorebookText });
+        // Прозаику — знания только активных: чтобы персонаж в сцене не выдал того, чего не знает.
+        const knowledgeText = await knowledge.textFor(store.roster().active);
+        const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText, examples, lorebookText, knowledgeText });
         if (writerId && writerId !== 'st-main') {
             const own = await writerProxy.respond({ payload, messages: context.messages, signal: input.signal });
             if (own) return own;

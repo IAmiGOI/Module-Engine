@@ -47,18 +47,20 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return result.value;
     };
     const store = createDecisionStore({ call, publishEvent });
-    const researcher = createResearcher({
-        call: callStrict,
-        getSettings: () => settings,
-        getWorkers: () => workers,
-        store,
-        publishEvent,
-    });
     const callService = async (contract, params) => {
         const result = await request(host.services, contract, { params });
         if (!result.ok) throw new Error(result.error.message);
         return result.value;
     };
+    // Веб-инструменты — Сервис (`stWebSearch.*`), а не контракт Ядра: через `call` их не было вовсе («No supplier registered»).
+    const researcher = createResearcher({
+        call: callStrict,
+        callService,
+        getSettings: () => settings,
+        getWorkers: () => workers,
+        store,
+        publishEvent,
+    });
     const banks = createCharacterBanks({ call, callService, getSettings: () => settings, getWorkers: () => workers, store, researcher, publishEvent });
     const cycle = createDecisionCycle({
         call: callStrict,
@@ -148,7 +150,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             const last = store.lastRun();
             if (last) {
                 const push = last.push ?? last.decision;
-                pending = { runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null, reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true };
+                pending = { runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null, reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true, sourceRunId: last.id };
                 publishEvent('decision.started', { runId, type, reused: true });
                 publishEvent('decision.completed', { runId, reused: true, workerId: pending.workerId });
                 return { reused: true, decision: push };
@@ -217,6 +219,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         persist: record => store.persist(record),
         discardPending,
         getLastFailure: () => lastFailure,
+        noteCorrection: params => cycle.noteCorrection(params),
         notify,
         revealCard: () => request(host.own, 'ui.reveal', { params: { anchor: 'card:decision' } }),
         restoreSnapshotFor,
@@ -234,6 +237,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const stored = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'settings', fallback: null });
         settings = clampDecisionSettings(stored ?? DEFAULT_SETTINGS);
         await reload();
+        await cycle.syncWindow().catch(error => publishEvent('decision.log.warning', { reason: `window sync failed: ${error?.message ?? error}` }));
         unregisters.push(...registerDecisionContracts(host, {
             getSettings: () => settings,
             configure: saveSettings,
@@ -269,6 +273,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         roster: () => store.roster(),
         log: () => store.cycles(),
         archive: () => store.archive(),
+        digests: () => store.frozen(),
+        window: () => store.window(),
+        frozen: () => store.frozen(),
         plan: () => store.plan(),
         arcs: () => store.arcs(),
         notes: () => store.notes(),

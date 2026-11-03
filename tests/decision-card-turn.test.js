@@ -35,7 +35,7 @@ test('a card-test turn goes through the real director and gives the writer notes
     const { call, calls, memoryWrites, load } = (() => {
         const made = build({
             replies: [
-                { text: '', toolCalls: [{ id: 'c1', name: 'assess', arguments: { comment: 'I need the chance that Aria spots the visitor.', character: 'Aria', action: 'spots the visitor', difficulty: 'easy', experience: 'skilled professional' } }] },
+                { text: '', toolCalls: [{ id: 'c1', name: 'assess', arguments: { comment: 'I need the chance that Aria spots the visitor.', character: 'Aria', action: 'spots the visitor', difficulty: 'easy', experience: 'skilled', why: 'The camp is quiet and the ground is clear.' } }] },
                 { text: '', toolCalls: [{ id: 'c2', name: 'submit_turn', arguments: {
                     comment: 'The test turn is decided.',
                     scene: { minutes: 1 },

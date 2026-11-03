@@ -91,7 +91,9 @@ test('the director runs on beforeSend and the writer replaces the outgoing messa
     assert.equal(calls[0].workerId, 'director');
     assert.equal(calls[0].stream, true, 'the director streams so the window can show thinking and calls as they arrive');
     assert.match(JSON.stringify(calls[0].messages), /Never kill a named character/);
-    assert.match(JSON.stringify(calls[0].messages), /They reached the keep/);
+    assert.doesNotMatch(JSON.stringify(calls[0].messages), /They reached the keep/, 'summary.core summaries no longer reach the director');
+    assert.match(JSON.stringify(calls[0].messages), /YOUR PLAN/);
+    assert.match(JSON.stringify(calls[0].messages), /A new turn has started/);
 
     const payload = { model: 'st', stream: true, temperature: 1, reasoning_effort: 'high', messages: [{ role: 'system', content: 'ST assembled' }] };
     const sent = await pipelineCore.run({ pipelineId: PAYLOAD, input: payload });

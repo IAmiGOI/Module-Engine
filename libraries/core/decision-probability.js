@@ -1,37 +1,38 @@
 /**
- * Guided random директора — чистая математика без сети и моделей.
+ * Guided random директора — чистая математика без сети, моделей и эмбеддингов.
  *
- * Замысел владельца (DIRECTOR-SPEC.md): не D&D, никаких характеристик и
- * кубиков. Директор описывает сложность и опыт **словами**, e5-small
- * проецирует их на шкалы по близости к опорным фразам, движок превращает
- * разницу в вероятность, сам бросает кость и по полосе выбирает слова
- * степени для Push.
+ * Замысел владельца (DIRECTOR-SPEC.md, часть 10): не D&D, никаких
+ * характеристик и кубиков. Директор выбирает **уровень сложности** и
+ * **уровень опыта** из двух коротких списков; вероятность берётся из
+ * таблицы двух уровней. e5-small в оценке больше не участвует: именно она
+ * смешивала длинные оговорки в середину и давала 0,5 почти на всё.
  *
- * Здесь намеренно нет эмбеддингов: сюда передаётся функция близости (или
- * векторы считает вызывающий). Поэтому формула проверяется без модели, а
- * e5-small подключается в e2 через `services/embedding.js`.
+ * Таблица — 6×6, порядок строк и столбцов ниже. Контрольные точки:
+ * novice/hard ≈ 0.15, master/nearly impossible ≈ 0.10,
+ * skilled/moderate ≈ 0.75.
  */
 
-/** Опорные фразы сложности: от «trivial» до «impossible», значение 0..1. */
-export const DIFFICULTY_ANCHORS = Object.freeze([
-    { value: 0.0, phrases: ['trivial', 'effortless', 'a child could do it', 'no challenge at all'] },
-    { value: 0.15, phrases: ['very easy', 'simple', 'routine', 'almost no risk'] },
-    { value: 0.35, phrases: ['easy', 'manageable', 'a familiar task'] },
-    { value: 0.5, phrases: ['moderate', 'challenging', 'demanding', 'requiring care'] },
-    { value: 0.7, phrases: ['hard', 'difficult', 'tough', 'against the odds'] },
-    { value: 0.85, phrases: ['very hard', 'formidable', 'near impossible', 'almost beyond reach'] },
-    { value: 1.0, phrases: ['impossible', 'beyond any skill', 'cannot be done'] },
+/** Сложность задачи, от пустяка до невозможного. Порядок — индекс строки таблицы. */
+export const DIFFICULTY_LEVELS = Object.freeze(['trivial', 'easy', 'moderate', 'hard', 'very hard', 'nearly impossible']);
+
+/** Опыт персонажа именно в этой задаче, от нуля до мастера. Порядок — индекс столбца таблицы. */
+export const EXPERIENCE_LEVELS = Object.freeze(['none', 'novice', 'practised', 'skilled', 'expert', 'master']);
+
+/**
+ * Вероятность «сможет ли персонаж сделать задуманное».
+ * Строка — опыт, столбец — сложность.
+ */
+export const PROBABILITY_TABLE = Object.freeze([
+    // trivial easy moderate hard very hard nearly impossible
+    [0.901, 0.664, 0.299, 0.084, 0.020, 0.004], // none
+    [0.946, 0.791, 0.450, 0.150, 0.037, 0.008], // novice
+    [0.971, 0.879, 0.610, 0.253, 0.068, 0.016], // practised
+    [0.985, 0.933, 0.750, 0.393, 0.123, 0.029], // skilled
+    [0.992, 0.964, 0.852, 0.554, 0.212, 0.055], // expert
+    [0.996, 0.981, 0.917, 0.704, 0.340, 0.100], // master
 ]);
 
-/** Опорные фразы опыта: от «novice» до «master», значение 0..1. */
-export const EXPERIENCE_ANCHORS = Object.freeze([
-    { value: 0.0, phrases: ['novice', 'beginner', 'untrained', 'no experience'] },
-    { value: 0.2, phrases: ['basic', 'amateur', 'a little practice'] },
-    { value: 0.4, phrases: ['competent', 'some experience', 'can handle it'] },
-    { value: 0.6, phrases: ['skilled', 'experienced', 'practised'] },
-    { value: 0.8, phrases: ['expert', 'veteran', 'highly trained'] },
-    { value: 1.0, phrases: ['master', 'legendary', 'unmatched'] },
-]);
+export const PROBABILITY_TABLE_NOTE = 'rows: experience none…master; columns: difficulty trivial…nearly impossible';
 
 /**
  * Полосы степени. `margin = probability - roll` — насколько бросок оказался
@@ -46,72 +47,35 @@ export const DEGREE_BANDS = Object.freeze([
     { id: 'botched', min: -Infinity, words: 'badly botched' },
 ]);
 
-/** Насколько круто разница «опыт − сложность» переходит в вероятность. 4 ≈ 0.88 на +0.5 и 0.12 на −0.5. */
-export const PROBABILITY_STEEPNESS = 4;
+const normalize = value => String(value ?? '').trim().toLowerCase();
+const difficultyIndex = value => DIFFICULTY_LEVELS.indexOf(normalize(value));
+const experienceIndex = value => EXPERIENCE_LEVELS.indexOf(normalize(value));
 
-const STOP_WORDS = new Set(['a', 'an', 'the', 'of', 'to', 'is', 'it', 'and', 'or', 'with', 'at', 'in', 'on', 'for', 'very', 'no', 'not', 'all']);
-
-function words(text) {
-    return String(text ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(word => word && !STOP_WORDS.has(word));
+export function isKnownDifficulty(value) {
+    return difficultyIndex(value) >= 0;
 }
 
-/**
- * Запасная близость без эмбеддингов: пересечение слов (Jaccard) плюс бонус за
- * вхождение целой фразы. Нужна и в тестах, и как честный фоллбэк, если
- * локальная модель недоступна.
- */
-export function lexicalSimilarity(a, b) {
-    const left = words(a);
-    const right = words(b);
-    if (!left.length || !right.length) return 0;
-    const set = new Set(right);
-    const shared = left.filter(word => set.has(word)).length;
-    const jaccard = shared / new Set([...left, ...right]).size;
-    const phraseBonus = String(b ?? '').toLowerCase().includes(String(a ?? '').toLowerCase()) && String(a ?? '').trim() ? 0.4 : 0;
-    return Math.min(1, jaccard + phraseBonus);
+export function isKnownExperience(value) {
+    return experienceIndex(value) >= 0;
 }
 
-/** Мягкий максимум: вес опоры растёт с близостью, но не схлопывается в одну. */
-function softmaxWeights(scores, temperature = 0.12) {
-    const max = Math.max(...scores);
-    const exp = scores.map(score => Math.exp((score - max) / temperature));
-    const total = exp.reduce((sum, value) => sum + value, 0) || 1;
-    return exp.map(value => value / total);
+/** Отказ инструмента со списком допустимых уровней — без догадки. */
+export function levelProblem({ difficulty, experience } = {}) {
+    if (!isKnownDifficulty(difficulty)) {
+        return `Unknown difficulty "${String(difficulty ?? '')}". Use one of: ${DIFFICULTY_LEVELS.join(', ')}.`;
+    }
+    if (!isKnownExperience(experience)) {
+        return `Unknown experience "${String(experience ?? '')}". Use one of: ${EXPERIENCE_LEVELS.join(', ')}.`;
+    }
+    return '';
 }
 
-/**
- * Слово директора → значение шкалы. `similarity(text, anchorPhrase)`.
- * Если ни одна опора не похожа (максимум ниже `floor`), возвращается
- * середина шкалы: молчаливая крайность здесь хуже нейтральности.
- */
-export function projectPhrase(text, anchors = DIFFICULTY_ANCHORS, { similarity = lexicalSimilarity, floor = 0.08 } = {}) {
-    const clean = String(text ?? '').trim();
-    if (!clean) return 0.5;
-    const scored = anchors.map(anchor => ({
-        value: anchor.value,
-        score: Math.max(...anchor.phrases.map(phrase => similarity(clean, phrase))),
-    }));
-    const best = Math.max(...scored.map(item => item.score));
-    if (best < floor) return 0.5;
-    const weights = softmaxWeights(scored.map(item => item.score));
-    return scored.reduce((sum, item, index) => sum + item.value * weights[index], 0);
-}
-
-/**
- * Сложность переводится в «абсолютную» шкалу: «trivial» лежит ниже любого
- * опыта (эффективная −0.5), «moderate» — между новичком и мастером (0.5),
- * «impossible» — выше мастера (1.5). Без этого равные концы обеих шкал
- * взаимно гасились бы, и новичок на пустяке получал бы те же 50 %, что и
- * мастер на невозможном. Опыт остаётся 0..1.
- */
-export function effectiveDifficulty(difficulty) {
-    return Number(difficulty) * 2 - 0.5;
-}
-
-/** Логистика: при равных опыте и сложности — ровно 0.5. */
-export function computeProbability(experience, difficulty, steepness = PROBABILITY_STEEPNESS) {
-    const gap = Number(experience) - effectiveDifficulty(difficulty);
-    return 1 / (1 + Math.exp(-steepness * gap));
+/** Вероятность по двум уровням. Неизвестный уровень — `null`, не середина шкалы. */
+export function computeProbability(experience, difficulty) {
+    const row = experienceIndex(experience);
+    const column = difficultyIndex(difficulty);
+    if (row < 0 || column < 0) return null;
+    return PROBABILITY_TABLE[row][column];
 }
 
 /** Детерминированный бросок для тестов: mulberry32, seed → [0,1). */
@@ -131,22 +95,22 @@ export function degreeFor(probability, roll) {
 }
 
 /**
- * Полная оценка: слова → шкалы → вероятность → бросок → степень.
- * `embed` (необязательно) — `{ similarity }` на основе e5-small; без неё
- * работает лексический фоллбэк.
+ * Полная оценка: два уровня → вероятность → бросок → степень.
+ * @returns {{ ok: true, … } | { ok: false, error: string }}
  */
-export function assessAction({ character = '', action = '', difficulty = '', experience = '', seed, similarity = lexicalSimilarity, steepness = PROBABILITY_STEEPNESS } = {}) {
-    const difficultyValue = projectPhrase(difficulty, DIFFICULTY_ANCHORS, { similarity });
-    const experienceValue = projectPhrase(experience, EXPERIENCE_ANCHORS, { similarity });
-    const probability = computeProbability(experienceValue, difficultyValue, steepness);
+export function assessAction({ character = '', action = '', difficulty = '', experience = '', why = '', seed } = {}) {
+    const problem = levelProblem({ difficulty, experience });
+    if (problem) return { ok: false, error: problem };
+    const probability = computeProbability(experience, difficulty);
     const roll = Number.isFinite(seed) ? rollFromSeed(seed) : Math.random();
     const band = degreeFor(probability, roll);
     return {
+        ok: true,
         character: String(character ?? '').trim(),
         action: String(action ?? '').trim(),
-        difficultyValue: round(difficultyValue),
-        difficultyEffective: round(effectiveDifficulty(difficultyValue)),
-        experienceValue: round(experienceValue),
+        difficulty: normalize(difficulty),
+        experience: normalize(experience),
+        why: String(why ?? '').trim(),
         probability: round(probability),
         roll: round(roll),
         margin: round(probability - roll),

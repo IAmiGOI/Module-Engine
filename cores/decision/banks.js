@@ -1,6 +1,6 @@
-import { bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking } from '../../libraries/core/decision-banks.js';
+import { bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking, BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
 import { createBankStore } from './bank-store.js';
-import { createBankTasks } from './bank-tasks.js';
+import { createBankTasks, bankConcurrency } from './bank-tasks.js';
 import { createLorebookMarker } from './lorebook-marker.js';
 
 /**
@@ -81,6 +81,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
             sourceHash: hashText(source.source), text, sizeBand: sizeFor(source), rawSource: source.source,
             examples: source.examples ?? '', aliases: source.aliases ?? [], canonicalName: source.canonicalName ?? '', status: 'ready',
+            builderVersion: BANK_BUILDER_VERSION,
         });
         await bankStore.putBase({ ...record, rawSource: '' });
         await bankStore.putChat(record);
@@ -139,7 +140,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             return progress({ timedOut: false, sources: sources.length });
         }
         const running = tasks.runQueue(pending, {
-            concurrency: 2,
+            concurrency: bankConcurrency(getSettings()),
             onDone: async (source, text) => { await saveReady(source, text); await bankStore.saveColdStart(progress()); },
             onError: async (source, error) => { await markError(source, error); await bankStore.saveColdStart(progress()); },
         });
@@ -209,7 +210,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         const existing = records().find(record => matchesName(record, clean));
         const record = createBankRecord({
             ...(existing ?? { sourceKey: `manual:${keyOf(clean)}`, sourceKind: 'manual', name: clean, sourceHash: hashText(value), examples: '' }),
-            text: value, status: 'ready', error: null, name: existing?.name ?? clean,
+            text: value, status: 'ready', error: null, name: existing?.name ?? clean, builderVersion: BANK_BUILDER_VERSION,
             sourceHash: existing?.sourceHash ?? hashText(value),
         });
         await bankStore.putChat(record);

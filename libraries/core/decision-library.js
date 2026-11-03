@@ -131,6 +131,33 @@ export function planFor(plans, { character } = {}) {
     return (Array.isArray(plans) ? plans : []).find(plan => key(plan.character) === name && !plan.resolvedAt) ?? null;
 }
 
+/** Блок 4: библиотека с уровнями, без планов — обновляется при переключении окна. */
+export function libraryLevelsSection(library) {
+    const records = Object.values(normalizeLibrary(library));
+    if (!records.length) return '';
+    const body = records.map(record => `- ${record.name} (level ${record.level})`).join('\n');
+    return `CHARACTER LIBRARY (levels 1–5):\n\n${body}`;
+}
+
+/** Блок 6: только планы на 24+ часа RP-времени — обновляются при переключении окна. */
+export function longPlansSection(plans, clockMinutes = 0) {
+    const list = (Array.isArray(plans) ? plans : []).filter(plan => {
+        if (!plan || plan.resolvedAt) return false;
+        const duration = Number(plan.durationMinutes);
+        if (Number.isFinite(duration)) return duration >= 1440;
+        const span = Number(plan.dueAt) - Number(plan.createdAt);
+        return Number.isFinite(span) && span >= 1440;
+    });
+    if (!list.length) return '';
+    const body = list.map(plan => {
+        const when = plan.interrupted ? 'in the scene, approximate plan'
+            : Number.isFinite(plan.dueAt) ? `due in ${formatDuration(Math.max(0, plan.dueAt - clockMinutes))}`
+                : 'no timed plan';
+        return `- ${plan.character} (level ${plan.level}): ${plan.summary} — ${when}`;
+    }).join('\n');
+    return `CHARACTER PLANS (24 hours or longer; directions, not scripts):\n\n${body}`;
+}
+
 /** Компактная секция контекста: по строке на персонажа, чтобы библиотека не съедала окно. */
 export function librarySection(library, plans, clockMinutes = 0) {
     const records = Object.values(normalizeLibrary(library));

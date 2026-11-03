@@ -27,29 +27,3 @@ export function createTimeReader(call) {
     };
 }
 
-export function createSimilarity(call) {
-    const anchorVectors = new Map();
-    async function vectorFor(text, kind) {
-        const cacheKey = `${kind}:${text}`;
-        if (anchorVectors.has(cacheKey)) return anchorVectors.get(cacheKey);
-        const vector = await call('embedding.compute', { text, kind });
-        if (Array.isArray(vector)) anchorVectors.set(cacheKey, vector);
-        return Array.isArray(vector) ? vector : null;
-    }
-    return async function similarityScores(phrase, anchors) {
-        try {
-            const query = await vectorFor(phrase, 'query');
-            if (!query) return null;
-            const scores = new Map();
-            for (const anchor of anchors) {
-                for (const anchorPhrase of anchor.phrases) {
-                    const vector = await vectorFor(anchorPhrase, 'passage');
-                    if (!vector) continue;
-                    const similarity = await call('embedding.similarity', { a: query, b: vector });
-                    if (Number.isFinite(similarity)) scores.set(anchorPhrase, similarity);
-                }
-            }
-            return scores.size ? scores : null;
-        } catch { return null; }
-    };
-}

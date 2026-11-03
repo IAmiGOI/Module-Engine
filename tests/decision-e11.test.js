@@ -67,7 +67,7 @@ test('a swipe restores the state from before the turn: roster, plan and clock go
         replies: [
             setPlan(),
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene.' }),
-            call('assess', { character: 'Lena', action: 'leaves', difficulty: 'easy', experience: 'skilled', comment: 'The chance matters for the form.' }),
+            call('assess', { character: 'Lena', action: 'leaves', difficulty: 'easy', experience: 'skilled', why: 'The exit is unguarded.', comment: 'The chance matters for the form.' }),
             form([{ name: 'Lena', decision: 'Leave.', decisionReason: 'She is out of time.', action: 'Leaves.', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She gets out.' }], 5),
         ],
     });
