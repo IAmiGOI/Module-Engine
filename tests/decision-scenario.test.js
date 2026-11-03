@@ -154,8 +154,9 @@ test('the writer body really reaches the outgoing request: exactly 20 history me
     assert.equal(director.stream, true);
     assert.equal(director.workerId, 'director');
     const directorText = JSON.stringify(director.messages);
-    assert.match(directorText, new RegExp(SUMMARY_TEXT));
+    assert.doesNotMatch(directorText, new RegExp(SUMMARY_TEXT), 'summary.core summaries no longer reach the director');
     assert.match(directorText, /Never kill a named character/);
+    assert.match(directorText, /YOUR PLAN/);
     assert.match(directorText, /char 2/, 'the last 20 history messages reach the director');
     assert.doesNotMatch(directorText, /user 1"/, 'the oldest messages are outside the 20');
 

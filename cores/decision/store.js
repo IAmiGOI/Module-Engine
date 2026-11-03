@@ -1,16 +1,14 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
-import { totalLogTokens } from '../../libraries/core/decision-log.js';
 import { createJournal } from './journal.js';
 import { createDigestStore } from './store-digests.js';
+import { createLogStore } from './store-log.js';
+import { createWindowStore } from './store-window.js';
 import { loadChatMemory } from './store-load.js';
-import { sanitizeCycles } from './store-sanitize.js';
 
 /** Хранение состояния директора в памяти чата; запись сериализована очередью,
  * чтобы `persist()` и правки блоков не затирали друг друга. */
 export function createDecisionStore({ call, publishEvent }) {
     let runs = {};
-    let log = [];
-    let logArchive = [];
     let roster = { active: [] };
     let directorPlan = null;
     let arcs = [];
@@ -31,6 +29,8 @@ export function createDecisionStore({ call, publishEvent }) {
         return run;
     }
 
+    const logs = createLogStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
+
     const journal = createJournal({
         enqueue,
         call,
@@ -38,18 +38,18 @@ export function createDecisionStore({ call, publishEvent }) {
         setBank: value => { memoryBank = value; },
         getNames: () => issuedNames,
         setNames: value => { issuedNames = value; },
-        getLog: () => log,
-        setLog: value => { log = value; },
-        getArchive: () => logArchive,
-        setArchive: value => { logArchive = value; },
+        getLog: logs.log,
+        setLog: logs.setLog,
+        getArchive: logs.archive,
+        setArchive: logs.setArchive,
     });
     const digests = createDigestStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
+    const windows = createWindowStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
 
     async function reload() {
         const data = await loadChatMemory(call);
         runs = data.runs;
-        log = data.log;
-        logArchive = data.logArchive;
+        logs.load(data);
         roster = data.roster;
         directorPlan = data.directorPlan;
         arcs = data.arcs;
@@ -62,24 +62,9 @@ export function createDecisionStore({ call, publishEvent }) {
         issuedNames = data.issuedNames;
         snapshots = data.snapshots;
         draft = data.draft;
+        windows.load({ window: data.window, frozenWindows: data.frozenWindows, windowBoundary: data.windowBoundary });
         digests.load(data.turnDigests);
-        return { runs, log };
-    }
-
-    /**
-     * Дописать цикл в лог. Через ту же очередь, что и прогоны: лог не должен
-     * терять запись, если рядом сохраняется решение.
-     */
-    function appendCycle(cycle) {
-        return enqueue(async () => {
-            log = [...log, cycle];
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
-            return cycle;
-        });
-    }
-
-    function logTokens() {
-        return totalLogTokens(log);
+        return { runs, log: logs.log() };
     }
 
     function saveRoster(next) {
@@ -210,20 +195,6 @@ export function createDecisionStore({ call, publishEvent }) {
         });
     }
 
-    /** Заменить лог (после переноса старых ходов в архив). Архив — отдельным ключом. */
-    function saveLog(next, { archived = [], archiveLimitTokens = 0 } = {}) {
-        return enqueue(async () => {
-            log = sanitizeCycles(next);
-            if (archived.length) logArchive = [...logArchive, ...sanitizeCycles(archived)];
-            if (archiveLimitTokens > 0) {
-                while (logArchive.length > 1 && totalLogTokens(logArchive) > archiveLimitTokens) logArchive = logArchive.slice(1);
-            }
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', value: log });
-            if (archived.length) await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', value: logArchive });
-            return log;
-        });
-    }
-
     function lastRun() {
         const list = Object.values(runs).sort((a, b) => (Number(a.mesid) || 0) - (Number(b.mesid) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0));
         return list.at(-1) ?? null;
@@ -255,8 +226,8 @@ export function createDecisionStore({ call, publishEvent }) {
     return {
         reload, persist, lastRun,
         runs: () => runs,
-        cycles: () => log,
-        archive: () => logArchive,
+        cycles: logs.log,
+        archive: logs.archive,
         roster: () => ({ active: [...roster.active] }),
         saveRoster,
         plan: () => (directorPlan ? { ...directorPlan, stages: [...(directorPlan.stages ?? [])] } : null),
@@ -287,9 +258,15 @@ export function createDecisionStore({ call, publishEvent }) {
         deleteSnapshot,
         draft: () => (draft ? JSON.parse(JSON.stringify(draft)) : null),
         saveDraft,
-        appendCycle,
-        saveLog,
-        logTokens,
+        boundary: windows.boundary,
+        saveBoundary: windows.saveBoundary,
+        window: windows.window,
+        saveWindow: windows.saveWindow,
+        frozen: windows.frozen,
+        saveFrozen: windows.saveFrozen,
+        appendCycle: logs.appendCycle,
+        saveLog: logs.saveLog,
+        logTokens: logs.logTokens,
         digests: digests.digests,
         saveDigests: digests.saveDigests,
     };

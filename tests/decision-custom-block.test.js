@@ -16,7 +16,11 @@ function chat(cycles) {
     return out;
 }
 
-function historyOf(context) {
+function directorHistoryOf(context) {
+    return context.messages.slice(1, -2);
+}
+
+function writerHistoryOf(context) {
     return context.messages.slice(1, -1);
 }
 
@@ -33,7 +37,7 @@ test('the director custom block sits before the last two full cycles, and before
     ];
     for (const [cycles, before, after] of cases) {
         const context = buildDeciderContext({ chat: chat(cycles), directorBlock: BLOCK });
-        const history = historyOf(context);
+        const history = directorHistoryOf(context);
         assert.equal(blockAt(history), before, `${cycles} cycles: block before ${before} history messages`);
         assert.equal(history.length - blockAt(history) - 1, after, `${cycles} cycles: ${after} history messages follow`);
         assert.equal(history.filter(message => message.content !== BLOCK).length, cycles * 2);
@@ -43,11 +47,11 @@ test('the director custom block sits before the last two full cycles, and before
 
 test('the writer custom block sits five messages from the end of the story, and before everything when the story is shorter', () => {
     const short = buildWriterContext({ chat: chat(1), decision: 'push', writerBlock: BLOCK });
-    assert.equal(blockAt(historyOf(short)), 0, 'two messages are fewer than five: the block goes first');
+    assert.equal(blockAt(writerHistoryOf(short)), 0, 'two messages are fewer than five: the block goes first');
     const exact = buildWriterContext({ chat: [{ mes: 'u0', is_user: true }, { mes: 'a0' }, { mes: 'u1', is_user: true }, { mes: 'a1' }, { mes: 'u2', is_user: true }], decision: 'push', writerBlock: BLOCK });
-    assert.equal(blockAt(historyOf(exact)), 0, 'exactly five messages: first');
+    assert.equal(blockAt(writerHistoryOf(exact)), 0, 'exactly five messages: first');
     const long = buildWriterContext({ chat: chat(5), decision: 'push', writerBlock: BLOCK });
-    const history = historyOf(long);
+    const history = writerHistoryOf(long);
     assert.equal(history.filter(message => message.content !== BLOCK).length, 10);
     assert.equal(blockAt(history), 5, 'ten messages: five from the end');
     assert.equal(history.length - blockAt(history) - 1, 5);

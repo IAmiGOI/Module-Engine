@@ -43,16 +43,20 @@ test('historyMessages expands a tool call into the same assistant + tool pair PM
     assert.equal('_hid' in messages[0], false);
 });
 
-test('the director context puts the immutable prefix first, then compressed and full turns, then mutable state, history and the task', () => {
+test('the director context puts the protected part first, then the window, mutable changes, the plan at @2 and the task', () => {
     const context = buildDeciderContext({
         banksText: 'ALL-CHARACTER-BANKS',
         lorebookText: 'THE LOREBOOK',
-        digests: [{ text: 'TURN 1 (compressed) — they left the keep.' }],
-        turns: [{ cycles: [{ event: 'turn', turn: 2, messages: [{ role: 'user', content: 'Where is the exit?' }] }] }],
+        libraryText: 'CHARACTER LIBRARY',
+        plansText: 'LONG PLANS',
+        roster: ['Aria'],
+        activeBanksText: 'ACTIVE-BANKS',
+        windowEntries: [{ kind: 'turn', turn: 1, text: 'TURN 1 (compressed) — they left the keep.' }],
         plan: { direction: 'Find the way out.', stages: [], currentStage: 0 },
         arcs: [{ status: 'open', title: 'The escape' }],
         directorBlock: 'Never kill a named character.',
         notes: { aria: [{ id: 'n1', character: 'Aria', title: 'Goal', text: 'Find the exit.' }] },
+        knowledgeText: 'WHAT CHARACTERS KNOW',
         summaries: [{ startIndex: 1, endIndex: 9, text: 'They arrived at the keep.' }],
         chat: [message('older'), message('Where is the exit?', { is_user: true })],
     });
@@ -60,22 +64,21 @@ test('the director context puts the immutable prefix first, then compressed and 
     assert.match(contents[0], /You are the Director of a living roleplay world/);
     assert.match(contents[1], /ALL-CHARACTER-BANKS/);
     assert.match(contents[2], /THE LOREBOOK/);
-    assert.equal(contents[3], 'EARLIER TURNS (compressed):');
-    assert.match(contents[4], /TURN 1 \(compressed\)/);
-    assert.match(contents[4], /they left the keep/);
-    assert.match(contents[5], /TURN 2 \(full\)/);
-    assert.match(contents[6], /YOUR PLAN/);
-    assert.match(contents[7], /ARCS/);
-    assert.match(contents[8], /CHARACTER NOTES/);
-    assert.match(contents[8], /Find the exit/);
-    assert.ok(contents.findIndex(item => /LONG-TERM SUMMARIES/.test(item)) > 8, 'summaries are mutable state and belong after the turns');
-    assert.equal(contents.at(-4), 'Never kill a named character.', 'two cycles before the end is before both history turns');
-    assert.equal(context.messages.at(-2).role, 'user');
-    assert.equal(context.messages.at(-2).content, 'Where is the exit?');
-    assert.equal(context.messages.at(-1).role, 'user');
-    assert.match(context.messages.at(-1).content, /A new turn has started/);
-    assert.match(context.prompt, /Where is the exit\?/);
+    assert.match(contents[3], /ARCS/);
+    assert.match(contents[4], /CHARACTER LIBRARY/);
+    assert.match(contents[5], /LONG PLANS/);
+    assert.match(contents[6], /ACTIVE ROSTER/);
+    assert.match(contents[7], /ACTIVE-BANKS/);
+    assert.equal(contents[8], 'Never kill a named character.', 'the custom block sits inside the window history');
+    assert.match(contents[9], /TURN 1 \(compressed\)/);
+    assert.match(contents.at(-4), /WHAT CHARACTERS KNOW/);
+    assert.match(contents.at(-3), /CHARACTER NOTES/);
+    assert.match(contents.at(-2), /^YOUR PLAN/);
+    assert.match(contents.at(-2), /Find the way out/);
+    assert.match(contents.at(-1), /A new turn has started/);
+    assert.equal(contents.some(item => /LONG-TERM SUMMARIES/.test(item)), false, 'summaries no longer reach the director');
     assert.match(context.prompt, /Find the exit/);
+    assert.doesNotMatch(context.prompt, /LONG-TERM SUMMARIES/);
 });
 
 test('the writer context puts the push after the history, and the history tail stays the last story line', () => {
@@ -137,13 +140,13 @@ test('the writer keeps only rarely changing parts before its sliding history; lo
     assert.equal(at('Lena opens the door'), messages.length - 1);
 });
 
-test('the frozen lorebook stays in the head of the director context and its changes go after the turns', () => {
+test('the frozen lorebook is the whole book in the protected part, with no changes block', () => {
     const { messages } = buildDeciderContext({
         lorebookText: 'THE LOREBOOK frozen', lorebookChanges: 'LOREBOOK CHANGES new entry',
-        turns: [{ cycles: [{ event: 'turn', turn: 2, messages: [{ role: 'user', content: 'Go.' }] }] }],
-        chat: [{ mes: 'Go.', is_user: true }],
+        windowEntries: [{ kind: 'turn', turn: 2, text: 'TURN 2 (compressed)' }],
+        plan: { direction: 'p' },
     });
     const at = needle => messages.findIndex(message => String(message.content).includes(needle));
-    assert.ok(at('THE LOREBOOK frozen') < at('TURN 2 (full)'));
-    assert.ok(at('LOREBOOK CHANGES') > at('TURN 2 (full)'));
+    assert.ok(at('THE LOREBOOK frozen') < at('TURN 2 (compressed)'));
+    assert.equal(at('LOREBOOK CHANGES'), -1);
 });

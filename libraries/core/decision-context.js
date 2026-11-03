@@ -4,6 +4,7 @@ import { DIRECTOR_SYSTEM, DIRECTOR_TURN, WRITER_SYSTEM, WRITER_PUSH, fillPrompt 
 import {
     compressedDigestMessages, fullTurnMessages, renderCompressedDigests, renderFullTurns,
 } from './decision-turn-digest.js';
+import { frozenWindowMessages, renderFrozenWindows, renderWindow, windowMessages } from './decision-window.js';
 
 /**
  * Сборка контекстов директора и прозаика — чистые функции над уже
@@ -164,43 +165,63 @@ function notesText(notes) {
 }
 
 /**
- * Контекст директора. `messages` — для `openai`/`st-main`; `systemPrompt` +
- * `prompt` — эквивалент для `anthropic`/`google`. `task` заменяет задание на
- * ход (пассивный цикл и заготовка), по умолчанию — начало хода.
+ * Блок пользователя внутри плавающего окна: перед последними двумя циклами
+ * хода. Окно — уже сообщения, поэтому вставка идёт по индексу записи.
+ */
+export function windowHistory(entries, block, keepTurns = DIRECTOR_BLOCK_CYCLES) {
+    const list = Array.isArray(entries) ? entries : [];
+    const messages = windowMessages(list);
+    const turns = list.map((entry, index) => (entry?.kind === 'turn' ? index : -1)).filter(index => index >= 0);
+    const at = turns.length >= keepTurns ? turns[turns.length - keepTurns] : 0;
+    return insertBlock(messages, block, at);
+}
+
+/**
+ * Контекст директора части 10: защищённая часть (банки → лорбук → арки →
+ * библиотека → замороженные окна → длинные планы → ростер → дубли банков)
+ * → плавающее окно → изменения активных (знания и заметки) → план на @2 →
+ * задание. Блок 9 (окно) только дописывается; прежний путь части 9
+ * (`digests` + `turns` + история) остаётся до w2.
  */
 export function buildDeciderContext({
-    summaries = [], chat = [], plan = null, arcs = [], notes = {}, roster = [],
-    libraryText = '', bankText = '', researchText = '', lorebookText = '', lorebookChanges = '', knowledgeText = '', banksText = '',
-    digests = [], turns = [], planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
+    plan = null, arcs = [], notes = {}, roster = [],
+    banksText = '', lorebookText = '', libraryText = '', plansText = '', activeBanksText = '',
+    frozenWindows = [], windowEntries = [], knowledgeText = '',
+    planMissing = false, directorBlock = '', task = '',
+    digests = [], turns = [], chat = [], summaries = [], researchText = '', bankText = '', lorebookChanges = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
-    const history = directorHistory(chat, limit, directorBlock);
-    // Порядок — от неизменного к меняющемуся и только дописываемому:
-    // банки и лорбук почти не меняются, сжатые ходы дописываются в конец,
-    // два полных хода — окно, дальше всё изменяемое и история.
-    const head = [String(banksText ?? '').trim(), String(lorebookText ?? '').trim()].filter(Boolean);
-    const state = [
-        String(lorebookChanges ?? '').trim(),
-        planSection(plan), arcsSection(arcs), notesSection(notes), String(knowledgeText ?? '').trim(), rosterSection(roster),
-        String(libraryText ?? '').trim(), String(bankText ?? '').trim(),
-        summariesSection(summaries), String(researchText ?? '').trim(),
+    const usingWindow = Array.isArray(windowEntries) && windowEntries.length > 0;
+    const history = usingWindow
+        ? windowHistory(windowEntries, directorBlock)
+        : directorHistory(chat, limit, directorBlock);
+    const head = [String(banksText ?? '').trim(), String(lorebookText ?? '').trim(), arcsSection(arcs), String(libraryText ?? '').trim()].filter(Boolean);
+    const middle = [
+        ...frozenWindowMessages(frozenWindows),
+        String(plansText ?? '').trim(),
+        rosterSection(roster),
+        String(activeBanksText ?? '').trim(),
     ].filter(Boolean);
-    const sections = [
-        ...head.map(content => ({ role: 'system', content })),
-        ...compressedDigestMessages(digests),
-        ...fullTurnMessages(turns),
-        ...state.map(content => ({ role: 'system', content })),
-    ];
+    const middleMessages = middle.map(entry => (typeof entry === 'string' ? { role: 'system', content: entry } : entry));
+    const windowPart = usingWindow ? [] : [...compressedDigestMessages(digests), ...fullTurnMessages(turns)];
+    const state = [String(knowledgeText ?? '').trim(), notesSection(notes)].filter(Boolean);
+    const planContent = planSection(plan) || 'YOUR PLAN: none yet — call set_plan before submit_turn.';
     const baseTask = String(task ?? '').trim() || DIRECTOR_TURN;
     const turnTask = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
     const messages = [
         { role: 'system', content: DIRECTOR_SYSTEM },
-        ...sections,
+        ...head.map(content => ({ role: 'system', content })),
+        ...middleMessages,
+        ...windowPart,
         ...history,
+        ...state.map(content => ({ role: 'system', content })),
+        { role: 'system', content: planContent },
         { role: 'user', content: turnTask },
     ];
     const prompt = [
-        DIRECTOR_SYSTEM, ...head, renderCompressedDigests(digests), renderFullTurns(turns),
-        ...state, renderHistory(history), turnTask,
+        DIRECTOR_SYSTEM, ...head, renderFrozenWindows(frozenWindows),
+        String(plansText ?? '').trim(), rosterSection(roster), String(activeBanksText ?? '').trim(),
+        usingWindow ? renderWindow(windowEntries) : `${renderCompressedDigests(digests)}\n${renderFullTurns(turns)}`,
+        renderHistory(history), ...state, planContent, turnTask,
     ].filter(Boolean).join('\n\n');
     return { systemPrompt: DIRECTOR_SYSTEM, messages, prompt };
 }

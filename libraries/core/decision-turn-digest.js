@@ -11,7 +11,7 @@ export const FULL_TURNS = 2;
 
 const text = value => String(value ?? '').trim();
 
-function oneLine(value, limit = 200) {
+export function oneLine(value, limit = 200) {
     const clean = text(value).replace(/\s+/g, ' ');
     if (!clean) return '';
     return clean.length > limit ? `${clean.slice(0, Math.max(1, limit - 1))}…` : clean;
@@ -26,7 +26,7 @@ function turnKey(turn) {
     return String(turn?.cycles?.[0]?.id ?? `turn_${turn?.at ?? ''}`);
 }
 
-function callChanges(call) {
+export function callChanges(call) {
     const name = text(call?.name);
     if (!name || name.startsWith('__') || call?.error) return [];
     const args = call?.args && typeof call.args === 'object' ? call.args : {};

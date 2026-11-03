@@ -2,56 +2,75 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDeciderContext } from '../libraries/core/decision-context.js';
 import { compareRequests } from '../libraries/core/decision-cache.js';
-import { groupTurns } from '../libraries/core/decision-turn-digest.js';
 
-const cycle = number => ({
-    event: 'turn', turn: number, at: number,
-    messages: [{ role: 'user', content: `user ${number}` }],
-    toolCalls: [], form: { resolution: `resolution ${number}` }, push: `push ${number}`,
-});
+const turn = (number, text = `TURN ${number} (compressed)`) => ({ kind: 'turn', turn: number, at: number, text });
 
-function context({ chat, plan = 'the same plan', notes = {}, task = 'A new turn has started.' }) {
+function context({
+    windowEntries = [turn(1)], plan = { direction: 'the same plan', stages: [], currentStage: 0 },
+    notes = {}, knowledgeText = '', roster = ['Aria'], activeBanksText = 'ACTIVE-BANKS', task = 'A new turn has started.',
+} = {}) {
     return buildDeciderContext({
         banksText: 'ALL-CHARACTER-BANKS',
         lorebookText: 'THE LOREBOOK',
-        digests: [{ text: 'TURN 1 (compressed) — the keep is behind them.' }],
-        turns: groupTurns([cycle(2)]),
-        plan: { direction: plan, stages: [], currentStage: 0 },
+        arcs: [{ status: 'open', title: 'The escape' }],
+        libraryText: 'CHARACTER LIBRARY',
+        frozenWindows: [{ text: 'PREVIOUS WINDOW SUMMARY' }],
+        plansText: 'LONG PLANS',
+        roster,
+        activeBanksText,
+        windowEntries,
+        knowledgeText,
         notes,
-        chat,
+        plan,
         task,
     });
 }
 
-test('two adjacent turns with unchanged banks, lorebook and turns share the whole immutable prefix, up to the history', () => {
-    const previous = context({ chat: [{ mes: 'older', is_user: true }] });
-    const next = context({ chat: [{ mes: 'newer', is_user: true }] });
+const indexOf = (context, needle) => context.messages.findIndex(message => String(message.content).includes(needle));
+
+test('blocks 0–8 stay byte-identical between turns; only the window is appended', () => {
+    const previous = context({ windowEntries: [turn(1)] });
+    const next = context({ windowEntries: [turn(1), turn(2)] });
     const comparison = compareRequests(previous.messages, next.messages);
-    assert.equal(comparison.sharedMessages, 7, 'system, banks, lorebook, the compressed header, the digest, the full turn and the plan all match');
-    assert.equal(comparison.culprit.index, 7, 'the first difference is the history, not the mutable state');
+    assert.deepEqual(previous.messages.slice(1, 10).map(message => message.content), ['ALL-CHARACTER-BANKS', 'THE LOREBOOK', 'ARCS:\n\n- [open] The escape', 'CHARACTER LIBRARY', 'PREVIOUS WINDOWS (summaries):', 'PREVIOUS WINDOW SUMMARY', 'LONG PLANS', 'ACTIVE ROSTER (everyone who can affect the scene right now; the form must cover each of them):\n\n- Aria', 'ACTIVE-BANKS']);
+    assert.equal(comparison.culprit.index, 11, 'the first difference is the new window entry');
 });
 
-test('a changed plan or notes does not touch the prefix before it', () => {
-    const base = context({ chat: [{ mes: 'same', is_user: true }] });
-    const changedPlan = context({ chat: [{ mes: 'same', is_user: true }], plan: 'a different plan' });
-    const planComparison = compareRequests(base.messages, changedPlan.messages);
-    assert.equal(planComparison.culprit.index, 6, 'the plan is the first mutable part after the full turn');
-    assert.match(base.messages[6].content, /the same plan/);
-    assert.match(changedPlan.messages[6].content, /a different plan/);
-
-    const changedNotes = context({ chat: [{ mes: 'same', is_user: true }], notes: { aria: [{ title: 'Goal', text: 'Find the exit.' }] } });
-    const notesComparison = compareRequests(base.messages, changedNotes.messages);
-    assert.equal(notesComparison.culprit.index, 7, 'notes come after the plan and arcs; the history moves once they exist');
+test('the director plan is always the second message from the end, and the task is the last', () => {
+    const built = context({ plan: { direction: 'leave the keep', stages: ['find the key'], currentStage: 0 } });
+    assert.equal(built.messages.at(-1).role, 'user');
+    assert.match(built.messages.at(-1).content, /A new turn has started/);
+    assert.equal(built.messages.at(-2).role, 'system');
+    assert.match(built.messages.at(-2).content, /^YOUR PLAN/);
+    assert.match(built.messages.at(-2).content, /leave the keep/);
 });
 
-test('the custom user block still sits two cycles from the end of the history, after the mutable state', () => {
-    const chat = [];
-    for (let index = 0; index < 5; index += 1) chat.push({ mes: `user ${index}`, is_user: true }, { mes: `assistant ${index}` });
-    const built = buildDeciderContext({
-        banksText: 'BANKS', lorebookText: 'LORE', digests: [{ text: 'TURN 1 (compressed)' }],
-        turns: groupTurns([cycle(2)]), directorBlock: 'DIRECTOR BLOCK', chat,
-    });
-    const index = built.messages.findIndex(message => message.content === 'DIRECTOR BLOCK');
-    assert.ok(index > 3, 'the block is not in the immutable prefix');
-    assert.equal(built.messages.slice(index + 1, -1).length, 4, 'the block keeps its two-cycle depth');
+test('knowledge and notes change after the window, never inside the protected part', () => {
+    const base = context();
+    const changed = context({ knowledgeText: 'WHAT CHARACTERS KNOW', notes: { aria: [{ title: 'Goal', text: 'Find the exit.' }] } });
+    const comparison = compareRequests(base.messages, changed.messages);
+    assert.equal(comparison.culprit.index, indexOf(base, 'TURN 1') + 1, 'the window is before the mutable changes');
+    assert.equal(indexOf(changed, 'WHAT CHARACTERS KNOW'), indexOf(changed, 'TURN 1') + 1);
+    assert.equal(indexOf(changed, 'CHARACTER NOTES'), indexOf(changed, 'WHAT CHARACTERS KNOW') + 1);
+});
+
+test('a roster change never touches the all-character banks, only the active list and its duplicate banks', () => {
+    const before = context({ roster: ['Aria'], activeBanksText: 'BANKS Aria' });
+    const after = context({ roster: ['Aria', 'Rem'], activeBanksText: 'BANKS Aria Rem' });
+    assert.equal(before.messages[1].content, after.messages[1].content, 'block 2 is unchanged');
+    const comparison = compareRequests(before.messages, after.messages);
+    assert.equal(comparison.culprit.index, indexOf(before, 'ACTIVE ROSTER'), 'the first change is the active roster');
+});
+
+test('the custom user block sits before the last two window cycles', () => {
+    const entries = [1, 2, 3, 4, 5].map(number => turn(number));
+    const built = buildDeciderContext({ windowEntries: entries, directorBlock: 'DIRECTOR BLOCK', plan: { direction: 'p' } });
+    const blockIndex = indexOf(built, 'DIRECTOR BLOCK');
+    assert.ok(blockIndex > 1);
+    assert.equal(built.messages.slice(blockIndex + 1, -2).length, 2, 'two window cycles follow the block');
+});
+
+test('the lorebook has no changes block: the frozen head is the whole book', () => {
+    const built = buildDeciderContext({ lorebookText: 'THE LOREBOOK frozen', plan: { direction: 'p' } });
+    assert.equal(built.messages.some(message => /LOREBOOK CHANGES/.test(message.content)), false);
 });
