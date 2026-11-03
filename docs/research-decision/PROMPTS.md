@@ -332,3 +332,18 @@ Write the reply again from the start, following the push. Do not mention the ear
 - You wrote what {{user}} does, says, thinks or feels: "{{quote}}". {{user}} belongs to the user — write only what the push gives as the result of {{user}}'s attempt.
 - You continued past the end of the turn: "{{quote}}". Stop at the resolution: {{resolution}}
 ```
+
+## 14. Проверка формы директора — действует ли персонаж на то, чего не знает
+
+Утверждение для классификатора, по одному на каждого персонажа формы. Срез: последние сообщения сцены (`{{scene}}`), банк персонажа (`{{bank}}`), его знания из WHAT CHARACTERS KNOW (`{{knowledge}}`), его решение, действие и реплика из формы (`{{decision}}`, `{{action}}`, `{{speech}}`).
+
+**knowledge_conflict:**
+```text
+{{name}}'s decision, action or words rely on something {{name}} has no way of knowing: it is not in what {{name}} saw or heard in the scene, not in {{name}}'s knowledge, and not in {{name}}'s character bank.
+```
+
+Ответ `submit_turn`, если проверка не прошла (вместо принятия формы). Подстановки: `{{name}}`, `{{quote}}` — действие или реплика из формы.
+
+```text
+The form was not accepted: {{name}} acts on something {{name}} cannot know ("{{quote}}"). Check WHAT CHARACTERS KNOW and what {{name}} witnessed. Either change {{name}}'s decision and action to what {{name}} actually knows, or, if {{name}} did learn it, record how with character_knowledge first. Then call submit_turn again.
+```
