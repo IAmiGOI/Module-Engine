@@ -140,8 +140,15 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const all = computed(() => filtered().cycles);
     const shown = computed(() => all().slice(-limit()));
     const hiddenCount = computed(() => Math.max(0, all().length - shown().length));
+    let reloadAsked = false;
     async function refresh() {
-        const [log, archive, settings] = await Promise.all([call('decision.log'), call('decision.archive'), call('decision.settings')]);
+        let [log, archive, settings] = await Promise.all([call('decision.log'), call('decision.archive'), call('decision.settings')]);
+        // Пустой журнал при открытом чате — чаще всего ядро прочитало память раньше ST: один раз попросить перечитать.
+        if (!reloadAsked && log.ok && Array.isArray(log.value) && !log.value.length) {
+            reloadAsked = true;
+            await call('decision.reload').catch(() => null);
+            [log, archive] = await Promise.all([call('decision.log'), call('decision.archive')]);
+        }
         costCounter.set(settings.ok ? settings.value?.costCounter !== false : true);
         feed.set(createFeedState({
             cycles: log.ok && Array.isArray(log.value) ? log.value : [],
@@ -178,7 +185,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
             }));
         }
         // Смена чата: ядро перечитало память — лента и банки этого чата сразу, без переоткрытия окна. Живые циклы старого чата не тащим.
-        subscriptions.push(host.events.subscribe('st.chatChanged', () => { feed.set(createFeedState({ cycles: [], archive: [] })); }));
+        subscriptions.push(host.events.subscribe('st.chatChanged', () => { reloadAsked = false; feed.set(createFeedState({ cycles: [], archive: [] })); }));
         subscriptions.push(host.events.subscribe('decision.reloaded', () => { refresh().catch(() => {}); }));
         for (const name of ['decision.bank.ready', 'decision.bank.failed', 'decision.bank.short', 'decision.bank.edited', 'decision.bank.timeout']) {
             subscriptions.push(host.events.subscribe(name, () => banksView.refresh()));

@@ -276,6 +276,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     async function load() {
         const stored = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'settings', fallback: null });
         settings = clampDecisionSettings(stored ?? DEFAULT_SETTINGS);
+        // Подписки — до первого чтения: ST открывает чат, пока ядро грузится, и `st.chatChanged`, пришедший раньше
+        // подписки, терялся — ядро оставалось с пустой памятью загрузки, а окно директора висело пустым.
+        subscriptions.push(...events.listen());
         await reload();
         await cycle.syncWindow().catch(error => publishEvent('decision.log.warning', { reason: `window sync failed: ${error?.message ?? error}` }));
         unregisters.push(...registerDecisionContracts(host, {
@@ -294,7 +297,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             decideContract: DECIDE_CONTRACT,
             rewriteContract: REWRITE_CONTRACT,
         }));
-        subscriptions.push(...events.listen());
         await registerStages();
         return settings;
     }
