@@ -146,11 +146,14 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const runId = input.runId ?? `decision_${(runCounter += 1)}`;
         const type = input.type ?? 'normal';
         const chat = Array.isArray(input.chat) ? input.chat : [];
+        if (type === 'regenerate' || type === 'swipe') {
+            await cycle.removeLastWindowTurn?.().catch(() => {});
+        }
         if ((type === 'regenerate' || type === 'swipe') && settings.regen === 'writer') {
             const last = store.lastRun();
             if (last) {
                 const push = last.push ?? last.decision;
-                pending = { runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null, reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true };
+                pending = { runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null, reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true, sourceRunId: last.id };
                 publishEvent('decision.started', { runId, type, reused: true });
                 publishEvent('decision.completed', { runId, reused: true, workerId: pending.workerId });
                 return { reused: true, decision: push };
@@ -237,7 +240,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const stored = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'settings', fallback: null });
         settings = clampDecisionSettings(stored ?? DEFAULT_SETTINGS);
         await reload();
-        await cycle.syncPrefix().catch(error => publishEvent('decision.log.warning', { reason: `compressed prefix failed: ${error?.message ?? error}` }));
+        await cycle.syncWindow().catch(error => publishEvent('decision.log.warning', { reason: `window sync failed: ${error?.message ?? error}` }));
         unregisters.push(...registerDecisionContracts(host, {
             getSettings: () => settings,
             configure: saveSettings,
@@ -273,7 +276,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         roster: () => store.roster(),
         log: () => store.cycles(),
         archive: () => store.archive(),
-        digests: () => store.digests(),
+        digests: () => store.frozen(),
+        window: () => store.window(),
+        frozen: () => store.frozen(),
         plan: () => store.plan(),
         arcs: () => store.arcs(),
         notes: () => store.notes(),

@@ -28,7 +28,9 @@ export function createDecisionEvents({
         }
         setPending(null);
         clearAttempts();
-        persist(pending).catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `could not save the director run: ${error?.message ?? error}` }));
+        persist(pending)
+            .then(stored => cycle.recordTurn?.({ pending, stored }))
+            .catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `could not save the director run: ${error?.message ?? error}` }));
     }
 
     function onAborted(payload) {

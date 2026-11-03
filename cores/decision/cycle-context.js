@@ -3,9 +3,8 @@ import { normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js'
 import { buildToolList } from '../../libraries/core/decision-tools.js';
 import { staticDirectorLorebook } from '../../libraries/core/decision-lorebook-static.js';
 import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
-import { fullTurns } from '../../libraries/core/decision-turn-digest.js';
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
-import { createBoundary, normalizeBoundary } from '../../libraries/core/decision-window.js';
+import { createBoundary, normalizeBoundary, windowTurnCount } from '../../libraries/core/decision-window.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createKnowledge } from './knowledge.js';
 
@@ -80,14 +79,33 @@ export function createCycleContext({ call, store, banks = null }) {
         return fresh;
     }
 
-    function buildContext({ chat = [], settings, task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null }) {
+    function lastUserText(chat) {
+        const list = Array.isArray(chat) ? chat : [];
+        for (let index = list.length - 1; index >= 0; index -= 1) {
+            if (list[index]?.is_user === true) return String(list[index].mes ?? list[index].content ?? '').trim();
+        }
+        return '';
+    }
+
+    /** Текущее сообщение пользователя — последняя (ещё не сохранённая) запись окна. */
+    function pendingTurn(entries, currentUser) {
+        const body = String(currentUser ?? '').trim();
+        if (!body) return [];
+        const turn = windowTurnCount(entries) + 1;
+        return [{ kind: 'turn', turn, at: Date.now(), text: `TURN ${turn} (compressed)\nUser: ${body}` }];
+    }
+
+    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '' }) {
         const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '' };
+        const win = typeof store.window === 'function' ? store.window() : null;
+        const entries = Array.isArray(win?.entries) ? win.entries : [];
         return buildDeciderContext({
-            chat, plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
+            plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
             planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
-            digests: typeof store.digests === 'function' ? store.digests() : [],
-            turns: fullTurns(store.cycles()),
+            windowEntries: [...entries, ...pendingTurn(entries, currentUser)],
+            frozenWindows: typeof store.frozen === 'function' ? store.frozen() : [],
+            windowMode: true,
         });
     }
 
@@ -96,7 +114,7 @@ export function createCycleContext({ call, store, banks = null }) {
             lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(),
         ]);
         const banksText = banks ? banks.contextFor({ all: true }).text : '';
-        return buildContext({ chat, settings, task, lorebookText, knowledgeText, directorBlock, banksText, boundary });
+        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat) });
     }
 
     function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {

@@ -79,6 +79,9 @@ export function buildCycleDigest(cycle, { kind = 'turn', turn = null, userText =
 
     if (text(userText)) lines.push(`User: ${text(userText)}`);
     if (cycles.message?.text) lines.push(`User: ${text(cycles.message.text)}`);
+    if (kind === 'message' && !cycles.message?.text && text(cycles.wake?.text ?? cycles.wake?.detail)) {
+        lines.push(`User: ${text(cycles.wake?.text ?? cycles.wake?.detail)}`);
+    }
     if (text(cycles.push)) lines.push('PUSH:', text(cycles.push));
 
     for (const call of Array.isArray(cycles.toolCalls) ? cycles.toolCalls : []) {

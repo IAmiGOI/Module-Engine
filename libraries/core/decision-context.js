@@ -186,11 +186,11 @@ export function windowHistory(entries, block, keepTurns = DIRECTOR_BLOCK_CYCLES)
 export function buildDeciderContext({
     plan = null, arcs = [], notes = {}, roster = [],
     banksText = '', lorebookText = '', libraryText = '', plansText = '', activeBanksText = '',
-    frozenWindows = [], windowEntries = [], knowledgeText = '',
+    frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '',
     planMissing = false, directorBlock = '', task = '',
     digests = [], turns = [], chat = [], summaries = [], researchText = '', bankText = '', lorebookChanges = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
-    const usingWindow = Array.isArray(windowEntries) && windowEntries.length > 0;
+    const usingWindow = windowMode || (Array.isArray(windowEntries) && windowEntries.length > 0);
     const history = usingWindow
         ? windowHistory(windowEntries, directorBlock)
         : directorHistory(chat, limit, directorBlock);

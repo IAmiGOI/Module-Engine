@@ -5,7 +5,7 @@ import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
 import { duePlans } from '../../libraries/core/decision-library.js';
 import { createHandlers } from './handlers.js';
-import { createTurnPrefix } from './prefix.js';
+import { createTurnWindow } from './window.js';
 import { createJudge } from './judge.js';
 import { createPlaceReader, createTimeReader, createSimilarity } from './readers.js';
 import { createCycleLive } from './live.js';
@@ -49,11 +49,14 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     }
 
     const knowledge = createKnowledge({ call, store, banks, now });
-    const prefix = createTurnPrefix({ store, getSettings, deciderWorker, call, now, publishEvent });
+    const turnWindow = createTurnWindow({ store, banks, call, getSettings, deciderWorker, publishEvent, now });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
     function handlersFor(settings) {
-        return { ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks }), ...knowledge.handlers };
+        return {
+            ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, similarityScores, researcher, banks, window: turnWindow }),
+            ...knowledge.handlers,
+        };
     }
 
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {
@@ -127,7 +130,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             const warnings = ['the form timed out; the saved draft was used'];
             const cycle = { ...startedCycle.cycle, form, push, warnings };
             await store.appendCycle(cycle).catch(() => {});
-            await prefix.sync().catch(error => publishEvent('decision.log.warning', { reason: `compressed prefix failed: ${error?.message ?? error}` }));
             live.form({ runId, form, push });
             live.finished({ cycle });
             wakeQueue.rest();
@@ -140,7 +142,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, contextMessages: built.messages,
         });
         await store.appendCycle(cycle).catch(() => {});
-        await prefix.sync().catch(error => publishEvent('decision.log.warning', { reason: `compressed prefix failed: ${error?.message ?? error}` }));
         if (form) live.form({ runId, form, push });
         live.finished({ cycle });
         wakeQueue.rest();
@@ -200,7 +201,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             workerId: worker.id, usage: usage(), contextMessages: built.messages,
         });
         await store.appendCycle(cycle).catch(() => {});
-        await prefix.sync().catch(error => publishEvent('decision.log.warning', { reason: `compressed prefix failed: ${error?.message ?? error}` }));
+        await turnWindow.recordBackground(cycle).catch(error => publishEvent('decision.log.warning', { reason: `window append failed: ${error?.message ?? error}` }));
         live.finished({ cycle });
         wakeQueue.rest();
         publishEvent('decision.passive.ended', { runId, event, steps: result.steps, type: result.type });
@@ -257,7 +258,6 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             workerId: getSettings().decider.workerId || null,
         });
         try { await store.appendCycle(record); } catch { /* the wake still runs */ }
-        await prefix.sync().catch(() => {});
         publishEvent('decision.message.added', { record });
         const runId = `message_${at.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
         wakeQueue.schedule(() => backgroundRun({
@@ -272,8 +272,11 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
 
     return {
         run, runPassive, runDraft, onResearcherReport, sendMessage, judgeForcedMemory,
-        syncPrefix: () => prefix.sync(),
-        noteCorrection: params => prefix.noteCorrection(params),
+        recordTurn: params => turnWindow.recordTurn(params),
+        removeLastWindowTurn: () => turnWindow.removeLastTurn(),
+        syncWindow: () => turnWindow.maybeSwitch(),
+        noteCorrection: params => turnWindow.noteCorrection(params),
+        window: turnWindow,
         assessments: () => new Map(assessments), resetAssessments: () => assessments.clear(),
         waiting: () => ({ awaiting: wakeQueue.isAwaiting(), queued: wakeQueue.queued() }),
     };

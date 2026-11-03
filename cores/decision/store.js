@@ -1,6 +1,5 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { createJournal } from './journal.js';
-import { createDigestStore } from './store-digests.js';
 import { createLogStore } from './store-log.js';
 import { createWindowStore } from './store-window.js';
 import { loadChatMemory } from './store-load.js';
@@ -43,7 +42,6 @@ export function createDecisionStore({ call, publishEvent }) {
         getArchive: logs.archive,
         setArchive: logs.setArchive,
     });
-    const digests = createDigestStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
     const windows = createWindowStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
 
     async function reload() {
@@ -63,7 +61,6 @@ export function createDecisionStore({ call, publishEvent }) {
         snapshots = data.snapshots;
         draft = data.draft;
         windows.load({ window: data.window, frozenWindows: data.frozenWindows, windowBoundary: data.windowBoundary });
-        digests.load(data.turnDigests);
         return { runs, log: logs.log() };
     }
 
@@ -208,6 +205,8 @@ export function createDecisionStore({ call, publishEvent }) {
             const stored = {
                 id: record.runId, mesid, at: Date.now(), type: record.type, decision: record.decision,
                 push: record.push ?? record.decision ?? '', form: record.form ?? null,
+                sourceRunId: record.sourceRunId ?? null,
+                writerText: String(last?.mes ?? last?.content ?? '').trim(),
                 reasoning: record.reasoning ?? '', steps: record.steps ?? [], workerId: record.workerId ?? null,
                 warnings: record.warnings ?? [],
             };
@@ -267,7 +266,5 @@ export function createDecisionStore({ call, publishEvent }) {
         appendCycle: logs.appendCycle,
         saveLog: logs.saveLog,
         logTokens: logs.logTokens,
-        digests: digests.digests,
-        saveDigests: digests.saveDigests,
     };
 }
