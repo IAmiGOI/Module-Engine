@@ -42,7 +42,7 @@ export const ASSESS_TOOL = Object.freeze({
 export const SUBMIT_TURN_TOOL = Object.freeze({
     name: 'submit_turn',
     displayName: 'Submit the turn',
-    description: 'The mandatory form for this turn. Every active roster member must appear exactly once; every listed assess id must exist. Where there was no roll, leave assessId out and say in "noCheck" why none was needed. Without a valid form the writer does not write. If the engine returns "missing", fix those fields and call again.',
+    description: 'The mandatory form for this turn. Every active roster member must appear exactly once; a member who does nothing worth showing this turn is listed with only the name and "idle": true. Every listed assess id must exist. Where there was no roll, leave assessId out and say in "noCheck" why none was needed. Without a valid form the writer does not write. If the engine returns "missing", fix those fields and call again.',
     parameters: {
         type: 'object',
         properties: {
@@ -62,6 +62,7 @@ export const SUBMIT_TURN_TOOL = Object.freeze({
                     type: 'object',
                     properties: {
                         name: { type: 'string' },
+                        idle: { type: 'boolean', description: 'True when the character is present but does nothing worth showing this turn. Then only the name is needed, and the writer keeps them in the background.' },
                         decision: { type: 'string', description: 'What they do overall. Persists between turns.' },
                         decisionReason: { type: 'string' },
                         action: { type: 'string', description: 'What they do in this turn, including the line they speak.' },
@@ -71,7 +72,7 @@ export const SUBMIT_TURN_TOOL = Object.freeze({
                         noCheck: { type: 'string', description: 'Why no roll was needed, when assessId is absent: a decision, a reaction, agreeing or refusing, staying put.' },
                         outcome: { type: 'string', description: 'Why it succeeded or failed, written after the assess result is known.' },
                     },
-                    required: ['name', 'decision', 'decisionReason', 'action', 'actionReason', 'outcome'],
+                    required: ['name'],
                 },
             },
             comment: COMMENT,

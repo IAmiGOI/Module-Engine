@@ -177,10 +177,12 @@ export function clampDecisionSettings(values = {}) {
 /** С включённым ризонингом размышления тратят тот же лимит, что и ответ: меньше — и ответ обрезается пустым. */
 export const DECIDER_MIN_TOKENS_WITH_REASONING = 6000;
 
-export function deciderRequestParams(decider = {}) {
+// `floor: false` — ход: лимит из настройки как есть, чтобы директор не думал минутами (пустой ответ всё равно повторяется с удвоенным лимитом).
+// Фоновым циклам (bootstrap, сообщения) — нижняя граница при ризонинге: там ответ важнее скорости.
+export function deciderRequestParams(decider = {}, { floor = true } = {}) {
     const values = decider && typeof decider === 'object' ? decider : {};
     const reasoning = values.reasoningMode && values.reasoningMode !== 'disabled';
-    const maxTokens = reasoning && Number.isFinite(values.maxTokens) ? Math.max(values.maxTokens, DECIDER_MIN_TOKENS_WITH_REASONING) : values.maxTokens;
+    const maxTokens = floor && reasoning && Number.isFinite(values.maxTokens) ? Math.max(values.maxTokens, DECIDER_MIN_TOKENS_WITH_REASONING) : values.maxTokens;
     return {
         ...(values.workerId ? { workerId: values.workerId } : {}),
         temperature: values.temperature,

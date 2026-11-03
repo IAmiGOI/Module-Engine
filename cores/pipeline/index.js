@@ -95,6 +95,8 @@ export function createPipelineCore(host, { publish, resolveAs, timeouts } = {}) 
             needs: [...(stage.needs ?? [])],
             fallbacks: [...(stage.fallbacks ?? [])],
             onExhausted,
+            // Свой срок этапа: число мс; 0 — срок ведёт сам владелец (например, директор со своей отменой).
+            ...(Number.isFinite(Number(stage.timeoutMs)) && stage.timeoutMs !== null && stage.timeoutMs !== undefined ? { timeoutMs: Math.max(0, Number(stage.timeoutMs)) } : {}),
             owner,
         };
         const next = new Map(pipeline.stages);
@@ -131,6 +133,7 @@ export function createPipelineCore(host, { publish, resolveAs, timeouts } = {}) 
     }
 
     async function resolveTimeoutFor(pipelineId, stage) {
+        if (stage.timeoutMs !== undefined) return stage.timeoutMs > 0 ? stage.timeoutMs : null;
         const key = `${pipelineId}:${stage.id}`;
         if (statisticsAvailable()) {
             const result = await resolveAs('core.pipeline', STATS_CONTRACT, { scope: 'pipeline.stage', key });

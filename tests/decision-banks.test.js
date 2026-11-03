@@ -301,3 +301,62 @@ test('a cold start finished by an older bank builder runs again once, and a curr
     await world.banks.ensureColdStart();
     assert.ok(world.calls.length > built, 'banks of the old builder are rebuilt');
 });
+
+test('while a bank is rebuilt for a new builder version, its old text stays in use; a failed rebuild keeps it too', async () => {
+    const world = fakeWorld({ failName: null });
+    await world.banks.ensureColdStart();
+    const chatEntry = [...world.chatMemory].find(([, value]) => value && typeof value === 'object' && Object.values(value).some(record => record?.sourceKey));
+    const aged = Object.fromEntries(Object.entries(chatEntry[1]).map(([sourceKey, record]) => [sourceKey, { ...record, builderVersion: 2, text: `OLD ${record.name}` }]));
+    world.chatMemory.set(chatEntry[0], aged);
+    for (const [name, value] of world.chatMemory) {
+        if (value && typeof value === 'object' && 'status' in value && 'builderVersion' in value && !('sourceKey' in value)) world.chatMemory.set(name, { ...value, builderVersion: 2 });
+    }
+    world.settingsStore.clear();
+    const failing = fakeWorld({ failName: 'Bram' });
+    for (const [name, value] of world.chatMemory) failing.chatMemory.set(name, value);
+    await failing.banks.reload();
+    assert.equal(failing.banks.hasAnyText(), true, 'an existing chat has bank texts, so the turn does not wait for the rebuild');
+    await failing.banks.ensureColdStart();
+    const bram = failing.banks.records().find(record => record.name === 'Bram');
+    assert.equal(bram.status, 'error');
+    assert.equal(bram.text, 'OLD Bram', 'the old bank survives a failed rebuild');
+});
+
+test('without its own setting a bank builder gets the researcher\'s step limit, not a hidden 12', async () => {
+    const { bankSteps } = await import('../cores/decision/bank-tasks.js');
+    assert.equal(bankSteps({ researcher: { maxSteps: 50 } }), 50);
+    assert.equal(bankSteps({ researcher: { maxSteps: 50, bankMaxSteps: 20 } }), 20);
+    assert.equal(bankSteps({}), 12);
+});
+
+test('a bank build waits for a free builder instead of failing with "busy"', async () => {
+    const { createBankTasks } = await import('../cores/decision/bank-tasks.js');
+    let tries = 0;
+    const waits = [];
+    const researcher = {
+        start: () => {
+            tries += 1;
+            if (tries < 3) return { ok: false, error: 'The bank builders are all busy.' };
+            return { ok: true, taskId: 't', done: Promise.resolve({ error: null, report: '***Elsa***\nA bank.' }) };
+        },
+    };
+    const tasks = createBankTasks({ getSettings: () => ({ researcher: { workerId: 'w', maxSteps: 50 } }), researcher, publishEvent: () => {}, sleep: async ms => { waits.push(ms); } });
+    const text = await tasks.build({ sourceKey: 'history:elsa', name: 'Elsa', sourceKind: 'history', source: 'Name: Elsa' });
+    assert.match(text, /A bank/);
+    assert.equal(tries, 3);
+    assert.equal(waits.length, 2);
+});
+
+test('an applied saved set is ready at once: the cold start builds only what the set does not cover', async () => {
+    const first = fakeWorld({ failName: null });
+    await first.banks.ensureColdStart();
+    const ready = first.banks.records().filter(record => record.status === 'ready' && record.sourceKind === 'lorebook entry');
+    assert.ok(ready.length >= 1);
+    const set = { id: 's1', banks: Object.fromEntries(ready.map(record => [record.sourceKey, { ...record }])) };
+    const second = fakeWorld({ failName: null });
+    await second.banks.reload();
+    assert.equal(await second.banks.applySet(set), ready.length);
+    await second.banks.ensureColdStart();
+    const builtNames = second.calls.map(call => /CHARACTER: (.+)/.exec(call.system)?.[1]);
+    for (const record of ready) assert.equal(builtNames.includes(record.name), false, `${record.name} comes from the set, not rebuilt`);
+});

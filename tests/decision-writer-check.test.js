@@ -12,7 +12,7 @@ const settings = () => ({
 });
 const workers = [{ id: 'writer', format: 'openai', model: 'writer/model' }];
 
-function build({ provider, classifier }) {
+function build({ provider, classifier, connections = [{ id: 'test', apiKey: 'test-key' }] }) {
     const engine = createEngine();
     const events = [];
     const providerCalls = [];
@@ -21,6 +21,7 @@ function build({ provider, classifier }) {
         providerCalls.push(params);
         return provider(params);
     });
+    engine.buses.cores.register('classifier.connections.get', () => connections);
     engine.buses.cores.register('classifier.decide', async params => {
         classifierCalls.push(params);
         return classifier(params);
@@ -156,4 +157,23 @@ test('the ST connection path is untouched: no writer proxy response and no class
     const answer = await proxy.respond({ payload: { stream: true }, messages: [] });
     assert.equal(answer, null);
     assert.equal(harness.classifierCalls.length, 0);
+});
+
+test('no classifier connection: the writer is not held back — frames go to ST live and the window says the check was skipped', async () => {
+    const harness = build({
+        connections: [],
+        provider: params => {
+            params.onChunk(frame('Part one. '));
+            params.onChunk(frame('Part two.'));
+            params.onChunk({ data: '[DONE]' });
+            return { status: 200, ok: true, text: '' };
+        },
+        classifier: () => { throw new Error('the classifier must not be asked'); },
+    });
+    const { response, events, classifierCalls } = await harness.send();
+    const text = await response.text();
+    assert.match(text, /"content":"Part one\. "/);
+    assert.match(text, /"content":"Part two\."/);
+    assert.equal(classifierCalls.length, 0);
+    assert.ok(events.some(([name, data]) => name === 'decision.writer.check' && data.skipped && /without a check/.test(data.error)));
 });

@@ -231,3 +231,18 @@ test('bank builders have their own limit and do not take the two director resear
     assert.equal(researcher.start({ task: 'director two' }).ok, true);
     assert.equal(researcher.start({ task: 'director three' }).ok, false);
 });
+
+test('cancelling a turn stops its research tasks: the task ends as cancelled and wakes nobody', async () => {
+    const { researcher, release, events, memory } = makeHarness();
+    const mine = researcher.start({ task: 'slow mine', runId: 'turn_1' });
+    const other = researcher.start({ task: 'slow other', runId: 'turn_2' });
+    assert.equal(researcher.cancel({ runId: 'turn_1' }), 1);
+    release();
+    await flush();
+    const tasks = Object.fromEntries(memory.tasks.map(task => [task.id, task]));
+    assert.equal(tasks[mine.taskId].status, 'cancelled');
+    assert.match(tasks[mine.taskId].error, /cancelled/);
+    assert.equal(tasks[other.taskId].status, 'done');
+    const reports = events.filter(([name]) => name === 'decision.researcher.report').map(([, payload]) => payload.taskId);
+    assert.deepEqual(reports, [other.taskId], 'only the task of the living turn reports');
+});

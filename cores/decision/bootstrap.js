@@ -17,7 +17,10 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
     async function load() {
         try {
             const stored = await call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'bootstrap', fallback: null });
-            if (stored && typeof stored === 'object') state = { ...state, ...stored };
+            // Состояние — только этого чата: без записи в памяти чат начинает с idle, а не с чужого «done»/«failed».
+            if (!promise) state = { status: 'idle', startedAt: 0, finishedAt: 0, error: null, ...(stored && typeof stored === 'object' ? stored : {}) };
+            // «running» из памяти чата — цикл прошлой страницы, его уже нет: честно «failed», чтобы был виден повтор.
+            if (state.status === 'running' && !promise) state = { ...state, status: 'failed', error: 'The bootstrap was interrupted (the page was reloaded).' };
         } catch { /* a missing memory value is a fresh bootstrap */ }
         loaded = true;
         return { ...state };
@@ -26,7 +29,10 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
     async function isNewChat() {
         try {
             const messages = await call('chatHistory.messages', { limit: 2 });
-            return (Array.isArray(messages) ? messages.length : 0) <= 1 && (typeof store.cycles === 'function' ? store.cycles().length : 0) === 0;
+            const list = Array.isArray(messages) ? messages : [];
+            // Ровно одно сообщение — приветствие карточки. Ноль — чат ещё не загружен (перезагрузка страницы):
+            // раньше это принималось за новый чат, и bootstrap запускался заново по пустым данным.
+            return list.length === 1 && list[0]?.is_user !== true && (typeof store.cycles === 'function' ? store.cycles().length : 0) === 0;
         } catch { return false; }
     }
 
@@ -43,7 +49,9 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
                 await save({ status: 'done', finishedAt: now(), error: null });
                 publishEvent('decision.bootstrap.finished', { status: 'done', at: now() });
             } else {
-                const message = 'The bootstrap cycle finished without a chat brief; the first turn goes on without one.';
+                const message = result?.type === 'error'
+                    ? `Bootstrap failed: ${result.reason}`
+                    : 'The bootstrap cycle finished without a chat brief; the first turn goes on without one.';
                 await save({ status: 'failed', finishedAt: now(), error: message });
                 publishEvent('decision.bootstrap.warning', { message });
                 publishEvent('decision.bootstrap.finished', { status: 'failed', at: now(), error: message });
@@ -59,6 +67,7 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
 
     async function ensure() {
         if (!loaded) await load();
+        if (promise) return promise;
         if (state.status === 'done' || state.status === 'failed') return { ...state, skipped: true };
         if (state.status === 'idle' && !(await isNewChat())) return { ...state, skipped: true };
         if (promise) return promise;
@@ -75,7 +84,8 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
 
     async function waitFirstTurn() {
         if (!loaded) await load();
-        if (state.status === 'done' || state.status === 'failed') return { timedOut: false, status: state.status };
+        // Идущий bootstrap ход ждёт всегда, что бы ни было записано в памяти: иначе они идут параллельно и делят состояние цикла.
+        if (!promise && (state.status === 'done' || state.status === 'failed')) return { timedOut: false, status: state.status };
         const timeoutMs = Math.max(1, Number(getSettings().bootstrap?.timeoutMs) || 180000);
         let timer = null;
         const timeout = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs); });
@@ -90,5 +100,14 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
         return result;
     }
 
-    return { load, ensure, maybeStart, waitFirstTurn, state: () => ({ ...state }), isNewChat };
+    /** Повтор после неудачи — по кнопке пользователя; «новый ли чат» уже не важно. */
+    async function retry() {
+        if (!loaded) await load();
+        if (promise) return { ok: false, error: 'The bootstrap is already running.' };
+        if (state.status !== 'failed') return { ok: false, error: 'There is no failed bootstrap to retry.' };
+        promise = run().finally(() => { promise = null; });
+        return { ok: true, state: await promise };
+    }
+
+    return { load, ensure, maybeStart, waitFirstTurn, retry, state: () => ({ ...state }), isNewChat };
 }

@@ -1,7 +1,8 @@
 import { createKnowledge } from './knowledge.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
-import { DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { ASK_USER_STREAK, DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
+import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
 import { createHandlers } from './handlers.js';
 import { createCycleJobs } from './cycle-jobs.js';
@@ -31,7 +32,7 @@ export class DecisionConfigError extends Error {
     }
 }
 
-export function createDecisionCycle({ call, callTool, callService = null, getSettings, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, now = () => Date.now() }) {
+export function createDecisionCycle({ call, callTool, callService = null, getSettings, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, capture = null, now = () => Date.now() }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
@@ -55,21 +56,26 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const turnWindow = createTurnWindow({ store, banks, call, getSettings, deciderWorker, publishEvent, now });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
-    /** Цикл, разбуженный сообщением пользователя, не закрывается без ответа ему (поле `reply` у await). */
-    function withRequiredReply(handlers) {
-        return {
-            ...handlers,
-            await: (args, extra) => (String(args?.reply ?? '').trim()
-                ? handlers.await(args, extra)
-                : { ok: false, error: 'The user wrote to you. Put a short answer into "reply" — what you did, or why you did not — and call await again.' }),
-        };
-    }
+    const recordFailure = createFailureRecorder({ store, state, getSettings, now });
 
     function handlersFor(settings) {
-        return {
+        return withQuestionStreak({
             ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions }),
             ...knowledge.handlers,
-        };
+        });
+    }
+
+    // Не больше двух вопросов подряд: третий ask_user без другой работы между ними — отказ инструмента.
+    // Счётчик сбрасывает любой другой вызов.
+    const MAX_QUESTIONS_IN_A_ROW = 2;
+    function withQuestionStreak(handlers) {
+        return Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, async (args, extra) => {
+            if (name !== 'ask_user') { state.questionStreak = 0; return handler(args, extra); }
+            if ((state.questionStreak ?? 0) >= MAX_QUESTIONS_IN_A_ROW) return { ok: false, error: ASK_USER_STREAK };
+            const result = await handler(args, extra);
+            if (result?.asked) state.questionStreak = (state.questionStreak ?? 0) + 1;
+            return result;
+        }]));
     }
 
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {
@@ -101,6 +107,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.canAsk = /\(\s*ooc\s*:/i.test(String(lastUser?.mes ?? lastUser?.content ?? ''));
         state.canWriteBrief = state.canAsk;
         state.questionCount = 0;
+        state.questionStreak = 0;
         state.questionLimit = settings.bootstrap?.maxQuestions ?? 5;
         state.briefWritten = false;
         wakeQueue.begin();
@@ -136,7 +143,12 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             controller.abort(new Error('form timeout'));
             agent.catch(() => {});
             const draft = store.draft();
-            if (!settings.turnDraft || !draft) throw new Error(`The director did not submit the turn within ${settings.formTimeoutMs} ms.`);
+            if (!settings.turnDraft || !draft) {
+                const seconds = Math.round(Number(settings.formTimeoutMs) / 1000);
+                const error = new Error(`The director did not finish the turn within ${seconds} s. Press Regenerate to try again.`);
+                error.code = 'decision-timeout';
+                throw error;
+            }
             const form = {
                 ...draft,
                 scene: { minutes: Number(draft.scene?.minutes) || 0, ...(draft.scene ?? {}) },
@@ -170,6 +182,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         wakeQueue.rest();
 
         if (result.type !== 'submit') {
+            if (result.type === 'error') researcher?.cancel?.({ runId });
             publishEvent('decision.cycle.ended', { runId, type: result.type, reason: result.reason, steps: result.steps });
             return { ok: false, reason: result.reason, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
         }
@@ -179,11 +192,15 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     }
 
     async function run(options) {
+        const startedAt = now();
         try {
             return await runCycle(options);
         } catch (error) {
+            const message = error?.message ?? String(error);
+            researcher?.cancel?.({ runId: options?.runId });
             wakeQueue.rest();
-            live.failed({ runId: options?.runId, message: error?.message ?? String(error) });
+            await recordFailure({ runId: options?.runId, event: options?.type && options.type !== 'normal' ? options.type : 'turn', wake: options?.wake ?? turnWake(options?.type ?? 'normal'), startedAt, message });
+            live.failed({ runId: options?.runId, message });
             throw error;
         }
     }
@@ -197,13 +214,19 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         return job;
     }
 
-    async function backgroundRun({ runId, event, task, thinking = () => '', wake = null, canAsk = false, maxSteps = null }) {
+    async function backgroundRun({ runId, event, task, thinking: givenThinking = null, wake = null, canAsk = false, maxSteps = null }) {
+        const captured = typeof capture === 'function' && !givenThinking
+            ? capture(`${runId}:`, { onThinking: text => publishEvent('decision.cycle.thinking', { runId, text }) })
+            : null;
+        const thinking = givenThinking ?? (() => captured?.value ?? '');
+        const runUsage = () => (captured ? captured.usage : usage());
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
         state.canAsk = canAsk;
         state.canWriteBrief = canAsk;
         state.questionCount = 0;
+        state.questionStreak = 0;
         state.questionLimit = settings.bootstrap?.maxQuestions ?? 5;
         state.briefWritten = false;
         state.sceneText = '';
@@ -211,33 +234,49 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const startedWake = wake ?? wakeFor({ type: event, label: `The director woke up: ${event}` });
         const startedAt = now();
         live.started({ runId, event, wake: startedWake, at: startedAt });
-        const built = await context.runContext({ settings, task, worker });
-        const tools = await context.toolsFor(settings, { background: true });
-        const hooks = live.hooks({ runId, thinking });
-        const result = await runDecisionCycle({
-            messages: built.messages,
-            tools,
-            generate: context.generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null }),
-            handlers: event === 'message' ? withRequiredReply(handlersFor(settings)) : handlersFor(settings),
-            callTool,
-            maxSteps: maxSteps ?? settings.maxSteps,
-            implicitAwait: true,
-            now,
-            ...hooks,
-        });
-        const { cycle } = cycleRecord({
-            runId, event, result, thinking, wake: startedWake, startedAt,
-            workerId: worker.id, usage: usage(), contextMessages: built.messages,
-        });
+        let result;
+        try {
+            const built = await context.runContext({ settings, task, worker });
+            const tools = await context.toolsFor(settings, { background: true });
+            const hooks = live.hooks({ runId, thinking });
+            result = await runDecisionCycle({
+                messages: built.messages,
+                tools,
+                generate: context.generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null }),
+                handlers: event === 'message' ? withRequiredReply(handlersFor(settings)) : handlersFor(settings),
+                callTool,
+                maxSteps: maxSteps ?? settings.maxSteps,
+                implicitAwait: true,
+                now,
+                ...hooks,
+            });
+            const { cycle } = cycleRecord({
+                runId, event, result, thinking, wake: startedWake, startedAt,
+                workerId: worker.id, usage: runUsage(), contextMessages: built.messages,
+            });
+            result.cycle = cycle;
+        } catch (error) {
+            // Исключение посреди фонового цикла не должно оставлять директора «занятым» навсегда.
+            const message = error?.message ?? String(error);
+            researcher?.cancel?.({ runId });
+            wakeQueue.rest();
+            await recordFailure({ runId, event, wake: startedWake, startedAt, message });
+            live.failed({ runId, message });
+            throw error;
+        } finally {
+            captured?.stop();
+        }
+        const { cycle } = result;
         await store.appendCycle(cycle).catch(() => {});
         await turnWindow.recordBackground(cycle).catch(error => publishEvent('decision.log.warning', { reason: `window append failed: ${error?.message ?? error}` }));
         live.finished({ cycle });
         wakeQueue.rest();
         publishEvent('decision.passive.ended', { runId, event, steps: result.steps, type: result.type });
-        return { skipped: false, steps: result.steps, type: result.type, briefWritten: Boolean(state.briefWritten) };
+        if (result.type === 'error') researcher?.cancel?.({ runId });
+        return { skipped: false, steps: result.steps, type: result.type, reason: result.reason, briefWritten: Boolean(state.briefWritten) };
     }
 
-    const jobs = createCycleJobs({ backgroundRun, wakeQueue, store, getSettings, wakeFor, now });
+    const jobs = createCycleJobs({ backgroundRun, enqueueBackground, wakeQueue, store, getSettings, wakeFor, now });
 
     /** Сообщение пользователя директору: в лог сразу, пробуждение — в очередь. */
     async function sendMessage({ text } = {}) {
@@ -267,6 +306,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap,
         onResearcherReport: jobs.onResearcherReport, sendMessage, judgeForcedMemory,
         answerQuestion: params => questions.answer(params),
+        // Вопрос от движка, а не от модели (например, «взять готовые банки?»): та же очередь и тот же тост.
+        askUser: ({ question, options, why = '' }) => questions.ask({ question, options, why, allowed: true, asked: 0, limit: 1 }),
         question: () => questions.pending(),
         recordTurn: params => turnWindow.recordTurn(params),
         removeLastWindowTurn: () => turnWindow.removeLastTurn(),

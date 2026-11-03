@@ -6,7 +6,7 @@ import {
     WRITER_AGENCY_QUESTION, WRITER_RESOLUTION_QUESTION, WRITER_REWRITE_PROMPT,
     WRITER_REASON_AGENCY, WRITER_REASON_RESOLUTION,
     FORM_KNOWLEDGE_QUESTION, FORM_KNOWLEDGE_REFUSAL,
-    BOOTSTRAP_TASK, ASK_USER_DESCRIPTION, ASK_USER_ANSWERED, ASK_USER_SKIPPED, ASK_USER_NOT_ALLOWED, ASK_USER_LIMIT,
+    BOOTSTRAP_TASK, ASK_USER_DESCRIPTION, ASK_USER_ANSWERED, ASK_USER_SKIPPED, ASK_USER_NOT_ALLOWED, ASK_USER_LIMIT, ASK_USER_STREAK,
     WRITE_CHAT_BRIEF_DESCRIPTION,
 } from '../libraries/core/decision-prompts.js';
 
@@ -68,7 +68,7 @@ test('the bootstrap task is PROMPTS.md section 15 word for word', () => {
 
 test('the ask_user and write_chat_brief texts are PROMPTS.md section 16 word for word', () => {
     assert.equal(ASK_USER_DESCRIPTION, blockFromDoc('**ask_user** — описание инструмента:'));
-    const answers = blocksFromDoc('Ответы инструмента:', 4);
-    assert.deepEqual(answers, [ASK_USER_ANSWERED, ASK_USER_SKIPPED, ASK_USER_NOT_ALLOWED, ASK_USER_LIMIT]);
+    const answers = blocksFromDoc('Ответы инструмента:', 5);
+    assert.deepEqual(answers, [ASK_USER_ANSWERED, ASK_USER_SKIPPED, ASK_USER_NOT_ALLOWED, ASK_USER_LIMIT, ASK_USER_STREAK]);
     assert.equal(WRITE_CHAT_BRIEF_DESCRIPTION, blockFromDoc('**write_chat_brief** — описание инструмента:'));
 });

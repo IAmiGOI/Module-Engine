@@ -172,7 +172,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
 
         spawn_researcher: async args => {
             if (!researcher) return { ok: false, error: 'The researcher is not available.' };
-            return researcher.start({ task: args.task });
+            return researcher.start({ task: args.task, runId: state.runId || null });
         },
 
         save_draft: async args => {
@@ -256,7 +256,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
 
         assess: createAssessHandler({ state, getSettings }),
 
-        submit_turn: createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker }),
+        submit_turn: createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker, userName: () => String(banks?.persona?.()?.name ?? '').trim() }),
 
 
         character_bank: async args => {
@@ -273,7 +273,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
                 allowed: state.canAsk === true, asked: state.questionCount ?? 0, limit: state.questionLimit ?? 5,
             });
             if (result.asked) state.questionCount = (state.questionCount ?? 0) + 1;
-            return { ok: true, text: result.text };
+            return { ok: true, text: result.text, asked: Boolean(result.asked) };
         },
 
         write_chat_brief: async args => {

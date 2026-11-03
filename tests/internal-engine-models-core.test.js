@@ -703,3 +703,35 @@ test('the repeat and presence penalties reach an OpenAI-style provider only when
     assert.equal(resolveGenerateRequest(base, {}).frequencyPenalty, 0);
     assert.equal(resolveGenerateRequest({ ...base, frequencyPenalty: 0.3 }, {}).frequencyPenalty, 0.3);
 });
+
+test('a network failure before any byte ("Failed to fetch") is retried on a fresh request; a request that keeps failing reports the error after two retries', async () => {
+    const run = async failures => {
+        const engine = createEngine();
+        let sent = 0;
+        registerHttpService(engine.buses.network, {
+            fetch: async () => {
+                sent += 1;
+                if (sent <= failures) throw new TypeError('Failed to fetch');
+                return { status: 200, ok: true, headers: { entries: () => [] }, text: async () => JSON.stringify({ choices: [{ message: { content: 'Hello.' } }] }) };
+            },
+        });
+        const settingsContext = { extensionSettings: {}, saveSettingsDebounced: () => {} };
+        registerExtensionSettingsService(engine.buses.services, { getContext: () => settingsContext });
+        createSettingsCore(engine.registerCaller('core.settings', 'cores', { tier: 'official' }));
+        const waits = [];
+        const modelsCore = createInternalEngineModelsCore(engine.registerCaller('core.models.internal', 'cores', { tier: 'official', networkAccess: true }), { sleep: async ms => { waits.push(ms); } });
+        modelsCore.configureWorkers([{ id: 'w1', endpoint: 'https://api.example.com', model: 'gpt-test', format: 'openai' }]);
+        const module = engine.registerCaller('module.writer', 'modules', { tier: 'official' });
+        const result = await new Promise(resolve => module.cores.subscribe('model.generate', { params: { prompt: 'hi', stream: false } }, resolve));
+        return { result, sent, waits };
+    };
+    const recovered = await run(1);
+    assert.equal(recovered.result.ok, true);
+    assert.equal(recovered.result.value, 'Hello.');
+    assert.equal(recovered.sent, 2);
+    assert.deepEqual(recovered.waits, [2000]);
+    const lost = await run(5);
+    assert.equal(lost.result.ok, false);
+    assert.match(lost.result.error.message, /Failed to fetch/);
+    assert.equal(lost.sent, 3, 'one request and two retries');
+});

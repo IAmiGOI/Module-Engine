@@ -12,6 +12,7 @@ import { previewSection } from './prompt-sections.js';
 import { createWriterRewrite } from './rewrite.js';
 import { createCharacterBanks } from './banks.js';
 import { createBootstrap } from './bootstrap.js';
+import { createBankSets } from './bank-sets.js';
 import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
@@ -27,6 +28,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     let workers = [];
     let pending = null; // текущий прогон директора: { runId, type, chat, decision, form, push, … }
     let lastFailure = null; // последняя неудача: нужна, чтобы отличить ошибку настройки от сбоя модели
+    const timedOutRuns = new Map(); // runId -> сообщение: ход истёк по сроку, повтор конвейера сразу отказывает
     let stagesRegistered = false;
     let registering = false;
     let runCounter = 0;
@@ -74,8 +76,18 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         researcher,
         banks,
         publishEvent,
+        // Мысли и расход фоновых циклов (bootstrap, сообщения, пассивные) — тем же перехватом, что у хода.
+        capture: (prefix, handlers) => captureReasoning(host, prefix, handlers),
     });
     const bootstrap = createBootstrap({ call: callStrict, store, cycle, getSettings: () => settings, publishEvent });
+    const bankSets = createBankSets({ call: callStrict, banks, store, bootstrap, askUser: params => cycle.askUser(params), publishEvent });
+    // Снимок «стартовых» банков — с паузой: событие «готов» приходит раньше, чем банк записан, а событий за bootstrap много.
+    let snapshotTimer = null;
+    const scheduleSnapshot = () => {
+        if (snapshotTimer) clearTimeout(snapshotTimer);
+        snapshotTimer = setTimeout(() => { snapshotTimer = null; bankSets.snapshot().catch(() => {}); }, 1500);
+    };
+    for (const name of ['decision.bootstrap.finished', 'decision.bank.ready', 'decision.bank.timeline']) host.events.subscribe(name, scheduleSnapshot);
     const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
     const rollback = createRollback({ store, getSettings: () => settings, publishEvent });
     const { snapshotState, restoreState, restoreSnapshotFor } = rollback;
@@ -86,6 +98,13 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         workers = (await call('model.workers.get')) ?? [];
         await bootstrap.load().catch(() => {});
         bootstrap.maybeStart().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }));
+        // Новый чат: банки строятся сразу, параллельно bootstrap, а не с первым ходом.
+        // Есть готовые банки прошлого bootstrap для этих книг — сначала вопрос «взять их?», потом сборка недостающих.
+        bootstrap.isNewChat().then(async fresh => {
+            if (!fresh) return;
+            await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
+            await banks.ensureColdStart();
+        }).catch(error => publishEvent('decision.bank.failed', { message: error?.message ?? String(error) }));
         return { runs: store.runs() };
     }
 
@@ -116,6 +135,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 params: { chat: { $from: '$input.chat' }, type: { $from: '$input.type' }, runId: { $from: '$input.runId' } },
                 fallbacks: [{ delayMs: retryDelayMs }],
                 onExhausted: 'abort',
+                timeoutMs: 0, // срок ведёт сам директор (formTimeoutMs) и отменяет запросы; 120 с конвейера рвали ход на ожидании банков
             });
             const rewritten = await addStage(PAYLOAD_PIPELINE, decisionRewriteStage({ id: REWRITE_STAGE, contract: REWRITE_CONTRACT }));
             stagesRegistered = Boolean(decided && rewritten);
@@ -153,10 +173,10 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 return { reused: true, decision: push };
             }
         }
-        await Promise.all([
-            banks.ensureColdStart().catch(error => publishEvent('decision.bank.failed', { runId, message: error?.message ?? String(error) })),
-            bootstrap.waitFirstTurn().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) })),
-        ]);
+        if (timedOutRuns.has(runId)) throw new Error(timedOutRuns.get(runId)); // повтор после таймаута — сразу отказ
+        const coldStart = banks.ensureColdStart().catch(error => publishEvent('decision.bank.failed', { runId, message: error?.message ?? String(error) }));
+        await Promise.all([banks.hasAnyText() ? null : coldStart, // банки ждём только в чате без них; пересборка — в фоне, со старым текстом
+            bootstrap.waitFirstTurn().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }))]);
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
@@ -187,6 +207,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             // снимку до хода, иначе повтор/свайп увидят чужие правки.
             if (beforeSnapshot) await restoreState(beforeSnapshot).catch(() => {});
             recordStep(runId, { attempt, workerId: settings.decider.workerId || null, durationMs: Date.now() - startedAt, error: error?.message ?? String(error) });
+            if (error?.code === 'decision-timeout') timedOutRuns.set(runId, error.message);
             lastFailure = { runId, kind: error?.code === 'decision-config' ? 'config' : 'runtime', message: error?.message ?? String(error) };
             publishEvent('decision.failed', { runId, message: error?.message ?? String(error) });
             throw error;
@@ -204,7 +225,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     function discardPending() {
         const record = pending;
         pending = null;
-        attempts.clear();
+        attempts.clear(); timedOutRuns.clear();
         if (record?.runId) store.markRejected(record.runId).catch(() => {});
         if (record?.snapshot) restoreState(record.snapshot).catch(() => {});
     }
@@ -214,7 +235,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         getSettings: () => settings,
         getPending: () => pending,
         setPending: value => { pending = value; },
-        clearAttempts: () => attempts.clear(),
+        clearAttempts: () => { attempts.clear(); timedOutRuns.clear(); },
         deleteAttempt: runId => attempts.delete(runId),
         persist: record => store.persist(record),
         discardPending,

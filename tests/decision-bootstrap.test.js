@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBootstrap } from '../cores/decision/bootstrap.js';
 
-function build({ messages = [], cycles = [], briefWritten = true, timeoutMs = 180000, run = null } = {}) {
+function build({ messages = [{ mes: 'The greeting.', is_user: false }], cycles = [], briefWritten = true, timeoutMs = 180000, run = null } = {}) {
     const memory = new Map();
     const events = [];
     let starts = 0;
@@ -65,4 +65,30 @@ test('the first turn waits for bootstrap, and a timeout lets the turn go on', as
     assert.equal(result.timedOut, true);
     assert.ok(world.events.some(([event]) => event === 'decision.bootstrap.warning'));
     release();
+});
+
+test('a failed bootstrap is retried only by the user, and the retry can succeed', async () => {
+    let brief = false;
+    const world = build({ run: () => ({ briefWritten: brief }) });
+    await world.bootstrap.load();
+    await world.bootstrap.maybeStart();
+    assert.equal(world.bootstrap.state().status, 'failed');
+    await world.bootstrap.maybeStart();
+    assert.equal(world.starts(), 1, 'a failed bootstrap does not restart by itself');
+    brief = true;
+    const retried = await world.bootstrap.retry();
+    assert.equal(retried.ok, true);
+    assert.equal(world.bootstrap.state().status, 'done');
+    assert.equal((await world.bootstrap.retry()).ok, false, 'nothing to retry after success');
+});
+
+test('a page reload before the chat is loaded (no messages yet) is not a new chat — bootstrap does not start on empty data', async () => {
+    const world = build({ messages: [] });
+    await world.bootstrap.load();
+    await world.bootstrap.maybeStart();
+    assert.equal(world.starts(), 0);
+    const userFirst = build({ messages: [{ mes: 'Hi', is_user: true }] });
+    await userFirst.bootstrap.load();
+    await userFirst.bootstrap.maybeStart();
+    assert.equal(userFirst.starts(), 0, 'a chat that already has a user message is not new');
 });

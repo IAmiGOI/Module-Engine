@@ -56,7 +56,7 @@ export function createQuestionQueue({ callService = null, publishEvent, now = ()
         if (index >= 0) order.splice(index, 1);
         const skippedQuestion = skipped === true || !String(answer ?? '').trim();
         const text = skippedQuestion ? ASK_USER_SKIPPED : fillPrompt(ASK_USER_ANSWERED, { answer: String(answer).trim() });
-        entry.resolve({ text, asked: true });
+        entry.resolve({ text, asked: true, answer: skippedQuestion ? '' : String(answer).trim(), skipped: skippedQuestion });
         if (!order.length) lock(false);
         publishEvent('decision.question.answered', { id: entry.id, answer: skippedQuestion ? '' : String(answer).trim(), skipped: skippedQuestion, at: now() });
         return { ok: true };

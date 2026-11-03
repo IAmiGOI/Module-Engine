@@ -92,13 +92,27 @@ export async function runDecisionCycle({
         steps += 1;
         const modelStartedAt = now();
         onModelStart({ step: steps, at: modelStartedAt });
-        let answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true }));
+        let answer;
+        try {
+            answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true }));
+        } catch (error) {
+            // Упавший запрос к модели не стирает цикл: всё сделанное до него (вызовы, вопросы, ответы) остаётся в записи.
+            const reason = error?.message ?? String(error);
+            warnings.push(`the model request failed: ${reason}`);
+            return { type: 'error', reason, error, trace, messages: conversation, steps, warnings };
+        }
         // Пустой ответ — ни текста, ни вызова — почти всегда обрыв по лимиту токенов (ризонинг съел весь лимит).
         // Это не «я закончил»: один повтор с удвоенным лимитом, и честное предупреждение, если не помогло.
         if (!answer.toolCalls.length && !String(answer.text ?? '').trim() && !emptyRetried) {
             emptyRetried = true;
             warnings.push('the answer came back empty (likely cut off by the token limit); retried with a doubled limit');
-            answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true, boost: 2 }));
+            try {
+                answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true, boost: 2 }));
+            } catch (error) {
+                const reason = error?.message ?? String(error);
+                warnings.push(`the model request failed: ${reason}`);
+                return { type: 'error', reason, error, trace, messages: conversation, steps, warnings };
+            }
             if (!answer.toolCalls.length && !String(answer.text ?? '').trim()) warnings.push('the answer was empty again — cut off by the token limit; raise the director max tokens');
         }
         onModelEnd({

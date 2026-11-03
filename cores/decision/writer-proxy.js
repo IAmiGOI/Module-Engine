@@ -79,6 +79,16 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
             push, userMessage, resolution, user, runId, publishEvent, targetFormat, stream,
             requestFor: nextMessages => makeRequest(worker, settings, payload, nextMessages, stream),
         };
+        // Проверять нечем (классификатор не настроен) — поток идёт живьём, как до части 11: держать ответ незачем,
+        // а пользователь иначе ничего не видит, пока писатель не допишет целиком.
+        const canCheck = context.check
+            ? (typeof context.check.ready === 'function' ? await context.check.ready().catch(() => false) : true)
+            : false;
+        if (!canCheck) {
+            announce(publishEvent, { runId, attempt: 1, phase: 'final', skipped: true, error: 'No classifier connection is set — the writer streams without a check.' });
+            context.check = null;
+            if (stream) return { respondWith: liveStreamResponse(context) };
+        }
         return stream
             ? { respondWith: streamResponse(context) }
             : { respondWith: await checkedJson(context) };
@@ -139,6 +149,55 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         if (!value.ok) return { ok: false, error: writerErrorMessage(context.id, value.status, value.text), status: value.status || 502 };
         const body = writerJsonBody(value.text);
         return { ok: true, text: String(body?.choices?.[0]?.message?.content ?? '') };
+    }
+
+    /** Поток писателя без проверки: кадры провайдера сразу уходят в ST. */
+    function liveStreamResponse(context) {
+        const { id, signal, targetFormat } = context;
+        const encoder = new TextEncoder();
+        let controller = null;
+        let closed = false;
+        let sawFrame = false;
+        let sawDone = false;
+        const body = new ReadableStream({ start(value) { controller = value; } });
+        const push = text => {
+            if (closed || !controller) return;
+            try { controller.enqueue(encoder.encode(text)); } catch { closed = true; }
+        };
+        const finish = () => {
+            if (closed || !controller) return;
+            closed = true;
+            try { controller.close(); } catch { /* already closed */ }
+        };
+        const fail = message => {
+            push(`data: ${JSON.stringify(writerErrorBody(message))}\n\n`);
+            finish();
+        };
+        const pushData = data => {
+            const translated = translateWriterFrame(data, targetFormat);
+            if (translated === null) return;
+            if (translated === '[DONE]') sawDone = true;
+            sawFrame = true;
+            push(`data: ${translated}\n\n`);
+        };
+        (async () => {
+            if (signal?.aborted) { finish(); return; }
+            const result = await network({
+                ...context.requestFor(context.messages), stream: true, signal, stallMs: STALL_MS,
+                onChunk: frame => { const data = String(frame?.data ?? ''); if (data) pushData(data); },
+            });
+            if (signal?.aborted) { finish(); return; }
+            if (!result.ok) { fail(`Writer connection "${id}" request failed: ${result.error.message}`); return; }
+            const value = result.value;
+            if (!value.ok) { fail(writerErrorMessage(id, value.status, value.text)); return; }
+            if (!sawFrame && String(value.text ?? '').trim()) pushData(String(value.text).trim());
+            if (!sawDone) push('data: [DONE]\n\n');
+            finish();
+        })().catch(error => {
+            if (signal?.aborted) finish();
+            else fail(`Writer connection "${id}" request failed: ${error?.message ?? error}`);
+        });
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
     }
 
     function streamResponse(context) {

@@ -146,10 +146,12 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
                 chat[source.sourceKey] = createBankRecord({ ...cached, rawSource: source.source, examples: source.examples ?? '', status: 'ready' });
                 continue;
             }
+            // Пока новый банк строится, старый текст остаётся в работе: директор и писатель не теряют персонажа.
             chat[source.sourceKey] = createBankRecord({
                 sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
-                sourceHash: hash, sizeBand: sizeFor(source), rawSource: source.source, examples: source.examples ?? '',
+                sourceHash: hash, sizeBand: own?.sizeBand ?? sizeFor(source), rawSource: source.source, examples: source.examples ?? '',
                 aliases: source.aliases ?? [], canonicalName: source.canonicalName ?? '', status: 'pending',
+                text: own?.text ?? cached?.text ?? '',
             });
             pending.push(source);
         }
@@ -183,7 +185,9 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         const state = bankStore.coldStart();
         // Новая версия сборщика: старый холодный старт не считается — банки пересоберутся один раз.
         const current = Number(state.builderVersion) === BANK_BUILDER_VERSION;
-        if (current && (state.status === 'ready' || state.status === 'partial')) return Promise.resolve(progress());
+        // Банки, упавшие только из-за занятых сборщиков (старая ошибка), пересобираются сами.
+        const busyFailed = records().some(record => record.status === 'error' && /busy/i.test(String(record.error ?? '')));
+        if (current && !busyFailed && (state.status === 'ready' || state.status === 'partial')) return Promise.resolve(progress());
         coldStartPromise = runColdStart().finally(() => { coldStartPromise = null; });
         return coldStartPromise;
     }
@@ -266,6 +270,20 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         return { text: renderBankSection(chosen), examples: renderExampleSection(chosen.filter(record => record.sourceKind === 'card')), records: chosen };
     }
 
+    /** Готовый набор банков (сохранённый bootstrap прошлого чата) — сразу в чат, как собранные. */
+    async function applySet(set) {
+        const chat = { ...bankStore.chat() };
+        let applied = 0;
+        for (const [sourceKey, bank] of Object.entries(set?.banks ?? {})) {
+            if (!String(bank?.text ?? '').trim()) continue;
+            chat[sourceKey] = createBankRecord({ ...bank, sourceKey, status: 'ready', error: null, builderVersion: BANK_BUILDER_VERSION });
+            applied += 1;
+        }
+        await bankStore.saveChat(chat);
+        publishEvent('decision.bank.edited', { sourceKey: '', name: '', applied });
+        return applied;
+    }
+
     function examplesForCards() { return renderExampleSection(records().filter(record => record.sourceKind === 'card')); }
 
     return {
@@ -273,6 +291,8 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         contextFor, examplesForCards,
         read, write, rebuild, progress,
         records, recordsFor,
+        applySet,
+        hasAnyText: () => records().some(record => String(record?.text ?? '').trim()),
         marksForLorebook: () => bankStore.marks(),
         scene: () => primary('scene'),
         persona: () => primary('persona'),

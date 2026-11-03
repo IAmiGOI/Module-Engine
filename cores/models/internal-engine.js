@@ -56,6 +56,9 @@ export {
  */
 /** Провайдер просит подождать (HTTP 429/503, например «OpenRouter could not verify available credits… Retry-After: 10»): ждём и повторяем тот же запрос, а не отдаём отказ человеку. */
 const RATE_LIMIT_RETRIES = 2;
+// Обрыв сети до первого байта ответа («Failed to fetch»): браузер не получил ничего, повтор идёт уже на новом соединении.
+const NETWORK_RETRY_WAITS_MS = [2000, 5000];
+const NETWORK_FAILURE = /failed to fetch|networkerror|network error|load failed|err_[a-z0-9_]+|econnreset|socket hang up|fetch failed/i;
 const RATE_LIMIT_MAX_WAIT_MS = 20000;
 const readRetryAfterMs = (text, fallbackMs) => { const seconds = Number(/"Retry-After"\s*:\s*"?(\d+)/i.exec(String(text ?? ''))?.[1]); return Math.min(RATE_LIMIT_MAX_WAIT_MS, Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : fallbackMs); };
 
@@ -136,7 +139,7 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
      * такой эндпоинт молча отвечал бы пустой строкой — silent regression
      * ровно там, где аддитивность контракта была обещана.
      */
-    async function dispatchToWorker(worker, generateRequest, { onChunk, onRaw, stallMs, stream = true, signal } = {}) {
+    async function dispatchToWorker(worker, generateRequest, { onChunk, onRaw, stallMs, stream = true, signal, networkRetry = false } = {}) {
         if (worker.format === ST_MAIN_FORMAT) return dispatchToMainConnection(worker, generateRequest, { onChunk, stallMs, signal });
         const providerRequest = buildProviderRequest(worker, generateRequest, { stream });
         let accumulated = '';
@@ -163,6 +166,13 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             timeoutMs: stream ? undefined : stallMs,
         });
         let result = await send();
+        // Повтор только если от провайдера не пришло ни байта: иначе часть ответа уже ушла в onChunk, и повтор задвоил бы текст.
+        for (let tries = 0; networkRetry && tries < NETWORK_RETRY_WAITS_MS.length && !result.ok && !signal?.aborted
+            && NETWORK_FAILURE.test(String(result.error?.message ?? '')) && !accumulated && !reasoning && !toolCalls.calls().length; tries += 1) {
+            publishEvent('model.generate.networkRetry', { workerId: worker.id, message: result.error?.message ?? '', retry: tries + 1 });
+            await sleep(NETWORK_RETRY_WAITS_MS[tries]);
+            result = await send();
+        }
         for (let tries = 0; tries < RATE_LIMIT_RETRIES && result.ok && [429, 503].includes(result.value.status) && !signal?.aborted; tries += 1) {
             publishEvent('model.generate.rateLimited', { workerId: worker.id, status: result.value.status, retry: tries + 1 });
             await sleep(readRetryAfterMs(result.value.text, rateLimitWaitMs));
@@ -299,6 +309,8 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     return attempt(worker, resolveGenerateRequest(params, worker), {
                         stream: params?.stream !== false,
                         stallMs, signal,
+                        // Есть запасной воркер — мёртвый уступает ему сразу; нет — обрыв сети повторяется на том же.
+                        networkRetry: tiers.length === 1,
                         onChunk: (delta, text, extra) => {
                             if (delta) publishEvent('model.generate.chunk', { requestId, workerId: worker.id, delta, text });
                             if (extra?.reasoning) publishEvent('model.generate.reasoning', { requestId, workerId: worker.id, delta: extra.reasoning, text: extra.thinking });

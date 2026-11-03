@@ -36,3 +36,28 @@ test('with reasoning on, the director never asks for fewer tokens than the safe 
     assert.equal(deciderRequestParams({ maxTokens: 2000, reasoningMode: 'disabled' }).maxTokens, 2000);
     assert.equal(deciderRequestParams({ maxTokens: 12000, reasoningMode: 'enabled' }).maxTokens, 12000);
 });
+
+test('a failed model request ends the cycle as an error but keeps every step made before it', async () => {
+    let calls = 0;
+    const result = await runDecisionCycle({
+        messages: [{ role: 'system', content: 'S' }],
+        tools: [],
+        generate: async () => {
+            calls += 1;
+            if (calls === 1) return { text: '', toolCalls: [call('ask_user', { question: 'Where?', options: ['A', 'B'] })] };
+            throw new TypeError('Failed to fetch');
+        },
+        handlers: { ask_user: () => ({ ok: true, answer: 'A' }) },
+        implicitAwait: true,
+    });
+    assert.equal(result.type, 'error');
+    assert.equal(result.reason, 'Failed to fetch');
+    assert.equal(result.trace.length, 1, 'the question asked before the failure stays in the record');
+    assert.ok(result.warnings.some(line => /model request failed: Failed to fetch/.test(line)));
+});
+
+test('the token floor with reasoning is for background cycles only; a turn keeps the configured limit', () => {
+    const decider = { maxTokens: 2000, reasoningMode: 'enabled' };
+    assert.equal(deciderRequestParams(decider).maxTokens, DECIDER_MIN_TOKENS_WITH_REASONING);
+    assert.equal(deciderRequestParams(decider, { floor: false }).maxTokens, 2000);
+});

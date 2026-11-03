@@ -106,11 +106,14 @@ export function createResearcher({ call, callService = call, getSettings, getWor
             if (!worker) throw new Error('no researcher worker is configured');
             if (worker.format !== 'openai') throw new Error(`the researcher needs an "openai" worker, "${worker.id}" is "${worker.format}"`);
             while (steps < maxSteps && !report) {
+                if (task.controller?.signal.aborted) throw new Error(task.cancelReason || 'cancelled');
                 steps += 1;
                 const answer = await call('model.generate', {
                     workerId: worker.id, messages, tools: RESEARCH_TOOLS, toolChoice: 'auto',
                     stream: false, returnMessage: true, maxTokens: Number(task.maxTokens) || 2000,
+                    ...(task.controller ? { signal: task.controller.signal } : {}),
                 });
+                if (task.controller?.signal.aborted) throw new Error(task.cancelReason || 'cancelled');
                 const calls = Array.isArray(answer?.toolCalls) ? answer.toolCalls : [];
                 const text = String(answer?.text ?? '');
                 if (!calls.length) {
@@ -146,10 +149,13 @@ export function createResearcher({ call, callService = call, getSettings, getWor
             failure = error?.message ?? String(error);
             report = `The researcher failed: ${failure}`;
         }
-        const finished = { ...task, status: 'done', report, steps, finishedAt: now(), trace, error: failure };
+        const { controller: _controller, ...plain } = task;
+        const cancelled = Boolean(task.controller?.signal.aborted);
+        const finished = { ...plain, status: cancelled ? 'cancelled' : 'done', report, steps, finishedAt: now(), trace, error: failure };
         await store.updateResearch(task.id, finished).catch(() => {});
         running.delete(task.id);
-        if (task.notify !== false) publishEvent('decision.researcher.report', { taskId: task.id, task: task.task, report, steps });
+        // Отменённая задача (ход, который её запустил, упал) директора не будит.
+        if (task.notify !== false && !cancelled) publishEvent('decision.researcher.report', { taskId: task.id, task: task.task, report, steps });
         return finished;
     }
 
@@ -158,7 +164,7 @@ export function createResearcher({ call, callService = call, getSettings, getWor
      * Ставит задачу и сразу возвращает id. Задачи директора — не больше `maxTasks`, третья — отказ, не ожидание.
      * Сборка дата-банков (`kind: 'bank'`) — свой лимит `bankConcurrency` и не занимает места исследований директора.
      */
-    function start({ task, system = null, kind = 'research', notify = true, maxSteps = null, maxTokens = null } = {}) {
+    function start({ task, system = null, kind = 'research', notify = true, maxSteps = null, maxTokens = null, runId = null } = {}) {
         const settings = getSettings();
         const text = String(task ?? '').trim();
         if (!text) return { ok: false, error: 'A researcher task needs text.' };
@@ -168,12 +174,24 @@ export function createResearcher({ call, callService = call, getSettings, getWor
         if (sameKind >= limit) {
             return { ok: false, error: isBank ? 'The bank builders are all busy.' : 'Two research tasks are already running — wait for their reports, do not queue a third.' };
         }
-        const record = { id: taskId(now(), rid), task: text, kind, notify: notify !== false, status: 'running', steps: 0, startedAt: now(), report: null, maxSteps, maxTokens };
-        running.set(record.id, record);
+        const record = { id: taskId(now(), rid), task: text, kind, notify: notify !== false, status: 'running', steps: 0, startedAt: now(), report: null, maxSteps, maxTokens, runId: runId || null };
+        running.set(record.id, { ...record, controller: new AbortController() });
         store.addResearch(record).catch(() => {});
-        const done = runTask(record, settings, { system });
+        const done = runTask(running.get(record.id), settings, { system });
         return { ok: true, taskId: record.id, done };
     }
 
-    return { start, running: () => [...running.values()].filter(item => item.kind !== 'bank').length, tasks: () => store.research() };
+    /** Снять задания, запущенные этим ходом: ход упал или истёк — их отчёты уже никому не нужны. */
+    function cancel({ runId, reason = 'cancelled: the turn that started it failed' } = {}) {
+        let count = 0;
+        for (const item of running.values()) {
+            if (!runId || item.runId !== runId || item.controller.signal.aborted) continue;
+            item.cancelReason = reason;
+            item.controller.abort(new Error(reason));
+            count += 1;
+        }
+        return count;
+    }
+
+    return { start, cancel, running: () => [...running.values()].filter(item => item.kind !== 'bank').length, tasks: () => store.research() };
 }

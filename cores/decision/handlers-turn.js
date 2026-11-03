@@ -3,11 +3,12 @@ import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
 import { advanceClock, clockFromLabel } from '../../libraries/core/decision-clock.js';
 
 /** `submit_turn`: строгая форма, проверка знаний классификатором, место и RP-время. */
-export function createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker = null }) {
+export function createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker = null, userName = () => '' }) {
     return async args => {
         if (!store.plan()) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };
-        const validation = validateTurn({ form: args, roster: store.roster().active, assessments: state.assessments });
+        const validation = validateTurn({ form: args, roster: store.roster().active, assessments: state.assessments, user: userName() });
         if (!validation.ok) return { ok: false, missing: validation.missing };
+        if (validation.warnings?.length) state.formWarnings = [...(state.formWarnings ?? []), ...validation.warnings];
         if (formChecker) {
             const verdict = await formChecker.check({
                 form: validation.normalized, sceneText: state.sceneText ?? '',

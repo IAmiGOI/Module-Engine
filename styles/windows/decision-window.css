@@ -69,11 +69,103 @@
 .stme-dw-bank-pending { border-style: dashed; }
 .stme-dw-bank-text { width: 100%; box-sizing: border-box; margin-top: 4px; resize: vertical; }
 
-/* Тост вопросов bootstrap: перекрывает ввод, пока очередь не пуста. */
-.stme-dq-toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 6960; width: min(520px, 92vw); box-sizing: border-box; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; background: var(--stme-level-1); border: 1px solid var(--stme-border); border-radius: var(--stme-radius); box-shadow: 0 8px 28px rgba(0,0,0,.28); }
-.stme-dq-title { font-weight: 700; }
-.stme-dq-counter { font-size: .82em; opacity: .7; }
-.stme-dq-question { font-size: .95em; }
-.stme-dq-why { font-size: .8em; opacity: .7; }
-.stme-dq-own { display: flex; gap: 6px; align-items: center; }
-.stme-dq-own .text_pole { flex: 1; min-width: 0; }
+/* Тост вопросов директора: над закрытым полем ввода, пока очередь не пуста.
+   Плотный фон с размытием, как у остальных уведомлений ME, — чат под ним не просвечивает. */
+.stme-dq-toast {
+    position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%); z-index: 6960;
+    width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 140px); overflow: auto; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 12px;
+    color: var(--stme-text); font-size: 14px; line-height: 1.45;
+    background: color-mix(in srgb, var(--stme-surface) 96%, transparent);
+    backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%);
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 55%, var(--stme-border));
+    border-radius: var(--stme-radius-card, 12px);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, .45), 0 0 0 1px rgba(0, 0, 0, .2);
+    animation: stme-dq-in .2s ease-out;
+}
+@keyframes stme-dq-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.stme-dq-head { display: flex; align-items: center; gap: 8px; }
+.stme-dq-mark { color: var(--stme-accent); font-size: 15px; line-height: 1; }
+.stme-dq-title { font-weight: 700; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; opacity: .85; }
+.stme-dq-counter {
+    margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; white-space: nowrap;
+    background: color-mix(in srgb, var(--stme-accent) 16%, transparent); color: var(--stme-text); opacity: .85;
+}
+.stme-dq-question { font-size: 15.5px; font-weight: 600; overflow-wrap: anywhere; }
+.stme-dq-why {
+    margin-top: -4px; padding-left: 9px; font-size: 12.5px; opacity: .7;
+    border-left: 2px solid color-mix(in srgb, var(--stme-accent) 50%, transparent);
+}
+.stme-dq-options { display: flex; flex-direction: column; gap: 6px; }
+.stme-dq-option {
+    display: flex; align-items: flex-start; gap: 10px; width: 100%; box-sizing: border-box; margin: 0;
+    padding: 8px 10px; text-align: left; font: inherit; color: inherit; cursor: pointer;
+    background: var(--stme-level-1); border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm);
+    transition: background-color .12s, border-color .12s;
+}
+.stme-dq-option:hover:not([disabled]), .stme-dq-option:focus-visible {
+    outline: none; border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, var(--stme-level-1));
+}
+.stme-dq-key {
+    flex-shrink: 0; width: 20px; height: 20px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11.5px; font-weight: 700; background: color-mix(in srgb, var(--stme-accent) 22%, transparent); color: var(--stme-text);
+}
+.stme-dq-option-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.stme-dq-own { display: flex; gap: 6px; align-items: stretch; }
+.stme-dq-input {
+    flex: 1; min-width: 0; margin: 0; padding: 7px 10px; font: inherit; color: inherit;
+    background: var(--stme-level-2); border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm);
+}
+.stme-dq-input:focus { outline: none; border-color: var(--stme-accent); }
+.stme-dq-send {
+    flex-shrink: 0; margin: 0; padding: 0 14px; font: inherit; font-weight: 600; cursor: pointer;
+    color: var(--stme-text); background: color-mix(in srgb, var(--stme-accent) 32%, transparent);
+    border: 1px solid var(--stme-accent); border-radius: var(--stme-radius-sm);
+}
+.stme-dq-send:hover:not([disabled]) { background: color-mix(in srgb, var(--stme-accent) 45%, transparent); }
+.stme-dq-foot { display: flex; justify-content: flex-end; }
+.stme-dq-skip {
+    margin: 0; padding: 2px 4px; font: inherit; font-size: 12.5px; color: inherit; opacity: .6; cursor: pointer;
+    background: none; border: 0; text-decoration: underline; text-underline-offset: 3px;
+}
+.stme-dq-skip:hover:not([disabled]) { opacity: .95; }
+.stme-dq-toast [disabled] { opacity: .45; cursor: default; }
+@media (max-width: 600px) {
+    .stme-dq-toast { bottom: 76px; padding: 12px; }
+    .stme-dq-question { font-size: 15px; }
+}
+.stme-dq-failed { border-color: color-mix(in srgb, var(--stme-danger) 60%, var(--stme-border)); }
+.stme-dq-failed .stme-dq-mark { color: var(--stme-danger-bright); font-weight: 700; }
+.stme-dq-failed .stme-dq-own { justify-content: flex-end; align-items: center; }
+.stme-dq-failed .stme-dq-send { padding: 6px 14px; }
+.stme-dw-ask { margin: 4px 0; padding: 4px 8px; border-left: 2px solid var(--stme-accent); }
+.stme-dw-ask-options { font-size: .85em; opacity: .75; margin-top: 2px; }
+
+/* Плашка сборки дата-банков: справа сверху, выезжает при сборке и уезжает после. */
+.stme-bp {
+    position: fixed; top: 64px; right: 16px; z-index: 6950; width: min(300px, calc(100vw - 32px)); box-sizing: border-box;
+    padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; color: var(--stme-text); font-size: 12.5px;
+    background: color-mix(in srgb, var(--stme-surface) 96%, transparent);
+    backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%);
+    border: 1px solid color-mix(in srgb, var(--stme-accent) 45%, var(--stme-border)); border-radius: var(--stme-radius-card, 12px);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+    transform: translateX(calc(100% + 32px)); opacity: 0; pointer-events: none;
+    transition: transform .28s ease, opacity .28s ease;
+}
+.stme-bp-open { transform: translateX(0); opacity: 1; pointer-events: auto; }
+.stme-bp-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.stme-bp-title { font-weight: 700; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; opacity: .85; }
+.stme-bp-count { margin-left: auto; font-variant-numeric: tabular-nums; opacity: .85; }
+.stme-bp-toggle { opacity: .6; width: 12px; text-align: center; }
+.stme-bp-bar { height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--stme-text) 12%, transparent); overflow: hidden; }
+.stme-bp-fill { height: 100%; background: var(--stme-accent); transition: width .3s ease; }
+.stme-bp-list { display: flex; flex-direction: column; gap: 3px; max-height: 40vh; overflow: auto; }
+.stme-bp-row { display: flex; align-items: center; gap: 8px; }
+.stme-bp-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: color-mix(in srgb, var(--stme-text) 35%, transparent); }
+.stme-bp-active .stme-bp-dot { background: var(--stme-accent); animation: stme-bp-pulse 1.1s ease-in-out infinite; }
+.stme-bp-failed .stme-bp-dot { background: var(--stme-danger-bright); }
+.stme-bp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stme-bp-state { font-size: 11px; opacity: .6; }
+.stme-bp-failed .stme-bp-state { color: var(--stme-danger-bright); opacity: .9; }
+.stme-bp-more, .stme-bp-done { font-size: 11.5px; opacity: .65; }
+@keyframes stme-bp-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }

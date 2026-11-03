@@ -119,3 +119,26 @@ test('the archive is built the same way and can be filtered separately', () => {
     assert.equal(filtered.archive.length, 1);
     assert.equal(filtered.cycles.length, 0);
 });
+
+test('a cycle the window never saw start is picked up by its first step, and a reload of the log keeps it running', () => {
+    let state = createFeedState({ cycles: [] });
+    state = applyFeedEvent(state, 'decision.tool.called', { runId: 'boot_1', id: 'c1', name: 'ask_user', args: { question: 'Where?' }, comment: 'I need the start.' });
+    assert.equal(Object.keys(state.live).length, 1, 'the unknown cycle is shown instead of dropped');
+    assert.equal(state.live.boot_1.rows.length, 1);
+    const reloaded = createFeedState({ cycles: [], live: state.live });
+    assert.ok(reloaded.live.boot_1, 'a reload of the log does not wipe a running cycle');
+    const ended = applyFeedEvent(createFeedState({ cycles: [] }), 'decision.cycle.ended', { runId: 'ghost' });
+    assert.equal(Object.keys(ended.live).length, 0, 'an end event alone does not create a phantom running cycle');
+    const finished = createFeedState({ cycles: [{ runId: 'boot_1', at: 1, event: 'bootstrap' }], live: state.live });
+    assert.equal(finished.live.boot_1, undefined, 'a cycle already in the log is no longer shown as running');
+});
+
+test('thinking is shown in parts where it happened: a new part starts after each tool call', () => {
+    let state = createFeedState({ cycles: [] });
+    state = applyFeedEvent(state, 'decision.cycle.started', { runId: 'r', event: 'bootstrap', wake: { label: 'Bootstrapping the chat' } });
+    state = applyFeedEvent(state, 'decision.cycle.thinking', { runId: 'r', text: 'First I read the lorebook.' });
+    state = applyFeedEvent(state, 'decision.tool.called', { runId: 'r', id: 'c1', name: 'lorebook', args: {}, comment: 'Reading.' });
+    state = applyFeedEvent(state, 'decision.cycle.thinking', { runId: 'r', text: 'First I read the lorebook. Now I ask the user.' });
+    const rows = state.live.r.rows.map(row => `${row.kind}:${row.text ?? row.name}`);
+    assert.deepEqual(rows, ['thinking:First I read the lorebook.', 'call:lorebook', 'thinking:Now I ask the user.']);
+});

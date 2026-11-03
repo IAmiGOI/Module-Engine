@@ -38,6 +38,7 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.bankRebuild', params => banks.rebuild(params ?? {})),
         host.own.register('decision.message', params => cycle.sendMessage(params ?? {})),
         host.own.register('decision.bootstrap', () => bootstrap?.state?.() ?? null),
+        host.own.register('decision.bootstrapRetry', () => bootstrap?.retry?.() ?? { ok: false, error: 'The bootstrap is not available.' }),
         host.own.register('decision.question', () => cycle.question?.() ?? null),
         host.own.register('decision.answerQuestion', params => cycle.answerQuestion(params ?? {})),
         host.own.register('decision.reload', () => reload()),

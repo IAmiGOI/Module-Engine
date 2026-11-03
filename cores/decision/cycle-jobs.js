@@ -2,16 +2,17 @@ import { BOOTSTRAP_TASK, DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/co
 import { duePlans } from '../../libraries/core/decision-library.js';
 
 /** Фоновые задания директора: bootstrap, пассивный цикл, заготовка, отчёт субагента. */
-export function createCycleJobs({ backgroundRun, wakeQueue, store, getSettings, wakeFor, now = () => Date.now() }) {
+export function createCycleJobs({ backgroundRun, enqueueBackground = job => job(), wakeQueue, store, getSettings, wakeFor, now = () => Date.now() }) {
+    // Bootstrap — в общей очереди фоновых циклов: иначе он делил бы состояние цикла с параллельным.
     function runBootstrap({ runId, maxQuestions = 5, maxSteps = 30 } = {}) {
-        return backgroundRun({
+        return enqueueBackground(() => backgroundRun({
             runId, event: 'bootstrap', canAsk: true, maxSteps,
             wake: wakeFor({ type: 'bootstrap', label: 'Bootstrapping the chat' }),
             task: fillPrompt(BOOTSTRAP_TASK, { max_questions: maxQuestions }),
-        });
+        }));
     }
 
-    function runPassive({ runId, thinking = () => '' } = {}) {
+    function runPassive({ runId, thinking = null } = {}) {
         return wakeQueue.schedule(() => {
             const clock = store.clock();
             const due = duePlans(store.plans(), clock.minutes);

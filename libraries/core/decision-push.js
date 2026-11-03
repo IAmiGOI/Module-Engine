@@ -39,7 +39,10 @@ export function buildPush({ form, assessments = new Map(), place = '', timeBefor
     lines.push(`Resolution: ${line(form?.resolution)}`);
     lines.push(`The user's action: ${line(form?.userResult)}`);
 
-    for (const character of Array.isArray(form?.characters) ? form.characters : []) {
+    const characters = Array.isArray(form?.characters) ? form.characters : [];
+    const idle = characters.filter(character => character?.idle === true).map(character => line(character?.name)).filter(Boolean);
+    for (const character of characters) {
+        if (character?.idle === true) continue;
         const name = line(character?.name) || 'Someone';
         const words = line(assessmentOf(assessments, character?.assessId)?.words);
         const degree = words ? ` — ${words}` : '';
@@ -48,5 +51,6 @@ export function buildPush({ form, assessments = new Map(), place = '', timeBefor
         if (line(character?.outcome)) lines.push(`Why it goes this way: ${line(character.outcome)}`);
         if (line(character?.speech)) lines.push(`${name} says: "${line(character.speech)}"`);
     }
+    if (idle.length) lines.push(`In the background, doing nothing notable this turn: ${idle.join(', ')}. Do not give them actions or lines.`);
     return lines.filter(Boolean).join('\n');
 }

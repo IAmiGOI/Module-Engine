@@ -27,7 +27,7 @@ async function build({ settings = {} } = {}) {
     engine.buses.cores.register('storage.chatMemory.set', ({ namespace, key, value }) => { memory.set(memoryKey(namespace, key), clone(value)); return true; });
     engine.buses.cores.register('model.workers.get', () => [{ id: 'director', format: 'openai' }]);
     engine.buses.cores.register('summary.list', () => []);
-    engine.buses.cores.register('chatHistory.messages', () => (lastMesid === null ? [] : [{ mesid: lastMesid, mes: lastMes }]));
+    engine.buses.cores.register('chatHistory.messages', () => (lastMesid === null ? [] : [{ mesid: 'greeting', mes: 'Hello.' }, { mesid: lastMesid, mes: lastMes }]));
     engine.buses.cores.register('chatHistory.annotations', () => ({}));
     engine.buses.cores.register('ui.notify', () => true);
     engine.buses.cores.register('generation.tools', () => []);

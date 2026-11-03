@@ -134,7 +134,7 @@ test('the writer request has the writer context, no tools and no reasoning, and 
     assert.equal(body.max_tokens, 64);
 });
 
-test('streaming: the checked provider text reaches ST as one frame and ends with [DONE]; Claude gets its own delta shape', async () => {
+test('streaming without a classifier: the provider frames reach ST live, as they come, and end with [DONE]; Claude gets its own delta shape', async () => {
     const harness = build({
         provider: params => {
             params.onChunk(frame('Hel'));
@@ -149,14 +149,15 @@ test('streaming: the checked provider text reaches ST as one frame and ends with
     const response = await send(harness, stPayload({ stream: true }));
     const text = await response.text();
     assert.equal(response.headers.get('Content-Type'), 'text/event-stream');
-    assert.match(text, /data: \{"choices":\[\{"delta":\{"content":"Hello"\}\}\]\}/);
+    assert.match(text, /"content":"Hel"/);
+    assert.match(text, /"content":"lo"/);
     assert.match(text, /data: \[DONE\]/);
-    assert.equal((text.match(/content/g) ?? []).length, 1, 'the user sees one checked frame, not the provider partials');
+    assert.equal((text.match(/content/g) ?? []).length, 2, 'nothing to check with — the frames are not held back');
 
     const claude = await send(harness, stPayload({ stream: true, chat_completion_source: 'claude' }));
     const claudeText = await claude.text();
     assert.match(claudeText, /content_block_delta/);
-    assert.match(claudeText, /"text":"Hello"/);
+    assert.match(claudeText, /"text":"Hel"/);
 });
 
 test('Stop: the ST abort signal reaches the provider request and cuts it off', async () => {

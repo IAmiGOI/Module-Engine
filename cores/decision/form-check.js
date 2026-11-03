@@ -26,7 +26,7 @@ export function createFormChecker({ call, getSettings, banks = null, knowledge =
     async function check({ form, sceneText = '', returned = new Set(), signal = null } = {}) {
         const userName = String(banks?.persona?.()?.name ?? '').trim().toLowerCase();
         const characters = (Array.isArray(form?.characters) ? form.characters : [])
-            .filter(character => String(character?.name ?? '').trim())
+            .filter(character => String(character?.name ?? '').trim() && character?.idle !== true)
             .filter(character => !userName || String(character.name).trim().toLowerCase() !== userName);
         if (!characters.length) return { ok: true, warnings: [] };
         const rich = await characterData(characters);

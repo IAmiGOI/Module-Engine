@@ -132,7 +132,7 @@ export function createCycleContext({ call, store, banks = null }) {
         let modelCall = 0;
         return async ({ messages, tools, toolChoice, returnMessage, boost = 1 }) => {
             modelCall += 1;
-            const params = deciderRequestParams(settings.decider);
+            const params = deciderRequestParams(settings.decider, { floor: prefix !== '' });
             if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
             const answer = await call('model.generate', {
                 requestId: `${runId}:${prefix}${modelCall}:${startedAt}`,

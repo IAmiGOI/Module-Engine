@@ -7,6 +7,7 @@ import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/cor
 import { createBanksView } from './decision-banks-view.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
 import { createQuestionView } from './decision-questions.js';
+import { createBankProgressView } from './decision-bank-progress.js';
 
 /**
  * Окно директора: лента по циклам, как у кодинг-агента. Читает лог и архив
@@ -49,6 +50,10 @@ function callNode(row) {
             h('code', {}, row.name || '?'),
             h('span', { class: 'stme-dw-call-detail' }, row.pending ? 'running…' : (row.error ? 'rejected' : (row.durationMs ? `${row.durationMs} ms` : 'ok')))),
         h('div', { class: 'stme-dw-comment' }, row.comment || '(no comment)'),
+        row.name === 'ask_user' && row.args?.question
+            ? h('div', { class: 'stme-dw-ask' }, h('b', {}, String(row.args.question)),
+                Array.isArray(row.args.options) && row.args.options.length ? h('div', { class: 'stme-dw-ask-options' }, row.args.options.map(String).join(' · ')) : null)
+            : null,
         row.pending ? null : h('details', { class: 'stme-dw-fold' },
             h('summary', {}, 'Arguments'),
             h('pre', {}, safeJson(row.args))),
@@ -100,8 +105,9 @@ function cycleNode(entry, now) {
     return h('div', { class: classes },
         h('div', { class: 'stme-dw-head' }, h('strong', {}, entry.title), h('span', { class: 'stme-dw-meta' }, cycleMeta(entry))),
         entry.detail ? h('div', { class: 'stme-dw-detail' }, entry.detail) : null,
-        waiting ? h('div', { class: 'stme-dw-waiting' }, waiting) : null,
-        ...entry.rows.map(rowNode));
+        ...entry.rows.map(rowNode),
+        // Таймер — внизу, там, где директор сейчас работает.
+        waiting ? h('div', { class: 'stme-dw-waiting' }, waiting) : null);
 }
 
 export function createDecisionWindowCore(host, { mount } = {}) {
@@ -125,6 +131,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const costCounter = signal(true);
     const banksView = createBanksView({ call });
     const questionView = createQuestionView({ host, call });
+    const bankProgress = createBankProgressView({ host, call });
     let timer = null;
     const subscriptions = [];
     const filtered = computed(() => filterFeed(feed(), {
@@ -139,6 +146,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         feed.set(createFeedState({
             cycles: log.ok && Array.isArray(log.value) ? log.value : [],
             archive: archive.ok && Array.isArray(archive.value) ? archive.value : [],
+            live: feed.peek().live,
         }));
         await banksView.refresh();
         scheduleScroll(true);
@@ -260,6 +268,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 onResize: next => { size.set(next); saveWindowState(); },
             }, computed(() => body())) : null)),
             computed(() => questionView.tree()),
+            computed(() => bankProgress.tree()),
             DockButton(h('span', { class: 'stme-dw-dock-icon', title: 'Open the director log' }, '◎'), { position: dockPosition, drag: dockDrag, title: 'Director log' }));
     }
 
@@ -285,6 +294,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         await loadWindowState();
         subscribe();
         questionView.subscribe();
+        bankProgress.subscribe();
         await refresh();
         const finalUi = mount(tree());
         await finalUi.settled?.();
@@ -295,6 +305,6 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     return {
         tree, open, show, hide, toggle, refresh, send, filtered, feed, now, draft, showThinking, onlyTurns, search,
         isVisible: () => visible.peek(),
-        stop() { stopTimer(); questionView.stop(); for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
+        stop() { stopTimer(); questionView.stop(); bankProgress.stop(); for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
     };
 }

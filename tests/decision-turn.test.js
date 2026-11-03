@@ -70,7 +70,7 @@ test('a form that names the same active character twice is rejected rather than 
     assert.match(result.missing.join('\n'), /more than once/);
 });
 
-test('without an assessId the form needs a noCheck reason; with it the form is accepted', () => {
+test('without an assessId a noCheck reason is kept; without both the form is still accepted with a default reason and a warning', () => {
     const form = valid();
     delete form.characters[0].assessId;
     form.characters[0].noCheck = 'She only decides whether to accept the apology.';
@@ -79,8 +79,9 @@ test('without an assessId the form needs a noCheck reason; with it the form is a
     assert.equal(accepted.normalized.characters[0].noCheck, 'She only decides whether to accept the apology.');
 
     const missing = validateTurn({ form: { ...form, characters: [{ ...form.characters[0], noCheck: '' }] }, roster: ['Lena'], assessments: new Map() });
-    assert.equal(missing.ok, false);
-    assert.match(missing.missing.join('\n'), /noCheck.*assessId/);
+    assert.equal(missing.ok, true, 'a forgotten noCheck no longer costs a whole extra model call');
+    assert.equal(missing.normalized.characters[0].noCheck, "no roll — decided from the character's psychology");
+    assert.match(missing.warnings.join('\n'), /no roll and no noCheck for Lena/);
 });
 
 test('a made-up assessId is still rejected even when noCheck is also present', () => {
@@ -90,4 +91,27 @@ test('a made-up assessId is still rejected even when noCheck is also present', (
     const result = validateTurn({ form, roster: ['Lena'], assessments: new Map() });
     assert.equal(result.ok, false);
     assert.match(result.missing.join('\n'), /was not returned by assess/);
+});
+
+test('the user\'s own character is never required in the form, and if the director lists it, it is dropped', async () => {
+    const { validateTurn: validate } = await import('../libraries/core/decision-turn.js');
+    const base = { scene: { minutes: 5 }, resolution: 'She leaves.', userResult: 'Sasha waits.' };
+    const emilia = { name: 'Emilia', decision: 'Leave.', decisionReason: 'Late.', action: 'Leaves.', actionReason: 'The door.', outcome: 'Gone.', noCheck: 'No contest.' };
+    const without = validate({ form: { ...base, characters: [emilia] }, roster: ['Emilia', 'Sasha'], user: 'Sasha' });
+    assert.equal(without.ok, true, 'Sasha from the roster is not demanded');
+    const withUser = validate({ form: { ...base, characters: [emilia, { name: 'Sasha' }] }, roster: ['Emilia', 'Sasha'], user: 'Sasha' });
+    assert.equal(withUser.ok, true, 'a listed user character is not checked');
+    assert.deepEqual(withUser.normalized.characters.map(character => character.name), ['Emilia']);
+});
+
+test('an idle character needs only a name and stays in the background of the push', async () => {
+    const { validateTurn: validate } = await import('../libraries/core/decision-turn.js');
+    const { buildPush } = await import('../libraries/core/decision-push.js');
+    const base = { scene: { minutes: 5 }, resolution: 'She leaves.', userResult: 'Sasha waits.' };
+    const emilia = { name: 'Emilia', decision: 'Leave.', decisionReason: 'Late.', action: 'leaves', actionReason: 'the door is open', outcome: 'Gone.', noCheck: 'No contest.' };
+    const result = validate({ form: { ...base, characters: [emilia, { name: 'Elsa', idle: true }] }, roster: ['Emilia', 'Elsa'] });
+    assert.equal(result.ok, true);
+    const push = buildPush({ form: result.normalized });
+    assert.doesNotMatch(push, /Elsa will/);
+    assert.match(push, /In the background, doing nothing notable this turn: Elsa\. Do not give them actions or lines\./);
 });

@@ -146,3 +146,21 @@ test('start on typing runs a background draft only when the setting and turn dra
     await flush();
     assert.equal(off.calls.length, 0);
 });
+
+test('a form timeout without a draft aborts the model, is logged with its reason and is not retried by the pipeline', async () => {
+    let aborted = 0;
+    const { pipelineCore, core, calls } = await build({
+        settings: { formTimeoutMs: 20 },
+        model: params => new Promise((resolve, reject) => {
+            params.signal?.addEventListener('abort', () => { aborted += 1; reject(new Error('aborted')); });
+        }),
+    });
+    const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
+    await flush();
+    assert.equal(result.ok, false);
+    assert.match(result.stages[0].failures.at(-1).error.message, /did not finish the turn within 0 s\. Press Regenerate/);
+    assert.equal(calls.length, 1, 'the retry fails at once instead of waiting the whole deadline again');
+    assert.equal(aborted, 1, 'the request of the timed-out attempt is cancelled');
+    const failed = core.log().filter(cycle => (cycle.warnings ?? []).some(line => /^failed: /.test(line)));
+    assert.equal(failed.length, 1, 'the failed turn stays in the director log with its reason');
+});

@@ -140,12 +140,18 @@ function liveEntry(payload) {
     };
 }
 
-export function createFeedState({ cycles = [], archive = [] } = {}) {
-    return { cycles: cycles.map(buildCycleEntry), archive: archive.map(buildCycleEntry), live: {} };
+export function createFeedState({ cycles = [], archive = [], live = {} } = {}) {
+    const built = cycles.map(buildCycleEntry);
+    // Идущие циклы переживают перезагрузку журнала, кроме тех, что уже в нём есть (успели закончиться).
+    const done = new Set(built.map(entry => entry.runId).filter(Boolean));
+    const running = Object.fromEntries(Object.entries(live ?? {}).filter(([runId]) => !done.has(runId)));
+    return { cycles: built, archive: archive.map(buildCycleEntry), live: running };
 }
 
-function withLive(state, runId, update) {
-    const entry = state.live[runId];
+function withLive(state, runId, update, create = false) {
+    // Цикл, начавшийся до того, как окно его увидело (bootstrap при открытии чата, обновление окна), заводится по первому событию:
+    // иначе все его шаги молча терялись.
+    const entry = state.live[runId] ?? (create && runId ? { ...liveEntry({ runId, event: 'running', wake: { label: 'The director is working' } }), at: Date.now() } : null);
     if (!entry) return state;
     const next = update(entry);
     if (next === entry) return state;
@@ -167,19 +173,28 @@ export function applyFeedEvent(state, event, payload = {}) {
     if (event === 'decision.cycle.step') {
         return withLive(state, runId, entry => (payload.phase === 'waiting'
             ? { ...entry, waiting: true, waitingSince: payload.at ?? Date.now() }
-            : { ...entry, waiting: false }));
+            : { ...entry, waiting: false }), true);
     }
     if (event === 'decision.cycle.thinking') {
-        return withLive(state, runId, entry => upsertRow(entry, { kind: 'thinking', id: 'thinking', text: text(payload.text) }));
+        // Мысли — кусками по шагам, на своём месте между вызовами: кусок начинается там, где кончился прошлый.
+        return withLive(state, runId, entry => {
+            const full = String(payload.text ?? '');
+            const part = text(full.slice(entry.thinkingOffset ?? 0));
+            if (!part) return { ...entry, thinkingLength: full.length };
+            return { ...upsertRow(entry, { kind: 'thinking', id: `thinking_${entry.thinkingPart ?? 0}`, text: part }), thinkingLength: full.length };
+        }, true);
     }
     if (event === 'decision.cycle.answer') {
-        return withLive(state, runId, entry => upsertRow(entry, { kind: 'answer', id: 'answer', text: text(payload.text) }));
+        return withLive(state, runId, entry => upsertRow(entry, { kind: 'answer', id: 'answer', text: text(payload.text) }), true);
     }
     if (event === 'decision.tool.called') {
         return withLive(state, runId, entry => {
             const row = toolRow({ name: payload.name, args: payload.args, comment: payload.comment });
-            return upsertRow(entry, { ...row, id: `pending_${payload.id || payload.name}_${entry.rows.length}`, pending: true });
-        });
+            const next = upsertRow(entry, { ...row, id: `pending_${payload.id || payload.name}_${entry.rows.length}`, pending: true });
+            // Следующие мысли — новым куском после этого вызова.
+            const hasPart = entry.rows.some(item => item.id === `thinking_${entry.thinkingPart ?? 0}`);
+            return hasPart ? { ...next, thinkingPart: (entry.thinkingPart ?? 0) + 1, thinkingOffset: entry.thinkingLength ?? 0 } : next;
+        }, true);
     }
     if (event === 'decision.tool.result') {
         return withLive(state, runId, entry => {
@@ -191,13 +206,13 @@ export function applyFeedEvent(state, event, payload = {}) {
             const rows = [...entry.rows];
             rows[at] = { ...toolRow(call, at), id: previous.id, pending: false };
             return { ...entry, rows };
-        });
+        }, true);
     }
     if (event === 'decision.cycle.form') {
         return withLive(state, runId, entry => {
             const next = upsertRow(entry, formRow(payload.form));
             return payload.push ? upsertRow(next, { kind: 'push', id: 'push', text: text(payload.push) }) : next;
-        });
+        }, true);
     }
     if (event === 'decision.cycle.finished') {
         const entry = payload.cycle ? buildCycleEntry(payload.cycle) : null;

@@ -227,3 +227,21 @@ test('running a pipeline nobody defined is a plain error envelope, not a throw a
     assert.equal(result.ok, false);
     assert.match(result.error.message, /pipeline "ghost" is not defined/);
 });
+
+test('a stage can set its own timeout: 0 leaves the deadline to its owner, a number replaces the learned one', async () => {
+    const { engine, core } = buildEngine({ timeouts: { maxMs: 30 } });
+    supplierCore(engine, 'core.owner', {
+        'slow.owned': () => new Promise(resolve => setTimeout(() => resolve('in time for the owner'), 80)),
+        'slow.capped': () => new Promise(resolve => setTimeout(() => resolve('too late'), 80)),
+    });
+    core.define({ id: 'own' });
+    core.addStage({ pipelineId: 'own', stage: { id: 'owned', contract: 'slow.owned', timeoutMs: 0 } }, 'core.owner');
+    const owned = await core.run({ pipelineId: 'own' });
+    assert.equal(owned.ok, true, 'the pipeline cap of 30 ms does not apply to a stage that runs its own deadline');
+
+    core.define({ id: 'capped' });
+    core.addStage({ pipelineId: 'capped', stage: { id: 'capped', contract: 'slow.capped', timeoutMs: 40 } }, 'core.owner');
+    const capped = await core.run({ pipelineId: 'capped' });
+    assert.equal(capped.ok, false);
+    assert.match(capped.stages[0].failures[0].error.message, /timed out after 40ms/);
+});

@@ -65,5 +65,17 @@ export function createWriterChecker({ call, getSettings, banks = null }) {
         return best;
     }
 
-    return { check, quote };
+    /** Есть ли чем проверять: выбранное (или первое) подключение классификатора с ключом. */
+    async function ready() {
+        try {
+            const list = await call('classifier.connections.get');
+            const id = String(settings().connectionId ?? '').trim();
+            const connection = (Array.isArray(list) ? list : []).find(item => (id ? item?.id === id : true));
+            return Boolean(connection?.apiKey);
+        } catch {
+            return false;
+        }
+    }
+
+    return { check, quote, ready };
 }

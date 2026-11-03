@@ -258,8 +258,9 @@ export function renderBankSection(records) {
     const list = (Array.isArray(records) ? records : []).filter(record => record && (text(record.text) || text(record.rawSource)));
     if (!list.length) return '';
     const body = list.map(record => {
-        const content = bankIsReady(record) ? text(record.text) : text(record.rawSource) || text(record.text);
-        const note = record.status === 'error' ? ' (bank rebuilding — the raw source is shown)' : record.status === 'short' ? ' (short bank — the full one is being built)' : '';
+        // Банк в пересборке (старая версия сборщика, правка источника) работает своим прежним текстом.
+        const content = text(record.text) || text(record.rawSource);
+        const note = record.status === 'error' && !text(record.text) ? ' (bank rebuilding — the raw source is shown)' : record.status === 'short' ? ' (short bank — the full one is being built)' : '';
         return `### ${text(record.name) || 'Character'}${note}\n${content}`;
     }).join('\n\n');
     return `CHARACTER DATA BANKS (compact cards for the Writer and the Director):\n\n${body}`;

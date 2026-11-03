@@ -1,11 +1,26 @@
 import { bankPromptFor } from '../../libraries/core/decision-banks.js';
 
 const BANK_MAX_TOKENS = 4000;
-export const bankSteps = settings => Math.max(2, Number(settings?.researcher?.bankMaxSteps) || 12);
+// Без отдельной настройки банк получает те же шаги, что исследователь: скрытые 12 не успевали найти канон.
+export const bankSteps = settings => Math.max(2, Number(settings?.researcher?.bankMaxSteps) || Number(settings?.researcher?.maxSteps) || 12);
 export const bankConcurrency = settings => Math.max(1, Number(settings?.researcher?.bankConcurrency) || 4);
 
 /** Задачи субагента на сборку банков: свой лимит, отдельно от двух слотов исследователя. */
-export function createBankTasks({ getSettings, researcher, publishEvent }) {
+const SLOT_WAIT_MS = 2000;
+const SLOT_WAIT_LIMIT_MS = 30 * 60 * 1000;
+
+export function createBankTasks({ getSettings, researcher, publishEvent, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+    // Все сборщики заняты — ждём место, а не падаем: раньше банк нового персонажа ростера навсегда оставался ошибкой «busy».
+    async function startWhenFree(options) {
+        const startedAt = Date.now();
+        for (;;) {
+            const started = researcher.start(options);
+            if (started.ok || !/busy/i.test(String(started.error ?? ''))) return started;
+            if (Date.now() - startedAt > SLOT_WAIT_LIMIT_MS) return started;
+            await sleep(SLOT_WAIT_MS);
+        }
+    }
+
     async function build(source) {
         if (!researcher) throw new Error('The researcher is not available.');
         const settings = getSettings();
@@ -17,7 +32,8 @@ export function createBankTasks({ getSettings, researcher, publishEvent }) {
             canonHint: source.canonHint ?? '', aliases: source.aliases ?? '', timeline: source.timeline ?? '',
             sizeBand: source.sizeBand ?? 'minor', steps,
         });
-        const started = researcher.start({ task: 'Build the data bank now.', system, kind: 'bank', notify: false, maxSteps: steps, maxTokens: BANK_MAX_TOKENS });
+        publishEvent('decision.bank.started', { sourceKey: source.sourceKey, name: source.name });
+        const started = await startWhenFree({ task: 'Build the data bank now.', system, kind: 'bank', notify: false, maxSteps: steps, maxTokens: BANK_MAX_TOKENS });
         if (!started.ok) throw new Error(started.error || 'The bank task did not start.');
         const done = await started.done;
         if (done?.error) throw new Error(done.error);
