@@ -160,6 +160,7 @@ function buildEngine({ fetchReply = '{"label":"Test Fact","content":"Something n
         allowedContracts: [
             'memoryGraph.settings', 'memoryGraph.configure', 'memoryGraph.nodes', 'memoryGraph.regions', 'memoryGraph.check',
             'memoryGraph.mergeQueue', 'memoryGraph.reconsolidationQueue', 'memoryGraph.staging', 'memoryGraph.retrievalStatus',
+            'memoryGraph.retrievalText', 'memoryGraph.lastRetrieval', 'memoryGraph.retrievals',
             'memoryGraph.mode', 'memoryGraph.setMode', 'memoryGraph.convertToStructured',
             'memoryGraph.nodes.create', 'memoryGraph.nodes.update', 'memoryGraph.nodes.delete', 'memoryGraph.nodes.move', 'memoryGraph.nodes.pin',
             'memoryGraph.nodes.createFromCharacterCard',
@@ -1341,13 +1342,14 @@ test('a new value of a state (outfit) replaces the current one: the old node is 
     assert.ok(white.content.includes('white dress'), 'the old value is kept, not deleted');
     assert.equal((await call(caller, 'memoryGraph.mergeQueue')).value.length, 0, 'two values of one state are never queued for merge as duplicates');
 
-    await graphCore.load(); // регистрирует этап инъекции на generation.beforeSend
+    await graphCore.load(); // этап инъекции на generation.beforeSend всё ещё считается, но в промпт не пишет
     const outgoing = [{ mes: 'What is Nyx wearing today?' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
-    const memory = outgoing.find(message => message.name === 'Memory')?.mes ?? '';
+    assert.deepEqual(outgoing, [{ mes: 'What is Nyx wearing today?' }], 'the graph contributes nothing to the prompt');
+    const memory = (await call(caller, 'memoryGraph.retrievalText')).value;
     assert.ok(memory.includes('black coat'), 'retrieval shows the current state');
     assert.ok(memory.includes('[since 3 09:00]'), 'and since when it holds');
-    assert.ok(!memory.includes('white dress'), 'the replaced value stays out of the prompt');
+    assert.ok(!memory.includes('white dress'), 'the replaced value stays out of the retrieval');
 });
 
 test('a state the model re-extracts with the same value updates the existing node instead of piling up copies (the apartment case)', async () => {
@@ -1579,24 +1581,20 @@ test('checkAndPlace() stores the node\'s OWN label+content embedding, not the tr
         'node.embedding must NOT be the raw triggering context text — that vector is a placement signal only');
 });
 
-test('checkAndPlace() mirrors a freshly-placed node into the active Lorebook as a DISABLED entry (решено с пользователем: "по идее вся инфраструктура есть" — lorebook.createEntry() уже реализован)', async () => {
-    // lorebookEntries: [] — активная книга ЕСТЬ (createEntry может писать),
-    // но записей нет (bootstrapFromLorebook честно ничего не делает — 0
-    // записей), так что граф стартует пустым для органического роста.
+test('checkAndPlace() no longer mirrors a freshly-placed node into the Lorebook (часть 10: граф в книгу не пишет)', async () => {
+    // lorebookEntries: [] — активная книга ЕСТЬ (createEntry мог бы писать),
+    // но записей нет, так что граф стартует пустым для органического роста.
     const { graphCore, caller, createEntryCalls } = buildEngine({ lorebookEntries: [] });
     await graphCore.load();
     await graphCore.waitForBootstrap();
 
     await graphCore.checkAndPlace('The player enters a dark cave and finds an old sword.');
 
-    assert.equal(createEntryCalls.length, 1, 'exactly one WI entry must have been created for the one new node');
-    assert.equal(createEntryCalls[0].comment, 'Test Fact', 'WI entry title must be the node\'s own label');
-    assert.equal(createEntryCalls[0].content, 'Something notable happened.', 'WI entry body must be the node\'s own content');
-    assert.equal(createEntryCalls[0].disable, true, 'must be DISABLED — the graph already injects this fact via beacon+route+noise in beforeSend; an ACTIVE WI entry would risk double-injecting the same fact through native ST keyword activation');
-
+    assert.deepEqual(createEntryCalls, [], 'the graph must not write anything into the lorebook');
     const nodes = await call(caller, 'memoryGraph.nodes');
-    assert.equal(nodes.value[0].wiUid, createEntryCalls[0].uid, 'the node must remember which WI entry mirrors it');
-    assert.equal(nodes.value[0].wiBook, 'Demo Lore');
+    assert.equal(nodes.value.length, 1, 'the node itself still exists in the graph');
+    assert.equal(nodes.value[0].wiUid, undefined, 'no WI entry mirrors it');
+    assert.equal(nodes.value[0].wiBook, undefined);
 });
 
 test('checkAndPlace() still creates the graph node when there is no active Lorebook at all — the WI mirror is best-effort, never blocking (реальный вызов lorebook.createEntry() бросает "no lorebook active", Шина превращает это в ok:false)', async () => {
@@ -2225,7 +2223,7 @@ test('the beforeSend stage injects a Memory message built from the graph\'s own 
         { uid: 1, comment: 'Elena', content: 'Elena often visits Marcus to trade rare herbs.' }, // mentions Marcus -> edge
         { uid: 2, comment: 'Ruins', content: 'Elena explores Ruins searching for lost artifacts.' }, // mentions Elena -> edge
     ];
-    const { graphCore, pipelineCore } = buildEngine({
+    const { graphCore, pipelineCore, caller } = buildEngine({
         lorebookEntries: entries,
         // Marcus = центр, Elena = под-центр (упоминает "Marcus" при
         // вставке). Ruins падает через argmax ('ordinary') и упоминает
@@ -2239,12 +2237,10 @@ test('the beforeSend stage injects a Memory message built from the graph\'s own 
     const result = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
 
     assert.equal(result.ok, true);
-    assert.equal(outgoing.length, 2, 'exactly one Memory message must have been unshifted ahead of the real outgoing message');
-    assert.equal(outgoing[0].is_system, true);
-    assert.equal(outgoing[0].name, 'Memory');
-    assert.ok(outgoing[0].mes.includes('Marcus'), 'the injected text must mention the graph\'s own nodes');
-    assert.ok(outgoing[0].mes.includes('runs the old tavern near the market square.'), 'and their actual content, not just labels');
-    assert.equal(outgoing[1].mes, 'Tell me more about Marcus and his tavern near the market.', 'the real outgoing message must stay in place, right after the injected memory');
+    assert.deepEqual(outgoing, [{ mes: 'Tell me more about Marcus and his tavern near the market.' }], 'the graph no longer injects a Memory message');
+    const memory = (await call(caller, 'memoryGraph.retrievalText')).value;
+    assert.ok(memory.includes('Marcus'), 'the computed retrieval must mention the graph\'s own nodes');
+    assert.ok(memory.includes('runs the old tavern near the market square.'), 'and their actual content, not just labels');
 });
 
 test('the beforeSend stage contributes nothing when the graph has no placed nodes yet', async () => {
@@ -2297,8 +2293,9 @@ test('a node off the beacon route, but one edge from it, gets pulled in as noise
 
     const outgoing = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+    assert.deepEqual(outgoing, [{ mes: 'Tell me more about Marcus and his tavern near the market.' }], 'nothing is injected into the prompt');
 
-    const text = outgoing[0].mes;
+    const text = (await call(caller, 'memoryGraph.retrievalText')).value;
     assert.ok(text.includes('Ruins (noise)'), 'Ruins was never selected as a beacon (only 3 slots, 4 candidates) but sits one edge off the route via Elena, so it must surface as noise');
     assert.ok(text.includes('- Ruins (noise): Elena explores Ruins searching for lost artifacts.'), 'its real content must be visible, not just its label');
 });
@@ -2329,8 +2326,9 @@ test('a node TWO edges off the beacon route, reachable only through a first-hop 
 
     const outgoing = [{ mes: 'Tell me more about Marcus and his tavern near the market.' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing } });
+    assert.deepEqual(outgoing, [{ mes: 'Tell me more about Marcus and his tavern near the market.' }], 'nothing is injected into the prompt');
 
-    const text = outgoing[0].mes;
+    const text = (await call(caller, 'memoryGraph.retrievalText')).value;
     assert.ok(text.includes('Ruins (noise)'), 'Ruins (one hop off the route) must be reached first');
     assert.ok(text.includes('DeepClue (noise)'), 'DeepClue is only reachable BY expanding again from Ruins, the previous round\'s own noise pick — this is the multi-hop "and so on" behavior, not just a single flat layer off the route');
     assert.ok(text.includes('- DeepClue (noise): A strange rune found deep inside the Ruins hints at their true age.'), 'its real content must be visible, not just its label');
@@ -2391,13 +2389,15 @@ test('injectIntoPrompt() sticky balance: a genuinely stronger fresh candidate se
 
     const outgoing1 = [{ mes: 'alpha bravo charlie delta echo' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing1 } });
-    assert.ok(outgoing1[0].mes.includes('Alpha'), 'sanity: the first turn must pin the Alpha-topic beacon');
-    assert.ok(!outgoing1[0].mes.includes('Beta'), 'sanity: Beta must not have been picked at all on the first turn');
+    const text1 = (await call(caller, 'memoryGraph.retrievalText')).value;
+    assert.ok(text1.includes('Alpha'), 'sanity: the first turn must pin the Alpha-topic beacon');
+    assert.ok(!text1.includes('Beta'), 'sanity: Beta must not have been picked at all on the first turn');
 
     const outgoing2 = [{ mes: 'golf lima oscar quebec sierra' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing2 } });
-    assert.ok(outgoing2[0].mes.includes('Beta'), 'a genuinely different topic must displace the sticky block — it must not keep showing Alpha forever');
-    assert.ok(!outgoing2[0].mes.includes('Alpha'), 'the swap is WHOLE-BLOCK — the old block is fully replaced, never merged one slot at a time with the new one');
+    const text2 = (await call(caller, 'memoryGraph.retrievalText')).value;
+    assert.ok(text2.includes('Beta'), 'a genuinely different topic must displace the sticky block — it must not keep showing Alpha forever');
+    assert.ok(!text2.includes('Alpha'), 'the swap is WHOLE-BLOCK — the old block is fully replaced, never merged one slot at a time with the new one');
 });
 
 test('injectIntoPrompt() sticky balance: a sticky beacon that disappeared from the graph (deleted/merged/evicted) forces an IMMEDIATE full refresh, even though the conversation itself did not change', async () => {
@@ -2410,13 +2410,13 @@ test('injectIntoPrompt() sticky balance: a sticky beacon that disappeared from t
 
     const outgoing1 = [{ mes: 'alpha bravo charlie delta echo' }];
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing1 } });
-    assert.ok(outgoing1[0].mes.includes('Alpha'), 'sanity: Alpha is pinned first');
+    assert.ok((await call(caller, 'memoryGraph.retrievalText')).value.includes('Alpha'), 'sanity: Alpha is pinned first');
 
     await call(caller, 'memoryGraph.nodes.delete', { id: alpha.value.nodeId });
 
     const outgoing2 = [{ mes: 'alpha bravo charlie delta echo' }]; // SAME context text as before — a topic-drift swap would not apply here
     await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { chat: outgoing2 } });
-    assert.ok(!outgoing2[0].mes.includes('Alpha'), 'the deleted node can no longer appear — the dangling sticky reference must trigger an unconditional refresh, "sticky" stability notwithstanding');
+    assert.ok(!(await call(caller, 'memoryGraph.retrievalText')).value.includes('Alpha'), 'the deleted node can no longer appear — the dangling sticky reference must trigger an unconditional refresh, "sticky" stability notwithstanding');
 });
 
 // --- Ручное редактирование графа (UI-редактор): CRUD нод/рёбер -----------
@@ -3500,7 +3500,7 @@ test('automatic promotion stops at the core cap while manual pinning still works
     assert.equal((await call(caller, 'memoryGraph.nodes.pin', { id: target.id })).value.ok, true);
 });
 
-test('the plot core message appears only when switched on, lists cores by importance, and is separate from the memory block', async () => {
+test('the plot core and memory blocks are no longer injected into the prompt (часть 10: вклады графа выключены)', async () => {
     const { graphCore, caller } = await structuredEngine();
     await call(caller, 'memoryGraph.nodes.create', { label: 'Crown', content: 'alpha bravo charlie delta echo', importance: 8, sector: 0, ring: 0 });
     const crown = (await call(caller, 'memoryGraph.nodes')).value.find(n => n.label === 'Crown');
@@ -3515,9 +3515,8 @@ test('the plot core message appears only when switched on, lists cores by import
     const on = scene();
     await graphCore.injectIntoPrompt({ chat: on });
 
-    const plot = on.find(m => m.name === 'Plot core');
-    assert.match(plot.mes, /^Plot core: Crown, Anchor/);
-    assert.equal(on.find(m => m.name === 'Memory').mes.includes('Plot core'), false);
+    assert.deepEqual(on, [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }], 'no contribution even with the plot skeleton on');
+    assert.match((await call(caller, 'memoryGraph.retrievalText')).value, /Crown/, 'the retrieval itself is still computed for the graph window');
 });
 
 async function structuredWithEvents() {
@@ -3531,12 +3530,13 @@ async function structuredWithEvents() {
 }
 
 test('in a structured graph the retrieval block gets a Recent events section for the events of the shown nodes', async () => {
-    const { graphCore } = await structuredWithEvents();
+    const { graphCore, caller } = await structuredWithEvents();
     const chat = [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }];
 
     await graphCore.injectIntoPrompt({ chat });
 
-    const memory = chat.find(m => m.name === 'Memory').mes;
+    assert.deepEqual(chat, [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }]);
+    const memory = (await call(caller, 'memoryGraph.retrievalText')).value;
     assert.match(memory, /Recent events:/);
     assert.match(memory, /First clash/);
     assert.match(memory, /Second clash/);
@@ -3547,7 +3547,7 @@ test('the number of events in the retrieval block follows the limit setting, and
     await call(caller, 'memoryGraph.configure', { retrievalEventsMax: 1 });
     const chat = [{ name: 'User', is_user: true, mes: 'alpha bravo charlie delta echo' }];
     await graphCore.injectIntoPrompt({ chat });
-    assert.equal((chat.find(m => m.name === 'Memory').mes.match(/clash at the gate/g) ?? []).length, 1);
+    assert.equal(((await call(caller, 'memoryGraph.retrievalText')).value.match(/clash at the gate/g) ?? []).length, 1);
 
 });
 
@@ -3558,7 +3558,7 @@ test('a zero events limit switches the Recent events section off', async () => {
 
     await graphCore.injectIntoPrompt({ chat });
 
-    assert.equal(chat.find(m => m.name === 'Memory').mes.includes('Recent events'), false);
+    assert.equal((await call(caller, 'memoryGraph.retrievalText')).value.includes('Recent events'), false);
 });
 
 test('a legacy graph never gets a Recent events section', async () => {
@@ -3568,7 +3568,7 @@ test('a legacy graph never gets a Recent events section', async () => {
 
     await graphCore.injectIntoPrompt({ chat });
 
-    assert.equal(chat.find(m => m.name === 'Memory').mes.includes('Recent events'), false);
+    assert.equal((await call(caller, 'memoryGraph.retrievalText')).value.includes('Recent events'), false);
 });
 
 test('reclassify asks the model per region, sets entity and object kinds from the reply, and leaves the rest as facts', async () => {
