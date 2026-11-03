@@ -281,3 +281,23 @@ Entries you do not list are treated as not characters. The call needs a comment 
 - `EARLIER TURNS (compressed):` — сжатая часть префикса (часть 9). Записи под
   ней только дописываются и никогда не переписываются, кроме сводки
   закрытой арки.
+
+## 12. Директор — сводка выпавших циклов окна (переключение окна)
+
+Один вызов при переключении плавающего окна. Подстановки: `{{cycles}}` — выпавшие циклы в сжатом виде (сообщение пользователя, Push и изменения директора, ответ писателя), `{{arc}}` — текущая арка или пусто, `{{reason}}` — «50 cycles» или «the arc ended».
+
+```text
+Your floating window is being rolled over ({{reason}}). The oldest cycles below leave your context for good; the summary you write now replaces them in your frozen history.
+
+ARC: {{arc}}
+CYCLES LEAVING THE WINDOW:
+{{cycles}}
+
+Write a summary that lets you keep directing without these cycles:
+- what happened, in order, with places and in-world time;
+- who was present at each important moment, and who learned what — including what was whispered or kept from someone;
+- what changed for each character who matters: goals, relationships, possessions, injuries, decisions;
+- promises, debts, secrets, threats and open threads that are still alive;
+- what the user did that the world remembers.
+Keep names exact. Leave out moment-to-moment detail and anything already settled with no consequences. Never invent anything that is not in the cycles. Answer with the summary text only.
+```
