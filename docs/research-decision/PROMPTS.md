@@ -304,3 +304,31 @@ Write a summary that lets you keep directing without these cycles:
 - what the user did that the world remembers.
 Keep names exact. Leave out moment-to-moment detail and anything already settled with no consequences. Never invent anything that is not in the cycles. Answer with the summary text only.
 ```
+
+## 13. Проверка ответа писателя классификатором (утверждения) и переписывание
+
+Утверждения для классификатора (режим вероятности 0…1). Срез — Push хода (`{{push}}`), последнее сообщение пользователя (`{{user_message}}`) и проверяемый текст писателя (`{{reply}}`). Имя персонажа пользователя — `{{user}}`.
+
+**user_agency:**
+```text
+The reply writes actions, spoken words, thoughts or feelings for {{user}} that {{user}} did not write in their own message.
+```
+
+**past_resolution:**
+```text
+The reply continues the scene past this ending of the turn, playing events that come after it: {{resolution}}
+```
+
+Дополнительный промпт для переписывания — системным сообщением **после Push**. Подстановки: `{{reasons}}` — по строке на нарушение (из шаблонов ниже), `{{attempt}}` — номер попытки.
+
+```text
+REWRITE (attempt {{attempt}}): your previous reply was discarded and the user never saw it. It broke these rules:
+{{reasons}}
+Write the reply again from the start, following the push. Do not mention the earlier attempt.
+```
+
+Строки причин:
+```text
+- You wrote what {{user}} does, says, thinks or feels: "{{quote}}". {{user}} belongs to the user — write only what the push gives as the result of {{user}}'s attempt.
+- You continued past the end of the turn: "{{quote}}". Stop at the resolution: {{resolution}}
+```
