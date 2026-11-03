@@ -246,3 +246,58 @@ test('cancelling a turn stops its research tasks: the task ends as cancelled and
     const reports = events.filter(([name]) => name === 'decision.researcher.report').map(([, payload]) => payload.taskId);
     assert.deepEqual(reports, [other.taskId], 'only the task of the living turn reports');
 });
+
+test('a bank builder that hits the step limit still writes its report from what it read, and old pages are shortened in its context', async () => {
+    const { createResearcher } = await import('../libraries/core/decision-researcher.js');
+    const memory = { tasks: [] };
+    const seen = [];
+    const call = async (contract, params) => {
+        if (contract === 'stWebSearch.view') return { id: params.id, text: 'x'.repeat(5000) };
+        if (contract !== 'model.generate') return { results: [] };
+        seen.push(params.messages.filter(message => message.role === 'tool').map(message => String(message.content).length));
+        if (!params.tools) return { text: '***Elsa***\nBuilt from what was read.' };
+        return { text: '', toolCalls: [{ id: `v${seen.length}`, name: 'web_view', arguments: { id: 'p', comment: 'Reading the next section.' } }] };
+    };
+    const researcher = createResearcher({
+        call, callService: call, getSettings: () => ({ researcher: { workerId: 'web', maxTasks: 2, maxSteps: 8 } }),
+        getWorkers: () => [{ id: 'web', format: 'openai' }],
+        store: { research: () => memory.tasks, addResearch: async task => { memory.tasks.push(task); }, updateResearch: async (id, patch) => { memory.tasks = memory.tasks.map(task => (task.id === id ? { ...task, ...patch } : task)); } },
+        publishEvent: () => {},
+    });
+    const started = researcher.start({ task: 'Build the data bank now.', kind: 'bank', notify: false, maxSteps: 8 });
+    const done = await started.done;
+    assert.equal(done.error, null);
+    assert.match(done.report, /Built from what was read/);
+    const last = seen.at(-1);
+    assert.ok(last.filter(length => length > 1000).length <= 3, 'only the last three page reads stay whole');
+});
+
+test('the researcher uses the guide\'s web toolkit: character databases, wikis, meaning search', async () => {
+    const { createResearcher, RESEARCH_TOOLS } = await import('../libraries/core/decision-researcher.js');
+    const names = RESEARCH_TOOLS.map(tool => tool.name);
+    for (const name of ['web_character', 'web_wikis', 'web_wiki', 'web_search', 'web_open', 'web_view', 'web_find']) assert.ok(names.includes(name), name);
+    const used = [];
+    const webActions = {
+        'web.character': { run: async args => { used.push(['web.character', args.name]); return { ok: true, message: 'found', detail: 'Candidates for Elsa:\n1. Elsa Granhiert — anilist:1' }; } },
+        'web.read': { run: async args => { used.push(['web.read', args.ref]); return { ok: false, message: 'The page did not open: offline' }; } },
+    };
+    const results = [];
+    let step = 0;
+    const call = async (contract, params) => {
+        step += 1;
+        results.push(params.messages.filter(message => message.role === 'tool').map(message => String(message.content)));
+        if (step === 1) return { text: '', toolCalls: [{ id: 'a', name: 'web_character', arguments: { name: 'Elsa', comment: 'Look her up first.' } }] };
+        if (step === 2) return { text: '', toolCalls: [{ id: 'b', name: 'web_open', arguments: { ref: 'anilist:1', comment: 'Open the best one.' } }] };
+        return { text: '', toolCalls: [{ id: 'f', name: 'finish', arguments: { report: 'Elsa bank.', comment: 'Enough.' } }] };
+    };
+    const memory = { tasks: [] };
+    const researcher = createResearcher({
+        call, webActions, getSettings: () => ({ researcher: { workerId: 'web', maxTasks: 2, maxSteps: 10 } }), getWorkers: () => [{ id: 'web', format: 'openai' }],
+        store: { research: () => memory.tasks, addResearch: async task => { memory.tasks.push(task); }, updateResearch: async () => {} }, publishEvent: () => {},
+    });
+    const done = await researcher.start({ task: 'Build the data bank now.', kind: 'bank', notify: false }).done;
+    assert.equal(done.report, 'Elsa bank.');
+    assert.deepEqual(used, [['web.character', 'Elsa'], ['web.read', 'anilist:1']]);
+    assert.match(results[1].join('\n'), /Candidates for Elsa/);
+    assert.match(results[2].join('\n'), /did not open: offline/);
+});

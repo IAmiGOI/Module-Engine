@@ -4,6 +4,7 @@ import { createDecisionStore } from './store.js';
 import { createDecisionCycle } from './cycle.js';
 import { createCardTurn } from './card-turn.js';
 import { createResearcher } from '../../libraries/core/decision-researcher.js';
+import { createWebActions } from '../guide/web-actions.js';
 import { captureReasoning } from './capture.js';
 import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
@@ -53,9 +54,16 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return result.value;
     };
     // Веб-инструменты — Сервис (`stWebSearch.*`), а не контракт Ядра: через `call` их не было вовсе («No supplier registered»).
+    // Веб-набор гида (базы персонажей, вики, поиск по смыслу) — и исследователю, и сборщикам банков.
+    const webActions = createWebActions({
+        callService: async (contract, params) => {
+            try { return { ok: true, value: await callService(contract, params) }; } catch (error) { return { ok: false, error: { message: error?.message ?? String(error) } }; }
+        },
+    });
     const researcher = createResearcher({
         call: callStrict,
         callService,
+        webActions,
         getSettings: () => settings,
         getWorkers: () => workers,
         store,

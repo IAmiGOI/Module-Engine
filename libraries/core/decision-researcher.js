@@ -29,25 +29,43 @@ function withComment(schema) {
     };
 }
 
+// Тот же набор, что у гида (Меа): базы персонажей, фэндом-вики, поиск внутри вики, страница по оглавлению и поиск
+// по смыслу. Раньше у исследователя были только голый поиск и чтение целых разделов — сборщик банка читал вики
+// по 19 раз и шёл по 74 с на шаг. Исполнение — действия гида (`web.*`), их передаёт ядро директора.
 export const RESEARCH_TOOLS = Object.freeze([
     withComment({
+        name: 'web_character', displayName: 'Look up a character',
+        description: 'FIRST STEP for an anime, manga, visual novel or game character: look the name up in AniList, VNDB and MyAnimeList (names, nicknames, age, description, the titles they appear in). Keep the name short; add the franchise if known. Returns up to six candidates with a ref; open one with web_open {"ref"}.',
+        parameters: { type: 'object', properties: { name: { type: 'string' }, franchise: { type: 'string' } }, required: ['name'] },
+    }),
+    withComment({
+        name: 'web_wikis', displayName: 'Find the franchise wiki',
+        description: 'Find the fan wiki of a franchise (Fandom, wiki.gg). Returns the wiki hosts that exist; then search inside one with web_wiki.',
+        parameters: { type: 'object', properties: { franchise: { type: 'string' } }, required: ['franchise'] },
+    }),
+    withComment({
+        name: 'web_wiki', displayName: 'Search inside a wiki',
+        description: 'Search INSIDE one wiki: {"host": "rezero.fandom.com", "query": "Elsa Granhiert"}. Returns up to six pages; open the best with web_open. Much better than a general web search for canon facts.',
+        parameters: { type: 'object', properties: { host: { type: 'string' }, query: { type: 'string' } }, required: ['host', 'query'] },
+    }),
+    withComment({
         name: 'web_search', displayName: 'Search the web',
-        description: 'Search the internet. Returns up to six results with titles, addresses and snippets.',
+        description: 'Search the internet. Returns up to six results with titles, addresses and snippets. For canon characters prefer web_character and web_wiki.',
         parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
     }),
     withComment({
         name: 'web_open', displayName: 'Open a page',
-        description: 'Open a page by address and get its size, outline and beginning. Read more with web_view or web_find.',
-        parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+        description: 'Open a page by address ({"url"}) or a character found with web_character ({"ref"}). A short page comes whole; a long one comes as its list of sections and its beginning (a wiki page starts with its Infobox). Then read only what you need with web_view or web_find.',
+        parameters: { type: 'object', properties: { url: { type: 'string' }, ref: { type: 'string' } } },
     }),
     withComment({
         name: 'web_view', displayName: 'Read a page section',
-        description: 'Read a section or a stretch of an opened page.',
+        description: 'Read one section of an opened page ({"id", "section": number or part of its title}) or a stretch ({"id", "offset", "chars"}, up to 8000). Read sections, not whole pages.',
         parameters: { type: 'object', properties: { id: { type: 'string' }, section: { type: 'string' }, offset: { type: 'number' }, chars: { type: 'number' } }, required: ['id'] },
     }),
     withComment({
         name: 'web_find', displayName: 'Find on a page',
-        description: 'Look for words or meaning on an opened page.',
+        description: 'Look for something on an opened page by the words AND by the meaning ("how she behaves in a fight"). Returns the best places with text around each; read more with web_view and the offset.',
         parameters: { type: 'object', properties: { id: { type: 'string' }, query: { type: 'string' } }, required: ['id', 'query'] },
     }),
     withComment({
@@ -56,6 +74,11 @@ export const RESEARCH_TOOLS = Object.freeze([
         parameters: { type: 'object', properties: { report: { type: 'string' } }, required: ['report'] },
     }),
 ]);
+
+const WEB_ACTION_FOR = Object.freeze({
+    web_character: 'web.character', web_wikis: 'web.wikis', web_wiki: 'web.wiki', web_search: 'web.search',
+    web_open: 'web.read', web_view: 'web.page', web_find: 'web.find',
+});
 
 /** Секция контекста: последние завершённые отчёты; незавершённые — только строкой статуса. */
 export function researchSection(tasks, { limit = 5, reportChars = 800 } = {}) {
@@ -73,11 +96,34 @@ function taskId(now, rid) {
     return `res_${now.toString(36)}_${rid().toString(36).slice(2, 8)}`;
 }
 
-export function createResearcher({ call, callService = call, getSettings, getWorkers, store, publishEvent, now = () => Date.now(), rid = Math.random }) {
+export function createResearcher({ call, callService = call, webActions = null, getSettings, getWorkers, store, publishEvent, now = () => Date.now(), rid = Math.random }) {
     const running = new Map();
     const NUDGE = 'Call finish now with your report. Put the whole report into its "report" field.';
+    const WRAP_UP = 'You have two steps left. Stop reading and call finish with your report now, built from what you already have.';
+    const FINAL = 'The step limit is reached. Write the final report now from what you already have — the full text, nothing else.';
+    const KEEP_FULL_RESULTS = 3;
+    const OLD_RESULT_CHARS = 600;
+
+    // Прочитанные страницы копятся в контексте целиком, и каждый следующий запрос всё тяжелее (74 с на шаг вместо 10).
+    // Целыми остаются последние результаты, старые сжимаются до начала — нужное из них модель уже использовала.
+    const shortened = new WeakSet();
+    function trimOldResults(messages) {
+        const results = messages.filter(message => message.role === 'tool');
+        for (const message of results.slice(0, Math.max(0, results.length - KEEP_FULL_RESULTS))) {
+            const content = String(message.content ?? '');
+            if (content.length > OLD_RESULT_CHARS && !shortened.has(message)) {
+                message.content = `${content.slice(0, OLD_RESULT_CHARS)}… [older result shortened; read it again if you still need it]`;
+                shortened.add(message);
+            }
+        }
+    }
 
     async function execute(name, args) {
+        const action = webActions?.[WEB_ACTION_FOR[name]];
+        if (action) {
+            const result = await action.run(args ?? {});
+            return result.ok ? { ok: true, text: result.detail || result.message } : { ok: false, error: result.message };
+        }
         if (name === 'web_search') return callService('stWebSearch.search', { query: args.query });
         if (name === 'web_open') return callService('stWebSearch.open', { url: args.url });
         if (name === 'web_view') return callService('stWebSearch.view', { id: args.id, section: args.section, offset: args.offset, chars: args.chars });
@@ -108,6 +154,8 @@ export function createResearcher({ call, callService = call, getSettings, getWor
             while (steps < maxSteps && !report) {
                 if (task.controller?.signal.aborted) throw new Error(task.cancelReason || 'cancelled');
                 steps += 1;
+                trimOldResults(messages);
+                if (maxSteps > 4 && steps === maxSteps - 1) messages.push({ role: 'user', content: WRAP_UP });
                 const answer = await call('model.generate', {
                     workerId: worker.id, messages, tools: RESEARCH_TOOLS, toolChoice: 'auto',
                     stream: false, returnMessage: true, maxTokens: Number(task.maxTokens) || 2000,
@@ -142,6 +190,17 @@ export function createResearcher({ call, callService = call, getSettings, getWor
                         break;
                     }
                 }
+            }
+            if (!report && !task.controller?.signal.aborted) {
+                // Лимит без отчёта: последний запрос без инструментов — отчёт из уже собранного, работа не выбрасывается.
+                trimOldResults(messages);
+                messages.push({ role: 'user', content: FINAL });
+                const answer = await call('model.generate', {
+                    workerId: worker.id, messages, stream: false,
+                    maxTokens: Number(task.maxTokens) || 2000,
+                    ...(task.controller ? { signal: task.controller.signal } : {}),
+                });
+                report = String(answer?.text ?? answer ?? '').trim();
             }
             if (!report) throw new Error(`the ${maxSteps}-step limit was reached without a report`);
         } catch (error) {

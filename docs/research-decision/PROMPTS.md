@@ -257,6 +257,8 @@ RULES OF WRITING
 
 For a persona (the user's own character): write only what others can see and know — appearance, manner, how they come across, what is publicly known. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
 
+READING BUDGET: most banks need web_character, then the character's page on the franchise wiki (web_wikis, web_wiki) — and from it only the Infobox and one or two sections: Appearance and Personality, plus speech or quotes. Use web_find to jump to what you need. Do not read whole articles or plot summaries, and stop reading as soon as the skeleton can be filled.
+
 When the bank is ready and inside its size, call finish with the bank as the report. Its last line is "IMPORTANCE: key" or "IMPORTANCE: minor". You have at most {{steps}} steps. Every call must carry "comment": at least one full sentence saying why you are making it.
 ```
 
