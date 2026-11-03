@@ -8,8 +8,10 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
     let state = { status: 'idle', startedAt: 0, finishedAt: 0, error: null };
     let loaded = false;
     let promise = null;
+    let epoch = 0; // смена чата: запуск старого чата больше ничего не пишет и никого не держит
 
-    function save(patch) {
+    function saveFor(patch, runEpoch = epoch) {
+        if (runEpoch !== epoch) return Promise.resolve(state);
         state = { ...state, ...patch, updatedAt: now() };
         return Promise.resolve(call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'bootstrap', value: state })).catch(() => state);
     }
@@ -38,8 +40,11 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
 
     async function run() {
         const settings = getSettings();
+        const runEpoch = epoch;
+        const save = patch => saveFor(patch, runEpoch);
+        const publish = (name, payload) => { if (runEpoch === epoch) publishEvent(name, payload); };
         await save({ status: 'running', startedAt: now(), finishedAt: 0, error: null });
-        publishEvent('decision.bootstrap.started', { at: now(), maxQuestions: settings.bootstrap?.maxQuestions ?? 5 });
+        publish('decision.bootstrap.started', { at: now(), maxQuestions: settings.bootstrap?.maxQuestions ?? 5 });
         try {
             const result = await cycle.runBootstrap({
                 runId: `bootstrap_${now()}`, maxQuestions: settings.bootstrap?.maxQuestions ?? 5,
@@ -47,20 +52,20 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
             });
             if (result?.briefWritten) {
                 await save({ status: 'done', finishedAt: now(), error: null });
-                publishEvent('decision.bootstrap.finished', { status: 'done', at: now() });
+                publish('decision.bootstrap.finished', { status: 'done', at: now() });
             } else {
                 const message = result?.type === 'error'
                     ? `Bootstrap failed: ${result.reason}`
                     : 'The bootstrap cycle finished without a chat brief; the first turn goes on without one.';
                 await save({ status: 'failed', finishedAt: now(), error: message });
-                publishEvent('decision.bootstrap.warning', { message });
-                publishEvent('decision.bootstrap.finished', { status: 'failed', at: now(), error: message });
+                publish('decision.bootstrap.warning', { message });
+                publish('decision.bootstrap.finished', { status: 'failed', at: now(), error: message });
             }
         } catch (error) {
             const message = `Bootstrap failed: ${error?.message ?? error}`;
             await save({ status: 'failed', finishedAt: now(), error: message });
-            publishEvent('decision.bootstrap.warning', { message });
-            publishEvent('decision.bootstrap.finished', { status: 'failed', at: now(), error: message });
+            publish('decision.bootstrap.warning', { message });
+            publish('decision.bootstrap.finished', { status: 'failed', at: now(), error: message });
         }
         return { ...state };
     }
@@ -71,7 +76,7 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
         if (state.status === 'done' || state.status === 'failed') return { ...state, skipped: true };
         if (state.status === 'idle' && !(await isNewChat())) return { ...state, skipped: true };
         if (promise) return promise;
-        promise = run().finally(() => { promise = null; });
+        promise = start();
         return promise;
     }
 
@@ -105,9 +110,23 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
         if (!loaded) await load();
         if (promise) return { ok: false, error: 'The bootstrap is already running.' };
         if (state.status !== 'failed') return { ok: false, error: 'There is no failed bootstrap to retry.' };
-        promise = run().finally(() => { promise = null; });
+        promise = start();
         return { ok: true, state: await promise };
     }
 
-    return { load, ensure, maybeStart, waitFirstTurn, retry, state: () => ({ ...state }), isNewChat };
+    // Завершение старого запуска не должно обнулить запуск нового чата.
+    function start() {
+        const current = run().finally(() => { if (promise === current) promise = null; });
+        return current;
+    }
+
+    /** Смена чата: запуск старого чата забыт — новый чат его не ждёт, а старый не пишет в новый. */
+    function chatChanged() {
+        epoch += 1;
+        promise = null;
+        loaded = false;
+        state = { status: 'idle', startedAt: 0, finishedAt: 0, error: null };
+    }
+
+    return { load, ensure, maybeStart, waitFirstTurn, retry, chatChanged, state: () => ({ ...state }), isNewChat };
 }

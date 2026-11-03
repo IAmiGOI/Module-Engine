@@ -53,6 +53,15 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const knowledge = createKnowledge({ call, store, banks, now });
     const formChecker = createFormChecker({ call, getSettings, banks, knowledge });
     const questions = createQuestionQueue({ callService, publishEvent, now });
+    // Эпоха чата: смена чата её увеличивает. Фоновый цикл старого чата обрывается и ничего не пишет в новый.
+    let chatEpoch = 0;
+    let backgroundController = null;
+    function chatChanged() {
+        chatEpoch += 1;
+        backgroundController?.abort(new Error('the chat was changed'));
+        backgroundController = null;
+        questions.cancelAll();
+    }
     const turnWindow = createTurnWindow({ store, banks, call, getSettings, deciderWorker, publishEvent, now });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
@@ -219,6 +228,10 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             ? capture(`${runId}:`, { onThinking: text => publishEvent('decision.cycle.thinking', { runId, text }) })
             : null;
         const thinking = givenThinking ?? (() => captured?.value ?? '');
+        const epoch = chatEpoch;
+        const controller = new AbortController();
+        backgroundController = controller;
+        const stale = () => epoch !== chatEpoch;
         const runUsage = () => (captured ? captured.usage : usage());
         const settings = getSettings();
         const worker = deciderWorker(settings);
@@ -242,7 +255,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             result = await runDecisionCycle({
                 messages: built.messages,
                 tools,
-                generate: context.generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null }),
+                generate: context.generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null, signal: controller.signal }),
                 handlers: event === 'message' ? withRequiredReply(handlersFor(settings)) : handlersFor(settings),
                 callTool,
                 maxSteps: maxSteps ?? settings.maxSteps,
@@ -260,13 +273,20 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             const message = error?.message ?? String(error);
             researcher?.cancel?.({ runId });
             wakeQueue.rest();
-            await recordFailure({ runId, event, wake: startedWake, startedAt, message });
+            if (!stale()) await recordFailure({ runId, event, wake: startedWake, startedAt, message });
             live.failed({ runId, message });
             throw error;
         } finally {
             captured?.stop();
+            if (backgroundController === controller) backgroundController = null;
         }
         const { cycle } = result;
+        if (stale()) {
+            // Цикл старого чата: в журнал и окно нового он не попадает.
+            wakeQueue.rest();
+            live.finished({ cycle });
+            return { skipped: true, stale: true, steps: result.steps, type: 'stale', briefWritten: false };
+        }
         await store.appendCycle(cycle).catch(() => {});
         await turnWindow.recordBackground(cycle).catch(error => publishEvent('decision.log.warning', { reason: `window append failed: ${error?.message ?? error}` }));
         live.finished({ cycle });
@@ -306,6 +326,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap,
         onResearcherReport: jobs.onResearcherReport, sendMessage, judgeForcedMemory,
         answerQuestion: params => questions.answer(params),
+        chatChanged,
         // Вопрос от движка, а не от модели (например, «взять готовые банки?»): та же очередь и тот же тост.
         askUser: ({ question, options, why = '' }) => questions.ask({ question, options, why, allowed: true, asked: 0, limit: 1 }),
         question: () => questions.pending(),

@@ -72,3 +72,16 @@ test('an empty question or one option is refused without locking the input', asy
     assert.match(result.text, /two to four concrete options/);
     assert.deepEqual(locks, []);
 });
+
+test('a chat switch closes the open questions as skipped and unlocks the input', async () => {
+    const { createQuestionQueue } = await import('../cores/decision/questions.js');
+    const locks = [];
+    const queue = createQuestionQueue({ callService: async (contract, params) => { locks.push(params.locked); }, publishEvent: () => {} });
+    const answer = queue.ask({ question: 'When?', options: ['A', 'B'], allowed: true });
+    assert.equal(queue.locked(), true);
+    queue.cancelAll();
+    const result = await answer;
+    assert.equal(result.skipped, true);
+    assert.equal(queue.locked(), false);
+    assert.equal(queue.count(), 0);
+});

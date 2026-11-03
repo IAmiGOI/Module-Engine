@@ -62,8 +62,19 @@ export function createQuestionQueue({ callService = null, publishEvent, now = ()
         return { ok: true };
     }
 
+    /** Смена чата: открытые вопросы старого чата снимаются как пропущенные, ввод открывается. */
+    function cancelAll() {
+        for (const entry of [...pending.values()]) {
+            pending.delete(entry.id);
+            entry.resolve({ text: ASK_USER_SKIPPED, asked: true, answer: '', skipped: true });
+            publishEvent('decision.question.answered', { id: entry.id, answer: '', skipped: true, at: now() });
+        }
+        order.length = 0;
+        lock(false);
+    }
+
     return {
-        ask, answer,
+        ask, answer, cancelAll,
         pending: () => view(first()),
         count: () => order.length,
         locked: () => locked,

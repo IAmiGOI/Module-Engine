@@ -1,8 +1,9 @@
 import { bankPromptFor } from '../../libraries/core/decision-banks.js';
 
 const BANK_MAX_TOKENS = 4000;
-// Без отдельной настройки банк получает те же шаги, что исследователь: скрытые 12 не успевали найти канон.
-export const bankSteps = settings => Math.max(2, Number(settings?.researcher?.bankMaxSteps) || Number(settings?.researcher?.maxSteps) || 12);
+// Свой лимит банка: 12 не успевали найти канон, а 50 шагов исследователя растягивали один банк на 10+ минут.
+export const BANK_STEPS_DEFAULT = 20;
+export const bankSteps = settings => Math.max(2, Number(settings?.researcher?.bankMaxSteps) || BANK_STEPS_DEFAULT);
 export const bankConcurrency = settings => Math.max(1, Number(settings?.researcher?.bankConcurrency) || 4);
 
 /** Задачи субагента на сборку банков: свой лимит, отдельно от двух слотов исследователя. */
@@ -47,10 +48,11 @@ export function createBankTasks({ getSettings, researcher, publishEvent, sleep =
      * `onDone(source, text)` / `onError(source, error)` вызываются по мере
      * готовности; промис ждёт все задачи. Таймаут решает вызывающий.
      */
-    function runQueue(sources, { concurrency = 2, onDone = async () => {}, onError = async () => {} } = {}) {
+    function runQueue(sources, { concurrency = 2, onDone = async () => {}, onError = async () => {}, isCurrent = () => true } = {}) {
         const queue = [...sources];
         const worker = async () => {
-            while (queue.length) {
+            // Чат сменился — очередь старого чата больше не берёт новых банков.
+            while (queue.length && isCurrent()) {
                 const source = queue.shift();
                 try {
                     const text = await build(source);

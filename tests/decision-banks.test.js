@@ -322,11 +322,11 @@ test('while a bank is rebuilt for a new builder version, its old text stays in u
     assert.equal(bram.text, 'OLD Bram', 'the old bank survives a failed rebuild');
 });
 
-test('without its own setting a bank builder gets the researcher\'s step limit, not a hidden 12', async () => {
+test('a bank builder has its own step limit (20 by default), not the researcher\'s 50 and not a hidden 12', async () => {
     const { bankSteps } = await import('../cores/decision/bank-tasks.js');
-    assert.equal(bankSteps({ researcher: { maxSteps: 50 } }), 50);
-    assert.equal(bankSteps({ researcher: { maxSteps: 50, bankMaxSteps: 20 } }), 20);
-    assert.equal(bankSteps({}), 12);
+    assert.equal(bankSteps({ researcher: { maxSteps: 50 } }), 20, 'a bank does not inherit the researcher\'s 50 steps');
+    assert.equal(bankSteps({ researcher: { maxSteps: 50, bankMaxSteps: 30 } }), 30);
+    assert.equal(bankSteps({}), 20);
 });
 
 test('a bank build waits for a free builder instead of failing with "busy"', async () => {
@@ -359,4 +359,16 @@ test('an applied saved set is ready at once: the cold start builds only what the
     await second.banks.ensureColdStart();
     const builtNames = second.calls.map(call => /CHARACTER: (.+)/.exec(call.system)?.[1]);
     for (const record of ready) assert.equal(builtNames.includes(record.name), false, `${record.name} comes from the set, not rebuilt`);
+});
+
+test('switching chats mid-build: the old chat\'s builds never write into the new chat', async () => {
+    const world = fakeWorld({ failName: null });
+    const running = world.banks.ensureColdStart();
+    await new Promise(resolve => setTimeout(resolve, 1));
+    world.chatMemory.clear();
+    await world.banks.reload();
+    await running;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const leaked = world.banks.records().filter(record => record.status === 'ready');
+    assert.equal(leaked.length, 0, 'nothing from the old chat landed in the new one');
 });

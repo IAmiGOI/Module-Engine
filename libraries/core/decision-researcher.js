@@ -182,12 +182,15 @@ export function createResearcher({ call, callService = call, getSettings, getWor
     }
 
     /** Снять задания, запущенные этим ходом: ход упал или истёк — их отчёты уже никому не нужны. */
-    function cancel({ runId, reason = 'cancelled: the turn that started it failed' } = {}) {
+    function cancel({ runId, all = false, reason = 'cancelled: the turn that started it failed' } = {}) {
         let count = 0;
         for (const item of running.values()) {
-            if (!runId || item.runId !== runId || item.controller.signal.aborted) continue;
+            if (item.controller.signal.aborted) continue;
+            if (!all && (!runId || item.runId !== runId)) continue;
             item.cancelReason = reason;
             item.controller.abort(new Error(reason));
+            // Слот освобождается сразу: новый чат не ждёт, пока отменённое задание дочитает свой последний запрос.
+            if (all) running.delete(item.id);
             count += 1;
         }
         return count;

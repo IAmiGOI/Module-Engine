@@ -33,6 +33,7 @@ export function createBankStore({ call }) {
     let chat = {};
     let coldStart = { status: 'idle', total: 0, done: 0, errors: 0, startedAt: 0, updatedAt: 0 };
     let tail = Promise.resolve();
+    let epoch = 0; // каждая загрузка — новый чат (или его перечитка): старые сборки сверяются с ней перед записью
 
     function enqueue(task) {
         const run = tail.then(task, task);
@@ -41,6 +42,7 @@ export function createBankStore({ call }) {
     }
 
     async function load() {
+        epoch += 1;
         const [baseValue, marksValue, chatValue, coldValue] = await Promise.all([
             call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: BASE_KEY, fallback: {} }),
             call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: MARKS_KEY, fallback: {} }),
@@ -76,7 +78,7 @@ export function createBankStore({ call }) {
     });
 
     return {
-        load, saveBase, saveMarks, saveChat, saveColdStart,
+        load, saveBase, saveMarks, saveChat, saveColdStart, epoch: () => epoch,
         base: () => ({ ...base }), marks: () => ({ ...marks }), chat: () => ({ ...chat }), coldStart: () => ({ ...coldStart }),
         putBase: record => saveBase({ ...base, [record.sourceKey]: record }).then(() => record),
         putChat: record => saveChat({ ...chat, [record.sourceKey]: record }).then(() => record),

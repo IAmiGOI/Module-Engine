@@ -6,7 +6,7 @@
 export function createDecisionEvents({
     host, getSettings, getPending, setPending, clearAttempts, deleteAttempt, persist,
     discardPending, getLastFailure, noteCorrection, notify, revealCard, restoreSnapshotFor, lastMesid,
-    cycle, reload, startDraft, canReregister, registerStages, publishEvent, decideStage,
+    cycle, reload, chatChanged = () => {}, startDraft, canReregister, registerStages, publishEvent, decideStage,
 }) {
     let typingActive = false;
 
@@ -61,6 +61,7 @@ export function createDecisionEvents({
     function onChatChanged() {
         setPending(null);
         clearAttempts();
+        chatChanged();
         reload().catch(() => {});
     }
 

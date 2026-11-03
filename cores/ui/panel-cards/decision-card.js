@@ -33,7 +33,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
     const formTimeoutMs = signal(180000);
     const compressedLimitTokens = signal(100000);
     const compression = { workerId: signal(''), thresholdTokens: signal(50000) };
-    const researcherSettings = { workerId: signal(''), maxTasks: signal(2), maxSteps: signal(50) };
+    const researcherSettings = { workerId: signal(''), maxTasks: signal(2), maxSteps: signal(50), bankMaxSteps: signal(20), bankConcurrency: signal(4) };
     const snapshots = signal(true);
     const adaptiveReasoning = signal(true);
     const turnDraft = signal(false);
@@ -118,6 +118,8 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
         researcherSettings.workerId.set(String(value.researcher?.workerId ?? ''));
         researcherSettings.maxTasks.set(Number(value.researcher?.maxTasks ?? 2));
         researcherSettings.maxSteps.set(Number(value.researcher?.maxSteps ?? 50));
+        researcherSettings.bankMaxSteps.set(Number(value.researcher?.bankMaxSteps ?? 20));
+        researcherSettings.bankConcurrency.set(Number(value.researcher?.bankConcurrency ?? 4));
         snapshots.set(value.snapshots !== false);
         adaptiveReasoning.set(value.adaptiveReasoning !== false);
         turnDraft.set(Boolean(value.turnDraft));
@@ -148,6 +150,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
             researcher: {
                 workerId: researcherSettings.workerId.peek(),
                 maxTasks: researcherSettings.maxTasks.peek(), maxSteps: researcherSettings.maxSteps.peek(),
+                bankMaxSteps: researcherSettings.bankMaxSteps.peek(), bankConcurrency: researcherSettings.bankConcurrency.peek(),
             },
             snapshots: snapshots.peek(), adaptiveReasoning: adaptiveReasoning.peek(),
             turnDraft: turnDraft.peek(), costCounter: costCounter.peek(),
@@ -265,6 +268,10 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
                     Field('Researcher connection', Select(researcherSettings.workerId, workerOptions)),
                     Slider('Research tasks at once', researcherSettings.maxTasks, { min: 1, max: 8, step: 1 }),
                     Slider('Research steps before the report', researcherSettings.maxSteps, { min: 1, max: 200, step: 1 }),
+                ),
+                Row(
+                    Slider('Bank builders at once', researcherSettings.bankConcurrency, { min: 1, max: 8, step: 1 }),
+                    Slider('Steps per character bank', researcherSettings.bankMaxSteps, { min: 2, max: 60, step: 1 }),
                 ),
             ),
             writerCheckSection({ classifierConnectionId, classifierThreshold, classifierCheckTokens, classifierRewriteLimit, classifierOptions }),

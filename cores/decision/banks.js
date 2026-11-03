@@ -90,7 +90,8 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         };
     }
 
-    async function saveReady(source, answer) {
+    async function saveReady(source, answer, epoch = bankStore.epoch()) {
+        if (epoch !== bankStore.epoch()) return null; // сборка старого чата: в новый не пишем
         const { text, importance } = splitBankImportance(answer);
         const record = createBankRecord({
             sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
@@ -108,7 +109,8 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         return record;
     }
 
-    async function markError(source, error) {
+    async function markError(source, error, epoch = bankStore.epoch()) {
+        if (epoch !== bankStore.epoch()) return null;
         const previous = bankStore.chat()[source.sourceKey];
         const record = createBankRecord({
             sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
@@ -133,7 +135,9 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     }
 
     async function runColdStart() {
+        const startEpoch = bankStore.epoch();
         const sources = await collectSources();
+        if (startEpoch !== bankStore.epoch()) return progress({ stale: true });
         const base = bankStore.base();
         const chat = { ...bankStore.chat() };
         const pending = [];
@@ -161,10 +165,12 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             await bankStore.saveColdStart({ status: 'ready', done: sources.length, total: sources.length, errors: 0, warnings: markWarnings });
             return progress({ timedOut: false, sources: sources.length });
         }
+        const epoch = startEpoch;
         const running = tasks.runQueue(pending.map(withFloor), {
+            isCurrent: () => epoch === bankStore.epoch(),
             concurrency: bankConcurrency(getSettings()),
-            onDone: async (source, text) => { await saveReady(source, text); await bankStore.saveColdStart(progress()); },
-            onError: async (source, error) => { await markError(source, error); await bankStore.saveColdStart(progress()); },
+            onDone: async (source, text) => { if (await saveReady(source, text, epoch)) await bankStore.saveColdStart(progress()); },
+            onError: async (source, error) => { if (await markError(source, error, epoch)) await bankStore.saveColdStart(progress()); },
         });
         const timeoutMs = Math.max(1, Number(getSettings().bankColdStartTimeoutMs) || 120000);
         let timer = null;
@@ -210,7 +216,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         });
         await bankStore.putChat(short);
         publishEvent('decision.bank.short', { sourceKey: source.sourceKey, name: short.name });
-        tasks.build(withFloor(source)).then(text => saveReady(source, text)).catch(error => markError(source, error));
+        { const epoch = bankStore.epoch(); tasks.build(withFloor(source)).then(text => saveReady(source, text, epoch)).catch(error => markError(source, error, epoch)); }
         return short;
     }
 
@@ -248,7 +254,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         const clean = String(name ?? '').trim();
         if (!sourcesCache.length) await collectSources();
         const source = findBankSource(sourcesCache, clean) ?? historySource(clean);
-        tasks.build(withFloor(source)).then(text => saveReady(source, text)).catch(error => markError(source, error));
+        { const epoch = bankStore.epoch(); tasks.build(withFloor(source)).then(text => saveReady(source, text, epoch)).catch(error => markError(source, error, epoch)); }
         return { ok: true, queued: true, sourceKey: source.sourceKey, name: source.name };
     }
 

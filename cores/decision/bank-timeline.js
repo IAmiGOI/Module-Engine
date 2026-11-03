@@ -6,7 +6,8 @@ const TIMELINE_CONCURRENCY = 3;
 
 /** Правка готовых банков под таймлайн: один запрос модели директора, без поиска. */
 export function createTimelineAdjust({ call, getSettings, publishEvent, bankStore, records, matchesName, currentTimeline, queue }) {
-    async function adjustOne(record, timeline, note = '') {
+    const epochNow = () => (typeof bankStore.epoch === 'function' ? bankStore.epoch() : 0);
+    async function adjustOne(record, timeline, note = '', epoch = epochNow()) {
         const workerId = String(getSettings().decider?.workerId ?? '').trim();
         if (!workerId) {
             publishEvent('decision.bank.warning', { name: record.name, message: 'Timeline adjust skipped: no director worker is configured.' });
@@ -17,6 +18,7 @@ export function createTimelineAdjust({ call, getSettings, publishEvent, bankStor
             const answer = await call('model.generate', { workerId, prompt, maxTokens: 4000, temperature: 0.2, stream: false });
             const { text } = splitBankImportance(String(answer ?? ''));
             if (!text) throw new Error('The model returned an empty bank.');
+            if (epoch !== epochNow()) return null; // чат сменился, пока шёл запрос: правка старого чата не пишется в новый
             const updated = createBankRecord({ ...record, text, timelineHash: hashText(timeline), status: 'ready', builderVersion: BANK_BUILDER_VERSION });
             await bankStore.putBase({ ...updated, rawSource: '' });
             await bankStore.putChat(updated);
@@ -31,6 +33,7 @@ export function createTimelineAdjust({ call, getSettings, publishEvent, bankStor
     async function applyTimeline({ timeline = '', timelineBanks = [] } = {}) {
         const value = String(timeline ?? '').trim();
         if (!value) return { ok: true, adjusted: 0, queued: 0 };
+        const epoch = epochNow();
         const hash = hashText(value);
         const adjusted = [];
         const queued = [];
@@ -43,10 +46,10 @@ export function createTimelineAdjust({ call, getSettings, publishEvent, bankStor
         }
         // По несколько банков сразу, а не строго по одному: каждый — отдельный запрос модели.
         const next = async () => {
-            while (jobs.length) {
+            while (jobs.length && epoch === epochNow()) {
                 const { record, item } = jobs.shift();
                 publishEvent('decision.bank.started', { sourceKey: record.sourceKey, name: record.name });
-                if (await adjustOne(record, value, item.note)) adjusted.push(item.name);
+                if (await adjustOne(record, value, item.note, epoch)) adjusted.push(item.name);
                 else publishEvent('decision.bank.failed', { sourceKey: record.sourceKey, name: record.name, message: 'Timeline adjust failed.' });
             }
         };

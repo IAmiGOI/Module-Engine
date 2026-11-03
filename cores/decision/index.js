@@ -92,6 +92,14 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     const rollback = createRollback({ store, getSettings: () => settings, publishEvent });
     const { snapshotState, restoreState, restoreSnapshotFor } = rollback;
 
+    // Смена чата: всё, что делалось для старого, отменяется и больше ничего не пишет в новый —
+    // фоновый цикл, вопросы, bootstrap, сборщики банков и задания исследователя.
+    function chatChanged() {
+        cycle.chatChanged();
+        bootstrap.chatChanged();
+        researcher.cancel({ all: true, reason: 'cancelled: the chat was changed' });
+    }
+
     async function reload() {
         await store.reload();
         await banks.reload().catch(() => {});
@@ -247,6 +255,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         lastMesid: () => call('chatHistory.messages', { limit: 1, includeSystem: true }).then(messages => messages?.at?.(-1)?.mesid),
         cycle,
         reload,
+        chatChanged,
         startDraft: () => cycle.runDraft({ runId: `typing_${(runCounter += 1)}` }).catch(error => publishEvent('decision.failed', { runId: null, message: `typing draft: ${error?.message ?? error}` })),
         canReregister: () => !registering && !stagesRegistered,
         registerStages,

@@ -92,3 +92,19 @@ test('a page reload before the chat is loaded (no messages yet) is not a new cha
     await userFirst.bootstrap.maybeStart();
     assert.equal(userFirst.starts(), 0, 'a chat that already has a user message is not new');
 });
+
+test('a chat switch forgets the running bootstrap: the new chat does not wait for it, and the old run writes nothing', async () => {
+    let release = null;
+    const world = build({ run: () => new Promise(resolve => { release = resolve; }) });
+    await world.bootstrap.load();
+    world.bootstrap.maybeStart();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(world.bootstrap.state().status, 'running');
+    world.bootstrap.chatChanged();
+    world.memory.clear();
+    assert.equal(world.bootstrap.state().status, 'idle');
+    release({ briefWritten: true });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(world.memory.has('bootstrap'), false, 'the old run did not save its state into the new chat');
+    assert.ok(!world.events.some(([event, payload]) => event === 'decision.bootstrap.finished' && payload.status === 'done'));
+});
