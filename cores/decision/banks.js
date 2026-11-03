@@ -1,5 +1,6 @@
 import { splitBankImportance, bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking, BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
 import { createBankStore } from './bank-store.js';
+import { createTimelineAdjust } from './bank-timeline.js';
 import { createBankTasks, bankConcurrency } from './bank-tasks.js';
 import { createLorebookMarker } from './lorebook-marker.js';
 
@@ -15,6 +16,15 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     let coldStartPromise = null;
     let sourcesCache = [];
     let markWarnings = [];
+    const timelineQueue = new Set();
+
+    function currentTimeline() {
+        const brief = typeof store.chatBrief === 'function' ? store.chatBrief() : null;
+        return String(brief?.timeline ?? '').trim();
+    }
+    const timelineAdjust = createTimelineAdjust({
+        call, getSettings, publishEvent, bankStore, records: () => records(), matchesName, currentTimeline, queue: timelineQueue,
+    });
 
     function keyOf(name) { return String(name ?? '').trim().toLowerCase(); }
     function matchesName(record, name) {
@@ -30,7 +40,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         const floor = bankSizeBand({ level: record?.level, isMain: source.sizeBand === 'key' || ['scene', 'persona'].includes(source.sourceKind) });
         return importance === 'key' ? 'key' : floor;
     }
-    const withFloor = source => ({ ...source, sizeBand: sizeFor(source) });
+    const withFloor = source => ({ ...source, sizeBand: sizeFor(source), timeline: currentTimeline() });
 
     async function markLorebooks(entries, cards) {
         markWarnings = [];
@@ -86,10 +96,15 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
             sourceHash: hashText(source.source), text, sizeBand: sizeFor(source, importance), rawSource: source.source,
             examples: source.examples ?? '', aliases: source.aliases ?? [], canonicalName: source.canonicalName ?? '', status: 'ready',
-            builderVersion: BANK_BUILDER_VERSION,
+            builderVersion: BANK_BUILDER_VERSION, timelineHash: source.timeline ? hashText(source.timeline) : '',
         });
         await bankStore.putBase({ ...record, rawSource: '' });
         await bankStore.putChat(record);
+        if (timelineQueue.has(source.name)) {
+            timelineQueue.delete(source.name);
+            const timeline = currentTimeline();
+            if (timeline && record.timelineHash !== hashText(timeline)) await timelineAdjust.adjustOne(record, timeline, '');
+        }
         return record;
     }
 
@@ -254,7 +269,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     function examplesForCards() { return renderExampleSection(records().filter(record => record.sourceKind === 'card')); }
 
     return {
-        reload, reset, ensureColdStart, ensureName, noteRosterAdded,
+        reload, reset, ensureColdStart, ensureName, noteRosterAdded, applyTimeline: timelineAdjust.applyTimeline,
         contextFor, examplesForCards,
         read, write, rebuild, progress,
         records, recordsFor,

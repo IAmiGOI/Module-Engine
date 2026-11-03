@@ -211,6 +211,7 @@ Drop repetition and moment-to-moment detail. Never invent anything. Records mark
 - `{{source}}` — текст источника;
 - `{{canon_hint}}` — франшиза, если известна, иначе пусто (франшизы может не быть вовсе — оригинальный мир);
 - `{{aliases}}` — другие имена персонажа (ключи записи), иначе пусто;
+- `{{timeline}}` — раздел TIMELINE из CHAT BRIEF (часть 12), иначе пусто;
 - `{{importance_floor}}` — пусто или «This character is already key in this story. » (главный персонаж карточки, персона, сцена, уровни 1–2 библиотеки). Важность сборщик решает сам по канону и источнику и пишет последней строкой `IMPORTANCE: key|minor`; ME её вырезает из текста банка.
 - `{{steps}}` — лимит шагов.
 
@@ -222,11 +223,13 @@ SOURCE ({{source_kind}}):
 {{source}}
 FRANCHISE: {{canon_hint}}
 ALSO KNOWN AS: {{aliases}}
+TIMELINE OF THIS STORY: {{timeline}}
 IMPORTANCE: decide it yourself from canon and the SOURCE — "key" for a character central to the story or to the chat character, "minor" for the rest. {{importance_floor}}A key bank stays under about 800 tokens, a minor one under about 400. These are ceilings, not targets.
 
 CANON DISCIPLINE
 If the character comes from a book, game, anime or any world that exists outside this chat, look the canon up instead of trusting memory: names, titles, ages, numbers, relations and appearance are exactly what models get wrong. For anime, manga, games and visual novels start with the character databases and the franchise wiki: read Appearance, Personality and the speech or quotes sections, not the whole plot. Take exact names and numbers from the source. What follows plainly from what you found is allowed; specifics you would be making up from nothing are not. The SOURCE above is the user's version of the character: where it differs from canon, the SOURCE wins.
 If FRANCHISE is empty, the character may be original. Do not guess a franchise: build from the SOURCE alone, and search only if the SOURCE itself clearly names an existing work or a canon character.
+If TIMELINE OF THIS STORY is given, build the character as they are at that point: relations, abilities, knowledge and events that come later in the canon do not exist yet, and the bank does not mention them. Add **Timeline lock** right after the identity line: where the character stands now and what has not happened yet.
 
 THE SKELETON — always these sections, in this order:
 ***{{name}}***  (one line of identity in the world's own terms, if useful)
@@ -283,6 +286,8 @@ Entries you do not list are treated as not characters. The call needs a comment 
 - `EARLIER TURNS (compressed):` — сжатая часть префикса (часть 9). Записи под
   ней только дописываются и никогда не переписываются, кроме сводки
   закрытой арки.
+- `CHAT BRIEF:` — сводка bootstrap чата (часть 12), после лорбука и арок.
+  Обновляется только при переключении окна.
 - `PREVIOUS WINDOWS (summaries):` — замороженная история плавающего окна
   (часть 10). Сводки прошлых окон под ней только дописываются.
 
@@ -348,3 +353,71 @@ Write the reply again from the start, following the push. Do not mention the ear
 ```text
 The form was not accepted: {{name}} acts on something {{name}} cannot know ("{{quote}}"). Check WHAT CHARACTERS KNOW and what {{name}} witnessed. Either change {{name}}'s decision and action to what {{name}} actually knows, or, if {{name}} did learn it, record how with character_knowledge first. Then call submit_turn again.
 ```
+
+## 15. Директор — bootstrap нового чата (задание цикла bootstrap)
+
+Подстановки: `{{max_questions}}` — лимит вопросов (настройка, по умолчанию 5).
+
+```text
+BOOTSTRAP: this chat is new and the story has not started yet. Before the first turn, study the world you are going to run.
+
+Read what you have: the lorebook and the arcs above, the chat character, the scenario, the first message and the user's persona. If the world comes from an existing work, ask the researcher about the canon where the lorebook is silent or unclear.
+
+Work out:
+- TIMELINE: the point of the canon the story starts at — what has already happened and what has not, in the world and for each important character;
+- WORLD AT THE START: the place, the situation and the state of the world when the story begins;
+- WHO KNOWS WHOM: which characters have already met, and what they know about each other and about the user's character;
+- DIFFERENCES FROM CANON: where the lorebook or the card departs from the canon. The lorebook and the card win.
+
+When something that changes how you run the story cannot be settled from the material — above all the point of the timeline — ask the user with ask_user. At most {{max_questions}} questions, each with two to four concrete options. Do not ask what the material already answers. If the user skips a question, decide it yourself and list it under ASSUMPTIONS.
+
+Record each important character's starting knowledge with character_knowledge. Then call write_chat_brief with the brief, in the sections TIMELINE, WORLD AT THE START, WHO KNOWS WHOM, DIFFERENCES FROM CANON, ASSUMPTIONS, and with every character whose data bank depends on the point of the timeline. Then call await.
+```
+
+## 16. Инструменты bootstrap: ask_user и write_chat_brief
+
+**ask_user** — описание инструмента:
+```text
+Ask the user one question and wait for the answer. Available only in the chat bootstrap, or when the user started an out-of-character talk (OOC) or wrote to you directly. Give two to four concrete options; the user can also answer in their own words or skip the question.
+```
+Поля: `question` — вопрос; `options` — 2–4 варианта; `why` — одной фразой, что от ответа зависит; `comment`.
+
+Ответы инструмента:
+```text
+The user answered: {{answer}}
+```
+```text
+The user skipped the question. Decide it yourself and note your decision as an assumption.
+```
+```text
+ask_user is available only in the chat bootstrap or when the user started an out-of-character talk with you. Decide it yourself.
+```
+```text
+You have asked {{max_questions}} questions already. Decide the rest yourself and note your decisions as assumptions.
+```
+
+**write_chat_brief** — описание инструмента:
+```text
+Write the chat brief: what you learned about the world this story starts in. It stays in your context for the whole chat. Name every character whose data bank depends on the point of the timeline, with what in the bank must change.
+```
+Поля: `brief` — текст в разделах TIMELINE, WORLD AT THE START, WHO KNOWS WHOM, DIFFERENCES FROM CANON, ASSUMPTIONS; `timelineBanks` — список `{ name, note }`; `comment`.
+
+Тост вопросов (UI, по-английски): заголовок `The Director asks`, счётчик `Question {{n}} of {{total}}`, строка `why` мелким текстом, кнопки вариантов, поле `Your own answer`, кнопки `Answer` и `Skip — decide yourself`.
+
+## 17. Правка банка под таймлайн (после bootstrap, без поиска)
+
+Один запрос к модели директора без инструментов. Подстановки: `{{name}}`, `{{timeline}}` — раздел TIMELINE из сводки, `{{note}}` — заметка директора из `timelineBanks`, `{{bank}}` — текст банка.
+
+```text
+You adjust one character's data bank to the point of the timeline this story starts at. Do not search; use only what is below.
+
+CHARACTER: {{name}}
+TIMELINE OF THIS STORY:
+{{timeline}}
+WHAT THE DIRECTOR NOTED FOR THIS CHARACTER: {{note}}
+DATA BANK:
+{{bank}}
+
+Rewrite the bank so that it holds only what is true for {{name}} at this point: remove or change relations, abilities, knowledge and events that come later in the canon; keep everything else as it is, in the same skeleton and the same size. Add **Timeline lock** right after the identity line, or correct it if it is there: where {{name}} stands now and what has not happened yet. Return the whole bank and nothing else.
+```
+

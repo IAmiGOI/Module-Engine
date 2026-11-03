@@ -3,14 +3,16 @@ import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { DIRECTOR_PASSIVE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
-import { duePlans } from '../../libraries/core/decision-library.js';
 import { createHandlers } from './handlers.js';
+import { createCycleJobs } from './cycle-jobs.js';
 import { createTurnWindow } from './window.js';
 import { createJudge } from './judge.js';
 import { createPlaceReader, createTimeReader } from './readers.js';
 import { createCycleLive } from './live.js';
 import { createWakeQueue } from './queue.js';
 import { createCycleContext, fallbackDecision, turnWake, wakeFor } from './cycle-context.js';
+import { createFormChecker } from './form-check.js';
+import { createQuestionQueue } from './questions.js';
 
 /**
  * Активный и пассивный циклы директора. Здесь только оркестровка: контекст,
@@ -29,7 +31,7 @@ export class DecisionConfigError extends Error {
     }
 }
 
-export function createDecisionCycle({ call, callTool, getSettings, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, now = () => Date.now() }) {
+export function createDecisionCycle({ call, callTool, callService = null, getSettings, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, now = () => Date.now() }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
@@ -48,6 +50,8 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     }
 
     const knowledge = createKnowledge({ call, store, banks, now });
+    const formChecker = createFormChecker({ call, getSettings, banks, knowledge });
+    const questions = createQuestionQueue({ callService, publishEvent, now });
     const turnWindow = createTurnWindow({ store, banks, call, getSettings, deciderWorker, publishEvent, now });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
@@ -63,7 +67,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
 
     function handlersFor(settings) {
         return {
-            ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow }),
+            ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions }),
             ...knowledge.handlers,
         };
     }
@@ -77,7 +81,8 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         const endedAt = now();
         const cycle = createCycleRecord({
             runId, event, messages: result.messages.slice(contextMessages.length), toolCalls: result.trace,
-            thinking: typeof thinking === 'function' ? thinking() : thinking, warnings: result.warnings, at: startedAt,
+            thinking: typeof thinking === 'function' ? thinking() : thinking,
+            warnings: [...(result.warnings ?? []), ...(state.formWarnings ?? [])], at: startedAt,
             usage: typeof runUsage === 'function' ? runUsage() : runUsage,
             form, push, wake, turn: state.turnCounter, clockMinutes: store.clock().minutes,
             workerId, endedAt, durationMs: endedAt - startedAt,
@@ -89,6 +94,15 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
+        state.sceneText = context.sceneText(chat);
+        state.formWarnings = [];
+        state.knowledgeReturns = new Set();
+        const lastUser = [...(Array.isArray(chat) ? chat : [])].reverse().find(entry => entry?.is_user === true);
+        state.canAsk = /\(\s*ooc\s*:/i.test(String(lastUser?.mes ?? lastUser?.content ?? ''));
+        state.canWriteBrief = state.canAsk;
+        state.questionCount = 0;
+        state.questionLimit = settings.bootstrap?.maxQuestions ?? 5;
+        state.briefWritten = false;
         wakeQueue.begin();
         const startedWake = wake ?? turnWake(type);
         const startedAt = now();
@@ -183,10 +197,16 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         return job;
     }
 
-    async function backgroundRun({ runId, event, task, thinking = () => '', wake = null }) {
+    async function backgroundRun({ runId, event, task, thinking = () => '', wake = null, canAsk = false, maxSteps = null }) {
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
+        state.canAsk = canAsk;
+        state.canWriteBrief = canAsk;
+        state.questionCount = 0;
+        state.questionLimit = settings.bootstrap?.maxQuestions ?? 5;
+        state.briefWritten = false;
+        state.sceneText = '';
         wakeQueue.begin();
         const startedWake = wake ?? wakeFor({ type: event, label: `The director woke up: ${event}` });
         const startedAt = now();
@@ -200,7 +220,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
             generate: context.generateFor({ settings, worker, runId, prefix: 'p', startedAt, effort: settings.adaptiveReasoning ? 'high' : null }),
             handlers: event === 'message' ? withRequiredReply(handlersFor(settings)) : handlersFor(settings),
             callTool,
-            maxSteps: settings.maxSteps,
+            maxSteps: maxSteps ?? settings.maxSteps,
             implicitAwait: true,
             now,
             ...hooks,
@@ -214,46 +234,10 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         live.finished({ cycle });
         wakeQueue.rest();
         publishEvent('decision.passive.ended', { runId, event, steps: result.steps, type: result.type });
-        return { skipped: false, steps: result.steps, type: result.type };
+        return { skipped: false, steps: result.steps, type: result.type, briefWritten: Boolean(state.briefWritten) };
     }
 
-    /** Пассивный цикл: только если есть завершившиеся планы. */
-    function runPassive({ runId, thinking = () => '' } = {}) {
-        return wakeQueue.schedule(() => {
-            const clock = store.clock();
-            const due = duePlans(store.plans(), clock.minutes);
-            if (!due.length) return { skipped: true, due: 0 };
-            const dueText = due.map(plan => `- ${plan.character} (level ${plan.level}): ${plan.summary}${plan.needsNewPlan ? ' [left the active roster — a new plan is needed]' : ''}`).join('\n');
-            const draftLine = getSettings().turnDraft ? '\nBefore await, if you can guess the likely next turn, call save_draft with it.' : '';
-            return backgroundRun({
-                runId, event: 'time', thinking,
-                wake: wakeFor({ type: 'time', label: 'The clock moved', detail: dueText }),
-                task: fillPrompt(DIRECTOR_PASSIVE, { event: `${dueText}${draftLine}` }),
-            });
-        });
-    }
-
-    /** Старт по набору текста: подготовить заготовку хода заранее (настройка, по умолчанию выключена). */
-    function runDraft({ runId } = {}) {
-        return wakeQueue.schedule(() => backgroundRun({
-            runId: runId ?? `typing_${now()}`,
-            event: 'typing',
-            wake: wakeFor({ type: 'typing', label: 'The user is typing' }),
-            task: 'The user is typing. Prepare a draft of the likely next decisions. If turn drafting is on, call save_draft with it, then await. Do not submit a turn.',
-        }));
-    }
-
-    /** Отчёт субагента будит директора; во время хода ждёт в очереди. */
-    function onResearcherReport(payload = {}) {
-        const task = String(payload.task ?? '');
-        const report = String(payload.report ?? '');
-        return wakeQueue.schedule(() => backgroundRun({
-            runId: `researcher_${payload.taskId ?? 'task'}`,
-            event: 'researcher',
-            wake: wakeFor({ type: 'researcher', label: 'A researcher reported', detail: report, task }),
-            task: fillPrompt(DIRECTOR_PASSIVE, { event: `A researcher reported:\n${report}` }),
-        }));
-    }
+    const jobs = createCycleJobs({ backgroundRun, wakeQueue, store, getSettings, wakeFor, now });
 
     /** Сообщение пользователя директору: в лог сразу, пробуждение — в очередь. */
     async function sendMessage({ text } = {}) {
@@ -270,7 +254,7 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
         publishEvent('decision.message.added', { record });
         const runId = `message_${at.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
         wakeQueue.schedule(() => backgroundRun({
-            runId, event: 'message',
+            runId, event: 'message', canAsk: true,
             wake: wakeFor({ type: 'message', label: 'A message from the user', detail: clean, text: clean }),
             task: fillPrompt(DIRECTOR_PASSIVE, {
                 event: `The user wrote to you directly, outside the story:\n\n${clean}\n\nTreat it as direction for where the story should go, not as an order.`,
@@ -280,7 +264,10 @@ export function createDecisionCycle({ call, callTool, getSettings, getWorkers, s
     }
 
     return {
-        run, runPassive, runDraft, onResearcherReport, sendMessage, judgeForcedMemory,
+        run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap,
+        onResearcherReport: jobs.onResearcherReport, sendMessage, judgeForcedMemory,
+        answerQuestion: params => questions.answer(params),
+        question: () => questions.pending(),
         recordTurn: params => turnWindow.recordTurn(params),
         removeLastWindowTurn: () => turnWindow.removeLastTurn(),
         syncWindow: () => turnWindow.maybeSwitch(),

@@ -172,13 +172,14 @@ export function renderWindow(entries) {
 }
 
 /** Граница окна: снимок блоков 4, 6, 7 и 8. Меняется только при переключении. */
-export function createBoundary({ roster = [], libraryText = '', plansText = '', activeBanksText = '', at = 0 } = {}) {
+export function createBoundary({ roster = [], libraryText = '', plansText = '', activeBanksText = '', chatBriefText = '', at = 0 } = {}) {
     return {
         at: Number(at) || 0,
         roster: (Array.isArray(roster) ? roster : []).map(text).filter(Boolean),
         libraryText: text(libraryText),
         plansText: text(plansText),
         activeBanksText: text(activeBanksText),
+        chatBriefText: text(chatBriefText),
     };
 }
 

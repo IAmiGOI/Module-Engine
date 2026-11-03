@@ -38,6 +38,7 @@ import { registerStWorldInfoService } from '../../services/st-worldinfo.js';
 import { registerStPresetService } from '../../services/st-preset.js';
 import { registerStDrawerGuard } from '../../services/st-drawer-guard.js';
 import { registerStDecisionUiService } from '../../services/st-decision-ui.js';
+import { registerStInputService } from '../../services/st-input.js';
 import { registerSessionService } from '../../services/session.js';
 import { createChatMemoryCore } from '../../cores/memory/index.js';
 import { createChatHistoryCore } from '../../cores/chat-history/index.js';
@@ -97,6 +98,7 @@ export async function wireServices(ctx) {
     registerStPresetService(engine.buses.services, { getContext });
     registerStDrawerGuard(engine.buses.services);
     registerStDecisionUiService(engine.buses.services);
+    registerStInputService(engine.buses.services);
     // Сервис перехвата: сюда встанут обе точки, которыми движок забирает
     // отправку себе. `interceptTarget` — «глобальный объект», на который
     // ставится именованная функция перехватчика и чей `fetch` подменяется;

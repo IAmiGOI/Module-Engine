@@ -1,6 +1,6 @@
 /** Контракты ядра «директор + прозаик». Только регистрация; логика — в index.js. */
 export function registerDecisionContracts(host, {
-    getSettings, configure, store, researcher, banks, cycle, cardTurn, decide, rewrite, reload, preview, decideContract, rewriteContract,
+    getSettings, configure, store, researcher, banks, cycle, cardTurn, decide, rewrite, reload, preview, decideContract, rewriteContract, bootstrap = null,
 }) {
     const settings = () => {
         const value = getSettings();
@@ -37,9 +37,22 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.bankWrite', params => banks.write(params ?? {})),
         host.own.register('decision.bankRebuild', params => banks.rebuild(params ?? {})),
         host.own.register('decision.message', params => cycle.sendMessage(params ?? {})),
+        host.own.register('decision.bootstrap', () => bootstrap?.state?.() ?? null),
+        host.own.register('decision.question', () => cycle.question?.() ?? null),
+        host.own.register('decision.answerQuestion', params => cycle.answerQuestion(params ?? {})),
         host.own.register('decision.reload', () => reload()),
         host.own.register('decision.cardTurn', params => cardTurn(params)),
         host.own.register(decideContract, params => decide(params)),
         host.own.register(rewriteContract, params => rewrite(params)),
     ];
+}
+
+/** Этап прозаика на `generation.payload`: последний в fold-цепочке. */
+export function decisionRewriteStage({ id, contract }) {
+    return {
+        id,
+        contract,
+        params: { payload: { $from: '$value' }, signal: { $from: '$context.signal' }, endpoint: { $from: '$context.endpoint' } },
+        onExhausted: 'abort',
+    };
 }

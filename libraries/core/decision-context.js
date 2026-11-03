@@ -185,7 +185,7 @@ export function windowHistory(entries, block, keepTurns = DIRECTOR_BLOCK_CYCLES)
  */
 export function buildDeciderContext({
     plan = null, arcs = [], notes = {}, roster = [],
-    banksText = '', lorebookText = '', libraryText = '', plansText = '', activeBanksText = '',
+    banksText = '', lorebookText = '', chatBriefText = '', libraryText = '', plansText = '', activeBanksText = '',
     frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '',
     planMissing = false, directorBlock = '', task = '',
     digests = [], turns = [], chat = [], summaries = [], researchText = '', bankText = '', lorebookChanges = '', limit = RECENT_MESSAGE_LIMIT,
@@ -194,7 +194,10 @@ export function buildDeciderContext({
     const history = usingWindow
         ? windowHistory(windowEntries, directorBlock)
         : directorHistory(chat, limit, directorBlock);
-    const head = [String(banksText ?? '').trim(), String(lorebookText ?? '').trim(), arcsSection(arcs), String(libraryText ?? '').trim()].filter(Boolean);
+    const head = [
+        String(banksText ?? '').trim(), String(lorebookText ?? '').trim(), arcsSection(arcs),
+        String(chatBriefText ?? '').trim(), String(libraryText ?? '').trim(),
+    ].filter(Boolean);
     const middle = [
         ...frozenWindowMessages(frozenWindows),
         String(plansText ?? '').trim(),

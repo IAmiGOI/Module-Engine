@@ -5,6 +5,8 @@ import { createDragHandlers, clampToViewport } from '../../libraries/shared/drag
 import { FloatingPanel, DockButton, Button, Toggle, TextArea, TextInput, Row, Field } from '../../libraries/shared/widgets.js';
 import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/core/decision-feed.js';
 import { createBanksView } from './decision-banks-view.js';
+import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
+import { createQuestionView } from './decision-questions.js';
 
 /**
  * Окно директора: лента по циклам, как у кодинг-агента. Читает лог и архив
@@ -17,17 +19,14 @@ const WINDOW_KEY = 'window';
 const DOCK_KEY = 'dock';
 const DEFAULT_SIZE = { width: 760, height: 660 };
 const PAGE = 30;
-
 const text = value => String(value ?? '').trim();
 const safeJson = value => { try { return JSON.stringify(value ?? null, null, 2); } catch { return String(value ?? ''); } };
 const firstLine = value => text(value).split('\n')[0].slice(0, 160);
-
 function clockLabel(minutes) {
     if (!Number.isFinite(Number(minutes))) return '';
     const total = Math.max(0, Math.round(Number(minutes)));
     return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
-
 function cycleMeta(entry) {
     const parts = [];
     if (clockLabel(entry.clockMinutes)) parts.push(`RP ${clockLabel(entry.clockMinutes)}`);
@@ -57,7 +56,6 @@ function callNode(row) {
             h('summary', {}, 'Result'),
             h('pre', {}, safeJson(row.result))));
 }
-
 function assessNode(row) {
     const odds = Number.isFinite(row.probability) ? `${Math.round(row.probability * 100)}%` : '—';
     const roll = Number.isFinite(row.roll) ? `roll ${row.roll}` : '';
@@ -67,7 +65,6 @@ function assessNode(row) {
             h('span', { class: 'stme-dw-assess-odds' }, ` ${odds}${roll ? ` · ${roll}` : ''}${row.degree ? ` · ${row.degree}` : ''}${row.words ? ` — ${row.words}` : ''}`)),
         h('small', { class: 'stme-dw-muted' }, `${row.difficulty || '—'} / ${row.experience || '—'}${row.comment ? ` · ${row.comment}` : ''}`));
 }
-
 function formNode(row) {
     return h('div', { class: 'stme-dw-form' },
         h('div', { class: 'stme-dw-block-title' }, 'The form'),
@@ -82,9 +79,10 @@ function formNode(row) {
         h('div', {}, h('strong', {}, 'Resolution: '), row.resolution),
         h('div', {}, h('strong', {}, "User's result: "), row.userResult));
 }
-
 function rowNode(row) {
     if (row.kind === 'thinking') return h('details', { class: 'stme-dw-thinking' }, h('summary', {}, firstLine(row.text)), h('pre', {}, row.text));
+    if (row.kind === 'writer_check') return writerCheckNode(row);
+    if (row.kind === 'form_check') return formCheckNode(row);
     if (row.kind === 'assess') return assessNode(row);
     if (row.kind === 'call') return callNode(row);
     if (row.kind === 'form') return formNode(row);
@@ -96,7 +94,6 @@ function rowNode(row) {
     if (row.kind === 'answer') return h('div', { class: 'stme-dw-answer' }, row.text);
     return null;
 }
-
 function cycleNode(entry, now) {
     const classes = ['stme-dw-cycle', entry.running ? 'stme-dw-live' : '', entry.rejected ? 'stme-dw-rejected' : ''].filter(Boolean).join(' ');
     const waiting = entry.waiting && entry.waitingSince ? `thinking… ${Math.max(0, Math.round((now - entry.waitingSince) / 1000))} s` : '';
@@ -127,6 +124,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const now = signal(Date.now());
     const costCounter = signal(true);
     const banksView = createBanksView({ call });
+    const questionView = createQuestionView({ host, call });
     let timer = null;
     const subscriptions = [];
     const filtered = computed(() => filterFeed(feed(), {
@@ -163,7 +161,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         const names = [
             'decision.cycle.started', 'decision.cycle.step', 'decision.cycle.thinking', 'decision.tool.called',
             'decision.tool.result', 'decision.cycle.form', 'decision.cycle.finished', 'decision.cycle.failed',
-            'decision.cycle.ended', 'decision.message.added',
+            'decision.cycle.ended', 'decision.message.added', 'decision.writer.check', 'decision.form.check',
         ];
         for (const name of names) {
             subscriptions.push(host.events.subscribe(name, payload => {
@@ -261,6 +259,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 onClose: () => { visible.set(false); saveWindowState(); },
                 onResize: next => { size.set(next); saveWindowState(); },
             }, computed(() => body())) : null)),
+            computed(() => questionView.tree()),
             DockButton(h('span', { class: 'stme-dw-dock-icon', title: 'Open the director log' }, '◎'), { position: dockPosition, drag: dockDrag, title: 'Director log' }));
     }
 
@@ -285,6 +284,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     async function open() {
         await loadWindowState();
         subscribe();
+        questionView.subscribe();
         await refresh();
         const finalUi = mount(tree());
         await finalUi.settled?.();
@@ -295,6 +295,6 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     return {
         tree, open, show, hide, toggle, refresh, send, filtered, feed, now, draft, showThinking, onlyTurns, search,
         isVisible: () => visible.peek(),
-        stop() { stopTimer(); for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
+        stop() { stopTimer(); questionView.stop(); for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
     };
 }

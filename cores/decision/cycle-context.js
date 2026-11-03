@@ -5,6 +5,7 @@ import { staticDirectorLorebook } from '../../libraries/core/decision-lorebook-s
 import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
 import { createBoundary, normalizeBoundary, windowTurnCount } from '../../libraries/core/decision-window.js';
+import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createKnowledge } from './knowledge.js';
 
@@ -73,10 +74,20 @@ export function createCycleContext({ call, store, banks = null }) {
             libraryText: libraryLevelsSection(store.library()),
             plansText: longPlansSection(store.plans(), store.clock().minutes),
             activeBanksText: banks ? banks.contextFor({ names: roster, all: false }).text : '',
+            chatBriefText: renderChatBrief(typeof store.chatBrief === 'function' ? store.chatBrief() : null),
             at: Date.now(),
         });
         if (typeof store.saveBoundary === 'function') await store.saveBoundary(fresh);
         return fresh;
+    }
+
+    function sceneText(chat) {
+        return (Array.isArray(chat) ? chat : [])
+            .filter(entry => !entry?.is_system)
+            .slice(-8)
+            .map(entry => `${entry?.is_user ? 'User' : (entry?.name || 'Character')}: ${String(entry?.mes ?? entry?.content ?? '').trim()}`)
+            .filter(Boolean)
+            .join('\n');
     }
 
     function lastUserText(chat) {
@@ -96,13 +107,13 @@ export function createCycleContext({ call, store, banks = null }) {
     }
 
     function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '' }) {
-        const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '' };
+        const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '', chatBriefText: '' };
         const win = typeof store.window === 'function' ? store.window() : null;
         const entries = Array.isArray(win?.entries) ? win.entries : [];
         return buildDeciderContext({
             plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
-            planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
+            chatBriefText: safe.chatBriefText ?? '', planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
             windowEntries: [...entries, ...pendingTurn(entries, currentUser)],
             frozenWindows: typeof store.frozen === 'function' ? store.frozen() : [],
             windowMode: true,
@@ -144,5 +155,5 @@ export function createCycleContext({ call, store, banks = null }) {
         });
     }
 
-    return { buildContext, runContext, generateFor, toolsFor };
+    return { buildContext, runContext, generateFor, toolsFor, sceneText };
 }

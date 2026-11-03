@@ -68,3 +68,12 @@
 .stme-dw-bank-error { border-color: var(--stme-danger-bright); }
 .stme-dw-bank-pending { border-style: dashed; }
 .stme-dw-bank-text { width: 100%; box-sizing: border-box; margin-top: 4px; resize: vertical; }
+
+/* Тост вопросов bootstrap: перекрывает ввод, пока очередь не пуста. */
+.stme-dq-toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 6960; width: min(520px, 92vw); box-sizing: border-box; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; background: var(--stme-level-1); border: 1px solid var(--stme-border); border-radius: var(--stme-radius); box-shadow: 0 8px 28px rgba(0,0,0,.28); }
+.stme-dq-title { font-weight: 700; }
+.stme-dq-counter { font-size: .82em; opacity: .7; }
+.stme-dq-question { font-size: .95em; }
+.stme-dq-why { font-size: .8em; opacity: .7; }
+.stme-dq-own { display: flex; gap: 6px; align-items: center; }
+.stme-dq-own .text_pole { flex: 1; min-width: 0; }

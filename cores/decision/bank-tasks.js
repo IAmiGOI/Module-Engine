@@ -14,8 +14,8 @@ export function createBankTasks({ getSettings, researcher, publishEvent }) {
         const steps = bankSteps(settings);
         const system = bankPromptFor({
             name: source.name, sourceKind: source.sourceKind, source: source.source,
-            canonHint: source.canonHint ?? '', aliases: source.aliases ?? '', sizeBand: source.sizeBand ?? 'minor',
-            steps,
+            canonHint: source.canonHint ?? '', aliases: source.aliases ?? '', timeline: source.timeline ?? '',
+            sizeBand: source.sizeBand ?? 'minor', steps,
         });
         const started = researcher.start({ task: 'Build the data bank now.', system, kind: 'bank', notify: false, maxSteps: steps, maxTokens: BANK_MAX_TOKENS });
         if (!started.ok) throw new Error(started.error || 'The bank task did not start.');

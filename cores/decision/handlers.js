@@ -1,8 +1,6 @@
 import { createAssessHandler } from './handlers-assess.js';
-import { validateTurn } from '../../libraries/core/decision-turn.js';
-import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
+import { createSubmitTurnHandler } from './handlers-turn.js';
 import { applyArc, applyCharacterNote, applyPlan, notesFor } from '../../libraries/core/decision-state.js';
-import { advanceClock, clockFromLabel } from '../../libraries/core/decision-clock.js';
 import { setLevel, removeOnLeavingRoster, setPlan, interruptPlan, completePlan, planFor } from '../../libraries/core/decision-library.js';
 import {
     addRecord, searchRecords, canCompress, ordinaryRecords, buildCompressionPrompt,
@@ -10,13 +8,12 @@ import {
 } from '../../libraries/core/decision-bank.js';
 import { issueName } from '../../libraries/core/decision-names.js';
 import { isFrequentCharacter } from '../../libraries/core/decision-window.js';
-
+import { normalizeBrief, normalizeTimelineBanks, renderChatBrief } from '../../libraries/core/decision-brief.js';
 /**
  * Исполнители инструментов директора — вынесены из цикла, чтобы цикл
  * оставался циклом. Всё состояние и шины приходят снаружи; обработчики
  * ничего не знают о модели.
  */
-
 const key = value => String(value ?? '').trim().toLowerCase();
 
 /**
@@ -24,7 +21,7 @@ const key = value => String(value ?? '').trim().toLowerCase();
  *           state: { assessments: Map, assessmentCounter: number, turnCounter: number },
  *           resolvePlace: Function, lastTimeMark: Function, similarityScores: Function }} input
  */
-export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null }) {
+export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -259,27 +256,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
 
         assess: createAssessHandler({ state, getSettings }),
 
-        submit_turn: async args => {
-            if (!store.plan()) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };
-            const validation = validateTurn({ form: args, roster: store.roster().active, assessments: state.assessments });
-            if (!validation.ok) return { ok: false, missing: validation.missing };
-            const place = await resolvePlace();
-            const timeBefore = await lastTimeMark();
-            const minutes = validation.normalized.scene.minutes;
-            const storedClock = store.clock();
-            const base = storedClock.updatedAt ? storedClock : (clockFromLabel(timeBefore) ?? storedClock);
-            const nextClock = advanceClock(base, minutes);
-            await store.saveClock(nextClock);
-            const timeAfter = shiftTimeLabel(timeBefore, minutes) ?? '';
-            const form = {
-                ...validation.normalized,
-                scene: { ...validation.normalized.scene, place: place || validation.normalized.scene.place || '' },
-                meta: { place, timeBefore, timeAfter, clockMinutes: nextClock.minutes },
-            };
-            state.turnCounter += 1;
-            publishEvent('decision.timeShift', { runId: state.runId, minutes, timeBefore, timeAfter, clockMinutes: nextClock.minutes });
-            return { ok: true, turnId: `turn_${state.turnCounter}`, form };
-        },
+        submit_turn: createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker }),
 
 
         character_bank: async args => {
@@ -287,6 +264,35 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             if (args.op === 'write') return banks.write({ name: args.character, text: args.text });
             if (args.op === 'rebuild') return banks.rebuild({ name: args.character });
             return { ok: true, banks: await banks.read({ name: args.character }) };
+        },
+
+        ask_user: async args => {
+            if (!questions) return { ok: false, text: 'ask_user is not available.' };
+            const result = await questions.ask({
+                question: args.question, options: args.options, why: args.why,
+                allowed: state.canAsk === true, asked: state.questionCount ?? 0, limit: state.questionLimit ?? 5,
+            });
+            if (result.asked) state.questionCount = (state.questionCount ?? 0) + 1;
+            return { ok: true, text: result.text };
+        },
+
+        write_chat_brief: async args => {
+            if (!state.canWriteBrief) {
+                return { ok: false, error: 'write_chat_brief is available only in the chat bootstrap or an out-of-character talk.' };
+            }
+            const brief = normalizeBrief({ text: args.brief, timelineBanks: normalizeTimelineBanks(args.timelineBanks), at: Date.now() });
+            if (!brief) return { ok: false, error: 'A chat brief needs text.' };
+            await store.saveChatBrief(brief);
+            state.briefWritten = true;
+            const win = typeof store.window === 'function' ? store.window() : null;
+            const hasTurns = Array.isArray(win?.entries) && win.entries.some(entry => entry.kind === 'turn');
+            if (hasTurns) await turnWindow?.addFact(`write_chat_brief: ${brief.text.split('\n')[0].slice(0, 240)}`);
+            else if (typeof store.boundary === 'function' && store.boundary()) {
+                await store.saveBoundary({ ...store.boundary(), chatBriefText: renderChatBrief(brief) });
+            }
+            if (banks?.applyTimeline) await banks.applyTimeline({ timeline: brief.timeline, timelineBanks: brief.timelineBanks }).catch(() => {});
+            publishEvent('decision.brief.written', { at: brief.at, timelineBanks: brief.timelineBanks.length });
+            return { ok: true };
         },
 
         await: args => ({ ok: true, reason: String(args.reason ?? '') }),

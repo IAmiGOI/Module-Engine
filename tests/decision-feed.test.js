@@ -74,6 +74,25 @@ test('the form and the push arrive live, before the cycle is written', () => {
     assert.equal(state.live.r.rows[1].text, 'LIVE PUSH');
 });
 
+test('writer and form checks become their own feed rows', () => {
+    let state = { cycles: [buildCycleEntry(turnCycle())], archive: [], live: {} };
+    state = applyFeedEvent(state, 'decision.writer.check', {
+        runId: 'run_1', attempt: 1, phase: 'stream', probabilities: { user_agency: 0.95, past_resolution: 0.1 },
+        violated: ['user_agency'], aborted: true,
+    });
+    const writerRow = state.cycles[0].rows.find(row => row.kind === 'writer_check');
+    assert.equal(writerRow.aborted, true);
+    assert.equal(writerRow.probabilities.user_agency, 0.95);
+
+    state = applyFeedEvent(state, 'decision.form.check', {
+        runId: 'run_1', name: 'Lena', chance: 0.9, quote: 'Mentions the vault.', refused: true,
+        probabilities: { 'knowledge_conflict:Lena': 0.9 },
+    });
+    const formRow = state.cycles[0].rows.find(row => row.kind === 'form_check');
+    assert.equal(formRow.refused, true);
+    assert.equal(formRow.name, 'Lena');
+});
+
 test('a failure before the first step still lands in the feed as a warning section', () => {
     const state = applyFeedEvent(createFeedState(), 'decision.cycle.failed', { runId: 'run_x', message: 'no director worker is configured', at: 9 });
     assert.equal(state.cycles.length, 1);

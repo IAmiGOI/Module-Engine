@@ -1,6 +1,7 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { DIRECTOR_WINDOW_SUMMARY, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
+import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import {
     buildCorrection, buildCycleDigest, buildFact, buildFrozenRecord, createBoundary,
     normalizeWindow, renderWindow, splitWindow, windowTurnCount,
@@ -123,6 +124,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
             libraryText: libraryLevelsSection(store.library()),
             plansText: longPlansSection(store.plans(), store.clock().minutes),
             activeBanksText: banks ? banks.contextFor({ names: roster, all: false }).text : '',
+            chatBriefText: renderChatBrief(typeof store.chatBrief === 'function' ? store.chatBrief() : null),
             at: now(),
         });
         await store.saveBoundary(boundary);

@@ -1,5 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
-import { clampDecisionSettings, DECISION_NAMESPACE, DEFAULT_SETTINGS } from '../../libraries/core/decision-settings.js';
+import { clampDecisionSettings, DECISION_NAMESPACE, DEFAULT_SETTINGS, publicDecisionSettings } from '../../libraries/core/decision-settings.js';
 import { createDecisionStore } from './store.js';
 import { createDecisionCycle } from './cycle.js';
 import { createCardTurn } from './card-turn.js';
@@ -7,12 +7,12 @@ import { createResearcher } from '../../libraries/core/decision-researcher.js';
 import { captureReasoning } from './capture.js';
 import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
-import { registerDecisionContracts } from './contracts.js';
+import { registerDecisionContracts, decisionRewriteStage } from './contracts.js';
 import { previewSection } from './prompt-sections.js';
 import { createWriterRewrite } from './rewrite.js';
 import { createCharacterBanks } from './banks.js';
+import { createBootstrap } from './bootstrap.js';
 import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
-
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
 const DECIDE_STAGE = 'decision:decide';
@@ -20,7 +20,6 @@ const REWRITE_STAGE = 'decision:rewrite';
 const DECIDE_CONTRACT = 'decision.decide';
 const REWRITE_CONTRACT = 'decision.rewrite';
 const RETRY_DELAY_MS = 500;
-
 /** Ядро «директор + прозаик»: директива перед отправкой, прозаик на `generation.payload`, банки персонажей. */
 export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_MS } = {}) {
     const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
@@ -34,7 +33,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     const attempts = new Map(); // runId -> шаги попыток (успешная и провалившиеся)
     const subscriptions = [];
     const unregisters = [];
-
     const call = async (contract, params, options) => {
         const result = await request(host.own, contract, { params, ...options });
         return result.ok ? result.value : undefined;
@@ -65,6 +63,11 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     const cycle = createDecisionCycle({
         call: callStrict,
         callTool: async (name, args) => callStrict('generation.callTool', { name, args }),
+        callService: async (contract, params) => {
+            const result = await request(host.services, contract, { params });
+            if (!result.ok) throw new Error(result.error.message);
+            return result.value;
+        },
         getSettings: () => settings,
         getWorkers: () => workers,
         store,
@@ -72,6 +75,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         banks,
         publishEvent,
     });
+    const bootstrap = createBootstrap({ call: callStrict, store, cycle, getSettings: () => settings, publishEvent });
     const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
     const rollback = createRollback({ store, getSettings: () => settings, publishEvent });
     const { snapshotState, restoreState, restoreSnapshotFor } = rollback;
@@ -80,6 +84,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         await store.reload();
         await banks.reload().catch(() => {});
         workers = (await call('model.workers.get')) ?? [];
+        await bootstrap.load().catch(() => {});
+        bootstrap.maybeStart().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }));
         return { runs: store.runs() };
     }
 
@@ -94,15 +100,6 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         settings = clampDecisionSettings(next);
         await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'settings', value: settings });
         return settings;
-    }
-
-    function rewriteStage() {
-        return {
-            id: REWRITE_STAGE,
-            contract: REWRITE_CONTRACT,
-            params: { payload: { $from: '$value' }, signal: { $from: '$context.signal' }, endpoint: { $from: '$context.endpoint' } },
-            onExhausted: 'abort',
-        };
     }
 
     async function addStage(pipelineId, stage) {
@@ -120,7 +117,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 fallbacks: [{ delayMs: retryDelayMs }],
                 onExhausted: 'abort',
             });
-            const rewritten = await addStage(PAYLOAD_PIPELINE, rewriteStage());
+            const rewritten = await addStage(PAYLOAD_PIPELINE, decisionRewriteStage({ id: REWRITE_STAGE, contract: REWRITE_CONTRACT }));
             stagesRegistered = Boolean(decided && rewritten);
         } finally {
             registering = false;
@@ -156,7 +153,10 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 return { reused: true, decision: push };
             }
         }
-        await banks.ensureColdStart().catch(error => publishEvent('decision.bank.failed', { runId, message: error?.message ?? String(error) }));
+        await Promise.all([
+            banks.ensureColdStart().catch(error => publishEvent('decision.bank.failed', { runId, message: error?.message ?? String(error) })),
+            bootstrap.waitFirstTurn().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) })),
+        ]);
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
@@ -195,7 +195,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }
     }
 
-    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, banks });
+    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, banks, publishEvent });
 
     /** Предпросмотр раздела: собирает блок и плашки данных для окна промптов. */
     const preview = input => previewSection({ input, settings, call, store });
@@ -245,6 +245,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             researcher,
             banks,
             cycle,
+            bootstrap,
             cardTurn,
             decide,
             rewrite,
@@ -258,17 +259,13 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return settings;
     }
 
-    const publicSettings = () => ({
-        ...settings, decider: { ...settings.decider }, writer: { ...settings.writer }, prompts: { ...settings.prompts },
-        promptSections: structuredClone(settings.promptSections ?? {}),
-    });
     return {
         load,
         configure: saveSettings,
         decide,
         rewrite,
         preview,
-        settings: publicSettings,
+        settings: () => publicDecisionSettings(settings),
         runs: () => ({ ...store.runs() }),
         roster: () => store.roster(),
         log: () => store.cycles(),
@@ -290,6 +287,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         waiting: () => cycle.waiting(),
         banks: () => banks.records(),
         bankProgress: () => banks.progress(),
+        bootstrap: () => bootstrap.state(),
+        question: () => cycle.question(),
+        answerQuestion: params => cycle.answerQuestion(params),
         unregister: async () => {
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();

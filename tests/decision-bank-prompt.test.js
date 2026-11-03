@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CHARACTER_BANK_BUILDER, LOREBOOK_MARKER, fillPrompt } from '../libraries/core/decision-prompts.js';
+import { CHARACTER_BANK_BUILDER, LOREBOOK_MARKER, BANK_TIMELINE_ADJUST, fillPrompt } from '../libraries/core/decision-prompts.js';
 
 function promptFromDoc() {
     const doc = readFileSync(new URL('../docs/research-decision/PROMPTS.md', import.meta.url), 'utf8');
@@ -17,7 +17,7 @@ test('the bank subagent prompt is the PROMPTS.md section 10 text word for word',
 
 test('every bank placeholder is filled, including the importance floor', () => {
     const filled = fillPrompt(CHARACTER_BANK_BUILDER, {
-        name: 'Lena', source_kind: 'card', source: 'A traveller.', canon_hint: '', aliases: '',
+        name: 'Lena', source_kind: 'card', source: 'A traveller.', canon_hint: '', aliases: '', timeline: '',
         importance_floor: 'This character is already key in this story. ', steps: 12,
         // Name Literal mentions the literal macro on purpose; it must stay in the prompt.
         char: '{{char}}',
@@ -39,6 +39,14 @@ test('the size band is key for the main card character and library levels 1–2,
     assert.equal(bankSizeBand({}), 'minor');
 });
 
+
+test('the timeline adjust prompt is the PROMPTS.md section 17 text word for word', () => {
+    const doc = readFileSync(new URL('../docs/research-decision/PROMPTS.md', import.meta.url), 'utf8');
+    const start = doc.indexOf('## 17. Правка банка под таймлайн');
+    const fence = doc.indexOf('```text', start);
+    const body = doc.indexOf('\n', fence) + 1;
+    assert.equal(BANK_TIMELINE_ADJUST, doc.slice(body, doc.indexOf('```', body)).trimEnd());
+});
 
 test('the lorebook marking prompt is the PROMPTS.md section 11 text word for word', () => {
     const doc = readFileSync(new URL('../docs/research-decision/PROMPTS.md', import.meta.url), 'utf8');

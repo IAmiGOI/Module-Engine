@@ -44,6 +44,19 @@ export const DEFAULT_WRITER = Object.freeze({
 
 export const DEFAULT_PROMPTS = Object.freeze({ director: '', writer: '' });
 
+export const DEFAULT_CLASSIFIER = Object.freeze({
+    connectionId: '',
+    threshold: 0.85,
+    checkTokens: 150,
+    rewriteLimit: 2,
+});
+
+export const DEFAULT_BOOTSTRAP = Object.freeze({
+    maxQuestions: 5,
+    maxSteps: 30,
+    timeoutMs: 180000,
+});
+
 export const DEFAULT_SETTINGS = Object.freeze({
     prompts: DEFAULT_PROMPTS,
     regen: 'decider',
@@ -66,6 +79,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     startOnTyping: false,
     // Seed оценки — только для тестов; `null` означает настоящий бросок.
     assessSeed: null,
+    classifier: DEFAULT_CLASSIFIER,
+    bootstrap: DEFAULT_BOOTSTRAP,
     decider: DEFAULT_DECIDER,
     writer: DEFAULT_WRITER,
     compression: DEFAULT_COMPRESSION,
@@ -87,6 +102,8 @@ export function clampDecisionSettings(values = {}) {
     const decider = source.decider && typeof source.decider === 'object' ? source.decider : {};
     const writer = source.writer && typeof source.writer === 'object' ? source.writer : {};
     const compression = source.compression && typeof source.compression === 'object' ? source.compression : {};
+    const classifier = source.classifier && typeof source.classifier === 'object' ? source.classifier : {};
+    const bootstrap = source.bootstrap && typeof source.bootstrap === 'object' ? source.bootstrap : {};
     const prompts = source.prompts && typeof source.prompts === 'object' ? source.prompts : {};
     const researcher = source.researcher && typeof source.researcher === 'object' ? source.researcher : {};
     return {
@@ -137,6 +154,17 @@ export function clampDecisionSettings(values = {}) {
             maxTokens: Math.round(number(compression.maxTokens, 200, 32768, DEFAULT_COMPRESSION.maxTokens)),
             temperature: number(compression.temperature, 0, 2, DEFAULT_COMPRESSION.temperature),
         },
+        classifier: {
+            connectionId: text(classifier.connectionId, DEFAULT_CLASSIFIER.connectionId).trim(),
+            threshold: number(classifier.threshold, 0, 1, DEFAULT_CLASSIFIER.threshold),
+            checkTokens: Math.round(number(classifier.checkTokens, 20, 4000, DEFAULT_CLASSIFIER.checkTokens)),
+            rewriteLimit: Math.round(number(classifier.rewriteLimit, 0, 10, DEFAULT_CLASSIFIER.rewriteLimit)),
+        },
+        bootstrap: {
+            maxQuestions: Math.round(number(bootstrap.maxQuestions, 1, 20, DEFAULT_BOOTSTRAP.maxQuestions)),
+            maxSteps: Math.round(number(bootstrap.maxSteps, 1, 200, DEFAULT_BOOTSTRAP.maxSteps)),
+            timeoutMs: Math.round(number(bootstrap.timeoutMs, 1000, 3600000, DEFAULT_BOOTSTRAP.timeoutMs)),
+        },
         researcher: {
             workerId: text(researcher.workerId, '').trim(),
             maxTasks: Math.round(number(researcher.maxTasks, 1, 8, 2)),
@@ -162,5 +190,16 @@ export function deciderRequestParams(decider = {}) {
         reasoningMode: values.reasoningMode,
         reasoningEffort: values.reasoningEffort,
         reasoningBudget: values.reasoningBudget,
+    };
+}
+
+/** Копия настроек наружу: без общих вложенных объектов. */
+export function publicDecisionSettings(settings = {}) {
+    return {
+        ...settings,
+        decider: { ...settings.decider },
+        writer: { ...settings.writer },
+        prompts: { ...settings.prompts },
+        promptSections: structuredClone(settings.promptSections ?? {}),
     };
 }

@@ -3,6 +3,7 @@ import { buildWriterLorebook } from '../../libraries/core/decision-lorebook.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createWriterProxy } from './writer-proxy.js';
+import { createWriterChecker } from './writer-check.js';
 import { createKnowledge } from './knowledge.js';
 
 /**
@@ -11,8 +12,9 @@ import { createKnowledge } from './knowledge.js';
  * подключения нет — прежний путь: подменяем тело запроса ST, адрес и ключ
  * остаются ST.
  */
-export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending, banks = null }) {
+export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending, banks = null, publishEvent = null }) {
     const writerProxy = createWriterProxy({ host, getSettings, getWorkers });
+    const writerChecker = createWriterChecker({ call, getSettings, banks });
     const knowledge = createKnowledge({ call, store, banks });
     return async function rewrite(input = {}) {
         const payload = input.payload ?? input;
@@ -32,11 +34,24 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const knowledgeText = await knowledge.textFor(store.roster().active);
         const context = buildWriterContext({ notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText, examples, lorebookText, knowledgeText });
         if (writerId && writerId !== 'st-main') {
-            const own = await writerProxy.respond({ payload, messages: context.messages, signal: input.signal });
+            const own = await writerProxy.respond({
+                payload, messages: context.messages, signal: input.signal,
+                check: writerChecker, push: decision, userMessage: lastUserText(pending.chat),
+                resolution: pending.form?.resolution ?? '', user: banks?.persona?.()?.name || 'the user',
+                runId: pending.runId, publishEvent,
+            });
             if (own) return own;
         }
         return computeWriterPayload(payload, context, { writer: settings.writer, model }) ?? payload;
     };
+}
+
+function lastUserText(chat) {
+    const list = Array.isArray(chat) ? chat : [];
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+        if (list[index]?.is_user === true) return String(list[index].mes ?? list[index].content ?? '').trim();
+    }
+    return '';
 }
 
 /** Лорбук прозаика как есть; ключи большой книги ищутся в его окне истории и в Push. Ошибка чтения не ломает ход. */

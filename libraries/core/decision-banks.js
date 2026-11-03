@@ -57,11 +57,12 @@ export function lorebookSourceText(entry = {}) {
  */
 export const BANK_BUILDER_VERSION = 3;
 
-export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0 }) {
+export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0, timelineHash = '' }) {
     return {
         builderVersion: Number(builderVersion) || 0,
         sourceKey: String(sourceKey ?? ''), sourceKind: String(sourceKind ?? ''),
         name: text(name), sourceHash: String(sourceHash ?? ''), text: String(bankText ?? ''),
+        timelineHash: String(timelineHash ?? ''),
         sizeBand: sizeBand === 'key' ? 'key' : 'minor', rawSource: String(rawSource ?? ''), examples: String(examples ?? ''),
         aliases: (Array.isArray(aliases) ? aliases : String(aliases ?? '').split(',')).map(item => text(item)).filter(Boolean),
         canonicalName: text(canonicalName) || text(name),
@@ -89,10 +90,10 @@ export function splitBankImportance(value) {
 }
 
 /** Готовый промпт субагента для одного источника; `sizeBand: 'key'` — нижняя граница важности. */
-export function bankPromptFor({ name, sourceKind, source, canonHint = '', aliases = '', sizeBand = 'minor', steps = 20 }) {
+export function bankPromptFor({ name, sourceKind, source, canonHint = '', aliases = '', timeline = '', sizeBand = 'minor', steps = 20 }) {
     return fillPrompt(CHARACTER_BANK_BUILDER, {
         name: text(name) || 'Unknown', source_kind: sourceKind || 'card', source: text(source),
-        canon_hint: text(canonHint), aliases: text(aliases), steps,
+        canon_hint: text(canonHint), aliases: text(aliases), timeline: text(timeline), steps,
         importance_floor: sizeBand === 'key' ? 'This character is already key in this story. ' : '',
         // Name Literal в промпте называет сам макрос — он должен остаться буквальным.
         char: '{{char}}',

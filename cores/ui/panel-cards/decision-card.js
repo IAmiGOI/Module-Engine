@@ -3,7 +3,8 @@ import { signal, computed } from '../reactive.js';
 import { Card, Toggle, Select, Field, Row, Button, Slider, Details } from '../../../libraries/shared/widgets.js';
 import { SAMPLER_PRESETS } from '../../models/generate-request.js';
 import { rosterView, planView, libraryView, bankView, arcsNotesView, forcedView } from './decision-views.js';
-
+import { createClassifierOptions, writerCheckSection } from './decision-card-check.js';
+import { createBootstrapSettings } from './decision-card-bootstrap.js';
 /**
  * Карточка «Director / Writer» на экране настроек движка. Читает и пишет
  * только через контракты `decision.*`, `model.workers.get`,
@@ -14,7 +15,6 @@ import { rosterView, planView, libraryView, bankView, arcsNotesView, forcedView 
  * сэмплер.
  */
 const readField = value => (typeof value === 'function' ? value() : value);
-
 export function createDecisionCard({ call, collapse, notify, workers, openPrompts, openDirector }) {
     const regen = signal('decider');
     const deciderWorkerId = signal('');
@@ -40,6 +40,12 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
     const costCounter = signal(true);
     const startOnTyping = signal(false);
     const implicitAwait = signal(false);
+    const classifierConnectionId = signal('');
+    const classifierThreshold = signal(0.85);
+    const classifierCheckTokens = signal(150);
+    const classifierRewriteLimit = signal(2);
+    const classifierConnections = signal([]);
+    const bootstrapSettings = createBootstrapSettings();
     const roster = signal({ active: [] });
     const plan = signal(null);
     const arcs = signal([]);
@@ -49,7 +55,6 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
     const bank = signal({});
     const clock = signal({ minutes: 0 });
     const forced = signal([]);
-
     const workerOptions = computed(() => [
         { value: '', label: 'Any connection (load-balanced)' },
         // Записи подключений из карточки моделей держат поля сигналами (`record.id()`), а не строками: без вызова все
@@ -64,6 +69,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
         { value: '', label: 'SillyTavern connection (no override)' },
         ...workerOptions().slice(1),
     ]);
+    const classifierOptions = createClassifierOptions(classifierConnections);
     const presetOptions = computed(() => [
         { value: '', label: 'Custom (do not change on pick)' },
         ...presets().map(preset => ({ value: preset.id, label: preset.name })),
@@ -118,8 +124,13 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
         costCounter.set(value.costCounter !== false);
         startOnTyping.set(Boolean(value.startOnTyping));
         implicitAwait.set(Boolean(value.implicitAwait));
+        const classifier = value.classifier ?? {};
+        classifierConnectionId.set(String(classifier.connectionId ?? ''));
+        classifierThreshold.set(Number(classifier.threshold ?? 0.85));
+        classifierCheckTokens.set(Number(classifier.checkTokens ?? 150));
+        classifierRewriteLimit.set(Number(classifier.rewriteLimit ?? 2));
+        bootstrapSettings.apply(value.bootstrap);
     }
-
     function collect() {
         return {
             regen: regen.peek(),
@@ -141,9 +152,13 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
             snapshots: snapshots.peek(), adaptiveReasoning: adaptiveReasoning.peek(),
             turnDraft: turnDraft.peek(), costCounter: costCounter.peek(),
             startOnTyping: startOnTyping.peek(), implicitAwait: implicitAwait.peek(),
+            classifier: {
+                connectionId: classifierConnectionId.peek(), threshold: classifierThreshold.peek(),
+                checkTokens: classifierCheckTokens.peek(), rewriteLimit: classifierRewriteLimit.peek(),
+            },
+            bootstrap: bootstrapSettings.collect(),
         };
     }
-
     async function save() {
         const answer = await call('decision.configure', { patch: collect() });
         if (!answer.ok) { await notify('error', answer.error?.message ?? 'Could not save decision settings'); return false; }
@@ -172,13 +187,12 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
             writer.maxTokens.set(found.maxTokens);
         }
     }
-
     async function loadDecision() {
-        const [settings, run, savedPresets, rosterAnswer, planAnswer, arcsAnswer, notesAnswer, libraryAnswer, plansAnswer, bankAnswer, clockAnswer, forcedAnswer] = await Promise.all([
+        const [settings, run, savedPresets, rosterAnswer, planAnswer, arcsAnswer, notesAnswer, libraryAnswer, plansAnswer, bankAnswer, clockAnswer, forcedAnswer, classifierAnswer] = await Promise.all([
             call('decision.settings'), call('decision.lastRun'), call('model.presets.get'),
             call('decision.roster'), call('decision.plan'), call('decision.arcs'), call('decision.notes'),
             call('decision.library'), call('decision.plans'), call('decision.bank'),
-            call('decision.clock'), call('summary.forced'),
+            call('decision.clock'), call('summary.forced'), call('classifier.connections.get'),
         ]);
         if (settings.ok) applySettings(settings.value);
         lastRun.set(run.ok ? run.value ?? null : null);
@@ -192,8 +206,8 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
         bank.set(bankAnswer.ok ? bankAnswer.value ?? {} : {});
         clock.set(clockAnswer.ok ? clockAnswer.value ?? { minutes: 0 } : { minutes: 0 });
         forced.set(forcedAnswer.ok ? forcedAnswer.value ?? [] : []);
+        classifierConnections.set(classifierAnswer.ok && Array.isArray(classifierAnswer.value) ? classifierAnswer.value : []);
     }
-
     function decisionCard() {
         return Card('Director / Writer', { ...collapse.bind('card:decision'), subtitle: 'Every generation: one model decides, another writes' },
             h('small', { class: 'stme-module-hint' }, 'Always on. Without an openai director connection, generation is not sent; this card is opened for you.'),
@@ -253,6 +267,8 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
                     Slider('Research steps before the report', researcherSettings.maxSteps, { min: 1, max: 200, step: 1 }),
                 ),
             ),
+            writerCheckSection({ classifierConnectionId, classifierThreshold, classifierCheckTokens, classifierRewriteLimit, classifierOptions }),
+            bootstrapSettings.section(),
             Details('Turn behaviour',
                 Toggle('Snapshots and rollback', snapshots, { hint: 'On: state before every turn is saved; swipe or delete restores it. Off: the state follows every applied form.' }),
                 Toggle('Low reasoning on the turn, high between turns', adaptiveReasoning, { hint: 'On: the active cycle asks for low effort, the passive one for high.' }),

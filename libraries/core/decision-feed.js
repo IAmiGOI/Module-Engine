@@ -56,6 +56,40 @@ export function formRow(form) {
     };
 }
 
+function odds(value) {
+    return Number.isFinite(Number(value)) ? `${Math.round(Number(value) * 100)}%` : '—';
+}
+
+function writerCheckRow(payload) {
+    return {
+        kind: 'writer_check', id: `writer_check_${text(payload.attempt)}_${text(payload.phase)}_${payload.at ?? ''}`,
+        attempt: payload.attempt ?? null, phase: text(payload.phase), aborted: Boolean(payload.aborted),
+        skipped: Boolean(payload.skipped), exhausted: Boolean(payload.exhausted), error: text(payload.error),
+        quote: text(payload.quote), reasons: text(payload.reasons),
+        probabilities: payload.probabilities && typeof payload.probabilities === 'object' ? payload.probabilities : {},
+        violated: Array.isArray(payload.violated) ? payload.violated.map(text).filter(Boolean) : [],
+    };
+}
+
+function formCheckRow(payload) {
+    return {
+        kind: 'form_check', id: `form_check_${payload.at ?? Date.now()}_${stateId(payload)}`,
+        refused: Boolean(payload.refused), name: text(payload.name), chance: payload.chance ?? null,
+        quote: text(payload.quote), skipped: Boolean(payload.skipped),
+        probabilities: payload.probabilities && typeof payload.probabilities === 'object' ? payload.probabilities : {},
+        warnings: Array.isArray(payload.warnings) ? payload.warnings.map(text).filter(Boolean) : [],
+    };
+}
+let formRowCounter = 0;
+function stateId(payload) { formRowCounter += 1; return `${payload.name ?? 'form'}_${formRowCounter}`; }
+
+function appendToCycle(state, runId, row) {
+    const index = state.cycles.map(entry => entry.runId).lastIndexOf(runId);
+    if (index < 0) return state;
+    const cycles = state.cycles.map((entry, at) => (at === index ? upsertRow(entry, row) : entry));
+    return { ...state, cycles };
+}
+
 function usageRow(cycle) {
     const usage = cycle?.usage && typeof cycle.usage === 'object' ? cycle.usage : null;
     const durationMs = Number(cycle?.durationMs) || null;
@@ -193,6 +227,16 @@ export function applyFeedEvent(state, event, payload = {}) {
         const cycles = index < 0 ? [...state.cycles, entry] : state.cycles.map((item, at) => (at === index ? entry : item));
         return { ...state, cycles };
     }
+    if (event === 'decision.writer.check') {
+        const row = writerCheckRow(payload);
+        if (state.live[runId]) return withLive(state, runId, entry => upsertRow(entry, row));
+        return appendToCycle(state, runId, row);
+    }
+    if (event === 'decision.form.check') {
+        const row = formCheckRow(payload);
+        if (state.live[runId]) return withLive(state, runId, entry => upsertRow(entry, row));
+        return appendToCycle(state, runId, row);
+    }
     if (event === 'decision.cycle.ended') return withLive(state, runId, entry => ({ ...entry, running: false, waiting: false }));
     return state;
 }
@@ -203,6 +247,7 @@ function entryText(entry) {
         parts.push(row.text, row.comment, row.name, row.character, row.action, row.difficulty, row.experience, row.words, row.resolution, row.task);
         if (row.kind === 'form') parts.push(row.userResult, row.place, ...row.characters.flatMap(character => [character.name, character.decision, character.action, character.outcome]));
         if (row.kind === 'call') parts.push(JSON.stringify(row.args ?? {}), JSON.stringify(row.result ?? null));
+        if (row.kind === 'writer_check' || row.kind === 'form_check') parts.push(JSON.stringify(row.probabilities ?? {}), row.quote, row.reasons, row.name);
     }
     return parts.filter(Boolean).join('\n').toLowerCase();
 }
