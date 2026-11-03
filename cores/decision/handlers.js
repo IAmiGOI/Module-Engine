@@ -191,11 +191,29 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
                 const results = await call('lorebook.search', { query: args.query, book: args.book, limit: args.limit });
                 return { ok: true, results: Array.isArray(results) ? results : [] };
             }
-            if (args.op === 'read') {
-                const entry = await call('lorebook.get', { uid: args.uid, book: args.book });
-                return entry ? { ok: true, entry } : { ok: false, error: 'There is no such lorebook entry.' };
+            if (args.op === 'list') {
+                // Оглавление книги: названия и номера, без текста — чтобы найти забытую запись и прочитать её.
+                const all = (await call('lorebook.entries')) ?? [];
+                const book = String(args.book ?? '').trim();
+                const entries = all.filter(entry => !entry?.disable && (!book || entry.book === book))
+                    .map(entry => ({ uid: entry.uid, book: entry.book, title: String(entry.comment ?? '').trim() || `Entry ${entry.uid}`, constant: Boolean(entry.constant) }));
+                return { ok: true, entries };
             }
-            return { ok: false, error: 'The lorebook tool needs op "search" or "read".' };
+            if (args.op === 'read') {
+                let { uid, book } = args;
+                const title = String(args.title ?? '').trim().toLowerCase();
+                if ((uid === undefined || uid === null || uid === '') && title) {
+                    const all = (await call('lorebook.entries')) ?? [];
+                    const found = all.find(entry => String(entry.comment ?? '').trim().toLowerCase() === title)
+                        ?? all.find(entry => String(entry.comment ?? '').toLowerCase().includes(title));
+                    if (!found) return { ok: false, error: `There is no lorebook entry titled "${args.title}". Use op "list" or "search".` };
+                    uid = found.uid;
+                    book = found.book;
+                }
+                const entry = await call('lorebook.get', { uid, book });
+                return entry ? { ok: true, entry } : { ok: false, error: 'There is no such lorebook entry. Use op "list" or "search".' };
+            }
+            return { ok: false, error: 'The lorebook tool needs op "list", "search" or "read".' };
         },
 
         memory: async args => {

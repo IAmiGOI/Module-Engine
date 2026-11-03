@@ -45,6 +45,7 @@ Every call must carry "comment": at least one full sentence saying why you are m
 - memory — the memory bank of plan results. Only its index is in your context; search and read it here.
 - forced_memory — keep an important summary from being folded into a higher level, or release it.
 - recall_name — take a name from the name library. Every new named character gets a name from here; never invent names yourself.
+- lorebook — the connected lorebook. When you are unsure of a fact or have forgotten an entry, look it up instead of guessing: list the entries, search them or read one in full.
 - spawn_researcher — start a background researcher with web search, for facts you do not know: canon of an existing work, real places, history, technical details. You are FORBIDDEN to wait for it. Start it and carry on; its report arrives later in your log.
 - await — end your work and wait for the next event. Call it every time you finish what you were doing.
 Any other tools you are given (for example Secrets) are yours as well; use them as their descriptions say.

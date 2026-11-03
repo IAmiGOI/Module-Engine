@@ -51,3 +51,26 @@ test('character entries stay out of the frozen head and of the changes, because 
     const next = staticDirectorLorebook(first.snapshot, [...entries, { uid: 5, book: 'World', comment: 'Character: Bram', content: 'Bram sells rope.' }]);
     assert.doesNotMatch(next.changes, /sells rope/);
 });
+
+test('the director lorebook tool lists entry titles and reads a forgotten entry by its title', async () => {
+    const { createHandlers } = await import('../cores/decision/handlers.js');
+    const entries = [
+        { uid: 4, book: 'World', comment: 'Old Mill', content: 'The mill stands by the river.' },
+        { uid: 7, book: 'World', comment: 'The Flood', content: 'The flood took the bridge.', constant: true },
+        { uid: 9, book: 'World', comment: 'Hidden', content: 'Disabled.', disable: true },
+    ];
+    const call = async (contract, params) => {
+        if (contract === 'lorebook.entries') return entries;
+        if (contract === 'lorebook.get') return entries.find(entry => entry.uid === params.uid) ?? null;
+        throw new Error(`unexpected ${contract}`);
+    };
+    const handlers = createHandlers({ store: {}, call, publishEvent: () => {}, getSettings: () => ({}), state: {} });
+    const listed = await handlers.lorebook({ op: 'list', comment: 'I forgot what the book holds.' });
+    assert.deepEqual(listed.entries.map(entry => [entry.uid, entry.title]), [[4, 'Old Mill'], [7, 'The Flood']]);
+    const read = await handlers.lorebook({ op: 'read', title: 'the flood', comment: 'I need the flood entry again.' });
+    assert.equal(read.ok, true);
+    assert.match(read.entry.content, /took the bridge/);
+    const missing = await handlers.lorebook({ op: 'read', title: 'Dragons', comment: 'Checking.' });
+    assert.equal(missing.ok, false);
+    assert.match(missing.error, /list/);
+});

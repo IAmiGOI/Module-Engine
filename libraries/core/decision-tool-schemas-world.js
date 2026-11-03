@@ -137,13 +137,14 @@ export const MEMORY_TOOL = Object.freeze({
 export const LOREBOOK_TOOL = Object.freeze({
     name: 'lorebook',
     displayName: 'Search or read the lorebook',
-    description: 'Search the connected lorebook for a fact (op "search" with "query"), or read one entry (op "read" with "uid" and "book"). Always-on entries are already in your context; this tool finds the rest. The Writer never sees the lorebook.',
+    description: 'Look into the connected lorebook whenever you are unsure or have forgotten something: op "list" shows the titles and uids of all entries, op "search" with "query" finds entries about a fact, op "read" with "uid" (or "title") returns the full entry. Re-reading an entry is cheap; do it instead of guessing.',
     parameters: {
         type: 'object',
         properties: {
-            op: { type: 'string', enum: ['search', 'read'] },
+            op: { type: 'string', enum: ['list', 'search', 'read'] },
             query: { type: 'string', description: 'For search: what to look for.' },
             uid: { type: 'number', description: 'For read: the entry uid.' },
+            title: { type: 'string', description: 'For read: the entry title, when you do not know the uid.' },
             book: { type: 'string', description: 'Optional book name.' },
             limit: { type: 'number', description: 'How many entries to return (default 8).' },
             comment: COMMENT,
