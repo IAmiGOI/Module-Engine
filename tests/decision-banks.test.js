@@ -372,3 +372,18 @@ test('switching chats mid-build: the old chat\'s builds never write into the new
     const leaked = world.banks.records().filter(record => record.status === 'ready');
     assert.equal(leaked.length, 0, 'nothing from the old chat landed in the new one');
 });
+
+test('banks left pending by a reload are built on the next turn instead of waiting forever', async () => {
+    const world = fakeWorld({ failName: null });
+    await world.banks.ensureColdStart();
+    const chatEntry = [...world.chatMemory].find(([, value]) => value && typeof value === 'object' && Object.values(value).some(record => record?.sourceKey));
+    const stuck = Object.fromEntries(Object.entries(chatEntry[1]).map(([key, record], index) => [key, index === 0 ? { ...record, status: 'pending', text: '' } : record]));
+    world.chatMemory.set(chatEntry[0], stuck);
+    for (const [name, value] of world.chatMemory) if (value && 'status' in value && 'builderVersion' in value && !('sourceKey' in value)) world.chatMemory.set(name, { ...value, status: 'partial' });
+    world.settingsStore.clear();
+    await world.banks.reload();
+    const before = world.calls.length;
+    await world.banks.ensureColdStart();
+    assert.ok(world.calls.length > before, 'the stuck bank is built');
+    assert.equal(world.banks.records().some(record => record.status === 'pending'), false);
+});

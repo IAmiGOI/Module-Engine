@@ -14,6 +14,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     const tasks = createBankTasks({ getSettings, researcher, publishEvent });
     const marker = createLorebookMarker({ call, getSettings, getWorkers, publishEvent });
     let coldStartPromise = null;
+    let queueRunning = null; // очередь сборки живёт дольше холодного старта (он отпускает ход по таймауту)
     let sourcesCache = [];
     let markWarnings = [];
     const timelineQueue = new Set();
@@ -166,7 +167,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             return progress({ timedOut: false, sources: sources.length });
         }
         const epoch = startEpoch;
-        const running = tasks.runQueue(pending.map(withFloor), {
+        const running = queueRunning = tasks.runQueue(pending.map(withFloor), {
             isCurrent: () => epoch === bankStore.epoch(),
             concurrency: bankConcurrency(getSettings()),
             onDone: async (source, text) => { if (await saveReady(source, text, epoch)) await bankStore.saveColdStart(progress()); },
@@ -175,6 +176,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         const timeoutMs = Math.max(1, Number(getSettings().bankColdStartTimeoutMs) || 120000);
         let timer = null;
         const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(true), timeoutMs); });
+        running.finally(() => { if (queueRunning === running) queueRunning = null; }).catch(() => {});
         const timedOut = await Promise.race([running.then(() => false, () => false), timeout]);
         if (timer) clearTimeout(timer);
         if (timedOut) {
@@ -188,12 +190,15 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
 
     function ensureColdStart() {
         if (coldStartPromise) return coldStartPromise;
+        if (queueRunning) return Promise.resolve(progress()); // банки ещё строятся в этой вкладке — второй очереди не нужно
         const state = bankStore.coldStart();
         // Новая версия сборщика: старый холодный старт не считается — банки пересоберутся один раз.
         const current = Number(state.builderVersion) === BANK_BUILDER_VERSION;
         // Банки, упавшие только из-за занятых сборщиков (старая ошибка), пересобираются сами.
         const busyFailed = records().some(record => record.status === 'error' && /busy/i.test(String(record.error ?? '')));
-        if (current && !busyFailed && (state.status === 'ready' || state.status === 'partial')) return Promise.resolve(progress());
+        // «pending» без живой очереди в этой вкладке — сборка оборвалась (перезагрузка, таймаут холодного старта): продолжить.
+        const unfinished = records().some(record => record.status === 'pending' || record.status === 'short');
+        if (current && !busyFailed && !unfinished && (state.status === 'ready' || state.status === 'partial')) return Promise.resolve(progress());
         coldStartPromise = runColdStart().finally(() => { coldStartPromise = null; });
         return coldStartPromise;
     }
@@ -260,12 +265,14 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
 
     async function reload() {
         coldStartPromise = null;
+        queueRunning = null;
         sourcesCache = [];
         return bankStore.load();
     }
 
     async function reset() {
         coldStartPromise = null;
+        queueRunning = null;
         sourcesCache = [];
         await bankStore.saveColdStart({ status: 'idle', total: 0, done: 0, errors: 0, startedAt: 0 });
     }
