@@ -1,6 +1,6 @@
 import { chatToMessages } from './chat-to-messages.js';
 import { planSection, arcsSection, notesSection, notesAsBlocks } from './decision-state.js';
-import { DIRECTOR_SYSTEM, DIRECTOR_TURN, WRITER_SYSTEM, WRITER_PUSH, fillPrompt } from './decision-prompts.js';
+import { DIRECTOR_REASONING, DIRECTOR_SYSTEM, DIRECTOR_TURN, WRITER_SYSTEM, WRITER_PUSH, fillPrompt } from './decision-prompts.js';
 import {
     compressedDigestMessages, fullTurnMessages, renderCompressedDigests, renderFullTurns,
 } from './decision-turn-digest.js';
@@ -209,7 +209,9 @@ export function buildDeciderContext({
     const state = [String(knowledgeText ?? '').trim(), notesSection(notes)].filter(Boolean);
     const planContent = planSection(plan) || 'YOUR PLAN: none yet — call set_plan before submit_turn.';
     const baseTask = String(task ?? '').trim() || DIRECTOR_TURN;
-    const turnTask = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
+    const taskText = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
+    // Как думать — в самом конце, ближе всего к генерации: там модель это действительно держит.
+    const turnTask = `${taskText}\n\n${DIRECTOR_REASONING}`;
     const messages = [
         { role: 'system', content: DIRECTOR_SYSTEM },
         ...head.map(content => ({ role: 'system', content })),

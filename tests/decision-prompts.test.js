@@ -72,3 +72,14 @@ test('the ask_user and write_chat_brief texts are PROMPTS.md section 16 word for
     assert.deepEqual(answers, [ASK_USER_ANSWERED, ASK_USER_SKIPPED, ASK_USER_NOT_ALLOWED, ASK_USER_LIMIT, ASK_USER_STREAK]);
     assert.equal(WRITE_CHAT_BRIEF_DESCRIPTION, blockFromDoc('**write_chat_brief** — описание инструмента:'));
 });
+
+test('HOW TO THINK is PROMPTS.md section 18 and sits at the very end of the director context, not in the system prompt', async () => {
+    const { DIRECTOR_REASONING, DIRECTOR_SYSTEM } = await import('../libraries/core/decision-prompts.js');
+    const { buildDeciderContext } = await import('../libraries/core/decision-context.js');
+    assert.equal(DIRECTOR_REASONING, blockFromDoc('## 18. Директор — как думать'));
+    assert.doesNotMatch(DIRECTOR_SYSTEM, /HOW TO THINK/);
+    const turn = buildDeciderContext({ chat: [{ mes: 'Hi', is_user: true }] });
+    assert.ok(turn.messages.at(-1).content.endsWith(DIRECTOR_REASONING), 'the last words before generation');
+    const background = buildDeciderContext({ task: 'A researcher reported.' });
+    assert.ok(background.messages.at(-1).content.endsWith(DIRECTOR_REASONING), 'background cycles too');
+});
