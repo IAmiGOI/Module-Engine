@@ -1,8 +1,8 @@
 import { buildDeciderContext } from '../../libraries/core/decision-context.js';
 import { normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildToolList } from '../../libraries/core/decision-tools.js';
-import { buildLorebookContext } from '../../libraries/core/decision-lorebook.js';
-import { deciderRequestParams } from '../../libraries/core/decision-settings.js';
+import { staticDirectorLorebook } from '../../libraries/core/decision-lorebook-static.js';
+import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { fullTurns } from '../../libraries/core/decision-turn-digest.js';
 import { librarySection } from '../../libraries/core/decision-library.js';
 import { bankIndex } from '../../libraries/core/decision-bank.js';
@@ -46,32 +46,41 @@ export function createCycleContext({ call, store, banks = null }) {
     }
 
     /** Лорбук — только директору: стабильный текст книги. Ошибка чтения не ломает ход. */
+    /**
+     * Лорбук — только директору и статичный: начало контекста — снимок книги, который не меняется от хода к ходу,
+     * а новые и изменённые записи (их дописывает граф памяти) — отдельным блоком в изменяемой части. Ошибка чтения не
+     * ломает ход.
+     */
+    const LOREBOOK_SNAPSHOT_KEY = 'lorebookSnapshot';
     async function lorebookTextFor(enabled) {
-        if (!enabled) return '';
+        if (!enabled) return { head: '', changes: '' };
         try {
             const books = await call('lorebook.books');
-            if (!Array.isArray(books) || !books.length) return '';
-            return buildLorebookContext((await call('lorebook.entries')) ?? [], { marks: banks?.marksForLorebook() ?? null }).text;
-        } catch { return ''; }
+            if (!Array.isArray(books) || !books.length) return { head: '', changes: '' };
+            const saved = await call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: LOREBOOK_SNAPSHOT_KEY, fallback: null });
+            const result = staticDirectorLorebook(saved, (await call('lorebook.entries')) ?? [], { marks: banks?.marksForLorebook() ?? null });
+            if (result.refreshed) await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: LOREBOOK_SNAPSHOT_KEY, value: result.snapshot });
+            return { head: result.head, changes: result.changes };
+        } catch { return { head: '', changes: '' }; }
     }
 
-    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', directorBlock = [], banksText = '' }) {
+    function buildContext({ chat = [], settings, summaries: list, task = '', lorebookText = '', lorebookChanges = '', directorBlock = [], banksText = '' }) {
         return buildDeciderContext({
             summaries: list, chat, plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
             libraryText: librarySection(store.library(), store.plans(), store.clock().minutes),
             bankText: bankIndex(store.bank()), researchText: researchSection(store.research()),
-            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, banksText, task,
+            roster: store.roster().active, planMissing: !store.plan(), directorBlock, lorebookText, lorebookChanges, banksText, task,
             digests: typeof store.digests === 'function' ? store.digests() : [],
             turns: fullTurns(store.cycles()),
         });
     }
 
     async function runContext({ settings, chat = [], task = '', lorebook = true, worker }) {
-        const [list, lorebookText, directorBlock] = await Promise.all([
+        const [list, lorebookParts, directorBlock] = await Promise.all([
             summaries(), lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker),
         ]);
         const bankText = banks ? banks.contextFor({ names: store.roster().active, all: true }).text : '';
-        return buildContext({ chat, settings, task, summaries: list, lorebookText, directorBlock, banksText: bankText });
+        return buildContext({ chat, settings, task, summaries: list, lorebookText: lorebookParts.head, lorebookChanges: lorebookParts.changes, directorBlock, banksText: bankText });
     }
 
     function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null }) {

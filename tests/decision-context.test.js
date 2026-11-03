@@ -136,3 +136,14 @@ test('the writer keeps only rarely changing parts before its sliding history; lo
     assert.ok(at('Lena opens the door') > at('LORE MATCH') && at('Lena opens the door') > at('Left arm'), 'the push stays last');
     assert.equal(at('Lena opens the door'), messages.length - 1);
 });
+
+test('the frozen lorebook stays in the head of the director context and its changes go after the turns', () => {
+    const { messages } = buildDeciderContext({
+        lorebookText: 'THE LOREBOOK frozen', lorebookChanges: 'LOREBOOK CHANGES new entry',
+        turns: [{ cycles: [{ event: 'turn', turn: 2, messages: [{ role: 'user', content: 'Go.' }] }] }],
+        chat: [{ mes: 'Go.', is_user: true }],
+    });
+    const at = needle => messages.findIndex(message => String(message.content).includes(needle));
+    assert.ok(at('THE LOREBOOK frozen') < at('TURN 2 (full)'));
+    assert.ok(at('LOREBOOK CHANGES') > at('TURN 2 (full)'));
+});

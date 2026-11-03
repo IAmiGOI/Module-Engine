@@ -170,7 +170,7 @@ function notesText(notes) {
  */
 export function buildDeciderContext({
     summaries = [], chat = [], plan = null, arcs = [], notes = {}, roster = [],
-    libraryText = '', bankText = '', researchText = '', lorebookText = '', banksText = '',
+    libraryText = '', bankText = '', researchText = '', lorebookText = '', lorebookChanges = '', banksText = '',
     digests = [], turns = [], planMissing = false, directorBlock = '', task = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
     const history = directorHistory(chat, limit, directorBlock);
@@ -179,6 +179,7 @@ export function buildDeciderContext({
     // два полных хода — окно, дальше всё изменяемое и история.
     const head = [String(banksText ?? '').trim(), String(lorebookText ?? '').trim()].filter(Boolean);
     const state = [
+        String(lorebookChanges ?? '').trim(),
         planSection(plan), arcsSection(arcs), notesSection(notes), rosterSection(roster),
         String(libraryText ?? '').trim(), String(bankText ?? '').trim(),
         summariesSection(summaries), String(researchText ?? '').trim(),
