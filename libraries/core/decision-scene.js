@@ -6,37 +6,42 @@
  */
 const text = value => String(value ?? '').trim();
 
-const LEAVE_WORDS = /\b(left|leaves|leaving|walks off|walked off|walks away|walked away|is gone|was gone|gone|out of sight|disappears|disappeared|vanishes|vanished|runs off|ran off|departs|departed|slips away|slipped away)\b/i;
+// Уход — только когда персонаж подлежащее и рядом глагол ухода: «Diethard… walks off», «Felt is gone into the crowd»,
+// «X leaves the square», «X is out of sight». Голые слова («left behind», «leaving Sasha», «gone quiet», «Sasha
+// leaves his quarter») давали ложные «ушёл», и директор каждый ход удалял и заново добавлял персонажа в ростер.
+const LEAVE_PATTERNS = [
+    String.raw`[^.;!?—]{0,80}?\b(?:walks|walked|runs|ran|slips|slipped|storms|stormed|heads|headed|hurries|hurried|strides|strode|wanders|wandered)\s+(?:off|away|out)\b`,
+    String.raw`[^.;!?—]{0,60}?\s(?:has\s+|had\s+)?(?:left|leaves|departs|departed)\s+(?:the|for|through|without|again)\b`,
+    String.raw`[^.;!?—]{0,60}?\b(?:vanishes|vanished|disappears|disappeared)\b`,
+    String.raw`[^.;!?—]{0,60}?\s(?:is|was|has|had)\s+(?:already\s+)?gone\b(?=\s*(?:[.,;!?—]|$|into\b|from\b|down\b|off\b|out\b|through\b))`,
+    String.raw`[^.;!?—]{0,60}?\bout of sight\b`,
+];
 
 function sentences(value) {
-    return text(value).split(/(?<=[.!?;])\s+|\s+—\s+/).map(text).filter(Boolean);
+    return text(value).split(/(?<=[.!?;])\s+/).map(text).filter(Boolean);
 }
 
-function lastMention(sentence, name, before) {
-    const full = text(name);
-    if (!full) return -1;
-    const first = full.split(/\s+/)[0];
-    const patterns = [full, ...(first.length >= 3 ? [first] : [])].map(value => new RegExp(`\\b${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'));
-    let at = -1;
-    for (const pattern of patterns) {
-        for (const match of sentence.matchAll(pattern)) if (match.index < before && match.index > at) at = match.index;
-    }
-    return at;
+function escape(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Кто из ростера, судя по исходу прошлого хода, ушёл из сцены: ближайший названный перед словом ухода. */
+/** Кто из ростера, судя по исходу прошлого хода, ушёл из сцены. */
 export function departedFrom(resolution, roster = [], { user = '' } = {}) {
     const list = (Array.isArray(roster) ? roster : []).map(text).filter(name => name && name.toLowerCase() !== text(user).toLowerCase());
+    const everyone = [...list, text(user)].filter(Boolean);
     const out = [];
     for (const sentence of sentences(resolution)) {
-        for (const leave of sentence.matchAll(new RegExp(LEAVE_WORDS.source, 'gi'))) {
-            let best = null;
-            let bestAt = -1;
-            for (const name of list) {
-                const at = lastMention(sentence, name, leave.index);
-                if (at > bestAt) { bestAt = at; best = name; }
-            }
-            if (best && leave.index - bestAt <= 150 && !out.includes(best)) out.push(best);
+        for (const name of list) {
+            const first = name.split(/\s+/)[0];
+            const labels = [...new Set([name, ...(first.length >= 3 ? [first] : [])])];
+            const hit = labels.some(label => LEAVE_PATTERNS.some(pattern => {
+                const match = new RegExp(`\\b${escape(label)}\\b(${pattern})`, 'i').exec(sentence);
+                if (!match) return false;
+                // Между именем и глаголом не должно стоять другое имя: «Felt…, leaving Sasha» — это не уход Саши.
+                const between = match[1];
+                return !everyone.some(other => other !== name && new RegExp(`\\b${escape(other.split(/\s+/)[0])}\\b`, 'i').test(between));
+            }));
+            if (hit && !out.includes(name)) out.push(name);
         }
     }
     return out;

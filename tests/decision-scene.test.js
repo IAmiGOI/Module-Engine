@@ -60,3 +60,15 @@ test('a character who left last turn and acts again is sent back once, then acce
     const second = await submit(form);
     assert.notEqual(second.missing?.[0]?.includes?.('left the scene'), true, 'only one reminder per turn');
 });
+
+test('departedFrom: words like left/leaving/gone without a real exit are not a departure', () => {
+    const roster = ['Emilia', 'Felt', 'Diethard Diethain'];
+    for (const line of [
+        'Emilia turns for the steps, telling Sasha to keep up or be left behind.',
+        'Felt stepped back to meet him, leaving Sasha against the wall.',
+        'Felt has gone quiet and dangerous at his shoulder.',
+        'Felt agrees on condition that Sasha leaves his quarter first.',
+    ]) assert.deepEqual(departedFrom(line, roster, { user: 'Sasha' }), [], line);
+    assert.deepEqual(departedFrom('Felt tears free and is gone into the crowd.', roster, { user: 'Sasha' }), ['Felt']);
+    assert.deepEqual(departedFrom('Diethard closes his notebook and walks off.', roster, { user: 'Sasha' }), ['Diethard Diethain']);
+});
