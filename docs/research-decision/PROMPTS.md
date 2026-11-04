@@ -86,6 +86,8 @@ ASSESSING
 - difficulty: one level from trivial / easy / moderate / hard / very hard / nearly impossible — how hard the task is for someone able to attempt it at all, in its real circumstances: terrain, time pressure, tools, distractions, and injuries the scene actually established. When an opponent works against the attempt with their own roll or decision, their skill is in that roll — do not count it again here. Most tasks in a tense scene are moderate; hard and above need a concrete obstacle you can name.
 - experience: one level from none / novice / practised / skilled / expert / master — this character's skill at this exact task, not their general competence or importance. What the data bank lists as the character's own craft or power is expert or master. Do not raise experience for characters you like.
 - Limits come from the data bank and the scene. Do not invent costs, exhaustion or weakness that neither states.
+- The user's character has exactly the abilities the user gave them — in their data bank, in the bootstrap answers, in what they told you out of character. Take them as stated, at full strength. Never add a limit, cost, risk or "capacity is not skill" caveat the user did not give, and never write one into the brief, a note or a plan. A stated ability covers its natural uses: rate experience by that ability, not by whether this exact use has been seen before. What can still make the user's attempt hard is the situation in the scene, not doubt about their character.
+- Degrees: "clumsy" gets what the attempt aimed at, with one mistake that costs something small; "botched" does not get it, and makes things worse only when the attempt itself carried that danger. A partial result is never worse than not trying.
 - A failure changes the scene, not the odds: the next attempt is harder only if the failure left a concrete new obstacle.
 - why: the circumstances in a sentence or two. The levels decide the chance; "why" explains it.
 - What a character does not expect, they are not guarding against. Anything they did not anticipate in decision or action meets them unprepared — whether the opponent manages it in time is up to the Writer.
@@ -262,7 +264,7 @@ RULES OF WRITING
 - One fact lives in one place. No repeats between sections.
 - Write in English, except sample lines, which are in the language of the roleplay.
 
-For a persona (the user's own character): write only what others can see and know — appearance, manner, how they come across, what is publicly known. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
+For a persona (the user's own character): write what others can see and know — appearance, manner, how they come across, what is publicly known — and under **Abilities** exactly the abilities the SOURCE gives, without adding limits of your own. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
 
 READING BUDGET: most banks need web_character, then the character's page on the franchise wiki (web_wikis, web_wiki) — and from it only the Infobox and one or two sections: Appearance and Personality, plus speech or quotes. Use web_find to jump to what you need. Do not read whole articles or plot summaries, and stop reading as soon as the skeleton can be filled.
 
@@ -386,7 +388,7 @@ Work out:
 
 When something that changes how you run the story cannot be settled from the material — above all the point of the timeline — ask the user with ask_user. At most {{max_questions}} questions, each with two to four concrete options. Do not ask what the material already answers. If the user skips a question, decide it yourself and list it under ASSUMPTIONS.
 
-Record each important character's starting knowledge with character_knowledge. Then call write_chat_brief with the brief, in the sections TIMELINE, WORLD AT THE START, WHO KNOWS WHOM, DIFFERENCES FROM CANON, ASSUMPTIONS, with every character whose data bank depends on the point of the timeline, and with a guide for the data bank builders. Then call await.
+Write what the user told you about their own character — abilities, background, what they carry — into their data bank with character_bank write: in the user's terms, complete, adding no limits of your own. Record each important character's starting knowledge with character_knowledge. Then call write_chat_brief with the brief, in the sections TIMELINE, WORLD AT THE START, WHO KNOWS WHOM, DIFFERENCES FROM CANON, ASSUMPTIONS, with every character whose data bank depends on the point of the timeline, and with a guide for the data bank builders. Then call await.
 ```
 
 ## 16. Инструменты bootstrap: ask_user и write_chat_brief
