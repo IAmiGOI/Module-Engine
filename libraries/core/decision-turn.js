@@ -4,7 +4,9 @@
  * чтобы отказ был перечнем недостающего, а не исключением.
  */
 
-const TEXT_FIELDS = Object.freeze(['decision', 'decisionReason', 'action', 'actionReason', 'outcome']);
+const TEXT_FIELDS = Object.freeze(['decision', 'decisionReason', 'action', 'actionReason']);
+// Решение «держится между ходами»: пропущенное берётся из прошлой формы, а не возвращает форму лишним запросом.
+const CARRIED = Object.freeze(['decision', 'decisionReason']);
 const MAX_MINUTES = 1440;
 
 const nonEmpty = value => typeof value === 'string' && value.trim().length > 0;
@@ -22,9 +24,12 @@ export const DEFAULT_NO_CHECK = "no roll — decided from the character's psycho
 /**
  * @returns {{ ok: boolean, missing: string[], normalized?: object }}
  */
-export function validateTurn({ form, roster = [], assessments = new Map(), user = '' } = {}) {
+export function validateTurn({ form, roster = [], assessments = new Map(), user = '', previous = null } = {}) {
     const missing = [];
     const defaulted = [];
+    const carried = [];
+    const before = name => (Array.isArray(previous?.characters) ? previous.characters : []).find(character => sameName(character?.name, name)) ?? null;
+    const filled = new Map();
     if (!form || typeof form !== 'object') return { ok: false, missing: ['form'] };
     const minutes = Number(form.scene?.minutes);
     if (!Number.isFinite(minutes) || minutes < 0 || minutes > MAX_MINUTES) missing.push('scene.minutes (0–1440)');
@@ -49,9 +54,16 @@ export function validateTurn({ form, roster = [], assessments = new Map(), user 
         // «idle» — в сцене, но ничего не делает: ни полей, ни броска не нужно, в Push — только фоном.
         if (character?.idle === true) continue;
         for (const field of TEXT_FIELDS) {
-            if (!nonEmpty(character?.[field])) missing.push(`characters[${name || '?'}].${field}`);
+            if (nonEmpty(character?.[field])) continue;
+            const kept = CARRIED.includes(field) ? before(name)?.[field] : null;
+            if (nonEmpty(kept)) {
+                filled.set(character, { ...(filled.get(character) ?? {}), [field]: kept });
+                if (!carried.includes(name)) carried.push(name);
+            } else missing.push(`characters[${name || '?'}].${field}`);
         }
         const rolled = nonEmpty(character?.assessId);
+        // Почему вышло или нет — только после броска; без броска итог решён самим решением.
+        if (rolled && !nonEmpty(character?.outcome)) missing.push(`characters[${name || '?'}].outcome`);
         const noCheck = nonEmpty(character?.noCheck);
         // Нет ни броска, ни noCheck — не повод возвращать форму (лишний запрос модели): ставится причина по умолчанию.
         if (!rolled && !noCheck) defaulted.push(name || '?');
@@ -62,10 +74,11 @@ export function validateTurn({ form, roster = [], assessments = new Map(), user 
         ...form,
         scene: { ...(form.scene ?? {}), minutes },
         characters: list.map(character => ({
-            ...character, name: String(character?.name ?? '').trim(),
+            ...character, ...(filled.get(character) ?? {}), name: String(character?.name ?? '').trim(),
             ...(character?.idle !== true && !nonEmpty(character?.assessId) && !nonEmpty(character?.noCheck) ? { noCheck: DEFAULT_NO_CHECK } : {}),
         })),
     };
     const warnings = defaulted.length ? [`no roll and no noCheck for ${defaulted.join(', ')} — "${DEFAULT_NO_CHECK}" was filled in`] : [];
+    if (carried.length) warnings.push(`decision kept from the previous turn for ${carried.join(', ')}`);
     return { ok: missing.length === 0, missing, normalized, warnings };
 }

@@ -32,6 +32,8 @@ export class DecisionConfigError extends Error {
     }
 }
 
+const PREEMPT_WAIT_MS = 3000;
+
 export function createDecisionCycle({ call, callTool, callService = null, getSettings, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, capture = null, now = () => Date.now() }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
@@ -56,6 +58,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     // Эпоха чата: смена чата её увеличивает. Фоновый цикл старого чата обрывается и ничего не пишет в новый.
     let chatEpoch = 0;
     let backgroundController = null;
+    let backgroundSettled = Promise.resolve();
     function chatChanged() {
         chatEpoch += 1;
         backgroundController?.abort(new Error('the chat was changed'));
@@ -122,6 +125,16 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     }
 
     async function runCycle({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true, wake = null }) {
+        // Ход важнее фонового цикла: тот делит с ходом слот модели директора и общее состояние, а срок хода уже идёт (ход 111 ждал 145 с и упал по 180 с).
+        if (backgroundController) {
+            const preempt = new Error('a turn started');
+            preempt.code = 'preempted';
+            backgroundController.abort(preempt);
+            // Модель отменяется по signal; если провайдер не отпускает — ход не ждёт дольше пары секунд.
+            let wait = null;
+            await Promise.race([backgroundSettled, new Promise(resolve => { wait = setTimeout(resolve, PREEMPT_WAIT_MS); })]);
+            clearTimeout(wait);
+        }
         const settings = getSettings();
         const worker = deciderWorker(settings);
         state.runId = runId;
@@ -258,6 +271,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const epoch = chatEpoch;
         const controller = new AbortController();
         backgroundController = controller;
+        let settle = () => {};
+        backgroundSettled = new Promise(resolve => { settle = resolve; });
         const stale = () => epoch !== chatEpoch;
         const runUsage = () => (captured ? captured.usage : usage());
         const settings = getSettings();
@@ -300,12 +315,14 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             const message = error?.message ?? String(error);
             researcher?.cancel?.({ runId });
             wakeQueue.rest();
-            if (!stale()) await recordFailure({ runId, event, wake: startedWake, startedAt, message });
+            const preempted = controller.signal.aborted && controller.signal.reason?.code === 'preempted';
+            if (!stale() && !preempted) await recordFailure({ runId, event, wake: startedWake, startedAt, message });
             live.failed({ runId, message });
             throw error;
         } finally {
             captured?.stop();
             if (backgroundController === controller) backgroundController = null;
+            settle();
         }
         const { cycle } = result;
         if (stale()) {

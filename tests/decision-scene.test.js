@@ -82,3 +82,16 @@ test('departedFrom: leaving an object, a possessive or running out of something 
         'Emilia walks off the ramp toward Sasha.',
     ]) assert.deepEqual(departedFrom(line, roster, { user: 'Sasha' }), [], line);
 });
+
+test('validateTurn: outcome only after a roll; missing decision is kept from the previous turn', async () => {
+    const { validateTurn } = await import('../libraries/core/decision-turn.js');
+    const base = { scene: { minutes: 1 }, resolution: 'r', userResult: 'u' };
+    const ok = validateTurn({ form: { ...base, characters: [{ name: 'Emilia', action: 'a', actionReason: 'b', noCheck: 'talk' }] }, roster: ['Emilia'],
+        previous: { characters: [{ name: 'Emilia', decision: 'keep him safe', decisionReason: 'debt' }] } });
+    assert.equal(ok.ok, true, JSON.stringify(ok.missing));
+    assert.equal(ok.normalized.characters[0].decision, 'keep him safe');
+    const rolled = validateTurn({ form: { ...base, characters: [{ name: 'Emilia', decision: 'd', decisionReason: 'e', action: 'a', actionReason: 'b', assessId: 'x' }] }, roster: ['Emilia'], assessments: new Map([['x', {}]]) });
+    assert.deepEqual(rolled.missing, ['characters[Emilia].outcome']);
+    const fresh = validateTurn({ form: { ...base, characters: [{ name: 'Emilia', action: 'a', actionReason: 'b' }] }, roster: ['Emilia'] });
+    assert.deepEqual(fresh.missing, ['characters[Emilia].decision', 'characters[Emilia].decisionReason']);
+});

@@ -7,11 +7,11 @@ import { advanceClock, clockFromLabel } from '../../libraries/core/decision-cloc
 export function createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker = null, userName = () => '' }) {
     return async args => {
         if (!store.plan()) return { ok: false, missing: ['plan: call set_plan before submit_turn'] };
-        const validation = validateTurn({ form: args, roster: store.roster().active, assessments: state.assessments, user: userName() });
+        const previous = lastAcceptedForm(typeof store.cycles === 'function' ? store.cycles() : []);
+        const validation = validateTurn({ form: args, roster: store.roster().active, assessments: state.assessments, user: userName(), previous });
         if (!validation.ok) return { ok: false, missing: validation.missing };
         // Ушедший в прошлом исходе снова действует, а из ростера не убран — один раз напомнить (стражник «уходил» и возвращался).
         if (!state.departureWarned) {
-            const previous = lastAcceptedForm(typeof store.cycles === 'function' ? store.cycles() : []);
             const departed = previous ? departedFrom(previous.resolution, store.roster().active, { user: userName() }) : [];
             const back = validation.normalized.characters.filter(character => character.idle !== true && departed.some(name => name.toLowerCase() === String(character.name).toLowerCase()));
             if (back.length) {
