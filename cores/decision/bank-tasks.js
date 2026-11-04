@@ -30,7 +30,7 @@ export function createBankTasks({ getSettings, researcher, publishEvent, sleep =
         const steps = bankSteps(settings);
         const system = bankPromptFor({
             name: source.name, sourceKind: source.sourceKind, source: source.source,
-            canonHint: source.canonHint ?? '', aliases: source.aliases ?? '', timeline: source.timeline ?? '',
+            canonHint: source.canonHint ?? '', aliases: source.aliases ?? '', timeline: source.timeline ?? '', guide: source.guide ?? '',
             sizeBand: source.sizeBand ?? 'minor', steps,
         });
         publishEvent('decision.bank.started', { sourceKey: source.sourceKey, name: source.name });

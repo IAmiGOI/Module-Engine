@@ -1,5 +1,5 @@
 import { COMMENT } from './decision-tool-comment.js';
-import { ASK_USER_DESCRIPTION, WRITE_CHAT_BRIEF_DESCRIPTION } from './decision-prompts.js';
+import { ASK_USER_DESCRIPTION, WRITE_CHAT_BRIEF_DESCRIPTION, BANK_GUIDE_DESCRIPTION } from './decision-prompts.js';
 
 /** Инструменты bootstrap — `PROMPTS.md`, раздел 16. */
 export const ASK_USER_TOOL = Object.freeze({
@@ -26,6 +26,7 @@ export const WRITE_CHAT_BRIEF_TOOL = Object.freeze({
         type: 'object',
         properties: {
             brief: { type: 'string', description: 'The brief in sections TIMELINE, WORLD AT THE START, WHO KNOWS WHOM, DIFFERENCES FROM CANON, ASSUMPTIONS.' },
+            bankGuide: { type: 'string', description: BANK_GUIDE_DESCRIPTION },
             timelineBanks: {
                 type: 'array',
                 items: {

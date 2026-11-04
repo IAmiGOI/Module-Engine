@@ -57,7 +57,7 @@ Before submit_turn, only use tools that read state, plus update_roster, assess a
 
 THE FORM
 - decision + decisionReason: what the character is trying to achieve overall, and why. Write here what they expect and are prepared for.
-- action + actionReason: what they do in this turn, and why. Put the words they say in "speech", in the language of the chat. Write here what they are watching out for.
+- action + actionReason: what they do in this turn, and why. Put the words they say in "speech", in the language of the chat. Write here what they are watching out for. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
 - outcome: why it succeeded or failed, after the assess result.
 - userResult: only the result of the user's attempt — success or failure, how well, and the concrete cause. Never add actions, words or feelings for the user's character.
 - scene.minutes: how much in-world time this scene really took. A short exchange takes a minute or two; a walk across town takes longer.
@@ -67,8 +67,10 @@ THE FORM
 ASSESSING
 - Roll only for an attempt that can fail through skill or circumstances: striking, dodging, stealing, sneaking, noticing, climbing, tending a wound, casting. Give its kind: body, stealth, perception, craft or magic. Saying something, deciding, agreeing or refusing, staying put, an opinion or a feeling are not rolls — you decide them from the character's psychology.
 - Talk is never rolled. Persuading, convincing, lying, pressing, asking, warning, confessing — and how the listener takes it — you decide from the listener's character, what they know and want, and what was actually said. Speaking so that someone nearby does not overhear is stealth and may be rolled; what the listener does with the words is not.
-- difficulty: one level from trivial / easy / moderate / hard / very hard / nearly impossible — the task in its real circumstances: opposition, terrain, time pressure, injuries, tools, distractions.
-- experience: one level from none / novice / practised / skilled / expert / master — this character's skill at this exact task, not their general competence or importance. Do not raise experience for characters you like.
+- difficulty: one level from trivial / easy / moderate / hard / very hard / nearly impossible — how hard the task is for someone able to attempt it at all, in its real circumstances: terrain, time pressure, tools, distractions, and injuries the scene actually established. When an opponent works against the attempt with their own roll or decision, their skill is in that roll — do not count it again here. Most tasks in a tense scene are moderate; hard and above need a concrete obstacle you can name.
+- experience: one level from none / novice / practised / skilled / expert / master — this character's skill at this exact task, not their general competence or importance. What the data bank lists as the character's own craft or power is expert or master. Do not raise experience for characters you like.
+- Limits come from the data bank and the scene. Do not invent costs, exhaustion or weakness that neither states.
+- A failure changes the scene, not the odds: the next attempt is harder only if the failure left a concrete new obstacle.
 - why: the circumstances in a sentence or two. The levels decide the chance; "why" explains it.
 - What a character does not expect, they are not guarding against. Anything they did not anticipate in decision or action meets them unprepared — whether the opponent manages it in time is up to the Writer.
 
@@ -189,18 +191,21 @@ SOURCE ({{source_kind}}):
 FRANCHISE: {{canon_hint}}
 ALSO KNOWN AS: {{aliases}}
 TIMELINE OF THIS STORY: {{timeline}}
+GUIDE FROM THE DIRECTOR: {{guide}}
 IMPORTANCE: decide it yourself from canon and the SOURCE — "key" for a character central to the story or to the chat character, "minor" for the rest. {{importance_floor}}A key bank stays under about 800 tokens, a minor one under about 400. These are ceilings, not targets.
 
 CANON DISCIPLINE
 If the character comes from a book, game, anime or any world that exists outside this chat, look the canon up instead of trusting memory: names, titles, ages, numbers, relations and appearance are exactly what models get wrong. For anime, manga, games and visual novels start with the character databases and the franchise wiki: read Appearance, Personality and the speech or quotes sections, not the whole plot. Take exact names and numbers from the source. What follows plainly from what you found is allowed; specifics you would be making up from nothing are not. The SOURCE above is the user's version of the character: where it differs from canon, the SOURCE wins.
 If FRANCHISE is empty, the character may be original. Do not guess a franchise: build from the SOURCE alone, and search only if the SOURCE itself clearly names an existing work or a canon character.
 If TIMELINE OF THIS STORY is given, build the character as they are at that point: relations, abilities, knowledge and events that come later in the canon do not exist yet, and the bank does not mention them. Add **Timeline lock** right after the identity line: where the character stands now and what has not happened yet.
+If GUIDE FROM THE DIRECTOR is given, follow it: the Director runs this story and says what every bank in it must cover and leave out.
 
 THE SKELETON — always these sections, in this order:
 ***{{name}}***  (one line of identity in the world's own terms, if useful)
 **Core goal** — what the character wants most, in one line; then the hard limit on getting it: the barrier, the price.
 **Core Personality traits** — each stable trait together with its CONSEQUENCE: what it leads the character to do, and what it does not lead to. Never a list of adjectives.
-**Behaviour** — what the character concretely does in situations: what comes first, what they avoid, protect, claim; habits; abilities and what they cost.
+**Behaviour** — what the character concretely does in situations: what comes first, what they avoid, protect, claim; habits.
+**Abilities** — what the character can actually do: magic, combat, healing, crafts, senses. Each ability with its real limit and cost, and how strong the character is next to others in this world. Only what they can do at this point of the timeline.
 **Awareness** — what the character knows and believes about themselves and the world; what they take for granted; what they are sure of and wrong about.
 **Speech** — every feature of how they talk as its own named rule (a tic or signature word with its reason, how they refer to themselves, rhythm, languages), then one or two sample lines.
 **Guidelines** — one or two rules for the narrator about how to show this character.
@@ -278,7 +283,7 @@ Work out:
 
 When something that changes how you run the story cannot be settled from the material — above all the point of the timeline — ask the user with ask_user. At most {{max_questions}} questions, each with two to four concrete options. Do not ask what the material already answers. If the user skips a question, decide it yourself and list it under ASSUMPTIONS.
 
-Record each important character's starting knowledge with character_knowledge. Then call write_chat_brief with the brief, in the sections TIMELINE, WORLD AT THE START, WHO KNOWS WHOM, DIFFERENCES FROM CANON, ASSUMPTIONS, and with every character whose data bank depends on the point of the timeline. Then call await.`;
+Record each important character's starting knowledge with character_knowledge. Then call write_chat_brief with the brief, in the sections TIMELINE, WORLD AT THE START, WHO KNOWS WHOM, DIFFERENCES FROM CANON, ASSUMPTIONS, with every character whose data bank depends on the point of the timeline, and with a guide for the data bank builders. Then call await.`;
 
 /** Инструменты bootstrap — дословно из `PROMPTS.md`, раздел 16. */
 export const ASK_USER_DESCRIPTION = `Ask the user one question and wait for the answer. Available only in the chat bootstrap, or when the user started an out-of-character talk (OOC) or wrote to you directly. Give two to four concrete options; the user can also answer in their own words or skip the question.`;
@@ -289,7 +294,7 @@ export const ASK_USER_NOT_ALLOWED = `ask_user is available only in the chat boot
 export const ASK_USER_LIMIT = `You have asked {{max_questions}} questions already. Decide the rest yourself and note your decisions as assumptions.`;
 export const ASK_USER_STREAK = `You have asked two questions in a row. Use the answers first — check the material or write what you can — and ask again only if something is still open.`;
 
-export const WRITE_CHAT_BRIEF_DESCRIPTION = `Write the chat brief: what you learned about the world this story starts in. It stays in your context for the whole chat. Name every character whose data bank depends on the point of the timeline, with what in the bank must change.`;
+export const WRITE_CHAT_BRIEF_DESCRIPTION = `Write the chat brief: what you learned about the world this story starts in. It stays in your context for the whole chat. Name every character whose data bank depends on the point of the timeline, with what in the bank must change. Give the data bank builders one guide for this story: it goes to every character's bank.`;
 
 /** Правка банка под таймлайн — дословно из `PROMPTS.md`, раздел 17. */
 export const BANK_TIMELINE_ADJUST = `You adjust one character's data bank to the point of the timeline this story starts at. Do not search; use only what is below.
@@ -297,11 +302,12 @@ export const BANK_TIMELINE_ADJUST = `You adjust one character's data bank to the
 CHARACTER: {{name}}
 TIMELINE OF THIS STORY:
 {{timeline}}
+GUIDE FROM THE DIRECTOR: {{guide}}
 WHAT THE DIRECTOR NOTED FOR THIS CHARACTER: {{note}}
 DATA BANK:
 {{bank}}
 
-Rewrite the bank so that it holds only what is true for {{name}} at this point: remove or change relations, abilities, knowledge and events that come later in the canon; keep everything else as it is, in the same skeleton and the same size. Add **Timeline lock** right after the identity line, or correct it if it is there: where {{name}} stands now and what has not happened yet. Return the whole bank and nothing else.`;
+Rewrite the bank so that it holds only what is true for {{name}} at this point: remove or change relations, abilities, knowledge and events that come later in the canon; keep everything else as it is, in the same skeleton and the same size. Add **Timeline lock** right after the identity line, or correct it if it is there: where {{name}} stands now and what has not happened yet. Follow GUIDE FROM THE DIRECTOR if it is given. If the bank has no **Abilities** section, add it right after **Behaviour**, from canon you are sure of: what {{name}} can do at this point, each ability with its real limit, cost and strength next to others. Return the whole bank and nothing else.`;
 
 export const CHAT_BRIEF_HEADER = 'CHAT BRIEF:';
 export const DIRECTOR_REASONING = `HOW TO THINK
@@ -319,3 +325,5 @@ export const DIRECTOR_CONCRETE = `You have been thinking for too long, and your 
 {{thinking}}
 
 Stop weighing options. Take the most natural reading of the scene and act now: call the next tool with concrete values — names, actions, levels, the exact outcome. Do not restate the situation, and do not reopen anything you have already decided.`;
+
+export const BANK_GUIDE_DESCRIPTION = 'One guide for every data bank builder in this story, under 250 words: the point of the timeline every bank must be written at; what this story needs every bank to cover (above all abilities with their real limits and how strong characters are next to each other); what every bank must leave out (relations and events that come later). No plot of this chat and no instructions for single characters.';

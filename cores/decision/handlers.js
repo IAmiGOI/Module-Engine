@@ -280,7 +280,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             if (!state.canWriteBrief) {
                 return { ok: false, error: 'write_chat_brief is available only in the chat bootstrap or an out-of-character talk.' };
             }
-            const brief = normalizeBrief({ text: args.brief, timelineBanks: normalizeTimelineBanks(args.timelineBanks), at: Date.now() });
+            const brief = normalizeBrief({ text: args.brief, timelineBanks: normalizeTimelineBanks(args.timelineBanks), bankGuide: args.bankGuide ?? store.chatBrief?.()?.bankGuide ?? '', at: Date.now() });
             if (!brief) return { ok: false, error: 'A chat brief needs text.' };
             await store.saveChatBrief(brief);
             state.briefWritten = true;
@@ -292,7 +292,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
                 await store.saveBoundary({ ...store.boundary(), chatBriefText: renderChatBrief(brief) });
             }
             // Правка банков под таймлайн — в фоне: это запрос модели на каждый банк, и bootstrap (а за ним ход и сообщения) ждал её минутами.
-            if (banks?.applyTimeline) banks.applyTimeline({ timeline: brief.timeline, timelineBanks: brief.timelineBanks }).catch(() => {});
+            if (banks?.applyTimeline) banks.applyTimeline({ timelineBanks: brief.timelineBanks }).catch(() => {});
             publishEvent('decision.brief.written', { at: brief.at, timelineBanks: brief.timelineBanks.length });
             return { ok: true };
         },

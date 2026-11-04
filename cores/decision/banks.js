@@ -1,4 +1,4 @@
-import { splitBankImportance, bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking, BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
+import { splitBankImportance, bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking, BANK_BUILDER_VERSION, bankFrameHash } from '../../libraries/core/decision-banks.js';
 import { createBankStore } from './bank-store.js';
 import { createTimelineAdjust } from './bank-timeline.js';
 import { createBankTasks, bankConcurrency } from './bank-tasks.js';
@@ -19,12 +19,11 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     let markWarnings = [];
     const timelineQueue = new Set();
 
-    function currentTimeline() {
-        const brief = typeof store.chatBrief === 'function' ? store.chatBrief() : null;
-        return String(brief?.timeline ?? '').trim();
-    }
+    const brief = () => (typeof store.chatBrief === 'function' ? store.chatBrief() : null);
+    function currentTimeline() { return String(brief()?.timeline ?? '').trim(); }
+    function currentGuide() { return String(brief()?.bankGuide ?? '').trim(); }
     const timelineAdjust = createTimelineAdjust({
-        call, getSettings, publishEvent, bankStore, records: () => records(), matchesName, currentTimeline, queue: timelineQueue,
+        call, getSettings, publishEvent, bankStore, records: () => records(), matchesName, currentTimeline, currentGuide, queue: timelineQueue,
     });
 
     function keyOf(name) { return String(name ?? '').trim().toLowerCase(); }
@@ -41,7 +40,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         const floor = bankSizeBand({ level: record?.level, isMain: source.sizeBand === 'key' || ['scene', 'persona'].includes(source.sourceKind) });
         return importance === 'key' ? 'key' : floor;
     }
-    const withFloor = source => ({ ...source, sizeBand: sizeFor(source), timeline: currentTimeline() });
+    const withFloor = source => ({ ...source, sizeBand: sizeFor(source), timeline: currentTimeline(), guide: currentGuide() });
 
     async function markLorebooks(entries, cards) {
         markWarnings = [];
@@ -98,15 +97,14 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
             sourceHash: hashText(source.source), text, sizeBand: sizeFor(source, importance), rawSource: source.source,
             examples: source.examples ?? '', aliases: source.aliases ?? [], canonicalName: source.canonicalName ?? '', status: 'ready',
-            builderVersion: BANK_BUILDER_VERSION, timelineHash: source.timeline ? hashText(source.timeline) : '',
+            builderVersion: BANK_BUILDER_VERSION, timelineHash: bankFrameHash(source.timeline, source.guide),
         });
         await bankStore.putBase({ ...record, rawSource: '' });
         await bankStore.putChat(record);
-        if (timelineQueue.has(source.name)) {
-            timelineQueue.delete(source.name);
-            const timeline = currentTimeline();
-            if (timeline && record.timelineHash !== hashText(timeline)) await timelineAdjust.adjustOne(record, timeline, '');
-        }
+        // Сводка (или указание сборщикам) появилась, пока банк строился, — банк собран не под неё: правка сразу.
+        timelineQueue.delete(source.name);
+        const frame = bankFrameHash(currentTimeline(), currentGuide());
+        if (frame && record.timelineHash !== frame) await timelineAdjust.adjustOne(record, currentTimeline(), '');
         return record;
     }
 
@@ -267,7 +265,10 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         coldStartPromise = null;
         queueRunning = null;
         sourcesCache = [];
-        return bankStore.load();
+        const loaded = await bankStore.load();
+        // Банки из набора другого чата или собранные до сводки — догнать под рамку этого чата, в фоне.
+        if (bankFrameHash(currentTimeline(), currentGuide())) timelineAdjust.applyTimeline({ timelineBanks: brief()?.timelineBanks ?? [] }).catch(() => {});
+        return loaded;
     }
 
     async function reset() {

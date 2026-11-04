@@ -90,10 +90,10 @@ export function splitBankImportance(value) {
 }
 
 /** Готовый промпт субагента для одного источника; `sizeBand: 'key'` — нижняя граница важности. */
-export function bankPromptFor({ name, sourceKind, source, canonHint = '', aliases = '', timeline = '', sizeBand = 'minor', steps = 20 }) {
+export function bankPromptFor({ name, sourceKind, source, canonHint = '', aliases = '', timeline = '', guide = '', sizeBand = 'minor', steps = 20 }) {
     return fillPrompt(CHARACTER_BANK_BUILDER, {
         name: text(name) || 'Unknown', source_kind: sourceKind || 'card', source: text(source),
-        canon_hint: text(canonHint), aliases: text(aliases), timeline: text(timeline), steps,
+        canon_hint: text(canonHint), aliases: text(aliases), timeline: text(timeline), guide: text(guide), steps,
         importance_floor: sizeBand === 'key' ? 'This character is already key in this story. ' : '',
         // Name Literal в промпте называет сам макрос — он должен остаться буквальным.
         char: '{{char}}',
@@ -271,4 +271,10 @@ export function renderExampleSection(records) {
     const list = (Array.isArray(records) ? records : []).filter(record => text(record?.examples));
     if (!list.length) return '';
     return `EXAMPLE DIALOGUES (how these characters speak; this is not what happened before):\n\n${list.map(record => `### ${text(record.name)}\n${text(record.examples)}`).join('\n\n')}`;
+}
+
+/** Хеш «рамки» банка: таймлайн сводки и указание директора сборщикам. Банк, собранный не под эту рамку, правится. */
+export function bankFrameHash(timeline = '', guide = '') {
+    const value = [text(timeline), text(guide)].filter(Boolean).join('\n\n');
+    return value ? hashText(value) : '';
 }

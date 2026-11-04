@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCharacterBanks } from '../cores/decision/banks.js';
-import { hashText } from '../libraries/core/decision-banks.js';
+import { hashText, bankFrameHash } from '../libraries/core/decision-banks.js';
 
 const CARD = { avatar: 'Aria.png', name: 'Aria', description: 'A courier.' };
 const PERSONA = { avatar: 'me.png', name: 'Me', description: 'A traveller.' };
@@ -59,28 +59,33 @@ test('a ready bank in timelineBanks gets one timeline adjust with no search', as
     const before = world.researcherCalls.length;
     world.setBrief({ text: 'TIMELINE:\nThe story starts before the war.', timeline: 'The story starts before the war.' });
     const result = await world.banks.applyTimeline({ timeline: 'The story starts before the war.', timelineBanks: [{ name: 'Aria', note: 'She has not met Subaru yet.' }] });
-    assert.equal(result.adjusted, 1);
-    assert.equal(world.adjustCalls.length, 1);
-    assert.match(world.adjustCalls[0].prompt, /You adjust one character's data bank/);
-    assert.match(world.adjustCalls[0].prompt, /She has not met Subaru yet\./);
+    assert.ok(result.adjusted >= 1);
+    const aria = world.adjustCalls.find(params => /CHARACTER: Aria/.test(params.prompt));
+    assert.match(aria.prompt, /You adjust one character's data bank/);
+    assert.match(aria.prompt, /She has not met Subaru yet\./);
     assert.equal(world.researcherCalls.length, before, 'the adjust does not start a search');
-    assert.equal(world.banks.records().find(record => record.name === 'Aria').timelineHash, hashText('The story starts before the war.'));
+    assert.equal(world.banks.records().find(record => record.name === 'Aria').timelineHash, bankFrameHash('The story starts before the war.'));
     assert.match(world.banks.records().find(record => record.name === 'Aria').text, /Timeline adjusted/);
 });
 
-test('a bank not named in timelineBanks is not touched', async () => {
+test('a bank not named in timelineBanks is adjusted too, once: built before the brief, it was never checked against it', async () => {
     const world = build();
     await world.banks.ensureColdStart();
-    const before = world.banks.records().find(record => record.name === 'Aria').text;
-    world.setBrief({ text: 'TIMELINE:\nThe story starts before the war.', timeline: 'The story starts before the war.' });
-    await world.banks.applyTimeline({ timeline: 'The story starts before the war.', timelineBanks: [{ name: 'Me', note: 'x' }] });
-    assert.equal(world.banks.records().find(record => record.name === 'Aria').text, before);
+    world.setBrief({ text: 'TIMELINE:\nThe story starts before the war.', timeline: 'The story starts before the war.', bankGuide: 'Cover abilities.' });
+    await world.banks.applyTimeline({ timelineBanks: [{ name: 'Me', note: 'x' }] });
+    const aria = world.banks.records().find(record => record.name === 'Aria');
+    assert.match(aria.text, /Timeline adjusted/);
+    assert.match(world.adjustCalls.find(params => /CHARACTER: Aria/.test(params.prompt)).prompt, /GUIDE FROM THE DIRECTOR: Cover abilities\./);
+    const calls = world.adjustCalls.length;
+    await world.banks.applyTimeline({ timelineBanks: [] });
+    assert.equal(world.adjustCalls.length, calls, 'a bank already adjusted to this frame is not adjusted again');
 });
 
 test('a failed adjust leaves the bank as it was and warns', async () => {
     const world = build({ adjust: () => '' });
     await world.banks.ensureColdStart();
     const before = world.banks.records().find(record => record.name === 'Aria').text;
+    world.setBrief({ text: 'TIMELINE:\nThe story starts before the war.', timeline: 'The story starts before the war.' });
     const result = await world.banks.applyTimeline({ timeline: 'The story starts before the war.', timelineBanks: [{ name: 'Aria', note: 'x' }] });
     assert.equal(result.adjusted, 0);
     assert.equal(world.banks.records().find(record => record.name === 'Aria').text, before);
@@ -91,8 +96,8 @@ test('a bank still being built is adjusted when it becomes ready', async () => {
     const world = build();
     await world.banks.ensureColdStart();
     world.setBrief({ text: 'TIMELINE:\nThe story starts before the war.', timeline: 'The story starts before the war.' });
-    await world.banks.applyTimeline({ timeline: 'The story starts before the war.', timelineBanks: [{ name: 'Nobody', note: 'x' }] });
-    assert.equal(world.adjustCalls.length, 0, 'nothing to adjust yet');
+    await world.banks.applyTimeline({ timelineBanks: [{ name: 'Nobody', note: 'x' }] });
+    assert.ok(!world.adjustCalls.some(params => /CHARACTER: Nobody/.test(params.prompt)), 'nothing to adjust for Nobody yet');
     await world.banks.ensureName('Nobody');
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(world.adjustCalls.some(params => /Nobody/.test(params.prompt)), 'the queued name is adjusted when its bank is ready');

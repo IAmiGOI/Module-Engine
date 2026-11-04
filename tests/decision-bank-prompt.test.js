@@ -17,7 +17,7 @@ test('the bank subagent prompt is the PROMPTS.md section 10 text word for word',
 
 test('every bank placeholder is filled, including the importance floor', () => {
     const filled = fillPrompt(CHARACTER_BANK_BUILDER, {
-        name: 'Lena', source_kind: 'card', source: 'A traveller.', canon_hint: '', aliases: '', timeline: '',
+        name: 'Lena', source_kind: 'card', source: 'A traveller.', canon_hint: '', aliases: '', timeline: '', guide: '',
         importance_floor: 'This character is already key in this story. ', steps: 12,
         // Name Literal mentions the literal macro on purpose; it must stay in the prompt.
         char: '{{char}}',

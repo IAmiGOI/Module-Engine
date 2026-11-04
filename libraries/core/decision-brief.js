@@ -19,6 +19,7 @@ export function normalizeBrief(value) {
         text: body,
         timeline: text(value.timeline) || extractBriefSection(body, 'TIMELINE'),
         timelineBanks: normalizeTimelineBanks(value.timelineBanks),
+        bankGuide: text(value.bankGuide),
         at: Number(value.at) || 0,
     };
 }
