@@ -72,3 +72,13 @@ test('departedFrom: words like left/leaving/gone without a real exit are not a d
     assert.deepEqual(departedFrom('Felt tears free and is gone into the crowd.', roster, { user: 'Sasha' }), ['Felt']);
     assert.deepEqual(departedFrom('Diethard closes his notebook and walks off.', roster, { user: 'Sasha' }), ['Diethard Diethain']);
 });
+
+test('departedFrom: leaving an object, a possessive or running out of something is not a departure', () => {
+    const roster = ['Emilia', 'Felt'];
+    for (const line of [
+        'Emilia leaves the plate and comes closer to Sasha.',
+        "Emilia's smile disappears.",
+        'Felt runs out of patience.',
+        'Emilia walks off the ramp toward Sasha.',
+    ]) assert.deepEqual(departedFrom(line, roster, { user: 'Sasha' }), [], line);
+});

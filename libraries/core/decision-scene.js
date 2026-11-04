@@ -7,11 +7,11 @@
 const text = value => String(value ?? '').trim();
 
 // Уход — только когда персонаж подлежащее и рядом глагол ухода: «Diethard… walks off», «Felt is gone into the crowd»,
-// «X leaves the square», «X is out of sight». Голые слова («left behind», «leaving Sasha», «gone quiet», «Sasha
+// «X is out of sight». «leaves» не считаем вовсе: «leaves the plate and comes closer» — не уход. Голые слова («left behind», «leaving Sasha», «gone quiet», «Sasha
 // leaves his quarter») давали ложные «ушёл», и директор каждый ход удалял и заново добавлял персонажа в ростер.
 const LEAVE_PATTERNS = [
-    String.raw`[^.;!?—]{0,80}?\b(?:walks|walked|runs|ran|slips|slipped|storms|stormed|heads|headed|hurries|hurried|strides|strode|wanders|wandered)\s+(?:off|away|out)\b`,
-    String.raw`[^.;!?—]{0,60}?\s(?:has\s+|had\s+)?(?:left|leaves|departs|departed)\s+(?:the|for|through|without|again)\b`,
+    String.raw`[^.;!?—]{0,80}?\b(?:walks|walked|runs|ran|slips|slipped|storms|stormed|heads|headed|hurries|hurried|strides|strode|wanders|wandered)\s+(?:off|away)\b(?!\s+(?:the|a|an|his|her|their|its|of|with)\b)`,
+    String.raw`[^.;!?—]{0,60}?\s(?:departs|departed)\b`,
     String.raw`[^.;!?—]{0,60}?\b(?:vanishes|vanished|disappears|disappeared)\b`,
     String.raw`[^.;!?—]{0,60}?\s(?:is|was|has|had)\s+(?:already\s+)?gone\b(?=\s*(?:[.,;!?—]|$|into\b|from\b|down\b|off\b|out\b|through\b))`,
     String.raw`[^.;!?—]{0,60}?\bout of sight\b`,
@@ -37,6 +37,8 @@ export function departedFrom(resolution, roster = [], { user = '' } = {}) {
             const hit = labels.some(label => LEAVE_PATTERNS.some(pattern => {
                 const match = new RegExp(`\\b${escape(label)}\\b(${pattern})`, 'i').exec(sentence);
                 if (!match) return false;
+                // «Emilia's smile disappears» — исчезает не она.
+                if (/^['’]s\b/i.test(match[1])) return false;
                 // Между именем и глаголом не должно стоять другое имя: «Felt…, leaving Sasha» — это не уход Саши.
                 const between = match[1];
                 return !everyone.some(other => other !== name && new RegExp(`\\b${escape(other.split(/\s+/)[0])}\\b`, 'i').test(between));
