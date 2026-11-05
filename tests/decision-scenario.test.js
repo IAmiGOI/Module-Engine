@@ -14,6 +14,8 @@ import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createGenerationCore, INTERCEPTOR_NAME } from '../cores/generation/index.js';
 import { createBasicSummaryCore } from '../cores/summary/index.js';
 import { createDecisionCore } from '../cores/decision/index.js';
+import { setAfterTurnDefault } from '../libraries/core/decision-settings.js';
+setAfterTurnDefault(false); // эти тесты считают вызовы модели; работа после хода проверяется отдельно
 
 /**
  * Сценарный уровень 2 (TESTING.md): настоящий движок, настоящие Шины/Гейты/

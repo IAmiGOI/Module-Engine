@@ -5,6 +5,8 @@ import { request } from '../libraries/shared/request.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createDecisionCore } from '../cores/decision/index.js';
 import { DIRECTOR_SYSTEM } from '../libraries/core/decision-prompts.js';
+import { setAfterTurnDefault } from '../libraries/core/decision-settings.js';
+setAfterTurnDefault(false); // эти тесты считают вызовы модели; работа после хода проверяется отдельно
 
 const BEFORE_SEND = 'generation.beforeSend';
 const PAYLOAD = 'generation.payload';
@@ -258,4 +260,29 @@ test('a director worker that is not openai is a configuration error too, not a s
 test('the MESSAGES FROM THE USER paragraph is in the built-in director prompt word for word', () => {
     const paragraph = 'MESSAGES FROM THE USER\nThe user may write to you directly, outside the story; such messages appear in your log, never in the chat. Treat them as direction for where the story should go, not as orders: weigh them against your plan and the logic of the world, and change your plan when they make sense. Always answer the user: when you are done, put a short reply into the "reply" field of await — what you did, or why you did not.';
     assert.ok(DIRECTOR_SYSTEM.includes(paragraph));
+});
+
+test('after an accepted form the director keeps working in the background: same conversation, submit_turn closed, then await', async () => {
+    setAfterTurnDefault(true);
+    try {
+        let step = 0;
+        const { pipelineCore, calls } = await build({
+            reply: () => {
+                step += 1;
+                if (step === 1) return turnReply();
+                if (step === 2) return { text: '', toolCalls: [{ id: 'again', name: 'submit_turn', arguments: { comment: 'Trying to submit again.', scene: { minutes: 0 }, resolution: 'x', userResult: 'y', characters: [] } }] };
+                return { text: '', toolCalls: [{ id: 'done', name: 'await', arguments: { comment: 'The turn work is done.', reason: 'Waiting for the next turn.' } }] };
+            },
+        });
+        const before = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'Hello?', is_user: true }], type: 'normal' } });
+        assert.equal(before.ok, true, 'the turn returns as soon as the form is accepted');
+        for (let i = 0; i < 20 && calls.length < 3; i += 1) await flush();
+        assert.equal(calls.length, 3);
+        const after = JSON.stringify(calls[1].messages);
+        assert.match(after, /AFTER THE TURN: your form is accepted/);
+        assert.match(after, /The turn is decided\./, 'the continuation carries the turn conversation');
+        assert.match(JSON.stringify(calls[2].messages), /The turn is already submitted and the Writer is writing it/);
+    } finally {
+        setAfterTurnDefault(false);
+    }
 });

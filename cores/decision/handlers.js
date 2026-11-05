@@ -95,7 +95,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, getGame
             const applied = applyCharacterNote(store.notes(), args);
             if (!applied.ok) return { ok: false, error: applied.error };
             await store.saveNotes(applied.notes);
-            return { ok: true, count: notesFor(applied.notes, args.character).length };
+            return { ok: true, count: notesFor(applied.notes, args.character).length, ...(applied.replaced ? { replaced: `The note "${applied.replaced}" was the oldest and was replaced.` } : {}) };
         },
 
         arc: async args => {

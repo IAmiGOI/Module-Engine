@@ -8,6 +8,11 @@ import { clampGameSettings, DEFAULT_GAME_SETTINGS } from './game-settings.js';
 import { clampGameMixes } from './game-mixes.js';
 
 export const DECISION_NAMESPACE = 'core.decision';
+
+// Работа директора после хода — по умолчанию включена. Тесты, считающие вызовы модели, выключают её здесь, а не в каждой сборке.
+let afterTurnDefault = true;
+export function setAfterTurnDefault(value) { afterTurnDefault = Boolean(value); }
+export const afterTurnEnabled = settings => (settings?.afterTurn === undefined ? afterTurnDefault : settings.afterTurn !== false);
 export const DECISION_MEMORY_NAMESPACE = 'core.decision';
 
 /** Те же значения, что у Ядра моделей, — но Библиотека не имеет права импортировать Ядро (слои, LIBRARIES.md). */
@@ -124,6 +129,7 @@ export function clampDecisionSettings(values = {}) {
         regen: REGEN_MODES.includes(source.regen) ? source.regen : DEFAULT_SETTINGS.regen,
         maxSteps: Math.round(number(source.maxSteps, 1, 500, DEFAULT_SETTINGS.maxSteps)),
         implicitAwait: source.implicitAwait === undefined ? DEFAULT_SETTINGS.implicitAwait : Boolean(source.implicitAwait),
+        ...(source.afterTurn === undefined ? {} : { afterTurn: Boolean(source.afterTurn) }),
         formTimeoutMs: Math.round(number(source.formTimeoutMs, 10, 3600000, DEFAULT_SETTINGS.formTimeoutMs)),
         bankColdStartTimeoutMs: Math.round(number(source.bankColdStartTimeoutMs, 1000, 3600000, DEFAULT_SETTINGS.bankColdStartTimeoutMs)),
         compressedLimitTokens: Math.round(number(source.compressedLimitTokens, 1, 5000000, DEFAULT_SETTINGS.compressedLimitTokens)),

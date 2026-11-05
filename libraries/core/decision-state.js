@@ -38,8 +38,19 @@ export function applyCharacterNote(notes, { character, op, id, title, text: body
     const find = (wanted, wantedTitle) => {
         const byId = current.find(note => note.id === text(wanted));
         if (byId) return byId;
-        const label = bare(wanted) || bare(wantedTitle);
-        return label ? current.find(note => bare(note.title) === label) ?? null : null;
+        // Директор нередко ссылается выдуманным id («note_emilia_alias») — тогда ищем и по нему как по названию, и по названию.
+        for (const label of [bare(wanted), bare(wantedTitle)].filter(Boolean)) {
+            const found = current.find(note => bare(note.title) === label);
+            if (found) return found;
+        }
+        return null;
+    };
+    // Полный набор: новая заметка вытесняет ту, что дольше всех не обновлялась, — отказ стоил директору лишнего вызова.
+    const addNote = () => {
+        const fresh = { id: `note_${now().toString(36)}_${rid()}`, character: text(character), title: text(title), text: text(body), updatedAt: now() };
+        if (current.length < MAX_NOTES_PER_CHARACTER) return { list: [...current, fresh], replaced: null };
+        const oldest = current.reduce((a, b) => ((Number(b.updatedAt) || 0) < (Number(a.updatedAt) || 0) ? b : a));
+        return { list: [...current.filter(note => note !== oldest), fresh], replaced: oldest.title };
     };
     const known = () => current.map(note => `"${note.title}"`).join(', ') || 'none';
     let next;
@@ -49,12 +60,22 @@ export function applyCharacterNote(notes, { character, op, id, title, text: body
         next = current.filter(note => note.id !== target.id);
     } else if (op === 'set') {
         const target = find(id, title);
-        if (!target) return { ok: false, error: `There is no note "${text(id) || text(title)}" for ${text(character)}. Notes: ${known()}.`, notes };
-        next = current.map(note => (note.id === target.id ? { ...note, title: text(title) || note.title, text: text(body) || note.text, updatedAt: now() } : note));
+        if (target) next = current.map(note => (note.id === target.id ? { ...note, title: text(title) || note.title, text: text(body) || note.text, updatedAt: now() } : note));
+        else {
+            // Нет такой — «set» с названием и текстом создаёт её, а не отказывает.
+            if (!text(title) || !text(body)) return { ok: false, error: `There is no note "${text(id) || text(title)}" for ${text(character)}. Notes: ${known()}.`, notes };
+            const added = addNote();
+            return { ok: true, notes: { ...notes, [name]: added.list }, ...(added.replaced ? { replaced: added.replaced } : {}) };
+        }
     } else if (op === 'add') {
         if (!text(title) || !text(body)) return { ok: false, error: 'A new note needs both a title and text.', notes };
-        if (current.length >= MAX_NOTES_PER_CHARACTER) return { ok: false, error: `${text(character)} already has ${MAX_NOTES_PER_CHARACTER} notes (${known()}) — "set" one of them by its title instead, or "remove" one first.`, notes };
-        next = [...current, { id: `note_${now().toString(36)}_${rid()}`, character: text(character), title: text(title), text: text(body), updatedAt: now() }];
+        // Заметка с тем же названием уже есть — это правка, а не вторая копия.
+        const same = find(null, title);
+        if (same) next = current.map(note => (note.id === same.id ? { ...note, text: text(body), updatedAt: now() } : note));
+        else {
+            const added = addNote();
+            return { ok: true, notes: { ...notes, [name]: added.list }, ...(added.replaced ? { replaced: added.replaced } : {}) };
+        }
     } else return { ok: false, error: `Unknown note operation "${op}".`, notes };
     return { ok: true, notes: { ...notes, [name]: next } };
 }

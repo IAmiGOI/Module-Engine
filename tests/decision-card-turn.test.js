@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createEngine } from '../libraries/shared/engine.js';
 import { request } from '../libraries/shared/request.js';
 import { createDecisionCore } from '../cores/decision/index.js';
+import { setAfterTurnDefault } from '../libraries/core/decision-settings.js';
+setAfterTurnDefault(false); // эти тесты считают вызовы модели; работа после хода проверяется отдельно
 
 function build({ workers = [{ id: 'director', format: 'openai', model: 'director/model' }], replies = [] } = {}) {
     const engine = createEngine();

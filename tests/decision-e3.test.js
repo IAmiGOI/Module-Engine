@@ -74,7 +74,7 @@ test('a turn without a plan is refused, then set_plan makes the form acceptable'
     assert.deepEqual(core.plan().stages, ['door', 'road']);
 });
 
-test('four notes are kept, the fifth is refused, arcs open and close, and the writer sees the notes', async () => {
+test('four notes are kept, the fifth replaces the oldest, arcs open and close, and the writer sees the notes', async () => {
     const { pipelineCore, core } = await build({
         replies: [
             call('set_plan', { direction: 'Get her out.', comment: 'A direction is required before the form.' }),
@@ -91,9 +91,9 @@ test('four notes are kept, the fifth is refused, arcs open and close, and the wr
 
     const result = await pipelineCore.run({ pipelineId: PAYLOAD, input: { messages: [{ role: 'system', content: 'ST' }] } });
     const text = result.value.messages.map(message => message.content).join('\n');
-    assert.match(text, /Lena: Note 0/);
+    assert.match(text, /Lena: Note 4/);
     assert.match(text, /Text 3/);
-    assert.doesNotMatch(text, /Note 4/);
+    assert.doesNotMatch(text, /Note 0/);
 });
 
 test('current_state reads place, time, plan stage and the open arc, and says nothing it cannot source', async () => {

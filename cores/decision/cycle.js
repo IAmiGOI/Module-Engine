@@ -1,6 +1,7 @@
 import { createKnowledge } from './knowledge.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
-import { ASK_USER_STREAK, DIRECTOR_PASSIVE, DIRECTOR_REROLL, DIRECTOR_TURN, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { afterTurnEnabled } from '../../libraries/core/decision-settings.js';
+import { ASK_USER_STREAK, DIRECTOR_PASSIVE, DIRECTOR_REROLL, DIRECTOR_TURN, DIRECTOR_AFTER_TURN, AFTER_TURN_SUBMIT_CLOSED, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
@@ -244,6 +245,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         }
         const decision = fallbackDecision(form);
         publishEvent('decision.cycle.submitted', { runId, type, steps: result.steps, characters: form.characters?.length ?? 0 });
+        // Заметки, знания и планы — после формы, пока пишет прозаик: раньше цикл кончался на submit_turn, и эта работа копилась до сообщения пользователя.
+        if (afterTurnEnabled(settings)) enqueueBackground(() => afterTurn({ runId, messages: result.messages, tools })).catch(() => {});
         return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
     }
 
@@ -268,6 +271,45 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const job = backgroundTail.then(run, run);
         backgroundTail = job.then(() => {}, () => {});
         return job;
+    }
+
+    const AFTER_TURN_STEPS = 8;
+
+    /** Продолжение цикла хода в фоне: тот же разговор (кеш тот же), повторный submit_turn закрыт, следующий ход прерывает. */
+    async function afterTurn({ runId: turnRunId, messages, tools }) {
+        const runId = `${turnRunId}_after`;
+        const epoch = chatEpoch;
+        const controller = new AbortController();
+        backgroundController = controller;
+        let settle = () => {};
+        backgroundSettled = new Promise(resolve => { settle = resolve; });
+        const captured = typeof capture === 'function' ? capture(`${runId}:`, { onThinking: text => publishEvent('decision.cycle.thinking', { runId, text }) }) : null;
+        const thinking = () => captured?.value ?? '';
+        const settings = getSettings();
+        const worker = deciderWorker(settings);
+        const startedWake = wakeFor({ type: 'after_turn', label: 'The director finishes the turn' });
+        const startedAt = now();
+        const start = [...messages, { role: 'user', content: DIRECTOR_AFTER_TURN }];
+        state.runId = runId;
+        live.started({ runId, event: 'after_turn', wake: startedWake, at: startedAt });
+        try {
+            const handlers = { ...handlersFor(settings), submit_turn: async () => ({ ok: false, error: AFTER_TURN_SUBMIT_CLOSED }) };
+            const result = await runDecisionCycle({
+                messages: start, tools, handlers, callTool, maxSteps: AFTER_TURN_STEPS, implicitAwait: true, now,
+                generate: context.generateFor({ settings, worker, runId, prefix: 'a', startedAt, effort: settings.adaptiveReasoning ? 'low' : null, signal: controller.signal }),
+                ...live.hooks({ runId, thinking }),
+            });
+            if (epoch !== chatEpoch) { live.finished({ cycle: null }); return; }
+            const { cycle } = cycleRecord({ runId, event: 'after_turn', result, thinking, wake: startedWake, startedAt, workerId: worker.id, usage: captured ? captured.usage : usage(), contextMessages: start });
+            await store.appendCycle(cycle).catch(() => {});
+            live.finished({ cycle });
+        } catch (error) {
+            live.failed({ runId, message: error?.message ?? String(error) });
+        } finally {
+            captured?.stop();
+            if (backgroundController === controller) backgroundController = null;
+            settle();
+        }
     }
 
     async function backgroundRun({ runId, event, task, thinking: givenThinking = null, wake = null, canAsk = false, maxSteps = null }) {

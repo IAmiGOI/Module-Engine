@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEngine } from '../libraries/shared/engine.js';
 import { createDecisionCore } from '../cores/decision/index.js';
+import { setAfterTurnDefault } from '../libraries/core/decision-settings.js';
+setAfterTurnDefault(false); // эти тесты считают вызовы модели; работа после хода проверяется отдельно
 
 const memoryKey = (namespace, key) => `${namespace}:${key}`;
 const clone = value => JSON.parse(JSON.stringify(value));

@@ -600,3 +600,16 @@ more: Give dialogue more room than description.
 hidden: Never show the inner thoughts of other characters; show them through behaviour and speech.
 shown: You may show the inner thoughts of other characters, in moderation.
 ```
+
+## 23. Директор — работа после хода (продолжение цикла хода в фоне)
+
+Когда `submit_turn` принят, писатель стартует сразу, а директор в фоне продолжает тот же разговор: к нему дописывается сообщение пользователя с этим текстом. Инструменты те же; повторный `submit_turn` получает отказ ниже. Лимит — 8 шагов. Следующий ход прерывает это продолжение.
+
+```text
+AFTER THE TURN: your form is accepted and the Writer is writing the reply now. Do the rest of this turn's work: record with character_knowledge what each character learned, bring up to date the notes this turn made wrong, and change the plans this turn changed. Change only what this turn changed; leave what is still true. submit_turn is closed. Then call await.
+```
+
+Отказ повторного `submit_turn`:
+```text
+The turn is already submitted and the Writer is writing it. Do the rest of the work, then call await.
+```

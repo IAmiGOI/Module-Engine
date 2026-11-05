@@ -5,17 +5,18 @@ import { applyCharacterNote, applyArc, applyPlan, notesFor, notesSection, planSe
 const now = () => 1000;
 const rid = () => 'x';
 
-test('a character can hold at most four notes; the fifth add is refused with a clear instruction', () => {
+test('a character holds at most four notes; the fifth add replaces the one updated longest ago and says so', () => {
     let notes = {};
     for (let index = 0; index < MAX_NOTES_PER_CHARACTER; index += 1) {
         const applied = applyCharacterNote(notes, { character: 'Lena', op: 'add', title: `T${index}`, text: `Text ${index}` }, { now, rid });
         assert.equal(applied.ok, true);
         notes = applied.notes;
     }
-    const fifth = applyCharacterNote(notes, { character: 'Lena', op: 'add', title: 'One more', text: 'No room.' }, { now, rid });
-    assert.equal(fifth.ok, false);
-    assert.match(fifth.error, /"set" one of them by its title instead, or "remove" one first/);
-    assert.equal(notesFor(notes, 'lena').length, MAX_NOTES_PER_CHARACTER);
+    const fifth = applyCharacterNote(notes, { character: 'Lena', op: 'add', title: 'One more', text: 'Room made.' }, { now, rid });
+    assert.equal(fifth.ok, true);
+    assert.equal(fifth.replaced, 'T0');
+    assert.equal(notesFor(fifth.notes, 'lena').length, MAX_NOTES_PER_CHARACTER);
+    assert.ok(notesFor(fifth.notes, 'lena').some(note => note.title === 'One more'));
 });
 
 test('notes are set, removed and kept per character, and the writer gets them as blocks', () => {

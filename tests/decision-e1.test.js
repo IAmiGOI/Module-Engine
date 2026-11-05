@@ -4,6 +4,8 @@ import { createEngine } from '../libraries/shared/engine.js';
 import { request } from '../libraries/shared/request.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createDecisionCore } from '../cores/decision/index.js';
+import { setAfterTurnDefault } from '../libraries/core/decision-settings.js';
+setAfterTurnDefault(false); // эти тесты считают вызовы модели; работа после хода проверяется отдельно
 
 /**
  * e1 на уровне ядра: цикл инструментов, обязательный комментарий, лог,

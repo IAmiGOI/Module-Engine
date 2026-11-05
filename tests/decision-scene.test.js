@@ -95,3 +95,24 @@ test('validateTurn: outcome only after a roll; missing decision is kept from the
     const fresh = validateTurn({ form: { ...base, characters: [{ name: 'Emilia', action: 'a', actionReason: 'b' }] }, roster: ['Emilia'] });
     assert.deepEqual(fresh.missing, ['characters[Emilia].decision', 'characters[Emilia].decisionReason']);
 });
+
+test('character notes: a made-up id falls back to the title, set creates a missing note, and a full set replaces the oldest', async () => {
+    const { applyCharacterNote, MAX_NOTES_PER_CHARACTER } = await import('../libraries/core/decision-state.js');
+    let t = 0;
+    const opts = { now: () => (t += 1), rid: () => 'r' };
+    let notes = {};
+    for (let i = 0; i < MAX_NOTES_PER_CHARACTER; i += 1) notes = applyCharacterNote(notes, { character: 'Emilia', op: 'add', title: `N${i}`, text: 'x' }, opts).notes;
+    const byTitle = applyCharacterNote(notes, { character: 'Emilia', op: 'set', id: 'note_emilia_alias', title: 'N1', text: 'updated' }, opts);
+    assert.equal(byTitle.ok, true);
+    assert.equal(byTitle.notes.emilia.find(note => note.title === 'N1').text, 'updated');
+    const full = applyCharacterNote(byTitle.notes, { character: 'Emilia', op: 'add', title: 'Right now — mid-fall', text: 'airborne' }, opts);
+    assert.equal(full.ok, true);
+    assert.equal(full.replaced, 'N0');
+    assert.equal(full.notes.emilia.length, MAX_NOTES_PER_CHARACTER);
+    const created = applyCharacterNote({}, { character: 'Ram', op: 'set', id: 'note_ram_x', title: 'Eyes', text: 'grey' }, opts);
+    assert.equal(created.ok, true);
+    assert.equal(created.notes.ram[0].title, 'Eyes');
+    const same = applyCharacterNote(created.notes, { character: 'Ram', op: 'add', title: 'Eyes', text: 'clear' }, opts);
+    assert.equal(same.notes.ram.length, 1);
+    assert.equal(same.notes.ram[0].text, 'clear');
+});

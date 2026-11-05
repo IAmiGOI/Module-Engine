@@ -101,7 +101,7 @@ export const SET_PLAN_TOOL = Object.freeze({
 export const CHARACTER_NOTE_TOOL = Object.freeze({
     name: 'character_note',
     displayName: 'Edit a character note',
-    description: 'Keep at most four short notes per character: what the Writer must know about them right now. A fifth note is refused — replace or delete one first. Old Notebook notes are not touched.',
+    description: 'Keep at most four short notes per character: what the Writer must know about them right now. A fifth note replaces the one updated longest ago; a note with the same title is updated, not doubled. Old Notebook notes are not touched.',
     parameters: {
         type: 'object',
         properties: {

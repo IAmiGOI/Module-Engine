@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createEngine } from '../libraries/shared/engine.js';
 import { createPipelineCore } from '../cores/pipeline/index.js';
 import { createDecisionCore } from '../cores/decision/index.js';
+import { setAfterTurnDefault } from '../libraries/core/decision-settings.js';
+setAfterTurnDefault(false); // эти тесты считают вызовы модели; работа после хода проверяется отдельно
 
 const BEFORE_SEND = 'generation.beforeSend';
 const PAYLOAD = 'generation.payload';

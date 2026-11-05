@@ -337,3 +337,6 @@ export const BANK_GUIDE_DESCRIPTION = 'One guide for every data bank builder in 
 
 /** Настройки игры — дословно из PROMPTS.md §22 (сами строки — в story-settings-text.js). */
 export { STORY_SETTINGS_HEADER, STORY_SETTINGS_RULES } from './story-settings-text.js';
+
+export const DIRECTOR_AFTER_TURN = `AFTER THE TURN: your form is accepted and the Writer is writing the reply now. Do the rest of this turn's work: record with character_knowledge what each character learned, bring up to date the notes this turn made wrong, and change the plans this turn changed. Change only what this turn changed; leave what is still true. submit_turn is closed. Then call await.`;
+export const AFTER_TURN_SUBMIT_CLOSED = `The turn is already submitted and the Writer is writing it. Do the rest of the work, then call await.`;
