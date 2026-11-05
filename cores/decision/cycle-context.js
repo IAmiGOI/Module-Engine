@@ -4,7 +4,7 @@ import { buildToolList } from '../../libraries/core/decision-tools.js';
 import { staticDirectorLorebook } from '../../libraries/core/decision-lorebook-static.js';
 import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
-import { createBoundary, normalizeBoundary, windowTurnCount } from '../../libraries/core/decision-window.js';
+import { createBoundary, normalizeBoundary, lastTurnNumber } from '../../libraries/core/decision-window.js';
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import { DIRECTOR_CONCRETE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
@@ -103,10 +103,10 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
     }
 
     /** Текущее сообщение пользователя — последняя (ещё не сохранённая) запись окна. */
-    function pendingTurn(entries, currentUser, reroll = false) {
+    function pendingTurn(entries, currentUser, reroll = false, number = null) {
         const body = String(currentUser ?? '').trim();
         if (!body) return [];
-        const turn = windowTurnCount(entries) + 1;
+        const turn = Number.isFinite(Number(number)) && Number(number) > 0 ? Number(number) : lastTurnNumber(entries) + 1;
         const head = reroll ? `TURN ${turn} — REROLL: your earlier version of this turn was discarded, none of it happened` : `TURN ${turn} (compressed)`;
         return [{ kind: 'turn', turn, at: Date.now(), text: `${head}\nUser: ${body}` }];
     }
@@ -148,7 +148,7 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
         return buildStorySettingsBlock('director', game);
     }
 
-    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '' }) {
+    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '', turn = null }) {
         const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '', chatBriefText: '' };
         const win = typeof store.window === 'function' ? store.window() : null;
         const all = Array.isArray(win?.entries) ? win.entries : [];
@@ -157,19 +157,19 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
             plan: store.plan(), arcs: store.arcs(), notes: store.notes(), storySettings,
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
             chatBriefText: safe.chatBriefText ?? '', planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
-            windowEntries: [...entries, ...pendingTurn(entries, currentUser, reroll)],
+            windowEntries: [...entries, ...pendingTurn(entries, currentUser, reroll, turn)],
             sceneText: currentSceneText({ beforeTurn: reroll && entries.length < all.length ? Number(all.filter(entry => entry.kind === 'turn').at(-1)?.turn) : null }),
             frozenWindows: typeof store.frozen === 'function' ? store.frozen() : [],
             windowMode: true,
         });
     }
 
-    async function runContext({ settings, chat = [], task = '', lorebook = true, worker, reroll = false }) {
+    async function runContext({ settings, chat = [], task = '', lorebook = true, worker, reroll = false, turn = null }) {
         const [lorebookText, directorBlock, knowledgeText, boundary] = await Promise.all([
             lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(),
         ]);
         const banksText = banks ? banks.contextFor({ all: true }).text : '';
-        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat), reroll, storySettings: storySettingsText(settings) });
+        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat), reroll, turn, storySettings: storySettingsText(settings) });
     }
 
     /**

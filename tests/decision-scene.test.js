@@ -116,3 +116,12 @@ test('character notes: a made-up id falls back to the title, set creates a missi
     assert.equal(same.notes.ram.length, 1);
     assert.equal(same.notes.ram[0].text, 'clear');
 });
+
+test('after a window switch the next turn is numbered from the last turn, not from how many turns the window holds', async () => {
+    const { lastTurnNumber, windowTurnCount } = await import('../libraries/core/decision-window.js');
+    const entries = Array.from({ length: 26 }, (_, index) => ({ kind: 'turn', turn: 61 + index, text: `TURN ${61 + index}` }));
+    entries.splice(16, 0, { kind: 'fact', turn: 76, text: 'a fact' });
+    assert.equal(windowTurnCount(entries), 26);
+    assert.equal(lastTurnNumber(entries) + 1, 87);
+    assert.equal(lastTurnNumber([]), 0);
+});

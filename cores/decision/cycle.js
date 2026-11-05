@@ -164,7 +164,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const startedAt = now();
         live.started({ runId, event: type === 'normal' ? 'turn' : type, wake: startedWake, at: startedAt, type });
         const reroll = type === 'regenerate' || type === 'swipe';
-        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, task: reroll ? `${DIRECTOR_TURN}\n\n${DIRECTOR_REROLL}` : '' });
+        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task: reroll ? `${DIRECTOR_TURN}\n\n${DIRECTOR_REROLL}` : '' });
         const tools = await context.toolsFor(settings, { filter: toolFilter });
         const controller = new AbortController();
         const hooks = live.hooks({ runId, thinking });

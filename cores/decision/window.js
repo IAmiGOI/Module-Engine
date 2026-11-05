@@ -4,7 +4,7 @@ import { libraryLevelsSection, longPlansSection } from '../../libraries/core/dec
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import {
     buildCorrection, buildCycleDigest, buildFact, buildFrozenRecord, createBoundary,
-    normalizeWindow, renderWindow, splitWindow, windowTurnCount,
+    normalizeWindow, renderWindow, splitWindow, windowTurnCount, lastTurnNumber,
 } from '../../libraries/core/decision-window.js';
 
 /**
@@ -57,7 +57,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
     async function recordTurn({ pending = null, stored = null } = {}) {
         const cycle = lastCycleFor(pending?.sourceRunId ?? stored?.sourceRunId ?? stored?.id ?? pending?.runId);
         if (!cycle) return false;
-        const turn = Number(cycle.turn) || windowTurnCount(current().entries) + 1;
+        const turn = Number(cycle.turn) || lastTurnNumber(current().entries) + 1;
         const entry = buildCycleDigest(cycle, {
             kind: 'turn', turn, userText: lastUserText(pending?.chat),
             writerText: stored?.writerText ?? '', index: windowTurnCount(current().entries), now,
@@ -78,7 +78,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
         if (!cycle || String(cycle.event ?? '') === 'typing') return false;
         const kind = String(cycle.event) === 'message' ? 'message' : 'passive';
         const entry = buildCycleDigest(cycle, {
-            kind, turn: Number(cycle.turn) || windowTurnCount(current().entries), index: windowTurnCount(current().entries), now,
+            kind, turn: Number(cycle.turn) || lastTurnNumber(current().entries), index: windowTurnCount(current().entries), now,
         });
         await append(entry);
         await maybeSwitch();
@@ -86,7 +86,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
     }
 
     async function addFact(textBody, { turn = null } = {}) {
-        const turnNumber = Number.isFinite(Number(turn)) ? Number(turn) : windowTurnCount(current().entries);
+        const turnNumber = Number.isFinite(Number(turn)) ? Number(turn) : lastTurnNumber(current().entries);
         await append(buildFact(textBody, { turn: turnNumber, at: now() }));
     }
 

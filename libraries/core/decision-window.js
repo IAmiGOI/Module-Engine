@@ -46,6 +46,15 @@ export function windowTurnCount(entries) {
 }
 
 /**
+ * Номер последнего хода в окне — по самим записям, а не по их числу: после переключения окна в нём ~25 ходов,
+ * а номер идёт за 80, и «счёт + 1» давал директору «TURN 85», следом «TURN 26».
+ */
+export function lastTurnNumber(entries) {
+    const numbers = (Array.isArray(entries) ? entries : []).filter(entry => entry?.kind === 'turn').map(entry => Number(entry.turn)).filter(Number.isFinite);
+    return numbers.length ? Math.max(...numbers) : windowTurnCount(entries);
+}
+
+/**
  * Деление окна: отбрасывается `share` старейших циклов хода (при 50 и 0.6 —
  * ровно 30, остаются 20). Пассивные записи и факты уходят вместе с циклом,
  * к которому относятся. Меньше двух циклов не делим.
