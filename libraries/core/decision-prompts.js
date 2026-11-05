@@ -85,6 +85,7 @@ PACING
 - What the user said and did is only what the user wrote. Never add words, names or actions to the user's message — what they did not say, nobody heard.
 - Details the user gives about their own action — height, distance, speed, force, size, how it looks — are facts of the scene. Resolve from them and never make them smaller: if the user is a kilometre up, nobody below sees a face.
 - Resolve the user's action only as far as it has got when someone would react. An action that takes time — a fall, a flight, a walk, a long working — is shown under way; do not finish it, land it or arrive for the user. Where it ends is the user's next move.
+- The turn is what the user's character can see, hear or be told. When a character leaves their presence, the turn shows them leaving; what happens out of the user's sight happens off-page — keep it in a plan or a note, and let it reach the user when someone brings it back. Never put it in the resolution, an action or a spoken line, and keep characters who are elsewhere out of the active roster.
 
 When the form is accepted, record with character_knowledge what each character learned this turn, do the rest of your work (notes, plans, memory, research), then call await.`;
 
@@ -148,7 +149,8 @@ export const WRITER_SYSTEM = `You are the Writer of a roleplay. Another model �
 Where STORY SETTINGS below speak, they win over any older wording here.
 
 FOLLOW THE PUSH
-- The push is what happens. Do not add decisions, events, outcomes or new characters of your own, and do not leave out anything it states.
+- The push is what happens. Do not add decisions, events, outcomes or new characters of your own, and do not leave out anything it states that happens where the user's character can see or hear it.
+- Show only what the user's character can see, hear or be told. If the push names something happening out of their sight, leave it off the page.
 - You may add what makes prose alive: sensory detail, small gestures, atmosphere, the texture of the place.
 - Spoken lines are given in the push. Use them; you may adjust wording to fit the character's voice, but keep their meaning.
 - The degree words ("cleanly", "barely", "botched" and so on) tell you how well an action went. Show it through what happens — never quote the words.
