@@ -11,7 +11,7 @@ import { makeFakeDocument, FakeElement, FakeTextNode } from './helpers/fake-docu
 const DOM_CONTRACTS = ['dom.createElement', 'dom.createTextNode', 'dom.setProp', 'dom.removeProp', 'dom.append', 'dom.remove', 'dom.replaceWith'];
 const tick = (ms = 10) => new Promise(done => setTimeout(done, ms));
 
-function build({ showRolls = 'chat', lines = ['Kael — picks the lock — cleanly, without a hitch'] } = {}) {
+function build({ showRolls = 'chat', lines = ['Kael — picks the lock — cleanly, without a hitch'], observe = () => () => {} } = {}) {
     const engine = createEngine();
     const doc = makeFakeDocument();
     registerDomService(engine.registerCaller('service.dom', 'services', { tier: 'official' }).own, { document: doc });
@@ -30,15 +30,18 @@ function build({ showRolls = 'chat', lines = ['Kael — picks the lock — clean
     engine.buses.services.register('stChat.messageTextElement', ({ mesid }) => (rendered.some(item => item.mesid === mesid) ? text : null));
     engine.buses.services.register('stChat.messageElement', () => block);
     engine.buses.services.register('stChat.container', () => new FakeElement('div'));
-    engine.buses.cores.register('decision.messageRolls', ({ mesid }) => ({ ...current, mesid }));
+    let rollCalls = 0;
+    engine.buses.cores.register('decision.messageRolls', ({ mesid }) => { rollCalls += 1; return { ...current, mesid }; });
+    engine.buses.cores.register('decision.gameSettings', () => ({ values: { showRolls: current.showRolls } }));
 
     const host = engine.registerCaller('core.ui.rollNote', 'cores', { tier: 'official' });
     const finalUiHost = engine.registerCaller('core.ui.rollNote.final', 'cores', { tier: 'official', allowedContracts: DOM_CONTRACTS });
-    const core = createRollNoteCore(host, { createFinalUi: () => createFinalUiPc(finalUiHost), observe: () => () => {} });
+    const core = createRollNoteCore(host, { createFinalUi: () => createFinalUiPc(finalUiHost), observe });
     return {
         engine, core, block, text,
         set: value => { current = value; },
         setRendered: value => { rendered = value; },
+        rollCalls: () => rollCalls,
     };
 }
 
@@ -87,7 +90,7 @@ test('the line appears once the turn is saved, not only on generation.completed'
     assert.equal(world.block.children.length, 1, 'nothing to show before the run is written');
     world.set({ showRolls: 'chat', lines: ['Kael — picks the lock — cleanly, without a hitch'] });
     world.engine.events.emit('decision.run.saved', { mesid: '3' });
-    await tick();
+    await new Promise(resolve => setTimeout(resolve, 300)); // проход отложен и склеен
     assert.equal(world.block.children[0].className, 'stme-roll-note');
 });
 
@@ -129,4 +132,21 @@ test('the user\'s own roll, not cited by the form, is shown first', async () => 
     assert.equal(lines.length, 2);
     assert.match(lines[0], /^Sasha — .* — cleanly/);
     assert.match(lines[1], /^Emilia — /);
+});
+
+test('mutations made by the roll lines themselves do not start another pass, a burst of changes gives one pass, and nothing is asked when rolls are not in the chat', async () => {
+    let onChanged = null;
+    const world = build({ observe: (container, fn) => { onChanged = fn; return () => {}; } });
+    await world.core.start();
+    const afterStart = world.rollCalls();
+    onChanged([{ target: { classList: { contains: name => name === 'stme-roll-note' } }, addedNodes: [], removedNodes: [] }]);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(world.rollCalls(), afterStart, 'our own line does not trigger a pass');
+    for (let i = 0; i < 20; i += 1) onChanged([{ target: {}, addedNodes: [{}], removedNodes: [] }]);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(world.rollCalls(), afterStart + 1, 'twenty changes, one pass');
+    world.set({ showRolls: 'log', lines: [] });
+    onChanged([{ target: {}, addedNodes: [{}], removedNodes: [] }]);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(world.rollCalls(), afterStart + 1, 'rolls not in the chat — no per-message requests');
 });

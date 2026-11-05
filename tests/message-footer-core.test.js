@@ -161,7 +161,7 @@ test('a redraw NOBODY announced is still caught — that is what the observer is
     // именно на этот случай и стоит наблюдатель.
     messageBlock.children.length = 0;
     fireObserver();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 300)); // проход от наблюдателя отложен и склеен
 
     assert.ok(footerOf(messageBlock));
 });

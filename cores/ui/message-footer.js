@@ -65,6 +65,13 @@ const REDRAW_EVENTS = Object.freeze([
 ]);
 
 const FOOTER_CLASS = 'stme-message-footer';
+const OBSERVER_DELAY_MS = 250;
+const isFooter = node => Boolean(node?.classList?.contains?.(FOOTER_CLASS) || node?.closest?.(`.${FOOTER_CLASS}`));
+/** Все изменения — внутри наших подвалов или это сами подвалы. */
+function ownFooterMutation(records) {
+    if (!Array.isArray(records) || !records.length) return false;
+    return records.every(record => isFooter(record.target) || [...(record.addedNodes ?? []), ...(record.removedNodes ?? [])].every(isFooter));
+}
 
 export function createMessageFooterCore(host, { createFinalUi, observe = defaultObserve, publish } = {}) {
     // Триада started/completed/failed — не для всего, а по критерию
@@ -310,7 +317,16 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
         // Наблюдатель зовёт attach() без разбора: тот сам дёшево выходит,
         // если подвал на месте. Проверять «а пропал ли он» здесь значило бы
         // держать вторую копию той же логики.
-        stopObserving = observe(container, () => { attach(); });
+        // Каждое изменение `#chat` (каждый токен потока, каждая наша вставка) запускало полный проход по всем
+        // сообщениям. Теперь: свои подвалы не в счёт, остальное склеивается в один проход с задержкой.
+        let observedTimer = null;
+        const fromObserver = records => {
+            if (ownFooterMutation(records) || observedTimer) return;
+            observedTimer = setTimeout(() => { observedTimer = null; attach(); }, OBSERVER_DELAY_MS);
+        };
+        stopObserving = observe(container, fromObserver);
+        const stopTimer = stopObserving;
+        stopObserving = () => { if (observedTimer) clearTimeout(observedTimer); observedTimer = null; stopTimer?.(); };
         return attach();
     }
 
@@ -362,7 +378,7 @@ export function createMessageFooterCore(host, { createFinalUi, observe = default
 /** Наблюдение за перерисовкой. Вынесено параметром, чтобы Ядро проверялось без DOM. */
 function defaultObserve(container, onChanged) {
     if (!container || typeof MutationObserver !== 'function') return () => {};
-    const observer = new MutationObserver(() => onChanged());
+    const observer = new MutationObserver(records => onChanged(records));
     observer.observe(container, { childList: true, subtree: true });
     return () => observer.disconnect();
 }

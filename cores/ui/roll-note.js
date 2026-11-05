@@ -33,6 +33,9 @@ export function createRollNoteCore(host, { createFinalUi, observe = defaultObser
     const subscriptions = [];
     let stopObserving = null;
     let attaching = false;
+    let again = false;
+    let timer = null;
+    const ATTACH_DELAY_MS = 250;
 
     const mountKey = mesid => `roll::${mesid}`;
 
@@ -82,13 +85,27 @@ export function createRollNoteCore(host, { createFinalUi, observe = defaultObser
         return root?.parentNode === block;
     }
 
+    // Перерисовка чата идёт сотнями изменений (каждый токен ответа — изменение `#chat`): проход один, с задержкой,
+    // а изменения во время прохода дают ровно один следующий. Раньше каждое изменение запускало полный проход по всем
+    // сообщениям с запросами на каждое — страница съедала гигабайты и процессор.
+    function schedule() {
+        if (attaching) { again = true; return; }
+        if (timer) return;
+        timer = setTimeout(() => { timer = null; attach(); }, ATTACH_DELAY_MS);
+    }
+
     /** Разложить строки по отрисованным сообщениям; идемпотентно. */
     async function attach() {
-        if (attaching) return false;
+        if (attaching) { again = true; return false; }
         attaching = true;
         try {
-            const messages = await readMessages();
-            const rendered = new Set(messages.map(message => message.mesid));
+            // Строки в чате выключены — ни одного запроса на сообщение.
+            const game = await request(host.own, 'decision.gameSettings', { params: {} });
+            if (game.ok && game.value?.values?.showRolls !== 'chat') { forgetAll(); return false; }
+            const runs = await request(host.own, 'decision.runs', { params: {} });
+            const withRun = runs.ok && runs.value && typeof runs.value === 'object' ? new Set(Object.keys(runs.value)) : null;
+            const messages = (await readMessages()).filter(message => !withRun || withRun.has(message.mesid));
+            const rendered = new Set((await readMessages()).map(message => message.mesid));
             for (const mesid of [...notes.keys()]) if (!rendered.has(mesid)) forget(mesid);
             let placed = false;
             for (const message of messages) {
@@ -113,20 +130,22 @@ export function createRollNoteCore(host, { createFinalUi, observe = defaultObser
             return placed;
         } finally {
             attaching = false;
+            if (again) { again = false; schedule(); }
         }
     }
 
     async function start() {
-        for (const event of REDRAW_EVENTS) subscriptions.push(host.events.subscribe(event, () => { attach(); }));
-        subscriptions.push(host.events.subscribe('generation.completed', () => { attach(); }));
+        for (const event of REDRAW_EVENTS) subscriptions.push(host.events.subscribe(event, () => { schedule(); }));
+        subscriptions.push(host.events.subscribe('generation.completed', () => { schedule(); }));
         // Запись хода сохраняется асинхронно уже после generation.completed — без этого события
         // первый attach читал runs[mesid] до записи и строка не появлялась до следующего хода.
-        subscriptions.push(host.events.subscribe('decision.run.saved', () => { attach(); }));
-        subscriptions.push(host.events.subscribe('decision.gameSettings.changed', () => { attach(); }));
-        subscriptions.push(host.events.subscribe('decision.reloaded', () => { attach(); }));
-        subscriptions.push(host.events.subscribe('st.chatChanged', () => { forgetAll(); attach(); }));
+        subscriptions.push(host.events.subscribe('decision.run.saved', () => { schedule(); }));
+        subscriptions.push(host.events.subscribe('decision.gameSettings.changed', () => { schedule(); }));
+        subscriptions.push(host.events.subscribe('decision.reloaded', () => { schedule(); }));
+        subscriptions.push(host.events.subscribe('st.chatChanged', () => { forgetAll(); schedule(); }));
         const container = await service('stChat.container');
-        stopObserving = observe(container, () => { attach(); });
+        // Свои строки — не повод для нового прохода: иначе вставка строки снова запускала проход.
+        stopObserving = observe(container, records => { if (!ownMutation(records)) schedule(); });
         return attach();
     }
 
@@ -135,6 +154,7 @@ export function createRollNoteCore(host, { createFinalUi, observe = defaultObser
         start,
         notes: () => [...notes.keys()],
         stop() {
+            if (timer) { clearTimeout(timer); timer = null; }
             stopObserving?.();
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             forgetAll();
@@ -143,10 +163,18 @@ export function createRollNoteCore(host, { createFinalUi, observe = defaultObser
     };
 }
 
+const isNote = node => Boolean(node?.classList?.contains?.(NOTE_CLASS) || node?.closest?.(`.${NOTE_CLASS}`));
+
+/** Все изменения — внутри наших строк или это сами строки. */
+function ownMutation(records) {
+    if (!Array.isArray(records) || !records.length) return false;
+    return records.every(record => isNote(record.target) || [...(record.addedNodes ?? []), ...(record.removedNodes ?? [])].every(isNote));
+}
+
 /** Наблюдение за перерисовкой; вынесено параметром, чтобы Ядро проверялось без DOM. */
 function defaultObserve(container, onChanged) {
     if (!container || typeof MutationObserver !== 'function') return () => {};
-    const observer = new MutationObserver(() => onChanged());
+    const observer = new MutationObserver(records => onChanged(records));
     observer.observe(container, { childList: true, subtree: true });
     return () => observer.disconnect();
 }
