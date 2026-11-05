@@ -149,7 +149,7 @@ function makePill(overrides = {}) {
 
 test('pill: the layout is regenerate circle, field, send circle — and typing resizes the field by its content and reports the text', () => {
     const { pill, calls } = makePill();
-    assert.deepEqual(pill.root.children.map(node => node.className.split(' ').slice(0, 2).join(' ')), ['stme-input-circle stme-input-regenerate', 'stme-input-field', 'stme-input-circle stme-input-send']);
+    assert.deepEqual(pill.root.children.map(node => node.className.split(' ').slice(0, 2).join(' ')), ['stme-input-circle stme-input-regenerate', 'stme-input-circle stme-input-rewrite', 'stme-input-field', 'stme-input-circle stme-input-send']);
     pill.field.value = 'a\nb\nc';
     pill.field.scrollHeight = 100;
     pill.field.dispatchEvent({ type: 'input' });
@@ -175,7 +175,7 @@ test('pill: Enter sends (and is swallowed), Shift+Enter is left alone for a new 
 
 test('pill: the right circle is Send, becomes Stop while generating (and stops instead of sending), the left circle regenerates', () => {
     const { pill, calls } = makePill();
-    const [regenerate, , send] = pill.root.children;
+    const [regenerate, , , send] = pill.root.children;
     send.click();
     assert.equal(calls.send, 1);
     pill.setGenerating(true);
@@ -193,7 +193,7 @@ test('pill: the right circle is Send, becomes Stop while generating (and stops i
 test('pill: the circles do not steal focus from the field (mousedown is cancelled), and the column sets the left edge and width', () => {
     const { pill } = makePill();
     let prevented = 0;
-    for (const button of [pill.root.children[0], pill.root.children[2]]) button.dispatchEvent({ type: 'mousedown', preventDefault: () => { prevented += 1; } });
+    for (const button of [pill.root.children[0], pill.root.children[3]]) button.dispatchEvent({ type: 'mousedown', preventDefault: () => { prevented += 1; } });
     assert.equal(prevented, 2);
     pill.setColumn({ left: 158, width: 674 });
     assert.equal(pill.root.style.left, '158px');
@@ -339,4 +339,14 @@ test('core: the side bar class (native top strip -> vertical bar on the left) is
     const narrow = makeCore({ win: { innerWidth: 700, innerHeight: 600, addEventListener() {}, removeEventListener() {} } });
     await narrow.core.enable();
     assert.equal(narrow.doc.documentElement.classList.contains('stme-side-bar-active'), false, 'a narrow window keeps the native top strip');
+});
+
+test('pill: the second left button rewrites (writer only), the first regenerates the whole turn', () => {
+    let rewrites = 0;
+    const { pill, calls } = makePill({ onRewrite: () => { rewrites += 1; } });
+    const [regenerate, rewrite] = pill.root.children;
+    rewrite.dispatchEvent({ type: 'click' });
+    regenerate.dispatchEvent({ type: 'click' });
+    assert.equal(rewrites, 1);
+    assert.equal(calls.regenerate, 1);
 });

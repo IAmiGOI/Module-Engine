@@ -1,7 +1,7 @@
 /** Контракты ядра «директор + прозаик». Только регистрация; логика — в index.js. */
 export function registerDecisionContracts(host, {
     getSettings, configure, store, researcher, banks, cycle, cardTurn, decide, rewrite, reload, preview, decideContract, rewriteContract, bootstrap = null,
-    gameSettings = null, messageRolls = null,
+    gameSettings = null, messageRolls = null, regenOnce = null,
 }) {
     const settings = () => {
         const value = getSettings();
@@ -13,6 +13,8 @@ export function registerDecisionContracts(host, {
     return [
         host.own.register('decision.settings', settings),
         host.own.register('decision.configure', params => configure(params?.patch ?? {})),
+        // Кнопки перегенерации в полосе ввода: следующая перегенерация — директор и писатель или только писатель, мимо общей настройки.
+        ...(regenOnce ? [host.own.register('decision.regenOnce', params => regenOnce(params?.mode))] : []),
         // Настройки игры (часть 13): текущий чат, умолчание новых чатов, сброс.
         // Строка броска над сообщением: источник — запись хода этого mesid.
         ...(messageRolls ? [host.own.register('decision.messageRolls', params => messageRolls(params?.mesid))] : []),

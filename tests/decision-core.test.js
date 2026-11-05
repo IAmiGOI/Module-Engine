@@ -286,3 +286,13 @@ test('after an accepted form the director keeps working in the background: same 
         setAfterTurnDefault(false);
     }
 });
+
+test('a one-shot "writer" regeneration reuses the last decision even when the setting regenerates the director, and only once', async () => {
+    const { pipelineCore, calls, engine } = await build({ initialRuns: { 10: { id: 'old', mesid: '10', at: 1, decision: 'She already decided.', steps: [] } } });
+    const caller = engine.registerCaller('test.regen', 'cores', { tier: 'official' });
+    await request(caller.own, 'decision.regenOnce', { params: { mode: 'writer' } });
+    await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_2', chat: [{ mes: 'Hello again?', is_user: true }], type: 'regenerate' } });
+    assert.equal(calls.length, 0, 'the writer-only button skipped the director');
+    await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_3', chat: [{ mes: 'Hello again?', is_user: true }], type: 'regenerate' } });
+    assert.equal(calls.length, 1, 'the next plain regeneration runs the director again');
+});

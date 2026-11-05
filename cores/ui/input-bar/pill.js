@@ -12,7 +12,7 @@ const FIELD_MIN_HEIGHT = 42;
  */
 export function createInputPill({
     document: doc = globalThis.document,
-    onInput = () => {}, onSend = () => {}, onStop = () => {}, onRegenerate = () => {}, shouldSend = () => false,
+    onInput = () => {}, onSend = () => {}, onStop = () => {}, onRegenerate = () => {}, onRewrite = () => {}, shouldSend = () => false,
     getWindowHeight = () => globalThis.innerHeight,
     ResizeObserverCtor = globalThis.ResizeObserver,
     onResize = () => {},
@@ -26,9 +26,16 @@ export function createInputPill({
 
     const regenerate = make('button', 'stme-input-circle stme-input-regenerate');
     regenerate.setAttribute('type', 'button');
-    regenerate.setAttribute('title', 'Regenerate the last message');
-    regenerate.setAttribute('aria-label', 'Regenerate the last message');
+    regenerate.setAttribute('title', 'Regenerate: the director decides the turn again, then the writer writes it');
+    regenerate.setAttribute('aria-label', 'Regenerate the turn');
     regenerate.append(icon('fa-rotate-right'));
+
+    // Вторая перегенерация — только писатель: тот же ход директора, новый текст.
+    const rewrite = make('button', 'stme-input-circle stme-input-rewrite');
+    rewrite.setAttribute('type', 'button');
+    rewrite.setAttribute('title', 'Rewrite: same turn, the writer writes it again');
+    rewrite.setAttribute('aria-label', 'Rewrite the reply');
+    rewrite.append(icon('fa-feather-pointed'));
 
     const field = make('textarea', 'stme-input-field');
     field.setAttribute('rows', '1');
@@ -38,7 +45,7 @@ export function createInputPill({
     const send = make('button', 'stme-input-circle stme-input-send');
     send.setAttribute('type', 'button');
 
-    root.append(regenerate, field, send);
+    root.append(regenerate, rewrite, field, send);
 
     let generating = false;
 
@@ -68,8 +75,9 @@ export function createInputPill({
         onSend();
     });
     // Кнопки не отбирают фокус у поля (на телефоне это закрывало бы клавиатуру при каждой отправке).
-    for (const button of [regenerate, send]) button.addEventListener('mousedown', event => event.preventDefault());
+    for (const button of [regenerate, rewrite, send]) button.addEventListener('mousedown', event => event.preventDefault());
     regenerate.addEventListener('click', () => onRegenerate());
+    rewrite.addEventListener('click', () => onRewrite());
     send.addEventListener('click', () => { if (generating) onStop(); else onSend(); });
 
     // Пилюля растёт с текстом — вьюпорту чата нужно знать её высоту (нижний отступ), поэтому наружу уходит событие на любой размер.

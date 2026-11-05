@@ -71,6 +71,8 @@ html.stme-input-bar-active #form_sheld { background: none !important; border: 0 
 .stme-input-send-stop { background: var(--stme-status-error, #e5453f); color: #fff; }
 .stme-input-regenerate { background: color-mix(in srgb, var(--stme-text) 14%, transparent); color: var(--stme-text); }
 .stme-input-regenerate:hover { background: color-mix(in srgb, var(--stme-accent) 30%, transparent); color: var(--stme-accent); }
+.stme-input-rewrite { background: color-mix(in srgb, var(--stme-text) 8%, transparent); color: var(--stme-text); border-left: 1px solid color-mix(in srgb, var(--stme-text) 12%, transparent); }
+.stme-input-rewrite:hover { background: color-mix(in srgb, var(--stme-accent) 30%, transparent); color: var(--stme-accent); }
 .stme-input-circle:active { filter: brightness(.9); }
 
 /* ===== Левый док (cores/ui/input-bar/left-dock.js): как правый, только на уровне нижней строки у ЛЕВОГО края окна, без светофора =====

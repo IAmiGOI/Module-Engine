@@ -41,7 +41,9 @@ export function createInputBarCore(host, {
 
     const emitChanged = payload => (publish ?? ((event, data) => host.events.emit(event, data)))('ui.inputBar.changed', payload);
 
-    async function regenerate() {
+    // Режим этой перегенерации сообщается директору заранее; нет ядра директора — перегенерация идёт как обычно.
+    async function regenerate(mode = 'decider') {
+        await request(host.own, 'decision.regenOnce', { params: { mode } }).catch(() => null);
         const result = await request(host.services, 'stChat.regenerate', { params: {} });
         if (!result.ok) console.warn('[input bar] regenerate failed:', result.error?.message);
     }
@@ -59,7 +61,8 @@ export function createInputBarCore(host, {
             onInput: value => bridge.writeText(value),
             onSend: () => { bridge.writeText(pill.getValue()); bridge.send(); },
             onStop: () => bridge.stop(),
-            onRegenerate: regenerate,
+            onRegenerate: () => regenerate('decider'),
+            onRewrite: () => regenerate('writer'),
             shouldSend: event => shouldSendOnKey({
                 key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
                 isComposing: event.isComposing, touch, sendOnEnter: getSendOnEnter(),

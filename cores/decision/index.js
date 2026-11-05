@@ -278,12 +278,17 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return list;
     }
 
+    let regenOverride = null;
+    const regenOnce = mode => { regenOverride = ['decider', 'writer'].includes(mode) ? mode : null; return { ok: true, mode: regenOverride }; };
+
     async function decide(input = {}) {
         lastFailure = null;
+        const regenMode = regenOverride ?? settings.regen;
+        regenOverride = null;
         const runId = input.runId ?? `decision_${(runCounter += 1)}`;
         const type = input.type ?? 'normal';
         const chat = Array.isArray(input.chat) ? input.chat : [];
-        if ((type === 'regenerate' || type === 'swipe') && settings.regen === 'writer') {
+        if ((type === 'regenerate' || type === 'swipe') && regenMode === 'writer') {
             const last = store.lastRun();
             if (last) {
                 const push = last.push ?? last.decision;
@@ -414,7 +419,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 get: gameSettingsState, set: setGameSettings, useDefault: useGameSettingsAsDefault, reset: resetGameSettings,
                 saveMix: saveGameMix, renameMix: renameSavedMix, removeMix: removeSavedMix, updateMix: updateSavedMix, applyMix: applySavedMix,
             },
-            messageRolls,
+            messageRolls, regenOnce,
         }));
         await registerStages();
         return settings;
