@@ -13,6 +13,7 @@ import { createUiModulesCore } from '../../cores/ui/ui-modules.js';
 import { createNotificationsCore } from '../../cores/ui/notifications.js';
 import { createActivityLightCore } from '../../cores/ui/activity-light.js';
 import { createMessageFooterCore } from '../../cores/ui/message-footer.js';
+import { createRollNoteCore } from '../../cores/ui/roll-note.js';
 import { createChatViewportCore } from '../../cores/ui/chat-viewport.js';
 import { createInputBarCore } from '../../cores/ui/input-bar/index.js';
 import { createHomeCore } from '../../cores/ui/home/index.js';
@@ -147,6 +148,10 @@ export async function wireUiCores(ctx) {
         createFinalUi: () => createFinalUiPc(messageFooterHost),
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.ui.messageFooter' }),
     });
+    // Строка броска над сообщением (часть 14): то же Ядро финального UI, но
+    // свой узел и своё место — первым ребёнком `.mes`, а не подвалом.
+    const rollNoteHost = engine.registerCaller('core.ui.rollNote', 'cores', { tier: 'official' });
+    const rollNote = createRollNoteCore(rollNoteHost, { createFinalUi: () => createFinalUiPc(rollNoteHost) });
 
     // Chat Viewport — гибридный WebGL/DOM рендер истории чата (план
     // `chat-viewport`): тело сообщения растеризуется в текстуру, действия
@@ -179,5 +184,5 @@ export async function wireUiCores(ctx) {
     });
 
 
-    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, picturePanel, decisionPromptsPanel, gameSettingsPanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home, decisionWindow };
+    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, picturePanel, decisionPromptsPanel, gameSettingsPanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, rollNote, chatViewportHost, chatViewport, inputBarHost, inputBar, home, decisionWindow };
 }

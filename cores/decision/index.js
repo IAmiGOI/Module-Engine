@@ -15,7 +15,9 @@ import { createCharacterBanks } from './banks.js';
 import { createBootstrap } from './bootstrap.js';
 import { createBankSets } from './bank-sets.js';
 import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
-import { clampGameSettings, modeOf, modeValues, patchGameSettings, resolveGameSettings } from '../../libraries/core/game-settings.js';
+import { clampGameSettings, describeSettingsChange, modeOf, modeValues, patchGameSettings, resolveGameSettings, settingsLabel } from '../../libraries/core/game-settings.js';
+import { buildRollLines } from '../../libraries/core/decision-push.js';
+import { addGameMix, clampGameMixes, findGameMix, nextGameMixId, removeGameMix, renameGameMix, updateGameMix } from '../../libraries/core/game-mixes.js';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
 const DECIDE_STAGE = 'decision:decide';
@@ -57,9 +59,17 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         if (!gameValues) gameValues = resolveGameSettings(store.gameSettings(), settings.gameDefaults);
         return { ...gameValues };
     };
+    const gameMixes = () => clampGameMixes(settings.gameMixes);
     const gameSettingsState = () => {
         const values = gameSettingsValues();
-        return { values, mode: modeOf(values), defaults: clampGameSettings(settings.gameDefaults) };
+        return { values, mode: modeOf(values), defaults: clampGameSettings(settings.gameDefaults), mixes: gameMixes() };
+    };
+    /** Строки броска для сообщения: только при «Show rolls: In the chat» и только броски его формы. */
+    const messageRolls = mesid => {
+        const showRolls = gameSettingsValues().showRolls;
+        const run = store.runs()[String(mesid ?? '')] ?? null;
+        if (!run || showRolls !== 'chat') return { showRolls, lines: [] };
+        return { showRolls, lines: buildRollLines({ form: run.form, assessments: run.assessments ?? [] }) };
     };
     const callService = async (contract, params) => {
         const result = await request(host.services, contract, { params });
@@ -154,6 +164,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }
         const state = { values, mode: modeOf(values), defaults: clampGameSettings(settings.gameDefaults) };
         publishEvent('decision.gameSettings.changed', { ...state, patch });
+        // Смена правил видна в журнале — той же лентой, что сообщения директору.
+        await cycle.logSettings({ text: describeSettingsChange(previous, values) }).catch(() => {});
         return state;
     }
 
@@ -169,6 +181,51 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     /** «Reset to Classic»: этот чат возвращается к набору Classic. */
     async function resetGameSettings() {
         return setGameSettings(modeValues('classic'));
+    }
+
+    async function saveGameMixes(next) {
+        await saveSettings({ gameMixes: clampGameMixes(next) });
+        return gameMixes();
+    }
+
+    /** «Save as mix…»: текущий набор под именем игрока; сохранённый набор — глобальный. */
+    async function saveGameMix({ name, values } = {}) {
+        const result = addGameMix(gameMixes(), { id: nextGameMixId(gameMixes(), name), name, values: values ?? gameSettingsValues() });
+        if (!result.ok) throw new Error(result.error);
+        await saveGameMixes(result.mixes);
+        publishEvent('decision.gameMixes.changed', { mixes: result.mixes });
+        return { ...gameSettingsState(), savedId: result.mix.id };
+    }
+
+    async function renameSavedMix({ id, name } = {}) {
+        const result = renameGameMix(gameMixes(), id, name);
+        if (!result.ok) throw new Error(result.error);
+        await saveGameMixes(result.mixes);
+        publishEvent('decision.gameMixes.changed', { mixes: result.mixes });
+        return gameSettingsState();
+    }
+
+    async function removeSavedMix({ id } = {}) {
+        const result = removeGameMix(gameMixes(), id);
+        if (!result.ok) throw new Error(result.error);
+        await saveGameMixes(result.mixes);
+        publishEvent('decision.gameMixes.changed', { mixes: result.mixes });
+        return gameSettingsState();
+    }
+
+    /** «Update mix»: явное обновление сохранённого набора текущим. */
+    async function updateSavedMix({ id } = {}) {
+        const result = updateGameMix(gameMixes(), id, gameSettingsValues());
+        if (!result.ok) throw new Error(result.error);
+        await saveGameMixes(result.mixes);
+        publishEvent('decision.gameMixes.changed', { mixes: result.mixes });
+        return gameSettingsState();
+    }
+
+    async function applySavedMix({ id } = {}) {
+        const mix = findGameMix(gameMixes(), id);
+        if (!mix) throw new Error('No such mix.');
+        return setGameSettings(mix.values);
     }
 
     async function saveSettings(patch = {}) {
@@ -230,7 +287,12 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             const last = store.lastRun();
             if (last) {
                 const push = last.push ?? last.decision;
-                pending = { runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null, reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true, sourceRunId: last.id };
+                pending = {
+                    runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null,
+                    assessments: Array.isArray(last.assessments) ? last.assessments : [],
+                    game: last.game ?? settingsLabel(gameSettingsValues()),
+                    reasoning: last.reasoning ?? '', steps: [], workerId: last.workerId ?? null, reused: true, sourceRunId: last.id,
+                };
                 publishEvent('decision.started', { runId, type, reused: true });
                 publishEvent('decision.completed', { runId, reused: true, workerId: pending.workerId });
                 return { reused: true, decision: push };
@@ -253,9 +315,16 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             const result = await cycle.run({ chat, runId, type, thinking: () => captured.value, usage: () => captured.usage });
             if (!result.ok) throw new Error(`The director did not submit the turn: ${result.reason ?? 'no form'}.`);
             const steps = recordStep(runId, { attempt, workerId: result.workerId ?? null, durationMs: Date.now() - startedAt, error: null });
+            // В запись хода идут только броски, на которые сослалась его форма:
+            // карта цикла живёт дольше хода и содержит чужие броски.
+            const referenced = (Array.isArray(result.form?.characters) ? result.form.characters : [])
+                .map(character => character?.assessId)
+                .filter(Boolean);
+            const row = cycle.assessments();
+            const assessments = [...new Set(referenced)].map(id => row.get(id)).filter(Boolean).map(item => ({ ...item }));
             pending = {
                 runId, type, chat, chatLength: chat.length, decision: result.decision,
-                push: result.push ?? result.decision, form: result.form, reasoning: captured.value,
+                push: result.push ?? result.decision, form: result.form, assessments, game: settingsLabel(gameSettingsValues()), reasoning: captured.value,
                 warnings: [...(result.warnings ?? [])], steps,
                 workerId: result.workerId ?? null, trace: result.trace ?? [], snapshot: beforeSnapshot,
             };
@@ -279,7 +348,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }
     }
 
-    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, getAssessments: () => cycle.assessments(), banks, publishEvent });
+    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, banks, publishEvent });
 
     /** Предпросмотр раздела: собирает блок и плашки данных для окна промптов. */
     const preview = input => previewSection({ input, settings, call, store });
@@ -341,7 +410,11 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             reload,
             decideContract: DECIDE_CONTRACT,
             rewriteContract: REWRITE_CONTRACT,
-            gameSettings: { get: gameSettingsState, set: setGameSettings, useDefault: useGameSettingsAsDefault, reset: resetGameSettings },
+            gameSettings: {
+                get: gameSettingsState, set: setGameSettings, useDefault: useGameSettingsAsDefault, reset: resetGameSettings,
+                saveMix: saveGameMix, renameMix: renameSavedMix, removeMix: removeSavedMix, updateMix: updateSavedMix, applyMix: applySavedMix,
+            },
+            messageRolls,
         }));
         await registerStages();
         return settings;

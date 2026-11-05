@@ -225,6 +225,41 @@ export function patchGameSettings(current = {}, patch = {}) {
     return clampGameSettings({ ...next, ...source });
 }
 
+/** Ярлык значения опции — для журнала и пометок в окне. */
+export function optionLabel(id, value) {
+    const option = gameOption(id);
+    return option?.values.find(item => item.value === value)?.label ?? String(value ?? '');
+}
+
+/**
+ * Что за набор: режим и опции, отличные от его основы (у Custom основа —
+ * Classic). Это же уходит в запись хода и в пометки окна.
+ */
+export function settingsLabel(values = {}) {
+    const clean = clampGameSettings(values);
+    const mode = modeOf(clean);
+    const base = modeValues(mode === 'custom' ? 'classic' : mode);
+    const changed = GAME_OPTIONS
+        .filter(option => clean[option.id] !== base[option.id])
+        .map(option => ({ id: option.id, title: option.title, value: clean[option.id], label: optionLabel(option.id, clean[option.id]) }));
+    return { mode, changed };
+}
+
+/** «Classic → Custom: Tone Dark», «Story → Hardcore» — строка смены для журнала. */
+export function describeSettingsChange(previous = {}, next = {}) {
+    const before = clampGameSettings(previous);
+    const after = clampGameSettings(next);
+    const from = modeOf(before);
+    const to = modeOf(after);
+    const name = id => (id === 'custom' ? 'Custom' : GAME_MODES.find(mode => mode.id === id)?.label ?? 'Custom');
+    const head = from === to ? name(to) : `${name(from)} → ${name(to)}`;
+    if (to !== 'custom') return head;
+    const changed = GAME_OPTIONS
+        .filter(option => after[option.id] !== before[option.id])
+        .map(option => `${option.title} ${optionLabel(option.id, after[option.id])}`);
+    return changed.length ? `${head}: ${changed.join(', ')}` : head;
+}
+
 /** Настройки чата есть — они; нет — умолчание для новых чатов; нет и его — Classic. */
 export function resolveGameSettings(stored = null, defaults = null) {
     return clampGameSettings(stored == null ? (defaults ?? DEFAULT_GAME_SETTINGS) : stored);

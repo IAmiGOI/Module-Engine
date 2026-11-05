@@ -1,7 +1,7 @@
 /** Контракты ядра «директор + прозаик». Только регистрация; логика — в index.js. */
 export function registerDecisionContracts(host, {
     getSettings, configure, store, researcher, banks, cycle, cardTurn, decide, rewrite, reload, preview, decideContract, rewriteContract, bootstrap = null,
-    gameSettings = null,
+    gameSettings = null, messageRolls = null,
 }) {
     const settings = () => {
         const value = getSettings();
@@ -14,11 +14,18 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.settings', settings),
         host.own.register('decision.configure', params => configure(params?.patch ?? {})),
         // Настройки игры (часть 13): текущий чат, умолчание новых чатов, сброс.
+        // Строка броска над сообщением: источник — запись хода этого mesid.
+        ...(messageRolls ? [host.own.register('decision.messageRolls', params => messageRolls(params?.mesid))] : []),
         ...(gameSettings ? [
             host.own.register('decision.gameSettings', () => gameSettings.get()),
             host.own.register('decision.gameSettings.set', params => gameSettings.set(params?.patch ?? {})),
             host.own.register('decision.gameSettings.useDefault', () => gameSettings.useDefault()),
             host.own.register('decision.gameSettings.reset', () => gameSettings.reset()),
+            host.own.register('decision.gameSettings.saveMix', params => gameSettings.saveMix(params ?? {})),
+            host.own.register('decision.gameSettings.renameMix', params => gameSettings.renameMix(params ?? {})),
+            host.own.register('decision.gameSettings.removeMix', params => gameSettings.removeMix(params ?? {})),
+            host.own.register('decision.gameSettings.updateMix', params => gameSettings.updateMix(params ?? {})),
+            host.own.register('decision.gameSettings.applyMix', params => gameSettings.applyMix(params ?? {})),
         ] : []),
         host.own.register('decision.preview', params => preview(params ?? {})),
         host.own.register('decision.runs', () => ({ ...store.runs() })),

@@ -373,8 +373,27 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         return { ok: true, record };
     }
 
+    /**
+     * Смена настроек игры — запись в журнал, как сообщение пользователя
+     * директору: без пробуждения модели и без влияния на ход.
+     */
+    async function logSettings({ text } = {}) {
+        const body = String(text ?? '').trim();
+        if (!body) return null;
+        const at = now();
+        const record = createCycleRecord({
+            event: 'settings', message: { text: body, at }, at, endedAt: at, durationMs: 0,
+            wake: wakeFor({ type: 'settings', label: 'Game settings changed', detail: body }),
+            turn: state.turnCounter, clockMinutes: store.clock().minutes,
+            workerId: getSettings().decider.workerId || null,
+        });
+        try { await store.appendCycle(record); } catch { /* the log line is not worth failing the save */ }
+        publishEvent('decision.message.added', { record });
+        return record;
+    }
+
     return {
-        run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap,
+        run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap, logSettings,
         onResearcherReport: jobs.onResearcherReport, sendMessage, judgeForcedMemory,
         answerQuestion: params => questions.answer(params),
         chatChanged,

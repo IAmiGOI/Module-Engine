@@ -38,6 +38,8 @@
 .stme-toast-error { border-color: var(--stme-danger); }
 .stme-toast-muted { border-color: color-mix(in srgb, var(--stme-accent) 45%, transparent); }
 .stme-toast-text { flex: 1; overflow-wrap: anywhere; }
+.stme-toast-action { flex-shrink: 0; padding: 2px 8px; border: 1px solid var(--stme-accent); border-radius: var(--stme-radius-sm); background: transparent; color: var(--stme-accent); font: inherit; font-size: 12px; cursor: pointer; }
+.stme-toast-action:hover { background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
 .stme-toast-close {
     flex-shrink: 0;
     border: 0;

@@ -225,6 +225,8 @@ export function createDecisionStore({ call, publishEvent }) {
             const stored = {
                 id: record.runId, mesid, at: Date.now(), type: record.type, decision: record.decision,
                 push: record.push ?? record.decision ?? '', form: record.form ?? null,
+                assessments: Array.isArray(record.assessments) ? record.assessments : [],
+                game: record.game && typeof record.game === 'object' ? record.game : null,
                 sourceRunId: record.sourceRunId ?? null,
                 writerText: String(last?.mes ?? last?.content ?? '').trim(),
                 reasoning: record.reasoning ?? '', steps: record.steps ?? [], workerId: record.workerId ?? null,

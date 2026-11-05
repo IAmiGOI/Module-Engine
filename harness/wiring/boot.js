@@ -12,7 +12,7 @@ export const SUMMARY_ENABLED = false;
 
 /** Запуск: восстановление сохранённого, открытие окон и панели, подключение пайплайна генерации — строго в этом порядке. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireBoot(ctx) {
-    const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, decisionCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, decisionPromptsPanel, gameSettingsPanel, decisionWindow, notifications, firstLoad, messageFooter, updateOverlay, modules, guide, enginePanel } = ctx;
+    const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, decisionCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, decisionPromptsPanel, gameSettingsPanel, decisionWindow, notifications, firstLoad, messageFooter, rollNote, updateOverlay, modules, guide, enginePanel } = ctx;
 
     // Every Ядро is constructed by now (Settings Core included) — safe to
     // actually read back whatever was persisted last time.
@@ -62,6 +62,8 @@ export async function wireBoot(ctx) {
     await modules.restore();
 
     await messageFooter.start();
+    // Строка броска — после подвала: та же точка жизни сообщений, но своё место над текстом.
+    await rollNote.start();
 
     // Тосты синхронизации: ход и итог — нашими плавающими плашками (Ядро уведомлений), не родными уведомлениями ST.
     createSyncToastsCore(engine.registerCaller('core.ui.syncToasts', 'cores', { tier: 'official' }), {

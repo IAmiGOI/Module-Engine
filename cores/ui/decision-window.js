@@ -68,7 +68,7 @@ function assessNode(row) {
         h('div', { class: 'stme-dw-assess-line' },
             h('strong', {}, row.character || 'someone'), ` · ${row.action || '—'}`,
             h('span', { class: 'stme-dw-assess-odds' }, ` ${odds}${roll ? ` · ${roll}` : ''}${row.degree ? ` · ${row.degree}` : ''}${row.words ? ` — ${row.words}` : ''}`)),
-        h('small', { class: 'stme-dw-muted' }, `${row.difficulty || '—'} / ${row.experience || '—'}${row.comment ? ` · ${row.comment}` : ''}`));
+        h('small', { class: 'stme-dw-muted' }, `${row.effective && row.effective !== row.difficulty ? `${row.difficulty || '—'} → ${row.effective}` : (row.difficulty || '—')} / ${row.experience || '—'}${row.comment ? ` · ${row.comment}` : ''}`));
 }
 function formNode(row) {
     return h('div', { class: 'stme-dw-form' },
@@ -96,6 +96,7 @@ function rowNode(row) {
     if (row.kind === 'warning') return h('div', { class: 'stme-dw-warning' }, `⚠ ${row.text}`);
     if (row.kind === 'usage') return h('div', { class: 'stme-dw-usage' }, usageLine(row));
     if (row.kind === 'message') return h('div', { class: 'stme-dw-message' }, h('strong', {}, 'You: '), row.text);
+    if (row.kind === 'settings') return h('div', { class: 'stme-dw-settings' }, h('strong', {}, 'Game settings: '), row.text);
     if (row.kind === 'answer') return h('div', { class: 'stme-dw-answer' }, row.text);
     return null;
 }

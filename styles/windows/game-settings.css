@@ -21,13 +21,34 @@
 .stme-gs-mode-label { font-weight: 700; font-size: 13px; }
 .stme-gs-mode-note { font-size: 11px; line-height: 1.25; opacity: .72; }
 .stme-gs-mode-custom { cursor: default; border-style: dashed; }
+.stme-gs-mode-custom:not(.stme-gs-mode-active) { opacity: .6; }
+
+/* Сохранённые наборы: ряд плиток под режимами, с переименованием и удалением. */
+.stme-gs-mixes { display: flex; flex-direction: column; gap: 5px; padding-top: 6px; border-top: 1px solid var(--stme-border); }
+.stme-gs-mixes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.stme-gs-mix-row { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.stme-gs-mix { display: flex; align-items: center; gap: 2px; min-width: 0; padding: 2px 2px 2px 8px; border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); background: var(--stme-level-1); }
+.stme-gs-mix-active { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 12%, var(--stme-level-1)); }
+.stme-panel .stme-gs-mix-name { min-width: 0; max-width: 160px; padding: 2px 4px; border: 0; background: none; color: var(--stme-text); font: inherit; font-size: 12px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.stme-panel .stme-gs-mix-icon { flex-shrink: 0; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--stme-radius-sm); background: none; color: var(--stme-text); font: inherit; font-size: 12px; line-height: 1; opacity: .65; cursor: pointer; }
+.stme-panel .stme-gs-mix-icon:hover { opacity: 1; background: color-mix(in srgb, var(--stme-accent) 16%, transparent); }
+.stme-gs-mix-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; align-items: center; }
+.stme-gs-mix-editor .stme-row { gap: 4px; }
 
 /* Группы опций: заголовок капителью, ниже — плоские строки. */
 .stme-gs-group { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; border-top: 1px solid var(--stme-border); }
 .stme-gs-group-title { margin: 6px 0 0; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .72; }
-.stme-gs-option { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.stme-gs-option { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding-left: 0; border-left: 2px solid transparent; transition: border-color .12s, padding-left .12s; }
+.stme-gs-option-changed { border-left-color: var(--stme-accent); padding-left: 7px; }
+.stme-gs-option-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
 .stme-gs-option-title { font-size: 13px; font-weight: 600; }
+.stme-gs-changed { color: var(--stme-accent); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stme-gs-option-foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
 .stme-gs-note { font-size: 11px; line-height: 1.3; opacity: .7; }
+.stme-panel .stme-gs-reset-option {
+    flex-shrink: 0; padding: 0; border: 0; background: none; color: var(--stme-accent);
+    font: inherit; font-size: 11px; white-space: nowrap; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
 
 /* Сегменты: 2–4 значения в один ряд, выбранное подсвечено. Сетка вместо
    flex-wrap — кнопки делят ширину поровну и не вылезают за 360 px. */
@@ -48,6 +69,7 @@
 /* Низ окна: действия над набором и ссылка в старый редактор. */
 .stme-gs-footer { position: sticky; bottom: -10px; display: flex; flex-direction: column; gap: 6px; padding: 8px 0 2px; border-top: 1px solid var(--stme-accent); background: var(--stme-surface); }
 .stme-panel .stme-gs-footer .menu_button { min-height: 32px; }
+.stme-gs-footer .stme-toast { width: 100%; }
 .stme-gs-status { color: var(--stme-accent); font-weight: 600; }
 .stme-gs-advanced { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; border-top: 1px solid var(--stme-border); }
 .stme-panel .stme-gs-link {

@@ -50,7 +50,7 @@ const inputChecked = event => /** @type {HTMLInputElement} */ (event.target).che
 /**
  * @param {UiChild} label
  * @param {((event: MouseEvent) => void) | undefined} onClick
- * @param {{ variant?: 'default' | 'danger', disabled?: boolean }} [options]
+ * @param {{ variant?: 'default' | 'danger', disabled?: boolean | (() => boolean) }} [options]
  * @returns {UiNode}
  */
 export function Button(label, onClick, { variant = 'default', disabled = false } = {}) {
@@ -229,12 +229,15 @@ export function Toggle(label, checkedSignal, { hint, onChange } = {}) {
  * подключения раньше был плашкой во всю ширину карточки.
  *
  * @param {UiChild} text
- * @param {{ tone?: string, onDismiss?: (event: MouseEvent) => void, key?: string | number }} [options]
+ * @param {{ tone?: string, onDismiss?: (event: MouseEvent) => void, key?: string | number, action?: { label: string, onClick: (event: MouseEvent) => void } }} [options]
  * @returns {UiNode}
  */
-export function Toast(text, { tone = 'muted', onDismiss, key } = {}) {
+export function Toast(text, { tone = 'muted', onDismiss, key, action } = {}) {
     return h('div', { class: `stme-toast stme-toast-${tone}`, key },
         h('span', { class: 'stme-toast-text' }, text),
+        // Действие прямо в плашке: «Reset to Classic» без отмены — потеря
+        // набора, а отдельная кнопка «Undo» на экране жила бы дольше события.
+        action ? h('button', { type: 'button', class: 'stme-toast-action', 'on:click': action.onClick }, action.label) : null,
         onDismiss ? h('button', { type: 'button', class: 'stme-toast-close', title: 'Dismiss', 'on:click': onDismiss }, '×') : null,
     );
 }

@@ -46,6 +46,7 @@
 .stme-dw-warning { border-left: 3px solid var(--stme-warn); padding: 3px 8px; background: color-mix(in srgb, var(--stme-warn) 12%, transparent); font-size: .85em; }
 .stme-dw-usage { font-size: .78em; opacity: .6; }
 .stme-dw-message { border-left: 3px solid var(--stme-accent); padding: 4px 8px; background: color-mix(in srgb, var(--stme-accent) 10%, transparent); }
+.stme-dw-settings { border-left: 3px solid var(--stme-ok); padding: 4px 8px; font-size: .88em; background: color-mix(in srgb, var(--stme-ok) 10%, transparent); }
 .stme-dw-answer { font-size: .9em; font-style: italic; opacity: .9; white-space: pre-wrap; }
 
 .stme-dw-archive { border-top: 1px dashed var(--stme-border); padding-top: 6px; }

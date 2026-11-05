@@ -11,7 +11,7 @@ const PASSIVE_EVENTS = new Set(['time', 'researcher', 'typing', 'message']);
 const EVENT_LABELS = {
     turn: 'A new turn has started', regenerate: 'Regenerate requested', swipe: 'Swipe requested',
     time: 'The clock moved', researcher: 'A researcher reported', typing: 'The user is typing',
-    message: 'A message from the user',
+    message: 'A message from the user', settings: 'Game settings changed',
 };
 
 const text = value => String(value ?? '').trim();
@@ -28,7 +28,8 @@ function assessRow(call, args, index) {
     return {
         kind: 'assess', id: callId(call, index), name: 'assess', comment: text(call?.comment) || text(args.comment),
         character: text(result.character ?? args.character), action: text(result.action ?? args.action),
-        difficulty: text(args.difficulty), experience: text(args.experience),
+        difficulty: text(args.difficulty), effective: text(result.difficultyEffective), shift: Number(result.difficultyShift) || 0,
+        experience: text(args.experience),
         probability: result.probability ?? null, roll: result.roll ?? null,
         degree: text(result.degree), words: text(result.words), error: call?.error ?? null, pending: false,
     };
@@ -110,7 +111,12 @@ function answerRows(cycle) {
 export function buildCycleEntry(cycle) {
     const wake = describeWake(cycle);
     const rows = [];
-    if (cycle?.message?.text) rows.push({ kind: 'message', id: 'message', text: text(cycle.message.text), at: cycle.message.at ?? cycle.at });
+    if (cycle?.message?.text) {
+        rows.push({
+            kind: cycle?.event === 'settings' ? 'settings' : 'message', id: 'message',
+            text: text(cycle.message.text), at: cycle.message.at ?? cycle.at,
+        });
+    }
     if (text(cycle?.thinking)) rows.push({ kind: 'thinking', id: 'thinking', text: text(cycle.thinking) });
     for (const [index, call] of (Array.isArray(cycle?.toolCalls) ? cycle.toolCalls : []).entries()) rows.push(toolRow(call, index));
     if (cycle?.form) rows.push(formRow(cycle.form));
@@ -259,7 +265,7 @@ export function applyFeedEvent(state, event, payload = {}) {
 function entryText(entry) {
     const parts = [entry.title, entry.detail];
     for (const row of entry.rows) {
-        parts.push(row.text, row.comment, row.name, row.character, row.action, row.difficulty, row.experience, row.words, row.resolution, row.task);
+        parts.push(row.text, row.comment, row.name, row.character, row.action, row.difficulty, row.effective, row.experience, row.words, row.resolution, row.task);
         if (row.kind === 'form') parts.push(row.userResult, row.place, ...row.characters.flatMap(character => [character.name, character.decision, character.action, character.outcome]));
         if (row.kind === 'call') parts.push(JSON.stringify(row.args ?? {}), JSON.stringify(row.result ?? null));
         if (row.kind === 'writer_check' || row.kind === 'form_check') parts.push(JSON.stringify(row.probabilities ?? {}), row.quote, row.reasons, row.name);

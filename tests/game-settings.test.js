@@ -114,5 +114,5 @@ test('the roll line names who, what and how well, and never a number', () => {
     const line = buildRollLine({ form, assessments });
     assert.equal(line, 'Kael — picks the lock — cleanly, without a hitch');
     assert.doesNotMatch(line, /\d|%/);
-    assert.equal(buildRollLine({ form: { characters: [] }, assessments }), '');
+    assert.equal(buildRollLine({ form: { characters: [] }, assessments: new Map() }), '');
 });

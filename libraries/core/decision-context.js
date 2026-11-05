@@ -239,25 +239,19 @@ export function buildDeciderContext({
  * Контекст прозаика: заметки о персонажах + история с блоком @5 + Push в
  * хвосте. Push идёт после истории, как написано во встроенном промпте.
  */
-export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', sceneText = '', storySettings = '', rollLine = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', sceneText = '', storySettings = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = writerHistory(chat, limit, writerBlock);
     // История прозаика — скользящее окно, поэтому кешируется только то, что стоит ДО неё: туда — редко меняющееся
     // (система, примеры, банки активных, саммари). Лорбук по ключам и заметки меняются почти каждый ход — они после
     // истории, рядом с Push, чтобы не обрывать кеш в начале запроса.
     const parts = [WRITER_SYSTEM, String(storySettings ?? '').trim(), String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
     const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim(), String(sceneText ?? '').trim()].filter(Boolean);
-    // Строка броска — рядом с Push: она меняется каждый ход, и держать её в
-    // защищённой части значило бы рвать кеш префикса.
-    const rollNote = String(rollLine ?? '').trim()
-        ? `ROLL LINE — begin your reply with this line exactly as given, then write the reply below it:\n${String(rollLine).trim()}`
-        : '';
     const push = String(decision ?? '').trim() ? fillPrompt(WRITER_PUSH, { push: String(decision).trim() }) : '';
     const messages = [
         ...parts.map(content => ({ role: 'system', content })),
         ...history,
         ...tail.map(content => ({ role: 'system', content })),
-        ...(rollNote ? [{ role: 'system', content: rollNote }] : []),
         ...(push ? [{ role: 'system', content: push }] : []),
     ];
-    return { messages, prompt: [...parts, renderHistory(history), ...tail, rollNote, push].filter(Boolean).join('\n\n') };
+    return { messages, prompt: [...parts, renderHistory(history), ...tail, push].filter(Boolean).join('\n\n') };
 }

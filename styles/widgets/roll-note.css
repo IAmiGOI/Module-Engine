@@ -1,0 +1,20 @@
+/* --- Строка броска над ответом (part 14) -----------------------------------
+   Отдельное Ядро (`cores/ui/roll-note.js`), а не текст модели: узел живёт
+   прямо над `.mes_text`, поэтому регенерация и свайп его не переписывают, а
+   удалённое сообщение уносит с собой. Только слова степени — чисел и
+   вероятностей здесь никогда нет. */
+.stme-roll-note {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0 0 6px;
+    padding: 3px 8px;
+    border-left: 2px solid var(--stme-accent);
+    border-radius: 0 var(--stme-radius-sm) var(--stme-radius-sm) 0;
+    background: color-mix(in srgb, var(--stme-accent) 7%, transparent);
+    font-size: 12px;
+    line-height: 1.35;
+    opacity: .85;
+    overflow-wrap: anywhere;
+}
+.stme-roll-note-line { white-space: normal; }

@@ -2,8 +2,13 @@ import { h } from './tree.js';
 import { signal, computed } from './reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { createDragHandlers, clampToViewport } from '../../libraries/shared/draggable.js';
-import { FloatingPanel, Button, Row, Segment } from '../../libraries/shared/widgets.js';
+import { FloatingPanel, Button, Row, Toast } from '../../libraries/shared/widgets.js';
 import { GAME_GROUPS, GAME_MODES, GAME_OPTIONS, modeValues } from '../../libraries/core/game-settings.js';
+import { MAX_GAME_MIXES, matchGameMix } from '../../libraries/core/game-mixes.js';
+import { modeTiles } from './game-settings/modes.js';
+import { optionGroups } from './game-settings/options.js';
+import { mixesRow } from './game-settings/mixes.js';
+import { DEFAULT_SIZE, loadPanelWindow, savePanelWindow } from './game-settings/window.js';
 
 /**
  * Окно «Game settings» — вместо редактора промптов на главном пути. Сверху
@@ -16,7 +21,6 @@ import { GAME_GROUPS, GAME_MODES, GAME_OPTIONS, modeValues } from '../../librari
  */
 const UI_NAMESPACE = 'core.ui.gameSettings';
 const WINDOW_KEY = 'window';
-const DEFAULT_SIZE = { width: 560, height: 720 };
 
 export function createGameSettingsPanelCore(host, { mount } = {}) {
     const call = (contract, params) => request(host.own, contract, { params });
@@ -33,12 +37,30 @@ export function createGameSettingsPanelCore(host, { mount } = {}) {
     // Сигнал на опцию рождается один раз, а не в отрисовке: иначе узел на
     // следующей перерисовке остался бы подписан на старый (UI.md).
     const optionSignals = new Map(GAME_OPTIONS.map(option => [option.id, signal(option.classic)]));
+    // Основа для пометок: у готового режима — он сам, у Custom — Classic.
+    const baseValues = computed(() => modeValues(mode() === 'custom' ? 'classic' : mode()));
+    const baseLabel = computed(() => (mode() === 'custom' ? 'Classic' : GAME_MODES.find(item => item.id === mode())?.label ?? 'Classic'));
+    const sameAsDefault = computed(() => {
+        const saved = defaults();
+        return Boolean(saved) && GAME_OPTIONS.every(option => optionSignals.get(option.id)() === saved[option.id]);
+    });
+    const undo = signal(null);
+    let undoTimer = null;
+    // Сохранённые наборы: глобальные, поэтому не сбрасываются со сменой чата.
+    const mixes = signal([]);
+    const activeMixId = signal('');
+    const mixEditing = signal(null); // { mode: 'new' | 'rename', id? }
+    const mixName = signal('');
+    const liveValues = computed(() => Object.fromEntries(GAME_OPTIONS.map(option => [option.id, optionSignals.get(option.id)()])));
+    const matchedMixId = computed(() => matchGameMix(mixes(), liveValues())?.id ?? '');
+    const atLimit = computed(() => mixes().length >= MAX_GAME_MIXES);
 
     let unsubscribeOpen = null;
     const subscriptions = [];
     const flash = text => {
         status.set(text);
-        setTimeout(() => { if (status.peek() === text) status.set(''); }, 3000);
+        const timer = setTimeout(() => { if (status.peek() === text) status.set(''); }, 3000);
+        timer?.unref?.();
     };
 
     function applyState(answer = {}) {
@@ -49,6 +71,7 @@ export function createGameSettingsPanelCore(host, { mount } = {}) {
         }
         mode.set(String(answer?.mode ?? 'classic'));
         if (answer?.defaults && typeof answer.defaults === 'object') defaults.set({ ...answer.defaults });
+        if (Array.isArray(answer?.mixes)) mixes.set(answer.mixes.map(mix => ({ ...mix, values: { ...mix.values } })));
     }
 
     async function refresh() {
@@ -84,16 +107,44 @@ export function createGameSettingsPanelCore(host, { mount } = {}) {
         }
     }
 
+    const currentValues = () => Object.fromEntries(GAME_OPTIONS.map(option => [option.id, optionSignals.get(option.id).peek()]));
+
+    function clearUndo() {
+        if (undoTimer) clearTimeout(undoTimer);
+        undoTimer = null;
+        undo.set(null);
+    }
+
     async function reset() {
         if (saving.peek()) return;
+        const previous = currentValues();
         saving.set(true);
         try {
             const answer = await call('decision.gameSettings.reset');
-            if (answer.ok) applyState(answer.value ?? {});
-            else flash(answer.error?.message ?? 'Could not reset');
+            if (answer.ok) {
+                applyState(answer.value ?? {});
+                undo.set({ text: 'Reset to Classic', values: previous });
+                if (undoTimer) clearTimeout(undoTimer);
+                undoTimer = setTimeout(clearUndo, 8000);
+                undoTimer?.unref?.();
+            } else flash(answer.error?.message ?? 'Could not reset');
         } finally {
             saving.set(false);
         }
+    }
+
+    async function undoReset() {
+        const saved = undo.peek();
+        clearUndo();
+        if (!saved) return;
+        await savePatch(saved.values);
+    }
+
+    /** «Reset this option» — к значению основы: режима, а у Custom — Classic. */
+    function resetOption(id) {
+        const base = baseValues.peek();
+        if (!Object.prototype.hasOwnProperty.call(base, id)) return;
+        savePatch({ [id]: base[id] }).catch(() => {});
     }
 
     function applyMode(modeId) {
@@ -105,83 +156,89 @@ export function createGameSettingsPanelCore(host, { mount } = {}) {
         host.events.emit('decisionPrompts.openRequested', {});
     }
 
-    function modeTile(item) {
-        return h('button', {
-            type: 'button',
-            class: computed(() => (mode() === item.id ? 'stme-gs-mode stme-gs-mode-active' : 'stme-gs-mode')),
-            'aria-pressed': computed(() => (mode() === item.id ? 'true' : 'false')),
-            'on:click': () => applyMode(item.id),
-        },
-            h('span', { class: 'stme-gs-mode-label' }, item.label),
-            h('small', { class: 'stme-gs-mode-note' }, item.note));
+    function startSaveNew() {
+        if (atLimit.peek()) return;
+        mixEditing.set({ mode: 'new' });
+        mixName.set('');
     }
 
-    function customTile() {
-        return h('div', { class: 'stme-gs-mode stme-gs-mode-active stme-gs-mode-custom', role: 'status' },
-            h('span', { class: 'stme-gs-mode-label' }, 'Custom'),
-            h('small', { class: 'stme-gs-mode-note' }, 'Your own mix; nothing was lost.'));
+    function startRename(id) {
+        const mix = mixes.peek().find(item => item.id === id);
+        if (!mix) return;
+        mixEditing.set({ mode: 'rename', id });
+        mixName.set(mix.name);
     }
 
-    function optionRow(option) {
-        const value = optionSignals.get(option.id);
-        return h('div', { class: 'stme-gs-option' },
-            h('div', { class: 'stme-gs-option-title' }, option.title),
-            Segment(option.values.map(item => ({ value: item.value, label: item.label })), value, {
-                label: option.title,
-                onChange: next => savePatch({ [option.id]: next }).catch(() => {}),
-            }),
-            computed(() => h('small', { class: 'stme-gs-note' }, option.values.find(item => item.value === value())?.note ?? '')));
+    function cancelMixEditing() {
+        mixEditing.set(null);
+        mixName.set('');
     }
 
-    function groupBlock(group) {
-        return h('section', { class: 'stme-gs-group' },
-            h('h3', { class: 'stme-gs-group-title' }, group.title),
-            ...GAME_OPTIONS.filter(option => option.group === group.id).map(optionRow));
+    async function saveMixName() {
+        const editing = mixEditing.peek();
+        if (!editing) return;
+        const name = mixName.peek().trim();
+        const answer = editing.mode === 'rename'
+            ? await call('decision.gameSettings.renameMix', { id: editing.id, name })
+            : await call('decision.gameSettings.saveMix', { name });
+        if (!answer.ok) { flash(answer.error?.message ?? 'Could not save the mix'); return; }
+        applyState(answer.value ?? {});
+        if (editing.mode === 'new' && answer.value?.savedId) activeMixId.set(answer.value.savedId);
+        cancelMixEditing();
+    }
+
+    async function applyMix(id) {
+        const answer = await call('decision.gameSettings.applyMix', { id });
+        if (!answer.ok) { flash(answer.error?.message ?? 'Could not apply the mix'); return; }
+        applyState(answer.value ?? {});
+        activeMixId.set(id);
+    }
+
+    async function removeMix(id) {
+        const answer = await call('decision.gameSettings.removeMix', { id });
+        if (!answer.ok) { flash(answer.error?.message ?? 'Could not remove the mix'); return; }
+        applyState(answer.value ?? {});
+        if (activeMixId.peek() === id) activeMixId.set('');
+    }
+
+    async function updateMix() {
+        const id = activeMixId.peek();
+        if (!id) return;
+        const answer = await call('decision.gameSettings.updateMix', { id });
+        if (!answer.ok) { flash(answer.error?.message ?? 'Could not update the mix'); return; }
+        applyState(answer.value ?? {});
+        flash('Mix updated');
     }
 
     function body() {
         return h('div', { class: 'stme-panel stme-gs-window-body' },
-            h('div', { class: 'stme-gs-modes', role: 'group', 'aria-label': 'Game mode' },
-                ...GAME_MODES.map(modeTile),
-                computed(() => (mode() === 'custom' ? customTile() : null))),
-            ...GAME_GROUPS.map(groupBlock),
+            modeTiles({ mode, onMode: applyMode }),
+            mixesRow({
+                mixes, matchedId: matchedMixId, activeId: activeMixId, editing: mixEditing, nameSignal: mixName, atLimit,
+                onApply: applyMix, onRename: startRename, onRemove: removeMix, onSaveNew: startSaveNew,
+                onUpdate: updateMix, onSaveName: saveMixName, onCancelName: cancelMixEditing,
+            }),
+            ...optionGroups({
+                groups: GAME_GROUPS, options: GAME_OPTIONS,
+                signalFor: id => optionSignals.get(id),
+                baseFor: () => baseValues(), baseLabel: () => baseLabel(),
+                onSet: (id, value) => { savePatch({ [id]: value }).catch(() => {}); },
+                onReset: resetOption,
+            }),
             h('div', { class: 'stme-gs-footer' },
                 Row(
-                    Button('Use for new chats', useDefault, { disabled: saving }),
+                    Button(computed(() => (sameAsDefault() ? 'New chats use this mix' : 'Use for new chats')), useDefault, { disabled: computed(() => sameAsDefault()) }),
                     Button('Reset to Classic', reset, { disabled: saving })),
+                computed(() => (undo() ? Toast(undo().text, { tone: 'ok', action: { label: 'Undo', onClick: undoReset }, onDismiss: clearUndo }) : null)),
                 computed(() => (status() ? h('small', { class: 'stme-gs-status', role: 'status' }, status()) : null))),
             h('div', { class: 'stme-gs-advanced' },
                 h('button', { type: 'button', class: 'stme-gs-link', 'on:click': openAdvanced }, 'Advanced: edit prompts'),
                 h('small', { class: 'stme-gs-note' }, 'The full prompt editor, for the rare case.')));
     }
 
-    async function saveWindowState() {
-        await call('storage.settings.set', {
-            namespace: UI_NAMESPACE, key: WINDOW_KEY,
-            value: { visible: visible.peek(), collapsed: collapsed.peek(), position: position.peek(), size: size.peek() },
-        });
-    }
-
-    function defaultPosition(currentSize) {
-        const viewportWidth = globalThis.innerWidth ?? 1920;
-        return { left: Math.max(16, viewportWidth - currentSize.width - 24), top: 60 };
-    }
-
-    async function loadWindowState() {
-        const result = await call('storage.settings.get', { namespace: UI_NAMESPACE, key: WINDOW_KEY, fallback: {} });
-        const saved = (result.ok ? result.value : null) ?? {};
-        visible.set(Boolean(saved.visible));
-        collapsed.set(Boolean(saved.collapsed));
-        const savedSize = saved.size ?? {};
-        const viewport = { viewportWidth: globalThis.innerWidth ?? 1920, viewportHeight: globalThis.innerHeight ?? 1080 };
-        size.set({
-            width: Math.min(savedSize.width > 0 ? savedSize.width : DEFAULT_SIZE.width, viewport.viewportWidth - 16),
-            height: Math.min(savedSize.height > 0 ? savedSize.height : DEFAULT_SIZE.height, viewport.viewportHeight - 32),
-        });
-        position.set(saved.position?.left === undefined
-            ? clampToViewport(defaultPosition(size.peek()), { ...size.peek(), ...viewport })
-            : clampToViewport(saved.position, { ...size.peek(), ...viewport }));
-    }
+    const windowState = { visible, collapsed, position, size };
+    const saveWindowState = () => savePanelWindow({ call, namespace: UI_NAMESPACE, key: WINDOW_KEY, state: windowState });
+    const loadWindowState = () => loadPanelWindow({ call, namespace: UI_NAMESPACE, key: WINDOW_KEY, state: windowState });
 
     function tree() {
         const minWidth = Math.min(360, (globalThis.innerWidth ?? 1920) - 16);
@@ -219,7 +276,10 @@ export function createGameSettingsPanelCore(host, { mount } = {}) {
         tree, open, show, hide, toggle, refresh, body,
         mode, optionSignals, defaults, saving, status,
         setOption: (id, value) => savePatch({ [id]: value }),
-        applyMode, useDefault, reset, openAdvanced,
+        applyMode, useDefault, reset, resetOption, undoReset, openAdvanced,
+        baseValues, baseLabel, sameAsDefault, undo, currentValues,
+        mixes, activeMixId, mixEditing, mixName, matchedMixId, atLimit,
+        startSaveNew, startRename, cancelMixEditing, saveMixName, applyMix, removeMix, updateMix,
         isVisible: () => visible.peek(),
         stop() {
             unsubscribeOpen?.();

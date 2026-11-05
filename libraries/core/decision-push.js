@@ -23,24 +23,53 @@ function minutesLabel(minutes) {
 
 function assessmentOf(assessments, id) {
     if (assessments instanceof Map) return assessments.get(id) ?? null;
+    if (Array.isArray(assessments)) return assessments.find(item => item?.id === id) ?? null;
     return assessments?.[id] ?? null;
 }
 
+/** Сокращённое действие для строки броска: одна короткая фраза, без хвоста. */
+export function shortAction(value, max = 44) {
+    const text = phrase(value).replace(/\s+/g, ' ') || 'makes the attempt';
+    if (text.length <= max) return text;
+    const cut = text.slice(0, max);
+    const at = cut.lastIndexOf(' ');
+    return `${(at > 12 ? cut.slice(0, at) : cut).replace(/[.,;:!?]+$/, '')}…`;
+}
+
 /**
- * Короткая строка броска для показа в чате (опция Show rolls): кто, что,
- * степень. Шансы и числа не выводятся никогда — это игра, а не отладка.
+ * Строки броска для показа в чате (опция Show rolls): по одной на бросок —
+ * кто, что (сокращённо), степень словами. Шансы и числа не выводятся
+ * никогда — это игра, а не отладка.
  */
-export function buildRollLine({ form, assessments = new Map() } = {}) {
+function allAssessments(assessments) {
+    if (assessments instanceof Map) return [...assessments.entries()].map(([id, value]) => ({ id, ...value }));
+    if (Array.isArray(assessments)) return assessments;
+    if (assessments && typeof assessments === 'object') return Object.entries(assessments).map(([id, value]) => ({ id, ...value }));
+    return [];
+}
+
+export function buildRollLines({ form, assessments = new Map() } = {}) {
     const lines = [];
+    const used = new Set();
     for (const character of Array.isArray(form?.characters) ? form.characters : []) {
         if (character?.idle === true) continue;
         const found = assessmentOf(assessments, character?.assessId);
         const words = line(found?.words);
         if (!words) continue;
+        used.add(line(character?.assessId));
         const name = line(character?.name) || 'Someone';
-        lines.push(`${name} — ${phrase(character?.action) || 'makes the attempt'} — ${words}`);
+        lines.push(`${name} — ${shortAction(character?.action)} — ${words}`);
     }
-    return lines.join('; ');
+    // Бросок попытки пользователя в форме не цитируется (его итог — userResult), но это главный бросок хода: он идёт первым.
+    const own = allAssessments(assessments)
+        .filter(item => line(item?.words) && !used.has(line(item?.id)))
+        .map(item => `${line(item?.character) || 'Someone'} — ${shortAction(item?.action)} — ${line(item.words)}`);
+    return [...own, ...lines];
+}
+
+/** Та же строка, склеенная в одну (совместимость и тесты). */
+export function buildRollLine({ form, assessments = new Map() } = {}) {
+    return buildRollLines({ form, assessments }).join('; ');
 }
 
 /**

@@ -111,11 +111,17 @@ export function assessAction({ character = '', action = '', difficulty = '', exp
     const probability = computeProbability(experience, difficulty, difficultyShift);
     const roll = Number.isFinite(seed) ? rollFromSeed(seed) : Math.random();
     const band = degreeFor(probability, roll);
+    // Выбранный директором уровень и действующий после сдвига настроек: лента
+    // показывает «moderate → hard», если они разошлись.
+    const step = Math.trunc(Number(difficultyShift)) || 0;
+    const effective = Math.max(0, Math.min(DIFFICULTY_LEVELS.length - 1, difficultyIndex(difficulty) + step));
     return {
         ok: true,
         character: String(character ?? '').trim(),
         action: String(action ?? '').trim(),
         difficulty: normalize(difficulty),
+        difficultyEffective: DIFFICULTY_LEVELS[effective],
+        difficultyShift: step,
         experience: normalize(experience),
         why: String(why ?? '').trim(),
         probability: round(probability),

@@ -29,7 +29,11 @@ export function createDecisionEvents({
         setPending(null);
         clearAttempts();
         persist(pending)
-            .then(stored => cycle.recordTurn?.({ pending, stored }))
+            .then(stored => {
+                cycle.recordTurn?.({ pending, stored });
+                // Уже после записи: строка броска читает runs[mesid], и до этого события записи ещё нет.
+                publishEvent('decision.run.saved', { runId: pending.runId, mesid: stored?.mesid ?? null });
+            })
             .catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `could not save the director run: ${error?.message ?? error}` }));
     }
 

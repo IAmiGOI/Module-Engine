@@ -7,7 +7,6 @@ import { createWriterProxy } from './writer-proxy.js';
 import { createWriterChecker } from './writer-check.js';
 import { createKnowledge } from './knowledge.js';
 import { buildStorySettingsBlock, resolveGameSettings } from '../../libraries/core/game-settings.js';
-import { buildRollLine } from '../../libraries/core/decision-push.js';
 
 /**
  * Тело запроса прозаика. Если у прозаика выбрано подключение ME, запрос
@@ -15,7 +14,7 @@ import { buildRollLine } from '../../libraries/core/decision-push.js';
  * подключения нет — прежний путь: подменяем тело запроса ST, адрес и ключ
  * остаются ST.
  */
-export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending, getAssessments = null, banks = null, publishEvent = null }) {
+export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending, banks = null, publishEvent = null }) {
     const writerProxy = createWriterProxy({ host, getSettings, getWorkers });
     const writerChecker = createWriterChecker({ call, getSettings, banks });
     const knowledge = createKnowledge({ call, store, banks });
@@ -41,14 +40,11 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const sceneText = renderCurrentScene({ form: lastAcceptedForm(cycles, { beforeTurn: Number.isFinite(currentTurn) ? currentTurn : null }), roster: store.roster().active, user: banks?.persona?.()?.name || '' })
             .replace('CURRENT SCENE (where the previous turn left things — start from here):', 'WHERE THE PREVIOUS REPLY LEFT THINGS (start from here; the push says what happens next):')
             .split('\n').filter(line => !line.startsWith('- Left the scene in that ending:')).join('\n');
-        // Show rolls — «In the chat»: писатель начинает ответ одной строкой броска.
+        // Броски в контекст писателя не идут вовсе: строку рисует интерфейс над сообщением.
         const game = resolveGameSettings(typeof store.gameSettings === 'function' ? store.gameSettings() : null, settings.gameDefaults);
-        const rollLine = game.showRolls === 'chat' && typeof getAssessments === 'function'
-            ? buildRollLine({ form: pending.form, assessments: getAssessments() })
-            : '';
         const context = buildWriterContext({
             notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText,
-            examples, lorebookText, knowledgeText, sceneText, rollLine, storySettings: buildStorySettingsBlock('writer', game),
+            examples, lorebookText, knowledgeText, sceneText, storySettings: buildStorySettingsBlock('writer', game),
         });
         if (writerId && writerId !== 'st-main') {
             const own = await writerProxy.respond({

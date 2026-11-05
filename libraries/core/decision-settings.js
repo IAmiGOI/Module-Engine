@@ -5,6 +5,7 @@
  */
 import { migratePromptSections } from './decision-prompt-model.js';
 import { clampGameSettings, DEFAULT_GAME_SETTINGS } from './game-settings.js';
+import { clampGameMixes } from './game-mixes.js';
 
 export const DECISION_NAMESPACE = 'core.decision';
 export const DECISION_MEMORY_NAMESPACE = 'core.decision';
@@ -62,6 +63,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     prompts: DEFAULT_PROMPTS,
     // Настройки игры для новых чатов (часть 13). Настройки текущего чата — в памяти чата.
     gameDefaults: DEFAULT_GAME_SETTINGS,
+    // Сохранённые игроком наборы (часть 14) — глобально, не на чат.
+    gameMixes: Object.freeze([]),
     regen: 'decider',
     // Предохранители и таймаут формы части 2.
     maxSteps: 50,
@@ -117,6 +120,7 @@ export function clampDecisionSettings(values = {}) {
         },
         promptSections: migratePromptSections(source.promptSections, { director: prompts.director, writer: prompts.writer }),
         gameDefaults: clampGameSettings(source.gameDefaults),
+        gameMixes: clampGameMixes(source.gameMixes),
         regen: REGEN_MODES.includes(source.regen) ? source.regen : DEFAULT_SETTINGS.regen,
         maxSteps: Math.round(number(source.maxSteps, 1, 500, DEFAULT_SETTINGS.maxSteps)),
         implicitAwait: source.implicitAwait === undefined ? DEFAULT_SETTINGS.implicitAwait : Boolean(source.implicitAwait),
@@ -210,5 +214,6 @@ export function publicDecisionSettings(settings = {}) {
         prompts: { ...settings.prompts },
         promptSections: structuredClone(settings.promptSections ?? {}),
         gameDefaults: { ...settings.gameDefaults },
+        gameMixes: (settings.gameMixes ?? []).map(mix => ({ ...mix, values: { ...mix.values } })),
     };
 }
