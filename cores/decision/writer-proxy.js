@@ -1,5 +1,5 @@
 import { request } from '../../libraries/shared/request.js';
-import { buildProviderRequest, resolveStreamDelta } from '../../libraries/core/provider-request.js';
+import { buildProviderRequest, resolveStreamDelta, isNanoGpt } from '../../libraries/core/provider-request.js';
 import { translateWriterFrame, writerSourceFormat, writerErrorMessage, writerErrorBody, writerJsonBody } from '../../libraries/core/writer-response.js';
 import { rewritePrompt, rewriteReasons } from '../../libraries/core/decision-writer-check.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
@@ -41,9 +41,36 @@ function linkSignal(external, controller) {
     return () => external.removeEventListener('abort', abort);
 }
 
+const NANO_MODELS_URL = 'https://nano-gpt.com/api/v1/models?detailed=true';
+const EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+/** Самый низкий уровень размышлений, который модель принимает; null — модель не размышляет или список недоступен. */
+export function lowestEffort(efforts) {
+    const list = Array.isArray(efforts) ? efforts.map(value => String(value).toLowerCase()) : [];
+    return EFFORT_ORDER.find(level => list.includes(level)) ?? null;
+}
+
 export function createWriterProxy({ host, getSettings, getWorkers }) {
     function network(params, options) {
         return request(host.network, 'http.request', { params, ...options });
+    }
+
+    // Писатель не размышляет. NanoGPT выключает это только у части моделей (GLM 5.3 — нет, минимум "low"), поэтому уровень берётся из их списка моделей: публичный, без ключа, один раз за сессию.
+    let nanoEfforts = null;
+    async function disabledEffortFor(worker) {
+        if (!isNanoGpt(worker?.endpoint)) return null;
+        if (!nanoEfforts) {
+            nanoEfforts = network({ url: NANO_MODELS_URL, method: 'GET' }, { timeoutMs: 8000 }).then(result => {
+                const value = result?.ok ? result.value : null;
+                if (!value?.ok) return null;
+                const map = new Map();
+                for (const model of JSON.parse(String(value.text ?? '{}'))?.data ?? []) map.set(String(model.id).toLowerCase(), model.reasoning_efforts ?? null);
+                return map;
+            }).catch(() => null);
+        }
+        const map = await nanoEfforts;
+        if (!map) { nanoEfforts = null; return null; }
+        return lowestEffort(map.get(String(worker.model ?? '').toLowerCase()));
     }
 
     function targetWorker() {
@@ -54,8 +81,8 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         return { worker, id };
     }
 
-    function makeRequest(worker, settings, payload, messages, stream) {
-        const generateRequest = { messages, ...samplerFor(settings, payload), reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0 };
+    function makeRequest(worker, settings, payload, messages, stream, disabledEffort = null) {
+        const generateRequest = { messages, ...samplerFor(settings, payload), reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0, disabledEffort };
         return buildProviderRequest(worker, generateRequest, { stream });
     }
 
@@ -74,11 +101,12 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
             return { respondWith: jsonResponse(writerErrorBody(`Writer connection "${id}" must be an "openai" connection; it is "${worker.format}".`), 400) };
         }
         const stream = payload?.stream === true;
+        const disabledEffort = await disabledEffortFor(worker);
         const targetFormat = writerSourceFormat(payload?.chat_completion_source);
         const context = {
             id, worker, settings, payload, messages, signal, check: check ?? null,
             push, userMessage, resolution, user, runId, publishEvent, targetFormat, stream,
-            requestFor: nextMessages => makeRequest(worker, settings, payload, nextMessages, stream),
+            requestFor: nextMessages => makeRequest(worker, settings, payload, nextMessages, stream, disabledEffort),
         };
         // Проверять нечем (классификатор не настроен) — поток идёт живьём, как до части 11: держать ответ незачем,
         // а пользователь иначе ничего не видит, пока писатель не допишет целиком.

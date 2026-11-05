@@ -66,6 +66,11 @@ function isOpenRouter(endpoint) {
     return /openrouter\.ai/i.test(String(endpoint ?? ''));
 }
 
+/** NanoGPT: размышления выключаются верхним `reasoning_effort` — "none" там, где модель это умеет, иначе самый низкий уровень. */
+export function isNanoGpt(endpoint) {
+    return /nano-gpt\.com/i.test(String(endpoint ?? ''));
+}
+
 /**
  * OpenRouter's `max_tokens` is a completion-only budget (prompt is billed
  * separately against the context window — see OpenRouter's own Parameters
@@ -107,6 +112,11 @@ function buildOpenAiReasoning(worker, request) {
     // `reasoningMode` (например прямой сбор запроса в обход
     // `resolveGenerateRequest()`, как в тестах) молча уезжал как ВКЛЮЧЁННЫЙ
     // ризонинг — ровно то, чего вызывающий никогда не просил.
+    if (isNanoGpt(worker.endpoint)) {
+        if (request.reasoningMode !== 'disabled') return {};
+        const effort = String(request.disabledEffort ?? '').trim();
+        return effort ? { reasoning_effort: effort } : {};
+    }
     if (!isOpenRouter(worker.endpoint)) return {};
     if (request.reasoningMode !== 'enabled' && request.reasoningMode !== 'disabled') return {};
     const enabled = request.reasoningMode === 'enabled';
