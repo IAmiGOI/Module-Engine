@@ -115,13 +115,13 @@ test('the Director / Writer card has no prompt fields and its button opens the p
     };
     let opened = 0;
     let openedDirector = 0;
-    const card = createDecisionCard({ call, collapse: { bind: () => ({}) }, notify: async () => ({ ok: true }), workers: signal([]), openPrompts: () => { opened += 1; }, openDirector: () => { openedDirector += 1; } });
+    const card = createDecisionCard({ call, collapse: { bind: () => ({}) }, notify: async () => ({ ok: true }), workers: signal([]), openSettings: () => { opened += 1; }, openDirector: () => { openedDirector += 1; } });
     await card.loadDecision();
     const node = card.decisionCard();
     const text = textOf(node);
     assert.doesNotMatch(text, /Director prompt|Writer prompt/);
-    const button = walkAll(node, item => item.tag === 'button' && textOf(item) === 'Open prompts')[0];
-    assert.ok(button, 'the card must offer a way into the window');
+    const button = walkAll(node, item => item.tag === 'button' && textOf(item) === 'Open game settings')[0];
+    assert.ok(button, 'the card must offer a way into the game settings window');
     button.props['on:click']();
     assert.equal(opened, 1);
     const director = walkAll(node, item => item.tag === 'button' && textOf(item) === 'Open director')[0];

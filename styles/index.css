@@ -29,6 +29,7 @@
 @import url('./modules/memory-graph.css');
 @import url('./windows/picture-window.css');
 @import url('./windows/decision-prompts-window.css');
+@import url('./windows/game-settings.css');
 @import url('./windows/decision-window.css');
 @import url('./screens/guide.css');
 @import url('./chat-viewport/overlay.css');

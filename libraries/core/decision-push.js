@@ -27,6 +27,23 @@ function assessmentOf(assessments, id) {
 }
 
 /**
+ * Короткая строка броска для показа в чате (опция Show rolls): кто, что,
+ * степень. Шансы и числа не выводятся никогда — это игра, а не отладка.
+ */
+export function buildRollLine({ form, assessments = new Map() } = {}) {
+    const lines = [];
+    for (const character of Array.isArray(form?.characters) ? form.characters : []) {
+        if (character?.idle === true) continue;
+        const found = assessmentOf(assessments, character?.assessId);
+        const words = line(found?.words);
+        if (!words) continue;
+        const name = line(character?.name) || 'Someone';
+        lines.push(`${name} — ${phrase(character?.action) || 'makes the attempt'} — ${words}`);
+    }
+    return lines.join('; ');
+}
+
+/**
  * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
  * @returns {string}
  */

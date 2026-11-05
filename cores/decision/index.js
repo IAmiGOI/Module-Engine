@@ -15,6 +15,7 @@ import { createCharacterBanks } from './banks.js';
 import { createBootstrap } from './bootstrap.js';
 import { createBankSets } from './bank-sets.js';
 import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
+import { clampGameSettings, modeOf, modeValues, patchGameSettings, resolveGameSettings } from '../../libraries/core/game-settings.js';
 const BEFORE_SEND_PIPELINE = 'generation.beforeSend';
 const PAYLOAD_PIPELINE = 'generation.payload';
 const DECIDE_STAGE = 'decision:decide';
@@ -48,6 +49,18 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         return result.value;
     };
     const store = createDecisionStore({ call, publishEvent });
+    // Настройки игры (часть 13): у чата свои, без записи — умолчание новых
+    // чатов. Кэш синхронный: два быстрых клика по разным опциям не должны
+    // оба прочитать старый набор и затереть правку друг друга.
+    let gameValues = null;
+    const gameSettingsValues = () => {
+        if (!gameValues) gameValues = resolveGameSettings(store.gameSettings(), settings.gameDefaults);
+        return { ...gameValues };
+    };
+    const gameSettingsState = () => {
+        const values = gameSettingsValues();
+        return { values, mode: modeOf(values), defaults: clampGameSettings(settings.gameDefaults) };
+    };
     const callService = async (contract, params) => {
         const result = await request(host.services, contract, { params });
         if (!result.ok) throw new Error(result.error.message);
@@ -79,6 +92,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             return result.value;
         },
         getSettings: () => settings,
+        getGameSettings: gameSettingsValues,
         getWorkers: () => workers,
         store,
         researcher,
@@ -87,7 +101,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         // Мысли и расход фоновых циклов (bootstrap, сообщения, пассивные) — тем же перехватом, что у хода.
         capture: (prefix, handlers) => captureReasoning(host, prefix, handlers),
     });
-    const bootstrap = createBootstrap({ call: callStrict, store, cycle, getSettings: () => settings, publishEvent });
+    const bootstrap = createBootstrap({ call: callStrict, store, cycle, getSettings: () => settings, getGameSettings: gameSettingsValues, publishEvent });
     const bankSets = createBankSets({ call: callStrict, banks, store, bootstrap, askUser: params => cycle.askUser(params), publishEvent });
     // Снимок «стартовых» банков — с паузой: событие «готов» приходит раньше, чем банк записан, а событий за bootstrap много.
     let snapshotTimer = null;
@@ -110,6 +124,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
 
     async function reload() {
         await store.reload();
+        gameValues = null;
         await cycle.rebuildWindow().catch(error => publishEvent('decision.log.warning', { reason: `window rebuild failed: ${error?.message ?? error}` }));
         await banks.reload().catch(() => {});
         workers = (await call('model.workers.get')) ?? [];
@@ -124,6 +139,36 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }).catch(error => publishEvent('decision.bank.failed', { message: error?.message ?? String(error) }));
         publishEvent('decision.reloaded', { at: Date.now() });
         return { runs: store.runs() };
+    }
+
+    /** Правка настроек игры этого чата: событие после записи, режим пересчитывается по набору. */
+    async function setGameSettings(patch = {}) {
+        const previous = gameSettingsValues();
+        const values = patchGameSettings(previous, patch);
+        gameValues = values;
+        try {
+            await store.saveGameSettings(values);
+        } catch (error) {
+            gameValues = previous;
+            throw error;
+        }
+        const state = { values, mode: modeOf(values), defaults: clampGameSettings(settings.gameDefaults) };
+        publishEvent('decision.gameSettings.changed', { ...state, patch });
+        return state;
+    }
+
+    /** «Use for new chats»: текущий набор становится умолчанием для новых чатов. */
+    async function useGameSettingsAsDefault() {
+        const values = gameSettingsValues();
+        await saveSettings({ gameDefaults: values });
+        const state = { values, mode: modeOf(values), defaults: { ...values } };
+        publishEvent('decision.gameSettings.changed', state);
+        return state;
+    }
+
+    /** «Reset to Classic»: этот чат возвращается к набору Classic. */
+    async function resetGameSettings() {
+        return setGameSettings(modeValues('classic'));
     }
 
     async function saveSettings(patch = {}) {
@@ -234,7 +279,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }
     }
 
-    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, banks, publishEvent });
+    const rewrite = createWriterRewrite({ host, call, getSettings: () => settings, getWorkers: () => workers, store, getPending: () => pending, getAssessments: () => cycle.assessments(), banks, publishEvent });
 
     /** Предпросмотр раздела: собирает блок и плашки данных для окна промптов. */
     const preview = input => previewSection({ input, settings, call, store });
@@ -296,6 +341,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             reload,
             decideContract: DECIDE_CONTRACT,
             rewriteContract: REWRITE_CONTRACT,
+            gameSettings: { get: gameSettingsState, set: setGameSettings, useDefault: useGameSettingsAsDefault, reset: resetGameSettings },
         }));
         await registerStages();
         return settings;
@@ -308,6 +354,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         rewrite,
         preview,
         settings: () => publicDecisionSettings(settings),
+        gameSettings: gameSettingsState,
+        setGameSettings,
         runs: () => ({ ...store.runs() }),
         roster: () => store.roster(),
         log: () => store.cycles(),

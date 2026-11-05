@@ -21,6 +21,7 @@ export function createDecisionStore({ call, publishEvent }) {
     let snapshots = {};
     let draft = null;
     let chatBrief = null;
+    let gameSettings = null;
     let tail = Promise.resolve();
 
     function enqueue(task) {
@@ -62,6 +63,7 @@ export function createDecisionStore({ call, publishEvent }) {
         snapshots = data.snapshots;
         draft = data.draft;
         chatBrief = data.chatBrief;
+        gameSettings = data.gameSettings;
         windows.load({ window: data.window, frozenWindows: data.frozenWindows, windowBoundary: data.windowBoundary });
         return { runs, log: logs.log() };
     }
@@ -186,6 +188,14 @@ export function createDecisionStore({ call, publishEvent }) {
         });
     }
 
+    function saveGameSettings(value) {
+        return enqueue(async () => {
+            gameSettings = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'gameSettings', value: gameSettings });
+            return gameSettings ? { ...gameSettings } : null;
+        });
+    }
+
     function saveChatBrief(value) {
         return enqueue(async () => {
             chatBrief = value && typeof value === 'object' ? value : null;
@@ -269,6 +279,8 @@ export function createDecisionStore({ call, publishEvent }) {
         saveDraft,
         chatBrief: () => (chatBrief ? JSON.parse(JSON.stringify(chatBrief)) : null),
         saveChatBrief,
+        gameSettings: () => (gameSettings ? { ...gameSettings } : null),
+        saveGameSettings,
         boundary: windows.boundary,
         saveBoundary: windows.saveBoundary,
         window: windows.window,

@@ -4,6 +4,7 @@
  * панель правит те же поля, поэтому клэмп живёт здесь, а не в UI.
  */
 import { migratePromptSections } from './decision-prompt-model.js';
+import { clampGameSettings, DEFAULT_GAME_SETTINGS } from './game-settings.js';
 
 export const DECISION_NAMESPACE = 'core.decision';
 export const DECISION_MEMORY_NAMESPACE = 'core.decision';
@@ -59,6 +60,8 @@ export const DEFAULT_BOOTSTRAP = Object.freeze({
 
 export const DEFAULT_SETTINGS = Object.freeze({
     prompts: DEFAULT_PROMPTS,
+    // Настройки игры для новых чатов (часть 13). Настройки текущего чата — в памяти чата.
+    gameDefaults: DEFAULT_GAME_SETTINGS,
     regen: 'decider',
     // Предохранители и таймаут формы части 2.
     maxSteps: 50,
@@ -113,6 +116,7 @@ export function clampDecisionSettings(values = {}) {
             writer: text(prompts.writer, DEFAULT_PROMPTS.writer),
         },
         promptSections: migratePromptSections(source.promptSections, { director: prompts.director, writer: prompts.writer }),
+        gameDefaults: clampGameSettings(source.gameDefaults),
         regen: REGEN_MODES.includes(source.regen) ? source.regen : DEFAULT_SETTINGS.regen,
         maxSteps: Math.round(number(source.maxSteps, 1, 500, DEFAULT_SETTINGS.maxSteps)),
         implicitAwait: source.implicitAwait === undefined ? DEFAULT_SETTINGS.implicitAwait : Boolean(source.implicitAwait),
@@ -205,5 +209,6 @@ export function publicDecisionSettings(settings = {}) {
         writer: { ...settings.writer },
         prompts: { ...settings.prompts },
         promptSections: structuredClone(settings.promptSections ?? {}),
+        gameDefaults: { ...settings.gameDefaults },
     };
 }

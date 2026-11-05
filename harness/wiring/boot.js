@@ -12,7 +12,7 @@ export const SUMMARY_ENABLED = false;
 
 /** Запуск: восстановление сохранённого, открытие окон и панели, подключение пайплайна генерации — строго в этом порядке. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireBoot(ctx) {
-    const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, decisionCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, decisionPromptsPanel, decisionWindow, notifications, firstLoad, messageFooter, updateOverlay, modules, guide, enginePanel } = ctx;
+    const { engine, late, eventsCore, modelsCore, diffusionCore, generationCore, decisionCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, summaryCore, memoryGraphCore, memoryGraphPanel, picturePanel, decisionPromptsPanel, gameSettingsPanel, decisionWindow, notifications, firstLoad, messageFooter, updateOverlay, modules, guide, enginePanel } = ctx;
 
     // Every Ядро is constructed by now (Settings Core included) — safe to
     // actually read back whatever was persisted last time.
@@ -93,6 +93,10 @@ export async function wireBoot(ctx) {
     // монтируется здесь, корень уходит в body, сервис перехватывает иконку ST.
     const decisionPromptsUi = await decisionPromptsPanel.open();
     document.body.append(decisionPromptsUi.getRoot());
+    // Окно Game settings — главный путь (иконка ST и карточка); старое окно
+    // промптов остаётся по ссылке Advanced внутри него.
+    const gameSettingsUi = await gameSettingsPanel.open();
+    document.body.append(gameSettingsUi.getRoot());
     // Окно директора монтируется так же: дерево здесь, корень в body, кнопка
     // дока внутри дерева. Открывается карточкой Director / Writer.
     const decisionWindowUi = await decisionWindow.open();
@@ -111,5 +115,5 @@ export async function wireBoot(ctx) {
     // ради ещё не собранного пайплайна.
     await generationCore.install();
 
-    return { firstLoadResult, notificationsUi, updateOverlayUi, memoryGraphPanelUi, picturePanelUi, decisionPromptsUi, decisionWindowUi, guideUi };
+    return { firstLoadResult, notificationsUi, updateOverlayUi, memoryGraphPanelUi, picturePanelUi, decisionPromptsUi, gameSettingsUi, decisionWindowUi, guideUi };
 }

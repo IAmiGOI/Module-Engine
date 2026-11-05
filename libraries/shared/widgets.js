@@ -456,6 +456,53 @@ export function Select(valueSignal, options, { onChange } = {}) {
 }
 
 /**
+ * Сегменты — переключатель на 2–4 значения в один ряд, как выбор сложности в
+ * игре (часть 13). `items` — `{ value, label }` или строки. Клавиатура: Tab
+ * входит в группу, стрелки ходят по значениям.
+ *
+ * @param {SelectOption[] | (() => SelectOption[])} items
+ * @param {Signal<string>} valueSignal
+ * @param {{ onChange?: (value: string) => void, label?: string }} [config]
+ * @returns {UiNode}
+ */
+export function Segment(items, valueSignal, { onChange, label } = {}) {
+    const read = () => (typeof items === 'function' ? items() : items).map(item => (typeof item === 'string' ? { value: item, label: item } : item));
+    /** @param {string} value */
+    const choose = value => {
+        if (valueSignal() === value) return;
+        valueSignal.set(value);
+        onChange?.(value);
+    };
+    /** @param {any} event @param {number} step */
+    const move = (event, step) => {
+        const list = read();
+        const at = list.findIndex(item => item.value === valueSignal());
+        const next = list[Math.max(0, Math.min(list.length - 1, at + step))];
+        if (!next || next.value === valueSignal()) return;
+        event.preventDefault?.();
+        choose(next.value);
+        event.currentTarget?.querySelectorAll?.('[role="radio"]')?.[list.indexOf(next)]?.focus?.();
+    };
+    return h('div', {
+        class: 'stme-segment',
+        role: 'radiogroup',
+        'aria-label': label,
+        'on:keydown': event => {
+            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') move(event, 1);
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') move(event, -1);
+        },
+    }, computed(() => read().map(item => h('button', {
+        key: item.value,
+        type: 'button',
+        role: 'radio',
+        'aria-checked': computed(() => (valueSignal() === item.value ? 'true' : 'false')),
+        tabindex: computed(() => (valueSignal() === item.value ? '0' : '-1')),
+        class: computed(() => (valueSignal() === item.value ? 'stme-segment-item stme-segment-active' : 'stme-segment-item')),
+        'on:click': () => choose(item.value),
+    }, item.label ?? item.value))));
+}
+
+/**
  * @param {UiChild} label
  * @param {UiChild} control
  * @param {{ hint?: string | (() => string) }} [options]  Подсказка — строка или функция/сигнал, если она следит за чужим состоянием.

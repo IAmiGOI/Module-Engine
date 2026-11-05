@@ -21,7 +21,7 @@ const key = value => String(value ?? '').trim().toLowerCase();
  *           state: { assessments: Map, assessmentCounter: number, turnCounter: number },
  *           resolvePlace: Function, lastTimeMark: Function, similarityScores: Function }} input
  */
-export function createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null }) {
+export function createHandlers({ store, call, publishEvent, getSettings, getGameSettings = null, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -254,7 +254,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, state, 
             };
         },
 
-        assess: createAssessHandler({ state, getSettings }),
+        assess: createAssessHandler({ state, getSettings, getGameSettings }),
 
         submit_turn: createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker, userName: () => String(banks?.persona?.()?.name ?? '').trim() }),
 

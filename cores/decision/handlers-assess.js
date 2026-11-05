@@ -1,5 +1,6 @@
 import { assessAction } from '../../libraries/core/decision-probability.js';
 import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js';
+import { difficultyShift } from '../../libraries/core/game-settings.js';
 
 /**
  * Оценка действия: два уровня из списков → таблица вероятностей → бросок
@@ -8,7 +9,7 @@ import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js'
  */
 export const ASSESS_KINDS = Object.freeze(['body', 'stealth', 'perception', 'craft', 'magic', 'social']);
 
-export function createAssessHandler({ state, getSettings }) {
+export function createAssessHandler({ state, getSettings, getGameSettings = null }) {
     return async args => {
         // Разговор не бросается: убедить, соврать, надавить — и как это примет слушатель — решает директор.
         // Обязательный вид попытки не даёт тихо превратить уговоры в бросок «на подачу».
@@ -22,8 +23,11 @@ export function createAssessHandler({ state, getSettings }) {
         const id = `asm_${state.runId}_${state.assessmentCounter}`;
         const settings = getSettings();
         const seed = Number.isFinite(settings.assessSeed) ? settings.assessSeed + state.assessmentCounter : undefined;
+        // Сложность игры двигает столбец таблицы для ВСЕХ бросков, включая броски NPC.
+        const game = typeof getGameSettings === 'function' ? getGameSettings() : null;
         const result = assessAction({
             character: args.character, action: args.action, difficulty: args.difficulty, experience: args.experience, why: args.why, seed,
+            difficultyShift: difficultyShift(game),
         });
         if (!result.ok) return result;
         state.assessments.set(id, { ...result, id });

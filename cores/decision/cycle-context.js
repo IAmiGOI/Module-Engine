@@ -8,6 +8,7 @@ import { createBoundary, normalizeBoundary, windowTurnCount } from '../../librar
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import { DIRECTOR_CONCRETE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
+import { buildStorySettingsBlock, resolveGameSettings } from '../../libraries/core/game-settings.js';
 import { lastAcceptedForm, renderCurrentScene } from '../../libraries/core/decision-scene.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createKnowledge } from './knowledge.js';
@@ -33,7 +34,7 @@ export function turnWake(type) {
     return wakeFor({ type, label: `The director runs again (${type})` });
 }
 
-export function createCycleContext({ call, store, banks = null, capture = null }) {
+export function createCycleContext({ call, store, banks = null, capture = null, getGameSettings = null }) {
     const knowledge = createKnowledge({ call, store, banks });
     async function externalTools() {
         try {
@@ -139,13 +140,21 @@ export function createCycleContext({ call, store, banks = null, capture = null }
         });
     }
 
-    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false }) {
+    /** Настройки игры этого чата: без них — Classic. Блок меняется только при смене настроек. */
+    function storySettingsText(settings = null) {
+        const game = typeof getGameSettings === 'function'
+            ? getGameSettings()
+            : resolveGameSettings(typeof store.gameSettings === 'function' ? store.gameSettings() : null, settings?.gameDefaults ?? null);
+        return buildStorySettingsBlock('director', game);
+    }
+
+    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '' }) {
         const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '', chatBriefText: '' };
         const win = typeof store.window === 'function' ? store.window() : null;
         const all = Array.isArray(win?.entries) ? win.entries : [];
         const entries = reroll ? withoutRejectedTurn(all, currentUser) : all;
         return buildDeciderContext({
-            plan: store.plan(), arcs: store.arcs(), notes: store.notes(),
+            plan: store.plan(), arcs: store.arcs(), notes: store.notes(), storySettings,
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
             chatBriefText: safe.chatBriefText ?? '', planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
             windowEntries: [...entries, ...pendingTurn(entries, currentUser, reroll)],
@@ -160,7 +169,7 @@ export function createCycleContext({ call, store, banks = null, capture = null }
             lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(),
         ]);
         const banksText = banks ? banks.contextFor({ all: true }).text : '';
-        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat), reroll });
+        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat), reroll, storySettings: storySettingsText(settings) });
     }
 
     /**

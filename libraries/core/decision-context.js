@@ -187,7 +187,7 @@ export function buildDeciderContext({
     plan = null, arcs = [], notes = {}, roster = [],
     banksText = '', lorebookText = '', chatBriefText = '', libraryText = '', plansText = '', activeBanksText = '',
     frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '', sceneText = '',
-    planMissing = false, directorBlock = '', task = '',
+    planMissing = false, directorBlock = '', storySettings = '', task = '',
     digests = [], turns = [], chat = [], summaries = [], researchText = '', bankText = '', lorebookChanges = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
     const usingWindow = windowMode || (Array.isArray(windowEntries) && windowEntries.length > 0);
@@ -213,8 +213,11 @@ export function buildDeciderContext({
     const taskText = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
     // Как думать — в самом конце, ближе всего к генерации: там модель это действительно держит.
     const turnTask = `${taskText}\n\n${DIRECTOR_REASONING}`;
+    // Настройки игры — сразу после system: защищённая часть, меняется только при смене настроек.
+    const settingsBlock = String(storySettings ?? '').trim();
     const messages = [
         { role: 'system', content: DIRECTOR_SYSTEM },
+        ...(settingsBlock ? [{ role: 'system', content: settingsBlock }] : []),
         ...head.map(content => ({ role: 'system', content })),
         ...middleMessages,
         ...windowPart,
@@ -224,7 +227,7 @@ export function buildDeciderContext({
         { role: 'user', content: turnTask },
     ];
     const prompt = [
-        DIRECTOR_SYSTEM, ...head, renderFrozenWindows(frozenWindows),
+        DIRECTOR_SYSTEM, settingsBlock, ...head, renderFrozenWindows(frozenWindows),
         String(plansText ?? '').trim(), rosterSection(roster), String(activeBanksText ?? '').trim(),
         usingWindow ? renderWindow(windowEntries) : `${renderCompressedDigests(digests)}\n${renderFullTurns(turns)}`,
         renderHistory(history), ...state, planContent, turnTask,
@@ -236,19 +239,25 @@ export function buildDeciderContext({
  * Контекст прозаика: заметки о персонажах + история с блоком @5 + Push в
  * хвосте. Push идёт после истории, как написано во встроенном промпте.
  */
-export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', sceneText = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', sceneText = '', storySettings = '', rollLine = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = writerHistory(chat, limit, writerBlock);
     // История прозаика — скользящее окно, поэтому кешируется только то, что стоит ДО неё: туда — редко меняющееся
     // (система, примеры, банки активных, саммари). Лорбук по ключам и заметки меняются почти каждый ход — они после
     // истории, рядом с Push, чтобы не обрывать кеш в начале запроса.
-    const parts = [WRITER_SYSTEM, String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
+    const parts = [WRITER_SYSTEM, String(storySettings ?? '').trim(), String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
     const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim(), String(sceneText ?? '').trim()].filter(Boolean);
+    // Строка броска — рядом с Push: она меняется каждый ход, и держать её в
+    // защищённой части значило бы рвать кеш префикса.
+    const rollNote = String(rollLine ?? '').trim()
+        ? `ROLL LINE — begin your reply with this line exactly as given, then write the reply below it:\n${String(rollLine).trim()}`
+        : '';
     const push = String(decision ?? '').trim() ? fillPrompt(WRITER_PUSH, { push: String(decision).trim() }) : '';
     const messages = [
         ...parts.map(content => ({ role: 'system', content })),
         ...history,
         ...tail.map(content => ({ role: 'system', content })),
+        ...(rollNote ? [{ role: 'system', content: rollNote }] : []),
         ...(push ? [{ role: 'system', content: push }] : []),
     ];
-    return { messages, prompt: [...parts, renderHistory(history), ...tail, push].filter(Boolean).join('\n\n') };
+    return { messages, prompt: [...parts, renderHistory(history), ...tail, rollNote, push].filter(Boolean).join('\n\n') };
 }

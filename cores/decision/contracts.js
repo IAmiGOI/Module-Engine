@@ -1,6 +1,7 @@
 /** Контракты ядра «директор + прозаик». Только регистрация; логика — в index.js. */
 export function registerDecisionContracts(host, {
     getSettings, configure, store, researcher, banks, cycle, cardTurn, decide, rewrite, reload, preview, decideContract, rewriteContract, bootstrap = null,
+    gameSettings = null,
 }) {
     const settings = () => {
         const value = getSettings();
@@ -12,6 +13,13 @@ export function registerDecisionContracts(host, {
     return [
         host.own.register('decision.settings', settings),
         host.own.register('decision.configure', params => configure(params?.patch ?? {})),
+        // Настройки игры (часть 13): текущий чат, умолчание новых чатов, сброс.
+        ...(gameSettings ? [
+            host.own.register('decision.gameSettings', () => gameSettings.get()),
+            host.own.register('decision.gameSettings.set', params => gameSettings.set(params?.patch ?? {})),
+            host.own.register('decision.gameSettings.useDefault', () => gameSettings.useDefault()),
+            host.own.register('decision.gameSettings.reset', () => gameSettings.reset()),
+        ] : []),
         host.own.register('decision.preview', params => preview(params ?? {})),
         host.own.register('decision.runs', () => ({ ...store.runs() })),
         host.own.register('decision.lastRun', () => store.lastRun()),

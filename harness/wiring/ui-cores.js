@@ -19,6 +19,7 @@ import { createHomeCore } from '../../cores/ui/home/index.js';
 import { createMemoryGraphPanelCore } from '../../cores/ui/memory-graph-panel.js';
 import { createPicturePanelCore } from '../../cores/ui/picture-panel.js';
 import { createDecisionPromptsPanelCore } from '../../cores/ui/decision-prompts-panel.js';
+import { createGameSettingsPanelCore } from '../../cores/ui/game-settings-panel.js';
 import { createDecisionWindowCore } from '../../cores/ui/decision-window.js';
 import { MUSIC_SERVER, BACKGROUNDS_REPO } from './config.js';
 
@@ -61,6 +62,12 @@ export async function wireUiCores(ctx) {
     const decisionPromptsPanel = createDecisionPromptsPanelCore(
         engine.registerCaller('core.ui.decisionPrompts', 'cores', { tier: 'official' }),
         { mount: node => uiEngine.mount('decisionPrompts', node) },
+    );
+    // Окно Game settings (часть 13) — главный путь вместо редактора промптов:
+    // перехватывает иконку ST и открывается карточкой Director / Writer.
+    const gameSettingsPanel = createGameSettingsPanelCore(
+        engine.registerCaller('core.ui.gameSettings', 'cores', { tier: 'official' }),
+        { mount: node => uiEngine.mount('gameSettings', node) },
     );
     // Окно директора: лента по циклам и поле сообщения. Своё дерево, постоянная
     // кнопка дока и событие `decisionWindow.openRequested` из карточки.
@@ -172,5 +179,5 @@ export async function wireUiCores(ctx) {
     });
 
 
-    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, picturePanel, decisionPromptsPanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home, decisionWindow };
+    return { cloudBackup, uiHost, createFinalUi, uiEngine, memoryGraphPanel, picturePanel, decisionPromptsPanel, gameSettingsPanel, uiModulesHost, uiModules, notifications, glAnimations, backgrounds, musicServer, syncCore, startup, activityLight, firstLoad, messageFooterHost, messageFooter, chatViewportHost, chatViewport, inputBarHost, inputBar, home, decisionWindow };
 }

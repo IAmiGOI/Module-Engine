@@ -70,11 +70,18 @@ export function levelProblem({ difficulty, experience } = {}) {
     return '';
 }
 
-/** Вероятность по двум уровням. Неизвестный уровень — `null`, не середина шкалы. */
-export function computeProbability(experience, difficulty) {
+/**
+ * Вероятность по двум уровням. Неизвестный уровень — `null`, не середина шкалы.
+ * `shift` двигает столбец сложности (часть 13): Easy — на шаг легче, Hard —
+ * на шаг тяжелее, Brutal — на два. Таблица не меняется, сдвиг упирается в
+ * её края.
+ */
+export function computeProbability(experience, difficulty, shift = 0) {
     const row = experienceIndex(experience);
-    const column = difficultyIndex(difficulty);
-    if (row < 0 || column < 0) return null;
+    const raw = difficultyIndex(difficulty);
+    if (row < 0 || raw < 0) return null;
+    const step = Math.trunc(Number(shift)) || 0;
+    const column = Math.max(0, Math.min(DIFFICULTY_LEVELS.length - 1, raw + step));
     return PROBABILITY_TABLE[row][column];
 }
 
@@ -98,10 +105,10 @@ export function degreeFor(probability, roll) {
  * Полная оценка: два уровня → вероятность → бросок → степень.
  * @returns {{ ok: true, … } | { ok: false, error: string }}
  */
-export function assessAction({ character = '', action = '', difficulty = '', experience = '', why = '', seed } = {}) {
+export function assessAction({ character = '', action = '', difficulty = '', experience = '', why = '', seed, difficultyShift = 0 } = {}) {
     const problem = levelProblem({ difficulty, experience });
     if (problem) return { ok: false, error: problem };
-    const probability = computeProbability(experience, difficulty);
+    const probability = computeProbability(experience, difficulty, difficultyShift);
     const roll = Number.isFinite(seed) ? rollFromSeed(seed) : Math.random();
     const band = degreeFor(probability, roll);
     return {

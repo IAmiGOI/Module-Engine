@@ -132,20 +132,21 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const note = signal('');
     const now = signal(Date.now());
     const costCounter = signal(true);
+    const showRolls = signal(true);
     const banksView = createBanksView({ call });
     const questionView = createQuestionView({ host, call });
     const bankProgress = createBankProgressView({ host, call });
     let timer = null;
     const subscriptions = [];
     const filtered = computed(() => filterFeed(feed(), {
-        showThinking: showThinking(), onlyTurns: onlyTurns(), onlyPassive: onlyPassive(), showUsage: costCounter(), search: search(),
+        showThinking: showThinking(), onlyTurns: onlyTurns(), onlyPassive: onlyPassive(), showUsage: costCounter(), showRolls: showRolls(), search: search(),
     }));
     const all = computed(() => filtered().cycles);
     const shown = computed(() => all().slice(-limit()));
     const hiddenCount = computed(() => Math.max(0, all().length - shown().length));
     let reloadAsked = false;
     async function refresh() {
-        let [log, archive, settings] = await Promise.all([call('decision.log'), call('decision.archive'), call('decision.settings')]);
+        let [log, archive, settings, game] = await Promise.all([call('decision.log'), call('decision.archive'), call('decision.settings'), call('decision.gameSettings')]);
         // Пустой журнал при открытом чате — чаще всего ядро прочитало память раньше ST: один раз попросить перечитать.
         if (!reloadAsked && log.ok && Array.isArray(log.value) && !log.value.length) {
             reloadAsked = true;
@@ -153,6 +154,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
             [log, archive] = await Promise.all([call('decision.log'), call('decision.archive')]);
         }
         costCounter.set(settings.ok ? settings.value?.costCounter !== false : true);
+        showRolls.set(game.ok ? game.value?.values?.showRolls !== 'hidden' : true);
         feed.set(createFeedState({
             cycles: log.ok && Array.isArray(log.value) ? log.value : [],
             archive: archive.ok && Array.isArray(archive.value) ? archive.value : [],
@@ -190,6 +192,9 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         // Смена чата: ядро перечитало память — лента и банки этого чата сразу, без переоткрытия окна. Живые циклы старого чата не тащим.
         subscriptions.push(host.events.subscribe('st.chatChanged', () => { reloadAsked = false; feed.set(createFeedState({ cycles: [], archive: [] })); }));
         subscriptions.push(host.events.subscribe('decision.reloaded', () => { refresh().catch(() => {}); }));
+        subscriptions.push(host.events.subscribe('decision.gameSettings.changed', payload => {
+            showRolls.set(payload?.values?.showRolls !== 'hidden');
+        }));
         for (const name of ['decision.bank.ready', 'decision.bank.failed', 'decision.bank.short', 'decision.bank.edited', 'decision.bank.timeout']) {
             subscriptions.push(host.events.subscribe(name, () => banksView.refresh()));
         }

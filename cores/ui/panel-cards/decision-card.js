@@ -15,7 +15,7 @@ import { createBootstrapSettings } from './decision-card-bootstrap.js';
  * сэмплер.
  */
 const readField = value => (typeof value === 'function' ? value() : value);
-export function createDecisionCard({ call, collapse, notify, workers, openPrompts, openDirector }) {
+export function createDecisionCard({ call, collapse, notify, workers, openSettings, openDirector }) {
     const regen = signal('decider');
     const deciderWorkerId = signal('');
     const writerWorkerId = signal('');
@@ -216,8 +216,8 @@ export function createDecisionCard({ call, collapse, notify, workers, openPrompt
     function decisionCard() {
         return Card('Director / Writer', { ...collapse.bind('card:decision'), subtitle: 'Every generation: one model decides, another writes' },
             h('small', { class: 'stme-module-hint' }, 'Always on. Without an openai director connection, generation is not sent; this card is opened for you.'),
-            Row(Button('Open prompts', openPrompts ?? (() => {})), Button('Open director', openDirector ?? (() => {}))),
-            h('small', { class: 'stme-module-hint' }, 'Two sections in one window, like Prompt Manager: the built-in instructions are locked, and your own prompts move only inside their block. The director block sits two cycles before the end; the writer block sits five messages before the end.'),
+            Row(Button('Open game settings', openSettings ?? (() => {})), Button('Open director', openDirector ?? (() => {}))),
+            h('small', { class: 'stme-module-hint' }, 'The story game is set in one window: Story, Classic or Hardcore, or your own mix. The full prompt editor is one link away under Advanced.'),
             Field('On swipe / regenerate', Select(regen, regenOptions), {
                 hint: 'The default asks the director again. "Writer only" reuses the last decision for this chat and only rewrites the prose.',
             }),

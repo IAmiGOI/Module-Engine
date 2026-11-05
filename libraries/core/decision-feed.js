@@ -268,7 +268,7 @@ function entryText(entry) {
 }
 
 /** Простые фильтры и поиск: окно не прячет данные, а только выбирает секции. */
-export function filterFeed(state, { showThinking = true, onlyTurns = false, onlyPassive = false, showUsage = true, search = '' } = {}) {
+export function filterFeed(state, { showThinking = true, onlyTurns = false, onlyPassive = false, showUsage = true, showRolls = true, search = '' } = {}) {
     const query = text(search).toLowerCase();
     const keep = entry => {
         if (onlyTurns && !TURN_EVENTS.has(entry.event)) return false;
@@ -277,8 +277,13 @@ export function filterFeed(state, { showThinking = true, onlyTurns = false, only
         return true;
     };
     const clean = entry => {
-        if (showThinking && showUsage) return entry;
-        return { ...entry, rows: entry.rows.filter(row => (showThinking || row.kind !== 'thinking') && (showUsage || row.kind !== 'usage')) };
+        if (showThinking && showUsage && showRolls) return entry;
+        return {
+            ...entry,
+            rows: entry.rows.filter(row => (showThinking || row.kind !== 'thinking')
+                && (showUsage || row.kind !== 'usage')
+                && (showRolls || row.kind !== 'assess')),
+        };
     };
     const all = [...state.cycles, ...Object.values(state.live)].filter(keep).map(clean).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     return { cycles: all, live: state.live, archive: state.archive.filter(keep).map(clean) };

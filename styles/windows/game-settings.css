@@ -1,0 +1,57 @@
+/* --- Game settings (part 13) -------------------------------------------------
+   Иконка ST «AI Response Configuration» открывает это окно, а не редактор
+   промптов. Тот же FloatingPanel, что у соседних окон; корень несёт
+   `.stme-panel`, иначе кнопки и поля выглядели бы сырыми дефолтами ST.
+   Ничего не должно уезжать в горизонтальную прокрутку на 360 px: сетки
+   строятся на `minmax(0, 1fr)`, подписи не переносятся по словам. */
+.stme-floating-panel.stme-gs-window { z-index: 6950; background: linear-gradient(var(--stme-surface), var(--stme-surface)), #15171e; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.stme-gs-window-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; overflow: auto; padding: 10px; }
+
+/* Режимы — плитки, как выбор сложности в игре. */
+.stme-gs-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; }
+.stme-panel .stme-gs-mode {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0;
+    padding: 8px 10px; text-align: left; cursor: pointer; font: inherit;
+    color: var(--stme-text); border-radius: var(--stme-radius-sm);
+    border: 1px solid var(--stme-border); background: var(--stme-level-1);
+    transition: border-color .12s, background-color .12s;
+}
+.stme-panel .stme-gs-mode:hover { border-color: var(--stme-accent); }
+.stme-panel .stme-gs-mode-active { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 14%, var(--stme-level-1)); box-shadow: inset 0 0 0 1px var(--stme-accent); }
+.stme-gs-mode-label { font-weight: 700; font-size: 13px; }
+.stme-gs-mode-note { font-size: 11px; line-height: 1.25; opacity: .72; }
+.stme-gs-mode-custom { cursor: default; border-style: dashed; }
+
+/* Группы опций: заголовок капителью, ниже — плоские строки. */
+.stme-gs-group { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; border-top: 1px solid var(--stme-border); }
+.stme-gs-group-title { margin: 6px 0 0; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .72; }
+.stme-gs-option { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.stme-gs-option-title { font-size: 13px; font-weight: 600; }
+.stme-gs-note { font-size: 11px; line-height: 1.3; opacity: .7; }
+
+/* Сегменты: 2–4 значения в один ряд, выбранное подсвечено. Сетка вместо
+   flex-wrap — кнопки делят ширину поровну и не вылезают за 360 px. */
+.stme-segment {
+    display: flex; flex-wrap: nowrap;
+    gap: 2px; padding: 2px; border: 1px solid var(--stme-border);
+    border-radius: var(--stme-radius-sm); background: var(--stme-level-1);
+}
+.stme-segment-item {
+    flex: 1 1 0; min-width: 0; padding: 4px 6px; border: 1px solid transparent; border-radius: calc(var(--stme-radius-sm) - 2px);
+    background: transparent; color: var(--stme-text); font: inherit; font-size: 12px; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.stme-segment-item:hover { border-color: color-mix(in srgb, var(--stme-accent) 60%, transparent); }
+.stme-segment-item:focus-visible { outline: 2px solid var(--stme-accent); outline-offset: 1px; }
+.stme-segment-active { border-color: var(--stme-accent); background: color-mix(in srgb, var(--stme-accent) 18%, var(--stme-level-1)); font-weight: 600; }
+
+/* Низ окна: действия над набором и ссылка в старый редактор. */
+.stme-gs-footer { position: sticky; bottom: -10px; display: flex; flex-direction: column; gap: 6px; padding: 8px 0 2px; border-top: 1px solid var(--stme-accent); background: var(--stme-surface); }
+.stme-panel .stme-gs-footer .menu_button { min-height: 32px; }
+.stme-gs-status { color: var(--stme-accent); font-weight: 600; }
+.stme-gs-advanced { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; border-top: 1px solid var(--stme-border); }
+.stme-panel .stme-gs-link {
+    align-self: flex-start; padding: 2px 0; border: 0; background: none; color: var(--stme-accent);
+    font: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.stme-panel .stme-gs-link:hover { color: var(--stme-accent); opacity: .85; }

@@ -1,10 +1,11 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
+import { bootstrapQuestionCount } from '../../libraries/core/game-settings.js';
 
 /**
  * Bootstrap нового чата: один цикл директора до первого хода, параллельно
  * холодному старту банков. Состояние в памяти чата; повторно не запускается.
  */
-export function createBootstrap({ call, store, cycle, getSettings, publishEvent, now = () => Date.now() }) {
+export function createBootstrap({ call, store, cycle, getSettings, getGameSettings = null, publishEvent, now = () => Date.now() }) {
     let state = { status: 'idle', startedAt: 0, finishedAt: 0, error: null };
     let loaded = false;
     let promise = null;
@@ -43,11 +44,13 @@ export function createBootstrap({ call, store, cycle, getSettings, publishEvent,
         const runEpoch = epoch;
         const save = patch => saveFor(patch, runEpoch);
         const publish = (name, payload) => { if (runEpoch === epoch) publishEvent(name, payload); };
+        const game = typeof getGameSettings === 'function' ? getGameSettings() : null;
+        const maxQuestions = game ? bootstrapQuestionCount(game) : (settings.bootstrap?.maxQuestions ?? 5);
         await save({ status: 'running', startedAt: now(), finishedAt: 0, error: null });
-        publish('decision.bootstrap.started', { at: now(), maxQuestions: settings.bootstrap?.maxQuestions ?? 5 });
+        publish('decision.bootstrap.started', { at: now(), maxQuestions });
         try {
             const result = await cycle.runBootstrap({
-                runId: `bootstrap_${now()}`, maxQuestions: settings.bootstrap?.maxQuestions ?? 5,
+                runId: `bootstrap_${now()}`, maxQuestions,
                 maxSteps: settings.bootstrap?.maxSteps ?? 30,
             });
             if (result?.briefWritten) {

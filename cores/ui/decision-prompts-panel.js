@@ -11,9 +11,11 @@ import { createPreviewTab } from './decision-prompts/preview-tab.js';
 /**
  * Окно разделов промптов директора и прозаика — выборочно возвращённый старый
  * Prompt Manager. Системные строки закреплены, пользовательский блок двигается
- * только внутри себя и встаёт на прежнюю глубину (2 цикла / @5). Открывается
- * иконкой ST «AI Response Configuration» (сервис `stDecisionUi`) и событием
- * `decisionPrompts.openRequested` из карточки.
+ * только внутри себя и встаёт на прежнюю глубину (2 цикла / @5).
+ *
+ * Часть 13: главный путь — окно `game-settings-panel.js`; это окно осталось
+ * рабочим и открывается ссылкой «Advanced: edit prompts» (событие
+ * `decisionPrompts.openRequested`). Иконку ST оно больше не перехватывает.
  */
 const MODULE_UI_NAMESPACE = 'core.ui.decisionPrompts';
 const WINDOW_KEY = 'window';
@@ -173,7 +175,6 @@ export function createDecisionPromptsPanelCore(host, { mount, pickFile = pickFro
         const finalUi = mount(tree());
         await finalUi.settled?.();
         unsubscribeOpen = host.events.subscribe('decisionPrompts.openRequested', () => toggle());
-        await serviceCall('stDecisionUi.install', { onOpen: () => toggle() }).catch(() => {});
         return finalUi;
     }
 
@@ -181,6 +182,6 @@ export function createDecisionPromptsPanelCore(host, { mount, pickFile = pickFro
         tree, open, show, hide, toggle, refresh, save,
         tabs, selectTab, sections, dirty,
         isVisible: () => visible.peek(),
-        stop() { unsubscribeOpen?.(); serviceCall('stDecisionUi.uninstall', {}).catch(() => {}); },
+        stop() { unsubscribeOpen?.(); },
     };
 }

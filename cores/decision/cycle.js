@@ -14,6 +14,7 @@ import { createWakeQueue } from './queue.js';
 import { createCycleContext, fallbackDecision, turnWake, wakeFor } from './cycle-context.js';
 import { createFormChecker } from './form-check.js';
 import { createQuestionQueue } from './questions.js';
+import { bootstrapQuestionCount } from '../../libraries/core/game-settings.js';
 
 /**
  * Активный и пассивный циклы директора. Здесь только оркестровка: контекст,
@@ -34,12 +35,12 @@ export class DecisionConfigError extends Error {
 
 const PREEMPT_WAIT_MS = 3000;
 
-export function createDecisionCycle({ call, callTool, callService = null, getSettings, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, capture = null, now = () => Date.now() }) {
+export function createDecisionCycle({ call, callTool, callService = null, getSettings, getGameSettings = null, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, capture = null, now = () => Date.now() }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
     const live = createCycleLive({ publishEvent, getTurn: () => state.turnCounter, getClock: () => store.clock().minutes });
-    const context = createCycleContext({ call, store, banks, capture });
+    const context = createCycleContext({ call, store, banks, capture, getGameSettings });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
 
@@ -72,9 +73,15 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
 
     function handlersFor(settings) {
         return withQuestionStreak({
-            ...createHandlers({ store, call, publishEvent, getSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions }),
+            ...createHandlers({ store, call, publishEvent, getSettings, getGameSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions }),
             ...knowledge.handlers,
         });
+    }
+
+    /** Лимит вопросов bootstrap: новая настройка игры, без неё — прежняя `bootstrap.maxQuestions`. */
+    function questionLimit(settings) {
+        const game = typeof getGameSettings === 'function' ? getGameSettings() : null;
+        return game ? bootstrapQuestionCount(game) : (settings.bootstrap?.maxQuestions ?? 5);
     }
 
     /** Номер последнего хода: из окна (а без ходов в окне — из журнала). При переигровке того же сообщения — на один меньше. */
@@ -149,7 +156,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.canWriteBrief = state.canAsk;
         state.questionCount = 0;
         state.questionStreak = 0;
-        state.questionLimit = settings.bootstrap?.maxQuestions ?? 5;
+        state.questionLimit = questionLimit(settings);
         state.briefWritten = false;
         wakeQueue.begin();
         const startedWake = wake ?? turnWake(type);
@@ -282,7 +289,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.canWriteBrief = canAsk;
         state.questionCount = 0;
         state.questionStreak = 0;
-        state.questionLimit = settings.bootstrap?.maxQuestions ?? 5;
+        state.questionLimit = questionLimit(settings);
         state.briefWritten = false;
         state.sceneText = '';
         wakeQueue.begin();
