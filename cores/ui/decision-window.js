@@ -145,6 +145,15 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const all = computed(() => filtered().cycles);
     const shown = computed(() => all().slice(-limit()));
     const hiddenCount = computed(() => Math.max(0, all().length - shown().length));
+    const archiveOpen = signal(false);
+    // Готовый цикл — тот же объект записи, пока он не изменился: тот же узел, и рендерер его не трогает.
+    // Живой (с таймером ожидания) строится заново — его запись и так новая на каждое событие.
+    const nodeCache = new WeakMap();
+    const nodeFor = entry => {
+        if (entry.running || entry.waiting) return cycleNode(entry, now);
+        if (!nodeCache.has(entry)) nodeCache.set(entry, cycleNode(entry, now));
+        return nodeCache.get(entry);
+    };
     let reloadAsked = false;
     async function refresh() {
         let [log, archive, settings, game] = await Promise.all([call('decision.log'), call('decision.archive'), call('decision.settings'), call('decision.gameSettings')]);
@@ -230,10 +239,11 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 hiddenCount() > 0
                     ? h('div', { class: 'stme-dw-more' }, Button(`Load ${Math.min(PAGE, hiddenCount())} older`, () => limit.update(value => value + PAGE)))
                     : null,
-                ...shown().map(entry => cycleNode(entry, now))),
+                ...shown().map(nodeFor)),
             computed(() => (filtered().archive.length
-                ? h('details', { class: 'stme-dw-archive' }, h('summary', {}, `Archived arcs (${filtered().archive.length})`),
-                    ...filtered().archive.map(entry => cycleNode(entry, now)))
+                // Архив строится, только когда его раскрыли: десятки циклов с мыслями перестраивались на каждое событие хода.
+                ? h('details', { class: 'stme-dw-archive', 'on:toggle': event => archiveOpen.set(Boolean(event?.target?.open)) }, h('summary', {}, `Archived arcs (${filtered().archive.length})`),
+                    ...(archiveOpen() ? filtered().archive.map(nodeFor) : []))
                 : null)),
             h('div', { class: 'stme-dw-compose' },
                 h('div', { class: 'stme-dw-compose-title' }, 'Message the director'),
