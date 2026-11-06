@@ -443,7 +443,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         askUser: ({ question, options, why = '' }) => questions.ask({ question, options, why, allowed: true, asked: 0, limit: 1 }),
         question: () => questions.pending(),
         recordTurn: params => turnWindow.recordTurn(params),
-        rebuildWindow: () => turnWindow.rebuildFromRuns(),
+        rebuildWindow: async () => (await turnWindow.rebuildFromRuns()) || turnWindow.fillWriterText(),
         removeLastWindowTurn: () => turnWindow.removeLastTurn(),
         syncWindow: () => turnWindow.maybeSwitch(),
         noteCorrection: params => turnWindow.noteCorrection(params),

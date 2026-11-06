@@ -228,7 +228,7 @@ export function createDecisionStore({ call, publishEvent }) {
                 assessments: Array.isArray(record.assessments) ? record.assessments : [],
                 game: record.game && typeof record.game === 'object' ? record.game : null,
                 sourceRunId: record.sourceRunId ?? null,
-                writerText: String(last?.mes ?? last?.content ?? '').trim(),
+                writerText: String(last?.text ?? last?.mes ?? last?.content ?? '').trim(),
                 reasoning: record.reasoning ?? '', steps: record.steps ?? [], workerId: record.workerId ?? null,
                 warnings: record.warnings ?? [],
             };

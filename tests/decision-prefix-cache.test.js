@@ -61,8 +61,8 @@ test('the floating window caches the protected part and everything already appen
     assert.ok(measured.reReadPerTurn < 8000, `re-read per turn is ${measured.reReadPerTurn}`);
 });
 
-test('a compressed window cycle is 300–800 tokens', () => {
+test('a compressed window cycle is 200–800 (no push once the writer reply is in) tokens', () => {
     const sizes = windowEntries.slice(0, 50).map(record => record.tokens);
     const average = sizes.reduce((sum, size) => sum + size, 0) / sizes.length;
-    assert.ok(average >= 300 && average <= 800, `the average window cycle is ${average}`);
+    assert.ok(average >= 200 && average <= 800, `the average window cycle is ${average}`);
 });

@@ -214,6 +214,40 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
         return true;
     }
 
+    /**
+     * Записи хода, сохранённые без ответа писателя (`chatHistory.messages` отдаёт `text`, а читалось `mes`):
+     * ответ берётся из чата по записи хода, Push из записи убирается. Директор видел только свои Push и копировал их.
+     */
+    async function fillWriterText() {
+        const runs = typeof store.runs === 'function' ? store.runs() : {};
+        const win = current();
+        const missing = win.entries.filter(entry => entry.kind === 'turn' && !/\nWriter: /.test(entry.text) && entry.runIds.length);
+        if (!missing.length) return false;
+        const mesidByRun = new Map();
+        for (const [key, run] of Object.entries(runs ?? {})) {
+            for (const id of [run?.id, run?.sourceRunId]) if (id) mesidByRun.set(String(id), String(run?.mesid ?? key));
+        }
+        const messages = await call('chatHistory.messages', { limit: 100000 }).catch(() => []);
+        const byId = new Map((Array.isArray(messages) ? messages : []).map(message => [String(message.mesid), message]));
+        let changed = 0;
+        const entries = win.entries.map(entry => {
+            if (!missing.includes(entry)) return entry;
+            const mesid = entry.runIds.map(id => mesidByRun.get(id)).find(Boolean);
+            const reply = String(byId.get(String(mesid))?.text ?? '').trim();
+            if (!mesid || !reply || byId.get(String(mesid))?.isUser) return entry;
+            changed += 1;
+            const lines = entry.text.split('\n');
+            const start = lines.indexOf('PUSH:');
+            const end = start < 0 ? -1 : lines.findIndex((line, index) => index > start && (/^[a-z]+(?:_[a-z]+)+: /.test(line) || line === 'CHANGES:'));
+            const kept = start < 0 ? lines : [...lines.slice(0, start), ...(end < 0 ? [] : lines.slice(end))];
+            const body = [...kept, `Writer: ${reply}`].join('\n');
+            return { ...entry, text: body, tokens: Math.ceil(body.length / 4) };
+        });
+        if (!changed) return false;
+        await save({ ...win, entries });
+        return true;
+    }
+
     /** Свайп и перегенерация меняют только последний цикл окна. */
     async function removeLastTurn() {
         const win = current();
@@ -239,7 +273,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
     }
 
     return {
-        recordTurn, recordBackground, addFact, maybeSwitch, switchWindow, rebuildFromRuns,
+        recordTurn, recordBackground, addFact, maybeSwitch, switchWindow, rebuildFromRuns, fillWriterText,
         removeLastTurn, noteCorrection, refreshBoundary, rebuildBoundary,
         entries: () => current().entries, frozen: () => (typeof store.frozen === 'function' ? store.frozen() : []),
     };
