@@ -24,7 +24,7 @@ test('CURRENT SCENE lists the place, the ending, who did what, who is idle and w
     assert.match(scene, /^CURRENT SCENE/);
     assert.match(scene, /Place: Main thoroughfare, by the fountain\./);
     assert.match(scene, /Emilia last: answers flatly/);
-    assert.match(scene, /Present, doing nothing notable: Kadomon\./);
+    assert.match(scene, /Present, not in the main exchange: Kadomon\./);
     assert.match(scene, /Left the scene in that ending: Diethard Diethain\. Remove them with update_roster/);
 });
 

@@ -72,10 +72,18 @@ export function buildRollLine({ form, assessments = new Map() } = {}) {
     return buildRollLines({ form, assessments }).join('; ');
 }
 
-/**
- * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
- * @returns {string}
- */
+/** Фон: кто здесь и чем занят сам — писатель показывает это штрихом, а не реакцией на главный разговор. */
+function backgroundLine(characters) {
+    const idle = characters.filter(character => character?.idle === true && line(character?.name));
+    if (!idle.length) return '';
+    const busy = idle.filter(character => line(character.busy));
+    const plain = idle.filter(character => !line(character.busy)).map(character => line(character.name));
+    const parts = [];
+    if (busy.length) parts.push(`In the background, busy with their own concerns — at most a passing touch, no lines:\n${busy.map(character => `- ${line(character.name)}: ${line(character.busy)}`).join('\n')}`);
+    if (plain.length) parts.push(`In the background, doing nothing notable this turn: ${plain.join(', ')}. Do not give them actions or lines.`);
+    return parts.join('\n');
+}
+
 /**
  * Push шагами (проверено на GLM 4.7, стенд в части «реплики»): каждое событие один раз и по порядку, реплика —
  * смыслом в прямой форме, развязка — только где ход стоп, причины — отдельным блоком «не для страницы».
@@ -104,7 +112,6 @@ function buildBeatPush({ form, assessments, place, timeBefore, timeAfter }) {
         }
         return text;
     });
-    const idle = characters.filter(character => character?.idle === true).map(character => line(character?.name)).filter(Boolean);
     const reasons = characters.filter(character => character?.idle !== true && line(character?.name)).map(character => {
         const parts = [line(character.actionReason), line(character.decision) ? `Aim: ${line(character.decision)}${line(character.decisionReason) ? ` — ${line(character.decisionReason)}` : ''}` : ''].filter(Boolean);
         return parts.length ? `- ${line(character.name)}: ${parts.join(' ')}` : '';
@@ -114,11 +121,15 @@ function buildBeatPush({ form, assessments, place, timeBefore, timeAfter }) {
         `THE USER'S ACTION, AND HOW IT LANDS: ${line(form?.userResult)}`,
         `BEATS — in this order, each one happens once:\n${beats.join('\n')}`,
         `END: ${line(form?.resolution)} Stop there.`,
-        idle.length ? `In the background, doing nothing notable this turn: ${idle.join(', ')}. Do not give them actions or lines.` : '',
+        backgroundLine(characters),
         reasons.length ? `NOT FOR THE PAGE — why they act, so you can play it right:\n${reasons.join('\n')}` : '',
     ].filter(Boolean).join('\n\n');
 }
 
+/**
+ * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
+ * @returns {string}
+ */
 export function buildPush({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '' } = {}) {
     if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatPush({ form, assessments, place, timeBefore, timeAfter });
     const lines = [minutesLabel(form?.scene?.minutes)];
@@ -130,7 +141,6 @@ export function buildPush({ form, assessments = new Map(), place = '', timeBefor
     lines.push(`The user's action: ${line(form?.userResult)}`);
 
     const characters = Array.isArray(form?.characters) ? form.characters : [];
-    const idle = characters.filter(character => character?.idle === true).map(character => line(character?.name)).filter(Boolean);
     for (const character of characters) {
         if (character?.idle === true) continue;
         const name = line(character?.name) || 'Someone';
@@ -145,6 +155,7 @@ export function buildPush({ form, assessments = new Map(), place = '', timeBefor
         if (line(character?.outcome)) lines.push(`Why it goes this way: ${line(character.outcome)}`);
         if (line(character?.speech)) lines.push(`${name} says: "${line(character.speech)}"`);
     }
-    if (idle.length) lines.push(`In the background, doing nothing notable this turn: ${idle.join(', ')}. Do not give them actions or lines.`);
+    const background = backgroundLine(characters);
+    if (background) lines.push(background);
     return lines.filter(Boolean).join('\n');
 }

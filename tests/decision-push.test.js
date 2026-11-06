@@ -47,3 +47,10 @@ test('what a character says goes on its own line, in meaning only, with the inst
     assert.match(push, /^Puck does: looks at Sasha\.$/m);
     assert.match(push, /^Puck says, in meaning only \(write it once, as Puck's spoken line in their own voice; do not also narrate it\): he will take the answer/m);
 });
+
+test('idle characters busy with their own concerns reach the writer as a background touch, without lines', () => {
+    const push = buildPush({ form: { scene: { minutes: 2 }, resolution: 'They wait.', userResult: 'u', beats: [{ who: 'Puck', kind: 'line', text: 'sit down' }],
+        characters: [{ name: 'Puck', action: 'speaks', actionReason: 'x', decision: 'd', decisionReason: 'e' }, { name: 'Ram', idle: true, busy: 'counting the minutes to the bell' }, { name: 'Rom', idle: true }] } });
+    assert.match(push, /In the background, busy with their own concerns — at most a passing touch, no lines:\n- Ram: counting the minutes to the bell/);
+    assert.match(push, /In the background, doing nothing notable this turn: Rom\./);
+});

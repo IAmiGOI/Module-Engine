@@ -69,7 +69,7 @@ export function renderCurrentScene({ form = null, roster = [], user = '', clock 
     const when = text(form.meta?.timeAfter) || text(clock);
     const characters = Array.isArray(form.characters) ? form.characters : [];
     const acting = characters.filter(character => character?.idle !== true && text(character?.name));
-    const idle = characters.filter(character => character?.idle === true).map(character => text(character.name)).filter(Boolean);
+    const idle = characters.filter(character => character?.idle === true && text(character?.name)).map(character => (text(character.busy) ? `${text(character.name)} (busy: ${text(character.busy)})` : text(character.name)));
     const present = (Array.isArray(roster) ? roster : []).map(text).filter(Boolean);
     const departed = departedFrom(form.resolution, present, { user });
     const lines = ['CURRENT SCENE (where the previous turn left things — start from here):'];
@@ -77,8 +77,12 @@ export function renderCurrentScene({ form = null, roster = [], user = '', clock 
     if (when) lines.push(`- Time: ${when}.`);
     if (text(form.resolution)) lines.push(`- How the previous turn ended: ${text(form.resolution)}`);
     if (text(form.userResult)) lines.push(`- ${text(user) || 'The user'}: ${text(form.userResult)}`);
-    for (const character of acting) lines.push(`- ${text(character.name)} last: ${text(character.action) || text(character.decision) || 'present'}`);
-    if (idle.length) lines.push(`- Present, doing nothing notable: ${idle.join(', ')}.`);
+    for (const character of acting) {
+        lines.push(`- ${text(character.name)} last: ${text(character.action) || 'present'}`);
+        // Текущая цель — чтобы директор видел, что держится, и не переписывал её без перемены.
+        if (text(character.decision)) lines.push(`  ${text(character.name)}'s current aim: ${text(character.decision)}`);
+    }
+    if (idle.length) lines.push(`- Present, not in the main exchange: ${idle.join(', ')}.`);
     if (present.length) lines.push(`- In the scene now (active roster): ${present.join(', ')}.`);
     if (departed.length) lines.push(`- Left the scene in that ending: ${departed.join(', ')}. Remove them with update_roster before you decide, unless they come back this turn with a reason.`);
     return lines.join('\n');

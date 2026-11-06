@@ -76,7 +76,8 @@ export const SUBMIT_TURN_TOOL = Object.freeze({
                     type: 'object',
                     properties: {
                         name: { type: 'string' },
-                        idle: { type: 'boolean', description: 'True when the character is present but does nothing worth showing this turn. Then only the name is needed, and the writer keeps them in the background.' },
+                        idle: { type: 'boolean', description: 'True when the character is present but does nothing worth showing this turn. Then only the name and busy are needed, and the writer keeps them in the background.' },
+                        busy: { type: 'string', description: 'For an idle character: what occupies them right now — their own concern or task, from their plan or notes. A few words.' },
                         decision: { type: 'string', description: 'What they do overall. Persists between turns.' },
                         decisionReason: { type: 'string' },
                         action: { type: 'string', description: 'What they do in this turn overall, in one line — deeds only. The order of actions and lines goes in beats.' },
