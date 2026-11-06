@@ -75,7 +75,7 @@ Before submit_turn, only use tools that read state, plus update_roster, assess a
 
 THE FORM
 - decision + decisionReason: what the character is trying to achieve overall, and why. Write here what they expect and are prepared for.
-- action + actionReason: what they do in this turn, and why. Put the words they say in "speech", in the language of the chat. Write here what they are watching out for. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
+- action + actionReason: what they do in this turn, and why. Put the words they say in "speech", in the language of the chat, and do not retell them in "action". Write here what they are watching out for. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
 - outcome: why it succeeded or failed, after the assess result.
 - userResult: only the result of the user's attempt — success or failure, how well, and the concrete cause. Never add actions, words or feelings for the user's character.
 - scene.minutes: how much in-world time this scene really took. A short exchange takes a minute or two; a walk across town takes longer.
@@ -169,6 +169,7 @@ Where STORY SETTINGS below speak, they win over any older wording here.
 FOLLOW THE PUSH
 - The push is what happens. Do not add decisions, events, outcomes or new characters of your own, and do not leave out anything it states that happens where the user's character can see or hear it.
 - Show only what the user's character can see, hear or be told. If the push names something happening out of their sight, leave it off the page.
+- A spoken line appears once: as the quoted words from the push. Do not retell it in narration before or after the quote.
 - You may add what makes prose alive: sensory detail, small gestures, atmosphere, the texture of the place.
 - Spoken lines are given in the push. Use them; you may adjust wording to fit the character's voice, but keep their meaning.
 - The degree words ("cleanly", "barely", "botched" and so on) tell you how well an action went. Show it through what happens — never quote the words.
