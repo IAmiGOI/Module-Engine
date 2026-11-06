@@ -656,8 +656,8 @@ test('advance() asks for the live message FRESH at write time, not from a value 
     assert.deepEqual(module.badges(), { 6: '11:40 (Morning)' }, 'ушло на настоящее последнее сообщение, а не на то, что запомнилось раньше');
 });
 
-test('a decision.timeShift moves the clock without a model and writes a new mark under the live message', async () => {
-    const { engine, module, live } = buildEngine();
+test('a decision.timeShift is written once, on the reply, with no model poll — not on the user message', async () => {
+    const { engine, module, live, calls } = buildEngine();
     await module.load();
     module.label.set('Day 1, 08:00 (Morning)');
     live.mesid = '1';
@@ -665,7 +665,13 @@ test('a decision.timeShift moves the clock without a model and writes a new mark
     await new Promise(resolve => setTimeout(resolve, 0));
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(module.label(), 'Day 1, 09:30 (Morning)');
-    const marks = await new Promise(resolve => engine.registerCaller('probe.time', 'cores', { tier: 'official' }).own.subscribe('chatHistory.annotations', { params: { namespace: MODULE_ID } }, resolve));
-    assert.equal(marks.ok, true);
-    assert.equal(marks.value['1'], 'Day 1, 09:30 (Morning)');
+    const probe = engine.registerCaller('probe.time', 'cores', { tier: 'official' }).own;
+    const read = () => new Promise(resolve => probe.subscribe('chatHistory.annotations', { params: { namespace: MODULE_ID } }, resolve));
+    assert.equal((await read()).value['1'], undefined, 'the user message gets no mark');
+    const before = calls.length;
+    live.mesid = '2';
+    engine.events.emit('generation.completed', { runId: 'r' });
+    for (let i = 0; i < 5; i += 1) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal((await read()).value['2'], 'Day 1, 09:30 (Morning)');
+    assert.equal(calls.length, before, 'no model poll when the director gave the time');
 });

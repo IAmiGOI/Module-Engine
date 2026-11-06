@@ -429,13 +429,28 @@ export function createTimeModule(host) {
      * её чистым разбором; формат не разобрался — ничего не меняем, только
      * предупреждение в консоль (в лог директора это уйдёт от него самого).
      */
-    async function shiftByMinutes({ minutes } = {}) {
+    // Время хода от директора ждёт ответа: событие приходит, пока ответа ещё нет, и запись «сейчас»
+    // ложилась на сообщение пользователя, а после ответа модель времени угадывала его второй раз.
+    let directorTime = null;
+
+    async function shiftByMinutes({ minutes, timeAfter } = {}) {
         const current = label.peek() || history.peek().at(-1) || '';
-        const next = shiftTimeLabel(current, Number(minutes) || 0);
+        const next = String(timeAfter ?? '').trim() || shiftTimeLabel(current, Number(minutes) || 0);
         if (!next) return false;
         label.set(next);
-        await markMessage(await currentMesid(), next);
+        directorTime = next;
         return true;
+    }
+
+    /** После ответа: есть время хода от директора — точное, пишется на ответ без модели; нет — опрос модели времени. */
+    async function afterReply() {
+        if (!directorTime) return advance();
+        const next = directorTime;
+        directorTime = null;
+        if (!enabled.peek()) return null;
+        label.set(next);
+        await markMessage(await currentMesid(), next);
+        return next;
     }
 
     // --- Настройка трекера в Ядре -------------------------------------------
@@ -767,7 +782,9 @@ export function createTimeModule(host) {
     const subscriptions = [
         // Время идёт ПОСЛЕ ответа: раньше него шага ещё не случилось. Ровно тот
         // же момент, на котором это делала Alpha.
-        host.events.subscribe('generation.completed', () => { advance(); }),
+        host.events.subscribe('generation.completed', () => { afterReply(); }),
+        // Сорвавшийся ход: время директора не должно лечь на следующий ответ.
+        host.events.subscribe('generation.aborted', () => { directorTime = null; }),
         // Пульсация бейджа — по ФАКТУ идущего опроса, не по роли сообщения
         // (см. doc-comment `footerWidget()`). Фильтр по `trackerId`: Ядро
         // трекинга публикует эту триаду для ЛЮБОГО трекера, не только этого.
