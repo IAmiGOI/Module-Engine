@@ -7,6 +7,8 @@ import {
     normalizeWindow, renderWindow, splitWindow, windowTurnCount, lastTurnNumber,
 } from '../../libraries/core/decision-window.js';
 
+const FALLBACK_CHARS = 8000;
+
 /**
  * Плавающее окно директора: дописывает сжатые циклы, факты и поправки,
  * переключается на 50 циклах или на конце арки, пишет сводку выпавших
@@ -138,13 +140,50 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
         try {
             const worker = deciderWorker(settings);
             const prompt = fillPrompt(DIRECTOR_WINDOW_SUMMARY, { cycles: renderWindow(dropped), arc: String(arc ?? ''), reason });
-            return String(await call('model.generate', {
-                workerId: worker.id, prompt, maxTokens: Number(settings.windowSummaryMaxTokens) || 1200, temperature: 0, stream: false,
-            }) ?? '').trim();
+            // Без ризонинга: у DeepSeek он съедал весь лимит, сводка приходила пустой, и в контекст ложились все выпавшие ходы целиком.
+            const ask = maxTokens => call('model.generate', {
+                workerId: worker.id, prompt, maxTokens, temperature: 0, stream: false,
+                reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
+            }).then(answer => String(answer ?? '').trim());
+            const limit = Math.max(Number(settings.windowSummaryMaxTokens) || 0, 3000);
+            return (await ask(limit)) || (await ask(limit * 2));
         } catch (error) {
             publishEvent('decision.window.warning', { reason: `window summary failed: ${error?.message ?? error}` });
             return '';
         }
+    }
+
+    /**
+     * Запас без сводки — коротко: строка пользователя и начало ответа писателя на ход, не больше FALLBACK_CHARS.
+     * Раньше сюда ложились все выпавшие ходы целиком (100–180 тыс. символов на окно) и уходили в каждый запрос директора.
+     */
+    function compactFallback(dropped) {
+        const lines = dropped.map(entry => {
+            const rows = String(entry.text ?? '').split('\n');
+            const head = rows[0] ?? '';
+            const user = rows.find(row => row.startsWith('User: ')) ?? '';
+            const writer = rows.find(row => row.startsWith('Writer: ')) ?? '';
+            return [head, user.slice(0, 300), writer.slice(0, 300)].filter(Boolean).join('\n');
+        });
+        const body = lines.join('\n\n');
+        return body.length > FALLBACK_CHARS ? body.slice(body.length - FALLBACK_CHARS) : body;
+    }
+
+    /** Старые запасные записи (`fallback`) пересказываются заново; не вышло — сжимаются до короткого запаса. */
+    async function repairFrozen() {
+        const records = typeof store.frozen === 'function' ? store.frozen() : [];
+        const bloated = record => record?.fallback && String(record.text ?? '').length > FALLBACK_CHARS;
+        if (!Array.isArray(records) || !records.some(bloated)) return false;
+        const next = [];
+        for (const record of records) {
+            if (!bloated(record)) { next.push(record); continue; }
+            const entries = String(record.text ?? '').split(/\n\n(?=TURN |PASSIVE CYCLE|MESSAGE TO THE DIRECTOR|FACT)/).map(text => ({ text }));
+            const summary = await summarize(entries, { reason: record.reason ?? '50 cycles', arc: record.arc ?? '' });
+            next.push(summary ? { ...record, text: summary, fallback: false } : { ...record, text: compactFallback(entries) });
+        }
+        if (typeof store.saveFrozen === 'function') await store.saveFrozen(next);
+        publishEvent('decision.window.rebuilt', { frozen: next.length });
+        return true;
     }
 
     async function switchWindow({ reason = '50 cycles', arc = '' } = {}) {
@@ -155,7 +194,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
         let summary = await summarize(dropped, { reason, arc });
         const fallback = !summary;
         if (fallback) {
-            summary = dropped.map(entry => entry.text).join('\n\n');
+            summary = compactFallback(dropped);
             publishEvent('decision.window.warning', { reason: 'the window switched without a model summary', dropped: dropped.length });
         }
         const record = buildFrozenRecord({
@@ -273,7 +312,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
     }
 
     return {
-        recordTurn, recordBackground, addFact, maybeSwitch, switchWindow, rebuildFromRuns, fillWriterText,
+        recordTurn, recordBackground, addFact, maybeSwitch, switchWindow, rebuildFromRuns, fillWriterText, repairFrozen,
         removeLastTurn, noteCorrection, refreshBoundary, rebuildBoundary,
         entries: () => current().entries, frozen: () => (typeof store.frozen === 'function' ? store.frozen() : []),
     };

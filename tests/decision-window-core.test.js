@@ -261,3 +261,21 @@ test('turn entries saved without the writer reply get it from the chat and lose 
     assert.equal(saved.entries[0].text, 'TURN 1 (compressed)\nUser: hi\nsubmit_turn: (no comment)\nWriter: Emilia turns away.');
     assert.equal(await win.fillWriterText(), false);
 });
+
+test('a bloated fallback record is summarised again, or cut to a short fallback when the summary fails', async () => {
+    const big = Array.from({ length: 60 }, (_, index) => `TURN ${index + 1} (compressed)\nUser: line ${index}\nPUSH:\n${'x'.repeat(400)}\nWriter: reply ${index} ${'y'.repeat(600)}`).join('\n\n');
+    let frozen = [{ key: 'a', text: 'short summary', fallback: false }, { key: 'b', text: big, fallback: true }];
+    const make = answer => createTurnWindow({
+        store: { window: () => ({ entries: [] }), saveWindow: async v => v, runs: () => ({}), frozen: () => frozen, saveFrozen: async v => { frozen = v; },
+            cycles: () => [], boundary: () => null, saveBoundary: async () => {}, roster: () => ({ active: [] }), library: () => ({}), plans: () => [] },
+        call: async (contract, params) => (contract === 'model.generate' ? (assert.equal(params.reasoningMode, 'disabled'), answer) : null),
+        getSettings: () => ({}), deciderWorker: () => ({ id: 'DIR' }), publishEvent: () => {},
+    });
+    assert.equal(await make('').repairFrozen(), true);
+    assert.ok(frozen[1].text.length <= 8000 && frozen[1].text.includes('User: line 59') && !frozen[1].text.includes('xxxx'));
+    assert.equal(await make('').repairFrozen(), false, 'a short fallback is left alone');
+    frozen[1] = { key: 'b', text: big, fallback: true };
+    await make('The summary.').repairFrozen();
+    assert.deepEqual([frozen[1].text, frozen[1].fallback], ['The summary.', false]);
+    assert.equal(frozen[0].text, 'short summary');
+});
