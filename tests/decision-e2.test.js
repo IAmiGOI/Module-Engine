@@ -117,7 +117,7 @@ test('the writer receives a Push with place, time, the user result and the degre
     assert.match(text, /Place: KEEP → EAST WING → EAST CORRIDOR/);
     assert.match(text, /Time: Day 1, 09:30 \(Morning\)/);
     assert.match(text, /The user's action: The user pushes the door/);
-    assert.match(text, /Lena — what they do and say \(in substance; find the words yourself\): Opens the east door/);
+    assert.match(text, /Lena does: Opens the east door/);
     assert.match(text, /\(Why — for you, not for the page: It is the only exit\.?\)/);
     assert.match(text, /— (flawlessly, exactly as intended|cleanly, without a hitch|barely, with visible effort|clumsily, with a mistake|badly botched)/);
     assert.match(text, /When the push says an opponent may counter something a character did not expect/);

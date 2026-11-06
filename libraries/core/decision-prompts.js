@@ -59,7 +59,8 @@ Before submit_turn, only use tools that read state, plus update_roster, assess a
 
 THE FORM
 - decision + decisionReason: what the character is trying to achieve overall, and why. Write here what they expect and are prepared for.
-- action + actionReason: what they do in this turn, and why. If they speak, give what they say in substance — the meaning and intent, never the wording: the Writer writes the words. Write here what they are watching out for. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
+- action + actionReason: what they do in this turn, and why — deeds only. Write here what they are watching out for.
+- says: what they say this turn, in substance — the meaning and intent, never the wording: the Writer writes the words. Leave it out if they say nothing. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
 - outcome: why it succeeded or failed, after the assess result.
 - userResult: only the result of the user's attempt — success or failure, how well, and the concrete cause. Never add actions, words or feelings for the user's character.
 - scene.minutes: how much in-world time this scene really took. A short exchange takes a minute or two; a walk across town takes longer.
