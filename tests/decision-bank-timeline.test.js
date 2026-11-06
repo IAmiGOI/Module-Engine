@@ -122,3 +122,18 @@ test('timeline adjustments run a few at a time instead of strictly one by one', 
     assert.equal(result.adjusted, 5);
     assert.equal(peak, 3);
 });
+
+test('a failed adjust is not repeated on every chat load until the frame changes; reasoning is off', async () => {
+    const world = build({ adjust: () => '' });
+    await world.banks.ensureColdStart();
+    world.setBrief({ text: 'TIMELINE:\nBefore the war.', timeline: 'Before the war.' });
+    await world.banks.applyTimeline({});
+    const first = world.adjustCalls.length;
+    assert.ok(first >= 1);
+    assert.ok(world.adjustCalls.every(params => params.reasoningMode === 'disabled'));
+    await world.banks.applyTimeline({});
+    assert.equal(world.adjustCalls.length, first, 'the same frame is not retried');
+    world.setBrief({ text: 'TIMELINE:\nAfter the war.', timeline: 'After the war.' });
+    await world.banks.applyTimeline({});
+    assert.ok(world.adjustCalls.length > first, 'a new frame is tried again');
+});

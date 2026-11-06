@@ -56,8 +56,9 @@ export function createBankStore({ call }) {
         return { base, marks, chat, coldStart };
     }
 
+    const resolve = next => (typeof next === 'function' ? next() : next);
     const saveBase = next => enqueue(async () => {
-        base = sanitizeBanks(next);
+        base = sanitizeBanks(resolve(next));
         await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: BASE_KEY, value: base });
         return base;
     });
@@ -67,7 +68,7 @@ export function createBankStore({ call }) {
         return marks;
     });
     const saveChat = next => enqueue(async () => {
-        chat = sanitizeBanks(next);
+        chat = sanitizeBanks(resolve(next));
         await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: CHAT_KEY, value: chat });
         return chat;
     });
@@ -80,7 +81,9 @@ export function createBankStore({ call }) {
     return {
         load, saveBase, saveMarks, saveChat, saveColdStart, epoch: () => epoch,
         base: () => ({ ...base }), marks: () => ({ ...marks }), chat: () => ({ ...chat }), coldStart: () => ({ ...coldStart }),
-        putBase: record => saveBase({ ...base, [record.sourceKey]: record }).then(() => record),
-        putChat: record => saveChat({ ...chat, [record.sourceKey]: record }).then(() => record),
+        // Слияние внутри очереди: карта, снятая в момент вызова, теряла записи соседних параллельных правок
+        // (последняя затирала остальные — банки «не правились» и правились снова при каждом входе в чат).
+        putBase: record => saveBase(() => ({ ...base, [record.sourceKey]: record })).then(() => record),
+        putChat: record => saveChat(() => ({ ...chat, [record.sourceKey]: record })).then(() => record),
     };
 }

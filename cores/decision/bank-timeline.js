@@ -4,6 +4,8 @@ import { normalizeTimelineBanks } from '../../libraries/core/decision-brief.js';
 
 const TIMELINE_CONCURRENCY = 3;
 
+const timelineFailMark = hash => `timeline ${hash} failed:`;
+
 /** Правка готовых банков под таймлайн: один запрос модели директора, без поиска. */
 export function createTimelineAdjust({ call, getSettings, publishEvent, bankStore, records, matchesName, currentTimeline, currentGuide = () => '', queue }) {
     const inFlight = new Set();
@@ -19,17 +21,27 @@ export function createTimelineAdjust({ call, getSettings, publishEvent, bankStor
         try {
             const guide = String(currentGuide() ?? '').trim();
             const prompt = fillPrompt(BANK_TIMELINE_ADJUST, { name: record.name, timeline, guide, note: String(note ?? ''), bank: record.text });
-            const answer = await call('model.generate', { workerId, prompt, maxTokens: 4000, temperature: 0.2, stream: false });
+            // Без ризонинга: у DeepSeek он съедал весь лимит, ответ был пустым, и правка повторялась при каждом входе в чат.
+            const answer = await call('model.generate', {
+                workerId, prompt, maxTokens: 8000, temperature: 0.2, stream: false,
+                reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
+            });
             const { text } = splitBankImportance(String(answer ?? ''));
             if (!text) throw new Error('The model returned an empty bank.');
             if (epoch !== epochNow()) return null; // чат сменился, пока шёл запрос: правка старого чата не пишется в новый
-            const updated = createBankRecord({ ...record, text, timelineHash: bankFrameHash(timeline, guide), status: 'ready', builderVersion: BANK_BUILDER_VERSION });
+            const updated = createBankRecord({ ...record, text, timelineHash: bankFrameHash(timeline, guide), status: 'ready', builderVersion: BANK_BUILDER_VERSION, error: null });
             await bankStore.putBase({ ...updated, rawSource: '' });
             await bankStore.putChat(updated);
             publishEvent('decision.bank.timeline', { sourceKey: record.sourceKey, name: record.name });
             return updated;
         } catch (error) {
             publishEvent('decision.bank.warning', { name: record.name, message: `Timeline adjust failed: ${error?.message ?? error}` });
+            // Неудача под эту рамку запоминается: банк остаётся прежним и не правится заново при каждом входе в чат,
+            // пока рамка (таймлайн или указание сборщикам) не сменится.
+            if (epoch === epochNow()) {
+                const marked = createBankRecord({ ...record, error: `${timelineFailMark(bankFrameHash(timeline, currentGuide()))} ${error?.message ?? error}` });
+                await bankStore.putChat(marked).catch(() => {});
+            }
             return null;
         }
     }
@@ -53,6 +65,7 @@ export function createTimelineAdjust({ call, getSettings, publishEvent, bankStor
         }
         for (const record of records()) {
             if (record.status !== 'ready' || !String(record.text ?? '').trim() || record.timelineHash === hash || inFlight.has(record.sourceKey)) continue;
+            if (String(record.error ?? '').startsWith(timelineFailMark(hash))) continue;
             const note = notes.find(item => matchesName(record, item.name))?.note ?? '';
             inFlight.add(record.sourceKey);
             jobs.push({ record, note });
