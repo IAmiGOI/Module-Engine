@@ -91,7 +91,7 @@ export const SUBMIT_TURN_TOOL = Object.freeze({
             },
             comment: COMMENT,
         },
-        required: ['scene', 'resolution', 'userResult', 'characters', 'comment'],
+        required: ['scene', 'resolution', 'userResult', 'beats', 'characters', 'comment'],
     },
 });
 

@@ -1,7 +1,8 @@
 import { createKnowledge } from './knowledge.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { afterTurnEnabled } from '../../libraries/core/decision-settings.js';
-import { ASK_USER_STREAK, DIRECTOR_PASSIVE, DIRECTOR_REROLL, DIRECTOR_TURN, DIRECTOR_AFTER_TURN, AFTER_TURN_SUBMIT_CLOSED, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { createUpdateStoryHandler } from './handlers-story.js';
+import { ASK_USER_STREAK, DIRECTOR_PASSIVE, DIRECTOR_REROLL, DIRECTOR_TURN, DIRECTOR_AFTER_TURN, AFTER_TURN_SUBMIT_CLOSED, AFTER_TURN_USE_UPDATE_STORY, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildPush } from '../../libraries/core/decision-push.js';
@@ -73,10 +74,11 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const recordFailure = createFailureRecorder({ store, state, getSettings, now });
 
     function handlersFor(settings) {
-        return withQuestionStreak({
+        const base = {
             ...createHandlers({ store, call, publishEvent, getSettings, getGameSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions }),
             ...knowledge.handlers,
-        });
+        };
+        return withQuestionStreak({ ...base, update_story: createUpdateStoryHandler(base) });
     }
 
     /** Лимит вопросов bootstrap: новая настройка игры, без неё — прежняя `bootstrap.maxQuestions`. */
@@ -293,9 +295,14 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.runId = runId;
         live.started({ runId, event: 'after_turn', wake: startedWake, at: startedAt });
         try {
-            const handlers = { ...handlersFor(settings), submit_turn: async () => ({ ok: false, error: AFTER_TURN_SUBMIT_CLOSED }) };
+            // Отдельные записи закрыты: раньше цикл шёл цепочкой по персонажу на вызов (3–8 запросов с полным контекстом).
+            const single = async () => ({ ok: false, error: AFTER_TURN_USE_UPDATE_STORY });
+            const handlers = {
+                ...handlersFor(settings), submit_turn: async () => ({ ok: false, error: AFTER_TURN_SUBMIT_CLOSED }),
+                character_knowledge: single, character_note: single, set_character_plan: single, set_plan: single,
+            };
             const result = await runDecisionCycle({
-                messages: start, tools, handlers, callTool, maxSteps: AFTER_TURN_STEPS, implicitAwait: true, now,
+                messages: start, tools, handlers, callTool, maxSteps: AFTER_TURN_STEPS, implicitAwait: true, now, stopAfter: ['update_story'],
                 generate: context.generateFor({ settings, worker, runId, prefix: 'a', startedAt, effort: settings.adaptiveReasoning ? 'low' : null, signal: controller.signal }),
                 ...live.hooks({ runId, thinking }),
             });

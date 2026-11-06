@@ -287,6 +287,29 @@ test('after an accepted form the director keeps working in the background: same 
     }
 });
 
+test('after the turn single records are refused and one update_story writes everything and ends the cycle', async () => {
+    setAfterTurnDefault(true);
+    try {
+        let step = 0;
+        const { pipelineCore, calls } = await build({
+            reply: () => {
+                step += 1;
+                if (step === 1) return turnReply();
+                if (step === 2) return { text: '', toolCalls: [{ id: 'k', name: 'character_knowledge', arguments: { comment: 'One fact.', op: 'add', character: 'Emilia', fact: 'x', source: 'saw' } }] };
+                if (step === 3) return { text: '', toolCalls: [{ id: 'u', name: 'update_story', arguments: { comment: 'Everything the turn changed.', knowledge: [{ op: 'add', character: 'Emilia', fact: 'He can fly.', source: 'saw' }], notes: [{ character: 'Emilia', op: 'add', title: 'Right now', text: 'On the step.' }] } }] };
+                return { text: '', toolCalls: [{ id: 'z', name: 'await', arguments: { comment: 'Should not be reached.', reason: 'x' } }] };
+            },
+        });
+        await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'Hello?', is_user: true }], type: 'normal' } });
+        for (let i = 0; i < 30 && calls.length < 3; i += 1) await flush();
+        for (let i = 0; i < 10; i += 1) await flush();
+        assert.equal(calls.length, 3, 'update_story ends the cycle: no await after it');
+        assert.match(JSON.stringify(calls[2].messages), /Record it in your update_story call instead/);
+    } finally {
+        setAfterTurnDefault(false);
+    }
+});
+
 test('a one-shot "writer" regeneration reuses the last decision even when the setting regenerates the director, and only once', async () => {
     const { pipelineCore, calls, engine } = await build({ initialRuns: { 10: { id: 'old', mesid: '10', at: 1, decision: 'She already decided.', steps: [] } } });
     const caller = engine.registerCaller('test.regen', 'cores', { tier: 'official' });

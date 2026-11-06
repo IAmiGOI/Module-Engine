@@ -93,7 +93,10 @@ test('validateTurn: outcome only after a roll; missing decision is kept from the
     const rolled = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', decision: 'd', decisionReason: 'e', action: 'a', actionReason: 'b', assessId: 'x' }] }, roster: ['Emilia'], assessments: new Map([['x', {}]]) });
     assert.deepEqual(rolled.missing, ['characters[Emilia].outcome']);
     const fresh = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', action: 'a', actionReason: 'b' }] }, roster: ['Emilia'] });
-    assert.deepEqual(fresh.missing, ['characters[Emilia].decision', 'characters[Emilia].decisionReason']);
+    assert.equal(fresh.ok, true, 'a new character without an aim is not sent back');
+    assert.match(fresh.warnings.join(' '), /no aim yet for Emilia/);
+    const planned = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', action: 'a', actionReason: 'b' }] }, roster: ['Emilia'], aimFor: () => 'Reach the capital.' });
+    assert.equal(planned.normalized.characters[0].decision, 'Reach the capital.');
 });
 
 test('character notes: a made-up id falls back to the title, set creates a missing note, and a full set replaces the oldest', async () => {

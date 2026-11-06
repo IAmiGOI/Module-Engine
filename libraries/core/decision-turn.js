@@ -24,8 +24,9 @@ export const DEFAULT_NO_CHECK = "no roll — decided from the character's psycho
 /**
  * @returns {{ ok: boolean, missing: string[], normalized?: object }}
  */
-export function validateTurn({ form, roster = [], assessments = new Map(), user = '', previous = null } = {}) {
+export function validateTurn({ form, roster = [], assessments = new Map(), user = '', previous = null, aimFor = () => '' } = {}) {
     const missing = [];
+    const aimless = [];
     const defaulted = [];
     const carried = [];
     const before = name => (Array.isArray(previous?.characters) ? previous.characters : []).find(character => sameName(character?.name, name)) ?? null;
@@ -59,6 +60,12 @@ export function validateTurn({ form, roster = [], assessments = new Map(), user 
             if (nonEmpty(kept)) {
                 filled.set(character, { ...(filled.get(character) ?? {}), [field]: kept });
                 if (!carried.includes(name)) carried.push(name);
+            } else if (CARRIED.includes(field)) {
+                // Цели ещё не было (персонаж новый): не возвращать форму лишним запросом — взять план персонажа,
+                // а без плана принять ход и попросить цель в update_story.
+                const plan = field === 'decision' ? String(aimFor(name) ?? '').trim() : '';
+                if (plan) filled.set(character, { ...(filled.get(character) ?? {}), decision: plan });
+                else if (field === 'decision' && !aimless.includes(name)) aimless.push(name);
             } else missing.push(`characters[${name || '?'}].${field}`);
         }
         const rolled = nonEmpty(character?.assessId);
@@ -85,5 +92,6 @@ export function validateTurn({ form, roster = [], assessments = new Map(), user 
     };
     const warnings = defaulted.length ? [`no roll and no noCheck for ${defaulted.join(', ')} — "${DEFAULT_NO_CHECK}" was filled in`] : [];
     if (carried.length) warnings.push(`decision kept from the previous turn for ${carried.join(', ')}`);
+    if (aimless.length) warnings.push(`no aim yet for ${aimless.join(', ')} — give one with set_character_plan in update_story`);
     return { ok: missing.length === 0, missing, normalized, warnings };
 }

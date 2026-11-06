@@ -253,3 +253,59 @@ export const CHARACTER_KNOWLEDGE_TOOL = Object.freeze({
         required: ['op', 'character', 'comment'],
     },
 });
+
+const STORY_KNOWLEDGE = {
+    type: 'object',
+    properties: {
+        op: { type: 'string', enum: ['add', 'update', 'revise', 'forget'] },
+        character: { type: 'string' },
+        fact: { type: 'string' },
+        source: { type: 'string', enum: ['saw', 'heard', 'told', 'read', 'worked out'] },
+        from: { type: 'string' },
+        id: { type: 'string', description: 'For update, revise and forget: the knowledge id.' },
+    },
+    required: ['op', 'character'],
+};
+const STORY_NOTE = {
+    type: 'object',
+    properties: {
+        character: { type: 'string' },
+        op: { type: 'string', enum: ['add', 'set', 'remove'] },
+        id: { type: 'string' },
+        title: { type: 'string' },
+        text: { type: 'string' },
+    },
+    required: ['character', 'op'],
+};
+const STORY_CHARACTER_PLAN = {
+    type: 'object',
+    properties: {
+        character: { type: 'string' },
+        summary: { type: 'string', description: 'What the character is doing and heading toward.' },
+        steps: { type: 'array', items: { type: 'string' } },
+        durationMinutes: { type: 'number' },
+    },
+    required: ['character', 'summary'],
+};
+
+/** Все записи хода одним вызовом: знания, заметки, планы персонажей и план директора. Вместо цепочки отдельных вызовов. */
+export const UPDATE_STORY_TOOL = Object.freeze({
+    name: 'update_story',
+    displayName: 'Record what the turn changed',
+    description: 'Record everything this turn changed in ONE call: what characters learned (knowledge — same ops as character_knowledge), the notes it made wrong (notes — same ops as character_note), character plans it changed (characterPlans — same as set_character_plan), and your own plan if it changed (plan — same as set_plan). Leave out a list that has nothing; leave out what is still true. After the turn this call ends the cycle.',
+    parameters: {
+        type: 'object',
+        properties: {
+            knowledge: { type: 'array', items: STORY_KNOWLEDGE },
+            notes: { type: 'array', items: STORY_NOTE },
+            characterPlans: { type: 'array', items: STORY_CHARACTER_PLAN },
+            plan: {
+                type: 'object',
+                properties: { direction: { type: 'string' }, stages: { type: 'array', items: { type: 'string' } }, currentStage: { type: 'number' } },
+                required: ['direction'],
+            },
+            comment: COMMENT,
+        },
+        required: ['comment'],
+    },
+});

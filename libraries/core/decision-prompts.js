@@ -27,6 +27,7 @@ Every call must carry "comment": at least one full sentence saying why you are m
 - set_plan — your own plan: the direction of future events around the user. It must always exist.
 - character_note — at most four short notes per character: what the Writer must know about them right now.
 - character_bank — read, edit or rebuild a character's data bank: the compact card you and the Writer read.
+- update_story — knowledge, notes, character plans and your plan in one call: use it whenever you record more than one thing.
 - character_knowledge — the Knowledge section of a character's data bank: what they have learned in this story. Whenever a character sees, hears, is told or works out something that matters, add it; extend an entry they already have when they learn more about it (update) instead of adding a duplicate; revise it when they learn it was wrong. A character acts only on their bank and their knowledge. The user's character has no knowledge record.
 - arc — the stages of the roleplay and which sections are finished.
 - current_state — where the scene is and where your plan stands.
@@ -89,7 +90,7 @@ PACING
 - Resolve the user's action only as far as it has got when someone would react. An action that takes time — a fall, a flight, a walk, a long working — is shown under way; do not finish it, land it or arrive for the user. Where it ends is the user's next move.
 - The turn is what the user's character can see, hear or be told. When the user's character leaves — walks off, rides away, flies up out of the street — the scene goes with them: the turn shows what they see and hear as they go, and the people they leave behind only while they are still in sight or earshot; what those people do after that is off-page. When a character leaves their presence, the turn shows them leaving; what happens out of the user's sight happens off-page — keep it in a plan or a note, and let it reach the user when someone brings it back. Never put it in the resolution, an action or a spoken line, and keep characters who are elsewhere out of the active roster.
 
-When the form is accepted, record with character_knowledge what each character learned this turn, do the rest of your work (notes, plans, memory, research), then call await.`;
+When the form is accepted, record in one update_story call what each character learned this turn and the notes and plans it changed; memory and research stay their own tools.`;
 
 export const DIRECTOR_PASSIVE = `Time has passed in the world, or something reached you between turns. The event is described below.
 
@@ -350,5 +351,6 @@ export const BANK_GUIDE_DESCRIPTION = 'One guide for every data bank builder in 
 /** Настройки игры — дословно из PROMPTS.md §22 (сами строки — в story-settings-text.js). */
 export { STORY_SETTINGS_HEADER, STORY_SETTINGS_RULES } from './story-settings-text.js';
 
-export const DIRECTOR_AFTER_TURN = `AFTER THE TURN: your form is accepted and the Writer is writing the reply now. Do the rest of this turn's work: record with character_knowledge what each character learned, bring up to date the notes this turn made wrong, and change the plans this turn changed. Change only what this turn changed; leave what is still true. submit_turn is closed. Then call await.`;
-export const AFTER_TURN_SUBMIT_CLOSED = `The turn is already submitted and the Writer is writing it. Do the rest of the work, then call await.`;
+export const DIRECTOR_AFTER_TURN = `AFTER THE TURN: your form is accepted and the Writer is writing the reply now. Record everything this turn changed in ONE update_story call: what each character learned (knowledge), the notes this turn made wrong (notes), the character plans it changed and an aim for anyone who has none yet (characterPlans), and your own plan if it changed (plan). Change only what this turn changed; leave what is still true. That one call ends the work. If the turn changed nothing, call await instead. submit_turn is closed.`;
+export const AFTER_TURN_USE_UPDATE_STORY = `Record it in your update_story call instead, together with everything else this turn changed: knowledge, notes, characterPlans and plan in one call.`;
+export const AFTER_TURN_SUBMIT_CLOSED = `The turn is already submitted and the Writer is writing it. Record what it changed in one update_story call.`;
