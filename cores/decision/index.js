@@ -1,3 +1,4 @@
+import { dropAnnouncedLines } from '../../libraries/core/writer-cleanup.js';
 import { request } from '../../libraries/shared/request.js';
 import { clampDecisionSettings, DECISION_NAMESPACE, DEFAULT_SETTINGS, publicDecisionSettings } from '../../libraries/core/decision-settings.js';
 import { createDecisionStore } from './store.js';
@@ -120,6 +121,22 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         snapshotTimer = setTimeout(() => { snapshotTimer = null; bankSets.snapshot().catch(() => {}); }, 1500);
     };
     for (const name of ['decision.bootstrap.finished', 'decision.bank.ready', 'decision.bank.timeline']) host.events.subscribe(name, scheduleSnapshot);
+    // Писатель (GLM) пересказывает реплику повествованием рядом с самой репликой и правило промпта не держит —
+    // лишняя фраза убирается из готового ответа механически (libraries/core/writer-cleanup.js).
+    host.events.subscribe('decision.run.saved', async payload => {
+        const mesid = payload?.mesid === null || payload?.mesid === undefined ? '' : String(payload.mesid);
+        if (!mesid) return;
+        try {
+            const found = await call('chatHistory.messages', { mesids: [mesid], includeSystem: true });
+            const message = Array.isArray(found) ? found.find(item => String(item.mesid) === mesid && !item.isUser) : null;
+            if (!message?.text) return;
+            const cleaned = dropAnnouncedLines(message.text);
+            if (cleaned && cleaned !== message.text) {
+                await call('chatHistory.replaceText', { mesid, text: cleaned });
+                publishEvent('decision.writer.cleaned', { mesid, removed: message.text.length - cleaned.length });
+            }
+        } catch { /* чистка — улучшение, её сбой ответ не трогает */ }
+    });
     const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
     const rollback = createRollback({ store, getSettings: () => settings, publishEvent, call: callStrict });
     const { snapshotState, restoreState, restoreSnapshotFor } = rollback;
