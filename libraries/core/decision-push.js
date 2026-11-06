@@ -113,7 +113,8 @@ function buildBeatPush({ form, assessments, place, timeBefore, timeAfter }) {
         return text;
     });
     const reasons = characters.filter(character => character?.idle !== true && line(character?.name)).map(character => {
-        const parts = [line(character.actionReason), line(character.decision) ? `Aim: ${line(character.decision)}${line(character.decisionReason) ? ` — ${line(character.decisionReason)}` : ''}` : ''].filter(Boolean);
+        // Цель (decision) писателю не нужна: она тянулась из прошлых ходов и уводила его в устаревшее. Только причина этого хода.
+        const parts = [line(character.actionReason)].filter(Boolean);
         return parts.length ? `- ${line(character.name)}: ${parts.join(' ')}` : '';
     }).filter(Boolean);
     return [
