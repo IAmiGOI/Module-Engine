@@ -294,7 +294,9 @@ test('a real ST generation actually runs the beforeSend contributions, and await
 
     await st.generate();
 
-    const contributions = await generationCore.awaitBeforeSend('run_1');
+    const runId = generationCore.current()?.runId ?? generationCore.runs().at(-1)?.runId;
+    assert.match(runId, /^run_[a-z0-9]+_1$/, 'run ids carry a session mark, so a reload does not reuse run_1');
+    const contributions = await generationCore.awaitBeforeSend(runId);
     assert.equal(contributions.ok, true);
     assert.equal(contributions.outputs.wi, 'lore for this turn');
 });

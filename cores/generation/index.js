@@ -93,6 +93,9 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
 
     let current = null;
     let runCounter = 0;
+    // Метка сессии: счётчик обнуляется с перезагрузкой страницы, и `run_2` прошлой сессии путался с нынешним
+    // (поиск цикла хода по runId брал первый попавшийся — ход другого дня).
+    const session = Date.now().toString(36);
     const beforeSendRuns = new Map(); // runId -> Promise результата сборки вкладов
     let installed = false;
     const finished = [];
@@ -136,7 +139,7 @@ export function createGenerationCore(host, { publish, pipelines, interceptorName
         // ждёт его завершения, не дождалось бы никогда.
         if (current) settle(current, 'superseded');
         runCounter += 1;
-        current = { runId: `run_${runCounter}`, stage: 'beforeSend', startedAt: Date.now(), endedAt: null, outcome: null, toolCalls: [] };
+        current = { runId: `run_${session}_${runCounter}`, stage: 'beforeSend', startedAt: Date.now(), endedAt: null, outcome: null, toolCalls: [] };
         publishEvent('generation.beforeSend', { runId: current.runId });
         // Сборку вкладов здесь НЕ запускаем. `GENERATION_STARTED` у ST
         // приходит раньше перехватчика, и в этот момент нет ни `chat`, ни
