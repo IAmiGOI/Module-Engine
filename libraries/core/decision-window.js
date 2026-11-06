@@ -20,6 +20,15 @@ const text = value => String(value ?? '').trim();
 const keyOf = value => text(value).toLowerCase();
 
 /** Окно с диска — безопасная форма; мусор не должен ломать контекст. */
+/** Старые записи окна несли Push целиком; при ответе писателя он вырезается (до строк инструментов, CHANGES или Writer). */
+function withoutStalePush(body) {
+    const lines = body.split('\n');
+    const start = lines.indexOf('PUSH:');
+    if (start < 0 || !lines.some(line => line.startsWith('Writer: '))) return body;
+    const end = lines.findIndex((line, index) => index > start && (/^[a-z]+(?:_[a-z]+)+: /.test(line) || line === 'CHANGES:' || line.startsWith('Writer: ')));
+    return [...lines.slice(0, start), ...lines.slice(end)].join('\n');
+}
+
 export function normalizeWindow(value) {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const entries = (Array.isArray(source.entries) ? source.entries : [])
@@ -29,8 +38,8 @@ export function normalizeWindow(value) {
             kind: WINDOW_KINDS.includes(entry.kind) ? entry.kind : 'fact',
             turn: Number.isFinite(Number(entry.turn)) ? Number(entry.turn) : null,
             at: Number(entry.at) || 0,
-            text: text(entry.text),
-            tokens: Number(entry.tokens) || estimateTokens(entry.text),
+            text: withoutStalePush(text(entry.text)),
+            tokens: withoutStalePush(text(entry.text)) === text(entry.text) && Number(entry.tokens) ? Number(entry.tokens) : estimateTokens(withoutStalePush(text(entry.text))),
             runIds: Array.isArray(entry.runIds) ? entry.runIds.map(text).filter(Boolean) : [],
         }));
     return {
@@ -72,7 +81,7 @@ export function splitWindow(entries, { share = WINDOW_DROP_SHARE } = {}) {
     };
 }
 
-/** Сжатая запись цикла: пользователь и ответ писателя целиком, от директора — Push, комментарии и изменения. */
+/** Сжатая запись цикла: пользователь и ответ писателя целиком, от директора — комментарии и изменения (Push — только без ответа писателя). */
 export function buildCycleDigest(cycle, { kind = 'turn', turn = null, userText = '', writerText = '', index = 0, now = () => Date.now() } = {}) {
     const cycles = cycle && typeof cycle === 'object' ? cycle : {};
     const number = Number.isFinite(Number(turn)) ? Number(turn)
@@ -91,7 +100,9 @@ export function buildCycleDigest(cycle, { kind = 'turn', turn = null, userText =
     if (kind === 'message' && !cycles.message?.text && text(cycles.wake?.text ?? cycles.wake?.detail)) {
         lines.push(`User: ${text(cycles.wake?.text ?? cycles.wake?.detail)}`);
     }
-    if (text(cycles.push)) lines.push('PUSH:', text(cycles.push));
+    // Push в окне — шаблон, который директор копирует из хода в ход (позы, смыслы реплик, старые цели).
+    // Что случилось, уже есть в ответе писателя; push остаётся, только если ответа нет.
+    if (text(cycles.push) && !text(writerText)) lines.push('PUSH:', text(cycles.push));
 
     for (const call of Array.isArray(cycles.toolCalls) ? cycles.toolCalls : []) {
         const name = text(call?.name);

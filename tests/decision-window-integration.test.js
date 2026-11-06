@@ -62,7 +62,7 @@ test('a real turn lands in the floating window with the user message and the wri
     assert.equal(entries.length, 1);
     assert.match(entries[0].text, /User: user 1/);
     assert.match(entries[0].text, /Writer: prose 1/);
-    assert.match(entries[0].text, /PUSH:/);
+    assert.doesNotMatch(entries[0].text, /PUSH:/);
 });
 
 test('a small window limit switches the window, freezes the summary and puts it before the new cycles', async () => {

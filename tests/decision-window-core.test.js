@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTurnWindow } from '../cores/decision/window.js';
-import { windowTurnCount } from '../libraries/core/decision-window.js';
+import { normalizeWindow, windowTurnCount } from '../libraries/core/decision-window.js';
 
 const clone = value => JSON.parse(JSON.stringify(value));
 
@@ -234,8 +234,16 @@ test('a window wiped by the old turn-count bug is rebuilt from the runs and the 
     assert.equal(await win.rebuildFromRuns(), true);
     const turns = saved.entries.filter(entry => entry.kind === 'turn');
     assert.deepEqual(turns.map(entry => entry.turn), [1, 2, 3]);
-    assert.match(turns[0].text, /User: Walk to the fountain\.[\s\S]*Emilia greets Sasha[\s\S]*Writer: Emilia turns\./);
-    assert.match(turns[2].text, /User: Whisper\.[\s\S]*the guard leaves/);
+    assert.match(turns[0].text, /User: Walk to the fountain\.[\s\S]*Writer: Emilia turns\./);
+    assert.doesNotMatch(turns[0].text, /Emilia greets Sasha/, 'the push stays out when the writer reply is there');
+    assert.match(turns[2].text, /User: Whisper\.[\s\S]*Writer: He walks off\./);
     assert.equal(saved.entries[0].kind, 'fact', 'the bootstrap facts before the turns are kept');
     assert.equal(await win.rebuildFromRuns(), false, 'a whole window is left alone');
+});
+
+test('a saved turn entry loses its old push when the writer reply is there', () => {
+    const body = 'TURN 3 (compressed)\nUser: hi\nPUSH:\nBEATS — in this order:\n1. Emilia — ACTION: Stands still.\nEND: she waits.\nsubmit_turn: (no comment)\nWriter: Emilia waits.';
+    const win = normalizeWindow({ entries: [{ kind: 'turn', turn: 3, text: body }, { kind: 'turn', turn: 4, text: 'TURN 4 (compressed)\nPUSH:\nOnly push.' }] });
+    assert.equal(win.entries[0].text, 'TURN 3 (compressed)\nUser: hi\nsubmit_turn: (no comment)\nWriter: Emilia waits.');
+    assert.match(win.entries[1].text, /Only push/, 'without a writer reply the push stays');
 });
