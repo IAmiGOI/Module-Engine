@@ -22,7 +22,7 @@ test('the push carries the time, place, resolution, the user result and the char
     assert.match(push, /Time: Day 1, 08:12 \(Morning\)/);
     assert.match(push, /Resolution: She gets out/);
     assert.match(push, /The user's action: The user pushes the door/);
-    assert.match(push, /Lena does: opens the east door — cleanly, without a hitch\./);
+    assert.match(push, /Lena — what they do and say \(in substance; find the words yourself\): opens the east door — cleanly, without a hitch\./);
     assert.match(push, /\(Why — for you, not for the page: she needs air\)/);
     assert.match(push, /Lena's aim — for you, not for the page: Leave the keep\./);
     assert.match(push, /Why it goes this way: The lock gives/);
@@ -31,8 +31,8 @@ test('the push carries the time, place, resolution, the user result and the char
 
 test('a missing assessment leaves the character line without invented degree words', () => {
     const push = buildPush({ form, assessments: new Map() });
-    const actionLine = push.split('\n').find(line => line.startsWith('Lena does:'));
-    assert.equal(actionLine, 'Lena does: opens the east door.');
+    const actionLine = push.split('\n').find(line => line.startsWith('Lena — what they do'));
+    assert.equal(actionLine, 'Lena — what they do and say (in substance; find the words yourself): opens the east door.');
 });
 
 test('the place and time are omitted honestly when the engine has no source, not made up', () => {

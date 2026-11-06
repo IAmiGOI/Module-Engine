@@ -93,7 +93,7 @@ export function buildPush({ form, assessments = new Map(), place = '', timeBefor
         const words = line(assessmentOf(assessments, character?.assessId)?.words);
         const degree = words ? ` — ${words}` : '';
         // Причины и цель — пометкой «не для страницы»: склейка «will … because …» читалась готовой фразой, и писатель вставлял её в текст.
-        lines.push(`${name} does: ${phrase(character?.action)}${degree}.`);
+        lines.push(`${name} — what they do and say (in substance; find the words yourself): ${phrase(character?.action)}${degree}.`);
         if (line(character?.actionReason)) lines.push(`(Why — for you, not for the page: ${line(character.actionReason)})`);
         if (line(character?.decision)) lines.push(`(${name}'s aim — for you, not for the page: ${line(character.decision)} — ${line(character.decisionReason)})`);
         if (line(character?.outcome)) lines.push(`Why it goes this way: ${line(character.outcome)}`);

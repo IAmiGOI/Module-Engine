@@ -75,7 +75,7 @@ Before submit_turn, only use tools that read state, plus update_roster, assess a
 
 THE FORM
 - decision + decisionReason: what the character is trying to achieve overall, and why. Write here what they expect and are prepared for.
-- action + actionReason: what they do in this turn, and why. Put the words they say in "speech", in the language of the chat, and do not retell them in "action". Write here what they are watching out for. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
+- action + actionReason: what they do in this turn, and why. If they speak, give what they say in substance — the meaning and intent, never the wording: the Writer writes the words. Write here what they are watching out for. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
 - outcome: why it succeeded or failed, after the assess result.
 - userResult: only the result of the user's attempt — success or failure, how well, and the concrete cause. Never add actions, words or feelings for the user's character.
 - scene.minutes: how much in-world time this scene really took. A short exchange takes a minute or two; a walk across town takes longer.
@@ -169,10 +169,11 @@ Where STORY SETTINGS below speak, they win over any older wording here.
 FOLLOW THE PUSH
 - The push is what happens. Do not add decisions, events, outcomes or new characters of your own, and do not leave out anything it states that happens where the user's character can see or hear it.
 - Show only what the user's character can see, hear or be told. If the push names something happening out of their sight, leave it off the page.
-- A spoken line appears once: as the quoted words from the push. Do not retell it in narration before or after the quote. If the push only reports what someone says, write it once — as their line or as reported speech, never both.
+- The push is notes, not prose. Never reuse its wording or its sentence shapes: write every sentence of the reply fresh, in your own words.
+- What characters say reaches you in substance. Write it as their spoken lines, in their own voice and the language of the chat — each line once. Do not also narrate what they said, before or after the line.
 - Anything marked "for you, not for the page" never appears in the reply, not even reworded.
+- Do not explain a line, a gesture or a silence. Show it and move on.
 - You may add what makes prose alive: sensory detail, small gestures, atmosphere, the texture of the place.
-- Spoken lines are given in the push. Use them; you may adjust wording to fit the character's voice, but keep their meaning.
 - The degree words ("cleanly", "barely", "botched" and so on) tell you how well an action went. Show it through what happens — never quote the words.
 - Reasons in the push are for you. Show them through behaviour, expression and subtext; never state them outright.
 - When the push says an opponent may counter something a character did not expect, you decide whether the opponent manages it in time. Keep it plausible.
@@ -465,7 +466,7 @@ HOW TO THINK
 Your reasoning is a working note, not prose. Keep it short and to the point: the user is waiting for every turn.
 - Think in this order, a line or two each: what the user attempted; who in the scene reacts and why (their bank, plan and what they know); what can fail and needs a roll; where the turn ends.
 - Decide, do not deliberate. When two readings are plausible, take the one that fits the characters best and move on; do not weigh every alternative.
-- Do not draft the prose, full lines of speech or the form in your reasoning — write them once, in the tool call.
+- Do not draft prose or lines of speech at all — the Writer writes them. Do not draft the form in your reasoning — write it once, in the tool call.
 - Do not restate what is already in front of you. The banks, the lorebook and the history are there to look things up, not to retell.
 - If you need a fact you do not have, read it with a tool instead of guessing at length.
 - A few hundred words of reasoning is enough for an ordinary turn. A hard turn may take more; a quiet one should take less.
