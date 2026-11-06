@@ -30,6 +30,7 @@ function samplerFor(settings, payload) {
         topP: own ? writer.topP : (number(payload?.top_p) ?? writer.topP),
         topK: own ? writer.topK : (number(payload?.top_k) ?? writer.topK),
         maxTokens: own ? writer.maxTokens : (number(payload?.max_tokens) ?? writer.maxTokens),
+        frequencyPenalty: own ? writer.frequencyPenalty : (number(payload?.frequency_penalty) ?? writer.frequencyPenalty),
     };
 }
 

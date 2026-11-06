@@ -47,6 +47,7 @@ export const DEFAULT_WRITER = Object.freeze({
     topP: 1,
     topK: 0,
     maxTokens: 1000,
+    frequencyPenalty: 0.3,
 });
 
 export const DEFAULT_PROMPTS = Object.freeze({ director: '', writer: '' });
@@ -163,6 +164,8 @@ export function clampDecisionSettings(values = {}) {
             topP: number(writer.topP, 0, 1, DEFAULT_WRITER.topP),
             topK: Math.round(number(writer.topK, 0, 200, DEFAULT_WRITER.topK)),
             maxTokens: Math.round(number(writer.maxTokens, 1, 32768, DEFAULT_WRITER.maxTokens)),
+            // Штраф за повторы: писатель переписывал целые абзацы из своих прошлых ответов.
+            frequencyPenalty: number(writer.frequencyPenalty, 0, 2, DEFAULT_WRITER.frequencyPenalty),
         },
         compression: {
             workerId: text(compression.workerId, DEFAULT_COMPRESSION.workerId).trim(),

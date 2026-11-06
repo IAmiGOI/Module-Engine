@@ -25,7 +25,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     };
     const writer = {
         samplerPreset: signal(''), applySampler: signal(false),
-        temperature: signal(0.9), topP: signal(1), topK: signal(0), maxTokens: signal(1000),
+        temperature: signal(0.9), topP: signal(1), topK: signal(0), maxTokens: signal(1000), frequencyPenalty: signal(0.3),
     };
     const lastRun = signal(null);
     const presets = signal([]);
@@ -111,6 +111,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
         writer.topP.set(Number(readWriter.topP ?? 1));
         writer.topK.set(Number(readWriter.topK ?? 0));
         writer.maxTokens.set(Number(readWriter.maxTokens ?? 1000));
+        writer.frequencyPenalty.set(Number(readWriter.frequencyPenalty ?? 0.3));
         maxSteps.set(Number(value.maxSteps ?? 50));
         formTimeoutMs.set(Number(value.formTimeoutMs ?? 180000));
         compressedLimitTokens.set(Number(value.compressedLimitTokens ?? 100000));
@@ -145,7 +146,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
             },
             writer: {
                 workerId: writerWorkerId.peek(), samplerPreset: writer.samplerPreset.peek(), applySampler: writer.applySampler.peek(),
-                temperature: writer.temperature.peek(), topP: writer.topP.peek(), topK: writer.topK.peek(), maxTokens: writer.maxTokens.peek(),
+                temperature: writer.temperature.peek(), topP: writer.topP.peek(), topK: writer.topK.peek(), maxTokens: writer.maxTokens.peek(), frequencyPenalty: writer.frequencyPenalty.peek(),
             },
             maxSteps: maxSteps.peek(), formTimeoutMs: formTimeoutMs.peek(), compressedLimitTokens: compressedLimitTokens.peek(),
             compression: { workerId: compression.workerId.peek(), thresholdTokens: compression.thresholdTokens.peek() },
@@ -253,6 +254,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                     Slider('Top P', writer.topP, { min: 0, max: 1, step: 0.01 }),
                     Slider('Top K', writer.topK, { min: 0, max: 200, step: 1 }),
                     Slider('Max tokens', writer.maxTokens, { min: 1, max: 32768, step: 1 }),
+                    Slider('Repetition penalty', writer.frequencyPenalty, { min: 0, max: 2, step: 0.05 }),
                 ),
                 h('small', { class: 'stme-module-hint' }, 'The writer never reasons: reasoning is always disabled in its request.'),
             ),
