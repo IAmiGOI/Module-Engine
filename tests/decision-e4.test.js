@@ -47,7 +47,7 @@ async function build({ replies }) {
 
 const form = (characters = [], minutes = 5) => call('submit_turn', {
     comment: 'The form is ready for the writer.', resolution: 'They move on.', userResult: 'The user waits.',
-    scene: { minutes }, characters,
+    scene: { minutes }, characters, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }],
 });
 
 async function flush() {

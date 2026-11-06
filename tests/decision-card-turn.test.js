@@ -43,7 +43,7 @@ test('a card-test turn goes through the real director and gives the writer notes
                     scene: { minutes: 1 },
                     resolution: 'Aria steps out of the shadows.',
                     userResult: 'The user called into the dark and was heard.',
-                    characters: [{ name: 'Aria', decision: 'Find out who is there.', decisionReason: 'A stranger is close to the camp.', action: 'steps out of the shadows', actionReason: 'She wants to see the visitor first.', outcome: 'She is a trained scout and the ground is clear.', assessId: 'asm_cardtest_1_1', speech: 'Who goes there?' }],
+                    beats: [{ who: 'Aria', kind: 'action', text: 'steps out of the shadows' }, { who: 'Aria', kind: 'line', text: 'who goes there?' }], characters: [{ name: 'Aria', decision: 'Find out who is there.', decisionReason: 'A stranger is close to the camp.', action: 'steps out of the shadows', actionReason: 'She wants to see the visitor first.', outcome: 'She is a trained scout and the ground is clear.', assessId: 'asm_cardtest_1_1', speech: 'Who goes there?' }],
                 } }] },
             ],
         });
@@ -56,8 +56,8 @@ test('a card-test turn goes through the real director and gives the writer notes
     const all = messages.map(message => message.content).join('\n');
     assert.match(all, /You are the Writer of a roleplay/);
     assert.match(all, /### Aria: Description\nAria is a scout\./, 'the card reaches the writer as character notes');
-    assert.match(all, /Resolution: Aria steps out of the shadows\./);
-    assert.match(all, /Aria says: "Who goes there\?"/);
+    assert.match(all, /END: Aria steps out of the shadows\./);
+    assert.match(all, /Aria — LINE \(meaning\): who goes there\?/);
     assert.equal(messages.at(-1).role, 'system', 'the push comes after the history');
     assert.match(messages.at(-1).content, /^PUSH — what happens this turn:/);
     assert.equal(calls.length, 2, 'assess, then the form');

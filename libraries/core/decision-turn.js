@@ -70,6 +70,11 @@ export function validateTurn({ form, roster = [], assessments = new Map(), user 
         else if (rolled && !hasAssessment(assessments, character.assessId)) missing.push(`characters[${name || '?'}].assessId: "${character.assessId}" was not returned by assess`);
     }
 
+    // Писателю нужен ход шагами по порядку: без них Push повторял каждое событие трижды, и писатель пересказывал реплики.
+    const acting = list.some(character => character?.idle !== true);
+    const beats = Array.isArray(form.beats) ? form.beats.filter(beat => nonEmpty(beat?.text)) : [];
+    if (acting && !beats.length) missing.push('beats: give the turn in order — every action and every line of the characters who act, each once (a line beat is what the words mean, in direct form)');
+
     const normalized = {
         ...form,
         scene: { ...(form.scene ?? {}), minutes },

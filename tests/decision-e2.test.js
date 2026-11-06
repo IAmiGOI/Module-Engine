@@ -76,7 +76,7 @@ test('assess uses the two-level table, the form validates, the place is read fro
             call('submit_turn', {
                 comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
                 userResult: 'The user pushes the door; it opens but the sleeve tears.', scene: { minutes: 90 },
-                characters: [lena()],
+                beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena()],
             }),
         ],
     });
@@ -105,7 +105,7 @@ test('the writer receives a Push with place, time, the user result and the degre
             call('submit_turn', {
                 comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
                 userResult: 'The user pushes the door; it opens but the sleeve tears.', scene: { minutes: 90 },
-                characters: [lena()],
+                beats: [{ who: 'Lena', kind: 'action', text: 'Opens the east door' }, { who: 'Lena', kind: 'line', text: 'this is the only way out' }], characters: [lena()],
             }),
         ],
     });
@@ -116,10 +116,11 @@ test('the writer receives a Push with place, time, the user result and the degre
     assert.match(text, /took 90 minutes/);
     assert.match(text, /Place: KEEP → EAST WING → EAST CORRIDOR/);
     assert.match(text, /Time: Day 1, 09:30 \(Morning\)/);
-    assert.match(text, /The user's action: The user pushes the door/);
-    assert.match(text, /Lena does: Opens the east door/);
-    assert.match(text, /\(Why — for you, not for the page: It is the only exit\.?\)/);
-    assert.match(text, /— (flawlessly, exactly as intended|cleanly, without a hitch|barely, with visible effort|clumsily, with a mistake|badly botched)/);
+    assert.match(text, /THE USER'S ACTION, AND HOW IT LANDS: The user pushes the door/);
+    assert.match(text, /1\. Lena — ACTION: Opens the east door/);
+    assert.match(text, /2\. Lena — LINE \(meaning\): this is the only way out/);
+    assert.match(text, /NOT FOR THE PAGE — why they act[\s\S]*- Lena: It is the only exit/);
+    assert.match(text, /\(it goes (flawlessly, exactly as intended|cleanly, without a hitch|barely, with visible effort|clumsily, with a mistake|badly botched)/);
     assert.match(text, /When the push says an opponent may counter something a character did not expect/);
     assert.equal('tools' in body, false);
     assert.equal(body.stream, true);
@@ -131,10 +132,10 @@ test('an incomplete form is refused with the list of missing fields, and the dir
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [] }),
+            call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [] }),
             call('submit_turn', {
                 comment: 'The form is ready now.', resolution: 'She gets out.', userResult: 'The user waits.', scene: { minutes: 5 },
-                characters: [lena()],
+                beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena()],
             }),
         ],
     });
@@ -149,10 +150,10 @@ test('a form that omits an active roster member is refused, and the missing name
             call('update_roster', { add: [{ name: 'Lena' }, { name: 'Marek' }], comment: 'Both are in the scene now.' }),
             call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
             call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [lena()] }),
+            call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena()] }),
             call('submit_turn', {
                 comment: 'The form is ready now.', resolution: 'They leave.', userResult: 'The user waits.', scene: { minutes: 5 },
-                characters: [lena(), { ...lena('asm_run_1_1'), name: 'Marek', action: 'Follows her out.' }],
+                beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena(), { ...lena('asm_run_1_1'), name: 'Marek', action: 'Follows her out.' }],
             }),
         ],
     });

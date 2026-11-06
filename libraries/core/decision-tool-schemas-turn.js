@@ -55,7 +55,20 @@ export const SUBMIT_TURN_TOOL = Object.freeze({
                 },
                 required: ['minutes'],
             },
-            resolution: { type: 'string', description: 'How this turn ends — the concrete outcome of this scene.' },
+            resolution: { type: 'string', description: 'Where the turn stops: the state of the scene at the end, in one sentence. Do not retell the lines or actions — the beats carry them.' },
+            beats: {
+                type: 'array',
+                description: 'The turn as it happens, in order: every action and every line of the characters who act, each exactly once. The user\'s character gets no beats.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        who: { type: 'string' },
+                        kind: { type: 'string', enum: ['line', 'action'], description: 'line — they speak; action — what their body does.' },
+                        text: { type: 'string', description: 'For a line: what the words mean, in direct form ("what were you two saying at the sill?") — never the wording, never "she asks…". For an action: what they do.' },
+                    },
+                    required: ['who', 'kind', 'text'],
+                },
+            },
             userResult: { type: 'string', description: 'The result of the user action only: success or failure and why. Never decide the user action itself.' },
             characters: {
                 type: 'array',
@@ -66,8 +79,7 @@ export const SUBMIT_TURN_TOOL = Object.freeze({
                         idle: { type: 'boolean', description: 'True when the character is present but does nothing worth showing this turn. Then only the name is needed, and the writer keeps them in the background.' },
                         decision: { type: 'string', description: 'What they do overall. Persists between turns.' },
                         decisionReason: { type: 'string' },
-                        action: { type: 'string', description: 'What they do in this turn — deeds only. What they say goes in "says".' },
-                        says: { type: 'string', description: 'What they say this turn, in substance — the meaning and intent, never the wording: the Writer writes the words. Leave it out if they say nothing.' },
+                        action: { type: 'string', description: 'What they do in this turn overall, in one line — deeds only. The order of actions and lines goes in beats.' },
                         actionReason: { type: 'string' },
                         assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
                         noCheck: { type: 'string', description: 'Why no roll was needed, when assessId is absent: a decision, a reaction, agreeing or refusing, staying put.' },

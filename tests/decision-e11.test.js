@@ -61,7 +61,7 @@ async function flush() {
 const setPlan = () => call('set_plan', { direction: 'Keep moving.', comment: 'A direction is required before the form.' });
 const form = (characters = [], minutes = 5) => call('submit_turn', {
     comment: 'The form is ready for the writer.', resolution: 'She leaves.', userResult: 'The user waits.',
-    scene: { minutes }, characters,
+    scene: { minutes }, characters, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }],
 });
 
 test('a swipe restores the state from before the turn: roster, plan and clock go back', async () => {
@@ -107,7 +107,7 @@ test('adaptive reasoning asks low effort on the turn and high effort in the pass
 });
 
 test('a form timeout uses the saved draft instead of cancelling the turn', async () => {
-    const draft = { scene: { minutes: 4 }, resolution: 'The draft resolution.', userResult: 'The user waits.', characters: [] };
+    const draft = { scene: { minutes: 4 }, resolution: 'The draft resolution.', userResult: 'The user waits.', beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [] };
     const { pipelineCore, core } = await build({
         settings: { turnDraft: true, formTimeoutMs: 20 },
         seed: { [memoryKey('core.decision', 'draft')]: draft },

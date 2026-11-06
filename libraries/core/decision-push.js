@@ -76,7 +76,51 @@ export function buildRollLine({ form, assessments = new Map() } = {}) {
  * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
  * @returns {string}
  */
+/**
+ * Push шагами (проверено на GLM 4.7, стенд в части «реплики»): каждое событие один раз и по порядку, реплика —
+ * смыслом в прямой форме, развязка — только где ход стоп, причины — отдельным блоком «не для страницы».
+ * Прежний Push рассказывал каждое событие трижды (развязка, действие, «why it goes»), и писатель отрабатывал
+ * каждое упоминание: пересказом и репликой.
+ */
+function buildBeatPush({ form, assessments, place, timeBefore, timeAfter }) {
+    const head = [minutesLabel(form?.scene?.minutes)];
+    const where = line(place) || line(form?.scene?.place);
+    if (where) head.push(`Place: ${where}.`);
+    const when = line(timeAfter) || line(timeBefore);
+    if (when) head.push(`Time: ${when}.`);
+    const characters = Array.isArray(form?.characters) ? form.characters : [];
+    const byName = name => characters.find(character => line(character?.name).toLowerCase() === line(name).toLowerCase()) ?? null;
+    const told = new Set();
+    const beats = form.beats.map((beat, index) => {
+        const who = line(beat?.who) || 'Someone';
+        const kind = String(beat?.kind ?? '').toLowerCase() === 'line' ? 'LINE (meaning)' : 'ACTION';
+        let text = `${index + 1}. ${who} — ${kind}: ${line(beat?.text)}`;
+        const character = byName(who);
+        const words = line(assessmentOf(assessments, character?.assessId)?.words);
+        // Как прошла попытка — у первого действия того, кто бросал.
+        if (words && kind === 'ACTION' && !told.has(who)) {
+            told.add(who);
+            text += ` (it goes ${words}${line(character?.outcome) ? ` — ${line(character.outcome)}` : ''})`;
+        }
+        return text;
+    });
+    const idle = characters.filter(character => character?.idle === true).map(character => line(character?.name)).filter(Boolean);
+    const reasons = characters.filter(character => character?.idle !== true && line(character?.name)).map(character => {
+        const parts = [line(character.actionReason), line(character.decision) ? `Aim: ${line(character.decision)}${line(character.decisionReason) ? ` — ${line(character.decisionReason)}` : ''}` : ''].filter(Boolean);
+        return parts.length ? `- ${line(character.name)}: ${parts.join(' ')}` : '';
+    }).filter(Boolean);
+    return [
+        head.join(' '),
+        `THE USER'S ACTION, AND HOW IT LANDS: ${line(form?.userResult)}`,
+        `BEATS — in this order, each one happens once:\n${beats.join('\n')}`,
+        `END: ${line(form?.resolution)} Stop there.`,
+        idle.length ? `In the background, doing nothing notable this turn: ${idle.join(', ')}. Do not give them actions or lines.` : '',
+        reasons.length ? `NOT FOR THE PAGE — why they act, so you can play it right:\n${reasons.join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
+}
+
 export function buildPush({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '' } = {}) {
+    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatPush({ form, assessments, place, timeBefore, timeAfter });
     const lines = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) lines.push(`Place: ${where}.`);

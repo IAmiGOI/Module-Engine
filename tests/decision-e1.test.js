@@ -59,7 +59,7 @@ test('the director runs a tool cycle: a Notebook call with a comment, then submi
         replies: [
             call('Notebook', { action: 'write', title: 'Door', content: 'Open', comment: 'I need to remember that the door is open.' }),
             call('set_plan', { direction: 'Get her out of the keep.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
+            call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
         ],
         externalTools: [{ name: 'Notebook', description: 'notes', parameters: { type: 'object', properties: {} } }],
         callTool: async (name, args) => { seen.push({ name, args }); return 'note saved'; },
@@ -88,7 +88,7 @@ test('update_roster is persisted and reaches the next context', async () => {
             call('submit_turn', {
                 comment: 'The turn is ready for the writer.',
                 resolution: 'Lena arrives.', scene: { minutes: 1 }, userResult: 'The user waits.',
-                characters: [{ name: 'Lena', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }],
+                beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Lena', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }],
             }),
         ],
     });
@@ -102,7 +102,7 @@ test('the writer body carries the form decision and no tools at all', async () =
     const { pipelineCore, core } = await build({
         replies: [
             call('set_plan', { direction: 'Get her out of the keep.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
+            call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
         ],
     });
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });

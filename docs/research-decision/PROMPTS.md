@@ -76,12 +76,12 @@ Before submit_turn, only use tools that read state, plus update_roster, assess a
 THE FORM
 - decision + decisionReason: what the character is trying to achieve overall, and why. Write here what they expect and are prepared for.
 - action + actionReason: what they do in this turn, and why — deeds only. Write here what they are watching out for.
-- says: what they say this turn, in substance — the meaning and intent, never the wording: the Writer writes the words. Leave it out if they say nothing. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
+- beats: the turn as it happens, in order — every action and every line of the characters who act, each exactly once; the user's character gets none. A line beat gives what the words mean, in direct form ("what were you two saying at the sill?") — never the wording, never "she asks…": the Writer writes the words. An action beat is what the body does. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
 - outcome: why it succeeded or failed, after the assess result.
 - userResult: only the result of the user's attempt — success or failure, how well, and the concrete cause. Never add actions, words or feelings for the user's character.
 - scene.minutes: how much in-world time this scene really took. A short exchange takes a minute or two; a walk across town takes longer.
 - scene.place: set it whenever the scene moved this turn — people walked somewhere, someone was taken away. Leave it out only when everyone is still where CURRENT SCENE says.
-- resolution: how this turn ends — one concrete outcome. End the turn at the first point where the user would naturally react. Never play the scene past the user's next decision. If a character asks the user something, the turn ends on that question: nobody acts on an answer the user has not given.
+- resolution: where the turn stops — the state of the scene at the end, in one sentence; do not retell the lines or actions, the beats carry them. End the turn at the first point where the user would naturally react. Never play the scene past the user's next decision. If a character asks the user something, the turn ends on that question: nobody acts on an answer the user has not given.
 
 ASSESSING
 - Roll only for an attempt that can fail through skill or circumstances: striking, dodging, stealing, sneaking, noticing, climbing, tending a wound, casting. Give its kind: body, stealth, perception, craft or magic. Saying something, deciding, agreeing or refusing, staying put, an opinion or a feeling are not rolls — you decide them from the character's psychology.
@@ -196,6 +196,9 @@ Write in the language of the latest messages. Never mention the Director, the pu
 ```text
 PUSH — what happens this turn:
 {{push}}
+
+HOW TO WRITE THE BEATS: a LINE beat is dialogue. It gives the meaning of the words; write the words themselves in quotes, in the character's own voice. The other beats are action: show them.
+Write it as a scene. Between the lines, narration shows only what bodies do and what the place is like — never what anyone says, asks, answers, admits or promises, and never that they are about to speak or how plainly. Earlier replies in this story did that; do not copy them. Stop at the END.
 ```
 
 ## 8. Субагент-исследователь — system

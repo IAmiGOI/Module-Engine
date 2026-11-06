@@ -7,7 +7,7 @@ const valid = (overrides = {}) => ({
     scene: { minutes: 5 },
     resolution: 'She gets out before the guard turns the corner.',
     userResult: 'The user holds the door; it works.',
-    characters: [{
+    beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{
         name: 'Lena', decision: 'Leave the keep.', decisionReason: 'She is out of time.',
         action: 'Opens the east door.', actionReason: 'It is the only exit.',
         assessId: 'a1', outcome: 'The lock gives after a hard pull.',
@@ -38,7 +38,7 @@ test('a character outside the active roster is rejected — the form is not a wa
 
 test('every form field is required: decision, its reason, action, its reason and the outcome', () => {
     const form = valid();
-    const result = validateTurn({ form: { ...form, characters: [{ ...form.characters[0], actionReason: '' }] }, roster: ['Lena'], assessments: new Map([['a1', assessment]]) });
+    const result = validateTurn({ form: { ...form, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ ...form.characters[0], actionReason: '' }] }, roster: ['Lena'], assessments: new Map([['a1', assessment]]) });
     assert.equal(result.ok, false);
     assert.ok(result.missing.some(item => /actionReason/.test(item)));
 });
@@ -78,7 +78,7 @@ test('without an assessId a noCheck reason is kept; without both the form is sti
     assert.equal(accepted.ok, true);
     assert.equal(accepted.normalized.characters[0].noCheck, 'She only decides whether to accept the apology.');
 
-    const missing = validateTurn({ form: { ...form, characters: [{ ...form.characters[0], noCheck: '' }] }, roster: ['Lena'], assessments: new Map() });
+    const missing = validateTurn({ form: { ...form, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ ...form.characters[0], noCheck: '' }] }, roster: ['Lena'], assessments: new Map() });
     assert.equal(missing.ok, true, 'a forgotten noCheck no longer costs a whole extra model call');
     assert.equal(missing.normalized.characters[0].noCheck, "no roll — decided from the character's psychology");
     assert.match(missing.warnings.join('\n'), /no roll and no noCheck for Lena/);
@@ -97,9 +97,9 @@ test('the user\'s own character is never required in the form, and if the direct
     const { validateTurn: validate } = await import('../libraries/core/decision-turn.js');
     const base = { scene: { minutes: 5 }, resolution: 'She leaves.', userResult: 'Sasha waits.' };
     const emilia = { name: 'Emilia', decision: 'Leave.', decisionReason: 'Late.', action: 'Leaves.', actionReason: 'The door.', outcome: 'Gone.', noCheck: 'No contest.' };
-    const without = validate({ form: { ...base, characters: [emilia] }, roster: ['Emilia', 'Sasha'], user: 'Sasha' });
+    const without = validate({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [emilia] }, roster: ['Emilia', 'Sasha'], user: 'Sasha' });
     assert.equal(without.ok, true, 'Sasha from the roster is not demanded');
-    const withUser = validate({ form: { ...base, characters: [emilia, { name: 'Sasha' }] }, roster: ['Emilia', 'Sasha'], user: 'Sasha' });
+    const withUser = validate({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [emilia, { name: 'Sasha' }] }, roster: ['Emilia', 'Sasha'], user: 'Sasha' });
     assert.equal(withUser.ok, true, 'a listed user character is not checked');
     assert.deepEqual(withUser.normalized.characters.map(character => character.name), ['Emilia']);
 });
@@ -109,7 +109,7 @@ test('an idle character needs only a name and stays in the background of the pus
     const { buildPush } = await import('../libraries/core/decision-push.js');
     const base = { scene: { minutes: 5 }, resolution: 'She leaves.', userResult: 'Sasha waits.' };
     const emilia = { name: 'Emilia', decision: 'Leave.', decisionReason: 'Late.', action: 'leaves', actionReason: 'the door is open', outcome: 'Gone.', noCheck: 'No contest.' };
-    const result = validate({ form: { ...base, characters: [emilia, { name: 'Elsa', idle: true }] }, roster: ['Emilia', 'Elsa'] });
+    const result = validate({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [emilia, { name: 'Elsa', idle: true }] }, roster: ['Emilia', 'Elsa'] });
     assert.equal(result.ok, true);
     const push = buildPush({ form: result.normalized });
     assert.doesNotMatch(push, /Elsa will/);
