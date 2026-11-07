@@ -1,3 +1,4 @@
+import { promptText } from './prompt-overrides.js';
 import { chatToMessages } from './chat-to-messages.js';
 import { planSection, arcsSection, notesSection, notesAsBlocks } from './decision-state.js';
 import { DIRECTOR_REASONING, DIRECTOR_SYSTEM, DIRECTOR_TURN, RESOLVER_THINK_TURN, RESOLVER_THINK_AFTER, WRITER_SYSTEM, WRITER_INSCRIPTION, fillPrompt } from './decision-prompts.js';
@@ -225,11 +226,11 @@ export function buildDeciderContext({
     const missingPlan = planMissing && !resolverTurn;
     const taskText = missingPlan ? `You have no plan yet. Call set_plan in a background cycle: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
     // CoT резолвера — в самом конце, ближе всего к генерации: без него модель засоряет ризонинг даже с инструментами.
-    const turnTask = `${taskText}\n\n${resolverTurn ? RESOLVER_THINK_TURN : (afterTurn ? RESOLVER_THINK_AFTER : DIRECTOR_REASONING)}`;
+    const turnTask = `${taskText}\n\n${promptText(resolverTurn ? RESOLVER_THINK_TURN : (afterTurn ? RESOLVER_THINK_AFTER : DIRECTOR_REASONING))}`;
     // Настройки игры — сразу после system: защищённая часть, меняется только при смене настроек.
     const settingsBlock = String(storySettings ?? '').trim();
     const messages = [
-        { role: 'system', content: DIRECTOR_SYSTEM },
+        { role: 'system', content: promptText(DIRECTOR_SYSTEM) },
         ...(settingsBlock ? [{ role: 'system', content: settingsBlock }] : []),
         ...head.map(content => ({ role: 'system', content })),
         ...middleMessages,
@@ -249,12 +250,12 @@ export function buildDeciderContext({
         ? insertBlock(withDecree, String(nearBanksText).trim(), Math.max(1, withDecree.length - NEAR_BANKS_DEPTH))
         : withDecree;
     const prompt = [
-        DIRECTOR_SYSTEM, settingsBlock, ...head, renderFrozenWindows(frozenWindows),
+        promptText(DIRECTOR_SYSTEM), settingsBlock, ...head, renderFrozenWindows(frozenWindows),
         String(plansText ?? '').trim(), rosterSection(roster), String(activeBanksText ?? '').trim(),
         usingWindow ? renderWindow(windowEntries) : `${renderCompressedDigests(digests)}\n${renderFullTurns(turns)}`,
         renderHistory(history), String(nearBanksText ?? '').trim(), String(decreeText ?? '').trim(), ...state, planContent, turnTask,
     ].filter(Boolean).join('\n\n');
-    return { systemPrompt: DIRECTOR_SYSTEM, messages: withNear, prompt };
+    return { systemPrompt: promptText(DIRECTOR_SYSTEM), messages: withNear, prompt };
 }
 
 /**
@@ -269,7 +270,7 @@ export function buildWriterContext({ notes = {}, summaries = [], chat = [], deci
     // История прозаика — скользящее окно, поэтому кешируется только то, что стоит ДО неё: туда — редко меняющееся
     // (система, примеры, банки активных, саммари). Лорбук по ключам и заметки меняются почти каждый ход — они после
     // истории, рядом с Push, чтобы не обрывать кеш в начале запроса.
-    const parts = [WRITER_SYSTEM, String(storySettings ?? '').trim(), String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
+    const parts = [promptText(WRITER_SYSTEM), String(storySettings ?? '').trim(), String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
     const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim(), String(sceneText ?? '').trim(), String(decreeText ?? '').trim()].filter(Boolean);
     const push = String(decision ?? '').trim() ? fillPrompt(WRITER_INSCRIPTION, { inscription: String(decision).trim() }) : '';
     const messages = [

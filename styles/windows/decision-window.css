@@ -179,3 +179,75 @@
 .stme-bp-failed .stme-bp-state { color: var(--stme-danger-bright); opacity: .9; }
 .stme-bp-more, .stme-bp-done { font-size: 11.5px; opacity: .65; }
 @keyframes stme-bp-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* --- The Court: пять дорожек (часть 21) ----------------------------------- */
+/* Колонки на десктопе, свайп по одной на телефоне. Без анимации: «работает» —
+   цветная точка и рамка дорожки, а не пульсация (TEXT_ENGINE_BRIEF.md §7). */
+.stme-court { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.stme-court-status { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 5px 10px; font-size: .8em; opacity: .85; border-bottom: 1px solid var(--stme-border); }
+.stme-court-telegram { background: color-mix(in srgb, var(--stme-warn) 14%, transparent); opacity: 1; }
+.stme-court-telegram-note { color: var(--stme-warn); font-weight: 600; }
+
+.stme-court-lanes { flex: 1; min-height: 0; display: grid; gap: 1px; background: var(--stme-border); }
+.stme-court-all { grid-auto-flow: column; grid-auto-columns: minmax(250px, 1fr); overflow-x: auto; scroll-snap-type: x mandatory; }
+.stme-court-one { grid-template-columns: minmax(0, 1fr); }
+.stme-court-lane { --stme-lane: var(--stme-accent); display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--stme-surface); scroll-snap-align: start; }
+.stme-court-lane-god { --stme-lane: #c9a227; }
+.stme-court-lane-director { --stme-lane: #b5523b; }
+.stme-court-lane-counsellor { --stme-lane: #4f8a6e; }
+.stme-court-lane-resolver { --stme-lane: var(--stme-accent); }
+.stme-court-lane-writer { --stme-lane: #8a6fb5; }
+.stme-court-lane-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 2px solid var(--stme-lane); font-weight: 700; font-size: .86em; letter-spacing: .03em; text-transform: uppercase; }
+.stme-court-lane-count { margin-left: auto; font-weight: 400; opacity: .6; }
+.stme-court-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--stme-lane); }
+.stme-court-working .stme-court-lane-head { background: color-mix(in srgb, var(--stme-lane) 14%, transparent); }
+.stme-court-feed { padding: 8px; }
+.stme-court-empty { opacity: .55; font-size: .86em; font-style: italic; padding: 12px 4px; }
+.stme-court-lane .stme-dw-cycle { border-left-color: var(--stme-lane); }
+
+/* Карточка цикла: заголовок и резюме всегда видны, остальное — по раскрытию. */
+details.stme-dw-cycle > summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+details.stme-dw-cycle > summary::-webkit-details-marker { display: none; }
+.stme-dw-head-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.stme-dw-summary { font-size: .86em; opacity: .85; line-height: 1.35; }
+details.stme-dw-cycle[open] > summary .stme-dw-summary { display: none; }
+.stme-dw-call-title { font-weight: 600; }
+.stme-dw-fields { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 4px 0; font-size: .88em; }
+.stme-dw-fields dt { opacity: .7; }
+.stme-dw-fields dd { margin: 0; white-space: pre-wrap; }
+.stme-dw-raw summary { opacity: .55; }
+.stme-dw-thinking-text { white-space: pre-wrap; margin: 4px 0; max-height: 260px; overflow: auto; font-size: .86em; line-height: 1.4; }
+.stme-court-search .text_pole { min-width: 140px; }
+
+@media (max-width: 767px) {
+    .stme-court-all { grid-auto-columns: 100%; }
+    .stme-dw-toolbar .stme-segment { order: -1; width: 100%; overflow-x: auto; }
+}
+
+/* --- The Court: Files — промпты как файлы (часть 21) ---------------------- */
+.stme-files { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(180px, 240px) 1fr; }
+.stme-files-tree { overflow: auto; border-right: 1px solid var(--stme-border); padding: 6px; display: flex; flex-direction: column; gap: 8px; }
+.stme-files-group-title { font-size: .76em; text-transform: uppercase; letter-spacing: .04em; opacity: .6; margin: 2px 4px; }
+.stme-files-item { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; padding: 3px 6px; border-radius: var(--stme-radius-sm); font-size: .84em; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stme-files-item:hover { background: var(--stme-level-2); }
+.stme-files-active { background: var(--stme-level-2); box-shadow: inset 2px 0 0 var(--stme-accent); }
+.stme-files-editor { display: flex; flex-direction: column; gap: 6px; padding: 8px; min-height: 0; overflow: auto; }
+.stme-files-path { display: flex; gap: 8px; align-items: center; font-weight: 600; font-size: .9em; }
+.stme-files-badge { font-weight: 400; font-size: .78em; opacity: .7; border: 1px solid var(--stme-border); border-radius: 10px; padding: 0 6px; }
+.stme-files-text { width: 100%; box-sizing: border-box; min-height: 320px; flex: 1; resize: vertical; font-family: var(--monoFontFamily, ui-monospace, monospace); font-size: .86em; line-height: 1.45; tab-size: 4; }
+.stme-files-diff { display: flex; flex-direction: column; gap: 6px; }
+.stme-files-hunk { margin: 0; padding: 4px 0; background: var(--stme-level-1); border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); font-size: .82em; overflow-x: auto; }
+.stme-files-line { padding: 0 8px; white-space: pre-wrap; }
+.stme-files-add { background: color-mix(in srgb, var(--stme-ok) 18%, transparent); }
+.stme-files-del { background: color-mix(in srgb, var(--stme-danger-bright) 16%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--stme-danger-bright) 50%, transparent); }
+.stme-files-same { opacity: .6; }
+.stme-files-nodiff { opacity: .6; font-size: .86em; }
+.stme-files-ai { display: flex; gap: 6px; align-items: center; }
+.stme-files-ai .text_pole { flex: 1; }
+.stme-files-proposal { border-left: 3px solid var(--stme-accent); padding-left: 8px; display: flex; flex-direction: column; gap: 4px; }
+.stme-files-history summary, .stme-files-version summary { cursor: pointer; font-size: .84em; opacity: .8; }
+@media (max-width: 767px) {
+    .stme-files { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    .stme-files-tree { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--stme-border); }
+    .stme-files-group { min-width: 160px; }
+}

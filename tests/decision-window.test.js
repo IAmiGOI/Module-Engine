@@ -125,8 +125,11 @@ test('a rejected cycle is marked and dimmed, not removed', async () => {
     panel.show();
     await flush();
     panel.feed.set({ cycles: [{ ...panel.filtered().cycles[0], rejected: true }], archive: [], live: {} });
+    // The Court: ход лежит в дорожке Resolver, а его Inscription — в дорожке Writer; отмечены обе.
     const node = walk(panel.tree(), item => hasClass(item, 'stme-dw-rejected'));
-    assert.equal(node.length, 1);
+    assert.ok(node.length >= 1);
+    const resolverLane = walk(panel.tree(), item => item.props?.['data-lane'] === 'resolver')[0];
+    assert.equal(walk(resolverLane, item => hasClass(item, 'stme-dw-rejected')).length, 1);
 });
 
 

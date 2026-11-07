@@ -1,3 +1,4 @@
+import { promptText } from '../../libraries/core/prompt-overrides.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildCounsellorToolList, COUNSELLOR_STOP_TOOLS } from '../../libraries/core/decision-tools.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
@@ -77,7 +78,7 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         const body = ledgerLines(rows);
         // Два strong подряд считаются по всей Ведомости: прошлую строку Советник мог уже разобрать в прошлый раз.
         const streaks = mode === 'message' ? [] : strongStreaks(typeof store.ledger === 'function' ? store.ledger() : rows);
-        const messages = [{ role: 'system', content: COUNSELLOR_SYSTEM }];
+        const messages = [{ role: 'system', content: promptText(COUNSELLOR_SYSTEM) }];
         // Разговор с пользователем не тащит Ведомость: у него свой короткий контекст (c4).
         if (mode !== 'message') {
             messages.push({ role: 'system', content: `${LEDGER_HEADER}\n\n${body || NO_NEW_LEDGER}${streaks.length ? `\n\nStrong conflict two turns in a row: ${streaks.join(', ')}.` : ''}` });

@@ -1,6 +1,7 @@
 import { h } from './tree.js';
 import { computed } from './reactive.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
+import { toolLabel, toolFields, entrySummary } from '../../libraries/core/court-lanes.js';
 
 /**
  * Строки ленты окна директора — вынесено из `decision-window.js`, чтобы файл
@@ -33,22 +34,27 @@ function usageLine(row) {
     return `${tokens} tokens (${row.prompt} in / ${row.completion} out, ${row.cached} cached)${seconds}`;
 }
 
+function fieldsNode(pairs) {
+    if (!pairs.length) return null;
+    return h('dl', { class: 'stme-dw-fields' }, ...pairs.flatMap(([label, value]) => [h('dt', {}, label), h('dd', {}, String(value))]));
+}
+
 function callNode(row) {
+    const fields = toolFields(row.name, row.args);
     return h('div', { class: `stme-dw-call${row.error ? ' stme-dw-error' : ''}` },
         h('div', { class: 'stme-dw-call-head' },
-            h('code', {}, row.name || '?'),
-            h('span', { class: 'stme-dw-call-detail' }, row.pending ? 'running…' : (row.error ? 'rejected' : (row.durationMs ? `${row.durationMs} ms` : 'ok')))),
-        h('div', { class: 'stme-dw-comment' }, row.comment || '(no comment)'),
+            h('span', { class: 'stme-dw-call-title' }, toolLabel(row.name, row.args)),
+            h('span', { class: 'stme-dw-call-detail' }, row.pending ? 'running…' : (row.error ? 'rejected' : (row.durationMs ? `${(row.durationMs / 1000).toFixed(1)} s` : '')))),
+        row.comment ? h('div', { class: 'stme-dw-comment' }, row.comment) : null,
         row.name === 'ask_user' && row.args?.question
             ? h('div', { class: 'stme-dw-ask' }, h('b', {}, String(row.args.question)),
                 Array.isArray(row.args.options) && row.args.options.length ? h('div', { class: 'stme-dw-ask-options' }, row.args.options.map(String).join(' · ')) : null)
             : null,
-        row.pending ? null : h('details', { class: 'stme-dw-fold' },
-            h('summary', {}, 'Arguments'),
-            h('pre', {}, safeJson(row.args))),
-        row.error ? h('div', { class: 'stme-dw-error-text' }, row.error) : h('details', { class: 'stme-dw-fold' },
-            h('summary', {}, 'Result'),
-            h('pre', {}, safeJson(row.result))));
+        fieldsNode(fields),
+        row.error ? h('div', { class: 'stme-dw-error-text' }, row.error) : null,
+        row.pending ? null : h('details', { class: 'stme-dw-fold stme-dw-raw' },
+            h('summary', {}, 'Raw'),
+            h('pre', {}, `${row.name}\n${safeJson(row.args)}${row.error ? '' : `\n\n→ ${safeJson(row.result)}`}`)));
 }
 function assessNode(row) {
     const odds = Number.isFinite(row.probability) ? `${Math.round(row.probability * 100)}%` : '—';
@@ -74,7 +80,7 @@ function formNode(row) {
         h('div', {}, h('strong', {}, "User's result: "), row.userResult));
 }
 export function rowNode(row) {
-    if (row.kind === 'thinking') return h('details', { class: 'stme-dw-thinking' }, h('summary', {}, firstLine(row.text)), h('pre', {}, row.text));
+    if (row.kind === 'thinking') return h('details', { class: 'stme-dw-thinking' }, h('summary', {}, `Thinking — ${row.text.split(/\s+/).length} words`), h('div', { class: 'stme-dw-thinking-text' }, row.text));
     if (row.kind === 'writer_check') return writerCheckNode(row);
     if (row.kind === 'form_check') return formCheckNode(row);
     if (row.kind === 'assess') return assessNode(row);
@@ -103,17 +109,20 @@ export function rowNode(row) {
     if (row.kind === 'answer') return h('div', { class: 'stme-dw-answer' }, row.text);
     return null;
 }
-export function cycleNode(entry, now) {
+export function cycleNode(entry, now, { open = false } = {}) {
     const classes = ['stme-dw-cycle', entry.running ? 'stme-dw-live' : '', entry.rejected ? 'stme-dw-rejected' : ''].filter(Boolean).join(' ');
     // Таймер — свой маленький computed: раз в секунду меняется только эта строка, а не вся лента.
     const waiting = entry.waiting && entry.waitingSince
         ? computed(() => `thinking… ${Math.max(0, Math.round(((typeof now === 'function' ? now() : now) - entry.waitingSince) / 1000))} s`)
         : '';
-    return h('div', { class: classes },
-        h('div', { class: 'stme-dw-head' }, h('strong', {}, entry.title), h('span', { class: 'stme-dw-meta' }, cycleMeta(entry))),
+    const summary = entrySummary(entry);
+    // Карточка: заголовок и резюме видны всегда, подробности — по раскрытию (живая и последняя раскрыты).
+    return h('details', { class: classes, ...(open || entry.running ? { open: true } : {}) },
+        h('summary', { class: 'stme-dw-head' },
+            h('span', { class: 'stme-dw-head-line' }, h('strong', {}, entry.title), h('span', { class: 'stme-dw-meta' }, cycleMeta(entry))),
+            summary ? h('span', { class: 'stme-dw-summary' }, summary) : null),
         entry.detail ? h('div', { class: 'stme-dw-detail' }, entry.detail) : null,
         ...entry.rows.map(rowNode),
-        // Таймер — внизу, там, где директор сейчас работает.
+        // Таймер — внизу, там, где роль сейчас работает.
         waiting ? h('div', { class: 'stme-dw-waiting' }, waiting) : null);
 }
-

@@ -3,6 +3,7 @@
  * хранения. Форма одна и та же в памяти, в `storage.settings` и в панели;
  * панель правит те же поля, поэтому клэмп живёт здесь, а не в UI.
  */
+import { cleanOverrides } from './prompt-overrides.js';
 import { migratePromptSections } from './decision-prompt-model.js';
 import { clampGameSettings, DEFAULT_GAME_SETTINGS } from './game-settings.js';
 import { clampGameMixes } from './game-mixes.js';
@@ -184,6 +185,7 @@ export function clampDecisionSettings(values = {}) {
             writer: text(prompts.writer, DEFAULT_PROMPTS.writer),
         },
         promptSections: migratePromptSections(source.promptSections, { director: prompts.director, writer: prompts.writer }),
+        promptOverrides: cleanOverrides(source.promptOverrides),
         gameDefaults: clampGameSettings(source.gameDefaults),
         gameMixes: clampGameMixes(source.gameMixes),
         regen: REGEN_MODES.includes(source.regen) ? source.regen : DEFAULT_SETTINGS.regen,

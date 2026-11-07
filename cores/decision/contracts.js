@@ -50,6 +50,9 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.names', () => store.names()),
         host.own.register('decision.draft', () => store.draft()),
         host.own.register('decision.banks', () => banks.records()),
+        // The Court, «Files»: Great Bank целиком и правка разделов от имени пользователя (часть 21).
+        host.own.register('decision.greatBank', async () => { await banks.great.sync(); return banks.great.load(); }),
+        host.own.register('decision.greatBankEdit', params => banks.edit(params ?? {}, { by: 'user' })),
         host.own.register('decision.bankProgress', () => banks.progress()),
         host.own.register('decision.bankWrite', params => banks.write(params ?? {})),
         host.own.register('decision.bankRebuild', params => banks.rebuild(params ?? {})),

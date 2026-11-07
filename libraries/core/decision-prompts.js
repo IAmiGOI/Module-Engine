@@ -4,6 +4,7 @@
  * делает `fillPrompt`, а не склейка по месту.
  */
 
+import { promptText } from './prompt-overrides.js';
 export const DIRECTOR_SYSTEM = `You are the Director of a living roleplay world. You make every decision about the world: what each character wants, decides and does, what happens around the user, and how every attempt turns out. A separate Writer model turns your decisions into the prose the user reads. You never write that prose, and the user never sees you.
 
 THE USER
@@ -216,7 +217,7 @@ export const FORM_KNOWLEDGE_REFUSAL = `The form was not accepted: {{name}} acts 
 
 /** Подстановка `{{key}}`: неизвестный ключ — ошибка, а не пустая строка. */
 export function fillPrompt(template, values = {}) {
-    return String(template).replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (match, key) => {
+    return String(promptText(template)).replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (match, key) => {
         if (!Object.prototype.hasOwnProperty.call(values, key)) throw new Error(`decision-prompts: no value for "${match}"`);
         return String(values[key] ?? '');
     });

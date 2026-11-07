@@ -2,11 +2,14 @@ import { h } from './tree.js';
 import { signal, computed } from './reactive.js';
 import { request } from '../../libraries/shared/request.js';
 import { createDragHandlers, clampToViewport } from '../../libraries/shared/draggable.js';
-import { FloatingPanel, DockButton, Button, Toggle, TextArea, TextInput, Row, Field } from '../../libraries/shared/widgets.js';
+import { FloatingPanel, DockButton, Button, Toggle, TextArea, TextInput, Row, Segment, Select } from '../../libraries/shared/widgets.js';
+import { LANES, LANE_IDS, turnsIn } from '../../libraries/core/court-lanes.js';
+import { createCourtLanes } from './court-lanes-view.js';
+import { createCourtFiles } from './court-files.js';
 import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/core/decision-feed.js';
 import { createBanksView } from './decision-banks-view.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
-import { rowNode, cycleNode, text, firstLine, safeJson } from './decision-window-rows.js';
+import { text } from './decision-window-rows.js';
 import { createQuestionView } from './decision-questions.js';
 import { createBankProgressView } from './decision-bank-progress.js';
 
@@ -19,7 +22,7 @@ import { createBankProgressView } from './decision-bank-progress.js';
 const UI_NAMESPACE = 'core.ui.decisionWindow';
 const WINDOW_KEY = 'window';
 const DOCK_KEY = 'dock';
-const DEFAULT_SIZE = { width: 760, height: 660 };
+const DEFAULT_SIZE = { width: 1180, height: 700 };
 const PAGE = 30;
 
 export function createDecisionWindowCore(host, { mount } = {}) {
@@ -34,8 +37,11 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const showThinking = signal(true);
     const onlyTurns = signal(false);
     const onlyPassive = signal(false);
+    // The Court: все пять дорожек или одна; ход — фильтр по всем дорожкам сразу (часть 21).
+    const mode = signal('all');
+    const turnFilter = signal('');
+    const limits = Object.fromEntries(LANE_IDS.map(id => [id, signal(PAGE)]));
     const search = signal('');
-    const limit = signal(PAGE);
     const draft = signal('');
     const busy = signal(false);
     const note = signal('');
@@ -51,17 +57,12 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         showThinking: showThinking(), onlyTurns: onlyTurns(), onlyPassive: onlyPassive(), showUsage: costCounter(), showRolls: showRolls(), search: search(),
     }));
     const all = computed(() => filtered().cycles);
-    const shown = computed(() => all().slice(-limit()));
-    const hiddenCount = computed(() => Math.max(0, all().length - shown().length));
     const archiveOpen = signal(false);
-    // Готовый цикл — тот же объект записи, пока он не изменился: тот же узел, и рендерер его не трогает.
-    // Живой (с таймером ожидания) строится заново — его запись и так новая на каждое событие.
-    const nodeCache = new WeakMap();
-    const nodeFor = entry => {
-        if (entry.running || entry.waiting) return cycleNode(entry, now);
-        if (!nodeCache.has(entry)) nodeCache.set(entry, cycleNode(entry, now));
-        return nodeCache.get(entry);
-    };
+    const files = createCourtFiles({ call });
+    const court = createCourtLanes({ entries: all, mode, turn: turnFilter, now, limits });
+    const archiveLimits = Object.fromEntries(LANE_IDS.map(id => [id, signal(PAGE)]));
+    const archiveCourt = createCourtLanes({ entries: computed(() => filtered().archive), mode, turn: () => '', now, limits: archiveLimits });
+    const turnOptions = computed(() => [{ value: '', label: 'All turns' }, ...turnsIn(all()).reverse().map(turn => ({ value: String(turn), label: `Turn ${turn}` }))]);
     let reloadAsked = false;
     async function refresh() {
         let [log, archive, settings, game] = await Promise.all([call('decision.log'), call('decision.archive'), call('decision.settings'), call('decision.gameSettings')]);
@@ -82,16 +83,16 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         scheduleScroll(true);
     }
 
-    function feedElement() {
-        return globalThis.document?.querySelector?.('.stme-dw-feed') ?? null;
-    }
+    const feedElements = () => [...(globalThis.document?.querySelectorAll?.('.stme-court-feed') ?? [])];
 
+    // Каждая дорожка прокручивается вниз, только если и так стояла внизу: читающего выше не дёргаем.
     function scheduleScroll(stick = false) {
-        const element = feedElement();
-        const atBottom = stick || !element || element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+        const atBottom = new Map(feedElements().map(element => [element.closest('[data-lane]')?.dataset?.lane, stick || element.scrollHeight - element.scrollTop - element.clientHeight < 120]));
         setTimeout(() => {
-            const target = feedElement();
-            if (target && atBottom) target.scrollTop = target.scrollHeight;
+            for (const element of feedElements()) {
+                const lane = element.closest('[data-lane]')?.dataset?.lane;
+                if (atBottom.get(lane) ?? true) element.scrollTop = element.scrollHeight;
+            }
         }, 0);
     }
 
@@ -135,23 +136,37 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         }
     }
 
+    function onKey(event) {
+        const key = String(event?.key ?? '');
+        if ((event.ctrlKey || event.metaKey) && /^[0-5]$/.test(key)) {
+            event.preventDefault?.();
+            setMode(key === '0' ? 'all' : LANE_IDS[Number(key) - 1]);
+        } else if (key === '/' && !/input|textarea/i.test(event.target?.tagName ?? '')) {
+            event.preventDefault?.();
+            globalThis.document?.querySelector?.('.stme-court-search input, input.stme-court-search')?.focus?.();
+        } else if (key === 'Escape' && !/input|textarea/i.test(event.target?.tagName ?? '')) hide();
+    }
+
+    function setMode(value) {
+        mode.set(value);
+        saveWindowState();
+        if (value === 'files') files.load().catch(() => {});
+        else scheduleScroll(true);
+    }
+
     function body() {
-        return h('div', { class: 'stme-panel stme-dw-window-body' },
+        return h('div', { class: 'stme-panel stme-dw-window-body', tabindex: '-1', 'on:keydown': onKey },
             h('div', { class: 'stme-dw-toolbar' },
-                Toggle('Thinking', showThinking),
-                Toggle('Turns only', onlyTurns),
-                Toggle('Passive only', onlyPassive),
-                TextInput(search, { placeholder: 'Search the feed' })),
+                Segment([{ value: 'all', label: 'All five' }, ...LANES.map(lane => ({ value: lane.id, label: lane.label })), { value: 'files', label: 'Files' }], mode, { label: 'Lanes', onChange: setMode }),
+                Select(turnFilter, () => turnOptions(), { onChange: () => scheduleScroll(true) }),
+                h('span', { class: 'stme-court-search' }, TextInput(search, { placeholder: 'Search  (/)' })),
+                Toggle('Thinking', showThinking)),
             banksView.section(),
-            h('div', { class: 'stme-dw-feed', 'on:scroll': () => {} },
-                hiddenCount() > 0
-                    ? h('div', { class: 'stme-dw-more' }, Button(`Load ${Math.min(PAGE, hiddenCount())} older`, () => limit.update(value => value + PAGE)))
-                    : null,
-                ...shown().map(nodeFor)),
+            computed(() => (mode() === 'files' ? files.tree() : court.tree())),
             computed(() => (filtered().archive.length
-                // Архив строится, только когда его раскрыли: десятки циклов с мыслями перестраивались на каждое событие хода.
+                // Архив строится, только когда его раскрыли.
                 ? h('details', { class: 'stme-dw-archive', 'on:toggle': event => archiveOpen.set(Boolean(event?.target?.open)) }, h('summary', {}, `Archived arcs (${filtered().archive.length})`),
-                    ...(archiveOpen() ? filtered().archive.map(nodeFor) : []))
+                    ...(archiveOpen() ? [archiveCourt.tree()] : []))
                 : null)),
             h('div', { class: 'stme-dw-compose' },
                 h('div', { class: 'stme-dw-compose-title' }, 'Message the Counsellor'),
@@ -163,7 +178,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     async function saveWindowState() {
         await call('storage.settings.set', {
             namespace: UI_NAMESPACE, key: WINDOW_KEY,
-            value: { visible: visible.peek(), collapsed: collapsed.peek(), position: position.peek(), size: size.peek() },
+            value: { visible: visible.peek(), collapsed: collapsed.peek(), position: position.peek(), size: size.peek(), mode: mode.peek() },
         });
     }
 
@@ -175,6 +190,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         const saved = (stored.ok ? stored.value : null) ?? {};
         visible.set(Boolean(saved.visible));
         collapsed.set(Boolean(saved.collapsed));
+        if (saved.mode === 'all' || saved.mode === 'files' || LANE_IDS.includes(saved.mode)) mode.set(saved.mode);
         const savedSize = saved.size ?? {};
         size.set({ width: savedSize.width > 0 ? savedSize.width : DEFAULT_SIZE.width, height: savedSize.height > 0 ? savedSize.height : DEFAULT_SIZE.height });
         position.set(saved.position ?? { left: Math.max(24, (globalThis.innerWidth ?? 1600) - DEFAULT_SIZE.width - 24), top: 60 });
@@ -197,7 +213,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
 
     function tree() {
         return h('div', { class: 'stme-dw-root' },
-            computed(() => (visible() ? FloatingPanel('Director', {
+            computed(() => (visible() ? FloatingPanel('The Court', {
                 position, size, collapsed, className: 'stme-dw-window', minWidth: 420, minHeight: 300,
                 drag,
                 onToggle: value => { collapsed.set(value); saveWindowState(); },
@@ -206,7 +222,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
             }, computed(() => body())) : null)),
             computed(() => questionView.tree()),
             computed(() => bankProgress.tree()),
-            DockButton(h('span', { class: 'stme-dw-dock-icon', title: 'Open the director log' }, '◎'), { position: dockPosition, drag: dockDrag, title: 'Director log' }));
+            DockButton(h('span', { class: 'stme-dw-dock-icon', title: 'Open The Court' }, '◎'), { position: dockPosition, drag: dockDrag, title: 'The Court' }));
     }
 
     function startTimer() {
@@ -240,7 +256,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     }
 
     return {
-        tree, open, show, hide, toggle, refresh, send, filtered, feed, now, draft, showThinking, onlyTurns, search,
+        tree, open, show, hide, toggle, refresh, send, filtered, feed, now, draft, showThinking, onlyTurns, search, mode, turnFilter, court, files,
         isVisible: () => visible.peek(),
         stop() { stopTimer(); questionView.stop(); bankProgress.stop(); for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
     };

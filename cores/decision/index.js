@@ -1,3 +1,5 @@
+import { setPromptOverrides } from '../../libraries/core/prompt-overrides.js';
+import { builtInPrompts } from '../../libraries/core/prompt-catalog.js';
 import { request } from '../../libraries/shared/request.js';
 import { clampDecisionSettings, DECISION_NAMESPACE, DEFAULT_SETTINGS, publicDecisionSettings } from '../../libraries/core/decision-settings.js';
 import { createDecisionStore } from './store.js';
@@ -239,6 +241,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             next.promptSections = migratePromptSections(null, { ...settings.prompts, ...patch.prompts });
         }
         settings = clampDecisionSettings(next);
+        setPromptOverrides(settings.promptOverrides, builtInPrompts());
         await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'settings', value: settings });
         return settings;
     }
@@ -405,6 +408,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     async function load() {
         const stored = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'settings', fallback: null });
         settings = clampDecisionSettings(stored ?? DEFAULT_SETTINGS);
+        setPromptOverrides(settings.promptOverrides, builtInPrompts());
         // Подписки — до первого чтения: ST открывает чат, пока ядро грузится, и `st.chatChanged`, пришедший раньше
         // подписки, терялся — ядро оставалось с пустой памятью загрузки, а окно директора висело пустым.
         subscriptions.push(...events.listen());
