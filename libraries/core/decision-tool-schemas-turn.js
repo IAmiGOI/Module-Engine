@@ -24,7 +24,7 @@ export const UPDATE_ROSTER_TOOL = Object.freeze({
 export const ASSESS_TOOL = Object.freeze({
     name: 'assess',
     displayName: 'Assess an action',
-    description: 'Ask the engine for the chance that a character can carry out an attempt that may fail. Pick a difficulty level and an experience level from the lists and explain the circumstances in "why". The engine rolls and returns a degree; you never choose the result yourself. Call it BEFORE submit_turn and cite the returned id there.',
+    description: 'Ask the engine for the chance that a character can carry out an attempt that may fail. Pick a difficulty level and an experience level from the lists and explain the circumstances in "why". The engine rolls and returns a degree; you never choose the result yourself. Call it before inscribe and cite the returned id there.',
     parameters: {
         type: 'object',
         properties: {
@@ -40,67 +40,10 @@ export const ASSESS_TOOL = Object.freeze({
     },
 });
 
-export const SUBMIT_TURN_TOOL = Object.freeze({
-    name: 'submit_turn',
-    displayName: 'Submit the turn',
-    description: 'The mandatory form for this turn. Every active roster member must appear exactly once; a member who does nothing worth showing this turn is listed with only the name and "idle": true. Every listed assess id must exist. Where there was no roll, leave assessId out and say in "noCheck" why none was needed. Without a valid form the writer does not write. If the engine returns "missing", fix those fields and call again.',
-    parameters: {
-        type: 'object',
-        properties: {
-            scene: {
-                type: 'object',
-                properties: {
-                    minutes: { type: 'number', description: 'How long this scene took, in minutes (0–1440).' },
-                    place: { type: 'string', description: 'Optional; the engine fills it from the map when omitted.' },
-                },
-                required: ['minutes'],
-            },
-            resolution: { type: 'string', description: 'Where the turn stops: the state of the scene at the end, in one sentence. Do not retell the lines or actions — the beats carry them.' },
-            beats: {
-                type: 'array',
-                description: 'The turn as it happens, in order: every action and every line of the characters who act, each exactly once. The user\'s character gets no beats.',
-                items: {
-                    type: 'object',
-                    properties: {
-                        who: { type: 'string' },
-                        kind: { type: 'string', enum: ['line', 'action'], description: 'line — they speak; action — what their body does.' },
-                        text: { type: 'string', description: 'For a line: what the words mean, in direct form ("what were you two saying at the sill?") — never the wording, never "she asks…". For an action: what they do.' },
-                    },
-                    required: ['who', 'kind', 'text'],
-                },
-            },
-            userResult: { type: 'string', description: 'The result of the user action only: success or failure and why. Never decide the user action itself.' },
-            characters: {
-                type: 'array',
-                items: {
-                    type: 'object',
-                    properties: {
-                        name: { type: 'string' },
-                        idle: { type: 'boolean', description: 'True when the character is present but does nothing worth showing this turn. Then only the name and busy are needed, and the writer keeps them in the background.' },
-                        busy: { type: 'string', description: 'For an idle character: what occupies them right now — their own concern or task, from their plan or notes. A few words.' },
-                        feeling: { type: 'string', description: 'What they feel right now and why — from their Emotions and what just happened.' },
-                        need: { type: 'string', description: 'What they need in this moment, from their Values and feeling. It decides the action.' },
-                        decision: { type: 'string', description: 'What they do overall. Persists between turns.' },
-                        decisionReason: { type: 'string' },
-                        action: { type: 'string', description: 'What they do in this turn overall, in one line — deeds only. The order of actions and lines goes in beats.' },
-                        actionReason: { type: 'string' },
-                        assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
-                        noCheck: { type: 'string', description: 'Why no roll was needed, when assessId is absent: a decision, a reaction, agreeing or refusing, staying put.' },
-                        outcome: { type: 'string', description: 'Why it succeeded or failed, written after the assess result is known.' },
-                    },
-                    required: ['name'],
-                },
-            },
-            comment: COMMENT,
-        },
-        required: ['scene', 'resolution', 'userResult', 'beats', 'characters', 'comment'],
-    },
-});
-
 export const SET_PLAN_TOOL = Object.freeze({
     name: 'set_plan',
     displayName: 'Set the director plan',
-    description: 'Keep your own direction for future events around the user. A plan always exists: if you have none, create it before submit_turn. It is a direction, not a fixed sequence, and may change freely when the story turns.',
+    description: 'Keep your own direction for future events around the user. A plan always exists: if you have none, create it in a background cycle. It is a direction, not a fixed sequence, and may change freely when the story turns.',
     parameters: {
         type: 'object',
         properties: {

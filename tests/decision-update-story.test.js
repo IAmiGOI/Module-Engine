@@ -24,8 +24,8 @@ test('update_story runs each part through its own handler, keeps going past a fa
     assert.deepEqual(seen, [['k', 'Emilia', 'The turn changed these.'], ['n', 'Puck'], ['p', 'Ram'], ['plan', 'd']]);
 });
 
-test('update_story is in the tool list, and submit_turn requires beats', () => {
+test('update_story is in the tool list, and inscribe requires beats', () => {
     const tools = buildToolList();
     assert.ok(tools.some(tool => tool.name === 'update_story'));
-    assert.ok(tools.find(tool => tool.name === 'submit_turn').parameters.required.includes('beats'));
+    assert.ok(tools.find(tool => tool.name === 'inscribe').parameters.required.includes('beats'));
 });

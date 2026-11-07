@@ -18,7 +18,7 @@ const turnReply = () => ({
     text: '',
     toolCalls: [
         { id: 'plan', name: 'set_plan', arguments: { comment: 'The turn needs a direction.', direction: 'Wait by the door.' } },
-        { id: 'turn', name: 'submit_turn', arguments: { comment: 'The form is ready.', scene: { minutes: 0 }, resolution: 'She waits.', userResult: 'The user waits.', characters: [] } },
+        { id: 'turn', name: 'inscribe', arguments: { comment: 'The form is ready.', scene: { minutes: 0 }, resolution: 'She waits.', userResult: 'The user waits.', characters: [] } },
     ],
 });
 
@@ -127,7 +127,7 @@ test('the writer request has the writer context, no tools and no reasoning, and 
     await send(harness, stPayload());
     const body = JSON.parse(harness.providerCalls[0].body);
     assert.match(JSON.stringify(body.messages), /You are the Writer of a roleplay/);
-    assert.match(JSON.stringify(body.messages), /PUSH — what happens this turn/);
+    assert.match(JSON.stringify(body.messages), /INSCRIPTION — what happens this turn/);
     assert.equal('tools' in body, false);
     assert.equal('reasoning_effort' in body, false);
     assert.equal(body.temperature, 0.5, 'applySampler takes the writer settings');

@@ -210,6 +210,9 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
     function httpError(worker, statusCode, detail = '') {
         const error = new Error(`Model worker "${worker.id}" replied with HTTP ${statusCode}${detail ? `: ${String(detail).slice(0, 200)}` : ''}.`);
         error.status = statusCode;
+        // Провайдер просит подождать — общий алгоритм повтора роли должен это увидеть (часть 19).
+        const retryAfterMs = readRetryAfterMs(detail);
+        if (Number.isFinite(retryAfterMs)) error.retryAfterMs = retryAfterMs;
         return error;
     }
 

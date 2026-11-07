@@ -332,12 +332,12 @@ test('tools are shaped into OpenAI form only when explicitly given, with tool_ch
     const worker = { endpoint: 'https://api.example.com/v1', model: 'gpt-test', format: 'openai' };
     const built = buildProviderRequest(worker, {
         ...REQUEST,
-        tools: [{ name: 'submit_turn', description: 'Submit the form', parameters: { type: 'object', properties: {} } }],
+        tools: [{ name: 'inscribe', description: 'Submit the form', parameters: { type: 'object', properties: {} } }],
         toolChoice: 'auto',
         parallelToolCalls: false,
     });
     const body = JSON.parse(built.body);
-    assert.deepEqual(body.tools.map(tool => tool.function.name), ['submit_turn']);
+    assert.deepEqual(body.tools.map(tool => tool.function.name), ['inscribe']);
     assert.equal(body.tool_choice, 'auto');
     assert.equal(body.parallel_tool_calls, false);
 });

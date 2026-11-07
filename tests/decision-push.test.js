@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPush } from '../libraries/core/decision-push.js';
+import { buildInscription } from '../libraries/core/decision-push.js';
 
 const form = {
     scene: { minutes: 12, place: 'east corridor' },
@@ -16,7 +16,7 @@ const form = {
 const assessments = new Map([['a1', { words: 'cleanly, without a hitch' }]]);
 
 test('the push carries the time, place, resolution, the user result and the character line with degree words', () => {
-    const push = buildPush({ form, assessments, place: 'KEEP → EAST WING → EAST CORRIDOR', timeAfter: 'Day 1, 08:12 (Morning)' });
+    const push = buildInscription({ form, assessments, place: 'KEEP → EAST WING → EAST CORRIDOR', timeAfter: 'Day 1, 08:12 (Morning)' });
     assert.match(push, /took 12 minutes/);
     assert.match(push, /Place: KEEP → EAST WING → EAST CORRIDOR/);
     assert.match(push, /Time: Day 1, 08:12 \(Morning\)/);
@@ -30,26 +30,26 @@ test('the push carries the time, place, resolution, the user result and the char
 });
 
 test('a missing assessment leaves the character line without invented degree words', () => {
-    const push = buildPush({ form, assessments: new Map() });
+    const push = buildInscription({ form, assessments: new Map() });
     const actionLine = push.split('\n').find(line => line.startsWith('Lena does:'));
     assert.equal(actionLine, 'Lena does: opens the east door.');
 });
 
 test('the place and time are omitted honestly when the engine has no source, not made up', () => {
-    const push = buildPush({ form: { ...form, scene: { minutes: 0 } }, assessments });
+    const push = buildInscription({ form: { ...form, scene: { minutes: 0 } }, assessments });
     assert.match(push, /no measurable time/);
     assert.doesNotMatch(push, /^Place:/m);
     assert.doesNotMatch(push, /^Time:/m);
 });
 
 test('what a character says goes on its own line, in meaning only, with the instruction to write it once', () => {
-    const push = buildPush({ form: { scene: { minutes: 1 }, resolution: 'r', userResult: 'u', characters: [{ name: 'Puck', action: 'looks at Sasha', actionReason: 'x', says: 'he will take the answer, and sets his own condition' }] } });
+    const push = buildInscription({ form: { scene: { minutes: 1 }, resolution: 'r', userResult: 'u', characters: [{ name: 'Puck', action: 'looks at Sasha', actionReason: 'x', says: 'he will take the answer, and sets his own condition' }] } });
     assert.match(push, /^Puck does: looks at Sasha\.$/m);
     assert.match(push, /^Puck says, in meaning only \(write it once, as Puck's spoken line in their own voice; do not also narrate it\): he will take the answer/m);
 });
 
 test('idle characters busy with their own concerns reach the writer as a background touch, without lines', () => {
-    const push = buildPush({ form: { scene: { minutes: 2 }, resolution: 'They wait.', userResult: 'u', beats: [{ who: 'Puck', kind: 'line', text: 'sit down' }],
+    const push = buildInscription({ form: { scene: { minutes: 2 }, resolution: 'They wait.', userResult: 'u', beats: [{ who: 'Puck', kind: 'line', text: 'sit down' }],
         characters: [{ name: 'Puck', action: 'speaks', actionReason: 'x', decision: 'd', decisionReason: 'e' }, { name: 'Ram', idle: true, busy: 'counting the minutes to the bell' }, { name: 'Rom', idle: true }] } });
     assert.match(push, /In the background, busy with their own concerns — at most a passing touch, no lines:\n- Ram: counting the minutes to the bell/);
     assert.match(push, /In the background, doing nothing notable this turn: Rom\./);

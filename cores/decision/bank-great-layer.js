@@ -1,4 +1,5 @@
 import { createGreatBank } from './bank-great.js';
+import { renderDecreeForResolver } from '../../libraries/core/decision-bank-projections.js';
 
 /**
  * Great Bank поверх банков-карточек: проекции (дальняя компактная, ближняя
@@ -40,8 +41,16 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
         return result;
     }
 
+    /** Указ действующих персонажей — в контекст резолвера на @10. Пока Указов нет — честная строка. */
+    async function decreeFor(names = []) {
+        await sync();
+        const state = await great.load();
+        const entries = Object.values(state).map(character => ({ character }));
+        return renderDecreeForResolver(entries, { names });
+    }
+
     /** Раздел, который увидит движок: нужен ответу инструмента и проверке прав. */
     const sectionOf = value => great.sectionOf(value);
 
-    return { great, farContext, nearContext, writerContext, edit, sectionOf, historyFor: name => great.historyFor(name) };
+    return { great, farContext, nearContext, writerContext, decreeFor, edit, sectionOf, historyFor: name => great.historyFor(name) };
 }

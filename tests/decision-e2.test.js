@@ -20,9 +20,9 @@ const hash = text => [...String(text)].reduce((sum, char) => (sum * 31 + char.ch
 
 function lena(assessId = 'asm_run_1_1') {
     return {
-        name: 'Lena', decision: 'Leave the keep.', decisionReason: 'She is out of time.',
-        action: 'Opens the east door.', feeling: 'calm', need: 'to be safe', actionReason: 'It is the only exit.',
-        assessId, outcome: 'The lock gives after a hard pull.', speech: 'Not tonight.',
+        name: 'Lena', decreeWants: 'Get out before the guard turns the corner.', conflict: { level: 'none' },
+        does: 'Opens the east door.', feels: 'calm',
+        assessId, outcome: 'The lock gives after a hard pull.', says: 'this is the only way out',
     };
 }
 
@@ -70,19 +70,17 @@ async function build({ replies }) {
 test('assess uses the two-level table, the form validates, the place is read from the map and the minute count shifts RP Time', async () => {
     const { pipelineCore, calls, memory, timeShifts } = await build({
         replies: [
-            call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'trivial', experience: 'master', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
-            call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', {
-                comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
-                userResult: 'The user pushes the door; it opens but the sleeve tears.', scene: { minutes: 90 },
+            call('inscribe', {
+                comment: 'The form is ready for the writer.', stop: 'She gets out before the guard turns the corner.',
+                userResult: 'The user pushes the door; it opens but the sleeve tears.', scene: { duration: 'an hour' },
                 beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena()],
             }),
         ],
     });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, true);
-    assert.equal(calls.length, 4, 'roster, assess, plan, form');
+    assert.equal(calls.length, 2, 'assess, then the template');
 
     const log = memory.get(memoryKey('core.decision', 'log'));
     const assess = log[0].toolCalls.find(entry => entry.name === 'assess');
@@ -90,21 +88,19 @@ test('assess uses the two-level table, the form validates, the place is read fro
     assert.equal(assess.result.difficulty, 'trivial');
     assert.equal(assess.result.experience, 'master');
     assert.ok(assess.result.words.length > 0);
-    assert.equal(log[0].toolCalls.find(entry => entry.name === 'submit_turn').result.ok, true);
+    assert.equal(log[0].toolCalls.find(entry => entry.name === 'inscribe').result.ok, true);
 
     assert.equal(timeShifts.length, 1);
-    assert.deepEqual(timeShifts[0], { runId: 'run_1', minutes: 90, timeBefore: 'Day 1, 08:00 (Morning)', timeAfter: 'Day 1, 09:30 (Morning)', clockMinutes: 2010 });
+    assert.deepEqual(timeShifts[0], { runId: 'run_1', minutes: 60, timeBefore: 'Day 1, 08:00 (Morning)', timeAfter: 'Day 1, 09:00 (Morning)', clockMinutes: 1980 });
 });
 
-test('the writer receives a Push with place, time, the user result and the degree words — and no tools', async () => {
+test('the writer receives an Inscription with place, time, the user result and the degree words — and no tools', async () => {
     const { pipelineCore } = await build({
         replies: [
-            call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'trivial', experience: 'master', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
-            call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', {
-                comment: 'The form is ready for the writer.', resolution: 'She gets out before the guard turns the corner.',
-                userResult: 'The user pushes the door; it opens but the sleeve tears.', scene: { minutes: 90 },
+            call('inscribe', {
+                comment: 'The form is ready for the writer.', stop: 'She gets out before the guard turns the corner.',
+                userResult: 'The user pushes the door; it opens but the sleeve tears.', scene: { duration: 'an hour' },
                 beats: [{ who: 'Lena', kind: 'action', text: 'Opens the east door' }, { who: 'Lena', kind: 'line', text: 'this is the only way out' }], characters: [lena()],
             }),
         ],
@@ -113,13 +109,13 @@ test('the writer receives a Push with place, time, the user result and the degre
     const result = await pipelineCore.run({ pipelineId: PAYLOAD, input: { messages: [{ role: 'system', content: 'ST' }], tools: [{ type: 'function', function: { name: 'Notebook' } }], stream: true } });
     const body = result.value;
     const text = body.messages.map(message => message.content).join('\n');
-    assert.match(text, /took 90 minutes/);
+    assert.match(text, /took 60 minutes/);
     assert.match(text, /Place: KEEP → EAST WING → EAST CORRIDOR/);
-    assert.match(text, /Time: Day 1, 09:30 \(Morning\)/);
+    assert.match(text, /Time: Day 1, 09:00 \(Morning\)/);
     assert.match(text, /THE USER'S ACTION, AND HOW IT LANDS: The user pushes the door/);
     assert.match(text, /1\. Lena — ACTION: Opens the east door/);
     assert.match(text, /2\. Lena — LINE \(meaning\): this is the only way out/);
-    assert.match(text, /NOT FOR THE PAGE — why they act[\s\S]*- Lena: Feels: calm\. Needs: to be safe\. It is the only exit/);
+    assert.match(text, /NOT FOR THE PAGE — why they act[\s\S]*- Lena: Feels: calm\. Wants: Get out before the guard turns the corner\./);
     assert.match(text, /\(it goes (flawlessly, exactly as intended|cleanly, without a hitch|barely, with visible effort|clumsily, with a mistake|badly botched)/);
     assert.match(text, /When the push says an opponent may counter something a character did not expect/);
     assert.equal('tools' in body, false);
@@ -129,37 +125,31 @@ test('the writer receives a Push with place, time, the user result and the degre
 test('an incomplete form is refused with the list of missing fields, and the director can fix it and submit again', async () => {
     const { pipelineCore, calls } = await build({
         replies: [
-            call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
-            call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [] }),
-            call('submit_turn', {
-                comment: 'The form is ready now.', resolution: 'She gets out.', userResult: 'The user waits.', scene: { minutes: 5 },
+            call('inscribe', { comment: 'The form is ready.', stop: 'She leaves.', userResult: 'The user waits.', scene: { duration: 'a few minutes' }, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [] }),
+            call('inscribe', {
+                comment: 'The form is ready now.', stop: 'She gets out.', userResult: 'The user waits.', scene: { duration: 'a few minutes' },
                 beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena()],
             }),
         ],
     });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, true);
-    assert.equal(calls.length, 5, 'the refused form cost one more model call');
+    assert.equal(calls.length, 2, 'the refused template cost one more model call');
 });
 
-test('a form that omits an active roster member is refused, and the missing name is in the tool result', async () => {
+test('a form that omits an active roster member fills that member in as idle instead of refusing the turn', async () => {
     const { pipelineCore, memory } = await build({
         replies: [
-            call('update_roster', { add: [{ name: 'Lena' }, { name: 'Marek' }], comment: 'Both are in the scene now.' }),
             call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
-            call('set_plan', { direction: 'Get her out of the keep before dawn.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', { comment: 'The form is ready.', resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena()] }),
-            call('submit_turn', {
-                comment: 'The form is ready now.', resolution: 'They leave.', userResult: 'The user waits.', scene: { minutes: 5 },
-                beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena(), { ...lena('asm_run_1_1'), name: 'Marek', action: 'Follows her out.' }],
-            }),
+            // Ростер приходит внутри шаблона: отдельного вызова на ходу нет.
+            call('inscribe', { comment: 'The form is ready.', roster: { add: [{ name: 'Lena' }, { name: 'Marek' }] }, stop: 'She leaves.', userResult: 'The user waits.', scene: { duration: 'a few minutes' }, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [lena()] }),
         ],
     });
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     const log = memory.get(memoryKey('core.decision', 'log'));
-    const first = log[0].toolCalls.filter(entry => entry.name === 'submit_turn')[0];
-    assert.equal(first.result.ok, false);
-    assert.match(first.result.missing.join('\n'), /Marek/);
+    const first = log[0].toolCalls.filter(entry => entry.name === 'inscribe')[0];
+    assert.equal(first.result.ok, true, 'a missed roster member is filled in, not refused');
+    assert.match((first.result.form?.characters ?? []).map(character => character.name).join(','), /Marek/);
+    assert.match((log[0].warnings ?? []).join(' '), /Marek/);
 });

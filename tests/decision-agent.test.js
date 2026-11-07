@@ -16,27 +16,27 @@ function scripted(answers) {
     };
 }
 
-const submit = (args = {}) => ({ text: '', toolCalls: [{ id: 'c', name: 'submit_turn', arguments: { comment: 'The turn is ready to be written.', resolution: 'She leaves.', characters: [], ...args } }] });
+const submit = (args = {}) => ({ text: '', toolCalls: [{ id: 'c', name: 'inscribe', arguments: { comment: 'The turn is ready to be written.', resolution: 'She leaves.', characters: [], ...args } }] });
 const awaitCall = () => ({ text: '', toolCalls: [{ id: 'a', name: 'await', arguments: { comment: 'Nothing else happens between turns.', reason: 'next turn' } }] });
 
 test('a tool call without a comment is rejected with a clear error, and the director can fix it and submit', async () => {
     const script = scripted([
-        { text: '', toolCalls: [{ id: 'b', name: 'submit_turn', arguments: { resolution: 'She leaves.' } }] },
+        { text: '', toolCalls: [{ id: 'b', name: 'inscribe', arguments: { resolution: 'She leaves.' } }] },
         submit(),
     ]);
-    const result = await runDecisionCycle({ messages: [{ role: 'user', content: 'go' }], generate: script.generate, handlers: { submit_turn: args => ({ ok: true, form: args }) } });
+    const result = await runDecisionCycle({ messages: [{ role: 'user', content: 'go' }], generate: script.generate, handlers: { inscribe: args => ({ ok: true, form: args }) } });
     assert.equal(result.type, 'submit');
-    assert.equal(result.trace[0].name, 'submit_turn');
+    assert.equal(result.trace[0].name, 'inscribe');
     assert.match(result.trace[0].error, /comment/);
     assert.equal(result.steps, 2);
 });
 
 test('a comment needs at least one full sentence, not just a word', async () => {
     const script = scripted([
-        { text: '', toolCalls: [{ id: 'b', name: 'submit_turn', arguments: { comment: 'because', resolution: 'x' } }] },
+        { text: '', toolCalls: [{ id: 'b', name: 'inscribe', arguments: { comment: 'because', resolution: 'x' } }] },
         submit(),
     ]);
-    const result = await runDecisionCycle({ messages: [], generate: script.generate, handlers: { submit_turn: args => ({ ok: true, form: args }) } });
+    const result = await runDecisionCycle({ messages: [], generate: script.generate, handlers: { inscribe: args => ({ ok: true, form: args }) } });
     assert.match(result.trace[0].error, /comment/);
     assert.equal(result.type, 'submit');
 });
@@ -51,11 +51,11 @@ test('assess then submit runs in order and the trace keeps both calls with their
         generate: script.generate,
         handlers: {
             assess: () => ({ ok: true, id: 'a1', probability: 0.8, degree: 'flawless', words: 'flawlessly' }),
-            submit_turn: args => ({ ok: true, form: args }),
+            inscribe: args => ({ ok: true, form: args }),
         },
     });
     assert.equal(result.type, 'submit');
-    assert.deepEqual(result.trace.map(entry => entry.name), ['assess', 'submit_turn']);
+    assert.deepEqual(result.trace.map(entry => entry.name), ['assess', 'inscribe']);
     assert.equal(result.trace[0].result.id, 'a1');
     assert.match(result.trace[0].comment, /chance/);
 });
@@ -68,7 +68,7 @@ test('await ends the cycle immediately', async () => {
 
 test('an answer without a tool call gets a reminder first, not a silent end', async () => {
     const script = scripted([{ text: 'I think she leaves.', toolCalls: [] }, submit()]);
-    const result = await runDecisionCycle({ messages: [], generate: script.generate, handlers: { submit_turn: args => ({ ok: true, form: args }) } });
+    const result = await runDecisionCycle({ messages: [], generate: script.generate, handlers: { inscribe: args => ({ ok: true, form: args }) } });
     assert.equal(result.type, 'submit');
     assert.equal(result.trace[0].name, '__reminder');
     assert.equal(script.calls.length, 2);
@@ -97,7 +97,7 @@ test('an external tool is called without the comment argument, but the comment s
     ]);
     const result = await runDecisionCycle({
         messages: [], generate: script.generate,
-        handlers: { submit_turn: args => ({ ok: true, form: args }) },
+        handlers: { inscribe: args => ({ ok: true, form: args }) },
         callTool: async (name, args) => { seen.push({ name, args }); return 'note saved'; },
     });
     assert.equal(result.type, 'submit');

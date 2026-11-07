@@ -150,7 +150,7 @@ async function buildCore() {
         { text: '', toolCalls: [{ id: 'r1', name: 'spawn_researcher', arguments: { task: 'find one', comment: 'Research would help later.' }, rawArguments: '{}' }] },
         { text: '', toolCalls: [{ id: 'r2', name: 'spawn_researcher', arguments: { task: 'find two', comment: 'Research would help later.' }, rawArguments: '{}' }] },
         { text: '', toolCalls: [{ id: 'r3', name: 'spawn_researcher', arguments: { task: 'find three', comment: 'Research would help later.' }, rawArguments: '{}' }] },
-        { text: '', toolCalls: [{ id: 's', name: 'submit_turn', arguments: { comment: 'The form is ready.', resolution: 'They move.', userResult: 'The user waits.', scene: { minutes: 1 }, characters: [] }, rawArguments: '{}' }] },
+        { text: '', toolCalls: [{ id: 's', name: 'inscribe', arguments: { comment: 'The form is ready.', resolution: 'They move.', userResult: 'The user waits.', scene: { minutes: 1 }, characters: [] }, rawArguments: '{}' }] },
     ];
     engine.events.subscribe('decision.researcher.report', payload => reports.push(payload));
     const pipelineCore = createPipelineCore(engine.registerCaller('core.pipeline', 'cores', { tier: 'official' }), {

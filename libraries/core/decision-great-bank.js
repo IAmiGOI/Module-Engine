@@ -1,5 +1,6 @@
 import { lineBody, stampLine, lineIsPast, deadlineFrom, formatInstant } from './decision-bank-time.js';
 import { MATERIAL_SECTIONS, SPIRITUAL_SECTIONS, DECREE_SECTIONS, OTHER_SPIRITUAL, ALL_SECTIONS, sectionsOf, otherSection, sectionLabel, resolveSection } from './decision-bank-sections.js';
+import { decreeSections } from './decision-decree.js';
 
 /**
  * Great Bank — разделы персонажа вне контекста модели. Чистые правила:
@@ -21,7 +22,7 @@ const text = value => String(value ?? '').trim();
 export const bankKey = name => text(name).toLowerCase();
 
 /** Служебные поля записи переживают нормализацию: по ним движок узнаёт пересборку банка. */
-const EXTRAS = Object.freeze(['sourceKey', 'textHash', 'sectionsReady', 'fallbackText']);
+const EXTRAS = Object.freeze(['sourceKey', 'textHash', 'sectionsReady', 'fallbackText', 'decreeAt']);
 
 export function normalizeImportance(value) {
     const clean = text(value).toLowerCase();
@@ -201,6 +202,58 @@ function applyOne(character, edit, { at, nowValue, by, comment, timeOfDay = null
         character: { ...updated, history: [...updated.history, { at, by, part, section: no, old: before, new: next, comment }] },
         change: { kind: 'section', character: character.name, part, section: no, pending: false, old: before, new: next, line: next ? stampLine(next, at, until) : '' },
     };
+}
+
+/**
+ * Один Указ → запись персонажа. Движок ставит метку RP-времени на строки;
+ * прежние строки уходят в историю. Тот же Указ историю не плодит — только
+ * обновляет метку времени.
+ * @returns {{ state, character, changed: boolean, history: object[] }}
+ */
+export function applyDecree(state, decree, { at = '', comment = '', by = 'director', importance = 'temporary' } = {}) {
+    let next = normalizeGreatBank(state);
+    const ensured = ensureCharacter(next, decree?.character, { importance });
+    next = ensured.state;
+    const character = findCharacter(next, decree?.character);
+    if (!character) return { state: next, character: null, changed: false, history: [] };
+    const sections = decreeSections(decree);
+    const history = [];
+    const decreeState = {};
+    let changed = false;
+    for (const section of DECREE_SECTIONS) {
+        const before = character.decree?.[section.no] ?? [];
+        const after = sections[section.no] ?? [];
+        const same = before.map(line => lineBody(line)).join('\n') === after.map(line => lineBody(line)).join('\n');
+        if (same) {
+            decreeState[section.no] = before;
+            continue;
+        }
+        changed = true;
+        history.push({
+            at, by, part: 'decree', section: section.no,
+            old: before.map(line => lineBody(line)).join('\n'), new: after.join('\n'), comment,
+        });
+        decreeState[section.no] = after.map(line => (text(line) ? stampLine(line, at) : line)).filter(line => text(line));
+    }
+    const updated = {
+        ...character,
+        decree: decreeState,
+        decreeAt: changed ? at : (character.decreeAt ?? at),
+        history: [...character.history, ...history],
+    };
+    return { state: { ...next, [bankKey(character.name)]: updated }, character: updated, changed, history };
+}
+
+/** Несколько Указов одним вызовом; дубли имён отбрасываются разбором выше. */
+export function applyDecrees(state, decrees, { at = '', comment = '', by = 'director' } = {}) {
+    let next = state;
+    const applied = [];
+    for (const decree of Array.isArray(decrees) ? decrees : []) {
+        const result = applyDecree(next, decree, { at, comment, by });
+        next = result.state;
+        applied.push({ character: result.character?.name ?? decree.character, changed: result.changed });
+    }
+    return { state: next, applied, at };
 }
 
 /**

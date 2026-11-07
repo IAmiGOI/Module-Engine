@@ -45,7 +45,7 @@ test('recall_name issues two different names and marks them issued in this chat'
             call('set_plan', { direction: 'Cast the scene.', comment: 'A direction is required before the form.' }),
             call('recall_name', { gender: 'female', culture: 'germany', setting: 'modern', comment: 'I need a name for the innkeeper.' }),
             call('recall_name', { gender: 'female', culture: 'germany', setting: 'modern', comment: 'I need another name for her sister.' }),
-            call('submit_turn', { comment: 'The form is ready.', resolution: 'They meet.', userResult: 'The user waits.', scene: { minutes: 1 }, characters: [] }),
+            call('inscribe', { comment: 'The form is ready.', resolution: 'They meet.', userResult: 'The user waits.', scene: { minutes: 1 }, characters: [] }),
         ],
     });
     const result = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });

@@ -82,7 +82,7 @@ function build({ bookEntries = entries, worker = 'director' } = {}) {
             toolCalls: [
                 { id: 'plan', name: 'set_plan', arguments: { comment: 'The turn needs a direction.', direction: 'Cross the river.' } },
                 { id: 'lore', name: 'lorebook', arguments: { comment: 'The mill may matter for the route.', op: 'search', query: 'mill' } },
-                { id: 'turn', name: 'submit_turn', arguments: { comment: 'The turn is decided.', scene: { minutes: 1 }, resolution: 'They cross the river.', userResult: 'The user waited.', characters: [] } },
+                { id: 'turn', name: 'inscribe', arguments: { comment: 'The turn is decided.', scene: { minutes: 1 }, resolution: 'They cross the river.', userResult: 'The user waited.', characters: [] } },
             ],
         };
     });
@@ -99,25 +99,21 @@ function build({ bookEntries = entries, worker = 'director' } = {}) {
     })();
 }
 
-test('the director sees the book and can search it; the writer body gets the book as is', async () => {
-    const { pipelineCore, core, calls, searches } = await build();
+test('the resolver sees the whole book in its stable part; the turn itself offers only the template and a roll', async () => {
+    const { pipelineCore, calls } = await build();
     const chat = [{ mes: 'Where is the mill?', is_user: true }];
     const before = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { runId: 'run_1', chat, type: 'normal' } });
     assert.equal(before.ok, true);
     const directorText = JSON.stringify(calls[0].messages);
     assert.match(directorText, /THE LOREBOOK/);
     assert.match(directorText, /Old Mill/);
-    assert.ok(calls[0].tools.some(tool => tool.name === 'lorebook'), 'the director gets the search tool');
-    assert.deepEqual(searches, [{ query: 'mill', limit: undefined }]);
-    const trace = core.log()[0].toolCalls.find(entry => entry.name === 'lorebook');
-    assert.equal(trace.result.ok, true);
-    assert.equal(trace.result.results[0].name, 'Old Mill');
+    assert.deepEqual(calls[0].tools.map(tool => tool.name), ['assess', 'inscribe'], 'the turn is a template and a roll');
 
     const sent = await pipelineCore.run({ pipelineId: 'generation.payload', input: { messages: [{ role: 'system', content: 'ST' }] } });
     const writerText = JSON.stringify(sent.value.messages);
     assert.match(writerText, /THE LOREBOOK/);
     assert.match(writerText, /Old Mill/);
-    assert.match(writerText, /PUSH — what happens this turn:/);
+    assert.match(writerText, /INSCRIPTION — what happens this turn:/);
 });
 
 test('a large book reaches the director only by its always-on entries, and the search tool finds the rest', async () => {
@@ -125,15 +121,15 @@ test('a large book reaches the director only by its always-on entries, and the s
         { uid: 1, book: 'World', comment: 'Ordinary Mill', key: ['mill'], content: long('Ordinary fact.'), constant: false },
         { uid: 2, book: 'World', comment: 'Always', key: ['truth'], content: long('Always true.'), constant: true },
     ];
-    const { pipelineCore, calls, searches } = await build({ bookEntries: large });
+    const { pipelineCore, calls } = await build({ bookEntries: large });
     const before = await pipelineCore.run({ pipelineId: 'generation.beforeSend', input: { runId: 'run_1', chat: [{ mes: 'hi', is_user: true }], type: 'normal' } });
     assert.equal(before.ok, true);
+    // Текст книги — в стабильной части, до первого результата инструмента: режем по нему, как и раньше.
     const firstToolCall = calls[0].messages.findIndex(message => Array.isArray(message.tool_calls) && message.tool_calls.length);
-    const text = JSON.stringify(calls[0].messages.slice(0, firstToolCall));
+    const text = JSON.stringify(calls[0].messages.slice(0, firstToolCall < 0 ? undefined : firstToolCall));
     assert.match(text, /THE LOREBOOK \(large/);
     assert.match(text, /Always true/);
     assert.doesNotMatch(text, /Ordinary fact/);
-    assert.deepEqual(searches, [{ query: 'mill', limit: undefined }]);
 });
 
 const withCharacters = [

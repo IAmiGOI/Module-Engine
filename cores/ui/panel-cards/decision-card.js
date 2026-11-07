@@ -46,6 +46,18 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     const classifierCheckTokens = signal(150);
     const classifierRewriteLimit = signal(2);
     const classifierConnections = signal([]);
+    const counsellorWorkerId = signal('');
+    const counsellorEveryTurns = signal(3);
+    const counsellorMaxSteps = signal(12);
+    const directorWorkerId = signal('');
+    const directorMaxSteps = signal(10);
+    const decreeTimeoutMs = signal(120000);
+    const retryMaxAttempts = signal(3);
+    const retryTurnBudgetMs = signal(120000);
+    const retryBackgroundBudgetMs = signal(600000);
+    const retryBackups = {
+        resolver: signal(''), writer: signal(''), counsellor: signal(''), director: signal(''), banks: signal(''),
+    };
     const bootstrapSettings = createBootstrapSettings();
     const roster = signal({ active: [] });
     const plan = signal(null);
@@ -68,6 +80,18 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     ]);
     const writerOptions = computed(() => [
         { value: '', label: 'SillyTavern connection (no override)' },
+        ...workerOptions().slice(1),
+    ]);
+    const counsellorOptions = computed(() => [
+        { value: '', label: 'Resolver connection (default)' },
+        ...workerOptions().slice(1),
+    ]);
+    const directorOptions = computed(() => [
+        { value: '', label: 'Resolver connection (default)' },
+        ...workerOptions().slice(1),
+    ]);
+    const backupOptions = computed(() => [
+        { value: '', label: 'None' },
         ...workerOptions().slice(1),
     ]);
     const classifierOptions = createClassifierOptions(classifierConnections);
@@ -134,6 +158,19 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
         classifierThreshold.set(Number(classifier.threshold ?? 0.85));
         classifierCheckTokens.set(Number(classifier.checkTokens ?? 150));
         classifierRewriteLimit.set(Number(classifier.rewriteLimit ?? 2));
+        const counsellor = value.counsellor ?? {};
+        counsellorWorkerId.set(String(counsellor.workerId ?? ''));
+        counsellorEveryTurns.set(Number(counsellor.everyTurns ?? 3));
+        counsellorMaxSteps.set(Number(counsellor.maxSteps ?? 12));
+        const director = value.director ?? {};
+        directorWorkerId.set(String(director.workerId ?? ''));
+        directorMaxSteps.set(Number(director.maxSteps ?? 10));
+        decreeTimeoutMs.set(Number(director.decreeTimeoutMs ?? 120000));
+        const retry = value.retry ?? {};
+        retryMaxAttempts.set(Number(retry.maxAttempts ?? 3));
+        retryTurnBudgetMs.set(Number(retry.turnBudgetMs ?? 120000));
+        retryBackgroundBudgetMs.set(Number(retry.backgroundBudgetMs ?? 600000));
+        for (const [role, target] of Object.entries(retryBackups)) target.set(String(retry.backups?.[role] ?? ''));
         bootstrapSettings.apply(value.bootstrap);
     }
     function collect() {
@@ -161,6 +198,16 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
             classifier: {
                 connectionId: classifierConnectionId.peek(), threshold: classifierThreshold.peek(),
                 checkTokens: classifierCheckTokens.peek(), rewriteLimit: classifierRewriteLimit.peek(),
+            },
+            counsellor: {
+                workerId: counsellorWorkerId.peek(), everyTurns: counsellorEveryTurns.peek(), maxSteps: counsellorMaxSteps.peek(),
+            },
+            director: {
+                workerId: directorWorkerId.peek(), maxSteps: directorMaxSteps.peek(), decreeTimeoutMs: decreeTimeoutMs.peek(),
+            },
+            retry: {
+                maxAttempts: retryMaxAttempts.peek(), turnBudgetMs: retryTurnBudgetMs.peek(), backgroundBudgetMs: retryBackgroundBudgetMs.peek(),
+                backups: Object.fromEntries(Object.entries(retryBackups).map(([role, target]) => [role, target.peek()])),
             },
             bootstrap: bootstrapSettings.collect(),
         };
@@ -228,6 +275,18 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                     hint: 'The writer request goes to this connection: its endpoint, key and model. Leave it on SillyTavern to keep the ST source.',
                 }),
             ),
+            Row(
+                Field('Counsellor connection', Select(counsellorWorkerId, counsellorOptions), {
+                    hint: 'Reads the Ledger between turns and is the only one the user talks to. Empty: the resolver connection, with its own key.',
+                }),
+                Slider('Counsellor reviews every N turns', counsellorEveryTurns, { min: 1, max: 20, step: 1 }),
+            ),
+            Row(
+                Field('Director connection', Select(directorWorkerId, directorOptions), {
+                    hint: 'Issues Decrees from reports. Empty: the resolver connection. God will get the same model with its own key.',
+                }),
+                Slider('A Telegram holds the turn for (ms)', decreeTimeoutMs, { min: 1000, max: 600000, step: 1000 }),
+            ),
             Details('Director generation settings',
                 Row(
                     Field('Preset', Select(decider.samplerPreset, presetOptions, { onChange: id => applyPreset('decider', id) })),
@@ -274,11 +333,32 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                     Slider('Research steps before the report', researcherSettings.maxSteps, { min: 1, max: 200, step: 1 }),
                 ),
                 Row(
+                    Slider('Counsellor steps per wake', counsellorMaxSteps, { min: 1, max: 100, step: 1 }),
+                    Slider('Director steps per wake', directorMaxSteps, { min: 1, max: 100, step: 1 }),
+                ),
+                Row(
                     Slider('Bank builders at once', researcherSettings.bankConcurrency, { min: 1, max: 8, step: 1 }),
                     Slider('Steps per character bank', researcherSettings.bankMaxSteps, { min: 2, max: 60, step: 1 }),
                 ),
             ),
             writerCheckSection({ classifierConnectionId, classifierThreshold, classifierCheckTokens, classifierRewriteLimit, classifierOptions }),
+            Details('Retries',
+                h('small', { class: 'stme-module-hint' }, 'One policy for every role: network, 5xx, 429, timeout and a dropped stream pause 1 / 3 / 8 s; an empty answer is retried once with a larger limit and lower reasoning; two empty answers switch to the backup connection.'),
+                Row(
+                    Slider('Attempts', retryMaxAttempts, { min: 1, max: 5, step: 1 }),
+                    Slider('Turn budget (ms)', retryTurnBudgetMs, { min: 1000, max: 3600000, step: 1000 }),
+                    Slider('Background budget (ms)', retryBackgroundBudgetMs, { min: 1000, max: 3600000, step: 1000 }),
+                ),
+                Row(
+                    Field('Resolver backup', Select(retryBackups.resolver, backupOptions)),
+                    Field('Writer backup', Select(retryBackups.writer, backupOptions)),
+                ),
+                Row(
+                    Field('Counsellor backup', Select(retryBackups.counsellor, backupOptions)),
+                    Field('Director backup', Select(retryBackups.director, backupOptions)),
+                    Field('Bank builder backup', Select(retryBackups.banks, backupOptions)),
+                ),
+            ),
             bootstrapSettings.section(),
             Details('Turn behaviour',
                 Toggle('Snapshots and rollback', snapshots, { hint: 'On: state before every turn is saved; swipe or delete restores it. Off: the state follows every applied form.' }),

@@ -1,5 +1,6 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
-import { applyEdits, bankKey, ensureCharacter, findCharacter, normalizeCharacter, normalizeGreatBank, normalizeImportance, resolveSection } from '../../libraries/core/decision-great-bank.js';
+import { applyDecrees, applyEdits, bankKey, ensureCharacter, findCharacter, normalizeCharacter, normalizeGreatBank, normalizeImportance, resolveSection } from '../../libraries/core/decision-great-bank.js';
+import { normalizeDecrees } from '../../libraries/core/decision-decree.js';
 import { parseBankSections } from '../../libraries/core/decision-bank-parse.js';
 import { BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
 import { formatInstant, rpInstant } from '../../libraries/core/decision-bank-time.js';
@@ -150,6 +151,23 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
         return { ok: true, character: found.name, importance: level };
     }
 
+    /**
+     * Указ (часть 19): несколько персонажей одним вызовом. Пишет блок `decree`,
+     * ставит метку RP-времени, прежние строки — в историю. Тот же Указ историю
+     * не плодит. Состояние меняется только после успешного ответа модели.
+     */
+    async function setDecree({ decrees = [], comment = '' } = {}) {
+        const state = await sync();
+        const rp = await rpNow();
+        const applied = applyDecrees(state, normalizeDecrees(decrees), { at: rp.label, comment, by: 'director' });
+        const next = { ...applied.state };
+        for (const [key, character] of Object.entries(next)) {
+            if (character.history.length > HISTORY_LIMIT) next[key] = { ...character, history: character.history.slice(-HISTORY_LIMIT) };
+        }
+        await save(next);
+        return { ok: true, at: rp.label, decrees: applied.applied };
+    }
+
     /** Знания персонажа — блок записи: та же форма, что у системы знаний, но живёт при персонаже. */
     async function setKnowledge(name, items) {
         const state = await sync();
@@ -224,7 +242,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     return {
-        load, sync, edit, setImportance, pending, resolvePending, resolveName, setKnowledge,
+        load, sync, edit, setImportance, setDecree, pending, resolvePending, resolveName, setKnowledge,
         farText, nearText, writerText, decreeText, rpNow, historyFor,
         sectionOf: resolveSection,
     };

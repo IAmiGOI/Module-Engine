@@ -1,8 +1,8 @@
 /**
- * Push — то, что прозаик получает вместо решения директора. Движок собирает
- * его сам из формы: место, время, развязка, результат действия пользователя,
- * строки персонажей со словами степени. Причины остаются подтекстом — их
- * прозаик не проговаривает (это правило его промпта).
+ * Inscription (бывший Push) — то, что прозаик получает вместо решения
+ * резолвера. Движок собирает его сам из шаблона хода: время и место, результат
+ * действия пользователя, beats по порядку, END и фон. Причины и цели идут
+ * отдельным блоком «не для страницы» — их прозаик не проговаривает.
  */
 
 function line(value) {
@@ -85,12 +85,12 @@ function backgroundLine(characters) {
 }
 
 /**
- * Push шагами (проверено на GLM 4.7, стенд в части «реплики»): каждое событие один раз и по порядку, реплика —
- * смыслом в прямой форме, развязка — только где ход стоп, причины — отдельным блоком «не для страницы».
+ * Inscription шагами (проверено на GLM 4.7, стенд в части «реплики»): каждое событие один раз и по порядку,
+ * реплика — смыслом в прямой форме, конец — только где ход стоп, причины — отдельным блоком «не для страницы».
  * Прежний Push рассказывал каждое событие трижды (развязка, действие, «why it goes»), и писатель отрабатывал
  * каждое упоминание: пересказом и репликой.
  */
-function buildBeatPush({ form, assessments, place, timeBefore, timeAfter }) {
+function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter }) {
     const head = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) head.push(`Place: ${where}.`);
@@ -113,16 +113,23 @@ function buildBeatPush({ form, assessments, place, timeBefore, timeAfter }) {
         return text;
     });
     const reasons = characters.filter(character => character?.idle !== true && line(character?.name)).map(character => {
-        // Цель (decision) писателю не нужна: она тянулась из прошлых ходов и уводила его в устаревшее. Только причина этого хода.
+        // Что чувствует и чего хочет по Указу и карте — резолверу, не странице: это уводит писателя в объяснения.
         const end = value => line(value).replace(/[.\s]+$/, '') + '.';
-        const parts = [line(character.feeling) ? `Feels: ${end(character.feeling)}` : '', line(character.need) ? `Needs: ${end(character.need)}` : '', line(character.actionReason)].filter(Boolean);
+        const conflict = character?.conflict && String(character.conflict.level ?? 'none') !== 'none'
+            ? `Conflict: ${end(`${character.conflict.level}${line(character.conflict.why) ? ` — ${line(character.conflict.why)}` : ''}`)}`
+            : '';
+        const parts = [
+            line(character.feels) ? `Feels: ${end(character.feels)}` : '',
+            line(character.decreeWants) ? `Wants: ${end(character.decreeWants)}` : '',
+            conflict,
+        ].filter(Boolean);
         return parts.length ? `- ${line(character.name)}: ${parts.join(' ')}` : '';
     }).filter(Boolean);
     return [
         head.join(' '),
         `THE USER'S ACTION, AND HOW IT LANDS: ${line(form?.userResult)}`,
         `BEATS — in this order, each one happens once:\n${beats.join('\n')}`,
-        `END: ${line(form?.resolution)} Stop there.`,
+        `END: ${line(form?.stop ?? form?.resolution)} Stop there.`,
         backgroundLine(characters),
         reasons.length ? `NOT FOR THE PAGE — why they act, so you can play it right:\n${reasons.join('\n')}` : '',
     ].filter(Boolean).join('\n\n');
@@ -132,8 +139,8 @@ function buildBeatPush({ form, assessments, place, timeBefore, timeAfter }) {
  * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
  * @returns {string}
  */
-export function buildPush({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '' } = {}) {
-    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatPush({ form, assessments, place, timeBefore, timeAfter });
+export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '' } = {}) {
+    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter });
     const lines = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) lines.push(`Place: ${where}.`);

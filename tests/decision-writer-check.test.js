@@ -34,7 +34,7 @@ function build({ provider, classifier, connections = [{ id: 'test', apiKey: 'tes
     };
     const proxy = createWriterProxy({ host, getSettings: settings, getWorkers: () => workers });
     const checker = createWriterChecker({ call, getSettings: settings, banks: null });
-    async function send({ payload = { stream: true, chat_completion_source: 'openai' }, messages = [{ role: 'system', content: 'Writer system' }, { role: 'system', content: 'PUSH — what happens this turn:\nShe waits.' }], signal } = {}) {
+    async function send({ payload = { stream: true, chat_completion_source: 'openai' }, messages = [{ role: 'system', content: 'Writer system' }, { role: 'system', content: 'INSCRIPTION — what happens this turn:\nShe waits.' }], signal } = {}) {
         const answer = await proxy.respond({
             payload, messages, signal, check: checker, push: 'She waits.', userMessage: 'Hello?', resolution: 'She waits.', user: 'Sasha',
             runId: 'run_1', publishEvent: (event, data) => events.push([event, data]),

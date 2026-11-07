@@ -38,7 +38,7 @@ test('a card-test turn goes through the real director and gives the writer notes
         const made = build({
             replies: [
                 { text: '', toolCalls: [{ id: 'c1', name: 'assess', arguments: { comment: 'I need the chance that Aria spots the visitor.', character: 'Aria', action: 'spots the visitor', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The camp is quiet and the ground is clear.' } }] },
-                { text: '', toolCalls: [{ id: 'c2', name: 'submit_turn', arguments: {
+                { text: '', toolCalls: [{ id: 'c2', name: 'inscribe', arguments: {
                     comment: 'The test turn is decided.',
                     scene: { minutes: 1 },
                     resolution: 'Aria steps out of the shadows.',
@@ -59,9 +59,9 @@ test('a card-test turn goes through the real director and gives the writer notes
     assert.match(all, /END: Aria steps out of the shadows\./);
     assert.match(all, /Aria — LINE \(meaning\): who goes there\?/);
     assert.equal(messages.at(-1).role, 'system', 'the push comes after the history');
-    assert.match(messages.at(-1).content, /^PUSH — what happens this turn:/);
+    assert.match(messages.at(-1).content, /^INSCRIPTION — what happens this turn:/);
     assert.equal(calls.length, 2, 'assess, then the form');
-    assert.ok(calls[0].tools.some(tool => tool.name === 'submit_turn'));
+    assert.ok(calls[0].tools.some(tool => tool.name === 'inscribe'));
     assert.equal(calls[0].tools.some(tool => tool.name === 'forced_memory'), false, 'the test cannot write real summary state');
     assert.equal(memoryWrites.some(name => name.startsWith('core.decision:')), false, 'nothing is written to the open chat');
 });

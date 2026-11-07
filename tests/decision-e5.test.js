@@ -49,7 +49,7 @@ async function build({ replies, thresholdTokens = 10 }) {
     return { pipelineCore, core, calls, memory };
 }
 
-const form = () => call('submit_turn', {
+const form = () => call('inscribe', {
     comment: 'The form is ready for the writer.', resolution: 'They move on.', userResult: 'The user waits.',
     scene: { minutes: 5 }, characters: [],
 });

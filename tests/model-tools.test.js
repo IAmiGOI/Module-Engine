@@ -31,7 +31,7 @@ const WORKER = { id: 'w1', endpoint: 'https://api.example.com/v1', apiKey: 'sk-1
 
 test('model.generate with returnMessage and tools sends the tools and gives back parsed tool_calls', async () => {
     const { engine, calls, modelsCore } = buildEngineWithModelsCore({
-        choices: [{ finish_reason: 'tool_calls', message: { content: '', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'submit_turn', arguments: '{"scene":{"minutes":5}}' } }] } }],
+        choices: [{ finish_reason: 'tool_calls', message: { content: '', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'inscribe', arguments: '{"scene":{"minutes":5}}' } }] } }],
     });
     modelsCore.configureWorkers([WORKER]);
     const host = engine.registerCaller('core.decision', 'cores', { tier: 'official' });
@@ -40,15 +40,15 @@ test('model.generate with returnMessage and tools sends the tools and gives back
         params: {
             workerId: 'w1', stream: false, returnMessage: true,
             messages: [{ role: 'user', content: 'decide' }],
-            tools: [{ name: 'submit_turn', description: 'Submit the form', parameters: { type: 'object', properties: {} } }],
+            tools: [{ name: 'inscribe', description: 'Submit the form', parameters: { type: 'object', properties: {} } }],
             toolChoice: 'auto',
         },
     }, resolve));
 
     assert.equal(result.ok, true);
-    assert.deepEqual(result.value.toolCalls, [{ id: 'call_1', name: 'submit_turn', arguments: { scene: { minutes: 5 } }, rawArguments: '{"scene":{"minutes":5}}' }]);
+    assert.deepEqual(result.value.toolCalls, [{ id: 'call_1', name: 'inscribe', arguments: { scene: { minutes: 5 } }, rawArguments: '{"scene":{"minutes":5}}' }]);
     const body = JSON.parse(calls[0].body);
-    assert.equal(body.tools[0].function.name, 'submit_turn');
+    assert.equal(body.tools[0].function.name, 'inscribe');
     assert.equal(body.tool_choice, 'auto');
 });
 

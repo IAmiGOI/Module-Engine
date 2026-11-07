@@ -95,3 +95,19 @@ export function renderDecreeSection(entries, { nowValue = null } = {}) {
     if (!blocks.length) return '';
     return `DECREES — how each character is to be played in this story:\n\n${blocks.join('\n\n')}`;
 }
+
+/** Указ резолверу: только действующие, на @10. Пока пусто — честная строка вместо блока. */
+export const NO_DECREE = 'No Decree yet — play from the bank.';
+
+export function renderDecreeForResolver(entries, { nowValue = null, names = null } = {}) {
+    const wanted = Array.isArray(names) ? new Set(names.map(name => text(name).toLowerCase())) : null;
+    const blocks = (Array.isArray(entries) ? entries : [])
+        .filter(entry => !wanted || wanted.has(text(entry?.character?.name).toLowerCase()))
+        .map(entry => {
+            const body = blocksOf(entry?.character, DECREE_PARTS, nowValue);
+            return body.length ? `### ${text(entry.character.name)}\n${body.join('\n\n')}` : '';
+        })
+        .filter(Boolean);
+    if (!blocks.length) return `DECREES — how each character is to be played in this story:\n\n${NO_DECREE}`;
+    return `DECREES — how each character is to be played in this story:\n\n${blocks.join('\n\n')}`;
+}

@@ -1,6 +1,6 @@
 import { chatToMessages } from './chat-to-messages.js';
 import { planSection, arcsSection, notesSection, notesAsBlocks } from './decision-state.js';
-import { DIRECTOR_REASONING, DIRECTOR_SYSTEM, DIRECTOR_TURN, WRITER_SYSTEM, WRITER_PUSH, fillPrompt } from './decision-prompts.js';
+import { DIRECTOR_REASONING, DIRECTOR_SYSTEM, DIRECTOR_TURN, RESOLVER_THINK_TURN, RESOLVER_THINK_AFTER, WRITER_SYSTEM, WRITER_INSCRIPTION, fillPrompt } from './decision-prompts.js';
 import {
     compressedDigestMessages, fullTurnMessages, renderCompressedDigests, renderFullTurns,
 } from './decision-turn-digest.js';
@@ -179,6 +179,9 @@ export function windowHistory(entries, block, keepTurns = DIRECTOR_BLOCK_CYCLES)
 /** Ближняя полная проекция Great Bank: столько сообщений от конца контекста директора. */
 export const NEAR_BANKS_DEPTH = 20;
 
+/** Указ действующих персонажей — столько сообщений от конца контекста резолвера. */
+export const DECREE_DEPTH = 10;
+
 /**
  * Контекст директора части 10: защищённая часть (банки → лорбук → арки →
  * библиотека → замороженные окна → длинные планы → ростер → дубли банков)
@@ -192,8 +195,8 @@ export const NEAR_BANKS_DEPTH = 20;
 export function buildDeciderContext({
     plan = null, arcs = [], notes = {}, roster = [],
     banksText = '', lorebookText = '', chatBriefText = '', libraryText = '', plansText = '', activeBanksText = '',
-    nearBanksText = '', frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '', sceneText = '',
-    planMissing = false, directorBlock = '', storySettings = '', task = '',
+    nearBanksText = '', decreeText = '', creationText = '', decreeWait = '', frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '', sceneText = '',
+    planMissing = false, directorBlock = '', storySettings = '', task = '', resolverTurn = false, afterTurn = false,
     digests = [], turns = [], chat = [], summaries = [], researchText = '', bankText = '', lorebookChanges = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
     const usingWindow = windowMode || (Array.isArray(windowEntries) && windowEntries.length > 0);
@@ -201,6 +204,8 @@ export function buildDeciderContext({
         ? windowHistory(windowEntries, directorBlock)
         : directorHistory(chat, limit, directorBlock);
     const head = [
+        // Мироздание (фаза 5) — в стабильной части, рядом с дальними банками; до фазы 5 строки нет.
+        String(creationText ?? '').trim(),
         String(banksText ?? '').trim(), String(lorebookText ?? '').trim(), arcsSection(arcs),
         String(chatBriefText ?? '').trim(), String(libraryText ?? '').trim(),
     ].filter(Boolean);
@@ -213,12 +218,14 @@ export function buildDeciderContext({
     const middleMessages = middle.map(entry => (typeof entry === 'string' ? { role: 'system', content: entry } : entry));
     const windowPart = usingWindow ? [] : [...compressedDigestMessages(digests), ...fullTurnMessages(turns)];
     // «Что сейчас» — в изменяемом хвосте, последним перед планом: ближе к заданию, и кеш до окна не трогает.
-    const state = [String(knowledgeText ?? '').trim(), notesSection(notes), String(sceneText ?? '').trim()].filter(Boolean);
-    const planContent = planSection(plan) || 'YOUR PLAN: none yet — call set_plan before submit_turn.';
+    const state = [String(knowledgeText ?? '').trim(), notesSection(notes), String(sceneText ?? '').trim(), String(decreeWait ?? '').trim()].filter(Boolean);
+    // Резолверу план не нужен: на ходу планы закрыты (спека части 17 убрала их), а свой план ведёт директор.
+    const planContent = resolverTurn ? '' : (planSection(plan) || 'YOUR PLAN: none yet — call set_plan.');
     const baseTask = String(task ?? '').trim() || DIRECTOR_TURN;
-    const taskText = planMissing ? `You have no plan yet. Call set_plan before submit_turn: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
-    // Как думать — в самом конце, ближе всего к генерации: там модель это действительно держит.
-    const turnTask = `${taskText}\n\n${DIRECTOR_REASONING}`;
+    const missingPlan = planMissing && !resolverTurn;
+    const taskText = missingPlan ? `You have no plan yet. Call set_plan in a background cycle: a direction, not a fixed script.\n\n${baseTask}` : baseTask;
+    // CoT резолвера — в самом конце, ближе всего к генерации: без него модель засоряет ризонинг даже с инструментами.
+    const turnTask = `${taskText}\n\n${resolverTurn ? RESOLVER_THINK_TURN : (afterTurn ? RESOLVER_THINK_AFTER : DIRECTOR_REASONING)}`;
     // Настройки игры — сразу после system: защищённая часть, меняется только при смене настроек.
     const settingsBlock = String(storySettings ?? '').trim();
     const messages = [
@@ -229,18 +236,23 @@ export function buildDeciderContext({
         ...windowPart,
         ...history,
         ...state.map(content => ({ role: 'system', content })),
-        { role: 'system', content: planContent },
+        ...(planContent ? [{ role: 'system', content: planContent }] : []),
         { role: 'user', content: turnTask },
     ];
+    // Указ действующих — на @10 от конца: он меняется, когда директор издаёт новый, и должен быть близко.
+    const withDecree = insertBlock(messages, String(decreeText ?? '').trim(), Math.max(1, messages.length - DECREE_DEPTH));
     // Ближняя полная проекция Great Bank — на @20 от конца: меняется после каждой правки, поэтому за окном и
     // изменяемым хвостом. План остаётся вторым сообщением от конца, задание — последним. В коротком контексте
     // блок не встаёт перед системным промптом.
-    const withNear = insertBlock(messages, String(nearBanksText ?? '').trim(), Math.max(1, messages.length - NEAR_BANKS_DEPTH));
+    // В коротком контексте Указ уже на месте — второй блок не ставим.
+    const withNear = String(nearBanksText ?? '').trim()
+        ? insertBlock(withDecree, String(nearBanksText).trim(), Math.max(1, withDecree.length - NEAR_BANKS_DEPTH))
+        : withDecree;
     const prompt = [
         DIRECTOR_SYSTEM, settingsBlock, ...head, renderFrozenWindows(frozenWindows),
         String(plansText ?? '').trim(), rosterSection(roster), String(activeBanksText ?? '').trim(),
         usingWindow ? renderWindow(windowEntries) : `${renderCompressedDigests(digests)}\n${renderFullTurns(turns)}`,
-        renderHistory(history), String(nearBanksText ?? '').trim(), ...state, planContent, turnTask,
+        renderHistory(history), String(nearBanksText ?? '').trim(), String(decreeText ?? '').trim(), ...state, planContent, turnTask,
     ].filter(Boolean).join('\n\n');
     return { systemPrompt: DIRECTOR_SYSTEM, messages: withNear, prompt };
 }
@@ -259,7 +271,7 @@ export function buildWriterContext({ notes = {}, summaries = [], chat = [], deci
     // истории, рядом с Push, чтобы не обрывать кеш в начале запроса.
     const parts = [WRITER_SYSTEM, String(storySettings ?? '').trim(), String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
     const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim(), String(sceneText ?? '').trim(), String(decreeText ?? '').trim()].filter(Boolean);
-    const push = String(decision ?? '').trim() ? fillPrompt(WRITER_PUSH, { push: String(decision).trim() }) : '';
+    const push = String(decision ?? '').trim() ? fillPrompt(WRITER_INSCRIPTION, { inscription: String(decision).trim() }) : '';
     const messages = [
         ...parts.map(content => ({ role: 'system', content })),
         ...history,

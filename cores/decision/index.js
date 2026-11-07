@@ -146,6 +146,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             if (!fresh) return;
             await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
             await banks.ensureColdStart();
+            // Main Cast без Указа получает его сразу, как только банки собраны (часть 19).
+            await cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
         }).catch(error => publishEvent('decision.bank.failed', { message: error?.message ?? String(error) }));
         publishEvent('decision.reloaded', { at: Date.now() });
         return { runs: store.runs() };
@@ -307,6 +309,12 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const coldStart = banks.ensureColdStart().catch(error => publishEvent('decision.bank.failed', { runId, message: error?.message ?? String(error) }));
         await Promise.all([banks.hasAnyText() ? null : coldStart, // банки ждём только в чате без них; пересборка — в фоне, со старым текстом
             bootstrap.waitFirstTurn().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }))]);
+        // Телеграмма (часть 19): следующий ход ждёт нового Указа не дольше настройки;
+        // не дождался — ход идёт по старому Указу, предупреждение пишет сам Director.
+        if (store.papers()?.awaitingDecree) {
+            await cycle.waitForDecree({ timeoutMs: settings.director?.decreeTimeoutMs })
+                .catch(error => publishEvent('decision.failed', { runId, message: `the Director could not issue a Decree: ${error?.message ?? error}` }));
+        }
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
@@ -332,6 +340,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 push: result.push ?? result.decision, form: result.form, assessments, game: settingsLabel(gameSettingsValues()), reasoning: captured.value,
                 warnings: [...(result.warnings ?? [])], steps,
                 workerId: result.workerId ?? null, trace: result.trace ?? [], snapshot: beforeSnapshot,
+                // Контекст хода нужен «после хода»: тот же разговор и тот же кеш.
+                built: result.built ?? null,
             };
             publishEvent('decision.completed', { runId, workerId: pending.workerId });
             // Пассивный цикл — ПОСЛЕ формы и НЕ ожидается: прозаик не должен

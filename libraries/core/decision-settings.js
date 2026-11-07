@@ -66,6 +66,37 @@ export const DEFAULT_BOOTSTRAP = Object.freeze({
 });
 
 /**
+ * Советник (часть 18): своё подключение — по умолчанию подключение резолвера;
+ * будится каждые N ходов и в конце RP-дня.
+ */
+export const DEFAULT_COUNSELLOR = Object.freeze({
+    workerId: '',
+    everyTurns: 3,
+    maxSteps: 12,
+});
+
+/**
+ * Director (часть 19): своё подключение и свой лимит шагов. Телеграмма
+ * блокирует следующий ход не дольше `decreeTimeoutMs`.
+ */
+export const DEFAULT_DIRECTOR = Object.freeze({
+    workerId: '',
+    maxSteps: 10,
+    decreeTimeoutMs: 120000,
+});
+
+/**
+ * Один алгоритм повтора для всех ролей (часть 19): общий лимит попыток,
+ * бюджеты времени у блокирующих и фоновых ролей и запасные подключения.
+ */
+export const DEFAULT_RETRY = Object.freeze({
+    maxAttempts: 3,
+    turnBudgetMs: 120000,
+    backgroundBudgetMs: 600000,
+    backups: Object.freeze({ resolver: '', writer: '', counsellor: '', director: '', banks: '' }),
+});
+
+/**
  * Времена суток для сроков Great Bank: модель пишет «dawn», движок ставит
  * абсолютную метку. Настройка владельца — часы можно переписать.
  */
@@ -102,6 +133,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     assessSeed: null,
     classifier: DEFAULT_CLASSIFIER,
     bootstrap: DEFAULT_BOOTSTRAP,
+    counsellor: DEFAULT_COUNSELLOR,
+    director: DEFAULT_DIRECTOR,
+    retry: DEFAULT_RETRY,
     bankTimeOfDay: DEFAULT_BANK_TIME_OF_DAY,
     decider: DEFAULT_DECIDER,
     writer: DEFAULT_WRITER,
@@ -138,6 +172,10 @@ export function clampDecisionSettings(values = {}) {
     const compression = source.compression && typeof source.compression === 'object' ? source.compression : {};
     const classifier = source.classifier && typeof source.classifier === 'object' ? source.classifier : {};
     const bootstrap = source.bootstrap && typeof source.bootstrap === 'object' ? source.bootstrap : {};
+    const counsellor = source.counsellor && typeof source.counsellor === 'object' ? source.counsellor : {};
+    const director = source.director && typeof source.director === 'object' ? source.director : {};
+    const retry = source.retry && typeof source.retry === 'object' ? source.retry : {};
+    const backups = retry.backups && typeof retry.backups === 'object' ? retry.backups : {};
     const prompts = source.prompts && typeof source.prompts === 'object' ? source.prompts : {};
     const researcher = source.researcher && typeof source.researcher === 'object' ? source.researcher : {};
     return {
@@ -205,6 +243,28 @@ export function clampDecisionSettings(values = {}) {
             maxSteps: Math.round(number(bootstrap.maxSteps, 1, 200, DEFAULT_BOOTSTRAP.maxSteps)),
             timeoutMs: Math.round(number(bootstrap.timeoutMs, 1000, 3600000, DEFAULT_BOOTSTRAP.timeoutMs)),
         },
+        counsellor: {
+            workerId: text(counsellor.workerId, DEFAULT_COUNSELLOR.workerId).trim(),
+            everyTurns: Math.round(number(counsellor.everyTurns, 1, 50, DEFAULT_COUNSELLOR.everyTurns)),
+            maxSteps: Math.round(number(counsellor.maxSteps, 1, 100, DEFAULT_COUNSELLOR.maxSteps)),
+        },
+        director: {
+            workerId: text(director.workerId, DEFAULT_DIRECTOR.workerId).trim(),
+            maxSteps: Math.round(number(director.maxSteps, 1, 100, DEFAULT_DIRECTOR.maxSteps)),
+            decreeTimeoutMs: Math.round(number(director.decreeTimeoutMs, 1000, 3600000, DEFAULT_DIRECTOR.decreeTimeoutMs)),
+        },
+        retry: {
+            maxAttempts: Math.round(number(retry.maxAttempts, 1, 5, DEFAULT_RETRY.maxAttempts)),
+            turnBudgetMs: Math.round(number(retry.turnBudgetMs, 1000, 3600000, DEFAULT_RETRY.turnBudgetMs)),
+            backgroundBudgetMs: Math.round(number(retry.backgroundBudgetMs, 1000, 3600000, DEFAULT_RETRY.backgroundBudgetMs)),
+            backups: {
+                resolver: text(backups.resolver, '').trim(),
+                writer: text(backups.writer, '').trim(),
+                counsellor: text(backups.counsellor, '').trim(),
+                director: text(backups.director, '').trim(),
+                banks: text(backups.banks, '').trim(),
+            },
+        },
         bankTimeOfDay: clampTimeOfDay(source.bankTimeOfDay),
         researcher: {
             workerId: text(researcher.workerId, '').trim(),
@@ -236,6 +296,23 @@ export function deciderRequestParams(decider = {}, { floor = true } = {}) {
     };
 }
 
+/** Советник работает на своём подключении, а без него — на подключении резолвера. */
+export function counsellorWorkerId(settings = {}) {
+    const own = String(settings?.counsellor?.workerId ?? '').trim();
+    return own || String(settings?.decider?.workerId ?? '').trim();
+}
+
+/** Director работает на своём подключении, а без него — на подключении резолвера (фаза 5 даст Богу свой ключ). */
+export function directorWorkerId(settings = {}) {
+    const own = String(settings?.director?.workerId ?? '').trim();
+    return own || String(settings?.decider?.workerId ?? '').trim();
+}
+
+/** Запасное подключение роли — для двух пустых ответов подряд (часть 19). */
+export function retryBackupId(settings = {}, role = 'resolver') {
+    return String(settings?.retry?.backups?.[role] ?? '').trim();
+}
+
 /** Копия настроек наружу: без общих вложенных объектов. */
 export function publicDecisionSettings(settings = {}) {
     return {
@@ -246,5 +323,12 @@ export function publicDecisionSettings(settings = {}) {
         promptSections: structuredClone(settings.promptSections ?? {}),
         gameDefaults: { ...settings.gameDefaults },
         gameMixes: (settings.gameMixes ?? []).map(mix => ({ ...mix, values: { ...mix.values } })),
+        counsellor: { ...DEFAULT_COUNSELLOR, ...(settings.counsellor ?? {}) },
+        director: { ...DEFAULT_DIRECTOR, ...(settings.director ?? {}) },
+        retry: {
+            ...DEFAULT_RETRY,
+            ...(settings.retry ?? {}),
+            backups: { ...DEFAULT_RETRY.backups, ...(settings.retry?.backups ?? {}) },
+        },
     };
 }

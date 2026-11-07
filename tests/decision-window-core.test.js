@@ -242,14 +242,14 @@ test('a window wiped by the old turn-count bug is rebuilt from the runs and the 
 });
 
 test('a saved turn entry loses its old push when the writer reply is there', () => {
-    const body = 'TURN 3 (compressed)\nUser: hi\nPUSH:\nBEATS — in this order:\n1. Emilia — ACTION: Stands still.\nEND: she waits.\nsubmit_turn: (no comment)\nWriter: Emilia waits.';
+    const body = 'TURN 3 (compressed)\nUser: hi\nPUSH:\nBEATS — in this order:\n1. Emilia — ACTION: Stands still.\nEND: she waits.\ninscribe: (no comment)\nWriter: Emilia waits.';
     const win = normalizeWindow({ entries: [{ kind: 'turn', turn: 3, text: body }, { kind: 'turn', turn: 4, text: 'TURN 4 (compressed)\nPUSH:\nOnly push.' }] });
-    assert.equal(win.entries[0].text, 'TURN 3 (compressed)\nUser: hi\nsubmit_turn: (no comment)\nWriter: Emilia waits.');
+    assert.equal(win.entries[0].text, 'TURN 3 (compressed)\nUser: hi\ninscribe: (no comment)\nWriter: Emilia waits.');
     assert.match(win.entries[1].text, /Only push/, 'without a writer reply the push stays');
 });
 
 test('turn entries saved without the writer reply get it from the chat and lose the push', async () => {
-    let saved = { entries: [{ kind: 'turn', turn: 1, runIds: ['run_a'], text: 'TURN 1 (compressed)\nUser: hi\nPUSH:\nBEATS:\n1. Emilia — ACTION: Stands.\nsubmit_turn: (no comment)' }] };
+    let saved = { entries: [{ kind: 'turn', turn: 1, runIds: ['run_a'], text: 'TURN 1 (compressed)\nUser: hi\nPUSH:\nBEATS:\n1. Emilia — ACTION: Stands.\ninscribe: (no comment)' }] };
     const runs = { 2: { id: 'run_a', mesid: '2', push: 'x' } };
     const messages = [{ mesid: '1', isUser: true, text: 'hi' }, { mesid: '2', isUser: false, text: 'Emilia turns away.' }];
     const store = {
@@ -258,7 +258,7 @@ test('turn entries saved without the writer reply get it from the chat and lose 
     };
     const win = createTurnWindow({ store, call: async contract => (contract === 'chatHistory.messages' ? messages : null), getSettings: () => ({}), deciderWorker: () => null, publishEvent: () => {} });
     assert.equal(await win.fillWriterText(), true);
-    assert.equal(saved.entries[0].text, 'TURN 1 (compressed)\nUser: hi\nsubmit_turn: (no comment)\nWriter: Emilia turns away.');
+    assert.equal(saved.entries[0].text, 'TURN 1 (compressed)\nUser: hi\ninscribe: (no comment)\nWriter: Emilia turns away.');
     assert.equal(await win.fillWriterText(), false);
 });
 

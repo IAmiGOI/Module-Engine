@@ -1,4 +1,5 @@
 import { bankPromptFor } from '../../libraries/core/decision-banks.js';
+import { classifyFailure, retryConfig, retryLine, retryWaitMs } from '../../libraries/core/retry-policy.js';
 
 const BANK_MAX_TOKENS = 4000;
 // Свой лимит банка: 12 не успевали найти канон, а 50 шагов исследователя растягивали один банк на 10+ минут.
@@ -34,14 +35,53 @@ export function createBankTasks({ getSettings, researcher, publishEvent, sleep =
             sizeBand: source.sizeBand ?? 'minor', steps,
         });
         publishEvent('decision.bank.started', { sourceKey: source.sourceKey, name: source.name });
-        const started = await startWhenFree({ task: 'Build the data bank now.', system, kind: 'bank', notify: false, maxSteps: steps, maxTokens: BANK_MAX_TOKENS });
-        if (!started.ok) throw new Error(started.error || 'The bank task did not start.');
-        const done = await started.done;
-        if (done?.error) throw new Error(done.error);
-        const text = String(done?.report ?? '').trim();
-        if (!text) throw new Error('The subagent returned an empty bank.');
-        publishEvent('decision.bank.ready', { sourceKey: source.sourceKey, name: source.name, text });
-        return text;
+        // Сборщик — фоновая роль части 19: сеть/5xx/429 повторяются с паузой, пустой банк — один раз с большим лимитом.
+        const config = retryConfig(settings, 'banks', 'background');
+        let attempt = 0;
+        let maxTokens = BANK_MAX_TOKENS;
+        let workerId = null;
+        let lastError = null;
+        while (attempt < config.maxAttempts) {
+            attempt += 1;
+            try {
+                const started = await startWhenFree({
+                    task: 'Build the data bank now.', system, kind: 'bank', notify: false, maxSteps: steps, maxTokens,
+                    ...(workerId ? { workerId } : {}),
+                });
+                if (!started.ok) throw new Error(started.error || 'The bank task did not start.');
+                const done = await started.done;
+                if (done?.error) throw new Error(done.error);
+                const text = String(done?.report ?? '').trim();
+                if (!text) {
+                    lastError = new Error('The subagent returned an empty bank.');
+                    if (attempt < config.maxAttempts) {
+                        maxTokens = Math.min(32768, maxTokens * 2);
+                        // Второй пустой банк — запасное подключение сборщика, если оно задано.
+                        if (attempt >= 2 && config.backupWorkerId) workerId = config.backupWorkerId;
+                        publishEvent('decision.retry', {
+                            role: 'banks', attempt, maxAttempts: config.maxAttempts, kind: 'empty',
+                            reason: 'the subagent returned an empty bank; retrying with a larger output limit',
+                            line: retryLine({ role: 'banks', attempt, maxAttempts: config.maxAttempts, reason: 'the subagent returned an empty bank' }),
+                            at: Date.now(),
+                        });
+                        continue;
+                    }
+                    throw lastError;
+                }
+                publishEvent('decision.bank.ready', { sourceKey: source.sourceKey, name: source.name, text });
+                return text;
+            } catch (error) {
+                lastError = error;
+                const failure = classifyFailure(error);
+                if (!failure.retry || attempt >= config.maxAttempts) throw error;
+                publishEvent('decision.retry', {
+                    role: 'banks', attempt, maxAttempts: config.maxAttempts, kind: failure.kind, reason: failure.reason,
+                    line: retryLine({ role: 'banks', attempt, maxAttempts: config.maxAttempts, reason: failure.reason }), at: Date.now(),
+                });
+                await sleep(retryWaitMs(attempt, failure.retryAfterMs));
+            }
+        }
+        throw lastError ?? new Error('The bank task did not start.');
     }
 
     /**

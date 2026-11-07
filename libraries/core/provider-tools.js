@@ -51,19 +51,45 @@ export function buildOpenAiTools(request) {
     return body;
 }
 
+/**
+ * Починка аргументов инструмента до разбора: забор ```json, одинарные кавычки
+ * и висячие запятые. Часть 19: сначала движок чинит, и только если не вышло —
+ * модель получает короткую подсказку, что не так.
+ */
+export function repairToolArguments(raw) {
+    const source = String(raw ?? '').trim();
+    if (!source) return { ok: true, value: {} };
+    const candidates = [
+        source,
+        source.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(),
+        source.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').replace(/'/g, '"').replace(/,\s*([}\]])/g, '$1').trim(),
+    ];
+    for (const candidate of candidates) {
+        try {
+            const value = JSON.parse(candidate);
+            if (value && typeof value === 'object' && !Array.isArray(value)) return { ok: true, value };
+        } catch { /* try the next repair */ }
+    }
+    return { ok: false, value: {}, error: 'The tool arguments were not valid JSON.' };
+}
+
 function normalizeOpenAiToolCalls(message) {
     const raw = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
     return raw.map((call, index) => {
         const fn = call?.function ?? call;
         let args = fn?.arguments;
+        let parseError = '';
         if (typeof args === 'string') {
-            try { args = JSON.parse(args); } catch { args = {}; }
+            const repaired = repairToolArguments(args);
+            args = repaired.value;
+            if (!repaired.ok) parseError = repaired.error;
         }
         return {
             id: String(call?.id ?? `call_${index}`),
             name: String(fn?.name ?? ''),
             arguments: args && typeof args === 'object' ? args : {},
             rawArguments: typeof fn?.arguments === 'string' ? fn.arguments : JSON.stringify(args ?? {}),
+            ...(parseError ? { parseError } : {}),
         };
     }).filter(call => call.name);
 }

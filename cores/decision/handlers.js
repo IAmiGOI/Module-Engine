@@ -1,8 +1,9 @@
 import { createAssessHandler } from './handlers-assess.js';
-import { createSubmitTurnHandler } from './handlers-turn.js';
 import { createBankHandlers } from './handlers-bank.js';
+import { createInscribeHandler } from './handlers-inscribe.js';
+import { createAfterTurnHandler } from './handlers-after-turn.js';
 import { applyArc, applyCharacterNote, applyPlan, notesFor } from '../../libraries/core/decision-state.js';
-import { setLevel, removeOnLeavingRoster, setPlan, interruptPlan, completePlan, planFor } from '../../libraries/core/decision-library.js';
+import { setLevel, setPlan, completePlan, planFor } from '../../libraries/core/decision-library.js';
 import {
     addRecord, searchRecords, canCompress, ordinaryRecords, buildCompressionPrompt,
     replaceOrdinaryWithSummary,
@@ -17,7 +18,7 @@ import { normalizeBrief, normalizeTimelineBanks, renderChatBrief } from '../../l
  */
 const key = value => String(value ?? '').trim().toLowerCase();
 
-export function createHandlers({ store, call, publishEvent, getSettings, getGameSettings = null, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null, knowledge = null }) {
+export function createHandlers({ store, call, publishEvent, getSettings, getGameSettings = null, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null, knowledge = null, applyRoster = null, timeOfDay = null }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -55,36 +56,10 @@ export function createHandlers({ store, call, publishEvent, getSettings, getGame
             if (args.op === 'rebuild') return banks.rebuild({ name: args.character });
             return { ok: true, banks: await banks.read({ name: args.character }) };
         },
+        // Ростер — одна операция на два входа: этот инструмент (фоновые циклы и bootstrap) и поле `roster` в `inscribe`.
         update_roster: async args => {
-            const before = store.roster().active;
-            const remove = new Set((Array.isArray(args.remove) ? args.remove : []).map(name => String(name).trim()).filter(Boolean));
-            const next = [...before.filter(name => !remove.has(name))];
-            const added = [];
-            for (const entry of Array.isArray(args.add) ? args.add : []) {
-                const name = String(entry?.name ?? '').trim();
-                if (name && !next.some(existing => key(existing) === key(name))) { next.push(name); added.push(name); }
-            }
-            const removed = before.filter(name => !next.includes(name));
-            await store.saveRoster({ active: next });
-
-            let plans = store.plans();
-            for (const name of added) plans = interruptPlan(plans, { character: name });
-            let library = store.library();
-            for (const name of removed) {
-                library = removeOnLeavingRoster(library, { character: name }).library;
-                plans = plans.map(plan => (key(plan.character) === key(name) && !plan.resolvedAt
-                    ? { ...plan, interrupted: false, approximate: false, dueAt: store.clock().minutes, needsNewPlan: true }
-                    : plan));
-            }
-            if (added.length || removed.length) { await store.saveLibrary(library); await store.savePlans(plans); }
-            if (added.length && banks) await banks.noteRosterAdded(added).catch(() => {});
-            if (added.length || removed.length) {
-                const parts = [];
-                if (added.length) parts.push(`+ ${added.join(', ')}`);
-                if (removed.length) parts.push(`− ${removed.join(', ')}`);
-                await turnWindow?.addFact(`update_roster: ${parts.join(', ')}`, { turn: state.turnCounter });
-            }
-            return { ok: true, active: next, added: added.length, removed: removed.length };
+            const applied = await applyRoster({ add: args.add, remove: args.remove });
+            return { ok: applied.ok, active: applied.active, added: applied.added.length, removed: applied.removed.length };
         },
 
         set_plan: async args => {
@@ -259,7 +234,8 @@ export function createHandlers({ store, call, publishEvent, getSettings, getGame
 
         assess: createAssessHandler({ state, getSettings, getGameSettings }),
 
-        submit_turn: createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker, userName: () => String(banks?.persona?.()?.name ?? '').trim() }),
+        after_turn: createAfterTurnHandler({ store, banks, knowledge, state, publishEvent }),
+        inscribe: createInscribeHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker, applyRoster, timeOfDay, getSettings, userName: () => String(banks?.persona?.()?.name ?? '').trim() }),
 
 
         ask_user: async args => {

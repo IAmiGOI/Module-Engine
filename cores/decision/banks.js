@@ -283,7 +283,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     return {
         reload, reset, ensureColdStart, ensureName, noteRosterAdded, applyTimeline: timelineAdjust.applyTimeline,
         contextFor, examplesForCards,
-        farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit,
+        farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit, decreeFor: greatLayer.decreeFor,
         writerContext: names => greatLayer.writerContext(names, {
             sceneText: () => renderBankSection(records().filter(record => record.sourceKind === 'scene')),
         }),

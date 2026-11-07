@@ -6,7 +6,7 @@
 import { assemblePromptSection } from '../../libraries/core/decision-prompt-assemble.js';
 import { systemLines } from '../../libraries/core/decision-prompt-model.js';
 import { previewRows } from '../../libraries/core/decision-prompt-preview.js';
-import { DIRECTOR_TURN, WRITER_PUSH } from '../../libraries/core/decision-prompts.js';
+import { DIRECTOR_TURN, WRITER_INSCRIPTION } from '../../libraries/core/decision-prompts.js';
 import { directorHistory, writerHistory, RECENT_MESSAGE_LIMIT } from '../../libraries/core/decision-context.js';
 import { windowTurnCount } from '../../libraries/core/decision-window.js';
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
@@ -148,6 +148,6 @@ export async function previewFor({ sectionId, settings, chat, call, store }) {
     }
     return previewRows({
         sectionId, systems: systemLines(sectionId), before, after: [historyAfter], block,
-        tail: { ...tail, text: sectionId === 'director' ? DIRECTOR_TURN : WRITER_PUSH }, tree: settings?.promptSections?.[sectionId]?.tree ?? [],
+        tail: { ...tail, text: sectionId === 'director' ? DIRECTOR_TURN : WRITER_INSCRIPTION }, tree: settings?.promptSections?.[sectionId]?.tree ?? [],
     });
 }

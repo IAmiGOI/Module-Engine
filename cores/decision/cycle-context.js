@@ -1,6 +1,7 @@
 import { buildDeciderContext } from '../../libraries/core/decision-context.js';
 import { normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
-import { buildToolList } from '../../libraries/core/decision-tools.js';
+import { buildToolList, buildTurnToolList } from '../../libraries/core/decision-tools.js';
+import { TURN_TOOLS } from '../../libraries/core/decision-agent.js';
 import { staticDirectorLorebook } from '../../libraries/core/decision-lorebook-static.js';
 import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
@@ -12,6 +13,7 @@ import { buildStorySettingsBlock, resolveGameSettings } from '../../libraries/co
 import { lastAcceptedForm, renderCurrentScene } from '../../libraries/core/decision-scene.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createKnowledge } from './knowledge.js';
+import { createRetryRunner } from './retry.js';
 
 /** Чужие инструменты, которые директору не отдаются: Secrets директор не использует (решение владельца — отключить). */
 const DIRECTOR_EXCLUDED_TOOLS = new Set(['Secrets']);
@@ -34,8 +36,9 @@ export function turnWake(type) {
     return wakeFor({ type, label: `The director runs again (${type})` });
 }
 
-export function createCycleContext({ call, store, banks = null, capture = null, getGameSettings = null }) {
+export function createCycleContext({ call, store, banks = null, capture = null, getGameSettings = null, getSettings = () => ({}), publishEvent = () => {} }) {
     const knowledge = createKnowledge({ call, store, banks });
+    const retry = createRetryRunner({ publishEvent, getSettings });
     async function externalTools() {
         try {
             const tools = await call('generation.tools');
@@ -91,10 +94,27 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
         return fresh;
     }
 
-    /** Ближняя полная проекция: активный ростер, пересобирается после каждой правки — она в некешируемом хвосте. */
-    async function nearBanksText() {
-        if (!banks?.nearContext) return '';
-        return banks.nearContext(store.roster().active).catch(() => '');
+    /**
+     * Контекст резолвера: дальняя компактная проекция — в границе окна, Указ действующих — на @10,
+     * ближней полной проекции у него нет (она директора). Пока Great Bank не собран, строки нет.
+     */
+    async function decreeTextFor() {
+        if (!banks?.decreeFor) return '';
+        return banks.decreeFor(store.roster().active).catch(() => '');
+    }
+
+    /** Место под Мироздание (фаза 5): стабильная часть, пустая до тех пор. */
+    const CREATION_PLACEHOLDER = '';
+
+    /**
+     * Телеграмма из закрытого списка ставит флаг «ход ждёт Указа». Само ожидание включится в фазе 4;
+     * здесь флаг только доходит до резолвера строкой, чтобы он знал, почему сцена не идёт дальше.
+     */
+    function decreeWaitText() {
+        const papers = typeof store.papers === 'function' ? store.papers() : null;
+        const waiting = papers?.awaitingDecree;
+        if (!waiting?.why) return '';
+        return `AWAITING A DECREE — a telegram said: ${String(waiting.why).trim()}. No decree plan is issued yet (phase 4): hold the scene where it is and do not move the urgent matter further.`;
     }
 
     function sceneText(chat) {
@@ -160,7 +180,7 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
         return buildStorySettingsBlock('director', game);
     }
 
-    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '', turn = null, nearBanks = '' }) {
+    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '', turn = null, nearBanks = '', decreeText = '', creationText = '', decreeWait = '' }) {
         const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '', chatBriefText: '' };
         const win = typeof store.window === 'function' ? store.window() : null;
         const all = Array.isArray(win?.entries) ? win.entries : [];
@@ -169,7 +189,7 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
             plan: store.plan(), arcs: store.arcs(), notes: store.notes(), storySettings,
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
             chatBriefText: safe.chatBriefText ?? '', planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
-            nearBanksText: nearBanks,
+            nearBanksText: nearBanks, decreeText, creationText, decreeWait, resolverTurn: true,
             windowEntries: [...entries, ...pendingTurn(entries, currentUser, reroll, turn)],
             sceneText: currentSceneText({ beforeTurn: reroll && entries.length < all.length ? Number(all.filter(entry => entry.kind === 'turn').at(-1)?.turn) : null }),
             frozenWindows: typeof store.frozen === 'function' ? store.frozen() : [],
@@ -178,39 +198,51 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
     }
 
     async function runContext({ settings, chat = [], task = '', lorebook = true, worker, reroll = false, turn = null }) {
-        const [lorebookText, directorBlock, knowledgeText, boundary, nearBanks] = await Promise.all([
-            lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(), nearBanksText(),
+        const [lorebookText, directorBlock, knowledgeText, boundary, decree] = await Promise.all([
+            lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(), decreeTextFor(),
         ]);
-        // Карточки банков больше не идут отдельным блоком: их место заняли проекции Great Bank — дальняя в границе
-        // окна (все персонажи) и ближняя на @20 (активный ростер). Старый банк без разделов виден в дальней как есть.
-        return buildContext({ task, lorebookText, knowledgeText, directorBlock, boundary, nearBanks, currentUser: lastUserText(chat), reroll, turn, storySettings: storySettingsText(settings) });
+        // Резолверу — дальняя компактная проекция (в границе окна) и Указ действующих на @10. Ближняя полная проекция
+        // здесь не нужна: она директора.
+        return buildContext({
+            task, lorebookText, knowledgeText, directorBlock, boundary, decreeText: decree, creationText: CREATION_PLACEHOLDER,
+            currentUser: lastUserText(chat), reroll, turn, storySettings: storySettingsText(settings), decreeWait: decreeWaitText(),
+        });
     }
 
     /**
      * `thinkLimit` (токены) — размышление дошло до лимита: запрос обрывается и уходит заново с хвостом размышления
      * и требованием конкретики (PROMPTS §21). Обрыв — один на шаг: повтор думает без лимита, иначе ход не дойдёт до формы.
      */
-    function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null, thinkLimit = 0, onCut = () => {} }) {
+    function generateFor({ settings, worker, runId, prefix, startedAt, effort = null, signal = null, thinkLimit = 0, onCut = () => {}, budget = null }) {
         let modelCall = 0;
-        return async ({ messages, tools, toolChoice, returnMessage, boost = 1 }) => {
+        const send = ({ list, tools, toolChoice, returnMessage, requestSignal, boost = 1, lowerReasoning = false, backupWorkerId = '', tag = '' }) => {
             modelCall += 1;
             const params = deciderRequestParams(settings.decider, { floor: prefix !== '' });
             if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
-            const request = (requestId, list, requestSignal) => call('model.generate', {
-                requestId, ...params,
-                ...(effort ? { reasoningEffort: effort } : {}),
-                workerId: worker.id,
+            const baseId = `${runId}:${prefix}${modelCall}:${startedAt}`;
+            return call('model.generate', {
+                requestId: tag === 'cut' ? `${baseId}:c` : baseId, ...params,
+                // Ризонинг ниже на повторе пустого ответа: он и съел лимит.
+                ...(lowerReasoning ? { reasoningEffort: 'low' } : (effort ? { reasoningEffort: effort } : {})),
+                workerId: backupWorkerId || worker.id,
                 messages: list, tools, toolChoice, stream: true, returnMessage,
                 ...(requestSignal ? { signal: requestSignal } : {}),
             });
-            const requestId = `${runId}:${prefix}${modelCall}:${startedAt}`;
-            if (!(thinkLimit > 0) || typeof capture !== 'function') return normalizeGenerateAnswer(await request(requestId, messages, signal));
+        };
+        const run = ({ list, tools, toolChoice, returnMessage, requestSignal, tag = '' }) => retry.run({
+            role: 'resolver', budget: budget ?? 'turn', signal: requestSignal, normalize: normalizeGenerateAnswer,
+            request: options => send({ list, tools, toolChoice, returnMessage, requestSignal, tag, ...options }),
+        });
+        return async ({ messages, tools, toolChoice, returnMessage }) => {
+            if (!(thinkLimit > 0) || typeof capture !== 'function') {
+                return run({ list: messages, tools, toolChoice, returnMessage, requestSignal: signal });
+            }
 
             const local = new AbortController();
             const forward = () => local.abort(signal?.reason);
             if (signal?.aborted) forward(); else signal?.addEventListener?.('abort', forward, { once: true });
             let cutText = '';
-            const watch = capture(requestId, {
+            const watch = capture(`${runId}:${prefix}${modelCall + 1}:${startedAt}`, {
                 onThinking: text => {
                     if (cutText || estimateTokens(text) < thinkLimit) return;
                     cutText = String(text);
@@ -218,9 +250,10 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
                 },
             });
             try {
-                return normalizeGenerateAnswer(await request(requestId, messages, local.signal));
+                return await run({ list: messages, tools, toolChoice, returnMessage, requestSignal: local.signal });
             } catch (error) {
                 if (!cutText || signal?.aborted) throw error;
+                if (error && typeof error === 'object') error.code = error.code ?? 'thinking-cut';
             } finally {
                 watch?.stop?.();
                 signal?.removeEventListener?.('abort', forward);
@@ -228,14 +261,17 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
             onCut({ tokens: estimateTokens(cutText) });
             const tail = cutText.length > 4000 ? `…${cutText.slice(-4000)}` : cutText;
             const pushed = [...messages, { role: 'user', content: fillPrompt(DIRECTOR_CONCRETE, { thinking: tail }) }];
-            return normalizeGenerateAnswer(await request(`${requestId}:c`, pushed, signal));
+            return run({ list: pushed, tools, toolChoice, returnMessage, requestSignal: signal, tag: 'cut' });
         };
     }
 
-    async function toolsFor(settings, { background = false, filter = null } = {}) {
+    async function toolsFor(settings, { background = false, filter = null, turn = false } = {}) {
+        // Ход резолвера — один шаблон и assess: фоновые циклы берут полный набор без шаблона,
+        // ход — только `assess` и `inscribe` (планы и записи на ходу закрыты).
+        if (turn) return buildTurnToolList();
         return buildToolList(await externalTools()).filter(tool => {
             if (filter && !filter.includes(tool.name)) return false;
-            if (background && tool.name === 'submit_turn') return false;
+            if (background && TURN_TOOLS.includes(tool.name)) return false;
             if (!settings.turnDraft && tool.name === 'save_draft') return false;
             return true;
         });

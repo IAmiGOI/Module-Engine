@@ -94,12 +94,12 @@ test('the writer context puts the push after the history, and the history tail s
     assert.ok(context.messages.slice(context.messages.lastIndexOf(story.at(-1)) + 1).every(item => item.role === 'system'), 'only the volatile notes and the push follow it');
     assert.equal(context.messages.filter(item => item.role === 'user').length, 1, 'no synthetic user turn after the real one');
     assert.equal(context.messages.at(-1).role, 'system');
-    assert.match(context.messages.at(-1).content, /^PUSH — what happens this turn:/);
+    assert.match(context.messages.at(-1).content, /^INSCRIPTION — what happens this turn:/);
     const system = context.messages.filter(item => item.role === 'system').map(item => item.content).join('\n');
     assert.match(system, /LONG-TERM SUMMARIES/);
     assert.match(system, /CHARACTER NOTES/);
     assert.match(system, /Find the exit/);
-    assert.doesNotMatch(context.messages[0].content, /PUSH — what happens this turn/, 'the push is not in the system preface');
+    assert.doesNotMatch(context.messages[0].content, /INSCRIPTION — what happens this turn/, 'the push is not in the system preface');
     assert.match(context.messages.at(-1).content, /eastern door/);
 });
 

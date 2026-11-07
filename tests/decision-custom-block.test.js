@@ -63,7 +63,7 @@ test('an empty custom block is not inserted at all, and the push stays after the
     assert.equal(director.messages.some(message => message.role === 'system' && !message.content), false);
     const writer = buildWriterContext({ chat: chat(3), decision: 'push', writerBlock: '' });
     assert.equal(writer.messages.some(message => message.content === ''), false);
-    assert.match(writer.messages.at(-1).content, /^PUSH — what happens this turn:/);
+    assert.match(writer.messages.at(-1).content, /^INSCRIPTION — what happens this turn:/);
     assert.equal(writer.messages.at(-1).role, 'system');
 });
 

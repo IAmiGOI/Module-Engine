@@ -3,6 +3,8 @@
  * завершение/отмена/вытеснение прогона, смена чата, свайп и удаление,
  * отчёты субагента, старт по набору текста. Логика хода — в index.js.
  */
+import { afterTurnEnabled } from '../../libraries/core/decision-settings.js';
+
 export function createDecisionEvents({
     host, getSettings, getPending, setPending, clearAttempts, deleteAttempt, persist,
     discardPending, getLastFailure, noteCorrection, notify, revealCard, restoreSnapshotFor, lastMesid,
@@ -33,6 +35,18 @@ export function createDecisionEvents({
                 cycle.recordTurn?.({ pending, stored });
                 // Уже после записи: строка броска читает runs[mesid], и до этого события записи ещё нет.
                 publishEvent('decision.run.saved', { runId: pending.runId, mesid: stored?.mesid ?? null });
+                // «После хода» идёт по тексту ответа писателя: исход пишется по странице, а не по замыслу формы.
+                // Советник читает Ведомость уже после него — иначе разбирал бы прошлый ход.
+                const writerText = String(stored?.writerText ?? '').trim();
+                const afterTurn = afterTurnEnabled(getSettings()) && typeof cycle.runAfterTurn === 'function'
+                    ? cycle.runAfterTurn({ runId: pending.runId, built: pending.built, writerText, form: pending.form })
+                        .catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `after the turn: ${error?.message ?? error}` }))
+                    : Promise.resolve();
+                afterTurn
+                    .then(() => cycle.maybeRunCounsellor?.())
+                    // Director идёт после Советника: Petition уже лежат в очереди (часть 19).
+                    .then(() => cycle.maybeRunDirector?.())
+                    .catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `the Counsellor or the Director: ${error?.message ?? error}` }));
             })
             .catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `could not save the director run: ${error?.message ?? error}` }));
     }
@@ -113,6 +127,14 @@ export function createDecisionEvents({
             host.events.subscribe('st.messageEdited', onEdited),
             // Старт по набору текста — только когда включены и настройка, и заготовка.
             host.events.subscribe('ui.inputBar.changed', onTyping),
+            // Повторы (часть 19): каждая попытка — строкой в журнале директора.
+            host.events.subscribe('decision.retry', payload => {
+                cycle.logRetry?.(payload).catch(() => {});
+            }),
+            // Новые Petition/Телеграммы будят Director и вне цепочки хода (ответ Советнику, отчёт).
+            host.events.subscribe('decision.counsellor.finished', () => {
+                cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
+            }),
         ];
     }
 

@@ -25,7 +25,7 @@ function withoutStalePush(body) {
     const lines = body.split('\n');
     const start = lines.indexOf('PUSH:');
     if (start < 0 || !lines.some(line => line.startsWith('Writer: '))) return body;
-    const end = lines.findIndex((line, index) => index > start && (/^[a-z]+(?:_[a-z]+)+: /.test(line) || line === 'CHANGES:' || line.startsWith('Writer: ')));
+    const end = lines.findIndex((line, index) => index > start && (/^[a-z][a-z_]*: /.test(line) || line === 'CHANGES:' || line.startsWith('Writer: ')));
     return [...lines.slice(0, start), ...lines.slice(end)].join('\n');
 }
 

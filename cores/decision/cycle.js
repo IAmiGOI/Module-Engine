@@ -1,11 +1,12 @@
 import { createKnowledge } from './knowledge.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
-import { afterTurnEnabled } from '../../libraries/core/decision-settings.js';
 import { createUpdateStoryHandler } from './handlers-story.js';
-import { ASK_USER_STREAK, DIRECTOR_PASSIVE, DIRECTOR_REROLL, DIRECTOR_TURN, DIRECTOR_AFTER_TURN, AFTER_TURN_SUBMIT_CLOSED, AFTER_TURN_USE_UPDATE_STORY, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { ASK_USER_STREAK, DIRECTOR_REROLL, DIRECTOR_TURN, RESOLVER_AFTER_TURN } from '../../libraries/core/decision-prompts.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
+import { createCounsellor } from './counsellor.js';
+import { createDirector } from './director.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
-import { buildPush } from '../../libraries/core/decision-push.js';
+import { buildInscription } from '../../libraries/core/decision-push.js';
 import { createHandlers } from './handlers.js';
 import { createCycleJobs } from './cycle-jobs.js';
 import { createTurnWindow } from './window.js';
@@ -14,6 +15,8 @@ import { createPlaceReader, createTimeReader } from './readers.js';
 import { createCycleLive } from './live.js';
 import { createWakeQueue } from './queue.js';
 import { createCycleContext, fallbackDecision, turnWake, wakeFor } from './cycle-context.js';
+import { createRosterApplier } from './roster.js';
+import { runAfterTurn } from './cycle-after-turn.js';
 import { createFormChecker } from './form-check.js';
 import { createQuestionQueue } from './questions.js';
 import { bootstrapQuestionCount } from '../../libraries/core/game-settings.js';
@@ -42,9 +45,20 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
     const live = createCycleLive({ publishEvent, getTurn: () => state.turnCounter, getClock: () => store.clock().minutes });
-    const context = createCycleContext({ call, store, banks, capture, getGameSettings });
+    const context = createCycleContext({ call, store, banks, capture, getGameSettings, getSettings, publishEvent });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
+    // Советник (часть 18): своя очередь в общем фоне, своё подключение, свой контекст.
+    // Через очередь пробуждений: сообщение пользователю не вклинивается в ход.
+    const counsellor = createCounsellor({
+        call, callTool, store, banks, getSettings, getWorkers, publishEvent, capture, now,
+        enqueue: job => Promise.resolve(wakeQueue.schedule(job)),
+    });
+    // Director (часть 19): полу-слепой, по отчётам; Телеграмма держит следующий ход до Указа.
+    const director = createDirector({
+        call, callTool, store, banks, getSettings, getWorkers, publishEvent, capture, now,
+        enqueue: job => Promise.resolve(wakeQueue.schedule(job)),
+    });
 
     function deciderWorker(settings) {
         const id = String(settings.decider.workerId ?? '').trim();
@@ -69,13 +83,14 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         questions.cancelAll();
     }
     const turnWindow = createTurnWindow({ store, banks, call, getSettings, deciderWorker, publishEvent, now });
+    const applyRoster = createRosterApplier({ store, banks, state, window: turnWindow });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
     const recordFailure = createFailureRecorder({ store, state, getSettings, now });
 
     function handlersFor(settings) {
         const base = {
-            ...createHandlers({ store, call, publishEvent, getSettings, getGameSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions, knowledge }),
+            ...createHandlers({ store, call, publishEvent, getSettings, getGameSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions, knowledge, applyRoster, timeOfDay: () => getSettings().bankTimeOfDay }),
             ...knowledge.handlers,
         };
         return withQuestionStreak({ ...base, update_story: createUpdateStoryHandler(base) });
@@ -119,7 +134,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
-            ? buildPush({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '' })
+            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '' })
             : '';
         if (form) form.push = push;
         const endedAt = now();
@@ -167,7 +182,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         live.started({ runId, event: type === 'normal' ? 'turn' : type, wake: startedWake, at: startedAt, type });
         const reroll = type === 'regenerate' || type === 'swipe';
         const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task: reroll ? `${DIRECTOR_TURN}\n\n${DIRECTOR_REROLL}` : '' });
-        const tools = await context.toolsFor(settings, { filter: toolFilter });
+        const tools = toolFilter ? await context.toolsFor(settings, { filter: toolFilter }) : await context.toolsFor(settings, { turn: true });
         const controller = new AbortController();
         const hooks = live.hooks({ runId, thinking });
         const agent = runDecisionCycle({
@@ -185,6 +200,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             callTool,
             maxSteps: settings.maxSteps,
             implicitAwait: Boolean(settings.implicitAwait),
+            // Пустой ответ повторяет общий алгоритм повтора (часть 19), а не агент.
+            emptyRetry: false,
             now,
             ...hooks,
         });
@@ -214,7 +231,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
                 characters: Array.isArray(draft.characters) ? draft.characters : [],
                 meta: { place: draft.scene?.place ?? '', timeBefore: '', timeAfter: '', clockMinutes: store.clock().minutes },
             };
-            const push = buildPush({ form, assessments });
+            const push = buildInscription({ form, assessments });
             form.push = push;
             await store.saveDraft(null).catch(() => {});
             const startedCycle = cycleRecord({
@@ -247,9 +264,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         }
         const decision = fallbackDecision(form);
         publishEvent('decision.cycle.submitted', { runId, type, steps: result.steps, characters: form.characters?.length ?? 0 });
-        // Заметки, знания и планы — после формы, пока пишет прозаик: раньше цикл кончался на submit_turn, и эта работа копилась до сообщения пользователя.
-        if (afterTurnEnabled(settings)) enqueueBackground(() => afterTurn({ runId, messages: result.messages, tools })).catch(() => {});
-        return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
+        // «После хода» ждёт ответа писателя: исход пишется по странице, а не по замыслу формы.
+        return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id, built, messages: result.messages };
     }
 
     async function run(options) {
@@ -275,48 +291,23 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         return job;
     }
 
-    const AFTER_TURN_STEPS = 8;
-
-    /** Продолжение цикла хода в фоне: тот же разговор (кеш тот же), повторный submit_turn закрыт, следующий ход прерывает. */
-    async function afterTurn({ runId: turnRunId, messages, tools }) {
-        const runId = `${turnRunId}_after`;
-        const epoch = chatEpoch;
-        const controller = new AbortController();
-        backgroundController = controller;
+    /**
+     * «После хода» — отдельный вызов по тексту ответа писателя (заменяет прежнее продолжение с update_story).
+     * Тело — в `cycle-after-turn.js`; здесь только фоновая очередь и состояние разговора.
+     */
+    function afterTurn({ runId, built, writerText, form }) {
+        const startEpoch = chatEpoch;
         let settle = () => {};
         backgroundSettled = new Promise(resolve => { settle = resolve; });
-        const captured = typeof capture === 'function' ? capture(`${runId}:`, { onThinking: text => publishEvent('decision.cycle.thinking', { runId, text }) }) : null;
-        const thinking = () => captured?.value ?? '';
-        const settings = getSettings();
-        const worker = deciderWorker(settings);
-        const startedWake = wakeFor({ type: 'after_turn', label: 'The director finishes the turn' });
-        const startedAt = now();
-        const start = [...messages, { role: 'user', content: DIRECTOR_AFTER_TURN }];
-        state.runId = runId;
-        live.started({ runId, event: 'after_turn', wake: startedWake, at: startedAt });
-        try {
-            // Отдельные записи закрыты: раньше цикл шёл цепочкой по персонажу на вызов (3–8 запросов с полным контекстом).
-            const single = async () => ({ ok: false, error: AFTER_TURN_USE_UPDATE_STORY });
-            const handlers = {
-                ...handlersFor(settings), submit_turn: async () => ({ ok: false, error: AFTER_TURN_SUBMIT_CLOSED }),
-                character_knowledge: single, character_note: single, set_character_plan: single, set_plan: single,
-            };
-            const result = await runDecisionCycle({
-                messages: start, tools, handlers, callTool, maxSteps: AFTER_TURN_STEPS, implicitAwait: true, now, stopAfter: ['update_story'],
-                generate: context.generateFor({ settings, worker, runId, prefix: 'a', startedAt, effort: settings.adaptiveReasoning ? 'low' : null, signal: controller.signal }),
-                ...live.hooks({ runId, thinking }),
-            });
-            if (epoch !== chatEpoch) { live.finished({ cycle: null }); return; }
-            const { cycle } = cycleRecord({ runId, event: 'after_turn', result, thinking, wake: startedWake, startedAt, workerId: worker.id, usage: captured ? captured.usage : usage(), contextMessages: start });
-            await store.appendCycle(cycle).catch(() => {});
-            live.finished({ cycle });
-        } catch (error) {
-            live.failed({ runId, message: error?.message ?? String(error) });
-        } finally {
-            captured?.stop();
-            if (backgroundController === controller) backgroundController = null;
-            settle();
-        }
+        return runAfterTurn({ runId, built, writerText, form }, {
+            getSettings, deciderWorker, context, handlersFor, runDecisionCycle, callTool, capture, live,
+            cycleRecord, store, publishEvent, wakeFor, now, usage, startEpoch, state,
+            epoch: () => chatEpoch,
+            setController: controller => {
+                backgroundController = controller;
+                if (!controller) settle();
+            },
+        });
     }
 
     async function backgroundRun({ runId, event, task, thinking: givenThinking = null, wake = null, canAsk = false, maxSteps = null }) {
@@ -358,6 +349,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
                 callTool,
                 maxSteps: maxSteps ?? settings.maxSteps,
                 implicitAwait: true,
+                emptyRetry: false,
                 now,
                 ...hooks,
             });
@@ -398,28 +390,33 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
 
     const jobs = createCycleJobs({ backgroundRun, enqueueBackground, wakeQueue, store, getSettings, wakeFor, now });
 
-    /** Сообщение пользователя директору: в лог сразу, пробуждение — в очередь. */
-    async function sendMessage({ text } = {}) {
-        const clean = String(text ?? '').trim();
-        if (!clean) return { ok: false, error: 'An empty message is not sent.' };
+    /**
+     * Сообщение пользователя Советнику — он единственный собеседник (часть 18).
+     * Запись в журнал и короткая переписка живут в Советнике; здесь только вход.
+     */
+    function sendMessage(params) {
+        return counsellor.sendMessage(params);
+    }
+
+    /**
+     * Повтор запроса — строкой журнала (часть 19): роль, попытка N/3, причина.
+     * Пишется без пробуждения модели и без влияния на ход.
+     */
+    async function logRetry({ role = '', attempt = 1, maxAttempts = 3, reason = '', line = '' } = {}) {
+        const body = String(line || `${role}: retry ${attempt}/${maxAttempts} — ${reason}`).trim();
+        if (!body) return null;
         const at = now();
         const record = createCycleRecord({
-            event: 'message', message: { text: clean, at }, at, endedAt: at, durationMs: 0,
-            wake: wakeFor({ type: 'message', label: 'A message from the user', detail: clean }),
+            event: 'retry', message: { text: body, at }, at, endedAt: at, durationMs: 0,
+            wake: { type: 'retry', label: 'A retry in the background', detail: body },
             turn: state.turnCounter, clockMinutes: store.clock().minutes,
             workerId: getSettings().decider.workerId || null,
         });
-        try { await store.appendCycle(record); } catch { /* the wake still runs */ }
+        try { await store.appendCycle(record); } catch { /* the retry line is not worth failing the save */ }
+        publishEvent('decision.retry.logged', { record });
+        // Лента дописывает готовую запись тем же событием, что сообщение пользователю.
         publishEvent('decision.message.added', { record });
-        const runId = `message_${at.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-        wakeQueue.schedule(() => backgroundRun({
-            runId, event: 'message', canAsk: true,
-            wake: wakeFor({ type: 'message', label: 'A message from the user', detail: clean, text: clean }),
-            task: fillPrompt(DIRECTOR_PASSIVE, {
-                event: `The user wrote to you directly, outside the story:\n\n${clean}\n\nTreat it as direction for where the story should go, not as an order.`,
-            }),
-        })).catch(error => live.failed({ runId, message: error?.message ?? String(error) }));
-        return { ok: true, record };
+        return record;
     }
 
     /**
@@ -442,14 +439,25 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     }
 
     return {
-        run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap, logSettings,
+        run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap, logSettings, logRetry,
         onResearcherReport: jobs.onResearcherReport, sendMessage, judgeForcedMemory,
+        // Советник (часть 18): будится после хода и по концу RP-дня.
+        maybeRunCounsellor: counsellor.maybeRun,
+        runCounsellor: counsellor.run,
+        counsellorTurn: counsellor.currentTurn,
+        // Director (часть 19): по отчётам; Телеграмма держит следующий ход.
+        maybeRunDirector: director.maybeRun,
+        runDirector: director.run,
+        directorReason: director.reasonNow,
+        directorTurn: director.currentTurn,
+        waitForDecree: director.waitForDecree,
         answerQuestion: params => questions.answer(params),
         chatChanged,
         // Вопрос от движка, а не от модели (например, «взять готовые банки?»): та же очередь и тот же тост.
         askUser: ({ question, options, why = '' }) => questions.ask({ question, options, why, allowed: true, asked: 0, limit: 1 }),
         question: () => questions.pending(),
         recordTurn: params => turnWindow.recordTurn(params),
+        runAfterTurn: params => enqueueBackground(() => afterTurn(params)),
         rebuildWindow: async () => {
             const rebuilt = (await turnWindow.rebuildFromRuns()) || (await turnWindow.fillWriterText());
             await turnWindow.repairFrozen();

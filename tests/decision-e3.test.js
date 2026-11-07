@@ -48,30 +48,21 @@ async function build({ replies }) {
     return { pipelineCore, core, calls, memory };
 }
 
-const form = (comment = 'The form is ready for the writer.') => call('submit_turn', {
+const form = (comment = 'The form is ready for the writer.') => call('inscribe', {
     comment, resolution: 'She leaves.', userResult: 'The user waits.', scene: { minutes: 5 }, characters: [],
 });
 
-test('a turn without a plan is refused, then set_plan makes the form acceptable', async () => {
+test('the turn needs no plan: plans are closed on the turn, and the only refusal is a turn without beats while someone acts', async () => {
     const { pipelineCore, core, memory } = await build({
         replies: [
-            form('The form is ready.'),
-            form('The form is ready again.'),
-            call('set_plan', { direction: 'Get her out before dawn.', stages: ['door', 'road'], comment: 'A direction is required before the form.' }),
-            form(),
+            call('inscribe', { comment: 'The template is ready.', stop: 'She leaves.', userResult: 'The user waits.', scene: { duration: 'a few minutes' }, characters: [], beats: [{ who: 'Lena', kind: 'action', text: 'opens the door' }] }),
         ],
     });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, true, result.error?.message);
+    assert.equal(core.plan(), null, 'no plan is asked for or created on the turn');
     const log = memory.get(memoryKey('core.decision', 'log'));
-    const submits = log[0].toolCalls.filter(entry => entry.name === 'submit_turn');
-    assert.equal(submits.length, 3);
-    assert.equal(submits[0].result.ok, false);
-    assert.match(submits[0].result.missing.join('\n'), /plan/);
-    assert.equal(submits[1].result.ok, false);
-    assert.equal(submits[2].result.ok, true);
-    assert.equal(core.plan().direction, 'Get her out before dawn.');
-    assert.deepEqual(core.plan().stages, ['door', 'road']);
+    assert.equal(log[0].toolCalls.filter(entry => entry.name === 'inscribe')[0].result.ok, true);
 });
 
 test('four notes are kept, the fifth replaces the oldest, arcs open and close, and the writer sees the notes', async () => {

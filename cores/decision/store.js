@@ -3,6 +3,8 @@ import { createJournal } from './journal.js';
 import { createLogStore } from './store-log.js';
 import { createWindowStore } from './store-window.js';
 import { loadChatMemory } from './store-load.js';
+import { createPapersStore } from './store-papers.js';
+import { createBlocksStore } from './store-blocks.js';
 
 /** Хранение состояния директора в памяти чата; запись сериализована очередью,
  * чтобы `persist()` и правки блоков не затирали друг друга. */
@@ -10,11 +12,6 @@ export function createDecisionStore({ call, publishEvent }) {
     let runs = {};
     let roster = { active: [] };
     let directorPlan = null;
-    let arcs = [];
-    let notes = {};
-    let library = {};
-    let plans = [];
-    let clock = { minutes: 0, updatedAt: 0 };
     let memoryBank = {};
     let research = [];
     let issuedNames = [];
@@ -45,6 +42,8 @@ export function createDecisionStore({ call, publishEvent }) {
         setArchive: logs.setArchive,
     });
     const windows = createWindowStore({ enqueue, call, namespace: DECISION_MEMORY_NAMESPACE });
+    const papersStore = createPapersStore({ enqueue, call });
+    const blocks = createBlocksStore({ enqueue, call });
 
     async function reload() {
         const data = await loadChatMemory(call);
@@ -52,11 +51,7 @@ export function createDecisionStore({ call, publishEvent }) {
         logs.load(data);
         roster = data.roster;
         directorPlan = data.directorPlan;
-        arcs = data.arcs;
-        notes = data.notes;
-        library = data.library;
-        plans = data.plans;
-        clock = data.clock;
+        blocks.load(data);
         memoryBank = data.memoryBank;
         research = data.research;
         issuedNames = data.issuedNames;
@@ -64,6 +59,7 @@ export function createDecisionStore({ call, publishEvent }) {
         draft = data.draft;
         chatBrief = data.chatBrief;
         gameSettings = data.gameSettings;
+        papersStore.load(data);
         windows.load({ window: data.window, frozenWindows: data.frozenWindows, windowBoundary: data.windowBoundary });
         return { runs, log: logs.log() };
     }
@@ -81,46 +77,6 @@ export function createDecisionStore({ call, publishEvent }) {
             directorPlan = plan && typeof plan === 'object' ? plan : null;
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'directorPlan', value: directorPlan });
             return directorPlan;
-        });
-    }
-
-    function saveArcs(next) {
-        return enqueue(async () => {
-            arcs = Array.isArray(next) ? next : [];
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'arcs', value: arcs });
-            return arcs;
-        });
-    }
-
-    function saveNotes(next) {
-        return enqueue(async () => {
-            notes = next && typeof next === 'object' && !Array.isArray(next) ? next : {};
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'notes', value: notes });
-            return notes;
-        });
-    }
-
-    function saveLibrary(next) {
-        return enqueue(async () => {
-            library = next && typeof next === 'object' && !Array.isArray(next) ? next : {};
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'library', value: library });
-            return library;
-        });
-    }
-
-    function savePlans(next) {
-        return enqueue(async () => {
-            plans = Array.isArray(next) ? next : [];
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'plans', value: plans });
-            return plans;
-        });
-    }
-
-    function saveClock(next) {
-        return enqueue(async () => {
-            clock = { minutes: Number(next?.minutes) || 0, updatedAt: Number(next?.updatedAt) || Date.now() };
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'clock', value: clock });
-            return clock;
         });
     }
 
@@ -253,16 +209,16 @@ export function createDecisionStore({ call, publishEvent }) {
         saveRoster,
         plan: () => (directorPlan ? { ...directorPlan, stages: [...(directorPlan.stages ?? [])] } : null),
         savePlan,
-        arcs: () => arcs.map(arc => ({ ...arc, stages: [...(arc.stages ?? [])] })),
-        saveArcs,
-        notes: () => JSON.parse(JSON.stringify(notes)),
-        saveNotes,
-        library: () => JSON.parse(JSON.stringify(library)),
-        saveLibrary,
-        plans: () => plans.map(plan => ({ ...plan, steps: [...(plan.steps ?? [])] })),
-        savePlans,
-        clock: () => ({ ...clock }),
-        saveClock,
+        arcs: blocks.arcs,
+        saveArcs: blocks.saveArcs,
+        notes: blocks.notes,
+        saveNotes: blocks.saveNotes,
+        library: blocks.library,
+        saveLibrary: blocks.saveLibrary,
+        plans: blocks.plans,
+        savePlans: blocks.savePlans,
+        clock: blocks.clock,
+        saveClock: blocks.saveClock,
         bank: () => JSON.parse(JSON.stringify(memoryBank)),
         saveBank,
         research: () => research.map(task => ({ ...task })),
@@ -283,6 +239,26 @@ export function createDecisionStore({ call, publishEvent }) {
         saveChatBrief,
         gameSettings: () => (gameSettings ? { ...gameSettings } : null),
         saveGameSettings,
+        ledger: papersStore.ledger,
+        unreviewedLedger: papersStore.unreviewed,
+        appendLedger: papersStore.appendLedger,
+        saveLedger: papersStore.saveLedger,
+        markLedgerReviewed: papersStore.markLedgerReviewed,
+        papers: papersStore.papers,
+        petitions: papersStore.petitions,
+        addPetition: papersStore.addPetition,
+        prayers: papersStore.prayers,
+        addPrayer: papersStore.addPrayer,
+        conversation: papersStore.conversation,
+        addConversation: papersStore.addConversation,
+        counsellor: papersStore.counsellor,
+        saveCounsellor: papersStore.saveCounsellor,
+        addTelegram: papersStore.addTelegram,
+        saveAwaitingDecree: papersStore.saveAwaitingDecree,
+        markPetitionsRead: papersStore.markPetitionsRead,
+        markTelegramsRead: papersStore.markTelegramsRead,
+        director: papersStore.director,
+        saveDirector: papersStore.saveDirector,
         boundary: windows.boundary,
         saveBoundary: windows.saveBoundary,
         window: windows.window,

@@ -42,7 +42,7 @@ function build({ answers = {}, classifier = true, error = null } = {}) {
 
 test('a knowledge conflict returns the section 14 text and remembers the character', async () => {
     const { handlers, state, events } = build({ answers: { 'knowledge_conflict:Lena': 0.95 } });
-    const result = await handlers.submit_turn(form());
+    const result = await handlers.inscribe(form());
     assert.equal(result.ok, false);
     assert.match(result.error, /The form was not accepted: Lena acts on something Lena cannot know/);
     assert.equal(state.knowledgeReturns.has('Lena'), true);
@@ -51,15 +51,15 @@ test('a knowledge conflict returns the section 14 text and remembers the charact
 
 test('the second conflict for the same character is accepted with a warning', async () => {
     const { handlers, state } = build({ answers: { 'knowledge_conflict:Lena': 0.95 } });
-    await handlers.submit_turn(form());
-    const second = await handlers.submit_turn(form());
+    await handlers.inscribe(form());
+    const second = await handlers.inscribe(form());
     assert.equal(second.ok, true);
     assert.match(state.formWarnings.join('\n'), /accepted with a knowledge conflict for Lena/);
 });
 
 test('without a classifier the form is accepted', async () => {
     const { handlers, state } = build({ classifier: false });
-    const result = await handlers.submit_turn(form());
+    const result = await handlers.inscribe(form());
     assert.equal(result.ok, true);
     assert.match(state.formWarnings.join('\n'), /was not checked by the classifier/);
 });

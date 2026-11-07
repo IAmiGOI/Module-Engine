@@ -17,7 +17,7 @@ import { assembleSectionFor } from './prompt-sections.js';
  */
 
 export const CARD_TEST_TOOLS = Object.freeze([
-    'update_roster', 'assess', 'submit_turn', 'await', 'set_plan',
+    'assess', 'inscribe', 'await',
     'character_note', 'current_state',
 ]);
 

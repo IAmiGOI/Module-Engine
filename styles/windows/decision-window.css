@@ -49,6 +49,15 @@
 .stme-dw-settings { border-left: 3px solid var(--stme-ok); padding: 4px 8px; font-size: .88em; background: color-mix(in srgb, var(--stme-ok) 10%, transparent); }
 .stme-dw-answer { font-size: .9em; font-style: italic; opacity: .9; white-space: pre-wrap; }
 
+/* Советник: разбор Ведомости, ответы пользователю и очереди. */
+.stme-dw-petition { border-left: 3px solid var(--stme-accent); padding: 4px 8px; background: var(--stme-level-1); border-radius: var(--stme-radius-sm); }
+.stme-dw-petition summary { cursor: pointer; font-weight: 600; }
+.stme-dw-petition pre { margin: 4px 0 0; white-space: pre-wrap; opacity: .85; }
+.stme-dw-nothing { font-size: .88em; opacity: .85; }
+.stme-dw-prayer { border-left: 3px solid var(--stme-ok); padding: 3px 8px; font-size: .88em; }
+.stme-dw-queues { font-size: .82em; opacity: .85; }
+.stme-dw-queues summary { cursor: pointer; }
+
 .stme-dw-archive { border-top: 1px dashed var(--stme-border); padding-top: 6px; }
 .stme-dw-archive summary { cursor: pointer; opacity: .75; font-size: .86em; }
 

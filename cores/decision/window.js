@@ -277,7 +277,7 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
             changed += 1;
             const lines = entry.text.split('\n');
             const start = lines.indexOf('PUSH:');
-            const end = start < 0 ? -1 : lines.findIndex((line, index) => index > start && (/^[a-z]+(?:_[a-z]+)+: /.test(line) || line === 'CHANGES:'));
+            const end = start < 0 ? -1 : lines.findIndex((line, index) => index > start && (/^[a-z][a-z_]*: /.test(line) || line === 'CHANGES:'));
             const kept = start < 0 ? lines : [...lines.slice(0, start), ...(end < 0 ? [] : lines.slice(end))];
             const body = [...kept, `Writer: ${reply}`].join('\n');
             return { ...entry, text: body, tokens: Math.ceil(body.length / 4) };

@@ -6,6 +6,7 @@ import { FloatingPanel, DockButton, Button, Toggle, TextArea, TextInput, Row, Fi
 import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/core/decision-feed.js';
 import { createBanksView } from './decision-banks-view.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
+import { rowNode, cycleNode, text, firstLine, safeJson } from './decision-window-rows.js';
 import { createQuestionView } from './decision-questions.js';
 import { createBankProgressView } from './decision-bank-progress.js';
 
@@ -20,99 +21,6 @@ const WINDOW_KEY = 'window';
 const DOCK_KEY = 'dock';
 const DEFAULT_SIZE = { width: 760, height: 660 };
 const PAGE = 30;
-const text = value => String(value ?? '').trim();
-const safeJson = value => { try { return JSON.stringify(value ?? null, null, 2); } catch { return String(value ?? ''); } };
-const firstLine = value => text(value).split('\n')[0].slice(0, 160);
-function clockLabel(minutes) {
-    if (!Number.isFinite(Number(minutes))) return '';
-    const total = Math.max(0, Math.round(Number(minutes)));
-    return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
-}
-function cycleMeta(entry) {
-    const parts = [];
-    if (clockLabel(entry.clockMinutes)) parts.push(`RP ${clockLabel(entry.clockMinutes)}`);
-    if (Number.isFinite(entry.turn) && entry.turn !== null) parts.push(`turn ${entry.turn}`);
-    if (entry.at) parts.push(new Date(Number(entry.at)).toLocaleTimeString());
-    if (entry.running) parts.push('live');
-    if (entry.rejected) parts.push('rejected');
-    return parts.join(' · ');
-}
-
-function usageLine(row) {
-    const tokens = row.total || row.prompt + row.completion;
-    const seconds = row.durationMs ? ` · ${(row.durationMs / 1000).toFixed(1)} s` : '';
-    return `${tokens} tokens (${row.prompt} in / ${row.completion} out, ${row.cached} cached)${seconds}`;
-}
-
-function callNode(row) {
-    return h('div', { class: `stme-dw-call${row.error ? ' stme-dw-error' : ''}` },
-        h('div', { class: 'stme-dw-call-head' },
-            h('code', {}, row.name || '?'),
-            h('span', { class: 'stme-dw-call-detail' }, row.pending ? 'running…' : (row.error ? 'rejected' : (row.durationMs ? `${row.durationMs} ms` : 'ok')))),
-        h('div', { class: 'stme-dw-comment' }, row.comment || '(no comment)'),
-        row.name === 'ask_user' && row.args?.question
-            ? h('div', { class: 'stme-dw-ask' }, h('b', {}, String(row.args.question)),
-                Array.isArray(row.args.options) && row.args.options.length ? h('div', { class: 'stme-dw-ask-options' }, row.args.options.map(String).join(' · ')) : null)
-            : null,
-        row.pending ? null : h('details', { class: 'stme-dw-fold' },
-            h('summary', {}, 'Arguments'),
-            h('pre', {}, safeJson(row.args))),
-        row.error ? h('div', { class: 'stme-dw-error-text' }, row.error) : h('details', { class: 'stme-dw-fold' },
-            h('summary', {}, 'Result'),
-            h('pre', {}, safeJson(row.result))));
-}
-function assessNode(row) {
-    const odds = Number.isFinite(row.probability) ? `${Math.round(row.probability * 100)}%` : '—';
-    const roll = Number.isFinite(row.roll) ? `roll ${row.roll}` : '';
-    return h('div', { class: `stme-dw-assess${row.error ? ' stme-dw-error' : ''}` },
-        h('div', { class: 'stme-dw-assess-line' },
-            h('strong', {}, row.character || 'someone'), ` · ${row.action || '—'}`,
-            h('span', { class: 'stme-dw-assess-odds' }, ` ${odds}${roll ? ` · ${roll}` : ''}${row.degree ? ` · ${row.degree}` : ''}${row.words ? ` — ${row.words}` : ''}`)),
-        h('small', { class: 'stme-dw-muted' }, `${row.effective && row.effective !== row.difficulty ? `${row.difficulty || '—'} → ${row.effective}` : (row.difficulty || '—')} / ${row.experience || '—'}${row.comment ? ` · ${row.comment}` : ''}`));
-}
-function formNode(row) {
-    return h('div', { class: 'stme-dw-form' },
-        h('div', { class: 'stme-dw-block-title' }, 'The form'),
-        h('table', { class: 'stme-dw-table' },
-            h('thead', {}, h('tr', {}, ['Character', 'Decision', 'Action', 'Outcome'].map(title => h('th', {}, title)))),
-            h('tbody', {}, ...row.characters.map(character => h('tr', {},
-                h('td', {}, character.name), h('td', {}, character.decision),
-                h('td', {}, character.action), h('td', {}, character.outcome))))),
-        h('div', { class: 'stme-dw-scene' },
-            [row.place ? `place: ${row.place}` : '', row.timeBefore || row.timeAfter ? `time: ${row.timeBefore || '?'} → ${row.timeAfter || '?'}` : '',
-                Number.isFinite(Number(row.minutes)) ? `${row.minutes} min` : ''].filter(Boolean).join(' · ')),
-        h('div', {}, h('strong', {}, 'Resolution: '), row.resolution),
-        h('div', {}, h('strong', {}, "User's result: "), row.userResult));
-}
-function rowNode(row) {
-    if (row.kind === 'thinking') return h('details', { class: 'stme-dw-thinking' }, h('summary', {}, firstLine(row.text)), h('pre', {}, row.text));
-    if (row.kind === 'writer_check') return writerCheckNode(row);
-    if (row.kind === 'form_check') return formCheckNode(row);
-    if (row.kind === 'assess') return assessNode(row);
-    if (row.kind === 'call') return callNode(row);
-    if (row.kind === 'form') return formNode(row);
-    if (row.kind === 'push') return h('details', { class: 'stme-dw-push' }, h('summary', {}, 'Push — what the writer received'), h('pre', {}, row.text));
-    if (row.kind === 'report') return h('details', { class: 'stme-dw-report' }, h('summary', {}, `Researcher: ${firstLine(row.task) || 'report'}`), h('pre', {}, row.text));
-    if (row.kind === 'warning') return h('div', { class: 'stme-dw-warning' }, `⚠ ${row.text}`);
-    if (row.kind === 'usage') return h('div', { class: 'stme-dw-usage' }, usageLine(row));
-    if (row.kind === 'message') return h('div', { class: 'stme-dw-message' }, h('strong', {}, 'You: '), row.text);
-    if (row.kind === 'settings') return h('div', { class: 'stme-dw-settings' }, h('strong', {}, 'Game settings: '), row.text);
-    if (row.kind === 'answer') return h('div', { class: 'stme-dw-answer' }, row.text);
-    return null;
-}
-function cycleNode(entry, now) {
-    const classes = ['stme-dw-cycle', entry.running ? 'stme-dw-live' : '', entry.rejected ? 'stme-dw-rejected' : ''].filter(Boolean).join(' ');
-    // Таймер — свой маленький computed: раз в секунду меняется только эта строка, а не вся лента.
-    const waiting = entry.waiting && entry.waitingSince
-        ? computed(() => `thinking… ${Math.max(0, Math.round(((typeof now === 'function' ? now() : now) - entry.waitingSince) / 1000))} s`)
-        : '';
-    return h('div', { class: classes },
-        h('div', { class: 'stme-dw-head' }, h('strong', {}, entry.title), h('span', { class: 'stme-dw-meta' }, cycleMeta(entry))),
-        entry.detail ? h('div', { class: 'stme-dw-detail' }, entry.detail) : null,
-        ...entry.rows.map(rowNode),
-        // Таймер — внизу, там, где директор сейчас работает.
-        waiting ? h('div', { class: 'stme-dw-waiting' }, waiting) : null);
-}
 
 export function createDecisionWindowCore(host, { mount } = {}) {
     const call = (contract, params) => request(host.own, contract, { params });
@@ -246,9 +154,9 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                     ...(archiveOpen() ? filtered().archive.map(nodeFor) : []))
                 : null)),
             h('div', { class: 'stme-dw-compose' },
-                h('div', { class: 'stme-dw-compose-title' }, 'Message the director'),
-                TextArea(draft, { placeholder: 'Direction for the story, not an order…', rows: 2 }),
-                Row(Button('Send', send, { disabled: busy }), h('small', { class: 'stme-dw-muted' }, 'Goes only to the director log. The chat never sees it.')),
+                h('div', { class: 'stme-dw-compose-title' }, 'Message the Counsellor'),
+                TextArea(draft, { placeholder: 'A wish about the story, or a question — the Counsellor answers…', rows: 2 }),
+                Row(Button('Send', send, { disabled: busy }), h('small', { class: 'stme-dw-muted' }, 'Goes only to the Counsellor. The chat never sees it.')),
                 note() ? h('div', { class: 'stme-dw-warning' }, note()) : null));
     }
 

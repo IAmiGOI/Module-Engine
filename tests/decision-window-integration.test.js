@@ -10,7 +10,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 let callCounter = 0;
 const call = (name, args) => ({ text: '', toolCalls: [{ id: `${name}_${(callCounter += 1)}`, name, arguments: args }] });
 const setPlan = () => call('set_plan', { direction: 'Keep the keep moving.', comment: 'A direction is required before the form.' });
-const form = () => call('submit_turn', {
+const form = () => call('inscribe', {
     comment: 'The form is ready for the writer.', resolution: 'They move on.', userResult: 'The user waits.',
     scene: { minutes: 5 }, characters: [],
 });

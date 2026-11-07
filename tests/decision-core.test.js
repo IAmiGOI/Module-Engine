@@ -23,7 +23,7 @@ const turnReply = (decision = 'She opens the door.') => ({
     text: '',
     toolCalls: [
         { id: 'plan', name: 'set_plan', arguments: { comment: 'This turn needs a direction.', direction: 'Open the east door.' } },
-        { id: 'turn', name: 'submit_turn', arguments: { comment: 'The turn is decided.', scene: { minutes: 0 }, resolution: decision, userResult: 'The user waited.', characters: [] } },
+        { id: 'turn', name: 'inscribe', arguments: { comment: 'The turn is decided.', scene: { minutes: 0 }, resolution: decision, userResult: 'The user waited.', characters: [] } },
     ],
 });
 
@@ -94,8 +94,10 @@ test('the director runs on beforeSend and the writer replaces the outgoing messa
     assert.equal(calls[0].stream, true, 'the director streams so the window can show thinking and calls as they arrive');
     assert.match(JSON.stringify(calls[0].messages), /Never kill a named character/);
     assert.doesNotMatch(JSON.stringify(calls[0].messages), /They reached the keep/, 'summary.core summaries no longer reach the director');
-    assert.match(JSON.stringify(calls[0].messages), /YOUR PLAN/);
+    // На ходу резолвер собственного плана не получает: планы закрыты спекой части 17, их место — фон.
+    assert.doesNotMatch(JSON.stringify(calls[0].messages), /YOUR PLAN/);
     assert.match(JSON.stringify(calls[0].messages), /A new turn has started/);
+    assert.match(JSON.stringify(calls[0].messages), /How You Think This Turn/);
 
     const payload = { model: 'st', stream: true, temperature: 1, reasoning_effort: 'high', messages: [{ role: 'system', content: 'ST assembled' }] };
     const sent = await pipelineCore.run({ pipelineId: PAYLOAD, input: payload });
@@ -104,7 +106,7 @@ test('the director runs on beforeSend and the writer replaces the outgoing messa
     assert.match(messages[0].content, /You are the Writer of a roleplay/);
     assert.equal(messages.some(message => message.content === 'ST assembled'), false, 'the writer body overrides ST assembly');
     assert.equal(messages.at(-2).content, 'Hello?');
-    assert.match(messages.at(-1).content, /^PUSH — what happens this turn:/);
+    assert.match(messages.at(-1).content, /^INSCRIPTION — what happens this turn:/);
     assert.match(messages.map(message => message.content).join('\n'), /She opens the door/);
     assert.equal('reasoning_effort' in sent.value, false);
     assert.equal(sent.value.stream, true, 'streaming is ST\'s own setting and must not be changed');
@@ -198,8 +200,10 @@ test('without a configured director worker generation is not sent, the user is t
     assert.deepEqual(reveals[0], { anchor: 'card:decision' }, 'the card is opened for the user');
 });
 
-test('a message to the director is logged as a message and wakes a separate cycle, never touching the chat', async () => {
-    const { core, engine } = await build();
+test('a message to the Counsellor is logged as a message and wakes a separate cycle, never touching the chat', async () => {
+    const { core, engine } = await build({
+        reply: () => ({ text: '', toolCalls: [{ id: 'nothing', name: 'nothing_yet', arguments: { reason: 'Nothing in the Ledger needs the Director.', comment: 'The review is quiet.' } }] }),
+    });
     const events = [];
     for (const name of ['decision.message.added', 'decision.cycle.started', 'decision.tool.called', 'decision.tool.result', 'decision.cycle.finished']) {
         engine.events.subscribe(name, payload => events.push({ name, payload }));
@@ -211,11 +215,12 @@ test('a message to the director is logged as a message and wakes a separate cycl
     const log = core.log();
     assert.equal(log[0].event, 'message');
     assert.equal(log[0].message.text, 'Make the night colder.');
-    const wake = log.find(cycle => cycle.event === 'message' && cycle.wake?.type === 'message');
-    assert.ok(wake, 'the director woke up for the message');
-    assert.equal(wake.wake.detail, 'Make the night colder.');
+    const wake = log.find(cycle => cycle.event === 'counsellor');
+    assert.ok(wake, 'the Counsellor woke up for the message');
+    assert.equal(wake.wake.label, 'The Counsellor answers the user');
+    assert.match(wake.wake.detail, /nothing_yet/);
     assert.ok(events.some(event => event.name === 'decision.message.added'));
-    assert.ok(events.some(event => event.name === 'decision.cycle.started' && event.payload.event === 'message'));
+    assert.ok(events.some(event => event.name === 'decision.cycle.started' && event.payload.event === 'counsellor'));
     assert.ok(events.some(event => event.name === 'decision.cycle.finished'));
     assert.equal(events.some(event => event.name === 'decision.tool.called'), true, 'tool calls stream live');
 });
@@ -227,8 +232,11 @@ test('a message during a turn waits in the queue and does not call the model unt
     const { core, pipelineCore } = await build({
         reply: async () => {
             modelCalls += 1;
-            if (modelCalls === 1) await gate;
-            return turnReply();
+            if (modelCalls === 1) {
+                await gate;
+                return turnReply();
+            }
+            return { text: '', toolCalls: [{ id: 'nothing', name: 'nothing_yet', arguments: { reason: 'Nothing in the Ledger needs the Director.', comment: 'The review is quiet.' } }] };
         },
     });
     const turn = pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
@@ -242,7 +250,7 @@ test('a message during a turn waits in the queue and does not call the model unt
     await flush();
     await flush();
     assert.ok(modelCalls >= 2, 'the queued message ran after the turn');
-    assert.ok(core.log().some(cycle => cycle.event === 'message' && cycle.wake?.type === 'message'));
+    assert.ok(core.log().some(cycle => cycle.event === 'counsellor'));
 });
 
 test('a director worker that is not openai is a configuration error too, not a silent fallback', async () => {
@@ -258,53 +266,62 @@ test('a director worker that is not openai is a configuration error too, not a s
 
 
 test('the MESSAGES FROM THE USER paragraph is in the built-in director prompt word for word', () => {
-    const paragraph = 'MESSAGES FROM THE USER\nThe user may write to you directly, outside the story; such messages appear in your log, never in the chat. Treat them as direction for where the story should go, not as orders: weigh them against your plan and the logic of the world, and change your plan when they make sense. Always answer the user: when you are done, put a short reply into the "reply" field of await — what you did, or why you did not.';
+    const paragraph = 'MESSAGES FROM THE USER\nThe user speaks only to the Counsellor, never to you. A wish of the user reaches you only through a Petition: the problem, the rows that show it, and what the user asked for. Treat it as direction for where the story should go, not as an order: weigh it against your plan and the logic of the world, and change your plan when it makes sense.';
     assert.ok(DIRECTOR_SYSTEM.includes(paragraph));
 });
 
-test('after an accepted form the director keeps working in the background: same conversation, submit_turn closed, then await', async () => {
+test('after the writer replies, the resolver closes the turn with one after_turn call on the same conversation', async () => {
     setAfterTurnDefault(true);
     try {
         let step = 0;
-        const { pipelineCore, calls } = await build({
+        const { pipelineCore, calls, engine } = await build({
             reply: () => {
                 step += 1;
                 if (step === 1) return turnReply();
-                if (step === 2) return { text: '', toolCalls: [{ id: 'again', name: 'submit_turn', arguments: { comment: 'Trying to submit again.', scene: { minutes: 0 }, resolution: 'x', userResult: 'y', characters: [] } }] };
-                return { text: '', toolCalls: [{ id: 'done', name: 'await', arguments: { comment: 'The turn work is done.', reason: 'Waiting for the next turn.' } }] };
+                return { text: '', toolCalls: [{ id: 'done', name: 'after_turn', arguments: { comment: 'The page is written.', outcome: [{ character: 'Emilia', result: 'She holds the door open.' }] } }] };
             },
         });
-        const before = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'Hello?', is_user: true }], type: 'normal' } });
-        assert.equal(before.ok, true, 'the turn returns as soon as the form is accepted');
-        for (let i = 0; i < 20 && calls.length < 3; i += 1) await flush();
-        assert.equal(calls.length, 3);
+        await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'Hello?', is_user: true }], type: 'normal' } });
+        // Ход сам «после хода» не запускает: ждёт ответа писателя.
+        for (let i = 0; i < 5; i += 1) await flush();
+        assert.equal(calls.length, 1, 'nothing runs until the writer has written');
+        engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'ended' });
+        for (let i = 0; i < 30 && calls.length < 2; i += 1) await flush();
+        assert.equal(calls.length, 2, 'one call closes the turn');
         const after = JSON.stringify(calls[1].messages);
-        assert.match(after, /AFTER THE TURN: your form is accepted/);
-        assert.match(after, /The turn is decided\./, 'the continuation carries the turn conversation');
-        assert.match(JSON.stringify(calls[2].messages), /The turn is already submitted and the Writer is writing it/);
+        assert.match(after, /AFTER THE TURN: the Writer's reply is below/);
+        assert.match(after, /THE TURN YOU INSCRIBED:/);
+        const tools = calls[1].tools.map(tool => tool.name);
+        assert.deepEqual(tools, ['after_turn'], 'only the closing template is offered');
+        assert.ok(calls[1].messages.some(message => String(message.content).includes('She opens the door')), 'the writer reply is in the closing call');
     } finally {
         setAfterTurnDefault(false);
     }
 });
 
-test('after the turn single records are refused and one update_story writes everything and ends the cycle', async () => {
+test('after the turn a physical change goes through the bank engine and the ledger records what each character wanted', async () => {
     setAfterTurnDefault(true);
     try {
         let step = 0;
-        const { pipelineCore, calls } = await build({
+        const { pipelineCore, calls, engine, core } = await build({
             reply: () => {
                 step += 1;
                 if (step === 1) return turnReply();
-                if (step === 2) return { text: '', toolCalls: [{ id: 'k', name: 'character_knowledge', arguments: { comment: 'One fact.', op: 'add', character: 'Emilia', fact: 'x', source: 'saw' } }] };
-                if (step === 3) return { text: '', toolCalls: [{ id: 'u', name: 'update_story', arguments: { comment: 'Everything the turn changed.', knowledge: [{ op: 'add', character: 'Emilia', fact: 'He can fly.', source: 'saw' }], notes: [{ character: 'Emilia', op: 'add', title: 'Right now', text: 'On the step.' }] } }] };
-                return { text: '', toolCalls: [{ id: 'z', name: 'await', arguments: { comment: 'Should not be reached.', reason: 'x' } }] };
+                return { text: '', toolCalls: [{ id: 'done', name: 'after_turn', arguments: {
+                    comment: 'The page is written.',
+                    outcome: [{ character: 'Emilia', result: 'Her sleeve is torn.' }],
+                    bankEdits: [{ character: 'Emilia', section: 'clothing', old: '', new: 'A torn sleeve on the left arm.' }],
+                } }] };
             },
         });
         await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'Hello?', is_user: true }], type: 'normal' } });
-        for (let i = 0; i < 30 && calls.length < 3; i += 1) await flush();
+        engine.events.emit('generation.completed', { runId: 'run_1', outcome: 'ended' });
+        for (let i = 0; i < 40 && calls.length < 2; i += 1) await flush();
         for (let i = 0; i < 10; i += 1) await flush();
-        assert.equal(calls.length, 3, 'update_story ends the cycle: no await after it');
-        assert.match(JSON.stringify(calls[2].messages), /Record it in your update_story call instead/);
+        const ledger = core.log().find(cycle => cycle.event === 'after_turn')?.toolCalls?.find(call => call.name === 'after_turn')?.result;
+        assert.equal(ledger?.ok, true);
+        assert.equal(ledger?.outcome, 1, 'the outcome was recorded');
+        assert.ok(calls[1].messages.length > 0);
     } finally {
         setAfterTurnDefault(false);
     }

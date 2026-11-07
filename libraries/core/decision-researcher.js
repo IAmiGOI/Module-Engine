@@ -132,14 +132,16 @@ export function createResearcher({ call, callService = call, webActions = null, 
         return { ok: false, error: `There is no researcher tool named "${name}".` };
     }
 
-    function workerFor(settings) {
+    function workerFor(settings, task = null) {
         const workers = getWorkers();
+        // Сборщик банка может прийти с запасного подключения роли (часть 19).
+        if (task?.workerId) return workers.find(worker => worker.id === task.workerId) ?? null;
         if (settings.researcher.workerId) return workers.find(worker => worker.id === settings.researcher.workerId) ?? null;
         return workers[0] ?? null;
     }
 
     async function runTask(task, settings, { system = null } = {}) {
-        const worker = workerFor(settings);
+        const worker = workerFor(settings, task);
         const maxSteps = Math.max(1, Number(task.maxSteps) || settings.researcher.maxSteps);
         let report = '';
         let steps = 0;
@@ -223,7 +225,7 @@ export function createResearcher({ call, callService = call, webActions = null, 
      * Ставит задачу и сразу возвращает id. Задачи директора — не больше `maxTasks`, третья — отказ, не ожидание.
      * Сборка дата-банков (`kind: 'bank'`) — свой лимит `bankConcurrency` и не занимает места исследований директора.
      */
-    function start({ task, system = null, kind = 'research', notify = true, maxSteps = null, maxTokens = null, runId = null } = {}) {
+    function start({ task, system = null, kind = 'research', notify = true, maxSteps = null, maxTokens = null, runId = null, workerId = null } = {}) {
         const settings = getSettings();
         const text = String(task ?? '').trim();
         if (!text) return { ok: false, error: 'A researcher task needs text.' };
@@ -233,7 +235,7 @@ export function createResearcher({ call, callService = call, webActions = null, 
         if (sameKind >= limit) {
             return { ok: false, error: isBank ? 'The bank builders are all busy.' : 'Two research tasks are already running — wait for their reports, do not queue a third.' };
         }
-        const record = { id: taskId(now(), rid), task: text, kind, notify: notify !== false, status: 'running', steps: 0, startedAt: now(), report: null, maxSteps, maxTokens, runId: runId || null };
+        const record = { id: taskId(now(), rid), task: text, kind, notify: notify !== false, status: 'running', steps: 0, startedAt: now(), report: null, maxSteps, maxTokens, runId: runId || null, ...(workerId ? { workerId } : {}) };
         running.set(record.id, { ...record, controller: new AbortController() });
         store.addResearch(record).catch(() => {});
         const done = runTask(running.get(record.id), settings, { system });

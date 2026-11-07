@@ -2,7 +2,7 @@ import { assistantToolMessage, toolResultMessage } from './provider-tools.js';
 import { commentProblem, stripComment } from './decision-tools.js';
 
 /**
- * Один цикл директора — вызовы инструментов до `submit_turn` или `await`.
+ * Один цикл резолвера — вызовы инструментов до `inscribe` или `await`.
  * Чистый цикл: модель приходит снаружи (`generate`), исполнение инструментов —
  * тоже (`handlers` для своих, `callTool` для зарегистрированных через
  * `generation.registerTool`). Поэтому цикл проверяется на фейковой модели и
@@ -16,8 +16,10 @@ import { commentProblem, stripComment } from './decision-tools.js';
  *  - лимит шагов без `await` — предохранитель, а не бесконечный цикл.
  */
 
-export const REMINDER_NO_TOOL = 'You did not call a tool. Call submit_turn to finish the turn, or await to end the cycle. Every call needs a comment of at least one full sentence.';
-export const REMINDER_AWAIT = 'You are close to the step limit. Finish the turn with submit_turn, or end the cycle with await.';
+export const TURN_TOOLS = Object.freeze(['inscribe']);
+
+export const REMINDER_NO_TOOL = 'You did not call a tool. Call inscribe to finish the turn, or await to end the cycle. Every call needs a comment of at least one full sentence.';
+export const REMINDER_AWAIT = 'You are close to the step limit. Finish the turn with inscribe, or end the cycle with await.';
 
 const MAX_NO_TOOL = 2;
 
@@ -44,6 +46,7 @@ export async function runDecisionCycle({
     maxSteps = 50,
     noToolLimit = MAX_NO_TOOL,
     implicitAwait = false,
+    emptyRetry = true,
     stopAfter = [],
     now = () => Date.now(),
     onStep = () => {},
@@ -68,6 +71,12 @@ export async function runDecisionCycle({
         const startedAt = now();
         const args = call?.arguments && typeof call.arguments === 'object' ? call.arguments : {};
         onToolStart({ id: call?.id ?? '', name: call?.name ?? '', args, comment: args.comment ?? '', at: startedAt });
+        // Аргументы не разобрались даже починкой движка — короткая подсказка модели, а не пустой вызов.
+        if (call?.parseError) {
+            const error = `Your arguments for "${call.name}" were not valid JSON. Call it again with one JSON object; no prose around it.`;
+            record({ name: call.name, args, comment: args.comment ?? '', result: { ok: false, error }, error, durationMs: now() - startedAt, at: startedAt });
+            return { ok: false, error };
+        }
         const problem = commentProblem(args);
         if (problem) {
             const result = { ok: false, error: problem };
@@ -103,11 +112,11 @@ export async function runDecisionCycle({
         }
         // Пустой ответ — ни текста, ни вызова — почти всегда обрыв по лимиту токенов (ризонинг съел весь лимит).
         // Это не «я закончил»: один повтор с удвоенным лимитом, и честное предупреждение, если не помогло.
-        if (!answer.toolCalls.length && !String(answer.text ?? '').trim() && !emptyRetried) {
+        if (emptyRetry && !answer.toolCalls.length && !String(answer.text ?? '').trim() && !emptyRetried) {
             emptyRetried = true;
-            warnings.push('the answer came back empty (likely cut off by the token limit); retried with a doubled limit');
+            warnings.push('the answer came back empty (likely cut off by the token limit); retried with a doubled limit and lower reasoning');
             try {
-                answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true, boost: 2 }));
+                answer = normalizeAnswer(await generate({ messages: conversation, tools, toolChoice: 'auto', stream: true, returnMessage: true, boost: 2, lowerReasoning: true }));
             } catch (error) {
                 const reason = error?.message ?? String(error);
                 warnings.push(`the model request failed: ${reason}`);
@@ -141,7 +150,7 @@ export async function runDecisionCycle({
         for (const call of answer.toolCalls) {
             const result = await execute(call);
             conversation.push(toolResultMessage(call, result));
-            if (call.name === 'submit_turn' && result?.ok === true) {
+            if (TURN_TOOLS.includes(call.name) && result?.ok === true) {
                 return { type: 'submit', form: result.form, trace, messages: conversation, steps, warnings };
             }
             if (stopAfter.includes(call.name) && result?.ok === true) {
@@ -158,6 +167,6 @@ export async function runDecisionCycle({
         if (steps === maxSteps - 1) conversation.push({ role: 'user', content: REMINDER_AWAIT });
     }
 
-    warnings.push(`the director hit the ${maxSteps}-step limit without submit_turn or await`);
+    warnings.push(`the resolver hit the ${maxSteps}-step limit without inscribe or await`);
     return { type: 'guard', reason: `step limit of ${maxSteps} reached`, trace, messages: conversation, steps, warnings };
 }

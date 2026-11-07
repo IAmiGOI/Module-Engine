@@ -31,7 +31,7 @@
  *    задан), положительное число — явный бюджет.
  */
 
-import { buildOpenAiTools } from './provider-tools.js';
+import { buildOpenAiTools, repairToolArguments } from './provider-tools.js';
 
 export { resolveProviderResponseMessage } from './provider-tools.js';
 
@@ -326,9 +326,11 @@ export function createStreamToolCallCollector() {
         },
         calls() {
             return [...parts.entries()].sort((a, b) => a[0] - b[0]).map(([index, part]) => {
-                let args = {};
-                try { args = part.arguments ? JSON.parse(part.arguments) : {}; } catch { args = {}; }
-                return { id: part.id || `call_${index}`, name: part.name, arguments: args, rawArguments: part.arguments || '{}' };
+                const repaired = repairToolArguments(part.arguments);
+                return {
+                    id: part.id || `call_${index}`, name: part.name, arguments: repaired.value,
+                    rawArguments: part.arguments || '{}', ...(repaired.ok ? {} : { parseError: repaired.error }),
+                };
             }).filter(call => call.name);
         },
         reset() { parts.clear(); },

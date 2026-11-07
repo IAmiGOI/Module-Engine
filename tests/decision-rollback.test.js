@@ -37,7 +37,7 @@ function build() {
             { id: 'plan', name: 'set_plan', arguments: { comment: 'This turn needs a direction.', direction: 'Keep moving.' } },
             { id: 'mem', name: 'memory', arguments: { comment: 'This result must outlive the turn.', op: 'write', character: 'Aria', text: 'Aria promised to return before dawn.' } },
             { id: 'name', name: 'recall_name', arguments: { comment: 'The new guard needs a name.', gender: 'female', culture: 'germany', setting: 'modern' } },
-            { id: 'turn', name: 'submit_turn', arguments: { comment: 'The turn is decided.', scene: { minutes: 1 }, resolution: 'The guard is named.', userResult: 'The user waited.', characters: [] } },
+            { id: 'turn', name: 'inscribe', arguments: { comment: 'The turn is decided.', scene: { minutes: 1 }, resolution: 'The guard is named.', userResult: 'The user waited.', characters: [] } },
         ],
     }));
     const pipelineCore = createPipelineCore(engine.registerCaller('core.pipeline', 'cores', { tier: 'official' }), {

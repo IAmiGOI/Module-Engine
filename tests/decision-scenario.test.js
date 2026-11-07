@@ -111,7 +111,7 @@ async function build({ directorFails = false, deciderWorkerId = 'director' } = {
             text: '',
             toolCalls: [
                 { id: 'plan', name: 'set_plan', arguments: { comment: 'The turn needs a direction.', direction: 'Leave through the east door.' } },
-                { id: 'turn', name: 'submit_turn', arguments: { comment: 'The turn is decided.', scene: { minutes: 2 }, resolution: DECISION_TEXT, userResult: 'The user waited.', characters: [] } },
+                { id: 'turn', name: 'inscribe', arguments: { comment: 'The turn is decided.', scene: { duration: 'a few minutes' }, stop: DECISION_TEXT, userResult: 'The user waited.', characters: [] } },
             ],
         };
     });
@@ -158,7 +158,9 @@ test('the writer body really reaches the outgoing request: exactly 20 history me
     const directorText = JSON.stringify(director.messages);
     assert.doesNotMatch(directorText, new RegExp(SUMMARY_TEXT), 'summary.core summaries no longer reach the director');
     assert.match(directorText, /Never kill a named character/);
-    assert.match(directorText, /YOUR PLAN/);
+    // Резолверу план на ходу не нужен: он видит Указ и шаблон, а не свой план.
+    assert.doesNotMatch(directorText, /YOUR PLAN/);
+    assert.match(directorText, /No Decree yet — play from the bank/);
     assert.match(directorText, /What now\?/, 'the current user message is the pending window cycle');
     assert.doesNotMatch(directorText, /char 2/, 'the director no longer reads the raw chat history');
 

@@ -53,29 +53,24 @@ async function build({ replies, externalTools = [], callTool = async () => 'ok' 
 
 const call = (name, args) => ({ text: '', toolCalls: [{ id: `${name}_1`, name, arguments: args }] });
 
-test('the director runs a tool cycle: a Notebook call with a comment, then submit_turn, and both land in the log', async () => {
+test('the turn runs on two tools only: assess and inscribe, and the foreign tool is not offered there', async () => {
     const seen = [];
     const { pipelineCore, core, calls, memory } = await build({
         replies: [
-            call('Notebook', { action: 'write', title: 'Door', content: 'Open', comment: 'I need to remember that the door is open.' }),
-            call('set_plan', { direction: 'Get her out of the keep.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
+            call('inscribe', { comment: 'The turn is ready for the writer.', stop: 'She steps through the open door.', beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [], scene: { duration: 'a moment' }, userResult: 'The user waits.' }),
         ],
         externalTools: [{ name: 'Notebook', description: 'notes', parameters: { type: 'object', properties: {} } }],
         callTool: async (name, args) => { seen.push({ name, args }); return 'note saved'; },
     });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     assert.equal(result.ok, true);
-    assert.deepEqual(seen, [{ name: 'Notebook', args: { action: 'write', title: 'Door', content: 'Open' } }], 'the comment is not passed to the foreign tool');
-    assert.equal(calls[0].tools.some(tool => tool.name === 'Notebook'), true, 'the director sees the engine tool');
-    assert.equal(calls[0].tools.find(tool => tool.name === 'Notebook').parameters.required.includes('comment'), true, 'every foreign tool is given the comment field');
+    assert.deepEqual(seen, [], 'the turn calls no foreign tool');
+    assert.deepEqual(calls[0].tools.map(tool => tool.name), ['assess', 'inscribe'], 'the turn is a template and a roll, nothing else');
     assert.equal(calls[0].returnMessage, true);
 
     const log = memory.get(memoryKey('core.decision', 'log'));
     assert.equal(log.length, 1, 'one cycle is recorded');
-    assert.deepEqual(log[0].toolCalls.map(entry => entry.name), ['Notebook', 'set_plan', 'submit_turn']);
-    assert.match(log[0].toolCalls[0].comment, /remember/);
-    assert.equal(log[0].toolCalls[0].result, 'note saved');
+    assert.deepEqual(log[0].toolCalls.map(entry => entry.name), ['inscribe']);
     assert.equal(core.runs()['10'], undefined, 'the log is separate from the per-message runs');
 });
 
@@ -85,7 +80,7 @@ test('update_roster is persisted and reaches the next context', async () => {
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena walks into the scene and can affect it.' }),
             call('assess', { character: 'Lena', action: 'arrives', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The door is open and nobody blocks her.', comment: 'I need the chance before writing the form.' }),
             call('set_plan', { direction: 'Bring Lena into the scene.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', {
+            call('inscribe', {
                 comment: 'The turn is ready for the writer.',
                 resolution: 'Lena arrives.', scene: { minutes: 1 }, userResult: 'The user waits.',
                 beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Lena', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', feeling: 'calm', need: 'to be safe', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }],
@@ -102,7 +97,7 @@ test('the writer body carries the form decision and no tools at all', async () =
     const { pipelineCore, core } = await build({
         replies: [
             call('set_plan', { direction: 'Get her out of the keep.', comment: 'I need a direction before the turn can be submitted.' }),
-            call('submit_turn', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
+            call('inscribe', { comment: 'The turn is ready for the writer.', resolution: 'She steps through the open door.', beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [], scene: { minutes: 2 }, userResult: 'The user waits.' }),
         ],
     });
     await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });

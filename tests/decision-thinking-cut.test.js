@@ -10,7 +10,7 @@ test('a turn whose thinking passes the limit is cut, and asked again with the th
     const call = async (contract, params) => {
         assert.equal(contract, 'model.generate');
         requests.push(params);
-        if (params.requestId.endsWith(':c')) return { text: '', toolCalls: [{ id: 'f', name: 'submit_turn', arguments: {} }] };
+        if (params.requestId.endsWith(':c')) return { text: '', toolCalls: [{ id: 'f', name: 'inscribe', arguments: {} }] };
         return new Promise((resolve, reject) => {
             params.signal.addEventListener('abort', () => reject(new Error('aborted')));
             watchers.get(params.requestId).onThinking('Wait, actually... '.repeat(800));
@@ -23,7 +23,7 @@ test('a turn whose thinking passes the limit is cut, and asked again with the th
         thinkLimit: 2000, onCut: info => cuts.push(info),
     });
     const answer = await generate({ messages: [{ role: 'user', content: 'Turn.' }], tools: [], toolChoice: 'auto', returnMessage: true });
-    assert.equal(answer.toolCalls[0].name, 'submit_turn');
+    assert.equal(answer.toolCalls[0].name, 'inscribe');
     assert.equal(requests.length, 2);
     assert.equal(cuts.length, 1);
     const pushed = requests[1].messages.at(-1).content;

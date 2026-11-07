@@ -59,7 +59,7 @@ async function flush() {
 }
 
 const setPlan = () => call('set_plan', { direction: 'Keep moving.', comment: 'A direction is required before the form.' });
-const form = (characters = [], minutes = 5) => call('submit_turn', {
+const form = (characters = [], minutes = 5) => call('inscribe', {
     comment: 'The form is ready for the writer.', resolution: 'She leaves.', userResult: 'The user waits.',
     scene: { minutes }, characters, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }],
 });

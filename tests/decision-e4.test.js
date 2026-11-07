@@ -45,7 +45,7 @@ async function build({ replies }) {
     return { pipelineCore, core, calls, memory };
 }
 
-const form = (characters = [], minutes = 5) => call('submit_turn', {
+const form = (characters = [], minutes = 5) => call('inscribe', {
     comment: 'The form is ready for the writer.', resolution: 'They move on.', userResult: 'The user waits.',
     scene: { minutes }, characters, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }],
 });

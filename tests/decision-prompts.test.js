@@ -23,7 +23,7 @@ test('the director system prompt is the PROMPTS.md section 1 text word for word'
 });
 
 test('the turn task is the PROMPTS.md section 2 text word for word', () => {
-    assert.equal(DIRECTOR_TURN, sectionFromDoc('## 2. Директор — задание на ход'));
+    assert.equal(DIRECTOR_TURN, sectionFromDoc('## 2. Резолвер — задание на ход'));
 });
 
 function blockFromDoc(marker) {
@@ -45,7 +45,7 @@ test('the writer check questions, reasons and rewrite prompt are PROMPTS.md sect
 
 test('the form knowledge question and refusal are PROMPTS.md section 14 word for word', () => {
     assert.equal(FORM_KNOWLEDGE_QUESTION, blockFromDoc('**knowledge_conflict:**'));
-    assert.equal(FORM_KNOWLEDGE_REFUSAL, blockFromDoc('Ответ `submit_turn`, если проверка не прошла'));
+    assert.equal(FORM_KNOWLEDGE_REFUSAL, blockFromDoc('Ответ `inscribe`, если проверка не прошла'));
 });
 
 function blocksFromDoc(marker, count) {
@@ -97,4 +97,16 @@ test('the social assess refusal is PROMPTS.md section 20 word for word', async (
 test('the thinking-cut prompt is PROMPTS.md section 21 word for word', async () => {
     const { DIRECTOR_CONCRETE } = await import('../libraries/core/decision-prompts.js');
     assert.equal(DIRECTOR_CONCRETE, blockFromDoc('## 21. Директор — обрыв долгого размышления'));
+});
+
+test('the resolver CoT, the after-turn task and its CoT are PROMPTS.md word for word', async () => {
+    const { RESOLVER_THINK_TURN, RESOLVER_AFTER_TURN, RESOLVER_THINK_AFTER } = await import('../libraries/core/decision-prompts-resolver.js');
+    assert.equal(RESOLVER_THINK_TURN, sectionFromDoc('## 24. Резолвер — как думать на ходу'));
+    assert.equal(RESOLVER_AFTER_TURN, sectionFromDoc('## 25. Резолвер — после хода'));
+    assert.equal(RESOLVER_THINK_AFTER, sectionFromDoc('## 26. Резолвер — как думать после хода'));
+});
+
+test('the Inscription block is PROMPTS.md section 7 word for word', async () => {
+    const { WRITER_INSCRIPTION } = await import('../libraries/core/decision-prompts.js');
+    assert.equal(WRITER_INSCRIPTION, sectionFromDoc('## 7. Прозаик — блок Начертания'));
 });

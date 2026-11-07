@@ -6,12 +6,16 @@
  * рисует готовое.
  */
 
+import { afterTurnRows, counsellorRows, queueRow } from './decision-feed-rows.js';
+
 const TURN_EVENTS = new Set(['turn', 'regenerate', 'swipe']);
-const PASSIVE_EVENTS = new Set(['time', 'researcher', 'typing', 'message']);
+const PASSIVE_EVENTS = new Set(['time', 'researcher', 'typing', 'message', 'counsellor', 'counsellor_day', 'decree', 'retry', 'warning']);
 const EVENT_LABELS = {
     turn: 'A new turn has started', regenerate: 'Regenerate requested', swipe: 'Swipe requested',
     time: 'The clock moved', researcher: 'A researcher reported', typing: 'The user is typing',
-    message: 'A message from the user', settings: 'Game settings changed',
+    message: 'A message to the Counsellor', settings: 'Game settings changed',
+    counsellor: 'The Counsellor read the Ledger', counsellor_day: 'The Counsellor closes the RP day',
+    decree: 'The Director issues a Decree', retry: 'A retry in the background', warning: 'A warning',
 };
 
 const text = value => String(value ?? '').trim();
@@ -120,6 +124,12 @@ export function buildCycleEntry(cycle) {
     if (text(cycle?.thinking)) rows.push({ kind: 'thinking', id: 'thinking', text: text(cycle.thinking) });
     for (const [index, call] of (Array.isArray(cycle?.toolCalls) ? cycle.toolCalls : []).entries()) rows.push(toolRow(call, index));
     if (cycle?.form) rows.push(formRow(cycle.form));
+    for (const [index, call] of (Array.isArray(cycle?.toolCalls) ? cycle.toolCalls : []).entries()) {
+        rows.push(...afterTurnRows(call, index));
+        rows.push(...counsellorRows(call, index));
+    }
+    const queues = queueRow(cycle?.wake?.queues);
+    if (queues) rows.push(queues);
     if (text(cycle?.push)) rows.push({ kind: 'push', id: 'push', text: text(cycle.push) });
     if (cycle?.wake?.report || (cycle?.wake?.type === 'researcher' && text(cycle?.wake?.detail))) {
         rows.push({ kind: 'report', id: 'report', task: text(cycle.wake.task), text: text(cycle.wake.report ?? cycle.wake.detail) });
@@ -265,10 +275,11 @@ export function applyFeedEvent(state, event, payload = {}) {
 function entryText(entry) {
     const parts = [entry.title, entry.detail];
     for (const row of entry.rows) {
-        parts.push(row.text, row.comment, row.name, row.character, row.action, row.difficulty, row.effective, row.experience, row.words, row.resolution, row.task);
+        parts.push(row.text, row.comment, row.name, row.character, row.action, row.difficulty, row.effective, row.experience, row.words, row.resolution, row.task, row.problem, row.excerpt, row.reason);
         if (row.kind === 'form') parts.push(row.userResult, row.place, ...row.characters.flatMap(character => [character.name, character.decision, character.action, character.outcome]));
         if (row.kind === 'call') parts.push(JSON.stringify(row.args ?? {}), JSON.stringify(row.result ?? null));
         if (row.kind === 'writer_check' || row.kind === 'form_check') parts.push(JSON.stringify(row.probabilities ?? {}), row.quote, row.reasons, row.name);
+        if (row.kind === 'queues') parts.push(...row.petitions.flatMap(item => [item.character, item.status]), ...row.prayers.flatMap(item => [item.text, item.status]));
     }
     return parts.filter(Boolean).join('\n').toLowerCase();
 }

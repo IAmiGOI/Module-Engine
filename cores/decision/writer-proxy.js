@@ -3,6 +3,8 @@ import { buildProviderRequest, resolveStreamDelta, isNanoGpt } from '../../libra
 import { translateWriterFrame, writerSourceFormat, writerErrorMessage, writerErrorBody, writerJsonBody } from '../../libraries/core/writer-response.js';
 import { rewritePrompt, rewriteReasons } from '../../libraries/core/decision-writer-check.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
+import { createWriterRetry, writerFailure } from './writer-retry.js';
+import { buildLiveStreamResponse, STALL_MS } from './writer-live.js';
 
 /**
  * Прозаик через своё подключение ME: строим openai-запрос, держим поток у
@@ -11,10 +13,8 @@ import { estimateTokens } from '../../libraries/core/token-estimate.js';
  * пользователь перезапусков не видит (вариант Б).
  */
 
-const STALL_MS = 120000;
 const TIMEOUT_MS = 120000;
 const OPENAI = 'openai';
-const isDone = data => String(data ?? '').trim() === '[DONE]';
 const EMPTY_CHECK = { ok: false, answers: {}, violated: [], error: 'No classifier check is configured.' };
 
 function jsonResponse(body, status = 200) {
@@ -82,8 +82,11 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         return { worker, id };
     }
 
-    function makeRequest(worker, settings, payload, messages, stream, disabledEffort = null) {
+    function makeRequest(worker, settings, payload, messages, stream, disabledEffort = null, boost = 1) {
         const generateRequest = { messages, ...samplerFor(settings, payload), reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0, disabledEffort };
+        if (boost > 1 && Number.isFinite(Number(generateRequest.maxTokens))) {
+            generateRequest.maxTokens = Math.min(32768, Math.round(Number(generateRequest.maxTokens) * boost));
+        }
         return buildProviderRequest(worker, generateRequest, { stream });
     }
 
@@ -104,10 +107,15 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         const stream = payload?.stream === true;
         const disabledEffort = await disabledEffortFor(worker);
         const targetFormat = writerSourceFormat(payload?.chat_completion_source);
+        const retry = createWriterRetry({ getSettings, publishEvent: (event, data) => publishEvent?.(event, data) });
+        const workerForId = idValue => getWorkers().find(item => item.id === idValue) ?? worker;
         const context = {
             id, worker, settings, payload, messages, signal, check: check ?? null,
-            push, userMessage, resolution, user, runId, publishEvent, targetFormat, stream,
-            requestFor: nextMessages => makeRequest(worker, settings, payload, nextMessages, stream, disabledEffort),
+            push, userMessage, resolution, user, runId, publishEvent, targetFormat, stream, retry,
+            requestFor: (nextMessages, options = {}) => makeRequest(
+                options.backupWorkerId ? workerForId(options.backupWorkerId) : worker,
+                settings, payload, nextMessages, stream, disabledEffort, options.boost ?? 1,
+            ),
         };
         // Проверять нечем (классификатор не настроен) — поток идёт живьём, как до части 11: держать ответ незачем,
         // а пользователь иначе ничего не видит, пока писатель не допишет целиком.
@@ -117,7 +125,7 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         if (!canCheck) {
             announce(publishEvent, { runId, attempt: 1, phase: 'final', skipped: true, error: 'No classifier connection is set — the writer streams without a check.' });
             context.check = null;
-            if (stream) return { respondWith: liveStreamResponse(context) };
+            if (stream) return { respondWith: buildLiveStreamResponse(context, { network }) };
         }
         return stream
             ? { respondWith: streamResponse(context) }
@@ -157,8 +165,13 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         let messages = context.messages;
         let current = '';
         for (let attempt = 1; attempt <= limit + 1; attempt += 1) {
-            const result = await jsonOnce(context, messages);
-            if (!result.ok) return jsonResponse(writerErrorBody(result.error), result.status || 502);
+            let result;
+            try {
+                result = await context.retry.run({ request: options => jsonOnce(context, messages, options) });
+            } catch (error) {
+                const message = error?.status ? writerErrorMessage(context.id, error.status, error.text) : (error?.message ?? String(error));
+                return jsonResponse(writerErrorBody(message), error?.status || 502);
+            }
             current = result.text;
             context.lastText = current;
             const verdict = await checkText(context, current, attempt, 'final');
@@ -172,83 +185,13 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         return jsonResponse(writerJsonBody(current), 200);
     }
 
-    async function jsonOnce(context, messages) {
-        const result = await network({ ...context.requestFor(messages), stream: false, signal: context.signal }, { timeoutMs: TIMEOUT_MS });
-        if (!result.ok) return { ok: false, error: `Writer connection "${context.id}" request failed: ${result.error.message}` };
+    async function jsonOnce(context, messages, options = {}) {
+        const result = await network({ ...context.requestFor(messages, options), stream: false, signal: context.signal }, { timeoutMs: TIMEOUT_MS });
+        if (!result.ok) throw new Error(`Writer connection "${context.id}" request failed: ${result.error.message}`);
         const value = result.value;
-        if (!value.ok) return { ok: false, error: writerErrorMessage(context.id, value.status, value.text), status: value.status || 502 };
+        if (!value.ok) throw writerFailure(context.id, value.status, value.text);
         const body = writerJsonBody(value.text);
-        return { ok: true, text: String(body?.choices?.[0]?.message?.content ?? '') };
-    }
-
-    /** Поток писателя без проверки: кадры провайдера сразу уходят в ST. */
-    function liveStreamResponse(context) {
-        const { id, signal, targetFormat } = context;
-        const encoder = new TextEncoder();
-        let controller = null;
-        let closed = false;
-        let sawFrame = false;
-        let sawDone = false;
-        const body = new ReadableStream({ start(value) { controller = value; } });
-        const push = text => {
-            if (closed || !controller) return;
-            try { controller.enqueue(encoder.encode(text)); } catch { closed = true; }
-        };
-        const finish = () => {
-            if (closed || !controller) return;
-            closed = true;
-            try { controller.close(); } catch { /* already closed */ }
-        };
-        const fail = message => {
-            push(`data: ${JSON.stringify(writerErrorBody(message))}\n\n`);
-            finish();
-        };
-        // Итог потока — чтобы обрыв без текста не прятался: причина конца, сколько пришло текста и мыслей, последний кадр.
-        const tally = { content: 0, reasoning: 0, finish: '', last: '' };
-        const count = data => {
-            try {
-                const choice = JSON.parse(data)?.choices?.[0] ?? {};
-                tally.content += String(choice.delta?.content ?? choice.message?.content ?? '').length;
-                tally.reasoning += String(choice.delta?.reasoning_content ?? choice.delta?.reasoning ?? '').length;
-                if (choice.finish_reason) tally.finish = String(choice.finish_reason);
-            } catch { /* не json — [DONE] или мусор */ }
-            if (!isDone(data)) tally.last = data.slice(0, 300);
-        };
-        const report = how => {
-            try { console.warn(`[ME writer] stream ${how}: text ${tally.content} chars, reasoning ${tally.reasoning} chars, finish_reason ${tally.finish || 'none'}; last frame: ${tally.last}`); } catch { /* консоли нет */ }
-        };
-        const pushData = data => {
-            count(data);
-            const translated = translateWriterFrame(data, targetFormat);
-            if (translated === null) return;
-            if (translated === '[DONE]') sawDone = true;
-            sawFrame = true;
-            push(`data: ${translated}\n\n`);
-        };
-        (async () => {
-            if (signal?.aborted) { finish(); return; }
-            const result = await network({
-                ...context.requestFor(context.messages), stream: true, signal, stallMs: STALL_MS,
-                onChunk: frame => { const data = String(frame?.data ?? ''); if (data) pushData(data); },
-            });
-            if (signal?.aborted) { report('stopped by the caller'); finish(); return; }
-            if (!result.ok) { report('failed'); fail(`Writer connection "${id}" request failed: ${result.error.message}`); return; }
-            const value = result.value;
-            if (!value.ok) { report(`HTTP ${value.status}`); fail(writerErrorMessage(id, value.status, value.text)); return; }
-            if (!sawFrame && String(value.text ?? '').trim()) pushData(String(value.text).trim());
-            report('ended');
-            if (!tally.content) {
-                fail(`Writer connection "${id}" ended without reply text (finish_reason: ${tally.finish || 'none'}, reasoning ${tally.reasoning} chars). Last frame: ${tally.last || 'none'}`);
-                return;
-            }
-            if (!sawDone) push('data: [DONE]\n\n');
-            finish();
-        })().catch(error => {
-            report(`threw ${error?.message ?? error}`);
-            if (signal?.aborted) finish();
-            else fail(`Writer connection "${id}" request failed: ${error?.message ?? error}`);
-        });
-        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+        return { text: String(body?.choices?.[0]?.message?.content ?? '') };
     }
 
     function streamResponse(context) {
@@ -304,54 +247,68 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
     }
 
     async function collectStream(context, messages, attempt) {
-        const abortController = new AbortController();
-        const unlink = linkSignal(context.signal, abortController);
-        const stepTokens = Math.max(20, Number(context.settings.classifier?.checkTokens) || 150);
-        let text = '';
-        let nextCheck = stepTokens;
-        let verdict = null;
-        let abortedByCheck = false;
-        let pending = Promise.resolve();
-        const runCheck = async snapshot => {
-            if (abortedByCheck || context.signal?.aborted) return;
-            const result = await checkText(context, snapshot, attempt, 'stream');
-            if (result.ok && result.violated?.length) {
-                verdict = result;
-                abortedByCheck = true;
-                abortController.abort();
-            }
-        };
+        // Проверенный путь держит поток у себя: повтор безопасен, кадры в ST ещё не ушли (часть 19).
         try {
-            const result = await network({
-                ...context.requestFor(messages), stream: true, signal: abortController.signal, stallMs: STALL_MS,
-                onChunk: frame => {
-                    const delta = resolveStreamDelta('openai', frame);
-                    if (!delta.delta) return;
-                    text += delta.delta;
-                    const tokens = estimateTokens(text);
-                    if (tokens >= nextCheck) {
-                        nextCheck = tokens + stepTokens;
-                        const snapshot = text;
-                        pending = pending.then(() => runCheck(snapshot));
+            const answer = await context.retry.run({
+                request: async options => {
+                    const abortController = new AbortController();
+                    const unlink = linkSignal(context.signal, abortController);
+                    const stepTokens = Math.max(20, Number(context.settings.classifier?.checkTokens) || 150);
+                    let text = '';
+                    let nextCheck = stepTokens;
+                    let verdict = null;
+                    let abortedByCheck = false;
+                    let pending = Promise.resolve();
+                    const runCheck = async snapshot => {
+                        if (abortedByCheck || context.signal?.aborted) return;
+                        const result = await checkText(context, snapshot, attempt, 'stream');
+                        if (result.ok && result.violated?.length) {
+                            verdict = result;
+                            abortedByCheck = true;
+                            abortController.abort();
+                        }
+                    };
+                    try {
+                        const result = await network({
+                            ...context.requestFor(messages, options), stream: true, signal: abortController.signal, stallMs: STALL_MS,
+                            onChunk: frame => {
+                                const delta = resolveStreamDelta('openai', frame);
+                                if (!delta.delta) return;
+                                text += delta.delta;
+                                const tokens = estimateTokens(text);
+                                if (tokens >= nextCheck) {
+                                    nextCheck = tokens + stepTokens;
+                                    const snapshot = text;
+                                    pending = pending.then(() => runCheck(snapshot));
+                                }
+                            },
+                        });
+                        await pending;
+                        if (abortedByCheck) {
+                            throw Object.assign(new Error('the classifier stopped the stream'), { code: 'check-abort', text, verdict });
+                        }
+                        if (context.signal?.aborted) throw Object.assign(new Error('stopped'), { code: 'stopped' });
+                        if (!result.ok) throw new Error(`Writer connection "${context.id}" request failed: ${result.error.message}`);
+                        const value = result.value;
+                        if (!value.ok) throw writerFailure(context.id, value.status, value.text);
+                        if (!text && String(value.text ?? '').trim()) text = String(value.text).trim();
+                        return { text };
+                    } catch (error) {
+                        if (abortedByCheck) throw Object.assign(new Error('the classifier stopped the stream'), { code: 'check-abort', text, verdict });
+                        throw error;
+                    } finally {
+                        unlink();
                     }
                 },
             });
-            await pending;
             if (context.signal?.aborted) return { aborted: true };
-            if (abortedByCheck) return { ok: true, text, verdict };
-            if (!result.ok) return { ok: false, error: `Writer connection "${context.id}" request failed: ${result.error.message}` };
-            const value = result.value;
-            if (!value.ok) return { ok: false, error: writerErrorMessage(context.id, value.status, value.text) };
-            if (!text && String(value.text ?? '').trim()) text = String(value.text).trim();
-            if (!text) return { ok: false, error: `Writer connection "${context.id}" returned an empty reply.` };
-            const finalVerdict = await checkText(context, text, attempt, 'final');
-            return { ok: true, text, verdict: finalVerdict };
+            const verdict = await checkText(context, answer.text, attempt, 'final');
+            return { ok: true, text: answer.text, verdict };
         } catch (error) {
             if (context.signal?.aborted) return { aborted: true };
-            if (abortedByCheck || error?.name === 'AbortError') return { ok: true, text, verdict };
-            return { ok: false, error: `Writer connection "${context.id}" request failed: ${error?.message ?? error}` };
-        } finally {
-            unlink();
+            if (error?.code === 'check-abort') return { ok: true, text: error.text, verdict: error.verdict };
+            const message = error?.status ? writerErrorMessage(context.id, error.status, error.text) : `Writer connection "${context.id}" request failed: ${error?.message ?? error}`;
+            return { ok: false, error: message };
         }
     }
 

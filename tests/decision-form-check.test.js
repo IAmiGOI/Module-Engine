@@ -50,7 +50,7 @@ test('a conflict returns the section 14 refusal with the name and quote', async 
     assert.equal(result.chance, 0.95);
     assert.equal(result.quote, 'Mentions the hidden vault.');
     assert.match(result.refusal, /The form was not accepted: Lena acts on something Lena cannot know \("Mentions the hidden vault\."\)/);
-    assert.match(result.refusal, /call submit_turn again/);
+    assert.match(result.refusal, /call inscribe again/);
 });
 
 test('the same conflict once returned is accepted with a warning on the next attempt', async () => {

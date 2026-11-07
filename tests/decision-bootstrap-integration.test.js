@@ -41,7 +41,7 @@ async function build({ bootstrapReply = null } = {}) {
         return {
             text: '', toolCalls: [
                 { id: 'plan', name: 'set_plan', arguments: { direction: 'Go.', comment: 'A direction is needed.' } },
-                { id: 'turn', name: 'submit_turn', arguments: { comment: 'The turn is decided.', scene: { minutes: 1 }, resolution: 'She waits.', userResult: 'The user waits.', characters: [] } },
+                { id: 'turn', name: 'inscribe', arguments: { comment: 'The turn is decided.', scene: { minutes: 1 }, resolution: 'She waits.', userResult: 'The user waits.', characters: [] } },
             ],
         };
     });

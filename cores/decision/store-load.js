@@ -3,7 +3,7 @@ import { sanitizeCycles, sanitizeRuns } from './store-sanitize.js';
 
 /** Прочитать всё состояние директора из памяти чата; мусор приводится к безопасной форме. */
 export async function loadChatMemory(call) {
-    const [storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft, storedBoundary, storedWindow, storedFrozen, storedBrief, storedGame] = await Promise.all([
+    const [storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft, storedBoundary, storedWindow, storedFrozen, storedBrief, storedGame, storedLedger, storedPapers] = await Promise.all([
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', fallback: [] }),
@@ -24,6 +24,8 @@ export async function loadChatMemory(call) {
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'frozenWindows', fallback: [] }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'chatBrief', fallback: null }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'gameSettings', fallback: null }),
+        call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'ledger', fallback: [] }),
+        call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'papers', fallback: null }),
     ]);
     return {
         runs: sanitizeRuns(storedRuns),
@@ -43,6 +45,10 @@ export async function loadChatMemory(call) {
         draft: storedDraft && typeof storedDraft === 'object' ? storedDraft : null,
         chatBrief: storedBrief && typeof storedBrief === 'object' && !Array.isArray(storedBrief) ? storedBrief : null,
         gameSettings: storedGame && typeof storedGame === 'object' && !Array.isArray(storedGame) ? storedGame : null,
+        ledger: Array.isArray(storedLedger) ? storedLedger.filter(row => row && typeof row === 'object') : [],
+        // Очереди Petition/Prayer, переписка Советника и состояние Director читаются целиком:
+        // иначе после перезагрузки терялись Petition и разбор дня.
+        papers: storedPapers && typeof storedPapers === 'object' && !Array.isArray(storedPapers) ? storedPapers : null,
         windowBoundary: storedBoundary && typeof storedBoundary === 'object' && !Array.isArray(storedBoundary) ? storedBoundary : null,
         window: storedWindow && typeof storedWindow === 'object' && !Array.isArray(storedWindow) ? storedWindow : null,
         frozenWindows: Array.isArray(storedFrozen) ? storedFrozen.filter(record => record && typeof record === 'object') : [],
