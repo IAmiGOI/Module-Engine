@@ -21,7 +21,7 @@ const hash = text => [...String(text)].reduce((sum, char) => (sum * 31 + char.ch
 function lena(assessId = 'asm_run_1_1') {
     return {
         name: 'Lena', decision: 'Leave the keep.', decisionReason: 'She is out of time.',
-        action: 'Opens the east door.', actionReason: 'It is the only exit.',
+        action: 'Opens the east door.', feeling: 'calm', need: 'to be safe', actionReason: 'It is the only exit.',
         assessId, outcome: 'The lock gives after a hard pull.', speech: 'Not tonight.',
     };
 }
@@ -119,7 +119,7 @@ test('the writer receives a Push with place, time, the user result and the degre
     assert.match(text, /THE USER'S ACTION, AND HOW IT LANDS: The user pushes the door/);
     assert.match(text, /1\. Lena — ACTION: Opens the east door/);
     assert.match(text, /2\. Lena — LINE \(meaning\): this is the only way out/);
-    assert.match(text, /NOT FOR THE PAGE — why they act[\s\S]*- Lena: It is the only exit/);
+    assert.match(text, /NOT FOR THE PAGE — why they act[\s\S]*- Lena: Feels: calm\. Needs: to be safe\. It is the only exit/);
     assert.match(text, /\(it goes (flawlessly, exactly as intended|cleanly, without a hitch|barely, with visible effort|clumsily, with a mistake|badly botched)/);
     assert.match(text, /When the push says an opponent may counter something a character did not expect/);
     assert.equal('tools' in body, false);

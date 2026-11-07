@@ -7,7 +7,7 @@ function form() {
     return {
         comment: 'The form is ready.', resolution: 'She speaks.', userResult: 'The user waits.', scene: { minutes: 1 },
         beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{
-            name: 'Lena', decision: 'Leave.', decisionReason: 'She is late.', action: 'Mentions the vault.', actionReason: 'She wants the key.',
+            name: 'Lena', decision: 'Leave.', decisionReason: 'She is late.', action: 'Mentions the vault.', feeling: 'calm', need: 'to be safe', actionReason: 'She wants the key.',
             noCheck: 'She is only speaking about what she knows.', outcome: 'She says it.',
         }],
     };

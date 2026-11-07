@@ -9,7 +9,7 @@ const valid = (overrides = {}) => ({
     userResult: 'The user holds the door; it works.',
     beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{
         name: 'Lena', decision: 'Leave the keep.', decisionReason: 'She is out of time.',
-        action: 'Opens the east door.', actionReason: 'It is the only exit.',
+        action: 'Opens the east door.', feeling: 'calm', need: 'to be safe', actionReason: 'It is the only exit.',
         assessId: 'a1', outcome: 'The lock gives after a hard pull.',
     }],
     ...overrides,
@@ -38,7 +38,7 @@ test('a character outside the active roster is rejected — the form is not a wa
 
 test('every form field is required: decision, its reason, action, its reason and the outcome', () => {
     const form = valid();
-    const result = validateTurn({ form: { ...form, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ ...form.characters[0], actionReason: '' }] }, roster: ['Lena'], assessments: new Map([['a1', assessment]]) });
+    const result = validateTurn({ form: { ...form, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ ...form.characters[0], feeling: 'calm', need: 'to be safe', actionReason: '' }] }, roster: ['Lena'], assessments: new Map([['a1', assessment]]) });
     assert.equal(result.ok, false);
     assert.ok(result.missing.some(item => /actionReason/.test(item)));
 });
@@ -96,7 +96,7 @@ test('a made-up assessId is still rejected even when noCheck is also present', (
 test('the user\'s own character is never required in the form, and if the director lists it, it is dropped', async () => {
     const { validateTurn: validate } = await import('../libraries/core/decision-turn.js');
     const base = { scene: { minutes: 5 }, resolution: 'She leaves.', userResult: 'Sasha waits.' };
-    const emilia = { name: 'Emilia', decision: 'Leave.', decisionReason: 'Late.', action: 'Leaves.', actionReason: 'The door.', outcome: 'Gone.', noCheck: 'No contest.' };
+    const emilia = { name: 'Emilia', decision: 'Leave.', decisionReason: 'Late.', action: 'Leaves.', feeling: 'calm', need: 'to be safe', actionReason: 'The door.', outcome: 'Gone.', noCheck: 'No contest.' };
     const without = validate({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [emilia] }, roster: ['Emilia', 'Sasha'], user: 'Sasha' });
     assert.equal(without.ok, true, 'Sasha from the roster is not demanded');
     const withUser = validate({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [emilia, { name: 'Sasha' }] }, roster: ['Emilia', 'Sasha'], user: 'Sasha' });
@@ -108,7 +108,7 @@ test('an idle character needs only a name and stays in the background of the pus
     const { validateTurn: validate } = await import('../libraries/core/decision-turn.js');
     const { buildPush } = await import('../libraries/core/decision-push.js');
     const base = { scene: { minutes: 5 }, resolution: 'She leaves.', userResult: 'Sasha waits.' };
-    const emilia = { name: 'Emilia', decision: 'Leave.', decisionReason: 'Late.', action: 'leaves', actionReason: 'the door is open', outcome: 'Gone.', noCheck: 'No contest.' };
+    const emilia = { name: 'Emilia', decision: 'Leave.', decisionReason: 'Late.', action: 'leaves', feeling: 'calm', need: 'to be safe', actionReason: 'the door is open', outcome: 'Gone.', noCheck: 'No contest.' };
     const result = validate({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [emilia, { name: 'Elsa', idle: true }] }, roster: ['Emilia', 'Elsa'] });
     assert.equal(result.ok, true);
     const push = buildPush({ form: result.normalized });

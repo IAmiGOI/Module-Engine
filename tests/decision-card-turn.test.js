@@ -43,7 +43,7 @@ test('a card-test turn goes through the real director and gives the writer notes
                     scene: { minutes: 1 },
                     resolution: 'Aria steps out of the shadows.',
                     userResult: 'The user called into the dark and was heard.',
-                    beats: [{ who: 'Aria', kind: 'action', text: 'steps out of the shadows' }, { who: 'Aria', kind: 'line', text: 'who goes there?' }], characters: [{ name: 'Aria', decision: 'Find out who is there.', decisionReason: 'A stranger is close to the camp.', action: 'steps out of the shadows', actionReason: 'She wants to see the visitor first.', outcome: 'She is a trained scout and the ground is clear.', assessId: 'asm_cardtest_1_1', speech: 'Who goes there?' }],
+                    beats: [{ who: 'Aria', kind: 'action', text: 'steps out of the shadows' }, { who: 'Aria', kind: 'line', text: 'who goes there?' }], characters: [{ name: 'Aria', decision: 'Find out who is there.', decisionReason: 'A stranger is close to the camp.', action: 'steps out of the shadows', feeling: 'calm', need: 'to be safe', actionReason: 'She wants to see the visitor first.', outcome: 'She is a trained scout and the ground is clear.', assessId: 'asm_cardtest_1_1', speech: 'Who goes there?' }],
                 } }] },
             ],
         });

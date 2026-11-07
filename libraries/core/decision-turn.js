@@ -4,7 +4,7 @@
  * чтобы отказ был перечнем недостающего, а не исключением.
  */
 
-const TEXT_FIELDS = Object.freeze(['decision', 'decisionReason', 'action', 'actionReason']);
+const TEXT_FIELDS = Object.freeze(['feeling', 'need', 'decision', 'decisionReason', 'action', 'actionReason']);
 // Решение «держится между ходами»: пропущенное берётся из прошлой формы, а не возвращает форму лишним запросом.
 const CARRIED = Object.freeze(['decision', 'decisionReason']);
 const MAX_MINUTES = 1440;

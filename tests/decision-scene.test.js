@@ -52,7 +52,7 @@ test('a character who left last turn and acts again is sent back once, then acce
         clock: () => ({ minutes: 0 }), saveClock: async () => {}, saveRoster: async () => {}, saveTurn: async () => {},
     };
     const submit = createSubmitTurnHandler({ store, publishEvent: () => {}, state, resolvePlace: async () => '', lastTimeMark: async () => '', userName: () => 'Sasha' });
-    const character = name => ({ name, decision: 'd', decisionReason: 'r', action: 'plants himself in the path', actionReason: 'r', outcome: 'o', noCheck: 'n' });
+    const character = name => ({ name, decision: 'd', decisionReason: 'r', action: 'plants himself in the path', feeling: 'calm', need: 'to be safe', actionReason: 'r', outcome: 'o', noCheck: 'n' });
     const form = { scene: { minutes: 2 }, resolution: 'The guard blocks them.', userResult: 'Sasha waits.', beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [character('Emilia'), character('Diethard Diethain')], comment: 'Ready.' };
     const first = await submit(form);
     assert.equal(first.ok, false);
@@ -86,16 +86,16 @@ test('departedFrom: leaving an object, a possessive or running out of something 
 test('validateTurn: outcome only after a roll; missing decision is kept from the previous turn', async () => {
     const { validateTurn } = await import('../libraries/core/decision-turn.js');
     const base = { scene: { minutes: 1 }, resolution: 'r', userResult: 'u' };
-    const ok = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', action: 'a', actionReason: 'b', noCheck: 'talk' }] }, roster: ['Emilia'],
+    const ok = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', action: 'a', feeling: 'calm', need: 'to be safe', actionReason: 'b', noCheck: 'talk' }] }, roster: ['Emilia'],
         previous: { beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', decision: 'keep him safe', decisionReason: 'debt' }] } });
     assert.equal(ok.ok, true, JSON.stringify(ok.missing));
     assert.equal(ok.normalized.characters[0].decision, 'keep him safe');
-    const rolled = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', decision: 'd', decisionReason: 'e', action: 'a', actionReason: 'b', assessId: 'x' }] }, roster: ['Emilia'], assessments: new Map([['x', {}]]) });
+    const rolled = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', decision: 'd', decisionReason: 'e', action: 'a', feeling: 'calm', need: 'to be safe', actionReason: 'b', assessId: 'x' }] }, roster: ['Emilia'], assessments: new Map([['x', {}]]) });
     assert.deepEqual(rolled.missing, ['characters[Emilia].outcome']);
-    const fresh = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', action: 'a', actionReason: 'b' }] }, roster: ['Emilia'] });
+    const fresh = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', action: 'a', feeling: 'calm', need: 'to be safe', actionReason: 'b' }] }, roster: ['Emilia'] });
     assert.equal(fresh.ok, true, 'a new character without an aim is not sent back');
     assert.match(fresh.warnings.join(' '), /no aim yet for Emilia/);
-    const planned = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', action: 'a', actionReason: 'b' }] }, roster: ['Emilia'], aimFor: () => 'Reach the capital.' });
+    const planned = validateTurn({ form: { ...base, beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Emilia', action: 'a', feeling: 'calm', need: 'to be safe', actionReason: 'b' }] }, roster: ['Emilia'], aimFor: () => 'Reach the capital.' });
     assert.equal(planned.normalized.characters[0].decision, 'Reach the capital.');
 });
 

@@ -75,8 +75,16 @@ Do this, in this order:
 Before submit_turn, only use tools that read state, plus update_roster, assess and set_plan. Everything else — notes, library, plans, memory, research — comes after submit_turn: the Writer is waiting for your form.
 
 THE FORM
+- feeling: what the character feels right now — from the Emotions section of their bank and what just happened to them. One or two words and the cause.
+- need: the Current Need that drives them in this moment — biological, emotional or instinctual (as in the Need Guidelines), felt more than understood. It comes from their Global Needs, Values and feeling, not from the plot.
 - decision + decisionReason: what the character is trying to achieve over the coming hours or days — their own aim, not the task of this scene — and why. Write here what they expect and are prepared for. Leave both out when they still hold; CURRENT SCENE shows the current ones. After a death, a fight, a betrayal, a revelation or a change of place, read each aim in CURRENT SCENE against what just happened and write a new one wherever the old one has lost its object (an aim about a person who is dead, a meeting that can no longer happen).
 - action + actionReason: what they do in this turn, and why — deeds only. Write here what they are watching out for.
+
+**Characters From The Inside** — fill each acting character in this order: feeling → need → decision (their Global or Interaction Goal, as in the Goal Guidelines) → action.
+- **Values** (in their bank) decide what and whom they like: a person or a deed that fits their values draws warmth, trust, help; one that goes against them draws dislike, distance, resistance.
+- **Need beats strategy.** The need of this moment decides the action; the goal only shapes it. When they pull apart, the stronger wins — in a frightened, hurt, happy or tired character that is usually the need.
+- **Bargain only with a reason.** A character bargains or sets conditions only when their values or goal make the user's offer a real trade for them. Otherwise they react as they feel: laugh, flare up, soften, go quiet, walk away, get on with their own task.
+- Two characters in one scene differ because their values, emotions and needs differ — check that their actions show it.
 - beats: the turn as it happens, in order — every action and every line of the characters who act, each exactly once; the user's character gets none. A line beat names every person it speaks of by name, never "he" or "she" ("that Sasha will be at the stall", not "that he will be"), and gives what the words mean, in direct form ("what were you two saying at the sill?") — never the wording, never "she asks…": the Writer writes the words. An action beat is what the body does that is new this turn: a posture or gesture the Writer's earlier replies already show stays on the page by itself, so a character who only keeps it gets no action beat. Write every beat for this turn — never carried over from an earlier turn. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly" — how the character sounds comes from the Speech section of their data bank, and the Writer shows it.
 - outcome: why it succeeded or failed, after the assess result.
 - userResult: only the result of the user's attempt — success or failure, how well, and the concrete cause. Never add actions, words or feelings for the user's character.
@@ -264,8 +272,10 @@ If GUIDE FROM THE DIRECTOR is given, follow it: the Director runs this story and
 
 THE SKELETON — always these sections, in this order:
 ***{{name}}***  (one line of identity in the world's own terms, if useful)
-**Core goal** — what the character wants most, in one line; then the hard limit on getting it: the barrier, the price.
+**Core goal** — what the character wants most, in one line; then what stands in the way.
+**Values** — what the character holds dear and what they despise: ideas, ways of acting, things, and people by name. Each value with how strongly it holds and what it makes them do. Values decide what and whom they like.
 **Core Personality traits** — each stable trait together with its CONSEQUENCE: what it leads the character to do, and what it does not lead to. Never a list of adjectives.
+**Emotions** — their usual mood; what quickly moves them to joy, anger, fear, shame, tenderness, and how each shows on them; how fast their feelings swing and how long they last.
 **Behaviour** — what the character concretely does in situations: what comes first, what they avoid, protect, claim; habits.
 **Abilities** — what the character can actually do: magic, combat, healing, crafts, senses. Each ability with its real limit and cost, and how strong the character is next to others in this world. Only what they can do at this point of the timeline.
 **Awareness** — what the character knows and believes about themselves and the world; what they take for granted; what they are sure of and wrong about.
@@ -472,7 +482,7 @@ Rewrite the bank so that it holds only what is true for {{name}} at this point: 
 ```text
 HOW TO THINK
 Your reasoning is a working note, not prose. Keep it short and to the point: the user is waiting for every turn.
-- Think in this order, a line or two each: what the user attempted; who in the scene reacts and why (their bank, plan and what they know); what can fail and needs a roll; where the turn ends.
+- Think in this order, a line or two each: what the user attempted; who in the scene reacts — for each: feeling, need, goal, then what they do (from their Values, Emotions, plan and what they know); what can fail and needs a roll; where the turn ends.
 - Decide, do not deliberate. When two readings are plausible, take the one that fits the characters best and move on; do not weigh every alternative.
 - Do not draft prose or lines of speech at all — the Writer writes them. Do not draft the form in your reasoning — write it once, in the tool call.
 - Do not restate what is already in front of you. The banks, the lorebook and the history are there to look things up, not to retell.

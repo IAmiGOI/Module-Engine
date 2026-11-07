@@ -5,8 +5,8 @@ import { createFormChecker } from '../cores/decision/form-check.js';
 const form = () => ({
     resolution: 'She speaks.', userResult: 'The user waits.', scene: { minutes: 1 },
     characters: [
-        { name: 'Lena', decision: 'Leave.', decisionReason: 'She is late.', action: 'Mentions the hidden vault.', actionReason: 'She wants the key.', outcome: 'She says it.', speech: 'The vault is under the mill.' },
-        { name: 'Marek', decision: 'Stay.', decisionReason: 'He is tired.', action: 'Sits down.', actionReason: 'The chair is close.', outcome: 'He sits.' },
+        { name: 'Lena', decision: 'Leave.', decisionReason: 'She is late.', action: 'Mentions the hidden vault.', feeling: 'calm', need: 'to be safe', actionReason: 'She wants the key.', outcome: 'She says it.', speech: 'The vault is under the mill.' },
+        { name: 'Marek', decision: 'Stay.', decisionReason: 'He is tired.', action: 'Sits down.', feeling: 'calm', need: 'to be safe', actionReason: 'The chair is close.', outcome: 'He sits.' },
     ],
 });
 
@@ -81,7 +81,7 @@ test('without a classifier the form is accepted without a check, with a warning'
 test('the user character is not checked', async () => {
     const { checker, calls } = build({ answers: { 'knowledge_conflict:Sasha': 0.99, 'knowledge_conflict:Lena': 0.1, 'knowledge_conflict:Marek': 0.1 } });
     const withUser = form();
-    withUser.characters.push({ name: 'Sasha', decision: 'Wait.', decisionReason: 'The user decides.', action: 'Waits.', actionReason: 'The user waits.', outcome: 'Waits.' });
+    withUser.characters.push({ name: 'Sasha', decision: 'Wait.', decisionReason: 'The user decides.', action: 'Waits.', feeling: 'calm', need: 'to be safe', actionReason: 'The user waits.', outcome: 'Waits.' });
     await checker.check({ form: withUser, sceneText: 'scene' });
     assert.equal(Object.keys(calls[0].params.calls[0].questions).includes('knowledge_conflict:Sasha'), false);
     assert.equal(calls[0].params.calls[0].state.characters.some(character => character.name === 'Sasha'), false);
