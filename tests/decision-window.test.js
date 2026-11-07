@@ -133,19 +133,3 @@ test('a rejected cycle is marked and dimmed, not removed', async () => {
 });
 
 
-test('the banks section shows cold-start progress and saves a hand-edited bank', async () => {
-    const { panel, bankWrites } = build();
-    await panel.open();
-    panel.show();
-    await flush();
-    const text = textOf(panel.tree());
-    assert.match(text, /Character banks: 1 of 1 ready/);
-    assert.match(text, /Cold start: ready/);
-    const area = walk(panel.tree(), node => node.tag === 'textarea' && hasClass(node, 'stme-dw-bank-text'))[0];
-    assert.ok(area, 'the bank has an editable textarea');
-    area.props['on:input']({ target: { value: '***Aria***\nEdited by hand.' } });
-    const save = walk(panel.tree(), node => node.tag === 'button' && textOf(node) === 'Save bank')[0];
-    save.props['on:click']();
-    await flush();
-    assert.deepEqual(bankWrites[0], { name: 'Aria', text: '***Aria***\nEdited by hand.' });
-});

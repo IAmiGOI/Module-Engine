@@ -45,11 +45,19 @@ export function createCourtFiles({ call }) {
         title: String(block.name || 'Untitled'), text: String(block.content ?? ''), section, blockId: block.id, blockRole: block.role ?? 'system',
         role: section, readOnly: false,
     }))));
-    const characterFiles = computed(() => Object.values(great()).filter(character => character?.name).flatMap(character => ['material', 'spiritual', 'decree'].map(part => ({
-        id: `character:${character.name}:${part}`, kind: 'character', path: `Characters/${character.name}/${part}.md`,
-        title: `${character.name} — ${part}`, text: renderPart(character, part), character: character.name, part,
-        importance: character.importance, readOnly: part === 'decree', role: part === 'decree' ? 'director' : 'banks',
-    }))));
+    const characterFiles = computed(() => Object.values(great()).filter(character => character?.name).flatMap(character => [
+        ...['material', 'spiritual', 'decree'].map(part => ({
+            id: `character:${character.name}:${part}`, kind: 'character', path: `Characters/${character.name}/${part}.md`,
+            title: `${character.name} — ${part}`, text: renderPart(character, part), character: character.name, part,
+            importance: character.importance, readOnly: part === 'decree', role: part === 'decree' ? 'director' : 'banks',
+        })),
+        // Банк старой версии ещё не разложен по разделам — его текст виден целиком, пока сборщик его не пересоберёт.
+        ...(character.fallbackText ? [{
+            id: `character:${character.name}:card`, kind: 'character', path: `Characters/${character.name}/card.md`,
+            title: `${character.name} — card`, text: String(character.fallbackText), character: character.name, part: 'card',
+            importance: character.importance, readOnly: true, role: 'banks',
+        }] : []),
+    ]));
     const builtInFiles = computed(() => builtIns.map(file => {
         const role = roleOfPrompt(file.name);
         const value = overrides()[file.id] ?? file.text;

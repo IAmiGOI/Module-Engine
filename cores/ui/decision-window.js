@@ -7,7 +7,6 @@ import { LANES, LANE_IDS, turnsIn } from '../../libraries/core/court-lanes.js';
 import { createCourtLanes } from './court-lanes-view.js';
 import { createCourtFiles } from './court-files.js';
 import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/core/decision-feed.js';
-import { createBanksView } from './decision-banks-view.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
 import { text } from './decision-window-rows.js';
 import { createQuestionView } from './decision-questions.js';
@@ -48,7 +47,6 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const now = signal(Date.now());
     const costCounter = signal(true);
     const showRolls = signal(true);
-    const banksView = createBanksView({ call });
     const questionView = createQuestionView({ host, call });
     const bankProgress = createBankProgressView({ host, call });
     let timer = null;
@@ -79,7 +77,6 @@ export function createDecisionWindowCore(host, { mount } = {}) {
             archive: archive.ok && Array.isArray(archive.value) ? archive.value : [],
             live: feed.peek().live,
         }));
-        await banksView.refresh();
         scheduleScroll(true);
     }
 
@@ -114,9 +111,6 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         subscriptions.push(host.events.subscribe('decision.gameSettings.changed', payload => {
             showRolls.set(payload?.values?.showRolls !== 'hidden');
         }));
-        for (const name of ['decision.bank.ready', 'decision.bank.failed', 'decision.bank.short', 'decision.bank.edited', 'decision.bank.timeout']) {
-            subscriptions.push(host.events.subscribe(name, () => banksView.refresh()));
-        }
     }
 
     async function send() {
@@ -161,7 +155,6 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 Select(turnFilter, () => turnOptions(), { onChange: () => scheduleScroll(true) }),
                 h('span', { class: 'stme-court-search' }, TextInput(search, { placeholder: 'Search  (/)' })),
                 Toggle('Thinking', showThinking)),
-            banksView.section(),
             computed(() => (mode() === 'files' ? files.tree() : court.tree())),
             computed(() => (filtered().archive.length
                 // Архив строится, только когда его раскрыли.
