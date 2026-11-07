@@ -75,7 +75,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
 
     function handlersFor(settings) {
         const base = {
-            ...createHandlers({ store, call, publishEvent, getSettings, getGameSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions }),
+            ...createHandlers({ store, call, publishEvent, getSettings, getGameSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions, knowledge }),
             ...knowledge.handlers,
         };
         return withQuestionStreak({ ...base, update_story: createUpdateStoryHandler(base) });

@@ -176,17 +176,23 @@ export function windowHistory(entries, block, keepTurns = DIRECTOR_BLOCK_CYCLES)
     return insertBlock(messages, block, at);
 }
 
+/** Ближняя полная проекция Great Bank: столько сообщений от конца контекста директора. */
+export const NEAR_BANKS_DEPTH = 20;
+
 /**
  * Контекст директора части 10: защищённая часть (банки → лорбук → арки →
  * библиотека → замороженные окна → длинные планы → ростер → дубли банков)
  * → плавающее окно → изменения активных (знания и заметки) → план на @2 →
  * задание. Блок 9 (окно) только дописывается; прежний путь части 9
  * (`digests` + `turns` + история) остаётся до w2.
+ *
+ * Ближняя полная проекция Great Bank встаёт на @20 от конца: правки видны
+ * сразу, а дальняя компактная снята в границе окна и кеш верха не ломает.
  */
 export function buildDeciderContext({
     plan = null, arcs = [], notes = {}, roster = [],
     banksText = '', lorebookText = '', chatBriefText = '', libraryText = '', plansText = '', activeBanksText = '',
-    frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '', sceneText = '',
+    nearBanksText = '', frozenWindows = [], windowEntries = [], windowMode = false, knowledgeText = '', sceneText = '',
     planMissing = false, directorBlock = '', storySettings = '', task = '',
     digests = [], turns = [], chat = [], summaries = [], researchText = '', bankText = '', lorebookChanges = '', limit = RECENT_MESSAGE_LIMIT,
 } = {}) {
@@ -226,26 +232,33 @@ export function buildDeciderContext({
         { role: 'system', content: planContent },
         { role: 'user', content: turnTask },
     ];
+    // Ближняя полная проекция Great Bank — на @20 от конца: меняется после каждой правки, поэтому за окном и
+    // изменяемым хвостом. План остаётся вторым сообщением от конца, задание — последним. В коротком контексте
+    // блок не встаёт перед системным промптом.
+    const withNear = insertBlock(messages, String(nearBanksText ?? '').trim(), Math.max(1, messages.length - NEAR_BANKS_DEPTH));
     const prompt = [
         DIRECTOR_SYSTEM, settingsBlock, ...head, renderFrozenWindows(frozenWindows),
         String(plansText ?? '').trim(), rosterSection(roster), String(activeBanksText ?? '').trim(),
         usingWindow ? renderWindow(windowEntries) : `${renderCompressedDigests(digests)}\n${renderFullTurns(turns)}`,
-        renderHistory(history), ...state, planContent, turnTask,
+        renderHistory(history), String(nearBanksText ?? '').trim(), ...state, planContent, turnTask,
     ].filter(Boolean).join('\n\n');
-    return { systemPrompt: DIRECTOR_SYSTEM, messages, prompt };
+    return { systemPrompt: DIRECTOR_SYSTEM, messages: withNear, prompt };
 }
 
 /**
  * Контекст прозаика: заметки о персонажах + история с блоком @5 + Push в
  * хвосте. Push идёт после истории, как написано во встроенном промпте.
+ * `banksText` — полные банки активного ростера; `decreeText` — Указы всех
+ * персонажей, прямо перед последним сообщением (Push): с ними писатель играет
+ * персонажей.
  */
-export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', sceneText = '', storySettings = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
+export function buildWriterContext({ notes = {}, summaries = [], chat = [], decision = '', writerBlock = '', banksText = '', examples = '', lorebookText = '', knowledgeText = '', sceneText = '', decreeText = '', storySettings = '', limit = RECENT_MESSAGE_LIMIT } = {}) {
     const history = writerHistory(chat, limit, writerBlock);
     // История прозаика — скользящее окно, поэтому кешируется только то, что стоит ДО неё: туда — редко меняющееся
     // (система, примеры, банки активных, саммари). Лорбук по ключам и заметки меняются почти каждый ход — они после
     // истории, рядом с Push, чтобы не обрывать кеш в начале запроса.
     const parts = [WRITER_SYSTEM, String(storySettings ?? '').trim(), String(examples ?? '').trim(), String(banksText ?? '').trim(), summariesSection(summaries)].filter(Boolean);
-    const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim(), String(sceneText ?? '').trim()].filter(Boolean);
+    const tail = [String(lorebookText ?? '').trim(), notesText(notes), String(knowledgeText ?? '').trim(), String(sceneText ?? '').trim(), String(decreeText ?? '').trim()].filter(Boolean);
     const push = String(decision ?? '').trim() ? fillPrompt(WRITER_PUSH, { push: String(decision).trim() }) : '';
     const messages = [
         ...parts.map(content => ({ role: 'system', content })),

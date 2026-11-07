@@ -2,10 +2,12 @@ import { COMMENT } from './decision-tool-comment.js';
 import * as turn from './decision-tool-schemas-turn.js';
 import * as world from './decision-tool-schemas-world.js';
 import * as bootstrap from './decision-tool-schemas-bootstrap.js';
+import * as bank from './decision-tool-schemas-bank.js';
 
 export * from './decision-tool-schemas-turn.js';
 export * from './decision-tool-schemas-world.js';
 export * from './decision-tool-schemas-bootstrap.js';
+export * from './decision-tool-schemas-bank.js';
 export { COMMENT } from './decision-tool-comment.js';
 
 /**
@@ -56,7 +58,8 @@ export function buildToolList(externalSchemas = []) {
         turn.CHARACTER_NOTE_TOOL, turn.ARC_TOOL, turn.CURRENT_STATE_TOOL, world.SET_CHARACTER_LEVEL_TOOL,
         world.SET_CHARACTER_PLAN_TOOL, world.RESOLVE_CHARACTER_PLAN_TOOL, world.LIBRARY_TOOL,
         world.MEMORY_TOOL, world.FORCED_MEMORY_TOOL, world.SPAWN_RESEARCHER_TOOL, world.RECALL_NAME_TOOL,
-        world.LOREBOOK_TOOL, world.CHARACTER_BANK_TOOL, world.CHARACTER_KNOWLEDGE_TOOL, world.UPDATE_STORY_TOOL, world.SAVE_DRAFT_TOOL, world.AWAIT_TOOL,
+        world.LOREBOOK_TOOL, world.CHARACTER_BANK_TOOL, bank.BANK_EDIT_TOOL, bank.SET_BANK_IMPORTANCE_TOOL,
+        world.CHARACTER_KNOWLEDGE_TOOL, turn.UPDATE_STORY_TOOL, world.SAVE_DRAFT_TOOL, world.AWAIT_TOOL,
         bootstrap.ASK_USER_TOOL, bootstrap.WRITE_CHAT_BRIEF_TOOL,
     ];
     const external = (Array.isArray(externalSchemas) ? externalSchemas : [])

@@ -1,12 +1,13 @@
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { LOREBOOK_MARKER, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { MARK_LOREBOOK_CHARACTERS_TOOL, AWAIT_TOOL } from '../../libraries/core/decision-tool-schemas-world.js';
-import { lorebookSections } from '../../libraries/core/decision-banks.js';
+import { lorebookSections, planLorebookMarking } from '../../libraries/core/decision-banks.js';
 
 /**
- * Разметка одной книги: директор одним вызовом решает, какие записи —
- * персонажи, и возвращает uid, чистое имя, алиасы, важность и франшизу.
- * Ошибка/пустой ответ — сигнал вызывающему перейти на запасной путь.
+ * Разметка книг: директор одним вызовом на книгу решает, какие записи —
+ * персонажи. Размечаются только новые и изменённые записи (план по записям),
+ * отметки неизменённых сохраняются. Ошибка книги не ломает остальные: она
+ * уходит предупреждением, а книга читается разделами.
  */
 const text = value => String(value ?? '').trim();
 // Ответ — вызов с записью на каждого персонажа (имя, алиасы, важность): на большой книге это тысячи токенов, а
@@ -83,5 +84,38 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
         return { marks, ignored };
     }
 
-    return { mark };
+    /**
+     * Все книги чата: разметка по плану записей, сохранение отметок и
+     * предупреждения. Возвращает текущие отметки для сбора источников.
+     */
+    async function markBooks({ entries, cards, marks, saveMarks, now = () => Date.now() }) {
+        const warnings = [];
+        const byBook = new Map();
+        for (const entry of Array.isArray(entries) ? entries : []) {
+            const book = text(entry?.book) || 'Lorebook';
+            if (!byBook.has(book)) byBook.set(book, []);
+            byBook.get(book).push(entry);
+        }
+        const cardHint = (Array.isArray(cards) ? cards : []).map(card => [card.name, ...(card.tags ?? [])].filter(Boolean).join(' — ')).filter(Boolean).join('; ');
+        for (const [book, list] of byBook) {
+            const plan = planLorebookMarking(marks[book], list);
+            const record = items => ({ sourceHash: plan.sourceHash, entryHashes: plan.entryHashes, marks: items, at: now() });
+            if (!plan.toMark.length) {
+                // Ничего нового: удалённые записи просто теряют отметки, запрос не нужен.
+                if (marks[book]?.sourceHash !== plan.sourceHash || !marks[book]?.entryHashes) await saveMarks({ ...marks, [book]: record(plan.kept) });
+                continue;
+            }
+            try {
+                const result = await mark({ book, entries: plan.toMark, sectionsFrom: list, cardHint });
+                await saveMarks({ ...marks, [book]: record([...plan.kept, ...result.marks]) });
+            } catch (error) {
+                const message = `Lorebook "${book}" was not marked (${error?.message ?? error}); using sections.`;
+                warnings.push(message);
+                publishEvent('decision.bank.warning', { book, message });
+            }
+        }
+        return warnings;
+    }
+
+    return { mark, markBooks };
 }

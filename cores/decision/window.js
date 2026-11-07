@@ -3,7 +3,7 @@ import { DIRECTOR_WINDOW_SUMMARY, fillPrompt } from '../../libraries/core/decisi
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import {
-    buildCorrection, buildCycleDigest, buildFact, buildFrozenRecord, createBoundary,
+    buildCorrection, buildCycleDigest, buildFact, buildFrozenRecord, createBoundary, BOUNDARY_BANKS_FORMAT,
     normalizeWindow, renderWindow, splitWindow, windowTurnCount, lastTurnNumber,
 } from '../../libraries/core/decision-window.js';
 
@@ -127,9 +127,9 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
             roster,
             libraryText: libraryLevelsSection(store.library()),
             plansText: longPlansSection(store.plans(), store.clock().minutes),
-            activeBanksText: banks ? banks.contextFor({ names: roster, all: false }).text : '',
-            chatBriefText: renderChatBrief(typeof store.chatBrief === 'function' ? store.chatBrief() : null),
-            at: now(),
+            // Дальняя компактная проекция Great Bank: обновляется только здесь, при переключении окна.
+            activeBanksText: banks ? await banks.farContext().catch(() => '') : '',
+            chatBriefText: renderChatBrief(typeof store.chatBrief === 'function' ? store.chatBrief() : null), banks: BOUNDARY_BANKS_FORMAT, at: now(),
         });
         await store.saveBoundary(boundary);
         return boundary;

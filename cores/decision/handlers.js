@@ -1,5 +1,6 @@
 import { createAssessHandler } from './handlers-assess.js';
 import { createSubmitTurnHandler } from './handlers-turn.js';
+import { createBankHandlers } from './handlers-bank.js';
 import { applyArc, applyCharacterNote, applyPlan, notesFor } from '../../libraries/core/decision-state.js';
 import { setLevel, removeOnLeavingRoster, setPlan, interruptPlan, completePlan, planFor } from '../../libraries/core/decision-library.js';
 import {
@@ -16,12 +17,7 @@ import { normalizeBrief, normalizeTimelineBanks, renderChatBrief } from '../../l
  */
 const key = value => String(value ?? '').trim().toLowerCase();
 
-/**
- * @param {{ store: object, call: Function, publishEvent: Function, getSettings: Function,
- *           state: { assessments: Map, assessmentCounter: number, turnCounter: number },
- *           resolvePlace: Function, lastTimeMark: Function, similarityScores: Function }} input
- */
-export function createHandlers({ store, call, publishEvent, getSettings, getGameSettings = null, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null }) {
+export function createHandlers({ store, call, publishEvent, getSettings, getGameSettings = null, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null, knowledge = null }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -52,6 +48,13 @@ export function createHandlers({ store, call, publishEvent, getSettings, getGame
     }
 
     return {
+        ...createBankHandlers({ banks, knowledge, state }),
+        character_bank: async args => {
+            if (!banks) return { ok: false, error: 'Character banks are not available.' };
+            if (args.op === 'write') return banks.write({ name: args.character, text: args.text });
+            if (args.op === 'rebuild') return banks.rebuild({ name: args.character });
+            return { ok: true, banks: await banks.read({ name: args.character }) };
+        },
         update_roster: async args => {
             const before = store.roster().active;
             const remove = new Set((Array.isArray(args.remove) ? args.remove : []).map(name => String(name).trim()).filter(Boolean));
@@ -258,13 +261,6 @@ export function createHandlers({ store, call, publishEvent, getSettings, getGame
 
         submit_turn: createSubmitTurnHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker, userName: () => String(banks?.persona?.()?.name ?? '').trim() }),
 
-
-        character_bank: async args => {
-            if (!banks) return { ok: false, error: 'Character banks are not available.' };
-            if (args.op === 'write') return banks.write({ name: args.character, text: args.text });
-            if (args.op === 'rebuild') return banks.rebuild({ name: args.character });
-            return { ok: true, banks: await banks.read({ name: args.character }) };
-        },
 
         ask_user: async args => {
             if (!questions) return { ok: false, text: 'ask_user is not available.' };

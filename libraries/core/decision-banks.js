@@ -55,7 +55,8 @@ export function lorebookSourceText(entry = {}) {
  * Версия сборщика банков. Банк старее этой версии не считается готовым и пересобирается: так банки, собранные, пока
  * веб-поиск субагента был сломан (в них лежала служебная строка «The researcher returned no report.»), уходят сами.
  */
-export const BANK_BUILDER_VERSION = 4; // 4: Values и Emotions в скелете — банки пересобираются один раз
+// 5: сборщик пишет сразу по разделам Great Bank — старые банки пересобираются один раз.
+export const BANK_BUILDER_VERSION = 5;
 
 export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0, timelineHash = '' }) {
     return {

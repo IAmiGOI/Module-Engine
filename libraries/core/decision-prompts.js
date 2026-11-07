@@ -26,7 +26,9 @@ Every call must carry "comment": at least one full sentence saying why you are m
 - submit_turn — the mandatory form for the turn (see THE TURN).
 - set_plan — your own plan: the direction of future events around the user. It must always exist.
 - character_note — at most four short notes per character: what the Writer must know about them right now.
-- character_bank — read, edit or rebuild a character's data bank: the compact card you and the Writer read.
+- character_bank — read or rebuild a character's data bank from its source: the card you and the Writer read.
+- bank_edit — change a character's Great Bank in one call: any number of characters, sections, facts added, changed or removed, with an optional deadline in words. The engine finds the closest line, writes the turn's RP time on it and never refuses the edit. The resolver may change only the material part; its spiritual edits wait for you as a proposal.
+- set_bank_importance — where a character stands: main (Main Cast), side (Side Character), temporary (Temporary Character) or mass (NPC/Mass).
 - update_story — knowledge, notes, character plans and your plan in one call: use it whenever you record more than one thing.
 - character_knowledge — the Knowledge section of a character's data bank: what they have learned in this story. Whenever a character sees, hears, is told or works out something that matters, add it; extend an entry they already have when they learn more about it (update) instead of adding a duplicate; revise it when they learn it was wrong. A character acts only on their bank and their knowledge. The user's character has no knowledge record.
 - arc — the stages of the roleplay and which sections are finished.
@@ -199,84 +201,9 @@ export const RESEARCHER_SYSTEM = `You are a background researcher for the Direct
 
 Every call must carry "comment": at least one full sentence saying why you are making it.`;
 
-export const BANK_COMPRESSION = `You compress the memory bank records of one character in a roleplay. The records are results of the character's plans, in time order.
-
-{{records}}
-
-Rewrite the ordinary records as a shorter chronicle that keeps:
-- what the character did, and what came of it;
-- every change in their goals, relationships, possessions, injuries and knowledge;
-- promises, debts, secrets and grudges that are still alive;
-- links between events: what caused what.
-Drop repetition and moment-to-moment detail. Never invent anything. Records marked important are not given to you and stay as they are; do not mention their absence.`;
 
 
 
-/** Дата-банк персонажа — дословно из `PROMPTS.md`, раздел 10. */
-export const CHARACTER_BANK_BUILDER = `You build a DATA BANK for one roleplay character: a compact character card that the Writer and the Director will read on every turn this character is active. You have web search and page reading.
-
-CHARACTER: {{name}}
-SOURCE ({{source_kind}}):
-{{source}}
-FRANCHISE: {{canon_hint}}
-ALSO KNOWN AS: {{aliases}}
-TIMELINE OF THIS STORY: {{timeline}}
-GUIDE FROM THE DIRECTOR: {{guide}}
-IMPORTANCE: decide it yourself from canon and the SOURCE — "key" for a character central to the story or to the chat character, "minor" for the rest. {{importance_floor}}A key bank stays under about 800 tokens, a minor one under about 400. These are ceilings, not targets.
-
-CANON DISCIPLINE
-If the character comes from a book, game, anime or any world that exists outside this chat, look the canon up instead of trusting memory: names, titles, ages, numbers, relations and appearance are exactly what models get wrong. For anime, manga, games and visual novels start with the character databases and the franchise wiki: read Appearance, Personality and the speech or quotes sections, not the whole plot. Take exact names and numbers from the source. What follows plainly from what you found is allowed; specifics you would be making up from nothing are not. The SOURCE above is the user's version of the character: where it differs from canon, the SOURCE wins.
-If FRANCHISE is empty, the character may be original. Do not guess a franchise: build from the SOURCE alone, and search only if the SOURCE itself clearly names an existing work or a canon character.
-If TIMELINE OF THIS STORY is given, build the character as they are at that point: relations, abilities, knowledge and events that come later in the canon do not exist yet, and the bank does not mention them. Add **Timeline lock** right after the identity line: where the character stands now and what has not happened yet.
-If GUIDE FROM THE DIRECTOR is given, follow it: the Director runs this story and says what every bank in it must cover and leave out.
-
-THE SKELETON — always these sections, in this order:
-***{{name}}***  (one line of identity in the world's own terms, if useful)
-**Core goal** — what the character wants most, in one line; then what stands in the way.
-**Values** — what the character holds dear and what they despise: ideas, ways of acting, things, and people by name. Each value with how strongly it holds and what it makes them do. Values decide what and whom they like.
-**Core Personality traits** — each stable trait together with its CONSEQUENCE: what it leads the character to do, and what it does not lead to. Never a list of adjectives.
-**Emotions** — their usual mood; what quickly moves them to joy, anger, fear, shame, tenderness, and how each shows on them; how fast their feelings swing and how long they last.
-**Behaviour** — what the character concretely does in situations: what comes first, what they avoid, protect, claim; habits.
-**Abilities** — what the character can actually do: magic, combat, healing, crafts, senses. Each ability with its real limit and cost, and how strong the character is next to others in this world. Only what they can do at this point of the timeline.
-**Awareness** — what the character knows and believes about themselves and the world; what they take for granted; what they are sure of and wrong about.
-**Speech** — every feature of how they talk as its own named rule (a tic or signature word with its reason, how they refer to themselves, rhythm, languages), then one or two sample lines.
-**Guidelines** — one or two rules for the narrator about how to show this character.
-Then only the free sections this character needs, each with a clear name: **Appearance** written as mechanics (a feature, then in parentheses what it does to behaviour, exact numbers), **Relations**, **Backstory**. Mark what the user's character does not know yet where the fact stands: "(the user does not know this until she says it)".
-
-RULES OF WRITING
-- Explicit Naming: every rule the model must act on gets its own short bold name that says what it does.
-- Name Literal: write the character's name out everywhere; never "{{char}}". The player is "the user".
-- Parenthesis Bound: a parenthesis after a rule only clarifies that rule — its bound or consequence.
-- Positive Phrasing: say what the character DOES. A negation only next to the positive wording it belongs to.
-- No Preset Echo: do not write general roleplay rules (not acting for the user, prose style, pacing, generic psychology). Only what is specific to this character.
-- One fact lives in one place. No repeats between sections.
-- Write in English, except sample lines, which are in the language of the roleplay.
-
-For a persona (the user's own character): write what others can see and know — appearance, manner, how they come across, what is publicly known — and under **Abilities** exactly the abilities the SOURCE gives, without adding limits of your own. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
-
-READING BUDGET: most banks need web_character, then the character's page on the franchise wiki (web_wikis, web_wiki) — and from it only the Infobox and one or two sections: Appearance and Personality, plus speech or quotes. Use web_find to jump to what you need. Do not read whole articles or plot summaries, and stop reading as soon as the skeleton can be filled.
-
-When the bank is ready and inside its size, call finish with the bank as the report. Its last line is "IMPORTANCE: key" or "IMPORTANCE: minor". You have at most {{steps}} steps. Every call must carry "comment": at least one full sentence saying why you are making it.`;
-
-/** Разметка лорбука — дословно из `PROMPTS.md`, раздел 11. */
-export const LOREBOOK_MARKER = `You are preparing the Director's character data banks. Below is the list of entries of one lorebook. Decide which entries describe a single character — a person or a creature with a will of their own — and which describe anything else: places, events, families, factions, magic, items, rules of the world.
-
-BOOK: {{book}}
-CHAT CHARACTER: {{card_hint}}
-SECTIONS OF THE BOOK: {{sections}}
-ENTRIES (uid | title | keys | beginning of the text):
-{{entries}}
-
-The book's sections are a hint, not a rule: a character can sit in any section, and a "characters" section can hold a family or a group entry. An entry about a group, a family or a pair of characters is not a single character.
-
-Call mark_lorebook_characters once, with every character entry:
-- uid — the entry;
-- name — the character's clean name as people in the story call them, without jokes, notes or status remarks from the title ("Rem (Still comatose lmao)" → "Rem");
-- aliases — other names, titles and nicknames from the title, the keys and the text;
-- franchise — the existing work this character comes from, only if the entries or the chat character make it clear; leave it empty if the world may be original. Never guess.
-Entries you do not list are treated as not characters. The call needs a comment of at least one sentence.`;
-
-/** Проверка ответа писателя — дословно из `PROMPTS.md`, раздел 13. */
 export const WRITER_AGENCY_QUESTION = `The reply writes actions, spoken words, thoughts or feelings for {{user}} that {{user}} did not write in their own message.`;
 
 export const WRITER_RESOLUTION_QUESTION = `The reply continues the scene past this ending of the turn, playing events that come after it: {{resolution}}`;
@@ -329,17 +256,6 @@ export const ASK_USER_STREAK = `You have asked two questions in a row. Use the a
 export const WRITE_CHAT_BRIEF_DESCRIPTION = `Write the chat brief: what you learned about the world this story starts in. It stays in your context for the whole chat. Name every character whose data bank depends on the point of the timeline, with what in the bank must change. Give the data bank builders one guide for this story: it goes to every character's bank.`;
 
 /** Правка банка под таймлайн — дословно из `PROMPTS.md`, раздел 17. */
-export const BANK_TIMELINE_ADJUST = `You adjust one character's data bank to the point of the timeline this story starts at. Do not search; use only what is below.
-
-CHARACTER: {{name}}
-TIMELINE OF THIS STORY:
-{{timeline}}
-GUIDE FROM THE DIRECTOR: {{guide}}
-WHAT THE DIRECTOR NOTED FOR THIS CHARACTER: {{note}}
-DATA BANK:
-{{bank}}
-
-Rewrite the bank so that it holds only what is true for {{name}} at this point: remove or change relations, abilities, knowledge and events that come later in the canon; keep everything else as it is, in the same skeleton and the same size. Add **Timeline lock** right after the identity line, or correct it if it is there: where {{name}} stands now and what has not happened yet. Follow GUIDE FROM THE DIRECTOR if it is given. If the bank has no **Abilities** section, add it right after **Behaviour**, from canon you are sure of: what {{name}} can do at this point, each ability with its real limit, cost and strength next to others. Return the whole bank and nothing else.`;
 
 export const CHAT_BRIEF_HEADER = 'CHAT BRIEF:';
 export const DIRECTOR_REASONING = `HOW TO THINK
@@ -358,11 +274,11 @@ export const DIRECTOR_CONCRETE = `You have been thinking for too long, and your 
 
 Stop weighing options. Take the most natural reading of the scene and act now: call the next tool with concrete values — names, actions, levels, the exact outcome. Do not restate the situation, and do not reopen anything you have already decided.`;
 
-export const BANK_GUIDE_DESCRIPTION = 'One guide for every data bank builder in this story, under 250 words: the point of the timeline every bank must be written at; what this story needs every bank to cover (above all abilities with their real limits and how strong characters are next to each other); what every bank must leave out (relations and events that come later). No plot of this chat and no instructions for single characters.';
 
-/** Настройки игры — дословно из PROMPTS.md §22 (сами строки — в story-settings-text.js). */
 export { STORY_SETTINGS_HEADER, STORY_SETTINGS_RULES } from './story-settings-text.js';
 
 export const DIRECTOR_AFTER_TURN = `AFTER THE TURN: your form is accepted and the Writer is writing the reply now. Record everything this turn changed in ONE update_story call: what each character learned (knowledge), the notes this turn made wrong (notes), the character plans it changed and an aim for anyone who has none yet (characterPlans), and your own plan if it changed (plan). Change only what this turn changed; leave what is still true. That one call ends the work. If the turn changed nothing, call await instead. submit_turn is closed.`;
 export const AFTER_TURN_USE_UPDATE_STORY = `Record it in your update_story call instead, together with everything else this turn changed: knowledge, notes, characterPlans and plan in one call.`;
 export const AFTER_TURN_SUBMIT_CLOSED = `The turn is already submitted and the Writer is writing it. Record what it changed in one update_story call.`;
+
+export { BANK_COMPRESSION, CHARACTER_BANK_BUILDER, LOREBOOK_MARKER, BANK_TIMELINE_ADJUST, BANK_GUIDE_DESCRIPTION } from './decision-prompts-bank.js';

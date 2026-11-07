@@ -38,7 +38,9 @@ Every call must carry "comment": at least one full sentence saying why you are m
 - submit_turn — the mandatory form for the turn (see THE TURN).
 - set_plan — your own plan: the direction of future events around the user. It must always exist.
 - character_note — at most four short notes per character: what the Writer must know about them right now.
-- character_bank — read, edit or rebuild a character's data bank: the compact card you and the Writer read.
+- character_bank — read or rebuild a character's data bank from its source: the card you and the Writer read.
+- bank_edit — change a character's Great Bank in one call: any number of characters, sections, facts added, changed or removed, with an optional deadline in words. The engine finds the closest line, writes the turn's RP time on it and never refuses the edit. The resolver may change only the material part; its spiritual edits wait for you as a proposal.
+- set_bank_importance — where a character stands: main (Main Cast), side (Side Character), temporary (Temporary Character) or mass (NPC/Mass).
 - update_story — knowledge, notes, character plans and your plan in one call: use it whenever you record more than one thing.
 - character_knowledge — the Knowledge section of a character's data bank: what they have learned in this story. Whenever a character sees, hears, is told or works out something that matters, add it; extend an entry they already have when they learn more about it (update) instead of adding a duplicate; revise it when they learn it was wrong. A character acts only on their bank and their knowledge. The user's character has no knowledge record.
 - arc — the stages of the roleplay and which sections are finished.
@@ -243,7 +245,7 @@ Drop repetition and moment-to-moment detail. Never invent anything. Records mark
 
 ## 10. Субагент — сборка дата-банка (холодный запуск и новые персонажи)
 
-Правила взяты из `guide/knowledge/character-rules.md` и `character-cards.md` (формат создания персонажей у Mea), сжаты под микро-карточку. Подстановки:
+Банк — Great Bank: сборщик пишет сразу по разделам (Material 1–7, Spiritual 1–6), а не свободной карточкой. Правила взяты из `guide/knowledge/character-rules.md` и `character-cards.md` (формат создания персонажей у Mea), сжаты под микро-карточку. Подстановки:
 - `{{name}}` — имя персонажа;
 - `{{source_kind}}` — card / lorebook entry / persona / history;
 - `{{source}}` — текст источника;
@@ -255,7 +257,7 @@ Drop repetition and moment-to-moment detail. Never invent anything. Records mark
 - `{{steps}}` — лимит шагов.
 
 ```text
-You build a DATA BANK for one roleplay character: a compact character card that the Writer and the Director will read on every turn this character is active. You have web search and page reading.
+You build a GREAT BANK for one roleplay character: the sections the Director edits and every role reads. The bank lives outside the model's context; each role gets its own projection of it. You have web search and page reading.
 
 CHARACTER: {{name}}
 SOURCE ({{source_kind}}):
@@ -269,36 +271,55 @@ IMPORTANCE: decide it yourself from canon and the SOURCE — "key" for a charact
 CANON DISCIPLINE
 If the character comes from a book, game, anime or any world that exists outside this chat, look the canon up instead of trusting memory: names, titles, ages, numbers, relations and appearance are exactly what models get wrong. For anime, manga, games and visual novels start with the character databases and the franchise wiki: read Appearance, Personality and the speech or quotes sections, not the whole plot. Take exact names and numbers from the source. What follows plainly from what you found is allowed; specifics you would be making up from nothing are not. The SOURCE above is the user's version of the character: where it differs from canon, the SOURCE wins.
 If FRANCHISE is empty, the character may be original. Do not guess a franchise: build from the SOURCE alone, and search only if the SOURCE itself clearly names an existing work or a canon character.
-If TIMELINE OF THIS STORY is given, build the character as they are at that point: relations, abilities, knowledge and events that come later in the canon do not exist yet, and the bank does not mention them. Add **Timeline lock** right after the identity line: where the character stands now and what has not happened yet.
+If TIMELINE OF THIS STORY is given, build the character as they are at that point: relations, abilities, knowledge and events that come later in the canon do not exist yet, and the bank does not mention them. Start Material 3 with one line naming the point of the timeline — **Timeline lock** — where the character stands now and what has not happened yet.
 If GUIDE FROM THE DIRECTOR is given, follow it: the Director runs this story and says what every bank in it must cover and leave out.
 
-THE SKELETON — always these sections, in this order:
+THE SECTIONS — write the identity line and every heading in this order, and put every fact on its own line, starting with "- ":
 ***{{name}}***  (one line of identity in the world's own terms, if useful)
-**Core goal** — what the character wants most, in one line; then what stands in the way.
-**Values** — what the character holds dear and what they despise: ideas, ways of acting, things, and people by name. Each value with how strongly it holds and what it makes them do. Values decide what and whom they like.
-**Core Personality traits** — each stable trait together with its CONSEQUENCE: what it leads the character to do, and what it does not lead to. Never a list of adjectives.
-**Emotions** — their usual mood; what quickly moves them to joy, anger, fear, shame, tenderness, and how each shows on them; how fast their feelings swing and how long they last.
-**Behaviour** — what the character concretely does in situations: what comes first, what they avoid, protect, claim; habits.
-**Abilities** — what the character can actually do: magic, combat, healing, crafts, senses. Each ability with its real limit and cost, and how strong the character is next to others in this world. Only what they can do at this point of the timeline.
-**Awareness** — what the character knows and believes about themselves and the world; what they take for granted; what they are sure of and wrong about.
-**Speech** — every feature of how they talk as its own named rule (a tic or signature word with its reason, how they refer to themselves, rhythm, languages), then one or two sample lines.
-**Guidelines** — one or two rules for the narrator about how to show this character.
-Then only the free sections this character needs, each with a clear name: **Appearance** written as mechanics (a feature, then in parentheses what it does to behaviour, exact numbers), **Relations**, **Backstory**. Mark what the user's character does not know yet where the fact stands: "(the user does not know this until she says it)".
+Material 1 — Appearance
+Material 2 — Property
+Material 3 — Life facts
+Material 4 — Carried items
+Material 5 — Clothing
+Material 6 — Abilities
+Material 7 — Other material facts
+Spiritual 1 — Values
+Spiritual 2 — Likes and dislikes
+Spiritual 3 — Emotional display and public mood
+Spiritual 4 — Needs and goals
+Spiritual 5 — Speech and thinking patterns
+Spiritual 6 — Resolving
+
+WHAT EACH SECTION HOLDS
+- Material 1 — Appearance: what anyone sees at once, as mechanics — a feature and, in parentheses, what it does to behaviour, with exact numbers where the canon has them.
+- Material 2 — Property: what they own and where it is — a home, land, money, a workshop, a debt held over them.
+- Material 3 — Life facts: history and present, one fact per line, oldest first; what shaped them and where they stand now, including where they stand at the point of the timeline.
+- Material 4 — Carried items: what they have on them day to day — weapons, tools, keys, keepsakes — each with why it is carried.
+- Material 5 — Clothing: what they wear, by occasion, and what it says about them.
+- Material 6 — Abilities: what they can actually do — magic, combat, healing, crafts, senses — AND their strengths and weaknesses: each strength with its real limit and cost, each weakness with when it shows, and how strong they are next to others in this world. Only what they can do at this point of the timeline.
+- Material 7 — Other material facts: whatever about their body, possessions or circumstances fits nowhere else.
+- Spiritual 1 — Values: what they hold dear and what they despise — ideas, ways of acting, things, and people by name; each value with how strongly it holds and what it makes them do. Values decide what and whom they like.
+- Spiritual 2 — Likes and dislikes: what draws them and what repels them day to day — food, weather, company, habits, small things.
+- Spiritual 3 — Emotional display and public mood: their usual mood; what moves them to joy, anger, fear, shame and tenderness, how each shows on them, how fast their feelings swing and how long they last.
+- Spiritual 4 — Needs and goals: what they want most and why; what stands in the way; what they need in a moment, from the body or from other people.
+- Spiritual 5 — Speech and thinking patterns: every feature of how they talk and think as its own line — a tic or signature word with its reason, how they refer to themselves, rhythm, languages — then one or two sample lines.
+- Spiritual 6 — Resolving: how this character makes a choice, in situations concrete to them: what wins when two things pull, what they never trade away, how they decide under fear, anger or time pressure. Situations of this character, never general formulas.
+
+Leave out a section the SOURCE truly says nothing about; never invent to fill it. One fact lives in one line and in one section.
 
 RULES OF WRITING
-- Explicit Naming: every rule the model must act on gets its own short bold name that says what it does.
+- Explicit Naming: every rule the model must act on says what it does in plain words.
 - Name Literal: write the character's name out everywhere; never "{{char}}". The player is "the user".
-- Parenthesis Bound: a parenthesis after a rule only clarifies that rule — its bound or consequence.
+- Parenthesis Bound: a parenthesis after a fact only clarifies that fact — its bound or consequence.
 - Positive Phrasing: say what the character DOES. A negation only next to the positive wording it belongs to.
 - No Preset Echo: do not write general roleplay rules (not acting for the user, prose style, pacing, generic psychology). Only what is specific to this character.
-- One fact lives in one place. No repeats between sections.
 - Write in English, except sample lines, which are in the language of the roleplay.
 
-For a persona (the user's own character): write what others can see and know — appearance, manner, how they come across, what is publicly known — and under **Abilities** exactly the abilities the SOURCE gives, without adding limits of your own. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
+For a persona (the user's own character): write what others can see and know — appearance, manner, how they come across, what is publicly known — and under Material 6 exactly the abilities the SOURCE gives, without adding limits of your own. Never write the user's goals, decisions, thoughts or feelings: those belong to the user.
 
-READING BUDGET: most banks need web_character, then the character's page on the franchise wiki (web_wikis, web_wiki) — and from it only the Infobox and one or two sections: Appearance and Personality, plus speech or quotes. Use web_find to jump to what you need. Do not read whole articles or plot summaries, and stop reading as soon as the skeleton can be filled.
+READING BUDGET: most banks need web_character, then the character's page on the franchise wiki (web_wikis, web_wiki) — and from it only the Infobox and one or two sections: Appearance and Personality, plus speech or quotes. Use web_find to jump to what you need. Do not read whole articles or plot summaries, and stop reading as soon as the sections can be filled.
 
-When the bank is ready and inside its size, call finish with the bank as the report. Its last line is "IMPORTANCE: key" or "IMPORTANCE: minor". You have at most {{steps}} steps. Every call must carry "comment": at least one full sentence saying why you are making it.
+When the bank is ready and inside its size, call finish with the bank as the report, headings exactly as written above. Its last line is "IMPORTANCE: key" or "IMPORTANCE: minor". You have at most {{steps}} steps. Every call must carry "comment": at least one full sentence saying why you are making it.
 ```
 
 ## 11. Директор — разметка лорбука при холодном запуске (какие записи — персонажи)
@@ -337,6 +358,15 @@ Entries you do not list are treated as not characters. The call needs a comment 
   Обновляется только при переключении окна.
 - `PREVIOUS WINDOWS (summaries):` — замороженная история плавающего окна
   (часть 10). Сводки прошлых окон под ней только дописываются.
+- `CHARACTER DATA BANKS — COMPACT (…):` — дальняя проекция Great Bank
+  (часть 16): Material 1, 3, 6 + Spiritual 4, 6 по всем персонажам. Стоит на
+  месте прежнего блока активных банков в границе окна и обновляется только
+  при переключении — кеш верха не ломается.
+- `CHARACTER DATA BANKS — FULL (the characters in this scene):` — ближняя
+  полная проекция Great Bank: все разделы активного ростера. Стоит на @20 от
+  конца контекста директора и пересобирается после каждой правки.
+- `DECREES — how each character is to be played in this story:` — Указы всех
+  персонажей, писателю прямо перед Push. Пока Указов нет, блока нет.
 
 ## 12. Директор — сводка выпавших циклов окна (переключение окна)
 

@@ -65,6 +65,14 @@ export const DEFAULT_BOOTSTRAP = Object.freeze({
     timeoutMs: 180000,
 });
 
+/**
+ * Времена суток для сроков Great Bank: модель пишет «dawn», движок ставит
+ * абсолютную метку. Настройка владельца — часы можно переписать.
+ */
+export const DEFAULT_BANK_TIME_OF_DAY = Object.freeze({
+    dawn: '06:00', morning: '08:00', noon: '12:00', afternoon: '13:00', evening: '18:00', night: '22:00', midnight: '00:00',
+});
+
 export const DEFAULT_SETTINGS = Object.freeze({
     prompts: DEFAULT_PROMPTS,
     // Настройки игры для новых чатов (часть 13). Настройки текущего чата — в памяти чата.
@@ -94,6 +102,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     assessSeed: null,
     classifier: DEFAULT_CLASSIFIER,
     bootstrap: DEFAULT_BOOTSTRAP,
+    bankTimeOfDay: DEFAULT_BANK_TIME_OF_DAY,
     decider: DEFAULT_DECIDER,
     writer: DEFAULT_WRITER,
     compression: DEFAULT_COMPRESSION,
@@ -107,6 +116,18 @@ function number(value, min, max, fallback) {
 
 function text(value, fallback = '') {
     return typeof value === 'string' ? value : fallback;
+}
+
+/** Время суток — `HH:MM`; мусор заменяется умолчанием, лишние слова отбрасываются. */
+export function clampTimeOfDay(value) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const out = { ...DEFAULT_BANK_TIME_OF_DAY };
+    for (const [word, at] of Object.entries(source)) {
+        const match = /^(\d{1,2}):(\d{2})$/.exec(String(at ?? '').trim());
+        if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) continue;
+        out[String(word).toLowerCase()] = `${String(Number(match[1])).padStart(2, '0')}:${match[2]}`;
+    }
+    return out;
 }
 
 /** Защитное чтение: ручная правка файла настроек и старая запись без полей не должны уйти в запрос как есть. */
@@ -184,6 +205,7 @@ export function clampDecisionSettings(values = {}) {
             maxSteps: Math.round(number(bootstrap.maxSteps, 1, 200, DEFAULT_BOOTSTRAP.maxSteps)),
             timeoutMs: Math.round(number(bootstrap.timeoutMs, 1000, 3600000, DEFAULT_BOOTSTRAP.timeoutMs)),
         },
+        bankTimeOfDay: clampTimeOfDay(source.bankTimeOfDay),
         researcher: {
             workerId: text(researcher.workerId, '').trim(),
             maxTasks: Math.round(number(researcher.maxTasks, 1, 8, 2)),

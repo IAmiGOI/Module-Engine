@@ -28,7 +28,10 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const worker = writerId ? getWorkers().find(item => item.id === writerId) : null;
         const model = worker && worker.id !== 'st-main' ? String(worker.model ?? '') : '';
         const writerBlock = (await assembleSectionFor({ sectionId: 'writer', settings, chat: pending.chat, call, model })).messages;
-        const bankText = banks ? banks.contextFor({ names: store.roster().active, all: false }).text : '';
+        // Писателю — полные банки активного ростера и Указы всех персонажей; пока Great Bank не собран, работают прежние банки.
+        const great = banks?.writerContext ? await banks.writerContext(store.roster().active).catch(() => null) : null;
+        const bankText = great?.banks || (banks ? banks.contextFor({ names: store.roster().active, all: false }).text : '');
+        const decreeText = great?.decrees ?? '';
         const examples = banks ? banks.examplesForCards() : '';
         const decision = pending.push ?? pending.decision;
         const lorebookText = await writerLorebookText(call, pending.chat, decision, banks);
@@ -44,7 +47,7 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const game = resolveGameSettings(typeof store.gameSettings === 'function' ? store.gameSettings() : null, settings.gameDefaults);
         const context = buildWriterContext({
             notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText,
-            examples, lorebookText, knowledgeText, sceneText, storySettings: buildStorySettingsBlock('writer', game),
+            examples, lorebookText, knowledgeText, sceneText, decreeText, storySettings: buildStorySettingsBlock('writer', game),
         });
         if (writerId && writerId !== 'st-main') {
             const own = await writerProxy.respond({

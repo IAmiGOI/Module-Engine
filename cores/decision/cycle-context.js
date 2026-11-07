@@ -4,7 +4,7 @@ import { buildToolList } from '../../libraries/core/decision-tools.js';
 import { staticDirectorLorebook } from '../../libraries/core/decision-lorebook-static.js';
 import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
-import { createBoundary, normalizeBoundary, lastTurnNumber } from '../../libraries/core/decision-window.js';
+import { createBoundary, normalizeBoundary, lastTurnNumber, BOUNDARY_BANKS_FORMAT } from '../../libraries/core/decision-window.js';
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import { DIRECTOR_CONCRETE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
@@ -68,21 +68,33 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
         } catch { return ''; }
     }
 
-    /** Граница окна: блоки 4, 6, 7 и 8. Нет сохранённой — снимается один раз и живёт до переключения. */
+    /**
+     * Граница окна: блоки 4, 6, 7 и 8. Нет сохранённой — снимается один раз и
+     * живёт до переключения. Дальняя компактная проекция Great Bank снимается
+     * здесь же: она меняется только на сломе контекста, и кеш верха цел.
+     */
     async function ensureBoundary() {
         const saved = typeof store.boundary === 'function' ? normalizeBoundary(store.boundary()) : null;
-        if (saved) return saved;
+        // Граница прежнего формата (карточки вместо разделов) переснимается один раз: иначе компактной проекции не будет.
+        if (saved && saved.banks === BOUNDARY_BANKS_FORMAT) return saved;
         const roster = store.roster().active;
         const fresh = createBoundary({
             roster,
             libraryText: libraryLevelsSection(store.library()),
             plansText: longPlansSection(store.plans(), store.clock().minutes),
-            activeBanksText: banks ? banks.contextFor({ names: roster, all: false }).text : '',
+            activeBanksText: banks ? await banks.farContext().catch(() => '') : '',
             chatBriefText: renderChatBrief(typeof store.chatBrief === 'function' ? store.chatBrief() : null),
+            banks: BOUNDARY_BANKS_FORMAT,
             at: Date.now(),
         });
         if (typeof store.saveBoundary === 'function') await store.saveBoundary(fresh);
         return fresh;
+    }
+
+    /** Ближняя полная проекция: активный ростер, пересобирается после каждой правки — она в некешируемом хвосте. */
+    async function nearBanksText() {
+        if (!banks?.nearContext) return '';
+        return banks.nearContext(store.roster().active).catch(() => '');
     }
 
     function sceneText(chat) {
@@ -148,7 +160,7 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
         return buildStorySettingsBlock('director', game);
     }
 
-    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '', turn = null }) {
+    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '', turn = null, nearBanks = '' }) {
         const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '', chatBriefText: '' };
         const win = typeof store.window === 'function' ? store.window() : null;
         const all = Array.isArray(win?.entries) ? win.entries : [];
@@ -157,6 +169,7 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
             plan: store.plan(), arcs: store.arcs(), notes: store.notes(), storySettings,
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
             chatBriefText: safe.chatBriefText ?? '', planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
+            nearBanksText: nearBanks,
             windowEntries: [...entries, ...pendingTurn(entries, currentUser, reroll, turn)],
             sceneText: currentSceneText({ beforeTurn: reroll && entries.length < all.length ? Number(all.filter(entry => entry.kind === 'turn').at(-1)?.turn) : null }),
             frozenWindows: typeof store.frozen === 'function' ? store.frozen() : [],
@@ -165,11 +178,12 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
     }
 
     async function runContext({ settings, chat = [], task = '', lorebook = true, worker, reroll = false, turn = null }) {
-        const [lorebookText, directorBlock, knowledgeText, boundary] = await Promise.all([
-            lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(),
+        const [lorebookText, directorBlock, knowledgeText, boundary, nearBanks] = await Promise.all([
+            lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(), nearBanksText(),
         ]);
-        const banksText = banks ? banks.contextFor({ all: true }).text : '';
-        return buildContext({ task, lorebookText, knowledgeText, directorBlock, banksText, boundary, currentUser: lastUserText(chat), reroll, turn, storySettings: storySettingsText(settings) });
+        // Карточки банков больше не идут отдельным блоком: их место заняли проекции Great Bank — дальняя в границе
+        // окна (все персонажи) и ближняя на @20 (активный ростер). Старый банк без разделов виден в дальней как есть.
+        return buildContext({ task, lorebookText, knowledgeText, directorBlock, boundary, nearBanks, currentUser: lastUserText(chat), reroll, turn, storySettings: storySettingsText(settings) });
     }
 
     /**

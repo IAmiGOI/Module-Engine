@@ -191,8 +191,15 @@ export function renderWindow(entries) {
     return (Array.isArray(entries) ? entries : []).map(entry => text(entry?.text)).filter(Boolean).join('\n\n');
 }
 
-/** Граница окна: снимок блоков 4, 6, 7 и 8. Меняется только при переключении. */
-export function createBoundary({ roster = [], libraryText = '', plansText = '', activeBanksText = '', chatBriefText = '', at = 0 } = {}) {
+/**
+ * Граница окна: снимок блоков 4, 6, 7 и 8. Меняется только при переключении.
+ * `activeBanksText` — дальняя компактная проекция Great Bank (Material 1, 3, 6 +
+ * Spiritual 4, 6): снимается здесь, чтобы кеш верха не ломался правками.
+ * `banks` — метка формата: граница прежнего банка переснимается один раз.
+ */
+export const BOUNDARY_BANKS_FORMAT = 'great-bank';
+
+export function createBoundary({ roster = [], libraryText = '', plansText = '', activeBanksText = '', chatBriefText = '', banks = '', at = 0 } = {}) {
     return {
         at: Number(at) || 0,
         roster: (Array.isArray(roster) ? roster : []).map(text).filter(Boolean),
@@ -200,6 +207,7 @@ export function createBoundary({ roster = [], libraryText = '', plansText = '', 
         plansText: text(plansText),
         activeBanksText: text(activeBanksText),
         chatBriefText: text(chatBriefText),
+        banks: text(banks),
     };
 }
 

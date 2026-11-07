@@ -1,8 +1,9 @@
-import { splitBankImportance, bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, planLorebookMarking, BANK_BUILDER_VERSION, bankFrameHash } from '../../libraries/core/decision-banks.js';
+import { splitBankImportance, bankSourcesForChat, findBankSource, createBankRecord, hashText, bankSizeBand, bankIsReady, renderBankSection, renderExampleSection, BANK_BUILDER_VERSION, bankFrameHash } from '../../libraries/core/decision-banks.js';
 import { createBankStore } from './bank-store.js';
 import { createTimelineAdjust } from './bank-timeline.js';
 import { createBankTasks, bankConcurrency } from './bank-tasks.js';
 import { createLorebookMarker } from './lorebook-marker.js';
+import { createGreatBankLayer } from './bank-great-layer.js';
 
 /**
  * Дата-банки персонажей: два слоя (общий и копия чата), холодный запуск перед
@@ -13,6 +14,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     const bankStore = createBankStore({ call });
     const tasks = createBankTasks({ getSettings, researcher, publishEvent });
     const marker = createLorebookMarker({ call, getSettings, getWorkers, publishEvent });
+    const greatLayer = createGreatBankLayer({ call, store, banks: { records: () => records() }, publishEvent, getSettings });
     let coldStartPromise = null;
     let queueRunning = null; // очередь сборки живёт дольше холодного старта (он отпускает ход по таймауту)
     let sourcesCache = [];
@@ -22,16 +24,15 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     const brief = () => (typeof store.chatBrief === 'function' ? store.chatBrief() : null);
     function currentTimeline() { return String(brief()?.timeline ?? '').trim(); }
     function currentGuide() { return String(brief()?.bankGuide ?? '').trim(); }
-    const timelineAdjust = createTimelineAdjust({
-        call, getSettings, publishEvent, bankStore, records: () => records(), matchesName, currentTimeline, currentGuide, queue: timelineQueue,
-    });
-
     function keyOf(name) { return String(name ?? '').trim().toLowerCase(); }
     function matchesName(record, name) {
         const wanted = keyOf(name);
         if (!wanted) return false;
         return [record?.name, record?.canonicalName, ...(record?.aliases ?? [])].some(value => keyOf(value) === wanted);
     }
+    const timelineAdjust = createTimelineAdjust({
+        call, getSettings, publishEvent, bankStore, records: () => records(), matchesName, currentTimeline, currentGuide, queue: timelineQueue,
+    });
 
     // Нижняя граница важности: главный персонаж карточки, персона, сцена, уровни 1–2 библиотеки.
     // Выше неё важность решает сборщик (строка IMPORTANCE в банке).
@@ -42,33 +43,11 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     }
     const withFloor = source => ({ ...source, sizeBand: sizeFor(source), timeline: currentTimeline(), guide: currentGuide() });
 
+    /** Разметка книг — в `lorebook-marker.js`; здесь только сбор источников и предупреждения. */
     async function markLorebooks(entries, cards) {
-        markWarnings = [];
-        const stored = bankStore.marks();
-        const byBook = new Map();
-        for (const entry of Array.isArray(entries) ? entries : []) {
-            const book = String(entry?.book ?? '').trim() || 'Lorebook';
-            if (!byBook.has(book)) byBook.set(book, []);
-            byBook.get(book).push(entry);
-        }
-        const cardHint = (Array.isArray(cards) ? cards : []).map(card => [card.name, ...(card.tags ?? [])].filter(Boolean).join(' — ')).filter(Boolean).join('; ');
-        for (const [book, list] of byBook) {
-            const plan = planLorebookMarking(stored[book], list);
-            const record = marks => ({ sourceHash: plan.sourceHash, entryHashes: plan.entryHashes, marks, at: now() });
-            if (!plan.toMark.length) {
-                // Ничего нового: удалённые записи просто теряют отметки, запрос не нужен.
-                if (stored[book]?.sourceHash !== plan.sourceHash || !stored[book]?.entryHashes) await bankStore.saveMarks({ ...bankStore.marks(), [book]: record(plan.kept) });
-                continue;
-            }
-            try {
-                const result = await marker.mark({ book, entries: plan.toMark, sectionsFrom: list, cardHint });
-                await bankStore.saveMarks({ ...bankStore.marks(), [book]: record([...plan.kept, ...result.marks]) });
-            } catch (error) {
-                const message = `Lorebook "${book}" was not marked (${error?.message ?? error}); using sections.`;
-                markWarnings.push(message);
-                publishEvent('decision.bank.warning', { book, message });
-            }
-        }
+        markWarnings = await marker.markBooks({
+            entries, cards, marks: bankStore.marks(), saveMarks: next => bankStore.saveMarks(next), now,
+        });
         return bankStore.marks();
     }
 
@@ -300,9 +279,15 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
 
     function examplesForCards() { return renderExampleSection(records().filter(record => record.sourceKind === 'card')); }
 
+
     return {
         reload, reset, ensureColdStart, ensureName, noteRosterAdded, applyTimeline: timelineAdjust.applyTimeline,
         contextFor, examplesForCards,
+        farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit,
+        writerContext: names => greatLayer.writerContext(names, {
+            sceneText: () => renderBankSection(records().filter(record => record.sourceKind === 'scene')),
+        }),
+        great: greatLayer.great,
         read, write, rebuild, progress,
         records, recordsFor,
         applySet,
