@@ -31,7 +31,14 @@ export function diffLines(before, after) {
 
 /** Diff → куски с `context` строками вокруг изменений; без изменений — пустой список. */
 export function diffHunks(before, after, { context = 2 } = {}) {
-    const diff = diffLines(before, after);
+    let oldNo = 0;
+    let newNo = 0;
+    // Номера старой и новой версии — по всему тексту, до разбивки на куски.
+    const diff = diffLines(before, after).map(line => {
+        if (line.type !== 'add') oldNo += 1;
+        if (line.type !== 'del') newNo += 1;
+        return { ...line, oldNo: line.type === 'add' ? null : oldNo, newNo: line.type === 'del' ? null : newNo };
+    });
     const changed = diff.map((line, index) => (line.type === 'same' ? -1 : index)).filter(index => index >= 0);
     if (!changed.length) return [];
     const hunks = [];

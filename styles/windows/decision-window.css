@@ -224,30 +224,102 @@ details.stme-dw-cycle[open] > summary .stme-dw-summary { display: none; }
     .stme-dw-toolbar .stme-segment { order: -1; width: 100%; overflow-x: auto; }
 }
 
-/* --- The Court: Files — промпты как файлы (часть 21) ---------------------- */
-.stme-files { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(180px, 240px) 1fr; }
-.stme-files-tree { overflow: auto; border-right: 1px solid var(--stme-border); padding: 6px; display: flex; flex-direction: column; gap: 8px; }
-.stme-files-group-title { font-size: .76em; text-transform: uppercase; letter-spacing: .04em; opacity: .6; margin: 2px 4px; }
-.stme-files-item { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; padding: 3px 6px; border-radius: var(--stme-radius-sm); font-size: .84em; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stme-files-item:hover { background: var(--stme-level-2); }
-.stme-files-active { background: var(--stme-level-2); box-shadow: inset 2px 0 0 var(--stme-accent); }
-.stme-files-editor { display: flex; flex-direction: column; gap: 6px; padding: 8px; min-height: 0; overflow: auto; }
-.stme-files-path { display: flex; gap: 8px; align-items: center; font-weight: 600; font-size: .9em; }
-.stme-files-badge { font-weight: 400; font-size: .78em; opacity: .7; border: 1px solid var(--stme-border); border-radius: 10px; padding: 0 6px; }
-.stme-files-text { width: 100%; box-sizing: border-box; min-height: 320px; flex: 1; resize: vertical; font-family: var(--monoFontFamily, ui-monospace, monospace); font-size: .86em; line-height: 1.45; tab-size: 4; }
-.stme-files-diff { display: flex; flex-direction: column; gap: 6px; }
-.stme-files-hunk { margin: 0; padding: 4px 0; background: var(--stme-level-1); border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); font-size: .82em; overflow-x: auto; }
-.stme-files-line { padding: 0 8px; white-space: pre-wrap; }
-.stme-files-add { background: color-mix(in srgb, var(--stme-ok) 18%, transparent); }
-.stme-files-del { background: color-mix(in srgb, var(--stme-danger-bright) 16%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--stme-danger-bright) 50%, transparent); }
-.stme-files-same { opacity: .6; }
-.stme-files-nodiff { opacity: .6; font-size: .86em; }
-.stme-files-ai { display: flex; gap: 6px; align-items: center; }
-.stme-files-ai .text_pole { flex: 1; }
-.stme-files-proposal { border-left: 3px solid var(--stme-accent); padding-left: 8px; display: flex; flex-direction: column; gap: 4px; }
-.stme-files-history summary, .stme-files-version summary { cursor: pointer; font-size: .84em; opacity: .8; }
+/* --- The Court: Files — всё, что читают модели, файлами (часть 21) ------- */
+/* Слева дерево, справа редактор: вкладки, путь, сведения, режимы, тело, сохранение, ИИ, история.
+   Моноширинный текст и номера строк — как в редакторе кода; цвета ролей — те же, что у дорожек. */
+.stme-files { --stme-files-mono: var(--monoFontFamily, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); }
+.stme-files-role-god { --stme-role: #c9a227; } .stme-files-role-director { --stme-role: #b5523b; } .stme-files-role-counsellor { --stme-role: #4f8a6e; }
+.stme-files-role-resolver { --stme-role: var(--stme-accent); } .stme-files-role-writer { --stme-role: #8a6fb5; } .stme-files-role-banks { --stme-role: #5b8fb9; } .stme-files-role-engine { --stme-role: var(--stme-border); }
+
+.stme-files-tree { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--stme-border); background: var(--stme-level-1); }
+.stme-files-tree-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 4px; }
+.stme-files-tree-title { font-weight: 700; font-size: .78em; text-transform: uppercase; letter-spacing: .06em; opacity: .7; }
+.stme-files-search { padding: 0 8px 6px; }
+.stme-files-search .text_pole { width: 100%; box-sizing: border-box; }
+.stme-files-new { display: flex; gap: 10px; padding: 0 10px 6px; }
+.stme-files-link { background: none; border: 0; padding: 0; color: var(--stme-accent); font-size: .8em; cursor: pointer; }
+.stme-files-link:hover { text-decoration: underline; }
+.stme-files-list { flex: 1; min-height: 0; overflow: auto; padding: 2px 0 8px; }
+.stme-files-legend { font-size: .72em; opacity: .5; padding: 6px 10px; border-top: 1px solid var(--stme-border); }
+.stme-files-folder-row, .stme-files-item { display: flex; align-items: center; gap: 6px; width: 100%; background: none; border: 0; color: inherit; text-align: left; cursor: pointer; font-size: .84em; line-height: 1.6; padding-right: 8px; }
+.stme-files-folder-row { font-weight: 600; opacity: .9; }
+.stme-files-folder-row:hover, .stme-files-item:hover { background: var(--stme-level-2); }
+.stme-files-chevron { width: 10px; opacity: .6; font-size: .9em; }
+.stme-files-folder-name, .stme-files-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stme-files-count { font-size: .82em; opacity: .5; font-weight: 400; }
+.stme-files-glyph { width: 12px; text-align: center; color: var(--stme-role); }
+.stme-files-active { background: color-mix(in srgb, var(--stme-role) 16%, transparent); box-shadow: inset 2px 0 0 var(--stme-role); }
+.stme-files-mark { font-size: .72em; opacity: .75; }
+.stme-files-unsaved { color: var(--stme-warn); }
+.stme-files-changed { color: var(--stme-accent); }
+.stme-files-hits { font-size: .72em; padding: 0 5px; border-radius: 8px; background: var(--stme-level-2); }
+
+.stme-files-editor { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; }
+.stme-files-tabs { display: flex; overflow-x: auto; background: var(--stme-level-1); border-bottom: 1px solid var(--stme-border); flex-shrink: 0; }
+.stme-files-tab { display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 12px; font-size: .82em; cursor: pointer; border-right: 1px solid var(--stme-border); white-space: nowrap; opacity: .75; }
+.stme-files-tab-active { opacity: 1; background: var(--stme-surface); box-shadow: inset 0 2px 0 var(--stme-accent); }
+.stme-files-tab-close { background: none; border: 0; color: inherit; opacity: .5; cursor: pointer; padding: 0 2px; font-size: 1.05em; }
+.stme-files-tab-close:hover { opacity: 1; }
+
+.stme-files-info { padding: 8px 12px 4px; display: flex; flex-direction: column; gap: 5px; }
+.stme-files-crumbs { font-size: .82em; opacity: .75; display: flex; flex-wrap: wrap; gap: 4px; }
+.stme-files-crumb-last { font-weight: 700; opacity: 1; }
+.stme-files-sep { opacity: .4; }
+.stme-files-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .78em; }
+.stme-files-pill { border: 1px solid var(--stme-border); border-radius: 10px; padding: 0 8px; line-height: 1.6; }
+.stme-files-pill.stme-files-role-god, .stme-files-pill.stme-files-role-director, .stme-files-pill.stme-files-role-counsellor, .stme-files-pill.stme-files-role-resolver, .stme-files-pill.stme-files-role-writer, .stme-files-pill.stme-files-role-banks { border-color: var(--stme-role); color: var(--stme-role); }
+.stme-files-pill-changed { border-color: var(--stme-accent); }
+.stme-files-dim { opacity: .6; }
+.stme-files-usage { font-size: .82em; opacity: .8; }
+.stme-files-vars { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: .78em; }
+.stme-files-var { font-family: var(--stme-files-mono); font-size: .92em; padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, var(--stme-accent) 14%, transparent); }
+
+.stme-files-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 12px 6px; border-bottom: 1px solid var(--stme-border); }
+.stme-files-spacer { flex: 1; }
+.stme-files-actions .text_pole { width: auto; }
+.stme-files-body { flex: 1; min-height: 260px; display: flex; flex-direction: column; padding: 8px 12px; }
+
+.stme-files-edit { flex: 1; min-height: 320px; display: grid; grid-template-columns: auto 1fr; border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); overflow: hidden; background: var(--stme-level-1); }
+.stme-files-gutter { overflow: hidden; padding: 8px 6px 8px 10px; text-align: right; font-family: var(--stme-files-mono); font-size: 12.5px; line-height: 20px; opacity: .4; user-select: none; background: var(--stme-level-2); border-right: 1px solid var(--stme-border); }
+.stme-files-text { border: 0; outline: 0; margin: 0; padding: 8px 10px; resize: none; background: transparent; color: inherit; font-family: var(--stme-files-mono); font-size: 12.5px; line-height: 20px; tab-size: 4; white-space: pre; overflow: auto; min-height: 320px; }
+
+.stme-files-preview { line-height: 1.55; font-size: .92em; max-width: 78ch; }
+.stme-files-preview h3, .stme-files-preview h4, .stme-files-preview h5 { margin: .9em 0 .3em; }
+.stme-files-preview p { margin: .4em 0; }
+.stme-files-preview blockquote { margin: .4em 0; padding-left: 10px; border-left: 3px solid var(--stme-border); opacity: .85; }
+.stme-files-li { display: flex; gap: 6px; margin: .15em 0; }
+.stme-files-li-mark { opacity: .6; }
+.stme-files-code { font-family: var(--stme-files-mono); font-size: .86em; background: var(--stme-level-1); padding: 8px; border-radius: var(--stme-radius-sm); white-space: pre-wrap; }
+
+.stme-files-diff { display: flex; flex-direction: column; gap: 8px; }
+.stme-files-diff-stats { font-size: .8em; opacity: .85; }
+.stme-files-plus { color: var(--stme-ok); font-weight: 700; }
+.stme-files-minus { color: var(--stme-danger-bright); font-weight: 700; }
+.stme-files-hunk { border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); overflow: hidden; font-family: var(--stme-files-mono); font-size: 12px; line-height: 19px; }
+.stme-files-hunk-head { padding: 2px 10px; background: var(--stme-level-2); opacity: .7; }
+.stme-files-line { display: grid; grid-template-columns: 38px 38px 16px 1fr; }
+.stme-files-no { text-align: right; padding-right: 6px; opacity: .4; user-select: none; }
+.stme-files-sign { text-align: center; opacity: .8; }
+.stme-files-code-text { white-space: pre-wrap; word-break: break-word; padding-right: 8px; }
+.stme-files-add { background: color-mix(in srgb, var(--stme-ok) 16%, transparent); }
+.stme-files-del { background: color-mix(in srgb, var(--stme-danger-bright) 14%, transparent); }
+.stme-files-same { opacity: .65; }
+.stme-files-nodiff { opacity: .6; font-size: .86em; padding: 8px 0; }
+
+.stme-files-savebar { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 12px; background: color-mix(in srgb, var(--stme-warn) 10%, var(--stme-surface)); border-top: 1px solid var(--stme-border); }
+.stme-files-savebar .text_pole { flex: 1; min-width: 160px; }
+.stme-files-ai, .stme-files-history { margin: 6px 12px; border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); padding: 6px 8px; }
+.stme-files-ai > summary, .stme-files-history > summary { cursor: pointer; font-weight: 600; font-size: .86em; }
+.stme-files-ai-row, .stme-files-row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.stme-files-ai-row .text_pole { flex: 1; }
+.stme-files-proposal { border-left: 3px solid var(--stme-accent); padding: 4px 0 4px 8px; margin: 6px 0; }
+.stme-files-version { margin: 4px 0; padding: 4px 6px; border-radius: var(--stme-radius-sm); background: var(--stme-level-1); }
+.stme-files-version > summary { cursor: pointer; font-size: .82em; }
+.stme-files-note { margin: 4px 12px 10px; font-size: .84em; opacity: .85; }
+.stme-files-badge { font-size: .74em; border: 1px solid var(--stme-border); border-radius: 10px; padding: 0 6px; }
+
 @media (max-width: 767px) {
-    .stme-files { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-    .stme-files-tree { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--stme-border); }
-    .stme-files-group { min-width: 160px; }
+    .stme-files { grid-template-columns: 1fr; grid-template-rows: minmax(140px, 34vh) 1fr; }
+    .stme-files-tree { border-right: 0; border-bottom: 1px solid var(--stme-border); }
+    .stme-files-line { grid-template-columns: 28px 28px 14px 1fr; }
 }
