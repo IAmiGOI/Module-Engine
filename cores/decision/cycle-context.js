@@ -100,7 +100,9 @@ export function createCycleContext({ call, store, banks = null, creation = null,
      */
     async function decreeTextFor() {
         if (!banks?.decreeFor) return '';
-        return banks.decreeFor(store.roster().active).catch(() => '');
+        // Пустой ростер (первый ход): персонаж входит в сцену этим же ходом — Указы всех, у кого они есть.
+        const active = store.roster().active ?? [];
+        return banks.decreeFor(active.length ? active : null).catch(() => '');
     }
 
     /**

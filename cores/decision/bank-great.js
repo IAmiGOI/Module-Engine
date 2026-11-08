@@ -165,6 +165,32 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
         return { ok: true, at: rp.label, decrees: applied.applied };
     }
 
+    /**
+     * Переписать Main Cast заново (по просьбе пользователя): material, spiritual и Указ пустеют,
+     * прежние строки — в историю, исходная карточка (card.md) остаётся. Директор пишет их снова.
+     */
+    async function clearForRewrite({ importance = 'main', comment = 'The user asked the Director to rewrite this character.', by = 'user' } = {}) {
+        const state = await sync();
+        const rp = await rpNow();
+        const next = { ...state };
+        const names = [];
+        for (const [key, character] of Object.entries(state)) {
+            if (character?.importance !== importance) continue;
+            const history = [...(character.history ?? [])];
+            const blank = {};
+            for (const part of ['material', 'spiritual', 'decree']) {
+                blank[part] = Object.fromEntries(Object.keys(character[part] ?? {}).map(no => [no, []]));
+                for (const [no, lines] of Object.entries(character[part] ?? {})) {
+                    if ((lines ?? []).length) history.push({ at: rp.label, by, part, section: Number(no), old: lines.join('\n'), new: '', comment });
+                }
+            }
+            next[key] = { ...character, ...blank, history: history.slice(-HISTORY_LIMIT) };
+            names.push(character.name);
+        }
+        await save(next);
+        return { ok: true, names };
+    }
+
     async function setDecree({ decrees = [], comment = '' } = {}) {
         const state = await sync();
         const rp = await rpNow();
@@ -251,7 +277,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     return {
-        load, sync, edit, setImportance, setDecree, writeDecree, pending, resolvePending, resolveName, setKnowledge,
+        load, sync, edit, setImportance, setDecree, writeDecree, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
         farText, nearText, writerText, decreeText, rpNow, historyFor,
         sectionOf: resolveSection,
     };

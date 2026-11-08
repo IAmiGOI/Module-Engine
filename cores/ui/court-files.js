@@ -295,6 +295,19 @@ export function createCourtFiles({ call }) {
         open(`block:${file.section}:${copyId}`);
     }
 
+    /** Банки и Указы Main Cast — заново директором (по card.md и миру). Один запуск директора — платный. */
+    async function rewriteMainCast() {
+        const ok = typeof globalThis.confirm !== 'function' || globalThis.confirm('Clear the banks and Decrees of every Main Cast character and let the Director write them again from their cards and the world? This is one paid Director run. The old lines stay in History.');
+        if (!ok) return;
+        await run(async () => {
+            const answer = await call('decision.rewriteMainCast');
+            if (!answer.ok) throw new Error(answer.error?.message ?? 'Not started.');
+            const fresh = await call('decision.greatBank');
+            if (fresh.ok && fresh.value) great.set(fresh.value);
+            if (!answer.value?.names?.length) throw new Error('There is no Main Cast character to rewrite.');
+        }, 'The Director is rewriting the Main Cast — watch its lane.');
+    }
+
     async function deleteBlock(id) {
         const file = byId(id);
         if (file?.kind !== 'block') return;
@@ -309,7 +322,7 @@ export function createCourtFiles({ call }) {
     const ctx = {
         files, current, tabs, active, search, expanded, history, note, saveNote, wish, proposals, busy, showHistory,
         draftOf, isDirty, viewOf, problemsOf, open, close, setDraft, setView, toggleFolder, save, discard, restore, resetToDefault,
-        askAi, accept, reject, acceptAll, newBlock, renameBlock, setBlockRole, duplicateBlock, deleteBlock,
+        askAi, accept, reject, acceptAll, newBlock, renameBlock, setBlockRole, duplicateBlock, deleteBlock, rewriteMainCast,
     };
 
     const tree = () => h('div', { class: 'stme-files' }, filesTreeView(ctx), filesEditorView(ctx));

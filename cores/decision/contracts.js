@@ -53,6 +53,12 @@ export function registerDecisionContracts(host, {
         // The Court, «Files»: Great Bank целиком и правка разделов от имени пользователя (часть 21).
         host.own.register('decision.greatBank', async () => { await banks.great.sync(); return banks.great.load(); }),
         host.own.register('decision.greatBankEdit', params => banks.edit(params ?? {}, { by: 'user' })),
+        // Переписать Main Cast директором: банки и Указы пустеют (история остаётся), директор пишет их по card.md и миру.
+        host.own.register('decision.rewriteMainCast', async () => {
+            const cleared = await banks.great.clearForRewrite({});
+            if (cleared.names.length) cycle.maybeRunDirector?.().catch(() => {});
+            return cleared;
+        }),
         // Остальные файлы слоя — knowledge.md и Creation/…; части банка окно берёт из decision.greatBank.
         host.own.register('decision.files', async () => {
             if (!cycle.files) return [];

@@ -789,7 +789,7 @@ A Decree is how a character is played until you renew it. It is not a script for
 **Files Are The Record** — every character is three files: Characters/<Name>/material.md, spiritual.md and decree.md, each a set of numbered sections ("## 1. …"). You change them the way a code editor does: edit replaces exact old text with new, several edits in several files in one call; view shows a file; create writes a file that is still empty, such as a first Decree. The engine stamps the RP time and keeps every old version.
 - **spiritual.md** is who the character is, for good: values, likes and dislikes, how they show feeling, needs and goals, how they speak and think, how they resolve. It changes only when the story truly changes them.
 - **decree.md** is how they are played now. It changes whenever the story calls for it, and at the start of every day.
-- **card.md** is the character's source as it came — their card or lorebook entry — while nobody has written their bank yet. It is read-only. You write the bank of the Main Cast from it: material.md and spiritual.md with create, every numbered section, in your own lines, taking what the card states and the world's Creation allows, inventing nothing the card does not imply.
+- **card.md** is the character's source as it came — their card or lorebook entry — while nobody has written their bank yet. It is read-only. You write the bank of the Main Cast from it: material.md and spiritual.md with create, every numbered section, in your own lines, taking what the card states and the world's Creation allows, inventing nothing the card does not imply. The card may describe the character at a later point of their story: write them as they are at the start of THIS story, by THE WORLD AT THE START — what has not happened yet, they do not know, have not lived through and do not feel; whom they have not met yet is no part of their bank or Decree.
 
 ## The Five Sections Of A Decree
 **## 1. The values and facts that matter most for understanding them** — three to six lines. Choose for the story as it stands now; do not retell the bank. A value says what they will pay for it; a fact is one the scene turns on.
@@ -873,6 +873,7 @@ Do not write the story, the scene or lines of speech. Do not rewrite a line that
 - `NO_REPORTS`: No reports have reached you yet.
 - `LAST_DECREES_HEADER`: YOUR LAST DECREES (your own reasoning, for continuity):
 - `TOUCHED_BANKS_HEADER`: FILES — the characters this report touches, exactly as you edit them:
+- `WORLD_HEADER`: THE WORLD AT THE START — from the Creation: the point of the timeline, and who is in the world and who is not yet:
 - `DIRECTOR_RP_HEADER`: CURRENT RP TIME:
 
 ## 36. God — system (начало контекста, стабильно)

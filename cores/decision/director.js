@@ -66,6 +66,16 @@ export function createDirector({
         try { await banks?.great?.sync?.(); return banks?.great?.load ? await banks.great.load() : {}; } catch { return {}; }
     }
 
+    /** History и The User in the World из Creation — точка таймлайна и кто уже в мире. */
+    async function worldAtStart() {
+        if (!creation) return '';
+        try {
+            await creation.load();
+            return ['History', 'The User in the World'].map(title => creation.section?.(title)).filter(section => String(section?.text ?? '').trim())
+                .map(section => `### ${section.title}\n${String(section.text).trim()}`).join('\n\n');
+        } catch { return ''; }
+    }
+
     async function reasonNow() {
         if (!banks?.great?.load) return null;
         const papers = typeof store.papers === 'function' ? store.papers() : {};
@@ -129,6 +139,7 @@ export function createDirector({
             thoughts: lastDecreeThoughts(typeof store.cycles === 'function' ? store.cycles() : []),
             rpTime: clockLabel(store.clock().minutes),
             reason: info.wake.detail,
+            world: await worldAtStart(),
         });
         const state = { role: 'director', decreeIssued: false, decreeNames: [] };
         const captured = typeof capture === 'function'

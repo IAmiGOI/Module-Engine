@@ -42,7 +42,7 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
     }
 
     /** Указ действующих персонажей — в контекст резолвера на @10. Пока Указов нет — честная строка. */
-    async function decreeFor(names = []) {
+    async function decreeFor(names = null) {
         await sync();
         const state = await great.load();
         const entries = Object.values(state).map(character => ({ character }));

@@ -56,7 +56,8 @@ export function filesTreeView(ctx) {
         h('div', { class: 'stme-files-search' }, TextInput(ctx.search, { placeholder: 'Search names and text' })),
         h('div', { class: 'stme-files-new' },
             h('button', { type: 'button', class: 'stme-files-link', 'on:click': () => ctx.newBlock('director') }, '+ Director block'),
-            h('button', { type: 'button', class: 'stme-files-link', 'on:click': () => ctx.newBlock('writer') }, '+ Writer block')),
+            h('button', { type: 'button', class: 'stme-files-link', 'on:click': () => ctx.newBlock('writer') }, '+ Writer block'),
+            h('button', { type: 'button', class: 'stme-files-link', title: 'The Director writes every Main Cast bank and Decree again, from the cards and the world', 'on:click': () => ctx.rewriteMainCast() }, '↻ Rewrite Main Cast')),
         h('div', { class: 'stme-files-list' }, ...body),
         h('div', { class: 'stme-files-legend' }, '✎ your block · ◉ character · ▣ knowledge / Creation · ◇ built-in · ● unsaved · ◆ changed'));
 }

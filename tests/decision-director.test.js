@@ -228,3 +228,12 @@ test('Main Cast without a Decree waits for the world: no cast reason while God i
     assert.equal(directorReason({ banks, worldReady: false }), null);
     assert.equal(directorReason({ banks, worldReady: true })?.reasons?.[0]?.type, 'cast');
 });
+
+test('the Director writes banks against the world at the start, and an empty roster still shows every Decree', async () => {
+    const { buildDirectorContext } = await import('../libraries/core/decision-director.js');
+    const { renderDecreeForResolver } = await import('../libraries/core/decision-bank-projections.js');
+    const built = buildDirectorContext({ world: '### History\nSubaru has not arrived yet.', reason: 'a Main Cast character has no Decree' });
+    assert.ok(built.messages.some(message => /THE WORLD AT THE START[\s\S]*Subaru has not arrived yet/.test(message.content)));
+    const entries = [{ character: { name: 'Emilia', decree: { 1: ['Keeps every promise.'] } } }];
+    assert.match(renderDecreeForResolver(entries, { names: null }), /Keeps every promise/);
+});
