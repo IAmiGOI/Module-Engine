@@ -31,6 +31,13 @@ export function createInscribeHandler({ store, publishEvent, state, resolvePlace
         if (repaired.warnings.length) state.formWarnings = [...(state.formWarnings ?? []), ...repaired.warnings];
         if (!repaired.ok) return { ok: false, missing: repaired.missing };
         const form = repaired.form;
+        // Состав сцены — из принятого Начертания: кто действует, тот в ростере, даже если «вошёл» не отмечен.
+        // Без этого ростер оставался прежним (однажды — один персонаж пользователя), и резолвер не видел Указов сцены.
+        const scene = (Array.isArray(form.roster?.active) ? form.roster.active : []).map(name => String(name ?? '').trim())
+            .filter(name => name && name.toLowerCase() !== String(user ?? '').trim().toLowerCase());
+        const stored = store.roster().active ?? [];
+        const sameScene = scene.length === stored.length && scene.every(name => stored.some(item => String(item).toLowerCase() === name.toLowerCase()));
+        if (scene.length && !sameScene && typeof store.saveRoster === 'function') await store.saveRoster({ active: scene });
 
         // Ушедший в прошлом исходе снова действует, а из ростера не убран — один раз напомнить.
         if (!state.departureWarned) {
