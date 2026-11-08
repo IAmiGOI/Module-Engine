@@ -3,6 +3,7 @@ import { SEND_ON_ENTER, shouldSendOnKey, computeBarColumn } from '../../../libra
 import { createNativeBridge } from './native-bridge.js';
 import { createInputPill } from './pill.js';
 import { createLeftDock } from './left-dock.js';
+import { createContextGauge, GAUGE_SIZE, GAUGE_GAP } from './context-gauge.js';
 
 const ACTIVE_CLASS = 'stme-input-bar-active';
 /** Боковая панель (верхняя полоса ST → вертикально слева, styles/chrome/side-bar.css) — только на широком экране без тача; на телефоне полоса остаётся родной. */
@@ -70,10 +71,17 @@ export function createInputBarCore(host, {
             onResize: () => emitChanged({ active: true, height: pill.height() }),
         });
         const dock = createLeftDock({ document: doc, touch, buttons, onCloseChat: () => bridge.closeChat() });
+        // Колесико контекста резолвера — отдельный круг справа от пилюли: пилюля уже на его ширину.
+        const gauge = createContextGauge({
+            document: doc,
+            load: async () => { const result = await request(host.own, 'decision.contextReport', { params: {} }); return result.ok ? result.value : null; },
+        });
 
         const applyColumn = () => {
             const bar = computeBarColumn({ column, windowWidth: win.innerWidth });
-            pill.setColumn(bar);
+            const width = Math.max(160, bar.width - GAUGE_SIZE - GAUGE_GAP);
+            pill.setColumn({ ...bar, width });
+            gauge.place({ right: bar.left + width });
         };
         const syncFromNative = () => { pill.setValue(bridge.readText()); };
         applyColumn();
@@ -84,6 +92,7 @@ export function createInputBarCore(host, {
         else doc.documentElement.classList.add(TOP_BAR_CLASS);
         pill.mount(doc.body);
         dock.mount(doc.body);
+        gauge.mount(doc.body);
 
         const onWindowResize = () => { applyColumn(); pill.autosize(); };
         win.addEventListener('resize', onWindowResize);
@@ -92,17 +101,20 @@ export function createInputBarCore(host, {
             bridge.watchGenerating(generating => pill.setGenerating(generating)),
             bridge.watchNativeText(syncFromNative),
             host.events.subscribe('st.chatChanged', syncFromNative),
+            host.events.subscribe('st.chatChanged', () => { gauge.refresh(); }),
+            host.events.subscribe('decision.context.report', () => { gauge.refresh(); }),
         ];
-        active = { pill, dock, cleanups, applyColumn };
+        active = { pill, dock, gauge, cleanups, applyColumn };
         emitChanged({ active: true, height: pill.height() });
         return { ok: true };
     }
 
     async function disable() {
         if (!active) return;
-        const { pill, dock, cleanups } = active;
+        const { pill, dock, gauge, cleanups } = active;
         active = null;
         for (const cleanup of cleanups) cleanup?.();
+        gauge?.dispose();
         dock.dispose();
         pill.dispose();
         doc.documentElement.classList.remove(ACTIVE_CLASS);

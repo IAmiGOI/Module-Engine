@@ -146,3 +146,56 @@ html.stme-input-bar-active #form_sheld { background: none !important; border: 0 
 
 /* Кнопка «Закрыть чат» — созданная нами, а не родная: у неё нет ID-правил ST, но вид тот же слот. */
 .stme-left-dock .stme-left-dock-close { border: 0; background: transparent; }
+
+/* ===== Колесико контекста резолвера (cores/ui/input-bar/context-gauge.js): отдельный круг справа от пилюли, в её стиле ===== */
+.stme-ctx-gauge {
+    position: fixed;
+    bottom: 9px;
+    z-index: 6900;
+    box-sizing: border-box;
+    width: var(--stme-input-h);
+    height: var(--stme-input-h);
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: var(--stme-input-border) solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--stme-surface) 88%, transparent);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .35);
+    cursor: pointer;
+    color: var(--stme-text);
+}
+.stme-ctx-gauge:hover { border-color: var(--stme-accent); }
+.stme-ctx-gauge-ring { position: relative; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+.stme-ctx-gauge-ring::before { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--stme-surface); }
+.stme-ctx-gauge-label { position: relative; font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stme-ctx-popup {
+    position: fixed;
+    z-index: 6950;
+    box-sizing: border-box;
+    width: min(460px, calc(100vw - 16px));
+    max-height: 60vh;
+    overflow: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border: var(--stme-input-border) solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--stme-surface) 96%, transparent);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+    color: var(--stme-text);
+    font-size: 13px;
+}
+.stme-ctx-popup[hidden] { display: none; }
+.stme-ctx-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.stme-ctx-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: color-mix(in srgb, var(--stme-text) 10%, transparent); }
+.stme-ctx-bar-part { display: block; height: 100%; min-width: 1px; }
+.stme-ctx-list { display: flex; flex-direction: column; gap: 2px; }
+.stme-ctx-section > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 3px 0; }
+.stme-ctx-dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.stme-ctx-name { flex: 1; }
+.stme-ctx-tokens { font-variant-numeric: tabular-nums; opacity: .75; }
+.stme-ctx-text { white-space: pre-wrap; font-size: 12px; max-height: 300px; overflow: auto; margin: 4px 0 6px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--stme-text) 7%, transparent); }
+.stme-ctx-empty { opacity: .7; }

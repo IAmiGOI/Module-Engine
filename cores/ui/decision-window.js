@@ -7,7 +7,6 @@ import { LANES, LANE_IDS, turnsIn } from '../../libraries/core/court-lanes.js';
 import { createCourtLanes } from './court-lanes-view.js';
 import { createCourtPreparation } from './court-preparation.js';
 import { createCourtFiles } from './court-files.js';
-import { createCourtContext } from './court-context.js';
 import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/core/decision-feed.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
 import { text } from './decision-window-rows.js';
@@ -67,8 +66,6 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         subscribe: (name, handler) => host.events.subscribe(name, handler),
         onOpenCounsellor: () => setMode('counsellor'),
     });
-    // Колесико заполнения контекста резолвера — в панели инструментов; по нажатию — разделы.
-    const contextGauge = createCourtContext({ call, subscribe: (name, handler) => host.events.subscribe(name, handler) });
     const court = createCourtLanes({
         entries: all, mode, turn: turnFilter, now, limits, openFile,
         header: () => preparation.tree(),
@@ -170,9 +167,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
                 Segment([{ value: 'all', label: 'All five' }, ...LANES.map(lane => ({ value: lane.id, label: lane.label })), { value: 'files', label: 'Files' }], mode, { label: 'Lanes', onChange: setMode }),
                 Select(turnFilter, () => turnOptions(), { onChange: () => scheduleScroll(true) }),
                 h('span', { class: 'stme-court-search' }, TextInput(search, { placeholder: 'Search  (/)' })),
-                Toggle('Thinking', showThinking),
-                contextGauge.ring()),
-            computed(() => contextGauge.panel()),
+                Toggle('Thinking', showThinking)),
             computed(() => (mode() === 'files' ? files.tree() : court.tree())),
             computed(() => (filtered().archive.length
                 // Архив строится, только когда его раскрыли.
