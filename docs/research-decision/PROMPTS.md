@@ -789,6 +789,7 @@ A Decree is how a character is played until you renew it. It is not a script for
 **Files Are The Record** — every character is three files: Characters/<Name>/material.md, spiritual.md and decree.md, each a set of numbered sections ("## 1. …"). You change them the way a code editor does: edit replaces exact old text with new, several edits in several files in one call; view shows a file; create writes a file that is still empty, such as a first Decree. The engine stamps the RP time and keeps every old version.
 - **spiritual.md** is who the character is, for good: values, likes and dislikes, how they show feeling, needs and goals, how they speak and think, how they resolve. It changes only when the story truly changes them.
 - **decree.md** is how they are played now. It changes whenever the story calls for it, and at the start of every day.
+- **card.md** is the character's source as it came — their card or lorebook entry — while nobody has written their bank yet. It is read-only. You write the bank of the Main Cast from it: material.md and spiritual.md with create, every numbered section, in your own lines, taking what the card states and the world's Creation allows, inventing nothing the card does not imply.
 
 ## The Five Sections Of A Decree
 **## 1. The values and facts that matter most for understanding them** — three to six lines. Choose for the story as it stands now; do not retell the bank. A value says what they will pay for it; a fact is one the scene turns on.
@@ -850,7 +851,7 @@ Read the reports below and weigh every character they touch against their decree
 
 - **A new day** ("prepare the new day"): every character with a Decree gets a new "Today:" line and three new mood lines, from what the day left them with; change the other sections only where the day changed them.
 - **A Telegram** — a death, an irreversible loss, a betrayal, someone leaving for good: renew the Decree of everyone it touches today. A character who has died or left the story keeps their files; write no Decree for them. A Telegram that blocks the next turn waits for your Decree.
-- **A Main Cast character without a Decree**, or one just promoted: create their decree.md from their bank — all five sections.
+- **A Main Cast character without a Decree**, or one just promoted: if their material.md and spiritual.md are still empty, write both from card.md first; then create their decree.md — all five sections.
 ```
 
 ```text
@@ -861,7 +862,7 @@ One or two sentences per point, then the call at once.
 2. **Who changes and why** — only the characters the reports touch, and on a new day everyone with a Decree. An ordinary turn, a cost paid or a small mood is not a reason; a broken value, a dead end, a sharp change in their life or a need they cannot close is.
 3. **Decree** — which lines of decree.md change, section by section, in the form the system prompt gives. Copy each old line exactly into "old". A character with an empty decree.md gets all five sections with create.
 4. **Bank** — promotions with set_bank_importance; the Resolver's proposals with resolve_proposals; spiritual.md itself with edit only when the report shows who they are has changed.
-5. **Check before you rest** — every Main Cast character has a Decree; each Decree you wrote has all five sections; section 3 has a "Long goal:" and a "Today:" line; section 4 has three axis lines in the given form; every line of section 5 is "When …, they …". On a new day, "Today:" and the mood are new for everyone. Fix what fails, then call await.
+5. **Check before you rest** — every Main Cast character has a written material.md, spiritual.md and a Decree; each Decree you wrote has all five sections; section 3 has a "Long goal:" and a "Today:" line; section 4 has three axis lines in the given form; every line of section 5 is "When …, they …". On a new day, "Today:" and the mood are new for everyone. Fix what fails, then call await.
 
 Do not write the story, the scene or lines of speech. Do not rewrite a line that still holds. Decide, then call.
 ```
@@ -1041,3 +1042,20 @@ Write into the Creation what these answers settle: edit the section files they c
 - `NO_QUESTIONS`: No question waits.
 - `CREATION_HEADER`: CREATION — the world the story stands in, and the rules it obeys:
 - `DISCOVERIES_HEADER`: NEW DISCOVERIES (found since the world was last read; from here on they are the law of the world):
+
+## 41. Модель банков — сортировка холодного старта (пять ролей)
+Один вызов на всех новых персонажей вместо сборщика на каждого. Полный банк Main Cast пишет Director по card.md и Мирозданию.
+
+```text
+You sort the characters of a roleplay before it starts. Nothing is built here: you only decide where each character stands. The Director later writes the full bank of the Main Cast from their cards and the world.
+
+For each character below choose one level:
+- main — Main Cast: the story is about them, or they will be at the user's side most of the time. The chat's own character cards usually are.
+- side — Side Character: they matter and come back, but the story does not rest on them.
+- temporary — Temporary Character: they appear for a while and leave.
+- mass — NPC/Mass: a crowd, a function, a role without a self of its own.
+
+Judge by what the material says about them and how much of it there is, not by how famous they are. The user's own character is not in the list.
+
+Answer only with JSON: [{"name": "the name exactly as written below", "importance": "main"}, …], one item per character.
+```

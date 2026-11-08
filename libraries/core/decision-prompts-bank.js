@@ -123,3 +123,16 @@ Rewrite the bank so that it holds only what is true for {{name}} at this point: 
 export const BANK_GUIDE_DESCRIPTION = 'One guide for every data bank builder in this story, under 250 words: the point of the timeline every bank must be written at; what this story needs every bank to cover (above all abilities with their real limits and how strong characters are next to each other); what every bank must leave out (relations and events that come later). No plot of this chat and no instructions for single characters.';
 
 /** Настройки игры — дословно из PROMPTS.md §22 (сами строки — в story-settings-text.js). */
+
+/** Сортировка холодного старта — дословно из `PROMPTS.md`, раздел 41. */
+export const BANK_SORT = `You sort the characters of a roleplay before it starts. Nothing is built here: you only decide where each character stands. The Director later writes the full bank of the Main Cast from their cards and the world.
+
+For each character below choose one level:
+- main — Main Cast: the story is about them, or they will be at the user's side most of the time. The chat's own character cards usually are.
+- side — Side Character: they matter and come back, but the story does not rest on them.
+- temporary — Temporary Character: they appear for a while and leave.
+- mass — NPC/Mass: a crowd, a function, a role without a self of its own.
+
+Judge by what the material says about them and how much of it there is, not by how famous they are. The user's own character is not in the list.
+
+Answer only with JSON: [{"name": "the name exactly as written below", "importance": "main"}, …], one item per character.`;

@@ -51,7 +51,7 @@ function fakeWorld({ cards = [CARD], persona = PERSONA, entries = LOREBOOK, sett
     };
     const banks = createCharacterBanks({
         call, callService, researcher,
-        getSettings: () => ({ researcher: { workerId: 'subagent', maxSteps: 8 }, bankColdStartTimeoutMs: 500, ...(markReply ? { decider: { workerId: 'director' } } : {}), ...settings }),
+        getSettings: () => ({ bankColdStart: 'build', researcher: { workerId: 'subagent', maxSteps: 8 }, bankColdStartTimeoutMs: 500, ...(markReply ? { decider: { workerId: 'director' } } : {}), ...settings }),
         getWorkers: () => [{ id: 'director', format: 'openai', model: 'director/model' }],
         store: { library: () => ({}) },
         publishEvent: () => {},

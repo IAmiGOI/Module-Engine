@@ -42,7 +42,7 @@ function build({ bankText = SECTIONED, builderVersion = BANK_BUILDER_VERSION } =
     const store = { library: () => ({}), clock: () => ({ minutes: 7 * 1440 + 4 * 60 + 15, updatedAt: 1 }) };
     const banks = createCharacterBanks({
         call, callService, researcher, store,
-        getSettings: () => ({ researcher: { workerId: 'subagent', maxSteps: 8 }, bankColdStartTimeoutMs: 500 }),
+        getSettings: () => ({ bankColdStart: 'build', researcher: { workerId: 'subagent', maxSteps: 8 }, bankColdStartTimeoutMs: 500 }),
         getWorkers: () => [],
         publishEvent: (event, payload) => events.push([event, payload]),
     });

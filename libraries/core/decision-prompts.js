@@ -261,7 +261,7 @@ Stop weighing options. Take the most natural reading of the scene and act now: c
 export { STORY_SETTINGS_HEADER, STORY_SETTINGS_RULES } from './story-settings-text.js';
 
 
-export { BANK_COMPRESSION, CHARACTER_BANK_BUILDER, LOREBOOK_MARKER, BANK_TIMELINE_ADJUST, BANK_GUIDE_DESCRIPTION } from './decision-prompts-bank.js';
+export { BANK_COMPRESSION, CHARACTER_BANK_BUILDER, LOREBOOK_MARKER, BANK_TIMELINE_ADJUST, BANK_GUIDE_DESCRIPTION, BANK_SORT } from './decision-prompts-bank.js';
 
 export { RESOLVER_THINK_TURN, RESOLVER_AFTER_TURN, RESOLVER_THINK_AFTER } from './decision-prompts-resolver.js';
 

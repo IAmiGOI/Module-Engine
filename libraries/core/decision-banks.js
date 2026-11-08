@@ -58,8 +58,10 @@ export function lorebookSourceText(entry = {}) {
 // 5: сборщик пишет сразу по разделам Great Bank — старые банки пересобираются один раз.
 export const BANK_BUILDER_VERSION = 5;
 
-export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0, timelineHash = '' }) {
+export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0, timelineHash = '', importance = '' }) {
     return {
+        // Важность из сортировки холодного старта (main / side / temporary / mass); пусто — не сортирован.
+        ...(text(importance) ? { importance: text(importance) } : {}),
         builderVersion: Number(builderVersion) || 0,
         sourceKey: String(sourceKey ?? ''), sourceKind: String(sourceKind ?? ''),
         name: text(name), sourceHash: String(sourceHash ?? ''), text: String(bankText ?? ''),
@@ -67,7 +69,7 @@ export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text
         sizeBand: sizeBand === 'key' ? 'key' : 'minor', rawSource: String(rawSource ?? ''), examples: String(examples ?? ''),
         aliases: (Array.isArray(aliases) ? aliases : String(aliases ?? '').split(',')).map(item => text(item)).filter(Boolean),
         canonicalName: text(canonicalName) || text(name),
-        status: ['ready', 'pending', 'error', 'short'].includes(status) ? status : 'pending',
+        status: ['ready', 'pending', 'error', 'short', 'sorted'].includes(status) ? status : 'pending',
         error: error ? String(error) : null, updatedAt: Number(at) || Date.now(),
     };
 }

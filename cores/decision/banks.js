@@ -2,6 +2,7 @@ import { splitBankImportance, bankSourcesForChat, findBankSource, createBankReco
 import { createBankStore } from './bank-store.js';
 import { createTimelineAdjust } from './bank-timeline.js';
 import { createBankTasks, bankConcurrency } from './bank-tasks.js';
+import { sortSources } from './bank-sort.js';
 import { createLorebookMarker } from './lorebook-marker.js';
 import { createGreatBankLayer } from './bank-great-layer.js';
 
@@ -113,6 +114,44 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     }
 
     async function runColdStart() {
+        if (getSettings()?.bankColdStart === 'build') return runBuildColdStart();
+        const startEpoch = bankStore.epoch();
+        const sources = await collectSources();
+        if (startEpoch !== bankStore.epoch()) return progress({ stale: true });
+        const base = bankStore.base();
+        const chat = { ...bankStore.chat() };
+        const pending = [];
+        for (const source of sources) {
+            const hash = hashText(source.source);
+            const own = chat[source.sourceKey];
+            if (bankIsReady(own) && own.sourceHash === hash) continue;
+            if (own?.status === 'sorted' && own.sourceHash === hash) continue; // уже отсортирован — второй вызов не нужен
+            const cached = base[source.sourceKey];
+            if (bankIsReady(cached) && cached.sourceHash === hash) {
+                chat[source.sourceKey] = createBankRecord({ ...cached, rawSource: source.source, examples: source.examples ?? '', status: 'ready' });
+                continue;
+            }
+            // Пять ролей: сборщика нет — запись держит исходный текст (card.md), важность ставит сортировка ниже.
+            chat[source.sourceKey] = createBankRecord({
+                sourceKey: source.sourceKey, sourceKind: source.sourceKind, name: source.name,
+                sourceHash: hash, sizeBand: own?.sizeBand ?? sizeFor(source), rawSource: source.source, examples: source.examples ?? '',
+                aliases: source.aliases ?? [], canonicalName: source.canonicalName ?? '', status: 'sorted',
+                text: source.source,
+            });
+            pending.push(source);
+        }
+        // Сортировка, а не сборка: один вызов модели банков раскладывает новых по важности.
+        const levels = pending.length ? await sortSources({ call, getSettings, sources: pending }) : new Map();
+        if (startEpoch !== bankStore.epoch()) return progress({ stale: true });
+        for (const source of pending) chat[source.sourceKey] = { ...chat[source.sourceKey], importance: levels.get(source.sourceKey) ?? 'side' };
+        await bankStore.saveChat(chat);
+        publishEvent('decision.bank.sorted', { total: pending.length, main: pending.filter(source => levels.get(source.sourceKey) === 'main').map(source => source.name) });
+        await bankStore.saveColdStart({ ...progress(), status: 'ready', builderVersion: BANK_BUILDER_VERSION, total: sources.length, done: sources.length, errors: 0, warnings: markWarnings });
+        return progress({ timedOut: false, sources: sources.length });
+    }
+
+    /** Старый холодный старт — сборщик на каждого персонажа; только по настройке `bankColdStart: 'build'`. */
+    async function runBuildColdStart() {
         const startEpoch = bankStore.epoch();
         const sources = await collectSources();
         if (startEpoch !== bankStore.epoch()) return progress({ stale: true });
@@ -164,6 +203,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         await bankStore.saveColdStart(progress({ status: 'ready', warnings: markWarnings }));
         return progress({ timedOut: false, sources: sources.length });
     }
+
 
     function ensureColdStart() {
         if (coldStartPromise) return coldStartPromise;

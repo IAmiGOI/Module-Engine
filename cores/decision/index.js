@@ -154,13 +154,15 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             // достраивается на следующем открытии. Раздел, который не построился, остаётся задачей.
             // Память Creation читается до решения: иначе начатый раз за прошлое открытие не был бы виден.
             await cycle.creation.load().catch(() => {});
-            if (fresh || (cycle.creation.started() && !cycle.creation.complete())) {
-                cycle.maybeRunGod?.({ allowBuild: true }).catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }));
-            }
+            // Бог строит мир параллельно сортировке банков; директор пишет банки Main Cast уже по готовому миру.
+            const god = (fresh || (cycle.creation.started() && !cycle.creation.complete()))
+                ? Promise.resolve(cycle.maybeRunGod?.({ allowBuild: true })).catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }))
+                : Promise.resolve();
             if (!fresh) return;
             await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
             await banks.ensureColdStart();
-            // Main Cast без Указа получает его сразу, как только банки собраны (часть 19).
+            await god;
+            // Main Cast без Указа получает его сразу, как только банки отсортированы и мир построен (часть 19).
             await cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
         }).catch(error => publishEvent('decision.bank.failed', { message: error?.message ?? String(error) }));
         publishEvent('decision.reloaded', { at: Date.now() });

@@ -171,6 +171,8 @@ export function touchedBankText(state, names) {
         if (!character) continue;
         // Ровно как файлы инструментов `view` / `edit`: «old» в правке совпадает дословно.
         for (const part of ['material', 'spiritual', 'decree']) files.push(`### Characters/${character.name}/${part}.md\n${renderPart(character, part)}`);
+        // Не разобранный банк — исходная карточка или запись лорбука: по ней Director пишет material.md и spiritual.md.
+        if (String(character.fallbackText ?? '').trim()) files.push(`### Characters/${character.name}/card.md\n${String(character.fallbackText).trim()}`);
     }
     return files.join('\n\n');
 }

@@ -38,7 +38,7 @@ function build({ timeline = '', adjust = null } = {}) {
     const store = { library: () => ({}), chatBrief: () => brief, window: () => ({ entries: [] }), boundary: () => null };
     const banks = createCharacterBanks({
         call, callService, researcher, store,
-        getSettings: () => ({ researcher: { workerId: 'subagent', maxSteps: 8 }, decider: { workerId: 'director' }, bankColdStartTimeoutMs: 500 }),
+        getSettings: () => ({ bankColdStart: 'build', researcher: { workerId: 'subagent', maxSteps: 8 }, decider: { workerId: 'director' }, bankColdStartTimeoutMs: 500 }),
         getWorkers: () => [{ id: 'director', format: 'openai', model: 'director/model' }],
         publishEvent: (event, payload) => events.push([event, payload]),
     });
