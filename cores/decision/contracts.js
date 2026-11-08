@@ -71,6 +71,8 @@ export function registerDecisionContracts(host, {
             const current = await cycle.files.read(params?.path ?? '');
             return cycle.files.write(current.path ?? params?.path, current.ok ? current.text : '', String(params?.text ?? ''), { comment: String(params?.comment ?? '') || 'Edited by the user in The Court.', by: 'user' });
         }),
+        // Заполнение контекстного окна резолвера по разделам (колесико The Court).
+        host.own.register('decision.contextReport', () => cycle.contextReport?.() ?? null),
         host.own.register('decision.bankProgress', () => banks.progress()),
         host.own.register('decision.bankWrite', params => banks.write(params ?? {})),
         host.own.register('decision.bankRebuild', params => banks.rebuild(params ?? {})),

@@ -23,6 +23,7 @@ import { createRosterApplier } from './roster.js';
 import { runAfterTurn } from './cycle-after-turn.js';
 import { createFormChecker } from './form-check.js';
 import { createQuestionQueue } from './questions.js';
+import { createContextReport } from './context-report.js';
 import { bootstrapQuestionCount } from '../../libraries/core/game-settings.js';
 
 /**
@@ -87,6 +88,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     }
 
     const knowledge = createKnowledge({ call, store, banks, now });
+    // Заполнение окна резолвера — для колесика в The Court.
+    const contextReport = createContextReport({ call, publishEvent, now });
     // Вкладка «Files» окна The Court: те же файлы, что правят модели, — от имени пользователя.
     const files = createFileLayer({ banks, knowledge });
     files.addProvider(createCreationProvider({ creation, state: {} }));
@@ -98,6 +101,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     let backgroundSettled = Promise.resolve();
     function chatChanged() {
         chatEpoch += 1;
+        contextReport.reset();
         backgroundController?.abort(new Error('the chat was changed'));
         backgroundController = null;
         questions.cancelAll();
@@ -203,6 +207,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         live.started({ runId, event: type === 'normal' ? 'turn' : type, wake: startedWake, at: startedAt, type });
         const reroll = type === 'regenerate' || type === 'swipe';
         const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task: reroll ? `${DIRECTOR_TURN}\n\n${DIRECTOR_REROLL}` : '' });
+        contextReport.record(built, { turn: state.turnCounter });
         const tools = toolFilter ? await context.toolsFor(settings, { filter: toolFilter }) : await context.toolsFor(settings, { turn: true });
         const controller = new AbortController();
         const hooks = live.hooks({ runId, thinking });
@@ -464,6 +469,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         onResearcherReport: jobs.onResearcherReport, sendMessage, judgeForcedMemory,
         relayGodQuestions: () => counsellor.relayGodQuestions(),
         relayStatus: report => counsellor.relayStatus(report),
+        contextReport: () => contextReport.get(),
         // Советник (часть 18): будится после хода и по концу RP-дня.
         maybeRunCounsellor: counsellor.maybeRun,
         runCounsellor: counsellor.run,

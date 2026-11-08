@@ -255,7 +255,28 @@ export function buildDeciderContext({
         usingWindow ? renderWindow(windowEntries) : `${renderCompressedDigests(digests)}\n${renderFullTurns(turns)}`,
         renderHistory(history), String(nearBanksText ?? '').trim(), String(decreeText ?? '').trim(), ...state, planContent, turnTask,
     ].filter(Boolean).join('\n\n');
-    return { systemPrompt: promptText(DIRECTOR_SYSTEM), messages: withNear, prompt };
+    // Раскладка контекста по разделам — для индикатора заполнения окна (как у кодинговых моделей).
+    const sections = [
+        ['system', 'Resolver instructions', promptText(DIRECTOR_SYSTEM)],
+        ['settings', 'Story settings', settingsBlock],
+        ['creation', 'Creation — the world', String(creationText ?? '').trim()],
+        ['banks', 'Character banks — far', String(banksText ?? '').trim()],
+        ['lorebook', 'Lorebook', String(lorebookText ?? '').trim()],
+        ['arcs', 'Arcs', arcsSection(arcs)],
+        ['brief', 'Chat brief', String(chatBriefText ?? '').trim()],
+        ['library', 'Character library', String(libraryText ?? '').trim()],
+        ['frozen', 'Earlier history — summaries', renderFrozenWindows(frozenWindows)],
+        ['plans', 'Plans', String(plansText ?? '').trim()],
+        ['roster', 'Roster', rosterSection(roster)],
+        ['active', 'Active banks', String(activeBanksText ?? '').trim()],
+        ['history', 'Recent history', [usingWindow ? renderWindow(windowEntries) : `${renderCompressedDigests(digests)}\n${renderFullTurns(turns)}`, renderHistory(history)].map(value => String(value ?? '').trim()).filter(Boolean).join('\n\n')],
+        ['near', 'Character banks — near', String(nearBanksText ?? '').trim()],
+        ['decree', 'Decrees', String(decreeText ?? '').trim()],
+        ['state', 'Knowledge, notes and the scene', state.join('\n\n')],
+        ['plan', 'Plan', planContent],
+        ['task', 'Turn task', turnTask],
+    ].map(([id, label, value]) => ({ id, label, text: String(value ?? '').trim() })).filter(section => section.text);
+    return { systemPrompt: promptText(DIRECTOR_SYSTEM), messages: withNear, prompt, sections };
 }
 
 /**

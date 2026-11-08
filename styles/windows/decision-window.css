@@ -363,3 +363,19 @@ span.stme-dw-file-path { cursor: default; text-decoration: none; }
 .stme-prep-ready { background: color-mix(in srgb, var(--stme-ok) 10%, transparent); }
 .stme-prep-ready .text_pole { min-width: 140px; }
 
+
+/* Заполнение контекстного окна резолвера: колесико и разделы. */
+.stme-ctx-ring-button { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 2px 4px; cursor: pointer; color: inherit; margin-left: auto; }
+.stme-ctx-ring { position: relative; width: 18px; height: 18px; border-radius: 50%; display: inline-block; }
+.stme-ctx-ring-hole { position: absolute; inset: 3px; border-radius: 50%; background: var(--stme-level-1, #1e1e1e); }
+.stme-ctx-ring-label { font-size: .8em; font-variant-numeric: tabular-nums; opacity: .8; }
+.stme-ctx-panel { border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); background: var(--stme-level-1); padding: 8px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 8px; max-height: 55vh; overflow: auto; }
+.stme-ctx-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.stme-ctx-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--stme-level-2); }
+.stme-ctx-bar-part { display: block; height: 100%; min-width: 1px; }
+.stme-ctx-list { display: flex; flex-direction: column; gap: 2px; }
+.stme-ctx-section > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: .9em; padding: 2px 0; }
+.stme-ctx-dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.stme-ctx-name { flex: 1; }
+.stme-ctx-tokens { font-variant-numeric: tabular-nums; opacity: .75; font-size: .9em; }
+.stme-ctx-text { white-space: pre-wrap; font-size: .8em; max-height: 320px; overflow: auto; background: var(--stme-level-2); padding: 6px 8px; border-radius: var(--stme-radius-sm); margin: 4px 0 6px; }
