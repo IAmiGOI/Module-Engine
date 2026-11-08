@@ -199,3 +199,39 @@ html.stme-input-bar-active #form_sheld { background: none !important; border: 0 
 .stme-ctx-tokens { font-variant-numeric: tabular-nums; opacity: .75; }
 .stme-ctx-text { white-space: pre-wrap; font-size: 12px; max-height: 300px; overflow: auto; margin: 4px 0 6px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--stme-text) 7%, transparent); }
 .stme-ctx-empty { opacity: .7; }
+
+/* ===== «Пять столпов» (cores/ui/input-bar/pillars-button.js): второй круг справа от пилюли, сразу за колесиком контекста =====
+   Открывает полноэкранное меню столпов. Вид — тот же круг, что у колесика; метка внутри — пять точек по кругу и черта стола. */
+.stme-pillars-launch {
+    position: fixed;
+    bottom: 9px;
+    z-index: 6900;
+    box-sizing: border-box;
+    width: var(--stme-input-h);
+    height: var(--stme-input-h);
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: var(--stme-input-border) solid color-mix(in srgb, var(--stme-accent) 55%, transparent);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--stme-surface) 88%, transparent);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .35);
+    cursor: pointer;
+    color: var(--stme-text);
+}
+.stme-pillars-launch:hover { border-color: var(--stme-accent); color: var(--stme-accent); }
+.stme-pillars-launch-mark {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 50% 8%, currentColor 0 2px, transparent 2.5px),
+        radial-gradient(circle at 90% 42%, currentColor 0 2px, transparent 2.5px),
+        radial-gradient(circle at 73% 92%, currentColor 0 2px, transparent 2.5px),
+        radial-gradient(circle at 27% 92%, currentColor 0 2px, transparent 2.5px),
+        radial-gradient(circle at 10% 42%, currentColor 0 2px, transparent 2.5px);
+}
+/* Под открытой панелью движение меню не нужно, как у прочих элементов интерфейса. */
+html.stme-panel-open .stme-pillars-launch { visibility: hidden; }

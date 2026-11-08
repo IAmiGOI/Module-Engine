@@ -22,6 +22,7 @@ import { createPicturePanelCore } from '../../cores/ui/picture-panel.js';
 import { createDecisionPromptsPanelCore } from '../../cores/ui/decision-prompts-panel.js';
 import { createGameSettingsPanelCore } from '../../cores/ui/game-settings-panel.js';
 import { createDecisionWindowCore } from '../../cores/ui/decision-window.js';
+import { createPillarsCore } from '../../cores/ui/pillars/index.js';
 import { MUSIC_SERVER, BACKGROUNDS_REPO } from './config.js';
 
 /** Интерфейс: Ядро UI, окна (граф, картинка), уведомления, фоны, синхронизация, лента чата, поле ввода, домашний экран. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
@@ -75,6 +76,12 @@ export async function wireUiCores(ctx) {
     const decisionWindow = createDecisionWindowCore(
         engine.registerCaller('core.ui.decisionWindow', 'cores', { tier: 'official' }),
         { mount: node => uiEngine.mount('decisionWindow', node) },
+    );
+    // Меню «Пять столпов» — своё UI-Ядро: полноэкранное меню с живым фоном (cores/ui/pillars/). Открывается
+    // кругом рядом с колесиком контекста (input-bar) или событием `decision.pillars.openRequested`; в `open()`
+    // строит DOM, поэтому здесь только конструкция — монтирование по требованию.
+    const pillars = createPillarsCore(
+        engine.registerCaller('core.ui.pillars', 'cores', { tier: 'official' }),
     );
     // У Модулей СВОЙ реестр UI, отдельный от слотов движка: у каждого
     // включённого Модуля свой независимый Final UI, иначе пути их деревьев

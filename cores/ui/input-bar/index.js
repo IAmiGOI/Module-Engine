@@ -4,6 +4,7 @@ import { createNativeBridge } from './native-bridge.js';
 import { createInputPill } from './pill.js';
 import { createLeftDock } from './left-dock.js';
 import { createContextGauge, GAUGE_SIZE, GAUGE_GAP } from './context-gauge.js';
+import { createPillarsButton, PILLARS_SIZE, PILLARS_GAP } from './pillars-button.js';
 
 const ACTIVE_CLASS = 'stme-input-bar-active';
 /** Боковая панель (верхняя полоса ST → вертикально слева, styles/chrome/side-bar.css) — только на широком экране без тача; на телефоне полоса остаётся родной. */
@@ -76,12 +77,16 @@ export function createInputBarCore(host, {
             document: doc,
             load: async () => { const result = await request(host.own, 'decision.contextReport', { params: {} }); return result.ok ? result.value : null; },
         });
+        // «Пять столпов» — круг сразу за колесиком контекста: открывает полноэкранное меню (Ядро `core.ui.pillars`).
+        const pillars = createPillarsButton({ document: doc, onOpen: () => { void request(host.own, 'pillars.toggle', { params: {} }); } });
 
         const applyColumn = () => {
             const bar = computeBarColumn({ column, windowWidth: win.innerWidth });
-            const width = Math.max(160, bar.width - GAUGE_SIZE - GAUGE_GAP);
+            // Пилюля уже, чем колонка, на ширину ДВУХ кругов: колесико контекста и «Пять столпов» стоят справа от неё.
+            const width = Math.max(160, bar.width - GAUGE_SIZE - GAUGE_GAP - PILLARS_SIZE - PILLARS_GAP);
             pill.setColumn({ ...bar, width });
             gauge.place({ right: bar.left + width });
+            pillars.place({ right: bar.left + width + GAUGE_SIZE + GAUGE_GAP });
         };
         const syncFromNative = () => { pill.setValue(bridge.readText()); };
         applyColumn();
@@ -93,6 +98,7 @@ export function createInputBarCore(host, {
         pill.mount(doc.body);
         dock.mount(doc.body);
         gauge.mount(doc.body);
+        pillars.mount(doc.body);
 
         const onWindowResize = () => { applyColumn(); pill.autosize(); };
         win.addEventListener('resize', onWindowResize);
@@ -104,17 +110,18 @@ export function createInputBarCore(host, {
             host.events.subscribe('st.chatChanged', () => { gauge.refresh(); }),
             host.events.subscribe('decision.context.report', () => { gauge.refresh(); }),
         ];
-        active = { pill, dock, gauge, cleanups, applyColumn };
+        active = { pill, dock, gauge, pillars, cleanups, applyColumn };
         emitChanged({ active: true, height: pill.height() });
         return { ok: true };
     }
 
     async function disable() {
         if (!active) return;
-        const { pill, dock, gauge, cleanups } = active;
+        const { pill, dock, gauge, pillars, cleanups } = active;
         active = null;
         for (const cleanup of cleanups) cleanup?.();
         gauge?.dispose();
+        pillars?.dispose();
         dock.dispose();
         pill.dispose();
         doc.documentElement.classList.remove(ACTIVE_CLASS);

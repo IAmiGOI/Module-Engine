@@ -309,18 +309,18 @@ test('core: the column the overlay reported BEFORE the pill existed is applied o
     fire('ui.chatViewport.columnChanged', { left: 40, width: 600 });
     await core.enable();
     assert.equal(core.pill().root.style.left, '40px');
-    // Пилюля уже на круг контекста и зазор (46 + 8): круг стоит сразу справа от неё, по колонке.
-    assert.equal(core.pill().root.style.width, '546px');
+    // Пилюля уже на ДВА круга и два зазора (46+8+46+8): колесико контекста и «Пять столпов» стоят справа от неё, по колонке.
+    assert.equal(core.pill().root.style.width, '492px');
     fire('ui.chatViewport.columnChanged', { left: 100, width: 500 });
     assert.equal(core.pill().root.style.left, '100px');
-    assert.equal(core.pill().root.style.width, '446px');
+    assert.equal(core.pill().root.style.width, '392px');
 });
 
 test('core: without a reported column the pill is centred with gaps, and the Send-on-Enter setting of ST decides Enter', async () => {
     const { core } = makeCore({ getSendOnEnter: () => -1 });
     await core.enable();
     assert.equal(core.pill().root.style.left, '20px');
-    assert.equal(core.pill().root.style.width, '906px');
+    assert.equal(core.pill().root.style.width, '852px');
     const { native, core: core2 } = makeCore({ getSendOnEnter: () => -1 });
     await core2.enable();
     core2.pill().field.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
