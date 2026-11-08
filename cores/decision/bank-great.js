@@ -48,6 +48,13 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
         return state;
     }
 
+    /** Canon: Great Bank ставится целиком — разделы, Указы и уровни уже в наборе. */
+    async function replace(value) {
+        const state = normalizeGreatBank(value);
+        await save(state);
+        return state;
+    }
+
     function records() {
         return typeof banks?.records === 'function' ? banks.records() : [];
     }
@@ -277,7 +284,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     return {
-        load, sync, edit, setImportance, setDecree, writeDecree, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
+        load, sync, replace, edit, setImportance, setDecree, writeDecree, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
         farText, nearText, writerText, decreeText, rpNow, historyFor,
         sectionOf: resolveSection,
     };

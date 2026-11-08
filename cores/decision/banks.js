@@ -205,6 +205,19 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     }
 
 
+    /**
+     * Применить готовый набор (Canon): банки уже на месте и отсортированы —
+     * холодный старт больше не нужен. Запись важности и текста сохранена в наборе.
+     */
+    async function markSorted() {
+        const records = Object.values(bankStore.chat());
+        await bankStore.saveColdStart({
+            ...progress(), status: 'ready', total: records.length, done: records.length, errors: 0,
+            builderVersion: BANK_BUILDER_VERSION, warnings: markWarnings,
+        });
+        return progress();
+    }
+
     function ensureColdStart() {
         if (coldStartPromise) return coldStartPromise;
         if (queueRunning) return Promise.resolve(progress()); // банки ещё строятся в этой вкладке — второй очереди не нужно
@@ -321,7 +334,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
 
 
     return {
-        reload, reset, ensureColdStart, ensureName, noteRosterAdded, applyTimeline: timelineAdjust.applyTimeline,
+        reload, reset, ensureColdStart, markSorted, ensureName, noteRosterAdded, applyTimeline: timelineAdjust.applyTimeline,
         contextFor, examplesForCards,
         farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit, decreeFor: greatLayer.decreeFor,
         writerContext: names => greatLayer.writerContext(names, {

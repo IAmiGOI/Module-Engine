@@ -350,3 +350,16 @@ span.stme-dw-file-path { cursor: default; text-decoration: none; }
 .stme-dw-writing-line { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .stme-dw-writing-dot { color: var(--stme-accent, currentColor); animation: stme-dw-pulse 1.2s ease-in-out infinite; }
 @keyframes stme-dw-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+/* Подготовка к игре (фаза 6): плашка над дорожками и строка Canon. */
+.stme-prep { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--stme-border); background: color-mix(in srgb, var(--stme-accent) 8%, transparent); font-size: .86em; }
+.stme-prep-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.stme-prep-title { font-weight: 700; }
+.stme-prep-detail, .stme-prep-role { opacity: .75; }
+.stme-prep-role { font-size: .92em; }
+.stme-prep-link { align-self: flex-start; background: none; border: 0; padding: 0; color: var(--stme-accent); cursor: pointer; text-decoration: underline dotted; font: inherit; }
+.stme-prep-error { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--stme-danger-bright); }
+.stme-prep-note { opacity: .8; font-style: italic; }
+.stme-prep-ready { background: color-mix(in srgb, var(--stme-ok) 10%, transparent); }
+.stme-prep-ready .text_pole { min-width: 140px; }
+

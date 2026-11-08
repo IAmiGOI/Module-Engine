@@ -19,6 +19,9 @@ import { createWriterRewrite } from './rewrite.js';
 import { createCharacterBanks } from './banks.js';
 import { createBootstrap } from './bootstrap.js';
 import { createBankSets } from './bank-sets.js';
+import { createPreparation } from './preparation.js';
+import { createCanon } from './canon.js';
+import { preparationStepText } from '../../libraries/core/decision-preparation.js';
 import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
 import { clampGameSettings, describeSettingsChange, modeOf, modeValues, patchGameSettings, resolveGameSettings, settingsLabel } from '../../libraries/core/game-settings.js';
 import { buildRollLines } from '../../libraries/core/decision-push.js';
@@ -38,6 +41,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     let pending = null; // текущий прогон директора: { runId, type, chat, decision, form, push, … }
     let lastFailure = null; // последняя неудача: нужна, чтобы отличить ошибку настройки от сбоя модели
     const timedOutRuns = new Map(); // runId -> сообщение: ход истёк по сроку, повтор конвейера сразу отказывает
+    const refusedRuns = new Set(); // runId, которому подготовка уже отказала: повтор конвейера не повторяет уведомление
     let stagesRegistered = false;
     let registering = false;
     let runCounter = 0;
@@ -122,9 +126,17 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     });
     const bootstrap = createBootstrap({ call: callStrict, store, cycle, getSettings: () => settings, getGameSettings: gameSettingsValues, publishEvent });
     const bankSets = createBankSets({ call: callStrict, banks, store, bootstrap, askUser: params => cycle.askUser(params), publishEvent });
-    // Снимок «стартовых» банков — с паузой: событие «готов» приходит раньше, чем банк записан, а событий за bootstrap много.
+    // Явная машина подготовки (фаза 6): шаги по фактам, а не цепочка событий.
+    const preparation = createPreparation({ call: callStrict, callService, store, banks, creation: cycle.creation, cycle, publishEvent, getSettings: () => settings });
+    // Canon — сохранённый итог подготовки; новый чат с тем же набором берёт его сразу.
+    const canon = createCanon({
+        call: callStrict, callService, store, banks, creation: cycle.creation, preparation,
+        askUser: params => cycle.askUser(params), publishEvent,
+    });
+    // Снимок «стартовых» банков — старая механика наборов; только по настройке `bankColdStart: 'build'`.
     let snapshotTimer = null;
     const scheduleSnapshot = () => {
+        if (settings.bankColdStart !== 'build') return;
         if (snapshotTimer) clearTimeout(snapshotTimer);
         snapshotTimer = setTimeout(() => { snapshotTimer = null; bankSets.snapshot().catch(() => {}); }, 1500);
     };
@@ -138,53 +150,48 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     function chatChanged() {
         cycle.chatChanged();
         bootstrap.chatChanged();
+        preparation.reset();
+        refusedRuns.clear();
         researcher.cancel({ all: true, reason: 'cancelled: the chat was changed' });
     }
 
     async function reload() {
         await store.reload();
         gameValues = null;
+        preparation.reset();
         await cycle.rebuildWindow().catch(error => publishEvent('decision.log.warning', { reason: `window rebuild failed: ${error?.message ?? error}` }));
         await banks.reload().catch(() => {});
         workers = (await call('model.workers.get')) ?? [];
         await bootstrap.load().catch(() => {});
-        // Главный экран ST — не чат: ни bootstrap, ни Бога, ни сборки банков, ни директора.
+        // Главный экран ST — не чат: ни bootstrap, ни Бога, ни сортировки банков, ни директора.
         if (!(await bootstrap.chatOpen())) {
             publishEvent('decision.reloaded', { at: Date.now() });
             return { runs: store.runs() };
         }
         if (settings.bootstrap?.legacy === true) bootstrap.maybeStart().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }));
-        // Новый чат: банки строятся сразу, параллельно bootstrap, а не с первым ходом.
-        // Есть готовые банки прошлого bootstrap для этих книг — сначала вопрос «взять их?», потом сборка недостающих.
+        // Подготовка идёт в фоне: новый чат — сортировка, Бог, ответы, Указы; старый готовый — сразу `ready`.
         bootstrap.isNewChat().then(async fresh => {
-            // Creation (фаза 5): строится один раз на чат, в фоне, при открытии нового чата; начатый —
-            // достраивается на следующем открытии. Раздел, который не построился, остаётся задачей.
-            // Память Creation читается до решения: иначе начатый раз за прошлое открытие не был бы виден.
+            // Creation (фаза 5): начатая за прошлое открытие достраивается, потерянные правила чинятся без Бога.
             await cycle.creation.load().catch(() => {});
-            // Правила Scales, потерянные старым разборщиком, — из исходного текста Бога в журнале, без нового запуска.
             repairStartHour({ creation: cycle.creation })
                 .then(titles => { if (titles.length) publishEvent('decision.creation.repaired', { sections: titles }); })
                 .catch(() => {});
             repairEmptyRules({ creation: cycle.creation, cycles: store.cycles() })
                 .then(names => { if (names.length) publishEvent('decision.creation.repaired', { systems: names }); })
                 .catch(() => {});
-            // Бог строит мир параллельно сортировке банков; директор пишет банки Main Cast уже по готовому миру.
-            const god = (fresh || (cycle.creation.started() && !cycle.creation.complete()))
-                ? Promise.resolve(cycle.maybeRunGod?.({ allowBuild: true })).catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }))
-                : Promise.resolve();
-            // Не новый чат: банки уже отсортированы — директор проверяет, есть ли Main Cast без банка и Указа.
-            // Без повода он не делает ни одного вызова модели.
-            if (!fresh) {
-                await god;
-                await cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
-                return;
+            // Новый чат с тем же набором книг и карточек: готовый Canon вместо дорогой подготовки.
+            if (fresh) {
+                const applied = await canon.offer().catch(error => {
+                    publishEvent('decision.bank.warning', { message: `The Canon was not offered: ${error?.message ?? error}` });
+                    return 0;
+                });
+                // Старые наборы банков — только под старой сборкой (`bankColdStart: 'build'`).
+                if (!applied && settings.bankColdStart === 'build') {
+                    await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
+                }
             }
-            // Готовые банки прошлых чатов — наборы старого сборщика; в пяти ролях банки сортируются, вопроса нет.
-            if (settings.bankColdStart === 'build') await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
-            await banks.ensureColdStart();
-            await god;
-            // Main Cast без Указа получает его сразу, как только банки отсортированы и мир построен (часть 19).
-            await cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
+            // Машина шагов сама ставит текущий шаг и запускает роль только на её шаге.
+            await preparation.advance().catch(error => publishEvent('decision.failed', { runId: null, message: `preparation: ${error?.message ?? error}` }));
         }).catch(error => publishEvent('decision.bank.failed', { message: error?.message ?? String(error) }));
         publishEvent('decision.reloaded', { at: Date.now() });
         return { runs: store.runs() };
@@ -328,6 +335,18 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const runId = input.runId ?? `decision_${(runCounter += 1)}`;
         const type = input.type ?? 'normal';
         const chat = Array.isArray(input.chat) ? input.chat : [];
+        // Ход игры ждёт готовый мир: до `ready` — отказ с понятным сообщением,
+        // а не тихая игра без мира. Только факты, без запуска God и Director.
+        const prepared = await preparation.assess().catch(() => null);
+        if (prepared && prepared.step !== 'ready') {
+            const step = preparationStepText(prepared.step);
+            const message = `The game is not ready yet: ${step.label.toLowerCase()}.${step.detail ? ` ${step.detail}` : ''} Wait for it to finish; if it failed, press Retry in The Court.`;
+            lastFailure = { runId, kind: 'preparation', message };
+            // Конвейер повторяет упавшую стадию: одно и то же уведомление дважды не показываем.
+            if (!refusedRuns.has(runId)) { refusedRuns.add(runId); notify('error', message); }
+            throw Object.assign(new Error(message), { code: 'decision-preparation' });
+        }
+        refusedRuns.delete(runId);
         if ((type === 'regenerate' || type === 'swipe') && regenMode === 'writer') {
             const last = store.lastRun();
             if (last) {
@@ -433,6 +452,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         cycle,
         reload,
         chatChanged,
+        advance: () => preparation.advance(),
         startDraft: () => cycle.runDraft({ runId: `typing_${(runCounter += 1)}` }).catch(error => publishEvent('decision.failed', { runId: null, message: `typing draft: ${error?.message ?? error}` })),
         canReregister: () => !registering && !stagesRegistered,
         registerStages,
@@ -471,6 +491,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             rewrite,
             preview,
             reload,
+            preparation,
+            canon,
             decideContract: DECIDE_CONTRACT,
             rewriteContract: REWRITE_CONTRACT,
             gameSettings: {

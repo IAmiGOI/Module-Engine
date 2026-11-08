@@ -5,6 +5,7 @@ import { createDragHandlers, clampToViewport } from '../../libraries/shared/drag
 import { FloatingPanel, DockButton, Button, Toggle, TextArea, TextInput, Row, Segment, Select } from '../../libraries/shared/widgets.js';
 import { LANES, LANE_IDS, turnsIn } from '../../libraries/core/court-lanes.js';
 import { createCourtLanes } from './court-lanes-view.js';
+import { createCourtPreparation } from './court-preparation.js';
 import { createCourtFiles } from './court-files.js';
 import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/core/decision-feed.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
@@ -59,7 +60,16 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const files = createCourtFiles({ call });
     // Путь файла в ленте — кнопка: открывает этот файл во вкладке Files.
     const openFile = path => { setMode('files'); files.openPath(path).catch(() => {}); };
-    const court = createCourtLanes({ entries: all, mode, turn: turnFilter, now, limits, openFile });
+    // Плашка подготовки и Canon — над дорожками, пока игра не открыта.
+    const preparation = createCourtPreparation({
+        call,
+        subscribe: (name, handler) => host.events.subscribe(name, handler),
+        onOpenCounsellor: () => setMode('counsellor'),
+    });
+    const court = createCourtLanes({
+        entries: all, mode, turn: turnFilter, now, limits, openFile,
+        header: () => preparation.tree(),
+    });
     const archiveLimits = Object.fromEntries(LANE_IDS.map(id => [id, signal(PAGE)]));
     const archiveCourt = createCourtLanes({ entries: computed(() => filtered().archive), mode, turn: () => '', now, limits: archiveLimits });
     const turnOptions = computed(() => [{ value: '', label: 'All turns' }, ...turnsIn(all()).reverse().map(turn => ({ value: String(turn), label: `Turn ${turn}` }))]);
@@ -244,6 +254,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         subscribe();
         questionView.subscribe();
         bankProgress.subscribe();
+        preparation.start();
         await refresh();
         const finalUi = mount(tree());
         await finalUi.settled?.();
@@ -254,6 +265,6 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     return {
         tree, open, show, hide, toggle, refresh, send, filtered, feed, now, draft, showThinking, onlyTurns, search, mode, turnFilter, court, files,
         isVisible: () => visible.peek(),
-        stop() { stopTimer(); questionView.stop(); bankProgress.stop(); for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
+        stop() { stopTimer(); questionView.stop(); bankProgress.stop(); preparation.stop(); for (const unsubscribe of subscriptions.splice(0)) unsubscribe(); },
     };
 }

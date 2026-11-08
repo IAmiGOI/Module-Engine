@@ -8,9 +8,12 @@ import { afterTurnEnabled } from '../../libraries/core/decision-settings.js';
 export function createDecisionEvents({
     host, getSettings, getPending, setPending, clearAttempts, deleteAttempt, persist,
     discardPending, getLastFailure, noteCorrection, notify, revealCard, restoreSnapshotFor, lastMesid,
-    cycle, reload, chatChanged = () => {}, startDraft, canReregister, registerStages, publishEvent, decideStage,
+    cycle, reload, chatChanged = () => {}, advance = () => Promise.resolve(), startDraft, canReregister, registerStages, publishEvent, decideStage,
 }) {
     let typingActive = false;
+    // Подготовка — явная машина шагов: событие только просит пересмотреть факты,
+    // а решение «чей шаг и кого будить» принимает `advance()`.
+    const runAdvance = () => Promise.resolve(advance()).catch(error => publishEvent('decision.failed', { runId: null, message: `preparation: ${error?.message ?? error}` }));
 
     function onBeforeSend(payload) {
         const pending = getPending();
@@ -59,6 +62,8 @@ export function createDecisionEvents({
             if (failure?.kind === 'config') {
                 notify('error', `Director: ${failure.message} The generation was not sent.`);
                 revealCard();
+            } else if (failure?.kind === 'preparation') {
+                // Отказ уже показан в `decide()` — второй раз то же сообщение не нужно.
             } else {
                 notify('error', 'Decision core: the director failed twice, so this generation was cancelled.');
             }
@@ -136,21 +141,20 @@ export function createDecisionEvents({
             // Новые Petition/Телеграммы будят Director и вне цепочки хода (ответ Советнику, отчёт).
             host.events.subscribe('decision.counsellor.finished', () => {
                 cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
-                // Ответы на вопросы Бога закрыли Декларацию — God строит мир по ним (повод — сама Декларация).
-                cycle.maybeRunGod?.().catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }));
+                // Ответы на вопросы Бога закрыли Декларацию — шаг подготовки двигается по фактам.
+                runAdvance();
             }),
-            // Мир построен — директор пишет банки Main Cast по нему (повод — Main Cast без Указа).
             // Бог или директор ответили на отправленное Советником — тот отчитывается пользователю по их записи.
             host.events.subscribe('decision.god.finished', payload => {
                 if (payload?.report) cycle.relayStatus?.(payload.report).catch(() => {});
+                runAdvance();
             }),
             host.events.subscribe('decision.director.finished', payload => {
                 if (payload?.report) cycle.relayStatus?.(payload.report).catch(() => {});
+                runAdvance();
             }),
-            host.events.subscribe('decision.god.finished', payload => {
-                if (!['first', 'build', 'declaration'].includes(String(payload?.kind ?? ''))) return;
-                cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
-            }),
+            // Холодный старт банков отсортирован — следующий шаг смотрит на факты.
+            host.events.subscribe('decision.bank.sorted', () => runAdvance()),
             // Вопрос Бога — Советнику сразу: он передаёт его пользователю, а не ждёт следующего разбора.
             host.events.subscribe('decision.god.question', () => {
                 cycle.relayGodQuestions?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Counsellor: ${error?.message ?? error}` }));

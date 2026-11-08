@@ -11,7 +11,7 @@ import { cycleNode } from './decision-window-rows.js';
 const PAGE = 30;
 const sameRows = (a, b) => a.length === b.length && a.every((row, index) => row === b[index]);
 
-export function createCourtLanes({ entries, mode, turn, now, limits, openFile = null }) {
+export function createCourtLanes({ entries, mode, turn, now, limits, openFile = null, header = null }) {
     const cache = new Map();
     const nodeFor = (part, open) => {
         if (part.running || part.waiting) return cycleNode(part, now, { open: true, openFile });
@@ -68,6 +68,7 @@ export function createCourtLanes({ entries, mode, turn, now, limits, openFile = 
     function tree() {
         const visible = mode() === 'all' ? LANES : LANES.filter(lane => lane.id === mode());
         return h('div', { class: 'stme-court' },
+            header ? header() : null,
             statusNode(),
             h('div', { class: `stme-court-lanes${mode() === 'all' ? ' stme-court-all' : ' stme-court-one'}` }, ...visible.map(laneNode)));
     }

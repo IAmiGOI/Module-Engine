@@ -1,7 +1,7 @@
 /** Контракты ядра «директор + прозаик». Только регистрация; логика — в index.js. */
 export function registerDecisionContracts(host, {
     getSettings, configure, store, researcher, banks, cycle, cardTurn, decide, rewrite, reload, preview, decideContract, rewriteContract, bootstrap = null,
-    gameSettings = null, messageRolls = null, regenOnce = null,
+    gameSettings = null, messageRolls = null, regenOnce = null, preparation = null, canon = null,
 }) {
     const settings = () => {
         const value = getSettings();
@@ -78,6 +78,12 @@ export function registerDecisionContracts(host, {
         // Старый бутстрап — только по `bootstrap.legacy`: иначе окно не предлагает повторять его «failed» из старых чатов.
         host.own.register('decision.bootstrap', () => (getSettings()?.bootstrap?.legacy === true ? bootstrap?.state?.() ?? null : null)),
         host.own.register('decision.bootstrapRetry', () => bootstrap?.retry?.() ?? { ok: false, error: 'The bootstrap is not available.' }),
+        // Подготовка к игре (фаза 6): явный шаг, повтор упавшего шага и Canon.
+        host.own.register('decision.preparation', () => preparation?.assess?.() ?? preparation?.state?.() ?? null),
+        host.own.register('decision.preparationRetry', () => preparation?.retry?.() ?? { ok: false, error: 'Preparation is not available.' }),
+        host.own.register('decision.canonList', () => canon?.list?.() ?? []),
+        host.own.register('decision.canonSave', params => canon?.save?.(params ?? {}) ?? { ok: false, error: 'Canon is not available.' }),
+        host.own.register('decision.canonApply', params => canon?.apply?.(params ?? {}) ?? { ok: false, error: 'Canon is not available.' }),
         // Мироздание и Бог (фаза 5): чтение Creation, очередь вопросов и запуск God.
         host.own.register('decision.creation', () => cycle.creation?.state?.() ?? null),
         host.own.register('decision.god', () => store.papers()?.god ?? null),
