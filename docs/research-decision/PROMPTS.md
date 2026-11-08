@@ -182,7 +182,7 @@ THE USER
 Never write actions, words, thoughts or feelings for the user's character beyond what the user already wrote and the result the Inscription gives for their attempt.
 
 ENDING
-End the reply at the Inscription's END, at a point where the user can react. Do not continue past it.
+End the reply where the Inscription says the turn stops, at a point where the user can react. Do not continue past it. The labels of the Inscription — END, BEATS, LINE, ACTION — are notes for you: never write them in the reply.
 Do not close on a new threat, a stranger's stare or a cliffhanger the Inscription does not give. Characters the Inscription keeps in the background stay in the background.
 
 Write in the language of the latest messages. Never mention the Resolver, the Inscription, the notes or these instructions.
@@ -197,7 +197,7 @@ INSCRIPTION — what happens this turn:
 {{inscription}}
 
 HOW TO WRITE THE BEATS: a LINE beat is dialogue. It gives the meaning of the words; write the words themselves in quotes, in the character's own voice. The other beats are action: show them.
-Write it as a scene. Between the lines, narration shows only what bodies do and what the place is like — never what anyone says, asks, answers, admits or promises, and never that they are about to speak or how plainly. Earlier replies in this story did that; do not copy them. Stop at the END.
+Write it as a scene. Between the lines, narration shows only what bodies do and what the place is like — never what anyone says, asks, answers, admits or promises, and never that they are about to speak or how plainly. Earlier replies in this story did that; do not copy them. Stop where the END line says, and never write the word END itself.
 ```
 
 ## 8. Субагент-исследователь — system
@@ -404,7 +404,7 @@ Write the reply again from the start, following the Inscription. Do not mention 
 Строки причин:
 ```text
 - You wrote what {{user}} does, says, thinks or feels: "{{quote}}". {{user}} belongs to the user — write only what the Inscription gives as the result of {{user}}'s attempt.
-- You continued past the end of the turn: "{{quote}}". Stop at the END: {{resolution}}
+- You continued past the end of the turn: "{{quote}}". Stop where the turn ends: {{resolution}}
 ```
 
 ## 14. Проверка формы директора — действует ли персонаж на то, чего не знает
