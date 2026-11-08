@@ -87,6 +87,13 @@ export function toolLabel(name, args = {}) {
         case 'character_knowledge': return `Knowledge — ${text(a.character) || 'a character'}`;
         case 'character_bank': return `Data bank — ${text(a.name ?? a.character) || 'a character'}`;
         case 'update_roster': return 'Who is in the scene';
+        case 'edit': {
+            const paths = [...new Set((Array.isArray(a.edits) ? a.edits : []).map(item => text(item?.path).replace(/^Characters\//, '')).filter(Boolean))];
+            return `Edit — ${paths.slice(0, 3).join(', ') || 'files'}${paths.length > 3 ? ` +${paths.length - 3}` : ''}`;
+        }
+        case 'view': return text(a.path) ? `Read ${text(a.path).replace(/^Characters\//, '')}` : 'List the files';
+        case 'create': return `Create ${text(a.path).replace(/^Characters\//, '') || 'a file'}`;
+        case 'resolve_proposals': return 'Proposals of the Resolver';
         case 'creation_write': return `Creation — ${(Array.isArray(a.sections) ? a.sections : []).map(section => text(section?.title)).filter(Boolean).join(', ') || 'a section'}`;
         case 'scale_write': return `Scales — ${text(a.system) || 'a system'}`;
         case 'ask': return 'Questions for you';
@@ -108,6 +115,8 @@ export function toolFields(name, args = {}) {
         ]));
         case 'petition': return pick([['Problem', a.problem], ['From the Ledger', a.excerpt], ['Promote', a.promote ? `${text(a.promote.level)} — ${text(a.promote.reason)}` : '']]);
         case 'inscribe': return pick([['Stops at', a.stop], ['Lasts', a.scene?.duration]]);
+        case 'edit': return (Array.isArray(a.edits) ? a.edits : []).map(item => [text(item?.path).replace(/^Characters\//, ''), `${text(item?.old) || '(add)'}  →  ${text(item?.new) || '(remove)'}`]);
+        case 'create': return pick([[text(a.path), a.text]]);
         case 'nothing_yet': case 'rest': return pick([['Why', a.reason]]);
         case 'reply': case 'prayer': return pick([['Text', a.text]]);
         default: return [];

@@ -1,3 +1,4 @@
+import * as files from './decision-tool-schemas-files.js';
 import { COMMENT } from './decision-tool-comment.js';
 import * as turn from './decision-tool-schemas-turn.js';
 import * as world from './decision-tool-schemas-world.js';
@@ -81,7 +82,7 @@ export function buildCounsellorToolList() {
  * предложения резолвера принимаются тем же вызовом `decree`.
  */
 export function buildDirectorToolList() {
-    return [DECREE_TOOL, bank.BANK_EDIT_TOOL, bank.SET_BANK_IMPORTANCE_TOOL, turn.AWAIT_TOOL];
+    return [files.VIEW_TOOL, files.EDIT_TOOL, files.CREATE_TOOL, bank.SET_BANK_IMPORTANCE_TOOL, files.RESOLVE_PROPOSALS_TOOL, turn.AWAIT_TOOL];
 }
 
 /** Все схемы движка, к которым добавляются чужие инструменты. */

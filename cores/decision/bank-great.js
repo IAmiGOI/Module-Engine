@@ -156,6 +156,15 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
      * ставит метку RP-времени, прежние строки — в историю. Тот же Указ историю
      * не плодит. Состояние меняется только после успешного ответа модели.
      */
+    /** Указ из файла `decree.md`: готовые разделы 1–5, без разбора полей (файловые инструменты, часть 21). */
+    async function writeDecree({ character, sections = {}, comment = '', by = 'director' } = {}) {
+        const state = await sync();
+        const rp = await rpNow();
+        const applied = applyDecrees(state, [{ character, sections }], { at: rp.label, comment, by });
+        await save(applied.state);
+        return { ok: true, at: rp.label, decrees: applied.applied };
+    }
+
     async function setDecree({ decrees = [], comment = '' } = {}) {
         const state = await sync();
         const rp = await rpNow();
@@ -242,7 +251,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     return {
-        load, sync, edit, setImportance, setDecree, pending, resolvePending, resolveName, setKnowledge,
+        load, sync, edit, setImportance, setDecree, writeDecree, pending, resolvePending, resolveName, setKnowledge,
         farText, nearText, writerText, decreeText, rpNow, historyFor,
         sectionOf: resolveSection,
     };

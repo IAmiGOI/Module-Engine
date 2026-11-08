@@ -195,3 +195,29 @@ test('director settings and the Decree lists are clamped into safe shapes', () =
     assert.deepEqual(importanceItems([{ character: 'Lena', importance: 'king' }]), []);
     assert.deepEqual(pendingDecisions([{ character: 'Lena', index: -3, accept: false }, {}]), [{ character: 'Lena', index: 0, accept: false }]);
 });
+
+test('the Director issues a Decree by editing decree.md like a code editor: only the changed line, then rests', async () => {
+    const { createFileLayer } = await import('../cores/decision/files-layer.js');
+    const { renderPart } = await import('../libraries/core/court-bank-files.js');
+    let state = { lena: { name: 'Lena', aliases: [], material: { 1: ['Short'] }, spiritual: {}, decree: { 1: ['Freedom above all.'], 3: ['Long: leave.', 'Today: find the key.'] }, history: [] } };
+    const edits = [];
+    const decrees = [];
+    const banks = { great: {
+        sync: async () => state, load: async () => state,
+        edit: async (params, options) => { edits.push({ params, options }); return { ok: true, changes: params.edits }; },
+        writeDecree: async params => { decrees.push(params); state = { ...state, lena: { ...state.lena, decree: params.sections } }; return { ok: true }; },
+    } };
+    const files = createFileLayer({ banks });
+    assert.deepEqual(await files.list(), ['Characters/Lena/material.md', 'Characters/Lena/spiritual.md', 'Characters/Lena/decree.md']);
+    const read = await files.read('characters/lena/decree');
+    assert.equal(read.path, 'Characters/Lena/decree.md');
+    assert.equal(read.text, renderPart(state.lena, 'decree'));
+    const result = await files.edit({ edits: [{ path: 'Characters/Lena/decree.md', old: '- Today: find the key.', new: '- Today: hide from the guard.' }], comment: 'The guard saw her.' });
+    assert.equal(result.files[0].ok, true);
+    assert.deepEqual(decrees[0].sections[3], ['Long: leave.', 'Today: hide from the guard.']);
+    assert.deepEqual(decrees[0].sections[1], ['Freedom above all.'], 'untouched lines stay');
+    await files.edit({ edits: [{ path: 'Lena/material.md', old: '- Short', new: '- Short, with a fresh scar on the chin' }], comment: 'Wounded.' });
+    assert.deepEqual(edits[0].params.edits, [{ character: 'Lena', section: 'material 1', old: 'Short', new: 'Short, with a fresh scar on the chin' }]);
+    const missing = await files.edit({ edits: [{ path: 'Characters/Lena/decree.md', old: 'nothing like this', new: '- A new rule.' }], comment: 'x' });
+    assert.equal(missing.files[0].applied[0], 'appended', 'a missed "old" never refuses');
+});

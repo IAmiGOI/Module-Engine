@@ -6,6 +6,7 @@ import { lastDecreeThoughts, lastReports, buildDirectorContext, directorReason }
 import { dayOf } from '../../libraries/core/decision-counsellor.js';
 import { createCycleLive } from './live.js';
 import { createDecreeHandler } from './handlers-decree.js';
+import { createFileHandlers } from './handlers-files.js';
 import { createBankHandlers } from './handlers-bank.js';
 import { createRetryRunner } from './retry.js';
 
@@ -98,6 +99,8 @@ export function createDirector({
         return {
             ...createBankHandlers({ banks, state }),
             ...createDecreeHandler({ banks, state, publishEvent }),
+            // Указ и банки — файлами: view / edit / create (часть 21).
+            ...createFileHandlers({ banks, state, publishEvent, by: 'director' }),
         };
     }
 
@@ -136,11 +139,12 @@ export function createDirector({
                 tools: buildDirectorToolList(),
                 generate: generateFor({ settings, worker, runId, startedAt }),
                 handlers: handlersFor(state),
+                // Старый вызов `decree` (совместимость) кончает цикл сразу; файловые правки кончаются на await.
+                stopAfter: ['decree'],
                 callTool,
                 maxSteps: Math.max(1, Number(settings.director?.maxSteps) || 10),
                 implicitAwait: true,
                 emptyRetry: false,
-                stopAfter: ['decree'],
                 now,
                 ...live.hooks({ runId, thinking: () => captured?.value ?? '' }),
             });

@@ -99,6 +99,10 @@ export function normalizeDecree(value = {}) {
 
 /** Пять полей Указа → разделы 1–5 записи Great Bank. */
 export function decreeSections(decree) {
+    // Указ, записанный файлом (`decree.md`), приходит готовыми разделами — без разбора полей.
+    if (decree?.sections && typeof decree.sections === 'object') {
+        return Object.fromEntries([1, 2, 3, 4, 5].map(no => [no, decreeLines(decree.sections[no] ?? [])]));
+    }
     return {
         1: decreeLines(decree?.valuesAndFacts),
         2: decreeLines(decree?.selfView),

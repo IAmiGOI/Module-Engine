@@ -1,3 +1,4 @@
+import { renderPart } from './court-bank-files.js';
 import { normalizeImportanceWord, normalizePetitions } from './decision-counsellor.js';
 import { findCharacter, normalizeGreatBank } from './decision-great-bank.js';
 import { libraryLevelsSection } from './decision-library.js';
@@ -164,20 +165,14 @@ export function levelsFor(library, names) {
 /** Полная проекция Great Bank затронутых; запись ищется по имени и псевдониму. */
 export function touchedBankText(state, names) {
     const bank = normalizeGreatBank(state);
-    const lines = [];
+    const files = [];
     for (const name of unique(names)) {
         const character = findCharacter(bank, name);
         if (!character) continue;
-        const sections = [];
-        for (const [part, label] of [['material', 'Material'], ['spiritual', 'Spiritual'], ['decree', 'Decree']]) {
-            for (const [no, values] of Object.entries(character[part] ?? {})) {
-                if (!Array.isArray(values) || !values.length) continue;
-                sections.push(`${label} ${no}\n${values.map(line => `- ${line}`).join('\n')}`);
-            }
-        }
-        if (sections.length) lines.push(`### ${character.name}\n${sections.join('\n\n')}`);
+        // Ровно как файлы инструментов `view` / `edit`: «old» в правке совпадает дословно.
+        for (const part of ['material', 'spiritual', 'decree']) files.push(`### Characters/${character.name}/${part}.md\n${renderPart(character, part)}`);
     }
-    return lines.join('\n\n');
+    return files.join('\n\n');
 }
 
 /**

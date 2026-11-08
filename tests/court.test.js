@@ -164,3 +164,10 @@ test('Files renders the tree and every view of every kind of file', async () => 
     walk(files.tree());
     assert.ok(true);
 });
+
+test('file edits read as what they change', async () => {
+    const { toolLabel, toolFields } = await import('../libraries/core/court-lanes.js');
+    const args = { edits: [{ path: 'Characters/Lena/decree.md', old: '- Today: find the key.', new: '- Today: hide.' }] };
+    assert.equal(toolLabel('edit', args), 'Edit — Lena/decree.md');
+    assert.deepEqual(toolFields('edit', args), [['Lena/decree.md', '- Today: find the key.  →  - Today: hide.']]);
+});
