@@ -65,6 +65,14 @@ export function normalizeMood(value) {
     }
     const raw = text(value);
     if (!raw) return MOOD_AXES.map(axis => axisLine(axis)).join('; ');
+    // Свой же вид «calm ↔ agitated: slightly toward agitated» — полюс после «toward», а не первое слово оси.
+    const canonical = MOOD_AXES.map(axis => {
+        const match = new RegExp(`${axis.key}\\s*↔\\s*${axis.opposite}\\s*:\\s*([a-z]+)(?:\\s+toward\\s+([a-z]+))?`, 'i').exec(raw);
+        if (!match) return null;
+        const pole = [axis.key, axis.opposite].includes(String(match[2] ?? '').toLowerCase()) ? match[2].toLowerCase() : '';
+        return axisLine(axis, pole, pole ? levelOf(match[1]) : 'neutral');
+    });
+    if (canonical.some(Boolean)) return canonical.map((line, index) => line ?? axisLine(MOOD_AXES[index])).join('; ');
     const words = raw.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean);
     const lines = [];
     for (const axis of MOOD_AXES) {

@@ -14,7 +14,9 @@ function blocksFromDoc(heading) {
     // Следующий раздел нумерован; «## How You Issue A Decree» внутри CoT — не раздел.
     const next = /\n## \d+\./g;
     next.lastIndex = start + 1;
-    const match = next.exec(doc);
+    // Заголовок внутри блока ```text (пример Указа) — не раздел: до него нечётное число ```.
+    let match = next.exec(doc);
+    while (match && (doc.slice(0, match.index).match(/```/g) ?? []).length % 2 === 1) match = next.exec(doc);
     const sectionEnd = match ? match.index : doc.length;
     let at = start;
     for (;;) {
@@ -44,4 +46,18 @@ test('the Director context headers are the ones documented in section 35', () =>
     for (const value of [REPORTS_HEADER, NO_REPORTS, LAST_DECREES_HEADER, TOUCHED_BANKS_HEADER, DIRECTOR_RP_HEADER]) {
         assert.ok(doc.includes(value), `PROMPTS.md is missing "${value}"`);
     }
+});
+
+test('the example Decree in the Director prompt is a full decree.md, and its mood reads back unchanged', async () => {
+    const { DIRECTOR_DECREE_SYSTEM } = await import('../libraries/core/decision-prompts-director.js');
+    const { parsePart } = await import('../libraries/core/court-bank-files.js');
+    const { normalizeMood } = await import('../libraries/core/decision-decree.js');
+    const example = DIRECTOR_DECREE_SYSTEM.split('--- example ---\n')[1].split('--- end of example ---')[0];
+    const sections = parsePart(example, 'decree');
+    for (const no of [1, 2, 3, 4, 5]) assert.ok(sections[no].length, `section ${no}`);
+    assert.match(sections[3][0], /^Long goal: /);
+    assert.match(sections[3][1], /^Today: /);
+    assert.equal(sections[4].length, 3);
+    assert.equal(normalizeMood(sections[4].join('; ')), sections[4].join('; '));
+    for (const line of sections[5]) assert.match(line, /^When .+, (she|he|they) /);
 });
