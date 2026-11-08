@@ -6,16 +6,17 @@
  * рисует готовое.
  */
 
-import { afterTurnRows, counsellorRows, queueRow } from './decision-feed-rows.js';
+import { afterTurnRows, counsellorRows, godRows, queueRow } from './decision-feed-rows.js';
 
 const TURN_EVENTS = new Set(['turn', 'regenerate', 'swipe']);
-const PASSIVE_EVENTS = new Set(['time', 'researcher', 'typing', 'message', 'counsellor', 'counsellor_day', 'decree', 'retry', 'warning']);
+const PASSIVE_EVENTS = new Set(['time', 'researcher', 'typing', 'message', 'counsellor', 'counsellor_day', 'decree', 'retry', 'warning', 'god_build', 'god_prayer', 'god_declaration']);
 const EVENT_LABELS = {
     turn: 'A new turn has started', regenerate: 'Regenerate requested', swipe: 'Swipe requested',
     time: 'The clock moved', researcher: 'A researcher reported', typing: 'The user is typing',
     message: 'A message to the Counsellor', settings: 'Game settings changed',
     counsellor: 'The Counsellor read the Ledger', counsellor_day: 'The Counsellor closes the RP day',
     decree: 'The Director issues a Decree', retry: 'A retry in the background', warning: 'A warning',
+    god_build: 'God shapes the world', god_prayer: 'Prayers reach God', god_declaration: 'God receives the Declaration',
 };
 
 const text = value => String(value ?? '').trim();
@@ -127,6 +128,7 @@ export function buildCycleEntry(cycle) {
     for (const [index, call] of (Array.isArray(cycle?.toolCalls) ? cycle.toolCalls : []).entries()) {
         rows.push(...afterTurnRows(call, index));
         rows.push(...counsellorRows(call, index));
+        rows.push(...godRows(call, index));
     }
     const queues = queueRow(cycle?.wake?.queues);
     if (queues) rows.push(queues);
@@ -280,6 +282,11 @@ function entryText(entry) {
         if (row.kind === 'call') parts.push(JSON.stringify(row.args ?? {}), JSON.stringify(row.result ?? null));
         if (row.kind === 'writer_check' || row.kind === 'form_check') parts.push(JSON.stringify(row.probabilities ?? {}), row.quote, row.reasons, row.name);
         if (row.kind === 'queues') parts.push(...row.petitions.flatMap(item => [item.character, item.status]), ...row.prayers.flatMap(item => [item.text, item.status]));
+        if (row.kind === 'creation') parts.push(...(row.titles ?? []), ...(row.missing ?? []));
+        if (row.kind === 'scale') parts.push(row.system, row.principle, row.payment, ...(row.rules ?? []));
+        if (row.kind === 'discovery') parts.push(row.system, row.rule, row.text);
+        if (row.kind === 'god_questions') parts.push(...(row.questions ?? []).flatMap(item => [item.question, item.why]));
+        if (row.kind === 'god_answer') parts.push(row.question, row.answer);
     }
     return parts.filter(Boolean).join('\n').toLowerCase();
 }

@@ -96,7 +96,7 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
     }
 
     async function write(path, before, after, { comment = '', by = 'director' } = {}) {
-        for (const provider of providers) if (provider.owns(path)) return provider.write(path, after, { comment, by });
+        for (const provider of providers) if (provider.owns(path)) return provider.write(path, after, { comment, by, before });
         const target = parseCharacterPath(path);
         if (!target || target.part === 'card') return { ok: false, error: `"${path}" cannot be written.` };
         const character = await findCharacter(target.name);
@@ -132,7 +132,7 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
     }
 
     async function create({ path = '', text = '', comment = '' } = {}, { by = 'director' } = {}) {
-        for (const provider of providers) if (provider.owns(path)) return provider.create ? provider.create(path, text, { comment, by }) : provider.write(path, text, { comment, by });
+        for (const provider of providers) if (provider.owns(path)) return provider.create ? provider.create(path, text, { comment, by }) : provider.write(path, String(text ?? ''), { comment, by });
         const target = parseCharacterPath(path);
         if (!target) return { ok: false, error: `"${path}" is not a place for a file. Character files are Characters/<Name>/material.md, spiritual.md or decree.md.` };
         const current = await read(path);

@@ -87,7 +87,22 @@ export const COUNSELLOR_AWAIT_TOOL = Object.freeze({
     },
 });
 
-export const COUNSELLOR_TOOLS = Object.freeze([PETITION_TOOL, NOTHING_YET_TOOL, REPLY_TOOL, PRAYER_TOOL, COUNSELLOR_AWAIT_TOOL]);
+export const GOD_ANSWER_TOOL = Object.freeze({
+    name: 'god_answer',
+    displayName: 'Answer a question of God',
+    description: 'God asked about this world and waits for an answer. Ask the user in your channel, then record what they said under the question\'s id. One call per question. When every question is answered, the answers go to God together as a Declaration.',
+    parameters: {
+        type: 'object',
+        properties: {
+            id: { type: 'string', description: 'The id of the question, as YOUR TALK WITH GOD shows it.' },
+            answer: { type: 'string', description: 'The user\'s answer, in their words, or what the material makes plain.' },
+            comment: COMMENT,
+        },
+        required: ['id', 'answer', 'comment'],
+    },
+});
+
+export const COUNSELLOR_TOOLS = Object.freeze([PETITION_TOOL, NOTHING_YET_TOOL, REPLY_TOOL, PRAYER_TOOL, GOD_ANSWER_TOOL, COUNSELLOR_AWAIT_TOOL]);
 
 /** Советнику нужен только `nothing_yet` как конец разбора; остальное — по желанию. */
 export const COUNSELLOR_STOP_TOOLS = Object.freeze(['nothing_yet']);

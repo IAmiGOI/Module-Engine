@@ -5,6 +5,7 @@ import { SAMPLER_PRESETS } from '../../models/generate-request.js';
 import { rosterView, planView, libraryView, bankView, arcsNotesView, forcedView } from './decision-views.js';
 import { createClassifierOptions, writerCheckSection } from './decision-card-check.js';
 import { createBootstrapSettings } from './decision-card-bootstrap.js';
+import { createGodSettings } from './decision-card-god.js';
 /**
  * Карточка «Director / Writer» на экране настроек движка. Читает и пишет
  * только через контракты `decision.*`, `model.workers.get`,
@@ -56,7 +57,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     const retryTurnBudgetMs = signal(120000);
     const retryBackgroundBudgetMs = signal(600000);
     const retryBackups = {
-        resolver: signal(''), writer: signal(''), counsellor: signal(''), director: signal(''), banks: signal(''),
+        resolver: signal(''), writer: signal(''), counsellor: signal(''), director: signal(''), god: signal(''), banks: signal(''),
     };
     const bootstrapSettings = createBootstrapSettings();
     const roster = signal({ active: [] });
@@ -82,6 +83,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
         { value: '', label: 'SillyTavern connection (no override)' },
         ...workerOptions().slice(1),
     ]);
+    const godSettings = createGodSettings(workerOptions);
     const counsellorOptions = computed(() => [
         { value: '', label: 'Resolver connection (default)' },
         ...workerOptions().slice(1),
@@ -166,6 +168,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
         directorWorkerId.set(String(director.workerId ?? ''));
         directorMaxSteps.set(Number(director.maxSteps ?? 10));
         decreeTimeoutMs.set(Number(director.decreeTimeoutMs ?? 120000));
+        godSettings.apply(value.god ?? {});
         const retry = value.retry ?? {};
         retryMaxAttempts.set(Number(retry.maxAttempts ?? 3));
         retryTurnBudgetMs.set(Number(retry.turnBudgetMs ?? 120000));
@@ -205,6 +208,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
             director: {
                 workerId: directorWorkerId.peek(), maxSteps: directorMaxSteps.peek(), decreeTimeoutMs: decreeTimeoutMs.peek(),
             },
+            god: godSettings.collect(),
             retry: {
                 maxAttempts: retryMaxAttempts.peek(), turnBudgetMs: retryTurnBudgetMs.peek(), backgroundBudgetMs: retryBackgroundBudgetMs.peek(),
                 backups: Object.fromEntries(Object.entries(retryBackups).map(([role, target]) => [role, target.peek()])),
@@ -283,10 +287,11 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
             ),
             Row(
                 Field('Director connection', Select(directorWorkerId, directorOptions), {
-                    hint: 'Issues Decrees from reports. Empty: the resolver connection. God will get the same model with its own key.',
+                    hint: 'Issues Decrees from reports. Empty: the resolver connection.',
                 }),
                 Slider('A Telegram holds the turn for (ms)', decreeTimeoutMs, { min: 1000, max: 600000, step: 1000 }),
             ),
+            godSettings.fields(),
             Details('Director generation settings',
                 Row(
                     Field('Preset', Select(decider.samplerPreset, presetOptions, { onChange: id => applyPreset('decider', id) })),
@@ -335,6 +340,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                 Row(
                     Slider('Counsellor steps per wake', counsellorMaxSteps, { min: 1, max: 100, step: 1 }),
                     Slider('Director steps per wake', directorMaxSteps, { min: 1, max: 100, step: 1 }),
+                    godSettings.steps(),
                 ),
                 Row(
                     Slider('Bank builders at once', researcherSettings.bankConcurrency, { min: 1, max: 8, step: 1 }),
@@ -356,6 +362,9 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                 Row(
                     Field('Counsellor backup', Select(retryBackups.counsellor, backupOptions)),
                     Field('Director backup', Select(retryBackups.director, backupOptions)),
+                ),
+                Row(
+                    Field('God backup', Select(retryBackups.god, backupOptions)),
                     Field('Bank builder backup', Select(retryBackups.banks, backupOptions)),
                 ),
             ),

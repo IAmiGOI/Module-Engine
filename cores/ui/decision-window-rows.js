@@ -98,6 +98,20 @@ export function rowNode(row) {
         h('summary', {}, `Queues — ${row.petitions.length} petition(s), ${row.prayers.length} prayer(s)`),
         row.petitions.length ? h('pre', {}, row.petitions.map(item => `- ${item.character} (${item.status})${item.day ? ' [prepare the new day]' : ''}`).join('\n')) : null,
         row.prayers.length ? h('pre', {}, row.prayers.map(item => `- (${item.status}) ${item.text}`).join('\n')) : null);
+    if (row.kind === 'creation') return h('details', { class: 'stme-dw-creation' },
+        h('summary', {}, `Creation — ${row.titles.length ? row.titles.join(', ') : 'section'}${row.complete ? ' · complete' : ''}`),
+        row.titles.length ? h('pre', {}, row.titles.map(title => `- ${title}`).join('\n')) : null,
+        row.missing?.length ? h('div', { class: 'stme-dw-muted' }, `Still missing: ${row.missing.join('; ')}`) : null);
+    if (row.kind === 'scale') return h('details', { class: 'stme-dw-scale' },
+        h('summary', {}, `Scales — ${row.system}${row.replaced ? ' (rewritten)' : ''} · ${row.rules.length} rule(s)`),
+        row.principle ? h('div', {}, h('strong', {}, 'Principle: '), row.principle) : null,
+        row.payment ? h('div', { class: 'stme-dw-muted' }, `Payment: ${row.payment}`) : null,
+        row.rules.length ? h('pre', {}, row.rules.map(name => `- ${name}`).join('\n')) : null);
+    if (row.kind === 'discovery') return h('div', { class: 'stme-dw-discovery' }, h('strong', {}, `Discovery — ${row.system || 'the world'}${row.rule ? ` / ${row.rule}` : ''}: `), row.text);
+    if (row.kind === 'god_questions') return h('details', { class: 'stme-dw-god-questions' },
+        h('summary', {}, `God asks ${row.questions.length} question(s)${row.kept ? ` (${row.kept} held back)` : ''}`),
+        h('pre', {}, row.questions.map(item => `- ${item.question}${item.why ? ` — ${item.why}` : ''}`).join('\n')));
+    if (row.kind === 'god_answer') return h('div', { class: 'stme-dw-answer' }, h('strong', {}, 'Counsellor answers God: '), row.answer, row.closed ? ' · all questions closed' : '');
     if (row.kind === 'prayer') return h('div', { class: 'stme-dw-prayer' }, h('strong', {}, `Prayer${row.status ? ` (${row.status})` : ''}: `), row.text);
     if (row.kind === 'telegram') return h('div', { class: 'stme-dw-telegram' }, h('strong', {}, `Telegram${row.blocked ? ' (the next turn waits for a Decree)' : ''}: `), row.text);
     if (row.kind === 'push') return h('details', { class: 'stme-dw-push' }, h('summary', {}, 'Inscription — what the writer received'), h('pre', {}, row.text));

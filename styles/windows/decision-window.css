@@ -55,6 +55,15 @@
 .stme-dw-petition pre { margin: 4px 0 0; white-space: pre-wrap; opacity: .85; }
 .stme-dw-nothing { font-size: .88em; opacity: .85; }
 .stme-dw-prayer { border-left: 3px solid var(--stme-ok); padding: 3px 8px; font-size: .88em; }
+.stme-dw-creation { border-left: 3px solid var(--stme-accent); padding: 4px 8px; background: var(--stme-level-1); border-radius: var(--stme-radius-sm); }
+.stme-dw-creation summary { cursor: pointer; font-weight: 600; }
+.stme-dw-creation pre, .stme-dw-scale pre { margin: 4px 0 0; white-space: pre-wrap; opacity: .85; }
+.stme-dw-scale { border-left: 3px solid var(--stme-accent); padding: 4px 8px; background: var(--stme-level-1); border-radius: var(--stme-radius-sm); }
+.stme-dw-scale summary { cursor: pointer; font-weight: 600; }
+.stme-dw-discovery { border-left: 3px solid var(--stme-ok); padding: 3px 8px; font-size: .88em; }
+.stme-dw-god-questions { border-left: 3px solid var(--stme-accent); padding: 3px 8px; font-size: .88em; }
+.stme-dw-god-questions summary { cursor: pointer; font-weight: 600; }
+.stme-dw-god-questions pre { margin: 4px 0 0; white-space: pre-wrap; opacity: .85; }
 .stme-dw-queues { font-size: .82em; opacity: .85; }
 .stme-dw-queues summary { cursor: pointer; }
 

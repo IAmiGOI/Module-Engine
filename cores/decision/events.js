@@ -46,7 +46,9 @@ export function createDecisionEvents({
                     .then(() => cycle.maybeRunCounsellor?.())
                     // Director идёт после Советника: Petition уже лежат в очереди (часть 19).
                     .then(() => cycle.maybeRunDirector?.())
-                    .catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `the Counsellor or the Director: ${error?.message ?? error}` }));
+                    // God — последним: Молитва из «после хода» и Советника уже в очереди (фаза 5).
+                    .then(() => cycle.maybeRunGod?.())
+                    .catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `the Counsellor, the Director or God: ${error?.message ?? error}` }));
             })
             .catch(error => publishEvent('decision.failed', { runId: pending.runId, message: `could not save the director run: ${error?.message ?? error}` }));
     }
@@ -134,6 +136,10 @@ export function createDecisionEvents({
             // Новые Petition/Телеграммы будят Director и вне цепочки хода (ответ Советнику, отчёт).
             host.events.subscribe('decision.counsellor.finished', () => {
                 cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
+            }),
+            // Новая Молитва от Советника — повод для God, даже если ход не шёл.
+            host.events.subscribe('decision.counsellor.prayer', () => {
+                cycle.maybeRunGod?.().catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }));
             }),
         ];
     }

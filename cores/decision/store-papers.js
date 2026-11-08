@@ -4,12 +4,14 @@ import {
     normalizePetitions, unreviewedRows, COUNSELLOR_CHAT_LIMIT,
 } from '../../libraries/core/decision-counsellor.js';
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
+import { answerGodQuestion, normalizeDeclaration, normalizeGodQuestions } from '../../libraries/core/decision-god-queue.js';
 
 /**
  * Ведомость, Молитвы, Телеграммы и очередь Прошений в памяти чата. Вынесено
  * из `store.js`, чтобы файл держался в пределах 300 строк; правила — в
  * `libraries/core/decision-ledger.js` и `decision-counsellor.js`.
  */
+
 export function createPapersStore({ enqueue, call }) {
     let ledger = [];
     let papers = empty();
@@ -20,6 +22,8 @@ export function createPapersStore({ enqueue, call }) {
             petitions: [],
             counsellor: { messages: [], lastReviewTurn: 0, lastReviewAt: 0, day: null },
             director: { lastRunAt: 0, lastReason: '' },
+            // Бог: вопросы Советнику, ответы на них и след последнего разбора.
+            god: { questions: [], declaration: null, lastRunAt: 0, lastReason: '' },
         };
     }
 
@@ -27,6 +31,7 @@ export function createPapersStore({ enqueue, call }) {
         const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
         const counsellor = source.counsellor && typeof source.counsellor === 'object' ? source.counsellor : {};
         const director = source.director && typeof source.director === 'object' ? source.director : {};
+        const god = source.god && typeof source.god === 'object' ? source.god : {};
         return {
             prayers: normalizePrayers(source.prayers),
             telegrams: (Array.isArray(source.telegrams) ? source.telegrams : [])
@@ -53,6 +58,12 @@ export function createPapersStore({ enqueue, call }) {
                 lastReviewTurn: Number(counsellor.lastReviewTurn) || 0,
                 lastReviewAt: Number(counsellor.lastReviewAt) || 0,
                 day: Number.isFinite(Number(counsellor.day)) ? Number(counsellor.day) : null,
+            },
+            god: {
+                questions: normalizeGodQuestions(god.questions),
+                declaration: normalizeDeclaration(god.declaration),
+                lastRunAt: Number(god.lastRunAt) || 0,
+                lastReason: String(god.lastReason ?? '').trim(),
             },
         };
     }
@@ -110,6 +121,12 @@ export function createPapersStore({ enqueue, call }) {
         director: {
             lastRunAt: Number(papers.director?.lastRunAt) || 0,
             lastReason: String(papers.director?.lastReason ?? '').trim(),
+        },
+        god: {
+            questions: normalizeGodQuestions(papers.god?.questions),
+            declaration: normalizeDeclaration(papers.god?.declaration),
+            lastRunAt: Number(papers.god?.lastRunAt) || 0,
+            lastReason: String(papers.god?.lastReason ?? '').trim(),
         },
     });
 
@@ -171,6 +188,50 @@ export function createPapersStore({ enqueue, call }) {
         return save({ ...current, director: { ...current.director, ...(patch && typeof patch === 'object' ? patch : {}) } });
     }
 
+    /** Бог прочитал Молитвы: строка больше не повод будить его. */
+    function markPrayersRead(at, ids = null) {
+        const current = now();
+        const wanted = Array.isArray(ids) ? new Set(ids.map(String)) : null;
+        const prayers = current.prayers.map(item => {
+            if (item.status === 'read') return item;
+            if (wanted && !wanted.has(String(item.id))) return item;
+            return { ...item, status: 'read', readAt: Number(at) || 0 };
+        });
+        return save({ ...current, prayers });
+    }
+
+    /** Вопросы Бога Советнику — очередью; ответы собирают Декларацию. */
+    function addGodQuestions(list, { turn = null, at = 0 } = {}) {
+        const current = now();
+        const added = normalizeGodQuestions(list).map(item => ({ ...item, at: Number(at) || 0, turn: Number.isFinite(Number(turn)) ? Number(turn) : null }));
+        return save({ ...current, god: { ...current.god, questions: [...current.god.questions, ...added] } });
+    }
+
+    function answerGod({ id, answer, at = 0 } = {}) {
+        const current = now();
+        const result = answerGodQuestion(current.god.questions, { id, answer, at });
+        const next = {
+            ...current,
+            god: {
+                ...current.god,
+                questions: result.questions,
+                declaration: result.declaration ?? current.god.declaration,
+            },
+        };
+        return save(next).then(papers => ({ papers, closed: result.closed, declaration: result.declaration }));
+    }
+
+    /** Декларация доставлена Богу: следующая собирается заново. */
+    function consumeDeclaration(at) {
+        const current = now();
+        return save({ ...current, god: { ...current.god, declaration: null, lastRunAt: Number(at) || 0 } });
+    }
+
+    function saveGod(patch) {
+        const current = now();
+        return save({ ...current, god: { ...current.god, ...(patch && typeof patch === 'object' ? patch : {}) } });
+    }
+
     return {
         load, save,
         ledger: () => ledger.map(row => ({ ...row, conflict: { ...row.conflict } })),
@@ -183,6 +244,7 @@ export function createPapersStore({ enqueue, call }) {
         addPetition,
         prayers: () => normalizePrayers(papers.prayers),
         addPrayer,
+        markPrayersRead,
         conversation: () => (papers.counsellor?.messages ?? []).map(item => ({ ...item })),
         addConversation,
         counsellor: () => now().counsellor,
@@ -193,5 +255,10 @@ export function createPapersStore({ enqueue, call }) {
         markTelegramsRead,
         director: () => now().director,
         saveDirector,
+        god: () => now().god,
+        addGodQuestions,
+        answerGod,
+        consumeDeclaration,
+        saveGod,
     };
 }

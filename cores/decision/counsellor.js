@@ -8,12 +8,13 @@ import { libraryLevelsSection } from '../../libraries/core/decision-library.js';
 import {
     COUNSELLOR_SYSTEM, COUNSELLOR_REVIEW, COUNSELLOR_DAY, COUNSELLOR_MESSAGE,
     LEDGER_HEADER, DECREE_HEADER, QUEUES_HEADER, COUNSELLOR_CHAT_HEADER, RP_TIME_HEADER,
-    NO_NEW_LEDGER, NO_DECREE_YET, fillPrompt,
+    NO_NEW_LEDGER, NO_DECREE_YET, GOD_ASKS_HEADER, fillPrompt,
 } from '../../libraries/core/decision-prompts.js';
 import {
     dayOf, dayChanged, shouldReview, makePetition, ensureDayPetitions, decreeNames,
     renderQueues, renderConversation, queueSummary, strongStreaks,
 } from '../../libraries/core/decision-counsellor.js';
+import { openGodQuestions, renderGodQuestions } from '../../libraries/core/decision-god-queue.js';
 import { createCycleLive } from './live.js';
 import { createRetryRunner } from './retry.js';
 
@@ -78,10 +79,15 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         const body = ledgerLines(rows);
         // Два strong подряд считаются по всей Ведомости: прошлую строку Советник мог уже разобрать в прошлый раз.
         const streaks = mode === 'message' ? [] : strongStreaks(typeof store.ledger === 'function' ? store.ledger() : rows);
+        const openQuestions = openGodQuestions(typeof store.god === 'function' ? (store.god()?.questions ?? []) : []);
         const messages = [{ role: 'system', content: promptText(COUNSELLOR_SYSTEM) }];
         // Разговор с пользователем не тащит Ведомость: у него свой короткий контекст (c4).
         if (mode !== 'message') {
             messages.push({ role: 'system', content: `${LEDGER_HEADER}\n\n${body || NO_NEW_LEDGER}${streaks.length ? `\n\nStrong conflict two turns in a row: ${streaks.join(', ')}.` : ''}` });
+        }
+        // Вопросы Бога — в любом разборе: ответить можно, пока не закрыты все.
+        if (openQuestions.length) {
+            messages.push({ role: 'system', content: `${GOD_ASKS_HEADER}\n\n${renderGodQuestions(openQuestions)}` });
         }
         messages.push(
             { role: 'system', content: `${DECREE_HEADER}\n\n${libraryLevelsSection(store.library()) || 'CHARACTER LIBRARY: no levels yet.'}\n\n${await decreeText()}` },
@@ -134,6 +140,16 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
                 state.prayers += 1;
                 publishEvent('decision.counsellor.prayer', { text: body });
                 return { ok: true, status: 'queued' };
+            },
+            god_answer: async args => {
+                const answer = text(args.answer);
+                if (!answer) return { ok: false, error: 'An answer to God needs text.' };
+                if (typeof store.answerGod !== 'function') return { ok: false, error: 'God is not available.' };
+                const result = await store.answerGod({ id: text(args.id), answer, at: now() });
+                state.decided = true;
+                state.godAnswers = (state.godAnswers ?? 0) + 1;
+                publishEvent('decision.counsellor.god_answer', { id: text(args.id), answer, closed: Boolean(result?.closed) });
+                return { ok: true, closed: Boolean(result?.closed), declaration: Boolean(result?.declaration) };
             },
             await: args => ({ ok: true, reason: text(args.reason) }),
         };
@@ -249,7 +265,9 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         // Первое наблюдение дня только запоминается: иначе первый же ход в новом чате считался бы концом дня.
         if (first && typeof store.saveCounsellor === 'function') await store.saveCounsellor({ day }).catch(() => null);
         const number = Number.isFinite(Number(turn)) ? Number(turn) : currentTurn();
-        const mode = shouldReview({
+        // Вопрос Бога важнее счётчика: пока мироздание ждёт ответа, Советник тоже не спит.
+        const openQuestion = typeof store.god === 'function' ? (store.god()?.questions ?? []).some(item => !String(item.answer ?? '').trim()) : false;
+        const mode = openQuestion && !first ? 'review' : shouldReview({
             turn: number, lastTurn: state.lastReviewTurn,
             everyTurns: Number(settings.counsellor?.everyTurns) || 3,
             dayEnded: !first && dayChanged(state.day, day),

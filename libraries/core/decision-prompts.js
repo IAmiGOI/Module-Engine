@@ -79,6 +79,7 @@ ASSESSING
 - Roll only for an attempt that can fail through skill or circumstances: striking, dodging, stealing, sneaking, noticing, climbing, tending a wound, casting. Give its kind: body, stealth, perception, craft or magic. Saying something, deciding, agreeing or refusing, staying put, an opinion or a feeling are not rolls — you decide them from the character's psychology.
 - Talk is never rolled. Persuading, convincing, lying, pressing, asking, warning, confessing — and how the listener takes it — you decide from the listener's character, what they know and want, and what was actually said. Speaking so that someone nearby does not overhear is stealth and may be rolled; what the listener does with the words is not.
 - difficulty: one level from trivial / easy / moderate / hard / very hard / nearly impossible — how hard the task is for someone able to attempt it at all, in its real circumstances: terrain, time pressure, tools, distractions, and injuries the scene actually established. When an opponent works against the attempt with their own roll or decision, their skill is in that roll — do not count it again here. Most tasks in a tense scene are moderate; hard and above need a concrete obstacle you can name. An obstacle counts only if it is already established — in CURRENT SCENE, the history, a data bank or a note. Never invent a new fact about the world, a body, a species or how magic works to make a roll harder; each established obstacle moves the difficulty one step from moderate, and "why" names them.
+- A world system of the Creation — its Scales — binds every attempt that uses it. When an attempt belongs to a system, its difficulty is the weight of the rule that covers it for anyone able to attempt at all; do not move it up or down for anything the rule already covers, and count only obstacles the scene has established. Using a system in a way its rules do not name is not forbidden: it is an honest discovery. Decide what it does, and in the after-turn template pass it to God as a prayer. You never edit the Creation yourself.
 - experience: one level from none / novice / practised / skilled / expert / master — this character's skill at this exact task, not their general competence or importance. What the data bank lists as the character's own craft or power is expert or master. Do not raise experience for characters you like.
 - Limits come from the data bank and the scene. Do not invent costs, exhaustion or weakness that neither states.
 - The user's character's abilities follow STORY SETTINGS: what they can do, and how far it reaches, is set there.
@@ -282,7 +283,13 @@ export {
 } from './decision-prompts-director.js';
 
 export {
+    GOD_SYSTEM, GOD_BUILD_TASK, GOD_THINK_BUILD, GOD_PRAYER_TASK, GOD_THINK_PRAYER, GOD_DECLARATION_TASK,
+    GOD_MATERIAL_HEADER, NO_MATERIAL, GOD_SCALES_HEADER, GOD_PRAYERS_HEADER, GOD_RP_HEADER,
+    GOD_QUESTIONS_HEADER, NO_QUESTIONS, CREATION_HEADER, DISCOVERIES_HEADER,
+} from './decision-prompts-god.js';
+
+export {
     COUNSELLOR_SYSTEM, COUNSELLOR_REVIEW, COUNSELLOR_DAY, COUNSELLOR_MESSAGE,
     LEDGER_HEADER, DECREE_HEADER, QUEUES_HEADER, COUNSELLOR_CHAT_HEADER, RP_TIME_HEADER,
-    NO_NEW_LEDGER, NO_DECREE_YET,
+    NO_NEW_LEDGER, NO_DECREE_YET, GOD_ASKS_HEADER,
 } from './decision-prompts-counsellor.js';

@@ -145,6 +145,13 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         // Новый чат: банки строятся сразу, параллельно bootstrap, а не с первым ходом.
         // Есть готовые банки прошлого bootstrap для этих книг — сначала вопрос «взять их?», потом сборка недостающих.
         bootstrap.isNewChat().then(async fresh => {
+            // Creation (фаза 5): строится один раз на чат, в фоне, при открытии нового чата; начатый —
+            // достраивается на следующем открытии. Раздел, который не построился, остаётся задачей.
+            // Память Creation читается до решения: иначе начатый раз за прошлое открытие не был бы виден.
+            await cycle.creation.load().catch(() => {});
+            if (fresh || (cycle.creation.started() && !cycle.creation.complete())) {
+                cycle.maybeRunGod?.({ allowBuild: true }).catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }));
+            }
             if (!fresh) return;
             await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
             await banks.ensureColdStart();

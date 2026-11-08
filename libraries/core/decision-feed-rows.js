@@ -45,6 +45,38 @@ export function counsellorRows(call, index) {
     return [];
 }
 
+/**
+ * Вызовы God: разделы Creation, системы весов, открытия, вопросы и ответы
+ * Советника на них — отдельными строками журнала (фаза 5).
+ */
+export function godRows(call, index) {
+    const args = call?.args && typeof call.args === 'object' ? call.args : {};
+    const result = call?.result && typeof call.result === 'object' ? call.result : {};
+    if (result.ok === false) return [];
+    if (call?.name === 'creation_write') {
+        const titles = (Array.isArray(args.sections) ? args.sections : []).map(item => text(item?.title)).filter(Boolean);
+        return [{
+            kind: 'creation', id: `creation_${index}`, titles,
+            complete: result.complete === true, missing: Array.isArray(result.missing) ? result.missing.map(text) : [],
+        }];
+    }
+    if (call?.name === 'scale_write') {
+        const rules = Array.isArray(args.rules) ? args.rules.map(item => text(item?.name)).filter(Boolean) : [];
+        return [{ kind: 'scale', id: `scale_${index}`, system: text(args.system), principle: text(args.principle), payment: text(args.payment), rules, replaced: Boolean(result.replaced) }];
+    }
+    if (call?.name === 'discovery_write') {
+        return [{ kind: 'discovery', id: `discovery_${index}`, system: text(args.system), rule: text(args.rule), text: text(args.text), at: text(result.at) }];
+    }
+    if (call?.name === 'ask') {
+        const questions = (Array.isArray(args.questions) ? args.questions : []).map(item => ({ question: text(item?.question), why: text(item?.why) })).filter(item => item.question);
+        return questions.length ? [{ kind: 'god_questions', id: `god_questions_${index}`, questions, kept: Number(result.kept) || 0 }] : [];
+    }
+    if (call?.name === 'god_answer') {
+        return [{ kind: 'god_answer', id: `god_answer_${index}`, question: text(args.id), answer: text(args.answer), closed: Boolean(result.closed) }];
+    }
+    return [];
+}
+
 /** Сводка очередей со статусом — последней строкой цикла Советника. */
 export function queueRow(queues) {
     if (!queues || typeof queues !== 'object') return null;

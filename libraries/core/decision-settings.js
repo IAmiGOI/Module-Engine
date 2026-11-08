@@ -87,6 +87,17 @@ export const DEFAULT_DIRECTOR = Object.freeze({
 });
 
 /**
+ * God (фаза 5): своё подключение, свой лимит шагов и лимит вопросов за одно
+ * построение Creation. Пустое подключение — подключение Director (решение
+ * владельца: одна мощная модель, два ключа).
+ */
+export const DEFAULT_GOD = Object.freeze({
+    workerId: '',
+    maxSteps: 20,
+    maxQuestions: 5,
+});
+
+/**
  * Один алгоритм повтора для всех ролей (часть 19): общий лимит попыток,
  * бюджеты времени у блокирующих и фоновых ролей и запасные подключения.
  */
@@ -94,7 +105,7 @@ export const DEFAULT_RETRY = Object.freeze({
     maxAttempts: 3,
     turnBudgetMs: 120000,
     backgroundBudgetMs: 600000,
-    backups: Object.freeze({ resolver: '', writer: '', counsellor: '', director: '', banks: '' }),
+    backups: Object.freeze({ resolver: '', writer: '', counsellor: '', director: '', god: '', banks: '' }),
 });
 
 /**
@@ -136,6 +147,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     bootstrap: DEFAULT_BOOTSTRAP,
     counsellor: DEFAULT_COUNSELLOR,
     director: DEFAULT_DIRECTOR,
+    god: DEFAULT_GOD,
     retry: DEFAULT_RETRY,
     bankTimeOfDay: DEFAULT_BANK_TIME_OF_DAY,
     decider: DEFAULT_DECIDER,
@@ -175,6 +187,7 @@ export function clampDecisionSettings(values = {}) {
     const bootstrap = source.bootstrap && typeof source.bootstrap === 'object' ? source.bootstrap : {};
     const counsellor = source.counsellor && typeof source.counsellor === 'object' ? source.counsellor : {};
     const director = source.director && typeof source.director === 'object' ? source.director : {};
+    const god = source.god && typeof source.god === 'object' ? source.god : {};
     const retry = source.retry && typeof source.retry === 'object' ? source.retry : {};
     const backups = retry.backups && typeof retry.backups === 'object' ? retry.backups : {};
     const prompts = source.prompts && typeof source.prompts === 'object' ? source.prompts : {};
@@ -255,6 +268,11 @@ export function clampDecisionSettings(values = {}) {
             maxSteps: Math.round(number(director.maxSteps, 1, 100, DEFAULT_DIRECTOR.maxSteps)),
             decreeTimeoutMs: Math.round(number(director.decreeTimeoutMs, 1000, 3600000, DEFAULT_DIRECTOR.decreeTimeoutMs)),
         },
+        god: {
+            workerId: text(god.workerId, DEFAULT_GOD.workerId).trim(),
+            maxSteps: Math.round(number(god.maxSteps, 1, 200, DEFAULT_GOD.maxSteps)),
+            maxQuestions: Math.round(number(god.maxQuestions, 1, 20, DEFAULT_GOD.maxQuestions)),
+        },
         retry: {
             maxAttempts: Math.round(number(retry.maxAttempts, 1, 5, DEFAULT_RETRY.maxAttempts)),
             turnBudgetMs: Math.round(number(retry.turnBudgetMs, 1000, 3600000, DEFAULT_RETRY.turnBudgetMs)),
@@ -264,6 +282,7 @@ export function clampDecisionSettings(values = {}) {
                 writer: text(backups.writer, '').trim(),
                 counsellor: text(backups.counsellor, '').trim(),
                 director: text(backups.director, '').trim(),
+                god: text(backups.god, '').trim(),
                 banks: text(backups.banks, '').trim(),
             },
         },
@@ -304,10 +323,16 @@ export function counsellorWorkerId(settings = {}) {
     return own || String(settings?.decider?.workerId ?? '').trim();
 }
 
-/** Director работает на своём подключении, а без него — на подключении резолвера (фаза 5 даст Богу свой ключ). */
+/** Director работает на своём подключении, а без него — на подключении резолвера. */
 export function directorWorkerId(settings = {}) {
     const own = String(settings?.director?.workerId ?? '').trim();
     return own || String(settings?.decider?.workerId ?? '').trim();
+}
+
+/** God — своё подключение; без него — подключение Director (одна мощная модель, два ключа). */
+export function godWorkerId(settings = {}) {
+    const own = String(settings?.god?.workerId ?? '').trim();
+    return own || directorWorkerId(settings);
 }
 
 /** Запасное подключение роли — для двух пустых ответов подряд (часть 19). */
@@ -327,6 +352,7 @@ export function publicDecisionSettings(settings = {}) {
         gameMixes: (settings.gameMixes ?? []).map(mix => ({ ...mix, values: { ...mix.values } })),
         counsellor: { ...DEFAULT_COUNSELLOR, ...(settings.counsellor ?? {}) },
         director: { ...DEFAULT_DIRECTOR, ...(settings.director ?? {}) },
+        god: { ...DEFAULT_GOD, ...(settings.god ?? {}) },
         retry: {
             ...DEFAULT_RETRY,
             ...(settings.retry ?? {}),

@@ -59,6 +59,11 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.message', params => cycle.sendMessage(params ?? {})),
         host.own.register('decision.bootstrap', () => bootstrap?.state?.() ?? null),
         host.own.register('decision.bootstrapRetry', () => bootstrap?.retry?.() ?? { ok: false, error: 'The bootstrap is not available.' }),
+        // Мироздание и Бог (фаза 5): чтение Creation, очередь вопросов и запуск God.
+        host.own.register('decision.creation', () => cycle.creation?.state?.() ?? null),
+        host.own.register('decision.god', () => store.papers()?.god ?? null),
+        host.own.register('decision.godRun', () => cycle.runGod?.() ?? { ok: false, error: 'God is not available.' }),
+        host.own.register('decision.answerGod', params => store.answerGod?.(params ?? {}) ?? { ok: false }),
         host.own.register('decision.question', () => cycle.question?.() ?? null),
         host.own.register('decision.answerQuestion', params => cycle.answerQuestion(params ?? {})),
         host.own.register('decision.reload', () => reload()),

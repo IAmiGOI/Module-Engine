@@ -15,7 +15,7 @@ const FALLBACK_CHARS = 8000;
  * циклов (PROMPTS.md, раздел 12) и обновляет границу блоков 4/6/7/8.
  * Состояние — в памяти чата (`store.window/frozen/boundary`).
  */
-export function createTurnWindow({ store, banks = null, call, getSettings, deciderWorker, publishEvent, now = () => Date.now() }) {
+export function createTurnWindow({ store, banks = null, creation = null, call, getSettings, deciderWorker, publishEvent, now = () => Date.now() }) {
     let switching = null;
 
     function current() {
@@ -212,6 +212,8 @@ export function createTurnWindow({ store, banks = null, call, getSettings, decid
             await store.saveLog(keepCycles, { archived, archiveLimitTokens: Number(getSettings().archiveLimitTokens) || 0 });
         }
         await refreshBoundary();
+        // Мироздание — тем же переключением: снимок Creation снимается заново, новые открытия дальше идут строкой у задания.
+        if (creation?.refreshSnapshot) await creation.refreshSnapshot().catch(() => {});
         try {
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'lorebookSnapshot', value: null });
         } catch { /* the next cycle rebuilds the book if it can */ }

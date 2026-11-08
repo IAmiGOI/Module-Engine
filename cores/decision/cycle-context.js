@@ -36,7 +36,7 @@ export function turnWake(type) {
     return wakeFor({ type, label: `The director runs again (${type})` });
 }
 
-export function createCycleContext({ call, store, banks = null, capture = null, getGameSettings = null, getSettings = () => ({}), publishEvent = () => {} }) {
+export function createCycleContext({ call, store, banks = null, creation = null, capture = null, getGameSettings = null, getSettings = () => ({}), publishEvent = () => {} }) {
     const knowledge = createKnowledge({ call, store, banks });
     const retry = createRetryRunner({ publishEvent, getSettings });
     async function externalTools() {
@@ -103,8 +103,20 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
         return banks.decreeFor(store.roster().active).catch(() => '');
     }
 
-    /** Место под Мироздание (фаза 5): стабильная часть, пустая до тех пор. */
-    const CREATION_PLACEHOLDER = '';
+    /**
+     * Мироздание (фаза 5) — стабильная часть контекста резолвера, рядом с
+     * дальними банками: снимок Creation, обновляется только на переключении
+     * окна. Открытия между снимками идут коротким блоком у задания.
+     */
+    async function creationTextFor() {
+        if (!creation?.resolverText) return '';
+        return creation.resolverText().catch(() => '');
+    }
+
+    function creationDiscoveries() {
+        if (!creation?.discoveries) return '';
+        try { return creation.discoveries(); } catch { return ''; }
+    }
 
     /**
      * Телеграмма из закрытого списка ставит флаг «ход ждёт Указа». Само ожидание включится в фазе 4;
@@ -198,13 +210,15 @@ export function createCycleContext({ call, store, banks = null, capture = null, 
     }
 
     async function runContext({ settings, chat = [], task = '', lorebook = true, worker, reroll = false, turn = null }) {
-        const [lorebookText, directorBlock, knowledgeText, boundary, decree] = await Promise.all([
-            lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(), decreeTextFor(),
+        const [lorebookText, directorBlock, knowledgeText, boundary, decree, creationText] = await Promise.all([
+            lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(), decreeTextFor(), creationTextFor(),
         ]);
         // Резолверу — дальняя компактная проекция (в границе окна) и Указ действующих на @10. Ближняя полная проекция
-        // здесь не нужна: она директора.
+        // здесь не нужна: она директора. Creation — в стабильной части; новые открытия — строкой у задания.
+        const discoveries = creationDiscoveries();
         return buildContext({
-            task, lorebookText, knowledgeText, directorBlock, boundary, decreeText: decree, creationText: CREATION_PLACEHOLDER,
+            task: discoveries ? `${task}\n\n${discoveries}` : task,
+            lorebookText, knowledgeText, directorBlock, boundary, decreeText: decree, creationText,
             currentUser: lastUserText(chat), reroll, turn, storySettings: storySettingsText(settings), decreeWait: decreeWaitText(),
         });
     }

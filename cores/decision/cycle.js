@@ -5,6 +5,8 @@ import { ASK_USER_STREAK, DIRECTOR_REROLL, DIRECTOR_TURN, RESOLVER_AFTER_TURN } 
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { createCounsellor } from './counsellor.js';
 import { createDirector } from './director.js';
+import { createGod } from './god.js';
+import { createCreationStore } from './creation.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildInscription } from '../../libraries/core/decision-push.js';
 import { createHandlers } from './handlers.js';
@@ -45,7 +47,9 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
     const live = createCycleLive({ publishEvent, getTurn: () => state.turnCounter, getClock: () => store.clock().minutes });
-    const context = createCycleContext({ call, store, banks, capture, getGameSettings, getSettings, publishEvent });
+    // Creation (фаза 5) — один экземпляр на ядро: его читает резолвер и правит God.
+    const creation = createCreationStore({ call, store, publishEvent, now });
+    const context = createCycleContext({ call, store, banks, creation, capture, getGameSettings, getSettings, publishEvent });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
     // Советник (часть 18): своя очередь в общем фоне, своё подключение, свой контекст.
@@ -59,6 +63,12 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         call, callTool, store, banks, getSettings, getWorkers, publishEvent, capture, now,
         enqueue: job => Promise.resolve(wakeQueue.schedule(job)),
     });
+    // God (фаза 5): строит Creation и отвечает на Молитвы — в той же очереди, что Director.
+    const god = createGod({
+        call, callTool, store, getSettings, getWorkers, publishEvent, capture, creation, now,
+        enqueue: job => Promise.resolve(wakeQueue.schedule(job)),
+    });
+    if (banks) god.setLayout({ marksForLorebook: () => banks.marksForLorebook?.() ?? null });
 
     function deciderWorker(settings) {
         const id = String(settings.decider.workerId ?? '').trim();
@@ -81,8 +91,9 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         backgroundController?.abort(new Error('the chat was changed'));
         backgroundController = null;
         questions.cancelAll();
+        creation.reset();
     }
-    const turnWindow = createTurnWindow({ store, banks, call, getSettings, deciderWorker, publishEvent, now });
+    const turnWindow = createTurnWindow({ store, banks, creation, call, getSettings, deciderWorker, publishEvent, now });
     const applyRoster = createRosterApplier({ store, banks, state, window: turnWindow });
     const { judgeForcedMemory } = createJudge({ getSettings, deciderWorker, call, now, publishEvent });
 
@@ -451,6 +462,12 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         directorReason: director.reasonNow,
         directorTurn: director.currentTurn,
         waitForDecree: director.waitForDecree,
+        // God (фаза 5): построение Creation и ответы на Молитвы.
+        maybeRunGod: god.maybeRun,
+        runGod: god.run,
+        godReason: god.reasonNow,
+        godTurn: god.currentTurn,
+        creation,
         answerQuestion: params => questions.answer(params),
         chatChanged,
         // Вопрос от движка, а не от модели (например, «взять готовые банки?»): та же очередь и тот же тост.
