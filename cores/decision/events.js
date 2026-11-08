@@ -140,6 +140,13 @@ export function createDecisionEvents({
                 cycle.maybeRunGod?.().catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }));
             }),
             // Мир построен — директор пишет банки Main Cast по нему (повод — Main Cast без Указа).
+            // Бог или директор ответили на отправленное Советником — тот отчитывается пользователю по их записи.
+            host.events.subscribe('decision.god.finished', payload => {
+                if (payload?.report) cycle.relayStatus?.(payload.report).catch(() => {});
+            }),
+            host.events.subscribe('decision.director.finished', payload => {
+                if (payload?.report) cycle.relayStatus?.(payload.report).catch(() => {});
+            }),
             host.events.subscribe('decision.god.finished', payload => {
                 if (!['first', 'build', 'declaration'].includes(String(payload?.kind ?? ''))) return;
                 cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));

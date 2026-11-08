@@ -2,6 +2,7 @@ import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/
 import { buildDirectorToolList } from '../../libraries/core/decision-tools.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { deciderRequestParams, directorWorkerId, godWorkerId, roleRequestParams } from '../../libraries/core/decision-settings.js';
+import { statusReport } from '../../libraries/core/decision-status.js';
 import { lastDecreeThoughts, lastReports, buildDirectorContext, directorReason } from '../../libraries/core/decision-director.js';
 import { dayOf } from '../../libraries/core/decision-counsellor.js';
 import { createCycleLive } from './live.js';
@@ -183,7 +184,10 @@ export function createDirector({
             if (state.decreeIssued) await store.saveAwaitingDecree?.(null).catch(() => null);
             await store.saveDirector?.({ lastRunAt: now(), lastReason: info.wake.detail }).catch(() => null);
         }
-        publishEvent('decision.director.finished', { runId, decrees: state.decreeNames.length, issued: state.decreeIssued });
+        // Отчёт Советнику: какие Петиции директор прочёл и что изменил в банках и Указах.
+        const handled = (papers.petitions ?? []).filter(item => petitionIds.includes(item.id)).map(item => `Petition about ${item.character}: ${item.problem}`);
+        const report = statusReport({ role: 'The Director', handled, toolCalls: cycle.toolCalls, failed });
+        publishEvent('decision.director.finished', { runId, decrees: state.decreeNames.length, issued: state.decreeIssued, report });
         return { ok: !failed, type: result.type, issued: state.decreeIssued, characters: state.decreeNames, cycle };
     }
 

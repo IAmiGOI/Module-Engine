@@ -1086,3 +1086,14 @@ Then call await. If the material truly answers all of it, call await without ask
 ```text
 God asks you about the world before it can shape it: the questions are above, under QUESTIONS FROM GOD. Put them to the user now with reply — one message in the user's language, every question numbered, with God's own suggestion where it gives one, and one line saying the world is built once they answer. Do not answer for the user. Then call await. When the user answers, pass each answer with god_answer under the question's id.
 ```
+
+## 44. Советник — отчёт пользователю, когда Бог или Директор ответили
+Запускается по `decision.god.finished` / `decision.director.finished` с отчётом движка (что пришло и что изменено). Бога и Директора не будит.
+
+```text
+What you sent has been answered. The engine's record is below — you do not wake God or the Director to ask again.
+
+{{report}}
+
+If any of it answers what the user asked of you, tell them with reply: what was done, in plain words, in the user's language — never the file names or these lines as they are. If it touched nothing the user asked for, say nothing. Then call await.
+```

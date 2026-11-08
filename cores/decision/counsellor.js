@@ -6,7 +6,7 @@ import { roleRequestParams, counsellorWorkerId } from '../../libraries/core/deci
 import { ledgerLines } from '../../libraries/core/decision-ledger.js';
 import { libraryLevelsSection } from '../../libraries/core/decision-library.js';
 import {
-    COUNSELLOR_SYSTEM, COUNSELLOR_REVIEW, COUNSELLOR_DAY, COUNSELLOR_MESSAGE, COUNSELLOR_GOD,
+    COUNSELLOR_SYSTEM, COUNSELLOR_REVIEW, COUNSELLOR_DAY, COUNSELLOR_MESSAGE, COUNSELLOR_GOD, COUNSELLOR_STATUS,
     LEDGER_HEADER, DECREE_HEADER, QUEUES_HEADER, COUNSELLOR_CHAT_HEADER, RP_TIME_HEADER,
     NO_NEW_LEDGER, NO_DECREE_YET, GOD_ASKS_HEADER, fillPrompt,
 } from '../../libraries/core/decision-prompts.js';
@@ -42,7 +42,7 @@ function clockLabel(minutes) {
 }
 
 /** Разговор с пользователем (сообщение или вопросы Бога) — без Ведомости и без отметки разбора. */
-const talk = mode => mode === 'message' || mode === 'god';
+const talk = mode => mode === 'message' || mode === 'god' || mode === 'status';
 
 export function createCounsellor({ call, callTool, store, banks = null, getSettings, getWorkers, publishEvent, capture = null, enqueue = job => job(), now = () => Date.now() }) {
     const live = createCycleLive({ publishEvent, getTurn: () => currentTurn(), getClock: () => store.clock().minutes });
@@ -106,6 +106,8 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
             ? COUNSELLOR_DAY
             : mode === 'god'
                 ? COUNSELLOR_GOD
+                : mode === 'status'
+                    ? fillPrompt(COUNSELLOR_STATUS, { report: message })
                 : mode === 'message'
                     ? fillPrompt(COUNSELLOR_MESSAGE, { message })
                 : fillPrompt(COUNSELLOR_REVIEW, { turns: Math.max(1, currentTurn() - (store.counsellor?.().lastReviewTurn ?? 0)) });
@@ -166,7 +168,7 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         const turn = currentTurn();
         const startedAt = now();
         const event = mode === 'day' ? 'counsellor_day' : 'counsellor';
-        const labels = { review: 'The Counsellor read the Ledger', day: 'The Counsellor closes the RP day', message: 'The Counsellor answers the user', god: 'The Counsellor puts God\'s questions to the user' };
+        const labels = { review: 'The Counsellor read the Ledger', day: 'The Counsellor closes the RP day', message: 'The Counsellor answers the user', god: 'The Counsellor puts God\'s questions to the user', status: 'The Counsellor tells the user what was done' };
         const state = { petitioned: new Set(), decided: false, nothing: '', reply: '', prayers: 0, day: mode === 'day' };
         let worker;
         try { worker = workerFor(settings); } catch (error) {
@@ -313,7 +315,16 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         return relaying;
     }
 
-    return { run, maybeRun, sendMessage, relayGodQuestions, currentTurn, workerFor };
+    /** Бог или директор ответили на отправленное — Советник пересказывает пользователю по их записи. */
+    function relayStatus(report) {
+        const body = text(report);
+        if (!body) return Promise.resolve({ skipped: true });
+        const runId = `counsellor_status_${now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        return enqueue(() => run({ runId, mode: 'status', text: body }))
+            .catch(error => live.failed({ runId, message: error?.message ?? String(error) }));
+    }
+
+    return { run, maybeRun, sendMessage, relayGodQuestions, relayStatus, currentTurn, workerFor };
 }
 
 /** Инструмент, который заканчивает разбор: «важного нет». */

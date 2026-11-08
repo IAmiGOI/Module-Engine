@@ -12,6 +12,7 @@ import { createCreationProvider } from './files-creation.js';
 import { createFileHandlers } from './handlers-files.js';
 import { createRetryRunner } from './retry.js';
 import { renderCreation } from '../../libraries/core/decision-creation.js';
+import { statusReport } from '../../libraries/core/decision-status.js';
 
 const INTERRUPTED = 'In progress — if this note stays after a reload, the run was interrupted.';
 
@@ -199,7 +200,10 @@ export function createGod({
             if (info.kind === 'declaration') await store.consumeDeclaration?.(now()).catch(() => null);
             await store.saveGod?.({ lastRunAt: now(), lastReason: info.wake.detail, ...(info.kind === 'study' ? { studiedAt: now() } : {}) }).catch(() => null);
         }
-        publishEvent('decision.god.finished', { runId, kind: info.kind, sections: handlerState.written.length, systems: handlerState.systems.length });
+        // Отчёт Советнику: на какие Молитвы и ответы Бог ответил и что изменил — тот пересказывает пользователю.
+        const handled = info.kind === 'prayer' ? (info.prayers ?? []).map(item => item.text) : (info.kind === 'declaration' ? ['The answers to God\'s questions (the Declaration).'] : []);
+        const report = statusReport({ role: 'God', handled, toolCalls: cycle.toolCalls, failed });
+        publishEvent('decision.god.finished', { runId, kind: info.kind, sections: handlerState.written.length, systems: handlerState.systems.length, report });
         return { ok: !failed, kind: info.kind, type: result.type, written: handlerState.written, systems: handlerState.systems, asked: Number(handlerState.questionsAsked) || 0, cycle };
     }
 

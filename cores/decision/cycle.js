@@ -463,6 +463,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap, logSettings, logRetry,
         onResearcherReport: jobs.onResearcherReport, sendMessage, judgeForcedMemory,
         relayGodQuestions: () => counsellor.relayGodQuestions(),
+        relayStatus: report => counsellor.relayStatus(report),
         // Советник (часть 18): будится после хода и по концу RP-дня.
         maybeRunCounsellor: counsellor.maybeRun,
         runCounsellor: counsellor.run,
