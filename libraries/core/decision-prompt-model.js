@@ -18,7 +18,7 @@ const clone = value => structuredClone(value);
 let counter = 0;
 
 const SYSTEM = {
-    director: [{ id: 'director.system', name: 'Director instructions', role: 'system', text: DIRECTOR_SYSTEM }],
+    director: [{ id: 'director.system', name: 'Resolver instructions', role: 'system', text: DIRECTOR_SYSTEM }],
     writer: [{ id: 'writer.system', name: 'Writer instructions', role: 'system', text: WRITER_SYSTEM }],
 };
 
