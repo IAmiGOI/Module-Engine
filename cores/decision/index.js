@@ -168,7 +168,13 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             const god = (fresh || (cycle.creation.started() && !cycle.creation.complete()))
                 ? Promise.resolve(cycle.maybeRunGod?.({ allowBuild: true })).catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }))
                 : Promise.resolve();
-            if (!fresh) return;
+            // Не новый чат: банки уже отсортированы — директор проверяет, есть ли Main Cast без банка и Указа.
+            // Без повода он не делает ни одного вызова модели.
+            if (!fresh) {
+                await god;
+                await cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
+                return;
+            }
             // Готовые банки прошлых чатов — наборы старого сборщика; в пяти ролях банки сортируются, вопроса нет.
             if (settings.bankColdStart === 'build') await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
             await banks.ensureColdStart();
