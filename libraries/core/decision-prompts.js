@@ -174,7 +174,10 @@ export const WRITER_INSCRIPTION = `INSCRIPTION — what happens this turn:
 {{inscription}}
 
 HOW TO WRITE THE BEATS: a LINE beat is dialogue. It gives the meaning of the words; write the words themselves in quotes, in the character's own voice. The other beats are action: show them.
-Write it as a scene. Between the lines, narration shows only what bodies do and what the place is like — never what anyone says, asks, answers, admits or promises, and never that they are about to speak or how plainly. Earlier replies in this story did that; do not copy them. Stop where the END line says, and never write the word END itself.`;
+Write it as a scene. Between the lines, narration shows only what bodies do and what the place is like — never what anyone says, asks, answers, admits or promises, and never that they are about to speak or how plainly. Earlier replies in this story did that; do not copy them. Stop where the END line says, and never write the word END itself.
+
+THE LAST SENTENCE: the reply ends on the END beat itself. Write nothing after it — no closing paragraph about where everyone sits or stands, what their hands, eyes or tails are doing, the water, the light or the silence, and no sentence that anyone waits, watches or holds still. Earlier replies in this story ended that way; that was a mistake — do not copy them.
+FRESH WRITING: before you write, look at your last replies above. Use no image, gesture, comparison or phrase from them again — find new detail for this moment, or leave the detail out.`;
 
 export const RESEARCHER_SYSTEM = `You are a background researcher for the Director of a roleplay. You have web search and page reading. You are given one task; find what it asks for and report.
 
@@ -192,6 +195,8 @@ export const WRITER_AGENCY_QUESTION = `The reply writes actions, spoken words, t
 
 export const WRITER_RESOLUTION_QUESTION = `The reply continues the scene past this ending of the turn, playing events that come after it: {{resolution}}`;
 
+export const WRITER_IDLE_QUESTION = `After the last spoken line or action of the turn, the reply adds a closing description of the characters holding still, waiting or watching, or of the scene settling around them — or it ends with a sentence that someone waits.`;
+
 export const WRITER_REWRITE_PROMPT = `REWRITE (attempt {{attempt}}): your previous reply was discarded and the user never saw it. It broke these rules:
 {{reasons}}
 Write the reply again from the start, following the Inscription. Do not mention the earlier attempt.`;
@@ -199,6 +204,8 @@ Write the reply again from the start, following the Inscription. Do not mention 
 export const WRITER_REASON_AGENCY = `- You wrote what {{user}} does, says, thinks or feels: "{{quote}}". {{user}} belongs to the user — write only what the Inscription gives as the result of {{user}}'s attempt.`;
 
 export const WRITER_REASON_RESOLUTION = `- You continued past the end of the turn: "{{quote}}". Stop where the turn ends: {{resolution}}`;
+
+export const WRITER_REASON_IDLE = `- You closed the reply on the characters waiting or the scene settling: "{{quote}}". End on the last beat itself — the line or the gesture — and write nothing after it.`;
 
 /** Проверка формы директора на знания — дословно из `PROMPTS.md`, раздел 14. */
 export const FORM_KNOWLEDGE_QUESTION = `{{name}}'s decision, action or words rely on something {{name}} has no way of knowing: it is not in what {{name}} saw or heard in the scene, not in {{name}}'s knowledge, and not in {{name}}'s character bank.`;

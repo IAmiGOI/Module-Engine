@@ -198,6 +198,9 @@ INSCRIPTION — what happens this turn:
 
 HOW TO WRITE THE BEATS: a LINE beat is dialogue. It gives the meaning of the words; write the words themselves in quotes, in the character's own voice. The other beats are action: show them.
 Write it as a scene. Between the lines, narration shows only what bodies do and what the place is like — never what anyone says, asks, answers, admits or promises, and never that they are about to speak or how plainly. Earlier replies in this story did that; do not copy them. Stop where the END line says, and never write the word END itself.
+
+THE LAST SENTENCE: the reply ends on the END beat itself. Write nothing after it — no closing paragraph about where everyone sits or stands, what their hands, eyes or tails are doing, the water, the light or the silence, and no sentence that anyone waits, watches or holds still. Earlier replies in this story ended that way; that was a mistake — do not copy them.
+FRESH WRITING: before you write, look at your last replies above. Use no image, gesture, comparison or phrase from them again — find new detail for this moment, or leave the detail out.
 ```
 
 ## 8. Субагент-исследователь — system
@@ -393,6 +396,11 @@ The reply writes actions, spoken words, thoughts or feelings for {{user}} that {
 The reply continues the scene past this ending of the turn, playing events that come after it: {{resolution}}
 ```
 
+**idle_ending:**
+```text
+After the last spoken line or action of the turn, the reply adds a closing description of the characters holding still, waiting or watching, or of the scene settling around them — or it ends with a sentence that someone waits.
+```
+
 Дополнительный промпт для переписывания — системным сообщением **после Push**. Подстановки: `{{reasons}}` — по строке на нарушение (из шаблонов ниже), `{{attempt}}` — номер попытки.
 
 ```text
@@ -405,6 +413,7 @@ Write the reply again from the start, following the Inscription. Do not mention 
 ```text
 - You wrote what {{user}} does, says, thinks or feels: "{{quote}}". {{user}} belongs to the user — write only what the Inscription gives as the result of {{user}}'s attempt.
 - You continued past the end of the turn: "{{quote}}". Stop where the turn ends: {{resolution}}
+- You closed the reply on the characters waiting or the scene settling: "{{quote}}". End on the last beat itself — the line or the gesture — and write nothing after it.
 ```
 
 ## 14. Проверка формы директора — действует ли персонаж на то, чего не знает

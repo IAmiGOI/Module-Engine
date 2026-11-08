@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
     DIRECTOR_SYSTEM, DIRECTOR_TURN,
     WRITER_AGENCY_QUESTION, WRITER_RESOLUTION_QUESTION, WRITER_REWRITE_PROMPT,
-    WRITER_REASON_AGENCY, WRITER_REASON_RESOLUTION,
+    WRITER_REASON_AGENCY, WRITER_REASON_RESOLUTION, WRITER_IDLE_QUESTION, WRITER_REASON_IDLE,
     FORM_KNOWLEDGE_QUESTION, FORM_KNOWLEDGE_REFUSAL,
     BOOTSTRAP_TASK, ASK_USER_DESCRIPTION, ASK_USER_ANSWERED, ASK_USER_SKIPPED, ASK_USER_NOT_ALLOWED, ASK_USER_LIMIT, ASK_USER_STREAK,
     WRITE_CHAT_BRIEF_DESCRIPTION,
@@ -37,10 +37,12 @@ function blockFromDoc(marker) {
 test('the writer check questions, reasons and rewrite prompt are PROMPTS.md section 13 word for word', () => {
     assert.equal(WRITER_AGENCY_QUESTION, blockFromDoc('**user_agency:**'));
     assert.equal(WRITER_RESOLUTION_QUESTION, blockFromDoc('**past_resolution:**'));
+    assert.equal(WRITER_IDLE_QUESTION, blockFromDoc('**idle_ending:**'));
     assert.equal(WRITER_REWRITE_PROMPT, blockFromDoc('Дополнительный промпт для переписывания'));
     const reasons = blockFromDoc('Строки причин:').split('\n');
     assert.equal(WRITER_REASON_AGENCY, reasons[0]);
     assert.equal(WRITER_REASON_RESOLUTION, reasons[1]);
+    assert.equal(WRITER_REASON_IDLE, reasons[2]);
 });
 
 test('the form knowledge question and refusal are PROMPTS.md section 14 word for word', () => {

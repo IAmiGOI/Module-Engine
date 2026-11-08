@@ -1,6 +1,6 @@
 import {
-    WRITER_AGENCY_QUESTION, WRITER_RESOLUTION_QUESTION, WRITER_REWRITE_PROMPT,
-    WRITER_REASON_AGENCY, WRITER_REASON_RESOLUTION, fillPrompt,
+    WRITER_AGENCY_QUESTION, WRITER_RESOLUTION_QUESTION, WRITER_IDLE_QUESTION, WRITER_REWRITE_PROMPT,
+    WRITER_REASON_AGENCY, WRITER_REASON_RESOLUTION, WRITER_REASON_IDLE, fillPrompt,
 } from './decision-prompts.js';
 
 /**
@@ -9,7 +9,8 @@ import {
  * из `PROMPTS.md`, раздел 13, и их подстановки.
  */
 
-export const WRITER_CHECK_IDS = Object.freeze(['user_agency', 'past_resolution']);
+// idle_ending — концовка-картинка «все замерли и ждут»: писатель копирует её из своих прошлых ответов
+export const WRITER_CHECK_IDS = Object.freeze(['user_agency', 'past_resolution', 'idle_ending']);
 const MAX_SENTENCES = 60;
 
 const text = value => String(value ?? '').trim();
@@ -22,6 +23,7 @@ export function writerCheckQuestions({ user = 'the user', resolution = '' } = {}
     return {
         user_agency: fillPrompt(WRITER_AGENCY_QUESTION, { user }),
         past_resolution: fillPrompt(WRITER_RESOLUTION_QUESTION, { resolution }),
+        idle_ending: WRITER_IDLE_QUESTION,
     };
 }
 
@@ -41,7 +43,7 @@ export function violatedIds(answers, threshold) {
 
 /** Строка причины без цитаты, если цитата не нашлась: `: ""` просто убирается. */
 export function reasonLine(id, { quote = '', user = 'the user', resolution = '' } = {}) {
-    const template = id === 'user_agency' ? WRITER_REASON_AGENCY : WRITER_REASON_RESOLUTION;
+    const template = id === 'user_agency' ? WRITER_REASON_AGENCY : id === 'idle_ending' ? WRITER_REASON_IDLE : WRITER_REASON_RESOLUTION;
     const filled = fillPrompt(template, { user, quote: text(quote), resolution });
     return text(quote) ? filled : filled.replace(/:\s*""/, '');
 }

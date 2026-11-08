@@ -1,5 +1,5 @@
 import { splitSentences, violatedIds, writerCheckQuestions, writerCheckState, WRITER_CHECK_IDS } from '../../libraries/core/decision-writer-check.js';
-import { WRITER_AGENCY_QUESTION, WRITER_RESOLUTION_QUESTION, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { WRITER_AGENCY_QUESTION, WRITER_RESOLUTION_QUESTION, WRITER_IDLE_QUESTION, fillPrompt } from '../../libraries/core/decision-prompts.js';
 
 /**
  * Проверка текста писателя классификатором: срез хода, два утверждения,
@@ -49,7 +49,7 @@ export function createWriterChecker({ call, getSettings, banks = null }) {
         if (!sentences.length || !WRITER_CHECK_IDS.includes(id)) return '';
         const question = id === 'user_agency'
             ? fillPrompt(WRITER_AGENCY_QUESTION, { user: persona() })
-            : fillPrompt(WRITER_RESOLUTION_QUESTION, { resolution });
+            : id === 'idle_ending' ? WRITER_IDLE_QUESTION : fillPrompt(WRITER_RESOLUTION_QUESTION, { resolution });
         const calls = sentences.map((sentence, index) => ({
             state: writerCheckState({ push, userMessage, reply: sentence }),
             questions: { [`quote_${index}`]: question },
