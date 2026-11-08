@@ -25,6 +25,8 @@ const FIT_CSS = `
 .ribbon { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .blank { max-width: 100%; overflow-wrap: anywhere; }
 .entry .det pre, .slip pre { overflow-wrap: anywhere; white-space: pre-wrap; }
+.depth .sigil-up { position: sticky; top: 0; z-index: 2; border-radius: 50%; background: radial-gradient(circle, rgba(7,8,10,.96) 45%, rgba(7,8,10,0) 72%); }
+.depth { cursor: zoom-out; } .depth-in { cursor: auto; }
 `;
 const esc = value => String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -925,7 +927,8 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
   });
   courtSvg.addEventListener('keydown', e => { const seat = e.target.closest('.seat'); if (seat && e.key === 'Enter') openLane(seat.dataset.role); });
   lane.addEventListener('click', async e => {
-    if (e.target.closest('[data-rise]')) { closeLane(); return; }
+    // выйти можно знаком роли (он всегда наверху на виду) или кликом по пустой темноте вокруг чата
+    if (e.target.closest('[data-rise]') || e.target === lane) { closeLane(); return; }
     const send = e.target.closest('.send');
     if (send) {
       const box = send.parentElement.querySelector('.answer'), said = box?.textContent.trim() ?? '';
