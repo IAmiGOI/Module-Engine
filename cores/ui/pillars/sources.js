@@ -1,6 +1,7 @@
 import { request } from '../../../libraries/shared/request.js';
 import { toCourt, toBookVolume, toCharter, toSky, charterPatch } from '../../../libraries/core/pillars-sources.js';
 import { workingLanes } from '../../../libraries/core/court-lanes.js';
+import { createFeedState, filterFeed } from '../../../libraries/core/decision-feed.js';
 import { pillarStates } from './pillar-states.js';
 
 /**
@@ -31,8 +32,18 @@ export function createPillarsSources({ host, call = null } = {}) {
         .map(character => ({ name: String(character?.name ?? '').trim(), main: character?.importance === 'main' }))
         .filter(person => person.name);
 
+    // лента — как у окна The Court: журнал и архив прошлых ходов, собранные в записи; рассуждения и расход скрыты
+    let reloadAsked = false;
     async function entries() {
-        return list('decision.log');
+        let [log, archive] = await Promise.all([list('decision.log'), list('decision.archive')]);
+        // пустой журнал при открытом чате — ядро прочитало память раньше ST: один раз попросить перечитать
+        if (!log.length && !reloadAsked) {
+            reloadAsked = true;
+            await value('decision.reload');
+            [log, archive] = await Promise.all([list('decision.log'), list('decision.archive')]);
+        }
+        const feed = filterFeed(createFeedState({ cycles: log, archive }), { showThinking: false, showUsage: false });
+        return [...feed.archive, ...feed.cycles].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     }
 
     async function court() {
