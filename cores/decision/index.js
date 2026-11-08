@@ -10,6 +10,7 @@ import { createWebActions } from '../guide/web-actions.js';
 import { captureReasoning } from './capture.js';
 import { watchToolProgress } from './tool-progress.js';
 import { repairEmptyRules, repairStartHour } from './creation-repair.js';
+import { withoutLegacyBlocks } from '../../libraries/core/decision-legacy-blocks.js';
 import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
 import { registerDecisionContracts, decisionRewriteStage } from './contracts.js';
@@ -443,6 +444,15 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const stored = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'settings', fallback: null });
         settings = clampDecisionSettings(stored ?? DEFAULT_SETTINGS);
         setPromptOverrides(settings.promptOverrides, builtInPrompts());
+        // Старые блоки разделов (до пяти ролей) — один раз и через саму страницу: правка файла при открытой вкладке
+        // перезаписалась бы её копией настроек.
+        const migrations = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'migrations', fallback: {} }).catch(() => ({}));
+        if (!migrations?.legacyBlocks) {
+            const cleaned = withoutLegacyBlocks(settings.promptSections);
+            if (cleaned.removed.length) await saveSettings({ promptSections: cleaned.sections }).catch(() => {});
+            await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'migrations', value: { ...(migrations ?? {}), legacyBlocks: Date.now() } }).catch(() => {});
+            if (cleaned.removed.length) publishEvent('decision.settings.cleaned', { removed: cleaned.removed });
+        }
         // Подписки — до первого чтения: ST открывает чат, пока ядро грузится, и `st.chatChanged`, пришедший раньше
         // подписки, терялся — ядро оставалось с пустой памятью загрузки, а окно директора висело пустым.
         subscriptions.push(...events.listen());
