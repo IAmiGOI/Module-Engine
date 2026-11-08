@@ -9,7 +9,7 @@ import { createResearcher } from '../../libraries/core/decision-researcher.js';
 import { createWebActions } from '../guide/web-actions.js';
 import { captureReasoning } from './capture.js';
 import { watchToolProgress } from './tool-progress.js';
-import { repairEmptyRules } from './creation-repair.js';
+import { repairEmptyRules, repairStartHour } from './creation-repair.js';
 import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
 import { registerDecisionContracts, decisionRewriteStage } from './contracts.js';
@@ -161,6 +161,9 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             // Память Creation читается до решения: иначе начатый раз за прошлое открытие не был бы виден.
             await cycle.creation.load().catch(() => {});
             // Правила Scales, потерянные старым разборщиком, — из исходного текста Бога в журнале, без нового запуска.
+            repairStartHour({ creation: cycle.creation })
+                .then(titles => { if (titles.length) publishEvent('decision.creation.repaired', { sections: titles }); })
+                .catch(() => {});
             repairEmptyRules({ creation: cycle.creation, cycles: store.cycles() })
                 .then(names => { if (names.length) publishEvent('decision.creation.repaired', { systems: names }); })
                 .catch(() => {});

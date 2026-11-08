@@ -161,7 +161,11 @@ function resolveForEdit(edit, character) {
 }
 
 /** Одна правка: строка заменяется, дописывается или удаляется; срок переводится в метку. */
-function applyOne(character, edit, { at, nowValue, by, comment, timeOfDay = null }) {
+/** Строка в часть, которая была пуста до этого вызова, — устоявшаяся константа персонажа: без метки RP-времени. */
+const markLine = (line, at, until, stamp) => (stamp ? stampLine(line, at, until) : (lineBody(line) ? (until ? `${lineBody(line)} [until ${until}]` : lineBody(line)) : ''));
+const partEmpty = (character, part) => !Object.values(character?.[part] ?? {}).some(lines => (lines ?? []).length);
+
+function applyOne(character, edit, { at, nowValue, by, comment, timeOfDay = null, stamp = true }) {
     const target = resolveForEdit(edit, character);
     const old = text(edit.old);
     const next = text(edit.new);
@@ -186,21 +190,21 @@ function applyOne(character, edit, { at, nowValue, by, comment, timeOfDay = null
     const until = untilValue === null ? '' : formatInstant(untilValue);
     let before = '';
     if (!old) {
-        if (next) lines.push(stampLine(next, at, until));
+        if (next) lines.push(markLine(next, at, until, stamp));
     } else {
         const found = nearestLine(lines, old);
         if (found) {
             before = lineBody(lines[found.index]);
-            if (next) lines[found.index] = stampLine(next, at, until);
+            if (next) lines[found.index] = markLine(next, at, until, stamp);
             else lines.splice(found.index, 1);
         } else if (next) {
-            lines.push(stampLine(next, at, until));
+            lines.push(markLine(next, at, until, stamp));
         }
     }
     const updated = setSectionLines(character, part, no, lines);
     return {
         character: { ...updated, history: [...updated.history, { at, by, part, section: no, old: before, new: next, comment }] },
-        change: { kind: 'section', character: character.name, part, section: no, pending: false, old: before, new: next, line: next ? stampLine(next, at, until) : '' },
+        change: { kind: 'section', character: character.name, part, section: no, pending: false, old: before, new: next, line: next ? markLine(next, at, until, stamp) : '' },
     };
 }
 
@@ -219,6 +223,8 @@ export function applyDecree(state, decree, { at = '', comment = '', by = 'direct
     const sections = decreeSections(decree);
     const history = [];
     const decreeState = {};
+    // Первый Указ персонажа — без меток времени: это то, каков он есть, а не новость хода.
+    const firstDecree = partEmpty(character, 'decree');
     let changed = false;
     for (const section of DECREE_SECTIONS) {
         const before = character.decree?.[section.no] ?? [];
@@ -233,7 +239,7 @@ export function applyDecree(state, decree, { at = '', comment = '', by = 'direct
             at, by, part: 'decree', section: section.no,
             old: before.map(line => lineBody(line)).join('\n'), new: after.join('\n'), comment,
         });
-        decreeState[section.no] = after.map(line => (text(line) ? stampLine(line, at) : line)).filter(line => text(line));
+        decreeState[section.no] = after.map(line => (text(line) ? markLine(line, at, '', !firstDecree) : line)).filter(line => text(line));
     }
     const updated = {
         ...character,
@@ -262,6 +268,7 @@ export function applyDecrees(state, decrees, { at = '', comment = '', by = 'dire
  */
 export function applyEdits(state, { edits = [], comment = '', by = 'director', at = '', nowValue = 0, importance = 'temporary', timeOfDay = null } = {}) {
     let next = normalizeGreatBank(state);
+    const start = next;
     const changes = [];
     const created = [];
     for (const edit of Array.isArray(edits) ? edits : []) {
@@ -271,7 +278,11 @@ export function applyEdits(state, { edits = [], comment = '', by = 'director', a
         next = ensured.state;
         if (ensured.created) created.push(ensured.character.name);
         const character = findCharacter(next, name);
-        const applied = applyOne(character, edit, { at, nowValue, by, comment, timeOfDay });
+        // Пустая до вызова часть (первая запись банка) — без меток времени; дальнейшие правки — с метками.
+        const target = resolveSection(edit?.section);
+        const before = findCharacter(start, name);
+        const stamp = !(target && target.part && (!before || partEmpty(before, target.part)));
+        const applied = applyOne(character, edit, { at, nowValue, by, comment, timeOfDay, stamp });
         next = { ...next, [bankKey(character.name)]: applied.character };
         changes.push(applied.change);
     }

@@ -34,3 +34,30 @@ export async function repairEmptyRules({ creation, cycles = [] }) {
     }
     return repaired;
 }
+
+/**
+ * Час старта, которого не было: до первого хода Бог видел пустые часы движка
+ * «Day 1, 00:00» и записал их как момент начала — резолвер играл полночь.
+ * Строки с ним в разделах Creation меняются на «первую сцену истории».
+ */
+const START_HOUR = [
+    [/\bon\s+(\*{0,2})Day 1, 00:00\1/g, 'in $1the story\'s opening scene$1'],
+    [/\bAt 00:00 on Day 1\b/g, 'At the story\'s opening scene'],
+    [/\bat 00:00 on Day 1\b/g, 'at the story\'s opening scene'],
+    [/\bDay 1, 00:00\b/g, 'The opening scene'],
+];
+
+export async function repairStartHour({ creation }) {
+    const state = creation?.state?.();
+    const fixed = [];
+    for (const section of state?.sections ?? []) {
+        const before = String(section?.text ?? '');
+        if (!/00:00/.test(before)) continue;
+        let after = before;
+        for (const [pattern, value] of START_HOUR) after = after.replace(pattern, value);
+        if (after === before) continue;
+        const result = await creation.writeSections({ sections: [{ title: section.title, text: after }], by: 'engine', comment: 'The start hour came from the empty engine clock before the first turn; the start is the opening scene.' });
+        if (result?.ok !== false) fixed.push(section.title);
+    }
+    return fixed;
+}

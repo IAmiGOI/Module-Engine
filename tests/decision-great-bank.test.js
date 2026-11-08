@@ -51,11 +51,11 @@ test('old is replaced, an unfound old appends new, an empty new removes the line
     let applied = run({}, [{ character: 'Rem', section: 'appearance', old: '', new: 'Blue hair, one horn.' }]);
     assert.equal(applied.created.length, 1, 'an unknown character is created, not refused');
     assert.equal(findCharacter(applied.state, 'rem').importance, 'temporary');
-    assert.match(applied.state.rem.material[1][0], /^\[2026-03-07 04:15\] Blue hair, one horn\.$/);
+    assert.match(applied.state.rem.material[1][0], /^Blue hair, one horn\.$/, 'the first line of an empty part is a constant: no RP time');
 
     applied = run(applied.state, [{ character: 'Rem', section: '1', old: 'blue hair one horn', new: 'Blue hair, one horn, chipped.' }]);
     assert.equal(applied.state.rem.material[1].length, 1, 'the closest line was replaced, not duplicated');
-    assert.match(applied.state.rem.material[1][0], /chipped/);
+    assert.match(applied.state.rem.material[1][0], /^\[2026-03-07 04:15\] Blue hair, one horn, chipped\.$/, 'a later change is news of the turn: stamped');
     assert.equal(applied.changes[0].old, 'Blue hair, one horn.');
 
     applied = run(applied.state, [{ character: 'Rem', section: '1', old: 'nothing like this line', new: 'A second fact.' }]);
@@ -82,8 +82,10 @@ test('a bare section number is settled by the line: the same number exists in bo
     assert.equal(applied.state.rem.material[4].length, 0, 'material 4 was not touched');
 });
 
-test('every changed line is stamped with the turn\'s RP time', () => {
-    const applied = run({}, [{ character: 'Rem', section: 'likes', old: '', new: 'Sweet things.' }]);
+test('every changed line is stamped with the turn\'s RP time, except the first fill of an empty part', () => {
+    const first = run({}, [{ character: 'Rem', section: 'values', old: '', new: 'Her sister above all.' }]);
+    assert.match(first.state.rem.spiritual[1][0], /^Her sister above all\.$/, 'the first fill of a part carries no RP time');
+    const applied = run(first.state, [{ character: 'Rem', section: 'likes', old: '', new: 'Sweet things.' }]);
     assert.match(applied.state.rem.spiritual[2][0], /^\[2026-03-07 04:15\] Sweet things\.$/);
     assert.equal(applied.at, AT, 'the answer names the time of the change');
 });

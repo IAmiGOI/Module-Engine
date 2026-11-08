@@ -134,7 +134,8 @@ export function createGod({
         const material = info.kind === 'prayer' || (info.kind === 'declaration' && !bare) ? '' : await loadMaterial();
         const context = buildGodContext({
             material, creation: state, kind: info.kind, prayers: info.prayers,
-            declaration: info.declaration, rpTime: clockLabel(store.clock().minutes),
+            // До первого хода часов нет: «Day 1, 00:00» — пустые часы движка, Бог принял их за момент старта (полночь).
+            declaration: info.declaration, rpTime: currentTurn() > 0 ? clockLabel(store.clock().minutes) : '',
             questions: (typeof store.papers === 'function' ? store.papers()?.god?.questions ?? [] : []).filter(item => !text(item.answer)),
             maxQuestions: Number(settings.god?.maxQuestions) || 5,
         });

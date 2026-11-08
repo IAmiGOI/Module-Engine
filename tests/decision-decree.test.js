@@ -37,12 +37,12 @@ test('a Decree becomes the five Great Bank fields', () => {
     assert.equal(normalizeDecrees([decree, { ...decree, selfView: 'Second view.' }]).length, 1, 'the last entry for a name wins');
 });
 
-test('applyDecree writes the block, stamps RP time and keeps the old Decree in history', () => {
+test('applyDecree writes the block, stamps RP time on renewals (not on the first Decree) and keeps the old Decree in history', () => {
     const first = applyDecree({}, normalizeDecree(decree), { at: 'Day 1, 10:00', comment: 'First Decree.' });
     assert.equal(first.changed, true);
     const lena = findCharacter(first.state, 'Lena');
     assert.equal(lena.decree[1].length, 2);
-    assert.match(lena.decree[1][0], /\[Day 1, 10:00\]/);
+    assert.doesNotMatch(lena.decree[1][0], /\[Day 1, 10:00\]/, 'the first Decree is who she is, not news of the turn: no RP time');
     assert.equal(lena.decreeAt, 'Day 1, 10:00');
     assert.equal(first.history.length, 5);
 
@@ -50,7 +50,7 @@ test('applyDecree writes the block, stamps RP time and keeps the old Decree in h
     const second = applyDecree(first.state, next, { at: 'Day 1, 12:00', comment: 'The report changed her.' });
     assert.equal(second.changed, true);
     assert.ok(second.history.some(item => item.part === 'decree' && item.section === 2 && /never caught/.test(item.old)));
-    assert.match(findCharacter(second.state, 'Lena').decree[2][0], /chose to stay/);
+    assert.match(findCharacter(second.state, 'Lena').decree[2][0], /^\[Day 1, 12:00\] .*chose to stay/, 'a renewed Decree is stamped');
 
     const same = applyDecree(second.state, next, { at: '[Day 1, 13:00]', comment: 'No change.' });
     assert.equal(same.changed, false, 'the same Decree does not grow history');

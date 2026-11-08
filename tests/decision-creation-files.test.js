@@ -75,3 +75,19 @@ test('a rule field written in bold is read, and rules lost by the old parser com
     assert.equal(writes.length, 1, 'a system with filled rules is left alone');
     assert.deepEqual(writes[0].rules[0].needs, ['a contract.']);
 });
+
+test('a start hour taken from the empty engine clock is replaced by the opening scene', async () => {
+    const { repairStartHour } = await import('../cores/decision/creation-repair.js');
+    const writes = [];
+    const creation = {
+        state: () => ({ sections: [
+            { title: 'The User in the World', text: '- Summoned on **Day 1, 00:00** directly in front of Emilia.' },
+            { title: 'Politics and Conflicts', text: '- At 00:00 on Day 1, Emilia is in the Capital.' },
+            { title: 'Geography', text: '- Three islands.' },
+        ] }),
+        writeSections: async ({ sections }) => { writes.push(...sections); return { ok: true }; },
+    };
+    assert.deepEqual(await repairStartHour({ creation }), ['The User in the World', 'Politics and Conflicts']);
+    assert.match(writes[0].text, /Summoned in \*\*the story's opening scene\*\*/);
+    assert.match(writes[1].text, /At the story's opening scene, Emilia/);
+});
