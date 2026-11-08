@@ -9,7 +9,7 @@ export const VIEW_TOOL = Object.freeze({
     name: 'view',
     displayName: 'View a file',
     description: 'Without "path": list every file you can change. With "path": the full text of that file, exactly as you edit it.',
-    parameters: { type: 'object', properties: { path: { type: 'string', description: 'For example Characters/Emilia/decree.md.' }, comment: COMMENT }, required: ['comment'] },
+    parameters: { type: 'object', properties: { path: { type: 'string', description: 'For example Characters/Emilia/decree.md or Creation/Scales/magic.md.' }, comment: COMMENT }, required: ['comment'] },
 });
 
 export const EDIT_TOOL = Object.freeze({
@@ -24,7 +24,7 @@ export const EDIT_TOOL = Object.freeze({
                 items: {
                     type: 'object',
                     properties: {
-                        path: { type: 'string', description: 'The file, for example Characters/Emilia/decree.md.' },
+                        path: { type: 'string', description: 'The file, for example Characters/Emilia/decree.md or Creation/geography.md.' },
                         old: { type: 'string', description: 'Exact text from the file to replace.' },
                         new: { type: 'string', description: 'The replacement.' },
                     },
@@ -40,7 +40,7 @@ export const EDIT_TOOL = Object.freeze({
 export const CREATE_TOOL = Object.freeze({
     name: 'create',
     displayName: 'Create a file',
-    description: 'Write a whole file at once — only for a file that is empty or does not exist yet, such as the first Decree of a character. Keep the section headings ("## 1. …") of the file kind.',
+    description: 'Write a whole file at once — only for a file that is empty or does not exist yet, such as the first Decree of a character. Keep the layout of the file kind: numbered sections ("## 1. …") for a character file, the system layout for Creation/Scales/<system>.md.',
     parameters: {
         type: 'object',
         properties: { path: { type: 'string' }, text: { type: 'string', description: 'The whole file in Markdown.' }, comment: COMMENT },

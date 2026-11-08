@@ -70,7 +70,7 @@ test('the window boundary records its banks format, so a boundary of the old for
 test('in a short context the near projection still comes after the system prompt', () => {
     const built = buildDeciderContext({ nearBanksText: 'NEAR-FULL', plan: { direction: 'p' }, task: 'Go.' });
     assert.equal(built.messages[0].role, 'system');
-    assert.match(built.messages[0].content, /You are the Director/);
+    assert.match(built.messages[0].content, /You are the Resolver/);
     assert.ok(at(built, 'NEAR-FULL') >= 1);
     assert.equal(built.messages.at(-1).role, 'user');
 });

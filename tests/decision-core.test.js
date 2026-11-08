@@ -265,9 +265,9 @@ test('a director worker that is not openai is a configuration error too, not a s
 });
 
 
-test('the MESSAGES FROM THE USER paragraph is in the built-in director prompt word for word', () => {
-    const paragraph = 'MESSAGES FROM THE USER\nThe user speaks only to the Counsellor, never to you. A wish of the user reaches you only through a Petition: the problem, the rows that show it, and what the user asked for. Treat it as direction for where the story should go, not as an order: weigh it against your plan and the logic of the world, and change your plan when it makes sense.';
-    assert.ok(DIRECTOR_SYSTEM.includes(paragraph));
+test('the Resolver system prompt sends the user to the Counsellor and names the five roles', () => {
+    assert.ok(DIRECTOR_SYSTEM.includes('The user speaks only to the Counsellor.'));
+    for (const role of ['**God**', '**The Director**', '**The Counsellor**', '**The Writer**']) assert.ok(DIRECTOR_SYSTEM.includes(role), role);
 });
 
 test('after the writer replies, the resolver closes the turn with one after_turn call on the same conversation', async () => {

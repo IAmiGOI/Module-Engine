@@ -61,7 +61,7 @@ test('the director context puts the protected part first, then the window, mutab
         chat: [message('older'), message('Where is the exit?', { is_user: true })],
     });
     const contents = context.messages.map(item => item.content);
-    assert.match(contents[0], /You are the Director of a living roleplay world/);
+    assert.match(contents[0], /You are the Resolver of a living roleplay world/);
     assert.match(contents[1], /ALL-CHARACTER-BANKS/);
     assert.match(contents[2], /THE LOREBOOK/);
     assert.match(contents[3], /ARCS/);

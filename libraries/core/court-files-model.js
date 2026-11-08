@@ -9,6 +9,8 @@ const text = value => String(value ?? '');
 /** Роль встроенного промпта по имени константы. */
 export function roleOfPrompt(name = '') {
     const n = String(name).toUpperCase();
+    // Старые имена DIRECTOR_* хода и фоновых циклов — промпты резолвера; Указ — директора.
+    if (/^DIRECTOR_(SYSTEM|TURN|REASONING|PASSIVE|REROLL|CONCRETE|FORCED_MEMORY|WINDOW_SUMMARY|ARC_SUMMARY)$|^ASSESS_SOCIAL/.test(n)) return 'resolver';
     if (/^(GOD|CREATION|SCALE|PRAYER_ANSWER|SERAPH)/.test(n)) return 'god';
     if (/^WRITER|INSCRIPTION|^STORY_SETTINGS/.test(n)) return 'writer';
     if (/^RESOLVER|^ASSESS|^FORM_|^INSCRIBE/.test(n)) return 'resolver';
@@ -23,9 +25,10 @@ export const ROLE_FOLDERS = Object.freeze({
 });
 
 const KNOWN_USE = {
-    DIRECTOR_SYSTEM: 'System prompt of the Director and the turn context — the first message.',
+    DIRECTOR_SYSTEM: 'System prompt of the Resolver — the first message of every turn and of its cycles between turns.',
     WRITER_SYSTEM: 'System prompt of the Writer — the first message of every reply.',
-    DIRECTOR_REASONING: 'How the Director thinks — at the very end of the task.',
+    DIRECTOR_REASONING: 'How the Resolver thinks in its cycles between turns — at the very end of the task.',
+    DIRECTOR_DECREE_SYSTEM: 'System prompt of the Director — the first message of every Decree cycle.',
     RESOLVER_THINK_TURN: 'How the Resolver thinks this turn — at the very end of the turn task.',
     RESOLVER_THINK_AFTER: 'How the Resolver thinks after the turn — at the end of the after-turn task.',
     RESOLVER_AFTER_TURN: 'The after-turn task — sent with the Writer reply.',

@@ -100,15 +100,13 @@ test('every built-in prompt fills its placeholders, and none is left with a raw 
     assert.throws(() => fillPrompt('{{missing}}', {}), /no value/);
 });
 
-test('the director prompt names exactly the tools the engine gives it, and no description still talks about an on/off core', () => {
-    const named = new Set();
-    for (const line of DIRECTOR_SYSTEM.split('\n')) {
-        const match = line.match(/^- ([a-z_]+(?:, [a-z_]+)*) —/);
-        if (match) match[1].split(', ').forEach(name => named.add(name));
-    }
+test('the Resolver prompt names only tools the engine has, and no description still talks about an on/off core', () => {
     const tools = buildToolList();
     const names = new Set(tools.map(tool => tool.name));
-    for (const name of named) assert.ok(names.has(name), `the prompt names "${name}" but there is no such tool`);
-    for (const name of names) if (!['save_draft', 'lorebook', 'ask_user', 'write_chat_brief'].includes(name)) assert.ok(named.has(name), `the tool "${name}" is not explained in the director prompt`);
+    // Ход, после хода и имена — прямо в промпте; остальное между ходами объясняют сами схемы.
+    for (const name of ['assess', 'inscribe', 'after_turn', 'recall_name', 'await']) {
+        assert.ok(DIRECTOR_SYSTEM.includes(name), `the prompt does not name "${name}"`);
+        assert.ok(names.has(name), `there is no tool "${name}"`);
+    }
     for (const tool of tools) assert.doesNotMatch(String(tool.description ?? ''), /while the core is on/i);
 });

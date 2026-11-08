@@ -34,10 +34,10 @@ export const INSCRIBE_TOOL = Object.freeze({
                         idle: { type: 'boolean', description: 'True when the character is present but does nothing worth showing this turn. Then only the name and busy are needed.' },
                         busy: { type: 'string', description: 'For an idle character: what occupies them right now — their own concern, from their bank or Decree. A few words.' },
                         feels: { type: 'string', description: 'What they feel right now and why — from their Emotions and what just happened.' },
-                        decreeWants: { type: 'string', description: 'What the Decree and the map want from them in this moment. With no Decree yet, what their bank and situation want.' },
+                        decreeWants: { type: 'string', description: 'What their Decree wants from them in this moment: its goal for today and its rules of resolving. With no Decree yet, what their bank and situation want.' },
                         conflict: {
                             type: 'object',
-                            description: 'How far the Decree or the map pulls against what the character would do on their own.',
+                            description: 'How far the Decree pulls against what the character would do on their own.',
                             properties: {
                                 level: { type: 'string', enum: CONFLICT_LEVELS, description: 'none — no tension; minor — a hesitation or a cost; strong — they act against themselves.' },
                                 why: { type: 'string', description: 'What pulls where, in one line. Required for minor and strong.' },

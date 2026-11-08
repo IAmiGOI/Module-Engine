@@ -42,7 +42,7 @@ test('a built Creation stands in the stable part of the resolver context, before
     const creationAt = messages.findIndex(content => content.startsWith('CREATION — the world the story stands in'));
     assert.ok(creationAt > 0, 'the Creation is a block in the context');
     assert.match(messages[creationAt], /Geography is written\./);
-    assert.match(messages[0], /^You are the Director of a living roleplay world\./, 'the system prompt is first');
+    assert.match(messages[0], /^You are the Resolver of a living roleplay world\./, 'the system prompt is first');
     assert.ok(creationAt > 0, 'the Creation is never the first message');
 });
 

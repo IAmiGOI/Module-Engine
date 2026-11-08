@@ -117,7 +117,7 @@ test('the writer receives an Inscription with place, time, the user result and t
     assert.match(text, /2\. Lena — LINE \(meaning\): this is the only way out/);
     assert.match(text, /NOT FOR THE PAGE — why they act[\s\S]*- Lena: Feels: calm\. Wants: Get out before the guard turns the corner\./);
     assert.match(text, /\(it goes (flawlessly, exactly as intended|cleanly, without a hitch|barely, with visible effort|clumsily, with a mistake|badly botched)/);
-    assert.match(text, /When the push says an opponent may counter something a character did not expect/);
+    assert.match(text, /When the Inscription says an opponent may counter something a character did not expect/);
     assert.equal('tools' in body, false);
     assert.equal(body.stream, true);
 });
