@@ -31,6 +31,7 @@ async function build({ replies, externalTools = [], callTool = async () => 'ok' 
     engine.buses.cores.register('model.workers.get', () => [{ id: 'director', format: 'openai', model: 'director/model' }]);
     engine.buses.cores.register('summary.list', () => []);
     engine.buses.cores.register('chatHistory.messages', () => []);
+    engine.buses.cores.register('chatHistory.chatId', () => ({ open: true, id: 'chat-1' }));
     engine.buses.cores.register('ui.notify', () => true);
     engine.buses.cores.register('generation.tools', () => externalTools);
     engine.buses.cores.register('generation.callTool', ({ name, args }) => callTool(name, args));

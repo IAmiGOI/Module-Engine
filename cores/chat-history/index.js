@@ -149,8 +149,15 @@ export function createChatHistoryCore(host) {
         return true;
     }
 
+    async function chatId() {
+        const result = await request(host.services, 'stChat.chatId', {});
+        if (!result.ok) throw new Error(result.error.message);
+        return result.value;
+    }
+
     const unregisters = [
         host.own.register('chatHistory.messages', params => readMessages(params)),
+        host.own.register('chatHistory.chatId', () => chatId()),
         host.own.register('chatHistory.hide', params => hideMessage(params)),
         host.own.register('chatHistory.replaceText', params => enqueue(() => replaceMessageText(params))),
         host.own.register('chatHistory.annotate', params => enqueue(() => annotate(params))),

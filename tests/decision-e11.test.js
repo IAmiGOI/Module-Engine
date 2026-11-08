@@ -26,6 +26,7 @@ async function build({ replies, settings = {}, seed = {}, model = null, usage = 
     engine.buses.cores.register('model.workers.get', () => [{ id: 'director', format: 'openai' }]);
     engine.buses.cores.register('summary.list', () => []);
     engine.buses.cores.register('chatHistory.messages', () => [{ mesid: '10' }]);
+    engine.buses.cores.register('chatHistory.chatId', () => ({ open: true, id: 'chat-1' }));
     engine.buses.cores.register('chatHistory.annotations', () => ({}));
     engine.buses.cores.register('embedding.compute', () => null);
     engine.buses.cores.register('embedding.similarity', () => 0);

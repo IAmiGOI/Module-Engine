@@ -110,3 +110,20 @@ test('a chat switch forgets the running bootstrap: the new chat does not wait fo
     assert.equal(world.memory.has('bootstrap'), false, 'the old run did not save its state into the new chat');
     assert.ok(!world.events.some(([event, payload]) => event === 'decision.bootstrap.finished' && payload.status === 'done'));
 });
+
+test('the ST welcome screen is not a new chat: no chat id, or only the welcome assistant greeting', async () => {
+    const memory = new Map();
+    const make = ({ chatId, messages }) => createBootstrap({
+        call: async (contract, params = {}) => {
+            if (contract === 'storage.chatMemory.get') return memory.has(params.key) ? memory.get(params.key) : params.fallback;
+            if (contract === 'chatHistory.chatId') return { open: Boolean(chatId), id: chatId };
+            if (contract === 'chatHistory.messages') return messages;
+            return undefined;
+        },
+        store: { cycles: () => [] }, cycle: { runBootstrap: async () => ({ briefWritten: true }) }, getSettings: () => ({}), publishEvent: () => {},
+    });
+    const welcome = [{ mesid: '1', isUser: false, isSystem: false, type: 'assistant_message', text: 'If you are connected to an API…' }];
+    assert.equal(await make({ chatId: null, messages: welcome }).chatOpen(), false);
+    assert.equal(await make({ chatId: 'Emilia - 2026-11-08', messages: welcome }).isNewChat(), false);
+    assert.equal(await make({ chatId: 'Emilia - 2026-11-08', messages: [{ mesid: '0', isUser: false, type: '', text: 'Hello.' }] }).isNewChat(), true);
+});

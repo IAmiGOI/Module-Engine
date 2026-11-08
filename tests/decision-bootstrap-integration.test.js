@@ -19,6 +19,7 @@ async function build({ bootstrapReply = null } = {}) {
     engine.buses.cores.register('model.workers.get', () => [{ id: 'director', format: 'openai' }]);
     engine.buses.cores.register('summary.list', () => []);
     engine.buses.cores.register('chatHistory.messages', () => messages);
+    engine.buses.cores.register('chatHistory.chatId', () => ({ open: true, id: 'chat-1' }));
     engine.buses.cores.register('chatHistory.annotations', () => ({}));
     engine.buses.cores.register('lorebook.books', () => []);
     engine.buses.cores.register('lorebook.entries', () => []);

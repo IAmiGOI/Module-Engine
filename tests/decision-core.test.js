@@ -44,6 +44,7 @@ async function build({ patch = {}, initialRuns = null, workers = [{ id: 'directo
     engine.buses.cores.register('model.workers.get', () => workersList);
     engine.buses.cores.register('summary.list', () => summaries);
     engine.buses.cores.register('chatHistory.messages', () => [{ mesid: '10', text: 'last message' }]);
+    engine.buses.cores.register('chatHistory.chatId', () => ({ open: true, id: 'chat-1' }));
     engine.buses.cores.register('ui.notify', params => { notifications.push(params); return true; });
     engine.buses.cores.register('ui.reveal', params => { reveals.push(params); return true; });
     engine.buses.cores.register('model.generate', async params => {

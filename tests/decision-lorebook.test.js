@@ -64,6 +64,7 @@ function build({ bookEntries = entries, worker = 'director' } = {}) {
     bus.register('model.workers.get', () => [{ id: 'director', format: 'openai', model: 'director/model' }]);
     bus.register('summary.list', () => []);
     bus.register('chatHistory.messages', () => [{ mesid: '1', text: 'last' }]);
+    bus.register('chatHistory.chatId', () => ({ open: true, id: 'chat-1' }));
     bus.register('chatHistory.annotations', () => ({}));
     bus.register('lorebook.books', () => ['World']);
     bus.register('lorebook.entries', () => bookEntries);

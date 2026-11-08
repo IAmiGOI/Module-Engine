@@ -49,6 +49,7 @@ function build({ writerId = 'writer', provider = null } = {}) {
     engine.buses.cores.register('model.workers.get', () => workerList);
     engine.buses.cores.register('summary.list', () => []);
     engine.buses.cores.register('chatHistory.messages', () => [{ mesid: '10' }]);
+    engine.buses.cores.register('chatHistory.chatId', () => ({ open: true, id: 'chat-1' }));
     engine.buses.cores.register('generation.tools', () => []);
     engine.buses.cores.register('generation.callTool', () => ({ ok: true }));
     engine.buses.cores.register('model.generate', async params => {

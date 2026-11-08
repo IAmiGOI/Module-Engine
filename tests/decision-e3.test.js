@@ -23,6 +23,7 @@ async function build({ replies }) {
     engine.buses.cores.register('model.workers.get', () => [{ id: 'director', format: 'openai', model: 'director/model' }]);
     engine.buses.cores.register('summary.list', () => []);
     engine.buses.cores.register('chatHistory.messages', () => []);
+    engine.buses.cores.register('chatHistory.chatId', () => ({ open: true, id: 'chat-1' }));
     engine.buses.cores.register('chatHistory.annotations', ({ namespace }) => namespace === 'module.time' ? { 5: 'Day 1, 08:00 (Morning)' } : {});
     engine.buses.cores.register('map.position.get', () => ({ nodeId: 'room' }));
     engine.buses.cores.register('map.nodes.list', () => [{ id: 'room', name: 'EAST CORRIDOR' }]);

@@ -29,10 +29,20 @@ export function createBootstrap({ call, store, cycle, getSettings, getGameSettin
         return { ...state };
     }
 
+    /** Открыт ли чат: на главном экране ST чата нет (null), хотя в `chat` лежит приветствие ассистента. */
+    async function chatOpen() {
+        try {
+            // Закрыт только по явному ответу ST; нет контракта или ответа — чат считается открытым.
+            const answer = await call('chatHistory.chatId');
+            return answer?.open !== false;
+        } catch { return true; }
+    }
+
     async function isNewChat() {
         try {
             const messages = await call('chatHistory.messages', { limit: 2 });
-            const list = Array.isArray(messages) ? messages : [];
+            // Приветствие ассистента главного экрана ST — не карточка и не чат.
+            const list = (Array.isArray(messages) ? messages : []).filter(message => message?.type !== 'assistant_message');
             // Ровно одно сообщение — приветствие карточки. Ноль — чат ещё не загружен (перезагрузка страницы):
             // раньше это принималось за новый чат, и bootstrap запускался заново по пустым данным.
             return list.length === 1 && list[0]?.is_user !== true && list[0]?.isUser !== true && (typeof store.cycles === 'function' ? store.cycles().length : 0) === 0;
@@ -133,5 +143,5 @@ export function createBootstrap({ call, store, cycle, getSettings, getGameSettin
         state = { status: 'idle', startedAt: 0, finishedAt: 0, error: null };
     }
 
-    return { load, ensure, maybeStart, waitFirstTurn, retry, chatChanged, state: () => ({ ...state }), isNewChat };
+    return { load, ensure, maybeStart, waitFirstTurn, retry, chatChanged, state: () => ({ ...state }), isNewChat, chatOpen };
 }

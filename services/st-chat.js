@@ -103,6 +103,8 @@ export function registerStChatService(bus, { getContext } = {}) {
                 mesid,
                 isUser: Boolean(message?.is_user),
                 isSystem: Boolean(message?.is_system),
+                // Вид служебного сообщения ST: приветствие ассистента главного экрана — `assistant_message`, хотя не is_system.
+                type: String(message?.extra?.type ?? ''),
                 name: String(message?.name ?? ''),
                 text: String(message?.mes ?? ''),
                 sendDate: message?.send_date ?? null,
@@ -356,6 +358,14 @@ export function registerStChatService(bus, { getContext } = {}) {
 
     const unregisters = [
         bus.register('stChat.messages', params => readChat(params), { loadMetric: () => 0 }),
+        /** `{ open, id }`: на главном экране ST чата нет (open: false), хотя в `chat` лежит приветствие ассистента. */
+        bus.register('stChat.chatId', () => {
+            // Без getCurrentChatId (старый ST, стенд) — неизвестно, и чат считается открытым.
+            const context = getContext();
+            if (typeof context?.getCurrentChatId !== 'function') return { open: true, id: null };
+            const id = context.getCurrentChatId() ?? null;
+            return { open: id !== null && id !== '', id };
+        }, { loadMetric: () => 0 }),
         bus.register('stChat.setHidden', params => setMessageHidden(params), { loadMetric: () => 0 }),
         bus.register('stChat.setText', params => setMessageText(params), { loadMetric: () => 0 }),
         bus.register('stChat.deleteMessage', params => deleteMessage(params), { loadMetric: () => 0 }),

@@ -141,6 +141,11 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         await banks.reload().catch(() => {});
         workers = (await call('model.workers.get')) ?? [];
         await bootstrap.load().catch(() => {});
+        // Главный экран ST — не чат: ни bootstrap, ни Бога, ни сборки банков, ни директора.
+        if (!(await bootstrap.chatOpen())) {
+            publishEvent('decision.reloaded', { at: Date.now() });
+            return { runs: store.runs() };
+        }
         bootstrap.maybeStart().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }));
         // Новый чат: банки строятся сразу, параллельно bootstrap, а не с первым ходом.
         // Есть готовые банки прошлого bootstrap для этих книг — сначала вопрос «взять их?», потом сборка недостающих.
