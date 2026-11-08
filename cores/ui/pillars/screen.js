@@ -25,6 +25,8 @@ const FIT_CSS = `
 .ribbon { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .blank { max-width: 100%; overflow-wrap: anywhere; }
 .entry .det pre, .slip pre { overflow-wrap: anywhere; white-space: pre-wrap; }
+.stamp { font: 400 21px/1 "Reenie Beanie", cursive; color: #7a2a18; white-space: nowrap; margin-right: .25em; }
+.depth .stamp { color: rgba(232,168,110,.85); }
 .depth .sigil-up { position: sticky; top: 0; z-index: 2; border-radius: 50%; background: radial-gradient(circle, rgba(7,8,10,.96) 45%, rgba(7,8,10,0) 72%); }
 .depth { cursor: zoom-out; } .depth-in { cursor: auto; }
 `;
@@ -479,8 +481,12 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
     return firstSpread(s => s.who === who);
   }
   // книга не показывает Markdown: звёздочки, решётки и списки становятся оформлением
+  // отметки банка `[2026-03-05 09:23] -` — пометка на полях от руки: «5 March · 09:23», год — только чужой
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const stamp = (_, y, m, d, hh, mm) => `<span class="stamp">${Number(d)} ${MONTHS[Number(m) - 1] ?? m}${Number(y) !== new Date().getFullYear() ? ` ${y}` : ''}${hh ? ` · ${hh}:${mm}` : ''}</span> `;
   function md(value) {
     return esc(value)
+      .replace(/\[(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::\d{2})?)?\]\s*(?:[-—–:]\s*)?/g, stamp)
       .replace(/^\s*#+\s*/, '')
       .replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '• ')
       .replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a, b) => `<b>${a ?? b}</b>`)
