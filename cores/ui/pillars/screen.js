@@ -1,4 +1,4 @@
-import { constellationStars } from '../../../libraries/core/pillars-sources.js';
+import { constellationStars, toCourt } from '../../../libraries/core/pillars-sources.js';
 import { PILLARS_CSS } from './screen-css.js';
 import { PILLARS_MARKUP } from './screen-markup.js';
 
@@ -353,6 +353,7 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
     $('[data-body="other"]').hidden = bank || charter || canon || court;
     menu.dataset.mode = bank ? 'bank' : p.dataset.p;
     // данные столпа — из моделей движка; вид рисуется, когда модель пришла
+    if (court) openCourt();
     loadModel(p.dataset.p).then(() => document.fonts?.ready).then(() => { if (bank) { setVolume(p.dataset.p); openBook(); } if (charter) openCharter(); if (canon) openCanon(); if (court) openCourt(); });
     setTimeout(() => paintPlate(bank ? 'book' : charter ? 'scroll' : canon ? 'sky' : court ? 'court' : ''), reduce ? 0 : 700);
     target = 1; $('.pillars').classList.add('swallowed');
@@ -821,7 +822,7 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
   function resetView() { cancelAnimationFrame(zoomRun); Object.assign(view, { k: 0, z: 1, s: [.5, .5], d: [.5, .5] }); plate.style.transform = ''; platefx.style.transform = ''; }
 
   /* ===== The Court — круглый стол (`toCourt`): роли, ходы, Ведомость, файлы; падение в темноту — чат роли пером ===== */
-  let courtModel = { roles: [], turns: [], ledger: [], files: [] };
+  let courtModel = toCourt({});
   let turnFilter = null;
   const courtSvg = $('[data-court]'), lane = $('[data-lane]');
   // знаки ролей — гравюра тем же пером, что эмблемы главного экрана
@@ -861,10 +862,15 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
         </g>`;
       }).join('')}`;
   }
+  const HIDDEN_RAW = new Set(['messages', 'system', 'prompt', 'prompts', 'request', 'response', 'context', 'thinking', 'reasoning', 'usage', 'raw', 'body', 'transcript']);
+  const rawOf = value => {
+    const textValue = JSON.stringify(value ?? {}, (key, v) => (HIDDEN_RAW.has(key) ? undefined : typeof v === 'string' && v.length > 400 ? `${v.slice(0, 400)}…` : v), 1);
+    return textValue && textValue !== '{}' ? textValue.slice(0, 4000) : '';
+  };
   const roleOf = id => (courtModel.roles ?? []).find(r => r.id === id);
   const entryHTML = e => {
     const ask = e.ask ? `<div class="sum">${md(e.ask.prompt)}</div><div class="answer" contenteditable="true" data-ph="write your answer…"></div><button class="send" data-ask="${esc(e.ask.id ?? '')}">send</button>` : '';
-    const det = e.ask ? '' : `<div class="det"><div>${(e.fields ?? []).length ? `<dl>${e.fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}<pre>${esc(JSON.stringify(e.raw ?? {}, null, 1)).slice(0, 6000)}</pre></div></div>`;
+    const det = e.ask ? '' : `<div class="det"><div>${(e.fields ?? []).length ? `<dl>${e.fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}${(e.fields ?? []).length ? '' : (raw => (raw ? `<pre>${esc(raw)}</pre>` : ''))(rawOf(e.raw?.rows?.filter?.(r => r?.kind === 'call' || r?.kind === 'petition').map(r => ({ call: r.name, args: r.args })) ?? null))}</div></div>`;
     return `<div class="entry${e.ask ? ' ask' : ''}"><div class="when">${esc(e.when)}</div><div class="what">${esc(e.title)}</div>${e.summary ? `<div class="sum">${md(e.summary)}</div>` : ''}${ask}${det}</div>`;
   };
   const byTurn = list => (list ?? []).filter(e => turnFilter === null || e.turn === turnFilter);
@@ -938,7 +944,7 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
   function openCourt() { buildCourt(); laneId = null; lane.hidden = true; lane.classList.remove('in'); courtWrap.classList.remove('deep'); courtSvg.style.transform = ''; }
 
   async function loadModel(id) {
-    const model = await Promise.resolve(load(id)).catch(() => null);
+    const model = await Promise.resolve(load(id)).catch(error => { console.warn(`[ST Module Engine (Beta)] The ${id} pillar could not load its data:`, error); return null; });
     if (id === 'bank' || id === 'world') books[id] = model;
     if (id === 'charter') charterModel = model;
     if (id === 'canon') skyModel = model ?? { constellations: [] };

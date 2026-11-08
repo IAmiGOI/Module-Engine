@@ -13,9 +13,15 @@ export function createPillarsSources({ host, call = null } = {}) {
     const invoke = call ?? ((contract, params) => request(host.own, contract, { params }));
     // `stCharacter.*` живут на Шине сервисов, всё `decision.*` — на Шине ядер.
     const service = (contract, params) => (host?.services ? request(host.services, contract, { params }) : invoke(contract, params));
+    // любой сбой источника (даже синхронный) — пустое значение: один упавший контракт не гасит весь столп
     const value = async (contract, params, fallback = null, via = invoke) => {
-        const result = await via(contract, params).catch(() => ({ ok: false }));
-        return result?.ok ? result.value ?? fallback : fallback;
+        try {
+            const result = await via(contract, params);
+            return result?.ok ? result.value ?? fallback : fallback;
+        } catch (error) {
+            console.warn(`[ST Module Engine (Beta)] ${contract} failed for the five pillars:`, error);
+            return fallback;
+        }
     };
     const list = async (contract, params) => {
         const result = await value(contract, params, []);
@@ -35,7 +41,7 @@ export function createPillarsSources({ host, call = null } = {}) {
             entries(), value('decision.god', undefined, { questions: [] }), list('decision.files'),
             value('stCharacter.current', undefined, null, service), value('decision.clock', undefined, { minutes: 0 }),
         ]);
-        return toCourt({
+        const state = {
             entries: log,
             god,
             files,
@@ -44,7 +50,11 @@ export function createPillarsSources({ host, call = null } = {}) {
             place: '',
             // кто работает — по живым записям ленты (`running`), а не по именам воркеров: их называет пользователь
             working: workingLanes(log),
-        });
+        };
+        try { return toCourt(state); } catch (error) {
+            console.warn('[ST Module Engine (Beta)] The Court model failed; showing the table without its records:', error);
+            return toCourt({ name: state.name, clock: state.clock });
+        }
     }
 
     async function bank() {
