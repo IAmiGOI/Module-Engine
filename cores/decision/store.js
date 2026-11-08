@@ -272,6 +272,7 @@ export function createDecisionStore({ call, publishEvent }) {
         frozen: windows.frozen,
         saveFrozen: windows.saveFrozen,
         appendCycle: logs.appendCycle,
+        upsertCycle: logs.upsertCycle,
         saveLog: logs.saveLog,
         logTokens: logs.logTokens,
     };

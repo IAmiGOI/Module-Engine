@@ -1004,6 +1004,8 @@ PRAYERS have reached you. Each says how a system of the world was used: what was
 THE SYSTEMS THEY TOUCH:
 {{scales}}
 
+A Prayer from the Counsellor may carry the user's will about the world itself — when the story starts, who is in it, what the world is. That is not a use of a system: edit the section files it changes, and the user's word wins over your own decisions.
+
 Read each Prayer against its system. Where a rule covers the use, say so. Where the use went around the letter of a rule, that is a discovery: add it as a line under "## Discoveries" of that system's file with edit — "[the rule it used] what the world now holds to". Where the Prayer shows that a rule no longer holds, edit that rule's lines in the same file. Then call await.
 ```
 
@@ -1028,7 +1030,7 @@ DECLARATION — the Counsellor has closed your questions, and the answers are be
 
 {{declaration}}
 
-Write into the Creation what these answers settle: edit the section files they change and the system files they change. Where an answer contradicts what you wrote, the answer wins; where it leaves something open, leave it open rather than invent. Then call await. Do not ask new questions.
+Write into the Creation what these answers settle: edit the section files they change and the system files they change. If the Creation is not written yet, build it now with these answers as law — every section and every system, as the build asks. Where an answer contradicts what you wrote, the answer wins; where it leaves something open, leave it open rather than invent. Then call await. Do not ask new questions.
 ```
 
 ## 40. God — служебные заголовки контекста
@@ -1058,4 +1060,26 @@ For each character below choose one level:
 Judge by what the material says about them and how much of it there is, not by how famous they are. The user's own character is not in the list.
 
 Answer only with JSON: [{"name": "the name exactly as written below", "importance": "main"}, …], one item per character.
+```
+
+## 42. God — изучение до построения (задание первого запуска)
+Сначала вопросы, потом мир: этот запуск ничего не пишет, только спрашивает Советника. Без вопросов построение начинается сразу.
+
+```text
+STUDY THE WORLD BEFORE YOU SHAPE IT. Below is everything this world gives. Do not write the Creation yet: you build it once the user's answers return.
+
+{{material}}
+
+Find what you cannot build without the user, and ask it with ask — at most {{max_questions}} questions, each concrete, each with what you would choose if the user does not mind:
+- **The point of the timeline** — where this story starts against the canon or the material: what has already happened and what has not. Always ask, unless the material names the moment exactly.
+- **The user in the world** — who the user's character is here, and whether they are in this world at all at that moment. Always ask, unless the user's persona states it.
+- **What the whole world turns on and the material leaves open** — or states two ways.
+Then call await. If the material truly answers all of it, call await without asking: the build starts at once.
+```
+
+## 43. Советник — вопросы Бога пользователю
+Запускается сразу, как Бог задал вопросы (своя очередь Советника).
+
+```text
+God asks you about the world before it can shape it: the questions are above, under QUESTIONS FROM GOD. Put them to the user now with reply — one message in the user's language, every question numbered, with God's own suggestion where it gives one, and one line saying the world is built once they answer. Do not answer for the user. Then call await. When the user answers, pass each answer with god_answer under the question's id.
 ```

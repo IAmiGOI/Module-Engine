@@ -136,6 +136,12 @@ export function createDecisionEvents({
             // Новые Petition/Телеграммы будят Director и вне цепочки хода (ответ Советнику, отчёт).
             host.events.subscribe('decision.counsellor.finished', () => {
                 cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
+                // Ответы на вопросы Бога закрыли Декларацию — God строит мир по ним (повод — сама Декларация).
+                cycle.maybeRunGod?.().catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }));
+            }),
+            // Вопрос Бога — Советнику сразу: он передаёт его пользователю, а не ждёт следующего разбора.
+            host.events.subscribe('decision.god.question', () => {
+                cycle.relayGodQuestions?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Counsellor: ${error?.message ?? error}` }));
             }),
             // Новая Молитва от Советника — повод для God, даже если ход не шёл.
             host.events.subscribe('decision.counsellor.prayer', () => {

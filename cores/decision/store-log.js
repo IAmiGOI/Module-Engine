@@ -19,6 +19,16 @@ export function createLogStore({ enqueue, call, namespace }) {
         });
     }
 
+    /** Цикл по id: заменить, если уже есть, иначе дописать — так долгий цикл сохраняется по ходу работы. */
+    function upsertCycle(cycle) {
+        return enqueue(async () => {
+            const index = log.findIndex(item => item?.id === cycle?.id);
+            log = index >= 0 ? [...log.slice(0, index), cycle, ...log.slice(index + 1)] : [...log, cycle];
+            await call('storage.chatMemory.set', { namespace, key: 'log', value: log });
+            return cycle;
+        });
+    }
+
     function saveLog(next, { archived = [], archiveLimitTokens = 0 } = {}) {
         return enqueue(async () => {
             log = sanitizeCycles(next);
@@ -38,6 +48,7 @@ export function createLogStore({ enqueue, call, namespace }) {
         setLog: value => { log = value; },
         setArchive: value => { archive = value; },
         appendCycle,
+        upsertCycle,
         saveLog,
         logTokens: () => totalLogTokens(log),
         load: data => {

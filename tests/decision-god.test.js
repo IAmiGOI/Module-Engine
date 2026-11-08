@@ -29,14 +29,14 @@ const mana = () => normalizeScaleSystem({
 });
 
 /** Фейковое ядро: память чата в памяти, модель — очередь готовых ответов. */
-function harness({ answers = [], creation = null, prayers = [], declaration = null, questions = [] } = {}) {
+function harness({ answers = [], creation = null, prayers = [], declaration = null, questions = [], studied = true } = {}) {
     const memory = new Map();
     if (creation) memory.set('creation', creation);
     const papers = {
         prayers: prayers.map(item => ({ ...item })),
         telegrams: [], awaitingDecree: null, petitions: [], counsellor: {},
         director: { lastRunAt: 0, lastReason: '' },
-        god: { questions: questions.map(item => ({ ...item })), declaration: declaration ?? null, lastRunAt: 0, lastReason: '' },
+        god: { questions: questions.map(item => ({ ...item })), declaration: declaration ?? null, lastRunAt: 0, lastReason: '', studiedAt: studied ? 1 : 0 },
     };
     const cycles = [];
     const events = [];
@@ -166,6 +166,16 @@ test('Creation never wakes God on an ordinary turn without a Prayer: the build b
     // Со Страницей, которая зовёт `allowBuild: true`, первый запуск строится.
     const reason = await god.reasonNow({ allowBuild: true });
     assert.equal(reason.kind, 'first');
+});
+
+test('a new world is studied first: God asks before it shapes, and an open question holds the build', async () => {
+    const fresh = harness({ studied: false });
+    assert.equal((await fresh.god.reasonNow({ allowBuild: true })).kind, 'study');
+    const waiting = harness({ questions: [{ id: 'q1', question: 'Where does the story start?', answer: '' }] });
+    assert.equal(await waiting.god.reasonNow({ allowBuild: true }), null, 'no build while the user has not answered');
+    const answered = harness({ declaration: { answers: [{ id: 'q1', question: 'Where does the story start?', answer: 'Before arc 1.' }] } });
+    const reason = await answered.god.reasonNow({ allowBuild: true });
+    assert.equal(reason.kind, 'declaration');
 });
 
 test('a full Creation and no Prayer mean no reason: God stays silent', async () => {

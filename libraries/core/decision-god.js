@@ -2,7 +2,7 @@ import { isComplete, missingSections, renderCreation, allSections } from './deci
 import { findScaleSystem, renderScaleSystem, discoveriesAfter, normalizeScaleSystems } from './decision-scales.js';
 import { withoutCharacterEntries } from './decision-lorebook.js';
 import {
-    GOD_SYSTEM, GOD_BUILD_TASK, GOD_THINK_BUILD, GOD_PRAYER_TASK, GOD_THINK_PRAYER, GOD_DECLARATION_TASK,
+    GOD_SYSTEM, GOD_BUILD_TASK, GOD_STUDY_TASK, GOD_THINK_BUILD, GOD_PRAYER_TASK, GOD_THINK_PRAYER, GOD_DECLARATION_TASK,
     GOD_MATERIAL_HEADER, NO_MATERIAL, GOD_SCALES_HEADER, GOD_PRAYERS_HEADER, GOD_RP_HEADER,
     GOD_QUESTIONS_HEADER, NO_QUESTIONS, fillPrompt,
 } from './decision-prompts.js';
@@ -65,14 +65,18 @@ export function queuedPrayers(prayers) {
  * построение (Creation нет или неполно), Молитвы, Декларация.
  * @returns {{ wake: object, kind: string, prayers: object[], declaration: object|null } | null}
  */
-export function godReason({ creation = null, prayers = [], declaration = null, questions = [], allowBuild = true } = {}) {
+export function godReason({ creation = null, prayers = [], declaration = null, questions = [], allowBuild = true, studied = true } = {}) {
     const open = queuedPrayers(prayers);
     const complete = isComplete(creation);
     const hasCreation = allSections(creation).some(section => text(section.text)) || (creation?.scales ?? []).length;
     const answers = renderableAnswers(declaration);
+    // Вопрос без ответа держит построение: мир строится по ответам пользователя, а не вперёд них.
+    const waiting = (Array.isArray(questions) ? questions : []).some(item => !text(item?.answer));
     const reasons = [];
+    // Сначала вопросы, потом мир: первый запуск только изучает материал и спрашивает Советника.
+    if (!hasCreation && !studied && allowBuild && !answers.length) reasons.push({ type: 'study' });
     // Достройка — задача на открытии чата, а не на каждом ходу: иначе God будился бы каждый ход без конца.
-    if (!complete && allowBuild) reasons.push({ type: hasCreation ? 'build' : 'first' });
+    else if (!complete && allowBuild && !waiting && !answers.length) reasons.push({ type: hasCreation ? 'build' : 'first' });
     if (open.length && complete) reasons.push({ type: 'prayer' });
     if (answers.length) reasons.push({ type: 'declaration' });
     if (!reasons.length) return null;
@@ -86,10 +90,12 @@ export function godReason({ creation = null, prayers = [], declaration = null, q
         primary.type === 'prayer' ? `${open.length} prayer(s): ${unique(open.map(item => text(item.text).slice(0, 60))).slice(0, 3).join('; ')}` : '',
         primary.type === 'build' ? `the Creation is not complete: ${missingSections(creation).join('; ')}` : '',
         primary.type === 'first' ? 'the Creation does not exist yet' : '',
+        primary.type === 'study' ? 'God studies the material and asks before shaping the world' : '',
         Array.isArray(questions) && questions.length ? `${questions.length} question(s) wait for the Counsellor` : '',
     ].filter(Boolean).join('; ');
     const labels = {
         first: 'God shapes the world for the first time',
+        study: 'God studies the world and asks',
         build: 'God finishes shaping the world',
         prayer: 'Prayers reach God',
         declaration: 'The Counsellor returns the Declaration',
@@ -144,6 +150,19 @@ export function buildGodContext({
         if (written) messages.push({ role: 'system', content: written });
         if (rpTime) messages.push({ role: 'system', content: `${GOD_RP_HEADER} ${rpTime}` });
         messages.push({ role: 'user', content: `${fillPrompt(GOD_PRAYER_TASK, { prayers: renderPrayers(prayers), scales: renderSystemsForPrayers(systems) })}\n\n${GOD_THINK_PRAYER}` });
+        return { messages, prompt: messages.map(message => message.content).join('\n\n'), kind };
+    }
+    if (kind === 'study') {
+        messages.push({ role: 'system', content: `${GOD_MATERIAL_HEADER}\n\n${text(material) || NO_MATERIAL}` });
+        if (rpTime) messages.push({ role: 'system', content: `${GOD_RP_HEADER} ${rpTime}` });
+        messages.push({ role: 'user', content: fillPrompt(GOD_STUDY_TASK, { material: text(material) || NO_MATERIAL, max_questions: Number(maxQuestions) || 5 }) });
+        return { messages, prompt: messages.map(message => message.content).join('\n\n'), kind };
+    }
+    // Декларация до мира — построение с ответами пользователя как законом.
+    if (kind === 'declaration' && !renderCreation(state)) {
+        messages.push({ role: 'system', content: `${GOD_MATERIAL_HEADER}\n\n${text(material) || NO_MATERIAL}` });
+        if (rpTime) messages.push({ role: 'system', content: `${GOD_RP_HEADER} ${rpTime}` });
+        messages.push({ role: 'user', content: `${fillPrompt(GOD_DECLARATION_TASK, { declaration: renderDeclaration(declaration) })}\n\n${fillPrompt(GOD_BUILD_TASK, { material: 'the material is above', max_questions: 0 })}\n\n${GOD_THINK_BUILD}` });
         return { messages, prompt: messages.map(message => message.content).join('\n\n'), kind };
     }
     if (kind === 'declaration') {

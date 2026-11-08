@@ -109,12 +109,24 @@ One or two sentences per point, then the call at once.
 
 Write no story, no scene and no character. Write law a weaker model can apply without inventing. Decide, then call.`;
 
+export const GOD_STUDY_TASK = `STUDY THE WORLD BEFORE YOU SHAPE IT. Below is everything this world gives. Do not write the Creation yet: you build it once the user's answers return.
+
+{{material}}
+
+Find what you cannot build without the user, and ask it with ask — at most {{max_questions}} questions, each concrete, each with what you would choose if the user does not mind:
+- **The point of the timeline** — where this story starts against the canon or the material: what has already happened and what has not. Always ask, unless the material names the moment exactly.
+- **The user in the world** — who the user's character is here, and whether they are in this world at all at that moment. Always ask, unless the user's persona states it.
+- **What the whole world turns on and the material leaves open** — or states two ways.
+Then call await. If the material truly answers all of it, call await without asking: the build starts at once.`;
+
 export const GOD_PRAYER_TASK = `PRAYERS have reached you. Each says how a system of the world was used: what was done, and what came of it.
 
 {{prayers}}
 
 THE SYSTEMS THEY TOUCH:
 {{scales}}
+
+A Prayer from the Counsellor may carry the user's will about the world itself — when the story starts, who is in it, what the world is. That is not a use of a system: edit the section files it changes, and the user's word wins over your own decisions.
 
 Read each Prayer against its system. Where a rule covers the use, say so. Where the use went around the letter of a rule, that is a discovery: add it as a line under "## Discoveries" of that system's file with edit — "[the rule it used] what the world now holds to". Where the Prayer shows that a rule no longer holds, edit that rule's lines in the same file. Then call await.`;
 
@@ -132,7 +144,7 @@ export const GOD_DECLARATION_TASK = `DECLARATION — the Counsellor has closed y
 
 {{declaration}}
 
-Write into the Creation what these answers settle: edit the section files they change and the system files they change. Where an answer contradicts what you wrote, the answer wins; where it leaves something open, leave it open rather than invent. Then call await. Do not ask new questions.`;
+Write into the Creation what these answers settle: edit the section files they change and the system files they change. If the Creation is not written yet, build it now with these answers as law — every section and every system, as the build asks. Where an answer contradicts what you wrote, the answer wins; where it leaves something open, leave it open rather than invent. Then call await. Do not ask new questions.`;
 
 export const GOD_MATERIAL_HEADER = 'THE MATERIAL THIS WORLD GIVES:';
 export const NO_MATERIAL = 'The material is empty: no lorebook and no card describes this world. Build what you can, and say in each section that it rests on your decision alone.';

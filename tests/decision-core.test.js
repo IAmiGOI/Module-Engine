@@ -226,7 +226,7 @@ test('a message to the Counsellor is logged as a message and wakes a separate cy
     assert.equal(events.some(event => event.name === 'decision.tool.called'), true, 'tool calls stream live');
 });
 
-test('a message during a turn waits in the queue and does not call the model until the turn ends', async () => {
+test('a message during a turn is answered at once: the Counsellor has its own queue and does not wait for the turn', async () => {
     let release;
     let modelCalls = 0;
     const gate = new Promise(resolve => { release = resolve; });
@@ -242,15 +242,12 @@ test('a message during a turn waits in the queue and does not call the model unt
     });
     const turn = pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });
     while (!modelCalls) await flush();
-    await core.message({ text: 'Wait until the turn is done.' });
-    await flush();
-    assert.equal(modelCalls, 1, 'the message did not interrupt the turn');
-    assert.equal(core.waiting().queued, 1);
+    await core.message({ text: 'Answer me while the turn runs.' });
+    for (let index = 0; index < 20 && modelCalls < 2; index += 1) await flush();
+    assert.ok(modelCalls >= 2, 'the Counsellor ran while the turn was still waiting');
     release();
     await turn;
     await flush();
-    await flush();
-    assert.ok(modelCalls >= 2, 'the queued message ran after the turn');
     assert.ok(core.log().some(cycle => cycle.event === 'counsellor'));
 });
 

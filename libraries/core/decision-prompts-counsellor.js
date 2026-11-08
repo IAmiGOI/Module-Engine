@@ -49,6 +49,8 @@ export const COUNSELLOR_MESSAGE = `The user wrote to you outside the story:
 
 Answer with the reply tool. If the wish belongs to the story, put it into a Petition for the Director; if it touches the world's rules, put it into a Prayer for God. Then call await.`;
 
+export const COUNSELLOR_GOD = `God asks you about the world before it can shape it: the questions are above, under QUESTIONS FROM GOD. Put them to the user now with reply — one message in the user's language, every question numbered, with God's own suggestion where it gives one, and one line saying the world is built once they answer. Do not answer for the user. Then call await. When the user answers, pass each answer with god_answer under the question's id.`;
+
 export const LEDGER_HEADER = 'LEDGER — the Resolver\'s rows since your last review:';
 export const DECREE_HEADER = 'DECREES — how each character is played, and the level they hold:';
 export const QUEUES_HEADER = 'QUEUES — what already waits for the Director and for God:';

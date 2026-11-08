@@ -11,6 +11,9 @@ import { createFileLayer } from './files-layer.js';
 import { createCreationProvider } from './files-creation.js';
 import { createFileHandlers } from './handlers-files.js';
 import { createRetryRunner } from './retry.js';
+import { renderCreation } from '../../libraries/core/decision-creation.js';
+
+const INTERRUPTED = 'Interrupted: the page was reloaded before this run finished.';
 
 /**
  * God (фаза 5): строит Creation из лорбука и мировых частей карт, потом
@@ -92,6 +95,8 @@ export function createGod({
             declaration: papers?.god?.declaration ?? null,
             questions: papers?.god?.questions ?? [],
             allowBuild,
+            // Изучал ли God материал и спрашивал ли: старый мир без этой отметки считается изученным.
+            studied: Boolean(papers?.god?.studiedAt) || Boolean(papers?.god?.lastRunAt) || (papers?.god?.questions ?? []).length > 0,
         });
     }
 
@@ -125,7 +130,8 @@ export function createGod({
         }
         const startedAt = now();
         const state = await creationStore.load();
-        const material = info.kind === 'prayer' || info.kind === 'declaration' ? '' : await loadMaterial();
+        const bare = !renderCreation(state);
+        const material = info.kind === 'prayer' || (info.kind === 'declaration' && !bare) ? '' : await loadMaterial();
         const context = buildGodContext({
             material, creation: state, kind: info.kind, prayers: info.prayers,
             declaration: info.declaration, rpTime: clockLabel(store.clock().minutes),
@@ -140,6 +146,25 @@ export function createGod({
             ? capture(`${runId}:`, { onThinking: value => publishEvent('decision.cycle.thinking', { runId, text: value }) })
             : null;
         live.started({ runId, event: info.kind === 'prayer' ? 'god_prayer' : (info.kind === 'declaration' ? 'god_declaration' : 'god_build'), wake: info.wake, at: startedAt });
+        const event = info.kind === 'prayer' ? 'god_prayer' : (info.kind === 'declaration' ? 'god_declaration' : (info.kind === 'study' ? 'god_study' : 'god_build'));
+        // Цикл пишется в журнал сразу и после каждого вызова: перезагрузка посреди долгого построения не стирает историю.
+        const cycleId = `cyc_${startedAt.toString(36)}_${runId.slice(-6)}`;
+        const calls = [];
+        const record = ({ endedAt = null, warnings = [INTERRUPTED], toolCalls = calls } = {}) => createCycleRecord({
+            id: cycleId, runId, event, messages: context.messages.slice(0), toolCalls,
+            thinking: captured?.value ?? '', warnings, usage: captured?.usage ?? null,
+            at: startedAt, endedAt, durationMs: endedAt ? endedAt - startedAt : null,
+            wake: { ...info.wake, detail: [info.wake.detail, handlerState.written.length ? `Sections: ${handlerState.written.join(', ')}` : '', handlerState.systems.length ? `Systems: ${handlerState.systems.join(', ')}` : ''].filter(Boolean).join('; ') },
+            turn: currentTurn(), clockMinutes: store.clock().minutes, workerId: worker.id,
+        });
+        const savePartial = () => (typeof store.upsertCycle === 'function' ? store.upsertCycle(record()).catch(() => null) : null);
+        await savePartial();
+        const handlers = Object.fromEntries(Object.entries(godHandlers(handlerState)).map(([name, handler]) => [name, async (...args) => {
+            const value = await handler(...args);
+            calls.push({ name, args: args[0] ?? {}, comment: String(args[0]?.comment ?? ''), result: value, at: now() });
+            await savePartial();
+            return value;
+        }]));
         let result;
         try {
             result = await runDecisionCycle({
@@ -147,7 +172,7 @@ export function createGod({
                 tools: buildGodToolList(),
                 generate: generateFor({ settings, worker, runId, startedAt }),
                 // Мир — файлами Creation/… (view / edit / create, часть 21); ask — вопрос Советнику.
-                handlers: godHandlers(handlerState),
+                handlers,
                 callTool,
                 maxSteps: Math.max(1, Number(settings.god?.maxSteps) || 20),
                 implicitAwait: true,
@@ -155,19 +180,15 @@ export function createGod({
                 now,
                 ...live.hooks({ runId, thinking: () => captured?.value ?? '' }),
             });
+        } catch (error) {
+            // Сбой посреди построения — тоже запись: что успело, остаётся видно, и ошибка рядом.
+            result = { type: 'error', reason: error?.message ?? String(error), trace: calls, warnings: [`God stopped: ${error?.message ?? error}`] };
         } finally {
             captured?.stop();
         }
         const endedAt = now();
-        const event = info.kind === 'prayer' ? 'god_prayer' : (info.kind === 'declaration' ? 'god_declaration' : 'god_build');
-        const cycle = createCycleRecord({
-            runId, event, messages: context.messages.slice(0), toolCalls: result.trace,
-            thinking: captured?.value ?? '', warnings: result.warnings ?? [], usage: captured?.usage ?? null,
-            at: startedAt, endedAt, durationMs: endedAt - startedAt,
-            wake: { ...info.wake, detail: [info.wake.detail, handlerState.written.length ? `Sections: ${handlerState.written.join(', ')}` : '', handlerState.systems.length ? `Systems: ${handlerState.systems.join(', ')}` : ''].filter(Boolean).join('; ') },
-            turn: currentTurn(), clockMinutes: store.clock().minutes, workerId: worker.id,
-        });
-        await store.appendCycle(cycle).catch(() => null);
+        const cycle = record({ endedAt, warnings: result.warnings ?? [], toolCalls: result.trace ?? calls });
+        await (typeof store.upsertCycle === 'function' ? store.upsertCycle(cycle) : store.appendCycle(cycle)).catch(() => null);
         live.finished({ cycle });
         const failed = result.type === 'error';
         if (!failed) {
@@ -175,10 +196,10 @@ export function createGod({
             const ids = (info.prayers ?? []).map(item => item.id).filter(Boolean);
             if (ids.length) await store.markPrayersRead?.(now(), ids).catch(() => null);
             if (info.kind === 'declaration') await store.consumeDeclaration?.(now()).catch(() => null);
-            await store.saveGod?.({ lastRunAt: now(), lastReason: info.wake.detail }).catch(() => null);
+            await store.saveGod?.({ lastRunAt: now(), lastReason: info.wake.detail, ...(info.kind === 'study' ? { studiedAt: now() } : {}) }).catch(() => null);
         }
         publishEvent('decision.god.finished', { runId, kind: info.kind, sections: handlerState.written.length, systems: handlerState.systems.length });
-        return { ok: !failed, kind: info.kind, type: result.type, written: handlerState.written, systems: handlerState.systems, cycle };
+        return { ok: !failed, kind: info.kind, type: result.type, written: handlerState.written, systems: handlerState.systems, asked: Number(handlerState.questionsAsked) || 0, cycle };
     }
 
     function track(job) {
@@ -195,7 +216,10 @@ export function createGod({
         const info = await reasonNow({ allowBuild }).catch(() => null);
         if (!info) return { skipped: true };
         const runId = `god_${now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-        return track(enqueue(() => run({ runId, reason: info })));
+        const done = await track(enqueue(() => run({ runId, reason: info })));
+        // Материал ответил на всё и вопросов нет — мир строится сразу, не дожидаясь следующего открытия чата.
+        if (done?.ok && done.kind === 'study' && !done.asked) return maybeRun({ allowBuild: true });
+        return done;
     }
 
     return {

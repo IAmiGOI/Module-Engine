@@ -54,21 +54,26 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const context = createCycleContext({ call, store, banks, creation, capture, getGameSettings, getSettings, publishEvent });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
-    // Советник (часть 18): своя очередь в общем фоне, своё подключение, свой контекст.
-    // Через очередь пробуждений: сообщение пользователю не вклинивается в ход.
+    // Своя последовательная очередь роли: задания идут по одному, но не ждут чужих фоновых циклов.
+    const ownQueue = () => {
+        let tail = Promise.resolve();
+        return job => { const next = tail.then(job, job); tail = next.catch(() => {}); return next; };
+    };
+    // Советник (часть 18): своя очередь, своё подключение, свой контекст. Ответ пользователю не ждёт
+    // ни бутстрапа, ни Бога, ни директора — у каждого своё подключение.
     const counsellor = createCounsellor({
         call, callTool, store, banks, getSettings, getWorkers, publishEvent, capture, now,
-        enqueue: job => Promise.resolve(wakeQueue.schedule(job)),
+        enqueue: ownQueue(),
     });
     // Director (часть 19): полу-слепой, по отчётам; Телеграмма держит следующий ход до Указа.
     const director = createDirector({
         call, callTool, store, banks, getSettings, getWorkers, publishEvent, capture, now,
         enqueue: job => Promise.resolve(wakeQueue.schedule(job)),
     });
-    // God (фаза 5): строит Creation и отвечает на Молитвы — в той же очереди, что Director.
+    // God (фаза 5): строит Creation и отвечает на Молитвы — своя очередь: долгое построение не держит Советника.
     const god = createGod({
         call, callTool, store, getSettings, getWorkers, publishEvent, capture, creation, now,
-        enqueue: job => Promise.resolve(wakeQueue.schedule(job)),
+        enqueue: ownQueue(),
     });
     if (banks) god.setLayout({ marksForLorebook: () => banks.marksForLorebook?.() ?? null });
 
@@ -457,6 +462,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     return {
         run, runPassive: jobs.runPassive, runDraft: jobs.runDraft, runBootstrap: jobs.runBootstrap, logSettings, logRetry,
         onResearcherReport: jobs.onResearcherReport, sendMessage, judgeForcedMemory,
+        relayGodQuestions: () => counsellor.relayGodQuestions(),
         // Советник (часть 18): будится после хода и по концу RP-дня.
         maybeRunCounsellor: counsellor.maybeRun,
         runCounsellor: counsellor.run,

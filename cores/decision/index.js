@@ -146,7 +146,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             publishEvent('decision.reloaded', { at: Date.now() });
             return { runs: store.runs() };
         }
-        bootstrap.maybeStart().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }));
+        if (settings.bootstrap?.legacy === true) bootstrap.maybeStart().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }));
         // Новый чат: банки строятся сразу, параллельно bootstrap, а не с первым ходом.
         // Есть готовые банки прошлого bootstrap для этих книг — сначала вопрос «взять их?», потом сборка недостающих.
         bootstrap.isNewChat().then(async fresh => {
@@ -325,7 +325,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         if (timedOutRuns.has(runId)) throw new Error(timedOutRuns.get(runId)); // повтор после таймаута — сразу отказ
         const coldStart = banks.ensureColdStart().catch(error => publishEvent('decision.bank.failed', { runId, message: error?.message ?? String(error) }));
         await Promise.all([banks.hasAnyText() ? null : coldStart, // банки ждём только в чате без них; пересборка — в фоне, со старым текстом
-            bootstrap.waitFirstTurn().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }))]);
+            settings.bootstrap?.legacy === true ? bootstrap.waitFirstTurn().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) })) : null]);
         // Телеграмма (часть 19): следующий ход ждёт нового Указа не дольше настройки;
         // не дождался — ход идёт по старому Указу, предупреждение пишет сам Director.
         if (store.papers()?.awaitingDecree) {

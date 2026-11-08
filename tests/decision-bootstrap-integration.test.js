@@ -46,10 +46,10 @@ async function build({ bootstrapReply = null } = {}) {
             ],
         };
     });
-    settings.set(memoryKey('core.decision', 'settings'), { decider: { workerId: 'director' }, bootstrap: { maxQuestions: 3, maxSteps: 10, timeoutMs: 1000 } });
+    settings.set(memoryKey('core.decision', 'settings'), { decider: { workerId: 'director' }, bootstrap: { legacy: true, maxQuestions: 3, maxSteps: 10, timeoutMs: 1000 } });
     const core = createDecisionCore(engine.registerCaller('core.decision', 'cores', { tier: 'official' }), { retryDelayMs: 0 });
     await core.load();
-    await core.configure({ decider: { workerId: 'director' }, bootstrap: { maxQuestions: 3, maxSteps: 10, timeoutMs: 1000 } });
+    await core.configure({ decider: { workerId: 'director' }, bootstrap: { legacy: true, maxQuestions: 3, maxSteps: 10, timeoutMs: 1000 } });
     return { core, calls, memory, messages, engine };
 }
 

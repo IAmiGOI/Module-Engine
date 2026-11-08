@@ -257,6 +257,8 @@ export function clampDecisionSettings(values = {}) {
             maxQuestions: Math.round(number(bootstrap.maxQuestions, 1, 20, DEFAULT_BOOTSTRAP.maxQuestions)),
             maxSteps: Math.round(number(bootstrap.maxSteps, 1, 200, DEFAULT_BOOTSTRAP.maxSteps)),
             timeoutMs: Math.round(number(bootstrap.timeoutMs, 1000, 3600000, DEFAULT_BOOTSTRAP.timeoutMs)),
+            // Старый бутстрап резолвера (до пяти ролей): таймлайн и место пользователя теперь спрашивает God. Только явно.
+            legacy: bootstrap.legacy === true,
         },
         counsellor: {
             workerId: text(counsellor.workerId, DEFAULT_COUNSELLOR.workerId).trim(),

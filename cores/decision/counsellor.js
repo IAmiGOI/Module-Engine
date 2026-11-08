@@ -6,7 +6,7 @@ import { deciderRequestParams, counsellorWorkerId } from '../../libraries/core/d
 import { ledgerLines } from '../../libraries/core/decision-ledger.js';
 import { libraryLevelsSection } from '../../libraries/core/decision-library.js';
 import {
-    COUNSELLOR_SYSTEM, COUNSELLOR_REVIEW, COUNSELLOR_DAY, COUNSELLOR_MESSAGE,
+    COUNSELLOR_SYSTEM, COUNSELLOR_REVIEW, COUNSELLOR_DAY, COUNSELLOR_MESSAGE, COUNSELLOR_GOD,
     LEDGER_HEADER, DECREE_HEADER, QUEUES_HEADER, COUNSELLOR_CHAT_HEADER, RP_TIME_HEADER,
     NO_NEW_LEDGER, NO_DECREE_YET, GOD_ASKS_HEADER, fillPrompt,
 } from '../../libraries/core/decision-prompts.js';
@@ -40,6 +40,9 @@ function clockLabel(minutes) {
     const total = Math.max(0, Math.round(Number(minutes) || 0));
     return `Day ${dayOf(total) + 1}, ${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
+
+/** Разговор с пользователем (сообщение или вопросы Бога) — без Ведомости и без отметки разбора. */
+const talk = mode => mode === 'message' || mode === 'god';
 
 export function createCounsellor({ call, callTool, store, banks = null, getSettings, getWorkers, publishEvent, capture = null, enqueue = job => job(), now = () => Date.now() }) {
     const live = createCycleLive({ publishEvent, getTurn: () => currentTurn(), getClock: () => store.clock().minutes });
@@ -75,14 +78,14 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
 
     /** Контекст Советника: Ведомость с прошлого разбора, уровни, Указы, очереди, RP-время. Истории чата нет. */
     async function contextFor({ mode, text: message = '' }) {
-        const rows = mode === 'message' ? [] : (typeof store.unreviewedLedger === 'function' ? store.unreviewedLedger() : []);
+        const rows = talk(mode) ? [] : (typeof store.unreviewedLedger === 'function' ? store.unreviewedLedger() : []);
         const body = ledgerLines(rows);
         // Два strong подряд считаются по всей Ведомости: прошлую строку Советник мог уже разобрать в прошлый раз.
-        const streaks = mode === 'message' ? [] : strongStreaks(typeof store.ledger === 'function' ? store.ledger() : rows);
+        const streaks = talk(mode) ? [] : strongStreaks(typeof store.ledger === 'function' ? store.ledger() : rows);
         const openQuestions = openGodQuestions(typeof store.god === 'function' ? (store.god()?.questions ?? []) : []);
         const messages = [{ role: 'system', content: promptText(COUNSELLOR_SYSTEM) }];
         // Разговор с пользователем не тащит Ведомость: у него свой короткий контекст (c4).
-        if (mode !== 'message') {
+        if (!talk(mode)) {
             messages.push({ role: 'system', content: `${LEDGER_HEADER}\n\n${body || NO_NEW_LEDGER}${streaks.length ? `\n\nStrong conflict two turns in a row: ${streaks.join(', ')}.` : ''}` });
         }
         // Вопросы Бога — в любом разборе: ответить можно, пока не закрыты все.
@@ -93,7 +96,7 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
             { role: 'system', content: `${DECREE_HEADER}\n\n${libraryLevelsSection(store.library()) || 'CHARACTER LIBRARY: no levels yet.'}\n\n${await decreeText()}` },
             { role: 'system', content: `${RP_TIME_HEADER} ${clockLabel(store.clock().minutes)}` },
         );
-        if (mode === 'message') {
+        if (talk(mode)) {
             messages.push(
                 { role: 'system', content: `${QUEUES_HEADER}\n\n${renderQueues({ petitions: store.petitions?.() ?? [], prayers: store.prayers?.() ?? [] })}` },
                 { role: 'system', content: `${COUNSELLOR_CHAT_HEADER}\n\n${renderConversation(store.conversation?.() ?? [])}` },
@@ -101,8 +104,10 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         }
         const task = mode === 'day'
             ? COUNSELLOR_DAY
-            : mode === 'message'
-                ? fillPrompt(COUNSELLOR_MESSAGE, { message })
+            : mode === 'god'
+                ? COUNSELLOR_GOD
+                : mode === 'message'
+                    ? fillPrompt(COUNSELLOR_MESSAGE, { message })
                 : fillPrompt(COUNSELLOR_REVIEW, { turns: Math.max(1, currentTurn() - (store.counsellor?.().lastReviewTurn ?? 0)) });
         messages.push({ role: 'user', content: task });
         return messages;
@@ -161,7 +166,7 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         const turn = currentTurn();
         const startedAt = now();
         const event = mode === 'day' ? 'counsellor_day' : 'counsellor';
-        const labels = { review: 'The Counsellor read the Ledger', day: 'The Counsellor closes the RP day', message: 'The Counsellor answers the user' };
+        const labels = { review: 'The Counsellor read the Ledger', day: 'The Counsellor closes the RP day', message: 'The Counsellor answers the user', god: 'The Counsellor puts God\'s questions to the user' };
         const state = { petitioned: new Set(), decided: false, nothing: '', reply: '', prayers: 0, day: mode === 'day' };
         let worker;
         try { worker = workerFor(settings); } catch (error) {
@@ -221,10 +226,10 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
             }
         }
 
-        if (mode !== 'message' && state.decided && typeof store.markLedgerReviewed === 'function') {
+        if (!talk(mode) && state.decided && typeof store.markLedgerReviewed === 'function') {
             await store.markLedgerReviewed(now()).catch(() => null);
         }
-        if (mode !== 'message' && typeof store.saveCounsellor === 'function') {
+        if (!talk(mode) && typeof store.saveCounsellor === 'function') {
             // Сбой модели в обычном разборе не съедает слот: следующий ход попробует снова.
             const reviewed = mode === 'day' || result.type !== 'error';
             await store.saveCounsellor({
@@ -297,7 +302,18 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         return { ok: true, record };
     }
 
-    return { run, maybeRun, sendMessage, currentTurn, workerFor };
+    /** Вопросы Бога — пользователю сразу, одним сообщением; несколько вопросов подряд — один запуск. */
+    let relaying = null;
+    function relayGodQuestions() {
+        if (relaying) return relaying;
+        const runId = `counsellor_god_${now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        relaying = Promise.resolve().then(() => enqueue(() => run({ runId, mode: 'god' })))
+            .catch(error => live.failed({ runId, message: error?.message ?? String(error) }))
+            .finally(() => { relaying = null; });
+        return relaying;
+    }
+
+    return { run, maybeRun, sendMessage, relayGodQuestions, currentTurn, workerFor };
 }
 
 /** Инструмент, который заканчивает разбор: «важного нет». */
