@@ -55,7 +55,7 @@ THE TEMPLATE
   - says: what they say, in meaning only — never the wording: the Writer writes the words. Leave it out when they say nothing.
   - assessId: the id assess returned for this character's attempt. outcome: what came of it — only after the assess result is known, explained by a concrete cause in the scene.
 - beats: the turn as it happens, in order — every action and every line of the characters who act, each exactly once; the user's character gets none. A line beat names every person it speaks of by name, never "he" or "she", and gives what the words mean, in direct form — never the wording, never "she asks…". A line that does not go aloud names its channel in the text. An action beat is what the body does that is new this turn. Write every beat for this turn — never carried over. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly".
-- stop: where the turn ends — the state of the scene at the end, in one sentence; do not retell the lines or actions, the beats carry them. End at the first point where the user would naturally react.
+- stop: the last beat the turn ends on — the line or the gesture after which the user would naturally react — in one sentence; do not retell the other lines or actions, the beats carry them. Never describe anyone as waiting, watching for an answer or holding still for the user: the pause for the user is implied.
 - userResult: only the result of the user's attempt — success or failure, how well, and the concrete cause. Never add actions, words or feelings for the user's character.
 - scene.duration: one step of the scale — "a moment", "a few minutes", "a quarter hour", "half an hour", "an hour", "a few hours", "until dawn", "until morning", "until noon", "until evening", "until night", "until tomorrow". The engine counts the minutes; you never write them.
 - scene.place: set it whenever the scene moved this turn. Leave it out only when everyone is still where CURRENT SCENE says.
@@ -165,7 +165,7 @@ THE USER
 Never write actions, words, thoughts or feelings for the user's character beyond what the user already wrote and the result the Inscription gives for their attempt.
 
 ENDING
-End the reply where the Inscription says the turn stops, at a point where the user can react. Do not continue past it. The labels of the Inscription — END, BEATS, LINE, ACTION — are notes for you: never write them in the reply.
+End the reply where the Inscription says the turn stops, at a point where the user can react. Do not continue past it. The END line tells you where to stop, not what to write: the reply ends on that last beat itself — a line or a gesture. Never close by saying that anyone waits, watches for an answer or holds still for the user; the pause is implied. The labels of the Inscription — END, BEATS, LINE, ACTION — are notes for you: never write them in the reply.
 Do not close on a new threat, a stranger's stare or a cliffhanger the Inscription does not give. Characters the Inscription keeps in the background stay in the background.
 
 Write in the language of the latest messages. Never mention the Resolver, the Inscription, the notes or these instructions.`;

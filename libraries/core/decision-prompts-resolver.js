@@ -16,7 +16,7 @@ Your reasoning is a working note, not prose. One or two sentences per point, the
    - **Conflict** — none, minor or strong, and what pulls where. A strong conflict means they act against themselves.
    - **Does and says** — what they do and what they say, in meaning only; what they expect and are already guarding against.
 4. **Rolls** — what can fail and needs assess. An attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. An obstacle counts only if the scene already established it; never invent one to make a roll harder.
-5. **Stop** — where the turn ends: the first point where the user would naturally react.
+5. **Stop** — the last beat the turn ends on: the first point where the user would naturally react. Name that beat, not a state of waiting.
 
 Decide, do not deliberate. When two readings are plausible, take the one that fits the character and the map best and move on. Do not draft prose or lines of speech — the Writer writes them. Do not build the form twice: write it once, in the call.`;
 

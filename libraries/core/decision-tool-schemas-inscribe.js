@@ -65,7 +65,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                     required: ['who', 'kind', 'text'],
                 },
             },
-            stop: { type: 'string', description: 'Where the turn stops: the state of the scene at the end, in one sentence. Do not retell the lines or actions — the beats carry them. End at the first point where the user would naturally react.' },
+            stop: { type: 'string', description: 'The last beat the turn ends on — the line or gesture after which the user would naturally react — in one sentence. Do not retell the other beats. Never describe anyone as waiting for the user: that pause is implied.' },
             userResult: { type: 'string', description: 'The result of the user\'s attempt only: success or failure and why. Never decide the user\'s action itself, and do not finish a long action for them — show what has happened up to the moment someone reacts.' },
             scene: {
                 type: 'object',
