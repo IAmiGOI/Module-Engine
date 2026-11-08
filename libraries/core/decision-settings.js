@@ -207,6 +207,8 @@ export function clampDecisionSettings(values = {}) {
         ...(source.afterTurn === undefined ? {} : { afterTurn: Boolean(source.afterTurn) }),
         formTimeoutMs: Math.round(number(source.formTimeoutMs, 10, 3600000, DEFAULT_SETTINGS.formTimeoutMs)),
         bankColdStartTimeoutMs: Math.round(number(source.bankColdStartTimeoutMs, 1000, 3600000, DEFAULT_SETTINGS.bankColdStartTimeoutMs)),
+        // Холодный старт банков: «sort» — пять ролей (по умолчанию), «build» — старый сборщик на каждого.
+        bankColdStart: source.bankColdStart === 'build' ? 'build' : 'sort',
         compressedLimitTokens: Math.round(number(source.compressedLimitTokens, 1, 5000000, DEFAULT_SETTINGS.compressedLimitTokens)),
         archiveLimitTokens: Math.round(number(source.archiveLimitTokens, 1, 5000000, DEFAULT_SETTINGS.archiveLimitTokens)),
         windowLimit: Math.round(number(source.windowLimit, 2, 500, DEFAULT_SETTINGS.windowLimit)),
@@ -317,6 +319,16 @@ export function deciderRequestParams(decider = {}, { floor = true } = {}) {
         reasoningEffort: values.reasoningEffort,
         reasoningBudget: values.reasoningBudget,
     };
+}
+
+/** Лимит ответа ролей без своих настроек генерации: Бог переписывает файлы мира, директор — банки и Указы. */
+export const ROLE_MAX_TOKENS = Object.freeze({ god: 32000, director: 16000, counsellor: 8000 });
+
+/** Параметры генерации роли: от резолвера, но лимит ответа свой — иначе размышление съедает весь ответ. */
+export function roleRequestParams(settings = {}, role = 'god') {
+    const params = deciderRequestParams(settings?.decider, { floor: true });
+    const own = Number(settings?.[role]?.maxTokens);
+    return { ...params, maxTokens: Math.max(Number(params.maxTokens) || 0, Number.isFinite(own) && own > 0 ? own : (ROLE_MAX_TOKENS[role] ?? 8000)) };
 }
 
 /** Советник работает на своём подключении, а без него — на подключении резолвера. */

@@ -19,7 +19,7 @@ function inline(tokens) {
         : token.t === 'code' ? h('code', {}, token.v) : token.t === 'var' ? h('span', { class: 'stme-files-var' }, token.v) : token.v));
 }
 
-function previewNode(value) {
+export function previewNode(value) {
     const blocks = markdownBlocks(value);
     if (!blocks.length) return h('div', { class: 'stme-court-empty' }, 'Empty file.');
     return h('div', { class: 'stme-files-preview' }, ...blocks.map(block => {

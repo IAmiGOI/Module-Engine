@@ -11,14 +11,14 @@ import { cycleNode } from './decision-window-rows.js';
 const PAGE = 30;
 const sameRows = (a, b) => a.length === b.length && a.every((row, index) => row === b[index]);
 
-export function createCourtLanes({ entries, mode, turn, now, limits }) {
+export function createCourtLanes({ entries, mode, turn, now, limits, openFile = null }) {
     const cache = new Map();
     const nodeFor = (part, open) => {
-        if (part.running || part.waiting) return cycleNode(part, now, { open: true });
+        if (part.running || part.waiting) return cycleNode(part, now, { open: true, openFile });
         const key = `${part.id}|${part.lane}|${open ? 1 : 0}`;
         const hit = cache.get(key);
         if (hit && sameRows(hit.rows, part.rows) && hit.title === part.title && hit.rejected === part.rejected) return hit.node;
-        const node = cycleNode(part, now, { open });
+        const node = cycleNode(part, now, { open, openFile });
         cache.set(key, { rows: part.rows, title: part.title, rejected: part.rejected, node });
         return node;
     };

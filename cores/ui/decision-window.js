@@ -57,7 +57,9 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const all = computed(() => filtered().cycles);
     const archiveOpen = signal(false);
     const files = createCourtFiles({ call });
-    const court = createCourtLanes({ entries: all, mode, turn: turnFilter, now, limits });
+    // Путь файла в ленте — кнопка: открывает этот файл во вкладке Files.
+    const openFile = path => { setMode('files'); files.openPath(path).catch(() => {}); };
+    const court = createCourtLanes({ entries: all, mode, turn: turnFilter, now, limits, openFile });
     const archiveLimits = Object.fromEntries(LANE_IDS.map(id => [id, signal(PAGE)]));
     const archiveCourt = createCourtLanes({ entries: computed(() => filtered().archive), mode, turn: () => '', now, limits: archiveLimits });
     const turnOptions = computed(() => [{ value: '', label: 'All turns' }, ...turnsIn(all()).reverse().map(turn => ({ value: String(turn), label: `Turn ${turn}` }))]);
@@ -98,6 +100,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
             'decision.cycle.started', 'decision.cycle.step', 'decision.cycle.thinking', 'decision.tool.called',
             'decision.tool.result', 'decision.cycle.form', 'decision.cycle.finished', 'decision.cycle.failed',
             'decision.cycle.ended', 'decision.message.added', 'decision.writer.check', 'decision.form.check',
+            'decision.cycle.writing',
         ];
         for (const name of names) {
             subscriptions.push(host.events.subscribe(name, payload => {

@@ -2,6 +2,7 @@ import { h } from './tree.js';
 import { computed } from './reactive.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
 import { toolLabel, toolFields, entrySummary } from '../../libraries/core/court-lanes.js';
+import { fileCallNode, writingNode, isFileCall } from './court-file-calls.js';
 
 /**
  * Строки ленты окна директора — вынесено из `decision-window.js`, чтобы файл
@@ -34,13 +35,20 @@ function usageLine(row) {
     return `${tokens} tokens (${row.prompt} in / ${row.completion} out, ${row.cached} cached)${seconds}`;
 }
 
+function keyed(node, key) {
+    if (node && typeof node === 'object') node.props = { ...node.props, key };
+    return node;
+}
+
 function fieldsNode(pairs) {
     if (!pairs.length) return null;
     return h('dl', { class: 'stme-dw-fields' }, ...pairs.flatMap(([label, value]) => [h('dt', {}, label), h('dd', {}, String(value))]));
 }
 
-function callNode(row) {
-    const fields = toolFields(row.name, row.args);
+function callNode(row, ctx = {}) {
+    // Файлы — как в редакторе: дифф, превью, путь кнопкой; поля «old → new» для них не нужны.
+    const fileView = isFileCall(row.name) ? fileCallNode(row, ctx) : null;
+    const fields = fileView ? [] : toolFields(row.name, row.args);
     return h('div', { class: `stme-dw-call${row.error ? ' stme-dw-error' : ''}` },
         h('div', { class: 'stme-dw-call-head' },
             h('span', { class: 'stme-dw-call-title' }, toolLabel(row.name, row.args)),
@@ -50,7 +58,7 @@ function callNode(row) {
             ? h('div', { class: 'stme-dw-ask' }, h('b', {}, String(row.args.question)),
                 Array.isArray(row.args.options) && row.args.options.length ? h('div', { class: 'stme-dw-ask-options' }, row.args.options.map(String).join(' · ')) : null)
             : null,
-        fieldsNode(fields),
+        fileView ?? fieldsNode(fields),
         row.error ? h('div', { class: 'stme-dw-error-text' }, row.error) : null,
         row.pending ? null : h('details', { class: 'stme-dw-fold stme-dw-raw' },
             h('summary', {}, 'Raw'),
@@ -79,12 +87,13 @@ function formNode(row) {
         h('div', {}, h('strong', {}, 'Resolution: '), row.resolution),
         h('div', {}, h('strong', {}, "User's result: "), row.userResult));
 }
-export function rowNode(row) {
+export function rowNode(row, ctx = {}) {
+    if (row.kind === 'writing') return writingNode(row, ctx);
     if (row.kind === 'thinking') return h('details', { class: 'stme-dw-thinking' }, h('summary', {}, `Thinking — ${row.text.split(/\s+/).length} words`), h('div', { class: 'stme-dw-thinking-text' }, row.text));
     if (row.kind === 'writer_check') return writerCheckNode(row);
     if (row.kind === 'form_check') return formCheckNode(row);
     if (row.kind === 'assess') return assessNode(row);
-    if (row.kind === 'call') return callNode(row);
+    if (row.kind === 'call') return callNode(row, ctx);
     if (row.kind === 'form') return formNode(row);
     if (row.kind === 'ledger') return h('details', { class: 'stme-dw-ledger' }, h('summary', {}, 'Ledger — what each character wanted and how it ended'), h('pre', {}, row.text));
     if (row.kind === 'petition') return h('details', { class: 'stme-dw-petition' },
@@ -123,7 +132,7 @@ export function rowNode(row) {
     if (row.kind === 'answer') return h('div', { class: 'stme-dw-answer' }, row.text);
     return null;
 }
-export function cycleNode(entry, now, { open = false } = {}) {
+export function cycleNode(entry, now, { open = false, openFile = null } = {}) {
     const classes = ['stme-dw-cycle', entry.running ? 'stme-dw-live' : '', entry.rejected ? 'stme-dw-rejected' : ''].filter(Boolean).join(' ');
     // Таймер — свой маленький computed: раз в секунду меняется только эта строка, а не вся лента.
     const waiting = entry.waiting && entry.waitingSince
@@ -131,12 +140,13 @@ export function cycleNode(entry, now, { open = false } = {}) {
         : '';
     const summary = entrySummary(entry);
     // Карточка: заголовок и резюме видны всегда, подробности — по раскрытию (живая и последняя раскрыты).
-    return h('details', { class: classes, ...(open || entry.running ? { open: true } : {}) },
+    // Ключи карточки и строк: живая карточка обновляется на месте, а не строится заново на каждое событие.
+    return h('details', { class: classes, key: String(entry.id ?? entry.runId ?? ''), ...(open || entry.running ? { open: true } : {}) },
         h('summary', { class: 'stme-dw-head' },
             h('span', { class: 'stme-dw-head-line' }, h('strong', {}, entry.title), h('span', { class: 'stme-dw-meta' }, cycleMeta(entry))),
             summary ? h('span', { class: 'stme-dw-summary' }, summary) : null),
         entry.detail ? h('div', { class: 'stme-dw-detail' }, entry.detail) : null,
-        ...entry.rows.map(rowNode),
+        ...entry.rows.map((row, index) => keyed(rowNode(row, { openFile }), `${row.kind}_${row.id ?? index}`)),
         // Таймер — внизу, там, где роль сейчас работает.
         waiting ? h('div', { class: 'stme-dw-waiting' }, waiting) : null);
 }

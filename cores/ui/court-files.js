@@ -113,6 +113,18 @@ export function createCourtFiles({ call }) {
         expanded.set(next);
     }
 
+    /** Файл по пути из ленты (`Characters/Lena/decree.md`, `Creation/geography.md`): загрузить и открыть вкладкой. */
+    async function openPath(path) {
+        const wanted = String(path ?? '').trim().replace(/^\/+/, '').toLowerCase();
+        if (!wanted) return false;
+        const find = () => files.peek().find(file => String(file.path).toLowerCase() === wanted || (!wanted.endsWith('.md') && String(file.path).toLowerCase() === `${wanted}.md`));
+        if (!find()) await load();
+        const file = find();
+        if (!file) { note.set(`There is no file "${path}" here.`); return false; }
+        open(file.id);
+        return true;
+    }
+
     function close(id) {
         if (isDirty(id) && typeof globalThis.confirm === 'function' && !globalThis.confirm('Close without saving?')) return;
         const list = tabs.peek().filter(item => item !== id);
@@ -302,5 +314,5 @@ export function createCourtFiles({ call }) {
 
     const tree = () => h('div', { class: 'stme-files' }, filesTreeView(ctx), filesEditorView(ctx));
 
-    return { tree, load, ...ctx };
+    return { tree, load, openPath, ...ctx };
 }

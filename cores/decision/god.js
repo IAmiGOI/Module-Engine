@@ -1,7 +1,7 @@
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildGodToolList } from '../../libraries/core/decision-tools.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
-import { deciderRequestParams, godWorkerId } from '../../libraries/core/decision-settings.js';
+import { roleRequestParams, godWorkerId } from '../../libraries/core/decision-settings.js';
 import { buildGodContext, godReason, godMaterial, renderPrayers } from '../../libraries/core/decision-god.js';
 import { dayOf } from '../../libraries/core/decision-counsellor.js';
 import { createCycleLive } from './live.js';
@@ -13,7 +13,7 @@ import { createFileHandlers } from './handlers-files.js';
 import { createRetryRunner } from './retry.js';
 import { renderCreation } from '../../libraries/core/decision-creation.js';
 
-const INTERRUPTED = 'Interrupted: the page was reloaded before this run finished.';
+const INTERRUPTED = 'In progress — if this note stays after a reload, the run was interrupted.';
 
 /**
  * God (фаза 5): строит Creation из лорбука и мировых частей карт, потом
@@ -108,7 +108,7 @@ export function createGod({
             normalize: normalizeGenerateAnswer,
             request: async ({ boost, lowerReasoning, backupWorkerId }) => {
                 callIndex += 1;
-                const params = deciderRequestParams(settings.decider, { floor: true });
+                const params = roleRequestParams(settings, 'god');
                 if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
                 if (lowerReasoning) params.reasoningEffort = 'low';
                 return call('model.generate', {

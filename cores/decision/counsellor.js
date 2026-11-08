@@ -2,7 +2,7 @@ import { promptText } from '../../libraries/core/prompt-overrides.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildCounsellorToolList, COUNSELLOR_STOP_TOOLS } from '../../libraries/core/decision-tools.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
-import { deciderRequestParams, counsellorWorkerId } from '../../libraries/core/decision-settings.js';
+import { roleRequestParams, counsellorWorkerId } from '../../libraries/core/decision-settings.js';
 import { ledgerLines } from '../../libraries/core/decision-ledger.js';
 import { libraryLevelsSection } from '../../libraries/core/decision-library.js';
 import {
@@ -178,7 +178,7 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         const captured = typeof capture === 'function' ? capture(`${runId}:`, { onThinking: value => publishEvent('decision.cycle.thinking', { runId, text: value }) }) : null;
         const messages = await contextFor({ mode, text: message });
         const contextLength = messages.length;
-        const generation = deciderRequestParams(settings.decider, { floor: true });
+        const generation = roleRequestParams(settings, 'counsellor');
         let modelCall = 0;
         const generate = async ({ messages: list, tools, toolChoice, returnMessage }) => retry.run({
             role: 'counsellor', budget: 'background', normalize: normalizeGenerateAnswer,

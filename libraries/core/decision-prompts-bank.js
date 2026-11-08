@@ -133,6 +133,6 @@ For each character below choose one level:
 - temporary — Temporary Character: they appear for a while and leave.
 - mass — NPC/Mass: a crowd, a function, a role without a self of its own.
 
-Judge by what the material says about them and how much of it there is, not by how famous they are. The user's own character is not in the list.
+Judge by what the material says about them and how much of it there is, not by how famous they are. A card that describes a world, a game or a narrator rather than one person is mass. The user's own character is not in the list.
 
 Answer only with JSON: [{"name": "the name exactly as written below", "importance": "main"}, …], one item per character.`;

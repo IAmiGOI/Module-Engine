@@ -332,3 +332,21 @@ details.stme-dw-cycle[open] > summary .stme-dw-summary { display: none; }
     .stme-files-tree { border-right: 0; border-bottom: 1px solid var(--stme-border); }
     .stme-files-line { grid-template-columns: 28px 28px 14px 1fr; }
 }
+
+/* Файловые вызовы в ленте (часть 21): как в редакторе кода. */
+.stme-dw-files { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.stme-dw-file { border: 1px solid var(--stme-border); border-radius: var(--stme-radius-sm); background: var(--stme-level-1); overflow: hidden; }
+.stme-dw-file.stme-dw-error { border-color: var(--stme-danger, #c0392b); }
+.stme-dw-file-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 8px; background: var(--stme-level-2); font-size: .85em; }
+.stme-dw-file-path { font-family: var(--stme-mono, ui-monospace, monospace); font-size: .92em; background: none; border: 0; padding: 0; color: var(--stme-accent, inherit); cursor: pointer; text-decoration: underline dotted; }
+span.stme-dw-file-path { cursor: default; text-decoration: none; }
+.stme-dw-file-note { font-size: .85em; opacity: .7; font-style: italic; }
+.stme-dw-file-edit + .stme-dw-file-edit { border-top: 1px dashed var(--stme-border); }
+.stme-dw-file .stme-files-diff { max-height: 360px; overflow: auto; }
+.stme-dw-file .stme-dw-fold { padding: 2px 8px 6px; }
+.stme-dw-file .stme-files-preview { max-height: 420px; overflow: auto; }
+.stme-dw-file-list { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; }
+.stme-dw-writing { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; font-size: .88em; }
+.stme-dw-writing-line { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.stme-dw-writing-dot { color: var(--stme-accent, currentColor); animation: stme-dw-pulse 1.2s ease-in-out infinite; }
+@keyframes stme-dw-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }

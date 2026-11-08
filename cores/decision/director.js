@@ -1,7 +1,7 @@
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildDirectorToolList } from '../../libraries/core/decision-tools.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
-import { deciderRequestParams, directorWorkerId } from '../../libraries/core/decision-settings.js';
+import { deciderRequestParams, directorWorkerId, godWorkerId, roleRequestParams } from '../../libraries/core/decision-settings.js';
 import { lastDecreeThoughts, lastReports, buildDirectorContext, directorReason } from '../../libraries/core/decision-director.js';
 import { dayOf } from '../../libraries/core/decision-counsellor.js';
 import { createCycleLive } from './live.js';
@@ -36,7 +36,7 @@ function clockLabel(minutes) {
 
 export function createDirector({
     call, callTool, store, banks = null, getSettings, getWorkers, publishEvent,
-    capture = null, enqueue = job => job(), now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+    capture = null, enqueue = job => job(), now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), creation = null,
 }) {
     const live = createCycleLive({ publishEvent, getTurn: () => currentTurn(), getClock: () => store.clock().minutes });
     const retry = createRetryRunner({ publishEvent, getSettings, sleep, now });
@@ -62,17 +62,20 @@ export function createDirector({
     }
 
     async function bankState() {
-        try { return banks?.great?.load ? await banks.great.load() : {}; } catch { return {}; }
+        // Great Bank догоняет записи банков перед чтением: иначе до первого хода он пуст, и Main Cast не видно.
+        try { await banks?.great?.sync?.(); return banks?.great?.load ? await banks.great.load() : {}; } catch { return {}; }
     }
 
     async function reasonNow() {
         if (!banks?.great?.load) return null;
         const papers = typeof store.papers === 'function' ? store.papers() : {};
-        return directorReason({ petitions: papers.petitions ?? [], telegrams: papers.telegrams ?? [], banks: await bankState() });
+        // Банки Main Cast пишутся по готовому миру: пока Бог строит Creation, директор их не начинает.
+        const worldReady = !godWorkerId(getSettings()) || !creation || Boolean(await creation.load().then(() => creation.complete()).catch(() => true));
+        return directorReason({ petitions: papers.petitions ?? [], telegrams: papers.telegrams ?? [], banks: await bankState(), worldReady });
     }
 
     function requestRecord(workerId, settings, runId, prefix, attempt) {
-        const params = deciderRequestParams(settings.decider, { floor: true });
+        const params = roleRequestParams(settings, 'director');
         const requestId = `${runId}:${prefix}${attempt}:${now()}`;
         return { requestId, ...params, workerId };
     }

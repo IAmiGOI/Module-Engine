@@ -221,3 +221,10 @@ test('the Director issues a Decree by editing decree.md like a code editor: only
     const missing = await files.edit({ edits: [{ path: 'Characters/Lena/decree.md', old: 'nothing like this', new: '- A new rule.' }], comment: 'x' });
     assert.equal(missing.files[0].applied[0], 'appended', 'a missed "old" never refuses');
 });
+
+test('Main Cast without a Decree waits for the world: no cast reason while God is still shaping the Creation', async () => {
+    const { directorReason } = await import('../libraries/core/decision-director.js');
+    const banks = { emilia: { name: 'Emilia', importance: 'main', decree: {} } };
+    assert.equal(directorReason({ banks, worldReady: false }), null);
+    assert.equal(directorReason({ banks, worldReady: true })?.reasons?.[0]?.type, 'cast');
+});

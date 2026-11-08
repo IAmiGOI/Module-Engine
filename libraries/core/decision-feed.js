@@ -202,13 +202,19 @@ export function applyFeedEvent(state, event, payload = {}) {
             return { ...upsertRow(entry, { kind: 'thinking', id: `thinking_${entry.thinkingPart ?? 0}`, text: part }), thinkingLength: full.length };
         }, true);
     }
+    if (event === 'decision.cycle.writing') {
+        // Модель пишет вызов: одна живая строка «пишет файл…», её убирает сам вызов.
+        const calls = (Array.isArray(payload.calls) ? payload.calls : []).map(call => ({ name: text(call.name), path: text(call.path), lines: Number(call.lines) || 0 }));
+        return withLive(state, runId, entry => upsertRow(entry, { kind: 'writing', id: 'writing', calls }), true);
+    }
     if (event === 'decision.cycle.answer') {
         return withLive(state, runId, entry => upsertRow(entry, { kind: 'answer', id: 'answer', text: text(payload.text) }), true);
     }
     if (event === 'decision.tool.called') {
         return withLive(state, runId, entry => {
             const row = toolRow({ name: payload.name, args: payload.args, comment: payload.comment });
-            const next = upsertRow(entry, { ...row, id: `pending_${payload.id || payload.name}_${entry.rows.length}`, pending: true });
+            const written = { ...entry, rows: entry.rows.filter(item => item.kind !== 'writing') };
+            const next = upsertRow(written, { ...row, id: `pending_${payload.id || payload.name}_${written.rows.length}`, pending: true });
             // Следующие мысли — новым куском после этого вызова.
             const hasPart = entry.rows.some(item => item.id === `thinking_${entry.thinkingPart ?? 0}`);
             return hasPart ? { ...next, thinkingPart: (entry.thinkingPart ?? 0) + 1, thinkingOffset: entry.thinkingLength ?? 0 } : next;

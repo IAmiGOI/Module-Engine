@@ -139,6 +139,11 @@ export function createDecisionEvents({
                 // Ответы на вопросы Бога закрыли Декларацию — God строит мир по ним (повод — сама Декларация).
                 cycle.maybeRunGod?.().catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }));
             }),
+            // Мир построен — директор пишет банки Main Cast по нему (повод — Main Cast без Указа).
+            host.events.subscribe('decision.god.finished', payload => {
+                if (!['first', 'build', 'declaration'].includes(String(payload?.kind ?? ''))) return;
+                cycle.maybeRunDirector?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Director: ${error?.message ?? error}` }));
+            }),
             // Вопрос Бога — Советнику сразу: он передаёт его пользователю, а не ждёт следующего разбора.
             host.events.subscribe('decision.god.question', () => {
                 cycle.relayGodQuestions?.().catch(error => publishEvent('decision.failed', { runId: null, message: `the Counsellor: ${error?.message ?? error}` }));

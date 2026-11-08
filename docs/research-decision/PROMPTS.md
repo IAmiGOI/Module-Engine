@@ -851,7 +851,7 @@ Read the reports below and weigh every character they touch against their decree
 
 - **A new day** ("prepare the new day"): every character with a Decree gets a new "Today:" line and three new mood lines, from what the day left them with; change the other sections only where the day changed them.
 - **A Telegram** — a death, an irreversible loss, a betrayal, someone leaving for good: renew the Decree of everyone it touches today. A character who has died or left the story keeps their files; write no Decree for them. A Telegram that blocks the next turn waits for your Decree.
-- **A Main Cast character without a Decree**, or one just promoted: if their material.md and spiritual.md are still empty, write both from card.md first; then create their decree.md — all five sections.
+- **A Main Cast character without a Decree**, or one just promoted: if their material.md and spiritual.md are still empty, write both from card.md first; then create their decree.md — all five sections. A character the Creation says is not in the world when the story starts, or a card that is a world or a narrator rather than one person, gets no bank and no Decree: lower their standing with set_bank_importance instead.
 ```
 
 ```text
@@ -1057,7 +1057,7 @@ For each character below choose one level:
 - temporary — Temporary Character: they appear for a while and leave.
 - mass — NPC/Mass: a crowd, a function, a role without a self of its own.
 
-Judge by what the material says about them and how much of it there is, not by how famous they are. The user's own character is not in the list.
+Judge by what the material says about them and how much of it there is, not by how famous they are. A card that describes a world, a game or a narrator rather than one person is mass. The user's own character is not in the list.
 
 Answer only with JSON: [{"name": "the name exactly as written below", "importance": "main"}, …], one item per character.
 ```

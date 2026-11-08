@@ -69,7 +69,8 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.bankWrite', params => banks.write(params ?? {})),
         host.own.register('decision.bankRebuild', params => banks.rebuild(params ?? {})),
         host.own.register('decision.message', params => cycle.sendMessage(params ?? {})),
-        host.own.register('decision.bootstrap', () => bootstrap?.state?.() ?? null),
+        // Старый бутстрап — только по `bootstrap.legacy`: иначе окно не предлагает повторять его «failed» из старых чатов.
+        host.own.register('decision.bootstrap', () => (getSettings()?.bootstrap?.legacy === true ? bootstrap?.state?.() ?? null : null)),
         host.own.register('decision.bootstrapRetry', () => bootstrap?.retry?.() ?? { ok: false, error: 'The bootstrap is not available.' }),
         // Мироздание и Бог (фаза 5): чтение Creation, очередь вопросов и запуск God.
         host.own.register('decision.creation', () => cycle.creation?.state?.() ?? null),

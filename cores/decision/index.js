@@ -8,6 +8,7 @@ import { createCardTurn } from './card-turn.js';
 import { createResearcher } from '../../libraries/core/decision-researcher.js';
 import { createWebActions } from '../guide/web-actions.js';
 import { captureReasoning } from './capture.js';
+import { watchToolProgress } from './tool-progress.js';
 import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
 import { registerDecisionContracts, decisionRewriteStage } from './contracts.js';
@@ -111,7 +112,11 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         banks,
         publishEvent,
         // Мысли и расход фоновых циклов (bootstrap, сообщения, пассивные) — тем же перехватом, что у хода.
-        capture: (prefix, handlers) => captureReasoning(host, prefix, handlers),
+        capture: (prefix, handlers) => {
+            const inner = captureReasoning(host, prefix, handlers);
+            const unwatch = watchToolProgress(host, prefix, { publishEvent });
+            return { get value() { return inner.value; }, get usage() { return inner.usage; }, stop: () => { inner.stop(); unwatch(); } };
+        },
     });
     const bootstrap = createBootstrap({ call: callStrict, store, cycle, getSettings: () => settings, getGameSettings: gameSettingsValues, publishEvent });
     const bankSets = createBankSets({ call: callStrict, banks, store, bootstrap, askUser: params => cycle.askUser(params), publishEvent });
@@ -159,7 +164,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 ? Promise.resolve(cycle.maybeRunGod?.({ allowBuild: true })).catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }))
                 : Promise.resolve();
             if (!fresh) return;
-            await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
+            // Готовые банки прошлых чатов — наборы старого сборщика; в пяти ролях банки сортируются, вопроса нет.
+            if (settings.bankColdStart === 'build') await bankSets.offer().catch(error => publishEvent('decision.bank.warning', { message: `Saved banks were not offered: ${error?.message ?? error}` }));
             await banks.ensureColdStart();
             await god;
             // Main Cast без Указа получает его сразу, как только банки отсортированы и мир построен (часть 19).

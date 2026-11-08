@@ -151,7 +151,10 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                 ...providerRequest, stream, stallMs, signal,
                 onChunk: stream ? frame => {
                     const parsed = resolveStreamDelta(worker.format, frame);
-                    if (parsed.toolCalls) toolCalls.push(parsed.toolCalls);
+                    if (parsed.toolCalls) {
+                        toolCalls.push(parsed.toolCalls);
+                        onChunk?.('', accumulated, { toolProgress: toolCalls.progress() });
+                    }
                     if (parsed.reasoning) reasoning += parsed.reasoning;
                     if (parsed.usage) streamedUsage = parsed.usage;
                     if (!parsed.delta) {
@@ -310,6 +313,8 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             // и `finish_reason` тем, кто попросил `returnMessage`. Без флага
             // ничего не читается, а тело всё равно отбрасывается, как раньше.
             let lastRaw = null;
+            // Прогресс аргументов вызова приходит на каждый токен — наружу не чаще раза в 250 мс.
+            let toolProgressAt = 0;
             return dispatchQueue.enqueueWithFallback(
                 tiers,
                 (worker, { signal }) => {
@@ -322,6 +327,10 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                         onChunk: (delta, text, extra) => {
                             if (delta) publishEvent('model.generate.chunk', { requestId, workerId: worker.id, delta, text });
                             if (extra?.reasoning) publishEvent('model.generate.reasoning', { requestId, workerId: worker.id, delta: extra.reasoning, text: extra.thinking });
+                            if (extra?.toolProgress && Date.now() - toolProgressAt >= 250) {
+                                toolProgressAt = Date.now();
+                                publishEvent('model.generate.toolProgress', { requestId, workerId: worker.id, calls: extra.toolProgress });
+                            }
                         },
                         onRaw: raw => {
                             lastRaw = { format: raw.format, body: raw.body, toolCalls: raw.toolCalls ?? [], reasoning: raw.reasoning ?? '', usage: raw.usage ?? null };

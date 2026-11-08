@@ -333,6 +333,14 @@ export function createStreamToolCallCollector() {
                 };
             }).filter(call => call.name);
         },
+        /** Что модель пишет прямо сейчас: имя вызова, путь файла и сколько строк уже пришло — для живой строки окна. */
+        progress() {
+            return [...parts.entries()].sort((a, b) => a[0] - b[0]).filter(([, part]) => part.name).map(([index, part]) => ({
+                index, name: part.name, chars: part.arguments.length,
+                path: /"path"\s*:\s*"([^"]*)"/.exec(part.arguments)?.[1] ?? '',
+                lines: (part.arguments.match(/\\n/g) ?? []).length + 1,
+            }));
+        },
         reset() { parts.clear(); },
     };
 }

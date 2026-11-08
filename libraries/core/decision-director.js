@@ -59,11 +59,11 @@ export function namedCharacters(value, state) {
  * Main Cast без Указа, повышения и конец дня.
  * @returns {{ wake: object, characters: string[], day: boolean, reasons: object[] } | null}
  */
-export function directorReason({ petitions = [], telegrams = [], banks = {} } = {}) {
+export function directorReason({ petitions = [], telegrams = [], banks = {}, worldReady = true } = {}) {
     const queued = normalizePetitions(petitions).filter(item => QUEUE_STATUS.has(item.status));
     const telegramsOpen = queuedTelegrams(telegrams);
     const nameState = banks?.great ?? banks;
-    const cast = mainWithoutDecree(nameState);
+    const cast = worldReady ? mainWithoutDecree(nameState) : [];
     const promoted = queued.filter(item => item.promote && ['main', 'side'].includes(item.promote.level));
     const day = queued.filter(item => item.prepareNewDay);
     const reasons = [];

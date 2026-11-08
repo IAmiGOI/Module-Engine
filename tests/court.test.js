@@ -191,3 +191,25 @@ test('Files shows knowledge and Creation files and saves them through the engine
     assert.equal(writes[0].path, 'Creation/Scales/magic.md');
     assert.equal(files.files().find(file => file.id === ids[1]).text, '# Magic\n**Principle:** Will');
 });
+
+test('file calls in a lane read like a code editor, and a live writing row gives way to the call', async () => {
+    const { fileCallNode, writingNode } = await import('../cores/ui/court-file-calls.js');
+    const { applyFeedEvent, createFeedState } = await import('../libraries/core/decision-feed.js');
+    const opened = [];
+    const texts = node => (typeof node === 'string' ? node : node && typeof node === 'object' ? (node.children ?? []).map(texts).join(' ') : '');
+    const edit = fileCallNode({ name: 'edit', args: { edits: [{ path: 'Characters/Lena/decree.md', old: '- Today: find the key.', new: '- Today: hide.' }] }, result: { ok: true, files: [{ path: 'Characters/Lena/decree.md', ok: true, applied: ['loose'] }] } }, { openFile: path => opened.push(path) });
+    assert.match(texts(edit), /Characters\/Lena\/decree\.md/);
+    assert.match(texts(edit), /matched loosely/);
+    assert.match(texts(edit), /\+1/);
+    const create = fileCallNode({ name: 'create', args: { path: 'Creation/geography.md', text: '# Geography\n- Three islands.' }, result: { ok: true } });
+    assert.match(texts(create), /2 lines/);
+    const view = fileCallNode({ name: 'view', args: { path: 'Creation/history.md' }, result: { ok: true, path: 'Creation/history.md', text: 'a\nb\nc' } });
+    assert.match(texts(view), /3 lines/);
+    assert.match(texts(writingNode({ calls: [{ name: 'create', path: 'Creation/geography.md', lines: 40 }] })), /Writing .*40 lines/);
+    let state = createFeedState({});
+    state = applyFeedEvent(state, 'decision.cycle.started', { runId: 'god_1', event: 'god_build', at: 1 });
+    state = applyFeedEvent(state, 'decision.cycle.writing', { runId: 'god_1', calls: [{ name: 'create', path: 'Creation/geography.md', lines: 12 }] });
+    assert.ok(state.live.god_1.rows.some(row => row.kind === 'writing'));
+    state = applyFeedEvent(state, 'decision.tool.called', { runId: 'god_1', name: 'create', args: { path: 'Creation/geography.md', text: 'x' } });
+    assert.ok(!state.live.god_1.rows.some(row => row.kind === 'writing'), 'the call replaces the writing row');
+});
