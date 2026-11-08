@@ -133,3 +133,31 @@ test('the director log shows the ledger rows, the prayer and the telegram of the
     assert.equal(entry.rows.find(row => row.kind === 'telegram').blocked, true);
     assert.match(entry.rows.find(row => row.kind === 'ledger').text, /Lena: She gets the door open\./);
 });
+
+test('after the turn the Resolver edits files like the Director: material.md, knowledge.md; decree.md stays the Director\'s', async () => {
+    const { createAfterTurnHandler } = await import('../cores/decision/handlers-after-turn.js');
+    const state = { lena: { name: 'Lena', aliases: [], material: { 5: ['Wool dress'] }, spiritual: {}, decree: { 3: ['Today: find the key.'] }, history: [] } };
+    const bankEdits = [];
+    const decreeWrites = [];
+    const learned = [];
+    const banks = { great: {
+        sync: async () => state, load: async () => state,
+        edit: async (params, options) => { bankEdits.push({ ...params, by: options.by }); return { ok: true, changes: params.edits }; },
+        writeDecree: async params => { decreeWrites.push(params); return { ok: true }; },
+    } };
+    const knowledge = { load: async () => ({ lena: { name: 'Lena', items: [] } }), handlers: { character_knowledge: async args => { learned.push(args); return { ok: true }; } } };
+    const handler = createAfterTurnHandler({ store: {}, banks, knowledge, state: { turnCounter: 3 } });
+    const answer = await handler({
+        comment: 'The page left her soaked and wiser.',
+        edits: [
+            { path: 'Characters/Lena/material.md', old: '- Wool dress', new: '- Wool dress, soaked through' },
+            { path: 'Characters/Lena/knowledge.md', old: '', new: '- The guard has a key on his belt.' },
+            { path: 'Characters/Lena/decree.md', old: '- Today: find the key.', new: '- Today: steal the key.' },
+        ],
+    });
+    assert.equal(answer.ok, true);
+    assert.deepEqual(bankEdits[0].edits, [{ character: 'Lena', section: 'material 5', old: 'Wool dress', new: 'Wool dress, soaked through' }]);
+    assert.equal(bankEdits[0].by, 'resolver');
+    assert.deepEqual(learned.map(item => [item.op, item.fact]), [['add', 'The guard has a key on his belt.']]);
+    assert.equal(decreeWrites.length, 0, 'the Resolver never writes the Decree');
+});

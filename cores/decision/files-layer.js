@@ -1,5 +1,6 @@
 import { applyEdit } from '../../libraries/core/text-diff.js';
 import { renderPart, parsePart, editsForPart } from '../../libraries/core/court-bank-files.js';
+import { knowledgeKey } from '../../libraries/core/decision-knowledge.js';
 
 /**
  * Файловый слой движка (часть 21): всё, что меняют модели, — виртуальные файлы,
@@ -8,7 +9,8 @@ import { renderPart, parsePart, editsForPart } from '../../libraries/core/court-
  * файл. Без отказов: путь, имя и строка ищутся мягко, не найденное дописывается.
  * Свои файлы подключают поставщики (`addProvider`) — так встанет Creation Бога.
  */
-const PARTS = Object.freeze({ material: 'material', spiritual: 'spiritual', decree: 'decree', card: 'card' });
+const PARTS = Object.freeze({ material: 'material', spiritual: 'spiritual', decree: 'decree', knowledge: 'knowledge', card: 'card' });
+const lineBodies = value => String(value ?? '').split('\n').map(line => line.replace(/^\s*[-*]\s+/, '').trim()).filter(line => line && !line.startsWith('#'));
 const clean = value => String(value ?? '').trim();
 
 export function parseCharacterPath(path) {
@@ -21,7 +23,7 @@ export function parseCharacterPath(path) {
     return part ? { name: rest.slice(0, -1).join('/'), part } : null;
 }
 
-export function createFileLayer({ banks = null } = {}) {
+export function createFileLayer({ banks = null, knowledge = null } = {}) {
     const providers = [];
     const great = () => banks?.great ?? null;
 
@@ -42,11 +44,41 @@ export function createFileLayer({ banks = null } = {}) {
             ?? null;
     }
 
+    async function knowledgeItems(name) {
+        const state = knowledge?.load ? await knowledge.load() : {};
+        return (state?.[knowledgeKey(name)]?.items ?? []).filter(item => item.status === 'known');
+    }
+
+    async function knowledgeText(name) {
+        const items = await knowledgeItems(name);
+        return items.length ? items.map(item => `- ${item.fact}`).join('\n') : '';
+    }
+
+    /** knowledge.md: новая строка — знание, убранная — забыто, заменённая — пересмотрено (старое остаётся «used to believe»). */
+    async function writeKnowledge(name, before, after, comment) {
+        const tool = knowledge?.handlers?.character_knowledge;
+        if (!tool) return { ok: false, error: 'Knowledge is not available here.' };
+        const items = await knowledgeItems(name);
+        const was = lineBodies(before);
+        const now = lineBodies(after);
+        const removed = was.filter(line => !now.includes(line));
+        const added = now.filter(line => !was.includes(line));
+        const idOf = fact => items.find(item => item.fact === fact)?.id;
+        while (removed.length && added.length) {
+            const id = idOf(removed.shift());
+            const fact = added.shift();
+            await tool(id ? { op: 'revise', character: name, id, fact, comment } : { op: 'add', character: name, fact, source: 'saw', comment });
+        }
+        for (const fact of added) await tool({ op: 'add', character: name, fact, source: 'saw', comment });
+        for (const line of removed) { const id = idOf(line); if (id) await tool({ op: 'forget', character: name, id, comment }); }
+        return { ok: true };
+    }
+
     async function list() {
         const files = [];
         for (const character of Object.values(await characters())) {
             if (!character?.name) continue;
-            for (const part of ['material', 'spiritual', 'decree']) files.push(`Characters/${character.name}/${part}.md`);
+            for (const part of ['material', 'spiritual', 'decree', ...(knowledge ? ['knowledge'] : [])]) files.push(`Characters/${character.name}/${part}.md`);
         }
         for (const provider of providers) files.push(...(await provider.list()));
         return files;
@@ -57,7 +89,9 @@ export function createFileLayer({ banks = null } = {}) {
         const target = parseCharacterPath(path);
         const character = target ? await findCharacter(target.name) : null;
         if (!character) return { ok: false, error: `There is no file "${path}". Call view without a path to list the files.` };
-        const text = target.part === 'card' ? String(character.fallbackText ?? '') : renderPart(character, target.part);
+        const text = target.part === 'card' ? String(character.fallbackText ?? '')
+            : target.part === 'knowledge' ? await knowledgeText(character.name)
+                : renderPart(character, target.part);
         return { ok: true, path: `Characters/${character.name}/${target.part}.md`, text };
     }
 
@@ -67,6 +101,9 @@ export function createFileLayer({ banks = null } = {}) {
         if (!target || target.part === 'card') return { ok: false, error: `"${path}" cannot be written.` };
         const character = await findCharacter(target.name);
         const name = character?.name ?? clean(target.name);
+        if (target.part === 'knowledge') return writeKnowledge(name, before, after, comment);
+        // Указ пишет только Director: правка резолвера не отклоняется, а остаётся без записи с пояснением.
+        if (target.part === 'decree' && by === 'resolver') return { ok: true, unchanged: true, note: 'Only the Director writes the Decree — tell it in the outcome instead.' };
         if (target.part === 'decree') return great().writeDecree({ character: name, sections: parsePart(after, 'decree'), comment, by });
         return great().edit({ comment, edits: editsForPart(name, target.part, before, after) }, { by });
     }
@@ -84,12 +121,12 @@ export function createFileLayer({ banks = null } = {}) {
         for (const [path, list] of byPath) {
             const current = await read(path);
             const target = parseCharacterPath(path);
-            const before = current.ok ? current.text : (target ? renderPart({}, target.part) : '');
+            const before = current.ok ? current.text : (target && target.part !== 'knowledge' ? renderPart({}, target.part) : '');
             let after = before;
             const how = [];
             for (const one of list) { const applied = applyEdit(after, one); after = applied.text; how.push(applied.how); }
             const written = after === before ? { ok: true, unchanged: true } : await write(current.path ?? path, before, after, { comment, by });
-            results.push({ path: current.path ?? path, ok: written.ok !== false, applied: how, ...(written.error ? { error: written.error } : {}), ...(written.unchanged ? { unchanged: true } : {}) });
+            results.push({ path: current.path ?? path, ok: written.ok !== false, applied: how, ...(written.error ? { error: written.error } : {}), ...(written.unchanged ? { unchanged: true } : {}), ...(written.note ? { note: written.note } : {}) });
         }
         return { ok: true, files: results };
     }

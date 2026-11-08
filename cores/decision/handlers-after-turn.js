@@ -1,4 +1,5 @@
 import { buildLedgerRows, isClosedTelegram } from '../../libraries/core/decision-ledger.js';
+import { createFileLayer } from './files-layer.js';
 
 /**
  * `after_turn` — единственная запись после ответа писателя. Исход хода и
@@ -16,7 +17,13 @@ export function createAfterTurnHandler({ store, banks = null, knowledge = null, 
             .filter(item => item.character);
         const results = [];
 
-        // Изменения — тем же движком, что `bank_edit`: права резолвера (Material и Knowledge) соблюдаются там же.
+        // Изменения — файлами, как у директора (`edits`, часть 21): material.md и knowledge.md; права резолвера — в файловом слое.
+        if (Array.isArray(args.edits) && args.edits.length && banks?.great) {
+            const files = createFileLayer({ banks, knowledge });
+            const edited = await files.edit({ edits: args.edits, comment: String(args.comment ?? '').trim() }, { by: 'resolver' });
+            for (const file of edited.files ?? []) results.push({ kind: 'file', path: file.path, ok: file.ok, ...(file.note ? { note: file.note } : {}) });
+        }
+        // Старая форма `bankEdits` — тем же движком, что `bank_edit`.
         if (Array.isArray(args.bankEdits) && args.bankEdits.length && banks?.edit) {
             const edited = await banks.edit({ comment: String(args.comment ?? '').trim(), edits: args.bankEdits }, { by: 'resolver' });
             for (const change of edited.changes ?? []) {

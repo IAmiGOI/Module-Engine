@@ -12,6 +12,16 @@ export const TELEGRAM_REASONS = Object.freeze([
     'a character leaves the story for good',
 ]);
 
+const FILE_EDIT = {
+    type: 'object',
+    properties: {
+        path: { type: 'string', description: 'The file: Characters/<Name>/material.md for the body, possessions, items and clothes; Characters/<Name>/knowledge.md for what they learned.' },
+        old: { type: 'string', description: 'Exact text from the file to replace. Use the line before to add a new line after it, or leave it empty to add at the end.' },
+        new: { type: 'string', description: 'The replacement. Empty removes the text.' },
+    },
+    required: ['path', 'new'],
+};
+
 const BANK_EDIT = {
     type: 'object',
     properties: {
@@ -28,7 +38,7 @@ const BANK_EDIT = {
 export const AFTER_TURN_TOOL = Object.freeze({
     name: 'after_turn',
     displayName: 'Record what the turn left behind',
-    description: 'The template after the Writer has finished, filled from the reply itself. outcome — what actually came of each character\'s action on the page. bankEdits — the physical changes and what they learned, in the same shape as bank_edit; you may change the Material sections and Knowledge, and a spiritual edit is kept as a proposal for the Director. prayer — only when the world\'s systems were used against their rules. telegram — only for something on the closed list: a death or an irreversible loss; the user\'s act breaks the Decree outright; a character leaves the story for good. Leave out what did not happen; one call ends the work.',
+    description: 'The template after the Writer has finished, filled from the reply itself. outcome — what actually came of each character\'s action on the page. edits — the physical changes and what they learned, as file edits like a code editor (old → new): material.md and knowledge.md of each character; an edit of spiritual.md is kept as a proposal for the Director, and decree.md belongs to the Director. prayer — only when the world\'s systems were used against their rules. telegram — only for something on the closed list: a death or an irreversible loss; the user\'s act breaks the Decree outright; a character leaves the story for good. Leave out what did not happen; one call ends the work.',
     parameters: {
         type: 'object',
         properties: {
@@ -44,7 +54,8 @@ export const AFTER_TURN_TOOL = Object.freeze({
                     required: ['character', 'result'],
                 },
             },
-            bankEdits: { type: 'array', items: BANK_EDIT, description: 'Physical changes and knowledge, in the shape of bank_edit.' },
+            edits: { type: 'array', items: FILE_EDIT, description: 'File edits: physical changes in material.md, what they learned in knowledge.md.' },
+            bankEdits: { type: 'array', items: BANK_EDIT, description: 'Older form of the same changes; use edits.' },
             prayer: { type: 'string', description: 'Only when the world\'s systems were used outside their rules: which rule, what was done, what came of it.' },
             telegram: { type: 'string', description: 'Only for the closed list of urgent matters: a death or an irreversible loss; the user\'s act breaks the Decree outright; a character leaves the story for good. One line.' },
             comment: COMMENT,

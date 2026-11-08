@@ -703,7 +703,7 @@ THE TURN YOU INSCRIBED:
 One or two sentences per point, then the call at once.
 
 1. **Outcome** — for each character who acted: what actually came of it on the page. By the Writer's text, not by what you intended.
-2. **Changes** — what the page changed for them: body, possessions, clothes, and what they learned. Physical changes go to the Material sections, knowledge to Knowledge. Only what really happened.
+2. **Changes** — what the page changed for them: body, possessions, clothes, and what they learned. As file edits (old → new): physical changes in material.md, what they learned in knowledge.md. Only what really happened.
 3. **Prayer** — leave it out unless the world's systems were used in a way the rules do not cover. Then say which rule, what was done and what came of it.
 4. **Telegram** — leave it out unless something is on the closed list: a death or an irreversible loss; the user's act breaks the Decree outright — a betrayal, a revelation, an attack on someone close; a character leaves the story for good. Then say what happened in one line.
 ```
@@ -712,7 +712,7 @@ One or two sentences per point, then the call at once.
 
 Поля инструмента (для схемы в коде):
 - `outcome[]` — `{ character, result }`: чем кончилось у персонажа на странице. Один пункт на каждого, кто действовал.
-- `bankEdits` — правки банка в формате `bank_edit` (`{ character, section, old, new, for?, until? }`). Резолвер правит только Material и Knowledge; по духовному правка ложится предложением директору.
+- `edits` — правки файлов `{ path, old, new }`, как у директора: `Characters/<Name>/material.md` и `knowledge.md`; правка `spiritual.md` ложится предложением директору, `decree.md` — только директора. Старая форма `bankEdits` (`{ character, section, old, new }`) ещё принимается.
 - `prayer` — необязательный текст: какая система мира применена не по правилам, что сделали, что вышло.
 - `telegram` — необязательный текст, только из закрытого списка (смерть или необратимая потеря; поступок пользователя полностью ломает Указ — предательство, раскрытие, нападение на близкого; персонаж уходит из истории насовсем).
 
