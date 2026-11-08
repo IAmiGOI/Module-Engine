@@ -9,6 +9,7 @@ import { createResearcher } from '../../libraries/core/decision-researcher.js';
 import { createWebActions } from '../guide/web-actions.js';
 import { captureReasoning } from './capture.js';
 import { watchToolProgress } from './tool-progress.js';
+import { repairEmptyRules } from './creation-repair.js';
 import { createRollback } from './rollback.js';
 import { createDecisionEvents } from './events.js';
 import { registerDecisionContracts, decisionRewriteStage } from './contracts.js';
@@ -159,6 +160,10 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             // достраивается на следующем открытии. Раздел, который не построился, остаётся задачей.
             // Память Creation читается до решения: иначе начатый раз за прошлое открытие не был бы виден.
             await cycle.creation.load().catch(() => {});
+            // Правила Scales, потерянные старым разборщиком, — из исходного текста Бога в журнале, без нового запуска.
+            repairEmptyRules({ creation: cycle.creation, cycles: store.cycles() })
+                .then(names => { if (names.length) publishEvent('decision.creation.repaired', { systems: names }); })
+                .catch(() => {});
             // Бог строит мир параллельно сортировке банков; директор пишет банки Main Cast уже по готовому миру.
             const god = (fresh || (cycle.creation.started() && !cycle.creation.complete()))
                 ? Promise.resolve(cycle.maybeRunGod?.({ allowBuild: true })).catch(error => publishEvent('decision.failed', { runId: null, message: `God: ${error?.message ?? error}` }))

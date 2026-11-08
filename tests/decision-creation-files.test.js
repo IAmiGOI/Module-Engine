@@ -60,3 +60,18 @@ test('the example system in the God prompt parses into a full rule', async () =>
     for (const field of ['needs', 'yields', 'weight', 'scaling', 'limit', 'cost', 'links', 'examples']) assert.ok(parsed.rules[0][field]?.length, field);
     assert.match(parsed.rules[0].weight, /^easy;/);
 });
+
+test('a rule field written in bold is read, and rules lost by the old parser come back from God\'s own text in the log', async () => {
+    const { parseScaleFile } = await import('../libraries/core/creation-files.js');
+    const { repairEmptyRules } = await import('../cores/decision/creation-repair.js');
+    const source = '# Spirit Arts\n**Principle:** Spirits answer a contract.\n**Payment:** atmospheric mana.\n\n## Invoke\n- **Needs:** a contract.\n- **Weight:** moderate; rises with a storm\n- **Examples:**\n  - a light in the dark\n';
+    const parsed = parseScaleFile(source);
+    assert.deepEqual(parsed.rules[0].needs, ['a contract.']);
+    assert.deepEqual(parsed.rules[0].examples, ['a light in the dark']);
+    const writes = [];
+    const creation = { state: () => ({ scales: [{ name: 'Spirit Arts', rules: [{ name: 'Invoke' }] }, { name: 'Full', rules: [{ name: 'X', needs: ['y'] }] }] }), writeScale: async value => { writes.push(value); return { ok: true }; } };
+    const cycles = [{ event: 'god_declaration', toolCalls: [{ name: 'create', args: { path: 'Creation/Scales/spirit-arts.md', text: source } }] }];
+    assert.deepEqual(await repairEmptyRules({ creation, cycles }), ['Spirit Arts']);
+    assert.equal(writes.length, 1, 'a system with filled rules is left alone');
+    assert.deepEqual(writes[0].rules[0].needs, ['a contract.']);
+});

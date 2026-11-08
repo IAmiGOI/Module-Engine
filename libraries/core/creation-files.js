@@ -54,7 +54,8 @@ export function parseScaleFile(source) {
         if ((match = /^\*\*(Principle|Payment):\*\*\s*(.*)$/i.exec(line))) { result[match[1].toLowerCase()] = text(match[2]); continue; }
         if (inDiscoveries) { const body = text(line.replace(/^\s*[-*]\s+/, '')); if (body) result.discoveries.push(body); continue; }
         if (!rule) continue;
-        if ((match = /^\s*[-*]\s+([A-Za-z]+):\s*(.*)$/.exec(line)) && FIELD_BY_LABEL[match[1].toLowerCase()]) {
+        // Метка поля — как пишет модель: «- Needs: …», «- **Needs:** …» или «- **Needs**: …».
+        if ((match = /^\s*[-*]\s+\*{0,2}([A-Za-z]+)\*{0,2}\s*:\s*\*{0,2}\s*(.*)$/.exec(line)) && FIELD_BY_LABEL[match[1].toLowerCase()]) {
             field = FIELD_BY_LABEL[match[1].toLowerCase()];
             const value = text(match[2]);
             rule[field] = value && value !== '—' ? [value] : [];
