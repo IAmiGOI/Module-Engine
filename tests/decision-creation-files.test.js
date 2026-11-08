@@ -48,3 +48,15 @@ test('a system of weight survives render → parse unchanged', () => {
     assert.deepEqual(parsed.rules[0].needs, ['a', 'b']);
     assert.equal(parsed.rules[0].weight, 'hard; rises with size');
 });
+
+test('the example system in the God prompt parses into a full rule', async () => {
+    const { GOD_SYSTEM } = await import('../libraries/core/decision-prompts-god.js');
+    const { parseScaleFile } = await import('../libraries/core/creation-files.js');
+    const example = GOD_SYSTEM.split('--- example ---\n')[1].split('--- end of example ---')[0];
+    const parsed = parseScaleFile(example);
+    assert.equal(parsed.system, 'Ember Craft');
+    assert.ok(parsed.principle && parsed.payment);
+    assert.equal(parsed.rules.length, 1);
+    for (const field of ['needs', 'yields', 'weight', 'scaling', 'limit', 'cost', 'links', 'examples']) assert.ok(parsed.rules[0][field]?.length, field);
+    assert.match(parsed.rules[0].weight, /^easy;/);
+});
