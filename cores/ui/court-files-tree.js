@@ -7,7 +7,7 @@ import { buildTree, searchFiles } from '../../libraries/core/court-files-model.j
  * изменённых, у файла — вид (блок, персонаж, встроенный), несохранённое и
  * изменённое против основы. Поиск — по именам и тексту, с числом совпадений.
  */
-const KIND_GLYPH = { block: '✎', character: '◉', builtin: '◇' };
+const KIND_GLYPH = { block: '✎', character: '◉', builtin: '◇', layer: '▣' };
 const ROLE_CLASS = role => `stme-files-role-${role || 'engine'}`;
 
 function fileRow(ctx, file, { hits = 0, depth = 0, label = null } = {}) {
@@ -58,5 +58,5 @@ export function filesTreeView(ctx) {
             h('button', { type: 'button', class: 'stme-files-link', 'on:click': () => ctx.newBlock('director') }, '+ Director block'),
             h('button', { type: 'button', class: 'stme-files-link', 'on:click': () => ctx.newBlock('writer') }, '+ Writer block')),
         h('div', { class: 'stme-files-list' }, ...body),
-        h('div', { class: 'stme-files-legend' }, '✎ your block · ◉ character · ◇ built-in · ● unsaved · ◆ changed'));
+        h('div', { class: 'stme-files-legend' }, '✎ your block · ◉ character · ▣ knowledge / Creation · ◇ built-in · ● unsaved · ◆ changed'));
 }

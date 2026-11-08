@@ -1,4 +1,6 @@
 import { createKnowledge } from './knowledge.js';
+import { createFileLayer } from './files-layer.js';
+import { createCreationProvider } from './files-creation.js';
 import { runDecisionCycle } from '../../libraries/core/decision-agent.js';
 import { createUpdateStoryHandler } from './handlers-story.js';
 import { ASK_USER_STREAK, DIRECTOR_REROLL, DIRECTOR_TURN, RESOLVER_AFTER_TURN } from '../../libraries/core/decision-prompts.js';
@@ -80,6 +82,9 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     }
 
     const knowledge = createKnowledge({ call, store, banks, now });
+    // Вкладка «Files» окна The Court: те же файлы, что правят модели, — от имени пользователя.
+    const files = createFileLayer({ banks, knowledge });
+    files.addProvider(createCreationProvider({ creation, state: {} }));
     const formChecker = createFormChecker({ call, getSettings, banks, knowledge });
     const questions = createQuestionQueue({ callService, publishEvent, now });
     // Эпоха чата: смена чата её увеличивает. Фоновый цикл старого чата обрывается и ничего не пишет в новый.
@@ -468,6 +473,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         godReason: god.reasonNow,
         godTurn: god.currentTurn,
         creation,
+        files,
         answerQuestion: params => questions.answer(params),
         chatChanged,
         // Вопрос от движка, а не от модели (например, «взять готовые банки?»): та же очередь и тот же тост.

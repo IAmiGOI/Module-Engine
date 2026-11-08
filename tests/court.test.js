@@ -171,3 +171,23 @@ test('file edits read as what they change', async () => {
     assert.equal(toolLabel('edit', args), 'Edit — Lena/decree.md');
     assert.deepEqual(toolFields('edit', args), [['Lena/decree.md', '- Today: find the key.  →  - Today: hide.']]);
 });
+
+test('Files shows knowledge and Creation files and saves them through the engine', async () => {
+    const { createCourtFiles } = await import('../cores/ui/court-files.js');
+    let layer = [{ path: 'Characters/Emilia/knowledge.md', text: '- The key is in the well' }, { path: 'Creation/Scales/magic.md', text: '# Magic' }];
+    const writes = [];
+    const call = async (contract, params) => {
+        if (contract === 'decision.files') return { ok: true, value: layer };
+        if (contract === 'decision.filesWrite') { writes.push(params); layer = layer.map(file => (file.path === params.path ? { ...file, text: params.text } : file)); return { ok: true, value: { ok: true } }; }
+        return { ok: true, value: {} };
+    };
+    const files = createCourtFiles({ call });
+    await files.load();
+    const ids = files.files().filter(file => file.kind === 'layer').map(file => file.id);
+    assert.deepEqual(ids, ['layer:Characters/Emilia/knowledge.md', 'layer:Creation/Scales/magic.md']);
+    files.open(ids[1]);
+    files.setDraft(ids[1], '# Magic\n**Principle:** Will');
+    await files.save(ids[1]);
+    assert.equal(writes[0].path, 'Creation/Scales/magic.md');
+    assert.equal(files.files().find(file => file.id === ids[1]).text, '# Magic\n**Principle:** Will');
+});

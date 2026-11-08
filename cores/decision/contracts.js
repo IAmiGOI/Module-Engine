@@ -53,6 +53,18 @@ export function registerDecisionContracts(host, {
         // The Court, «Files»: Great Bank целиком и правка разделов от имени пользователя (часть 21).
         host.own.register('decision.greatBank', async () => { await banks.great.sync(); return banks.great.load(); }),
         host.own.register('decision.greatBankEdit', params => banks.edit(params ?? {}, { by: 'user' })),
+        // Остальные файлы слоя — knowledge.md и Creation/…; части банка окно берёт из decision.greatBank.
+        host.own.register('decision.files', async () => {
+            if (!cycle.files) return [];
+            const paths = (await cycle.files.list()).filter(path => !/\/(material|spiritual|decree)\.md$/i.test(path) || /^creation\//i.test(path));
+            const read = await Promise.all(paths.map(path => cycle.files.read(path)));
+            return read.filter(file => file.ok).map(file => ({ path: file.path, text: file.text }));
+        }),
+        host.own.register('decision.filesWrite', async params => {
+            if (!cycle.files) return { ok: false, error: 'Files are not available.' };
+            const current = await cycle.files.read(params?.path ?? '');
+            return cycle.files.write(current.path ?? params?.path, current.ok ? current.text : '', String(params?.text ?? ''), { comment: String(params?.comment ?? '') || 'Edited by the user in The Court.', by: 'user' });
+        }),
         host.own.register('decision.bankProgress', () => banks.progress()),
         host.own.register('decision.bankWrite', params => banks.write(params ?? {})),
         host.own.register('decision.bankRebuild', params => banks.rebuild(params ?? {})),

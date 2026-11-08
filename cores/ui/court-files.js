@@ -25,12 +25,13 @@ export function createCourtFiles({ call }) {
     const sections = signal({});
     const overrides = signal({});
     const great = signal({});
+    const layer = signal([]);
     const history = signal({});
     const tabs = signal([]);
     const active = signal('');
     const drafts = signal({});
     const views = signal({});
-    const expanded = signal(new Set(['Your blocks', 'Your blocks/Director', 'Your blocks/Writer', 'Characters', 'Built-in']));
+    const expanded = signal(new Set(['Your blocks', 'Your blocks/Director', 'Your blocks/Writer', 'Characters', 'Creation', 'Built-in']));
     const search = signal('');
     const note = signal('');
     const saveNote = signal('');
@@ -58,6 +59,14 @@ export function createCourtFiles({ call }) {
             importance: character.importance, readOnly: true, role: 'banks',
         }] : []),
     ]));
+    // knowledge.md персонажей и Creation/… Бога — файлами движка (`decision.files`), как их видят модели.
+    const layerFiles = computed(() => layer().map(file => {
+        const knowledge = /\/knowledge\.md$/i.test(file.path);
+        return {
+            id: `layer:${file.path}`, kind: 'layer', path: file.path, title: file.path.replace(/^(Characters|Creation)\//, '').replace(/\.md$/i, ''),
+            text: String(file.text ?? ''), part: knowledge ? 'knowledge' : 'creation', role: knowledge ? 'banks' : 'god', readOnly: false,
+        };
+    }));
     const builtInFiles = computed(() => builtIns.map(file => {
         const role = roleOfPrompt(file.name);
         const value = overrides()[file.id] ?? file.text;
@@ -66,7 +75,7 @@ export function createCourtFiles({ call }) {
             text: value, base: file.text, changed: value !== file.text, role, readOnly: false,
         };
     }));
-    const files = computed(() => [...blockFiles(), ...characterFiles(), ...builtInFiles()]);
+    const files = computed(() => [...blockFiles(), ...characterFiles(), ...layerFiles(), ...builtInFiles()]);
     const byId = id => files.peek().find(file => file.id === id) ?? null;
     const current = computed(() => files().find(file => file.id === active()) ?? null);
     const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -79,11 +88,17 @@ export function createCourtFiles({ call }) {
             call('storage.settings.get', { namespace: HISTORY_NAMESPACE, key: HISTORY_KEY, fallback: {} }),
             call('decision.greatBank'),
         ]);
+        await loadLayer();
         sections.set(settings.ok ? structuredClone(settings.value?.promptSections ?? {}) : {});
         overrides.set(settings.ok ? { ...(settings.value?.promptOverrides ?? {}) } : {});
         great.set(bank.ok && bank.value && typeof bank.value === 'object' ? bank.value : {});
         history.set(stored.ok && stored.value && typeof stored.value === 'object' ? stored.value : {});
         if (!active.peek() && files.peek().length) open(files.peek()[0].id);
+    }
+
+    async function loadLayer() {
+        const answer = await call('decision.files');
+        layer.set(answer.ok && Array.isArray(answer.value) ? answer.value : []);
     }
 
     function open(id) {
@@ -150,6 +165,10 @@ export function createCourtFiles({ call }) {
                 if (!answer.ok) throw new Error(answer.error?.message ?? 'Not saved.');
                 const fresh = await call('decision.greatBank');
                 if (fresh.ok && fresh.value) great.set(fresh.value);
+            } else if (file.kind === 'layer') {
+                const answer = await call('decision.filesWrite', { path: file.path, text: value, comment: saveNote.peek() });
+                if (!answer.ok || answer.value?.ok === false) throw new Error(answer.error?.message ?? answer.value?.error ?? 'Not saved.');
+                await loadLayer();
             } else if (file.kind === 'builtin') {
                 const next = { ...overrides.peek() };
                 if (value === file.base) delete next[file.id]; else next[file.id] = value;

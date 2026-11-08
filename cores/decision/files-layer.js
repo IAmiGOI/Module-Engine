@@ -142,5 +142,5 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
 
     function addProvider(provider) { providers.push(provider); }
 
-    return { list, read, edit, create, addProvider };
+    return { list, read, write, edit, create, addProvider };
 }

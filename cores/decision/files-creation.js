@@ -31,7 +31,7 @@ export function createCreationProvider({ creation, state = {} }) {
             const section = findSection(path);
             return section ? { ok: true, path: sectionPath(section), text: String(section.text ?? '') } : { ok: false, error: `There is no section "${path}" yet — create it.` };
         },
-        async write(path, after, { comment = '' } = {}) {
+        async write(path, after, { comment = '', by = 'god' } = {}) {
             await creation.load();
             if (isScale(path)) {
                 const before = findScale(path);
@@ -47,7 +47,7 @@ export function createCreationProvider({ creation, state = {} }) {
             }
             const section = findSection(path);
             const title = section?.title ?? String(path).split('/').pop().replace(/\.md$/i, '').replace(/-/g, ' ');
-            return creation.writeSections({ sections: [{ title, text: String(after ?? '') }], at: state.rpLabel ?? '', by: 'god', comment });
+            return creation.writeSections({ sections: [{ title, text: String(after ?? '') }], at: state.rpLabel ?? '', by, comment });
         },
     };
 }

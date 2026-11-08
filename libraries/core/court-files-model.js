@@ -37,6 +37,9 @@ const KNOWN_USE = {
 export function usageOf(file) {
     if (file?.kind === 'block') return `Your ${file.section === 'writer' ? 'Writer' : 'Director'} block — added to that section of the context in the order of its tree.`;
     if (file?.kind === 'character' && file.part === 'card') return 'An older data bank, not yet split into sections — the engine rebuilds it; until then it reaches the roles as is.';
+    if (file?.kind === 'layer' && file.part === 'knowledge') return 'What this character knows — a new line is learned, a removed line is forgotten, a changed line is revised. The Resolver edits it after each turn.';
+    if (file?.kind === 'layer' && /^Creation\/Scales\//i.test(file.path)) return 'A Scales system of God — rules the Resolver weighs every roll by. New lines under Discoveries are recorded as discoveries.';
+    if (file?.kind === 'layer') return 'A section of the Creation — the world God built; it reaches the Director and the Resolver.';
     if (file?.kind === 'character') return file.part === 'decree' ? 'The Decree of this character — written by the Director, read by the Resolver (@10) and the Writer.' : `The ${file.part} part of the Great Bank — projections of it reach the roles.`;
     if (file?.name && KNOWN_USE[file.name]) return KNOWN_USE[file.name];
     if (file?.name) return `A built-in prompt of the ${ROLE_FOLDERS[roleOfPrompt(file.name)] ?? 'engine'}.`;

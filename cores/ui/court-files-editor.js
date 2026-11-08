@@ -12,7 +12,7 @@ import { markdownBlocks } from '../../libraries/core/court-markdown.js';
  * Changes / vs Default, редактор с номерами строк, diff с номерами старой и новой
  * версии, сохранение с заметкой, правка через ИИ, история с откатом.
  */
-const KIND_LABEL = { block: 'Your block', character: 'Great Bank', builtin: 'Built-in' };
+const KIND_LABEL = { layer: 'Engine file', block: 'Your block', character: 'Great Bank', builtin: 'Built-in' };
 
 function inline(tokens) {
     return tokens.map(token => (token.t === 'b' ? h('strong', {}, token.v) : token.t === 'i' ? h('em', {}, token.v)
