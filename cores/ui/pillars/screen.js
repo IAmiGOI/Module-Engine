@@ -10,6 +10,22 @@ import { PILLARS_MARKUP } from './screen-markup.js';
  * действия — `actions` (их проводит ядро через контракты движка). Своих данных экран не держит.
  */
 const FONTS = 'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Barlow+Condensed:wght@400;500;600&family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Reenie+Beanie&display=swap';
+// живые тексты длиннее макетных: ничего не выезжает за страницу — переносы, ограниченные колонки, многоточия
+const FIT_CSS = `
+.ink, .sheet-in, .depth-in, .entry, .art { overflow-wrap: anywhere; }
+.ink > *, .ink dl, .ink dd, .ink dt, .ink p { max-width: 100%; min-width: 0; }
+.ink dl { grid-template-columns: minmax(4.5em, 32%) minmax(0, 1fr); }
+.ink dl + dl { margin-top: 9px; }
+.ink img { max-width: 100%; }
+.ink .nm, .ink .h, .ink .title .big { overflow-wrap: anywhere; hyphens: auto; }
+.ink .toc button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ink .toc button b { flex: none; }
+.thumb { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thumb small { overflow: hidden; text-overflow: ellipsis; }
+.ribbon { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blank { max-width: 100%; overflow-wrap: anywhere; }
+.entry .det pre, .slip pre { overflow-wrap: anywhere; white-space: pre-wrap; }
+`;
 const esc = value => String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export function createPillarsScreen({ document = globalThis.document, load = async () => null, actions = {}, onHide = () => {} } = {}) {
@@ -20,7 +36,7 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
   host.className = 'stme-pillars-host';
   host.style.cssText = 'position:fixed;inset:0;z-index:31000;display:none;';
   const root = host.attachShadow({ mode: 'open' });
-  root.innerHTML = `<style>${PILLARS_CSS}</style><div class="stage">${PILLARS_MARKUP}</div>`;
+  root.innerHTML = `<style>${PILLARS_CSS}${FIT_CSS}</style><div class="stage">${PILLARS_MARKUP}</div>`;
   const $ = selector => root.querySelector(selector), $$ = selector => root.querySelectorAll(selector);
   let visible = false, chatName = '';
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -337,7 +353,7 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
     $('[data-body="other"]').hidden = bank || charter || canon || court;
     menu.dataset.mode = bank ? 'bank' : p.dataset.p;
     // данные столпа — из моделей движка; вид рисуется, когда модель пришла
-    loadModel(p.dataset.p).then(() => { if (bank) { setVolume(p.dataset.p); openBook(); } if (charter) openCharter(); if (canon) openCanon(); if (court) openCourt(); });
+    loadModel(p.dataset.p).then(() => document.fonts?.ready).then(() => { if (bank) { setVolume(p.dataset.p); openBook(); } if (charter) openCharter(); if (canon) openCanon(); if (court) openCourt(); });
     setTimeout(() => paintPlate(bank ? 'book' : charter ? 'scroll' : canon ? 'sky' : court ? 'court' : ''), reduce ? 0 : 700);
     target = 1; $('.pillars').classList.add('swallowed');
     setTimeout(() => menu.classList.add('open'), reduce ? 0 : 650);
@@ -459,40 +475,95 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
     }
     return firstSpread(s => s.who === who);
   }
-  function tocHTML() {
-    const rows = (bm.thumbs ?? []).filter(t => t.id !== 'contents').map(t => {
-      const i = targetOf(t);
-      return `<li><button data-go="${i}"><span>${esc(t.label)}</span><i></i><b>${esc(SPREADS[i]?.left?.folio ?? '')}</b></button></li>`;
-    }).join('');
-    return `<div class="h">Contents</div><ul class="toc">${rows}</ul>`;
+  // книга не показывает Markdown: звёздочки, решётки и списки становятся оформлением
+  function md(value) {
+    return esc(value)
+      .replace(/^\s*#+\s*/, '')
+      .replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '• ')
+      .replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a, b) => `<b>${a ?? b}</b>`)
+      .replace(/(^|[\s(“"'])[*_](?=\S)(.+?)(?<=\S)[*_](?=[\s.,;:!?)”"']|$)/g, '$1<i>$2</i>')
+      .replace(/`([^`]+)`/g, '<i>$1</i>')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
   }
-  /** Блоки страницы (`Page.blocks`) → разметка книги макета. */
-  function pageHTML(pg, side) {
-    let html = '', heads = 0, texts = 0;
+  // длинный абзац режется по предложениям, чтобы перенос на следующую страницу не оставлял дыр
+  function sentences(value, max = 520) {
+    const textValue = String(value ?? '');
+    if (textValue.length <= max) return [textValue];
+    const parts = textValue.match(/[^.!?]+[.!?]+["”')]*\s*|[^.!?]+$/g) ?? [textValue];
+    const out = []; let cur = '';
+    for (const part of parts) { if ((cur + part).length > max && cur) { out.push(cur.trim()); cur = ''; } cur += part; }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  }
+  // оглавление: номера и переходы ставятся по готовой раскладке страниц (`fillToc`)
+  function tocPieces() {
+    return ['<div class="h">Contents</div>', ...(bm.thumbs ?? []).filter(t => t.id !== 'contents').map(t => {
+      const who = esc(t.go?.who ?? t.id);
+      return `<ul class="toc"><li><button data-go="@go:${who}@"><span>${esc(t.label)}</span><i></i><b>@folio:${who}@</b></button></li></ul>`;
+    })];
+  }
+  const fillToc = html => String(html ?? '').replace(/@go:([^@]*)@/g, (_, who) => targetOf({ id: who })).replace(/@folio:([^@]*)@/g, (_, who) => folioL(targetOf({ id: who })));
+  /** Блоки страницы (`Page.blocks`) → куски разметки: по ним страница режется, если не влезает. */
+  function blockPieces(pg, side) {
+    const out = []; let heads = 0, texts = 0;
     for (const b of pg?.blocks ?? []) {
       if (b.type === 'heading') {
-        if (side === 'right' && heads === 0 && b.text === 'Contents') return tocHTML();
-        html += side === 'left' && heads === 0 ? `<div class="nm">${esc(b.text)}</div>` : `<div class="h">${esc(b.text)}</div>`;
+        if (side === 'right' && heads === 0 && b.text === 'Contents') return tocPieces();
+        out.push(side === 'left' && heads === 0 ? `<div class="nm">${md(b.text)}</div>` : `<div class="h">${md(b.text)}</div>`);
         heads += 1;
-      } else if (b.type === 'note') html += `<div class="chap">${esc(b.text)}</div>`;
+      } else if (b.type === 'note') out.push(`<div class="chap">${md(b.text)}</div>`);
       else if (b.type === 'text') {
         if (!b.text) continue;
-        html += side === 'left' ? `<div class="caption">${esc(b.text)}</div>` : `<p${texts++ ? '' : ' class="drop"'}>${esc(b.text)}</p>`;
-      } else if (b.type === 'pairs') html += `<dl>${(b.pairs ?? []).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
-      else if (b.type === 'amend') html += `<div class="amend">${b.was ? `<div class="was">${esc(b.was)}</div>` : ''}<div class="now">${esc(b.now)}</div><div class="who">— ${esc(b.who)}</div></div>`;
-      else if (b.type === 'sketch') html += `<img class="portrait" src="${sketch(SKETCH_KINDS.includes(b.kind) ? b.kind : 'figure')}" alt="">`;
+        if (side === 'left') { out.push(`<div class="caption">${md(b.text)}</div>`); continue; }
+        for (const part of sentences(b.text)) { const bullet = /^\s*(?:[-*•]|\d+[.)])\s+/.test(part); out.push(`<p${texts++ || bullet ? '' : ' class="drop"'}>${md(part)}</p>`); }
+      } else if (b.type === 'pairs') for (const [k, v] of b.pairs ?? []) out.push(`<dl><dt>${md(k)}</dt><dd>${md(v)}</dd></dl>`);
+      else if (b.type === 'amend') out.push(`<div class="amend">${b.was ? `<div class="was">${md(b.was)}</div>` : ''}<div class="now">${md(b.now)}</div><div class="who">— ${esc(b.who)}</div></div>`);
+      else if (b.type === 'sketch') out.push(`<img class="portrait" src="${sketch(SKETCH_KINDS.includes(b.kind) ? b.kind : 'figure')}" alt="">`);
     }
-    return html;
+    return out;
+  }
+  // страница меряется невидимым листом того же размера: что не влезло — на следующую страницу, дальше по разворотам
+  const folioL = i => 2 * i + 2, folioR = i => 2 * i + 3;
+  let measure = null;
+  function measureInk() {
+    if (!measure) {
+      measure = document.createElement('div'); measure.className = 'leaf measure';
+      measure.style.cssText = 'visibility:hidden;pointer-events:none;z-index:-1;transform:none';
+      measure.innerHTML = '<div class="face front"><div class="ink"></div></div>';
+    }
+    if (!measure.isConnected) pagesEl.append(measure);
+    return measure.querySelector('.ink');
+  }
+  function fit(pieces) {
+    const ink = measureInk();
+    if (!ink.clientHeight) return [pieces.join('')]; // нет раскладки (узкий экран) — страницы и так растут вниз
+    const pages = []; let cur = [];
+    for (const piece of pieces) {
+      ink.innerHTML = cur.concat(piece).join('');
+      if (ink.scrollHeight > ink.clientHeight + 1 && cur.length) { pages.push(cur.join('')); cur = [piece]; } else cur.push(piece);
+    }
+    pages.push(cur.join('')); ink.innerHTML = '';
+    return pages;
+  }
+  function paginate(spreads) {
+    const out = [];
+    for (const sp of spreads) {
+      const chunks = fit(blockPieces(sp.right, 'right'));
+      out.push({ ...sp, rightHTML: chunks[0] });
+      for (let k = 1; k < chunks.length; k += 2) out.push({ who: sp.who, part: sp.part, group: sp.group, cont: true, leftHTML: chunks[k], rightHTML: chunks[k + 1] ?? '' });
+    }
+    measure?.remove();
+    return out;
   }
   function pageL(i) {
-    const pg = SPREADS[i]?.left;
+    const sp = SPREADS[i];
     if (i === 0) {
-      const head = pg?.blocks?.find(b => b.type === 'heading')?.text ?? '', line = pg?.blocks?.find(b => b.type === 'text')?.text ?? '';
-      return { html: `<div class="title"><div class="chap">being a true account of</div><div class="big">${esc(head)}</div><img src="${coverSrc()}" alt=""><div class="sub">${esc(line)}</div></div>`, no: pg?.folio ?? '' };
+      const pg = sp?.left, head = pg?.blocks?.find(b => b.type === 'heading')?.text ?? '', line = pg?.blocks?.find(b => b.type === 'text')?.text ?? '';
+      return { html: `<div class="title"><div class="chap">being a true account of</div><div class="big">${md(head)}</div><img src="${coverSrc()}" alt=""><div class="sub">${md(line)}</div></div>`, no: folioL(0) };
     }
-    return { html: pageHTML(pg, 'left'), no: pg?.folio ?? '' };
+    return { html: sp?.cont ? fillToc(sp.leftHTML) : blockPieces(sp?.left, 'left').join(''), no: folioL(i) };
   }
-  function pageR(i) { const pg = SPREADS[i]?.right; return { html: pageHTML(pg, 'right'), no: pg?.folio ?? '' }; }
+  function pageR(i) { const sp = SPREADS[i]; return { html: fillToc(sp?.rightHTML ?? blockPieces(sp?.right, 'right').join('')), no: folioR(i) }; }
   function paintChrome() {
     const cur = SPREADS[state.i] ?? {};
     tome.dataset.kind = vol === 'world' ? 'chapter' : cur.who && cur.who !== 'contents' ? 'chapter' : 'contents';
@@ -508,7 +579,8 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
   const EMPTY_SPREAD = v => ({ who: 'contents', left: { blocks: [{ type: 'heading', text: v === 'world' ? 'The World' : 'The Great Bank' }, { type: 'text', text: 'Nothing is written here yet.' }], folio: 1 }, right: { blocks: [], folio: 2 } });
   function setVolume(v) {
     vol = v; bm = books[v] ?? { spreads: [], thumbs: [], ribbons: [] };
-    SPREADS = bm.spreads?.length ? bm.spreads : [EMPTY_SPREAD(v)];
+    SPREADS = []; // targetOf в оглавлении читает уже готовую раскладку
+    SPREADS = paginate(bm.spreads?.length ? bm.spreads : [EMPTY_SPREAD(v)]);
     state = { i: Math.min(savedAt[v] ?? 0, SPREADS.length - 1) };
     tome.querySelector('[data-cover]').src = coverSrc();
     tome.querySelector('.lid .seal span').textContent = v === 'world' ? 'The World' : 'The Great Bank';
@@ -791,9 +863,9 @@ export function createPillarsScreen({ document = globalThis.document, load = asy
   }
   const roleOf = id => (courtModel.roles ?? []).find(r => r.id === id);
   const entryHTML = e => {
-    const ask = e.ask ? `<div class="sum">${esc(e.ask.prompt)}</div><div class="answer" contenteditable="true" data-ph="write your answer…"></div><button class="send" data-ask="${esc(e.ask.id ?? '')}">send</button>` : '';
+    const ask = e.ask ? `<div class="sum">${md(e.ask.prompt)}</div><div class="answer" contenteditable="true" data-ph="write your answer…"></div><button class="send" data-ask="${esc(e.ask.id ?? '')}">send</button>` : '';
     const det = e.ask ? '' : `<div class="det"><div>${(e.fields ?? []).length ? `<dl>${e.fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}<pre>${esc(JSON.stringify(e.raw ?? {}, null, 1)).slice(0, 6000)}</pre></div></div>`;
-    return `<div class="entry${e.ask ? ' ask' : ''}"><div class="when">${esc(e.when)}</div><div class="what">${esc(e.title)}</div>${e.summary ? `<div class="sum">${esc(e.summary)}</div>` : ''}${ask}${det}</div>`;
+    return `<div class="entry${e.ask ? ' ask' : ''}"><div class="when">${esc(e.when)}</div><div class="what">${esc(e.title)}</div>${e.summary ? `<div class="sum">${md(e.summary)}</div>` : ''}${ask}${det}</div>`;
   };
   const byTurn = list => (list ?? []).filter(e => turnFilter === null || e.turn === turnFilter);
   function stagger() { const all = lane.querySelectorAll('.entry'); all.forEach((en, i) => en.style.setProperty('--i', Math.max(0, i - all.length + 12))); }
