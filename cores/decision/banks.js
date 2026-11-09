@@ -23,7 +23,10 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     const timelineQueue = new Set();
 
     const brief = () => (typeof store.chatBrief === 'function' ? store.chatBrief() : null);
-    function currentTimeline() { return String(brief()?.timeline ?? '').trim(); }
+    // Точка таймлайна: прежний бриф чата, а без него — мир от Бога (History и The User in the World из Creation).
+    // Брифа в новом запуске нет, и сборщик писал персонажей «из будущего» (Отто — уже чиновник лагеря Emilia).
+    let worldTimeline = '';
+    function currentTimeline() { return String(brief()?.timeline ?? '').trim() || worldTimeline; }
     function currentGuide() { return String(brief()?.bankGuide ?? '').trim(); }
     function keyOf(name) { return String(name ?? '').trim().toLowerCase(); }
     function matchesName(record, name) {
@@ -335,6 +338,14 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
 
     return {
         reload, reset, ensureColdStart, markSorted, ensureName, noteRosterAdded, applyTimeline: timelineAdjust.applyTimeline,
+        /** Мир от Бога как точка таймлайна; новая — уже собранные банки догоняются под неё в фоне. */
+        setWorldTimeline: value => {
+            const next = String(value ?? '').trim();
+            if (next === worldTimeline) return false;
+            worldTimeline = next;
+            if (bankFrameHash(currentTimeline(), currentGuide())) timelineAdjust.applyTimeline({ timelineBanks: brief()?.timelineBanks ?? [] }).catch(() => {});
+            return true;
+        },
         contextFor, examplesForCards,
         farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit, decreeFor: greatLayer.decreeFor,
         writerContext: names => greatLayer.writerContext(names, {

@@ -176,10 +176,16 @@ export function createDirector({
                 && Object.values(character?.decree ?? {}).some(lines => Array.isArray(lines) && lines.length));
             const untouched = [...new Set(fresh.map(item => String(item.character ?? '').trim()).filter(Boolean))]
                 .filter(name => hasDecree(name) && !(state.decreeNames ?? []).some(done => String(done).toLowerCase() === name.toLowerCase()));
+            // След в журнале: вернул ли движок Петицию и почему нет — вживую возврат однажды не сработал без видимой причины.
+            const petitioned = [...new Set(fresh.map(item => String(item.character ?? '').trim()).filter(Boolean))];
+            const note = petitioned.length
+                ? (untouched.length ? `petition handed back: ${untouched.join(', ')}` : `petition not handed back: ${petitioned.map(name => `${name} (${hasDecree(name) ? 'Decree changed' : 'no Decree'})`).join(', ')}`)
+                : '';
             if (result.type !== 'error' && untouched.length) {
                 const again = await runDecisionCycle(cycleParams([...result.messages, { role: 'user', content: fillPrompt(DIRECTOR_PETITION_STANDS, { names: untouched.join(', ') }) }]));
                 result = { ...again, trace: [...(result.trace ?? []), ...(again.trace ?? [])], warnings: [...(result.warnings ?? []), ...(again.warnings ?? [])] };
             }
+            if (note) result = { ...result, warnings: [...(result.warnings ?? []), note] };
         } finally {
             captured?.stop?.();
         }

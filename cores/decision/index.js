@@ -129,6 +129,16 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     const bootstrap = createBootstrap({ call: callStrict, store, cycle, getSettings: () => settings, getGameSettings: gameSettingsValues, publishEvent });
     const bankSets = createBankSets({ call: callStrict, banks, store, bootstrap, askUser: params => cycle.askUser(params), publishEvent });
     // Явная машина подготовки (фаза 6): шаги по фактам, а не цепочка событий.
+    /** Мир от Бога — точка таймлайна для сборщика банков (тот же текст, что «мир в начале» у Директора). */
+    async function refreshWorldTimeline() {
+        try {
+            await cycle.creation.load();
+            const text = ['History', 'The User in the World'].map(title => cycle.creation.section?.(title))
+                .filter(section => String(section?.text ?? '').trim())
+                .map(section => `### ${section.title}\n${String(section.text).trim()}`).join('\n\n');
+            banks.setWorldTimeline?.(text);
+        } catch { /* без Creation сборщик живёт прежним брифом */ }
+    }
     const preparation = createPreparation({ call: callStrict, callService, store, banks, creation: cycle.creation, cycle, publishEvent, getSettings: () => settings });
     // Canon — сохранённый итог подготовки; новый чат с тем же набором берёт его сразу.
     const canon = createCanon({
@@ -216,6 +226,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         bootstrap.isNewChat().then(async fresh => {
             // Creation (фаза 5): начатая за прошлое открытие достраивается, потерянные правила чинятся без Бога.
             await cycle.creation.load().catch(() => {});
+            await refreshWorldTimeline();
             repairStartHour({ creation: cycle.creation })
                 .then(titles => { if (titles.length) publishEvent('decision.creation.repaired', { sections: titles }); })
                 .catch(() => {});
@@ -418,6 +429,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         }
         // Ветка, начатая во время набора, решается здесь же: обучение на паузах
         // этого сообщения и решение «вливаем или идём обычным путём».
+        // Бог мог дописать мир между ходами: сборщик банков получает свежую точку таймлайна.
+        refreshWorldTimeline().catch(() => {});
         const speculation = await speculator.beginSend({ chat, runId, type });
         // Брошенная ветка отпускает слот модели не дольше трёх секунд — затем ход идёт обычным путём.
         if (!speculation.handle) await speculator.settle();
