@@ -76,7 +76,20 @@ export function lastAcceptedForm(cycles, { beforeTurn = null } = {}) {
  * кто здесь, кто в стороне, кто ушёл. Резолвер раньше тратил ризонинг на «Puck idle? он в ростере, но занят
  * внизу…» — противоречивые строки сцены звали его спорить с ней; теперь у каждого одно место.
  */
-export function renderCurrentScene({ form = null, roster = [], user = '', clock = '' } = {}) {
+/** Номер последнего хода, где персонаж действовал (не в фоне), — по принятым ходам. */
+export function lastActedTurns(cycles) {
+    const out = {};
+    for (const cycle of Array.isArray(cycles) ? cycles : []) {
+        if (!['turn', 'regenerate', 'swipe'].includes(cycle?.event) || cycle?.rejected || !cycle?.form) continue;
+        for (const character of Array.isArray(cycle.form.characters) ? cycle.form.characters : []) {
+            if (character?.idle === true || !text(character?.name)) continue;
+            out[text(character.name).toLowerCase()] = Math.max(out[text(character.name).toLowerCase()] ?? 0, Number(cycle.turn) || 0);
+        }
+    }
+    return out;
+}
+
+export function renderCurrentScene({ form = null, roster = [], user = '', clock = '', lastActed = null, turn = null } = {}) {
     if (!form) return '';
     const place = text(form.meta?.place) || text(form.scene?.place);
     const when = text(form.meta?.timeAfter) || text(clock);
@@ -100,7 +113,14 @@ export function renderCurrentScene({ form = null, roster = [], user = '', clock 
         }
     }
     if (background.length) {
-        lines.push(`- Here in the background, on their own: ${background.map(name => (text(entryOf(name)?.busy) ? `${name} (${text(entryOf(name).busy)})` : name)).join(', ')}.`);
+        // Сколько ходов молчит: Пак 41 ход висел «в фоне», хотя улетел за кадром, — ростер сам никого не отпускал.
+        const silent = name => {
+            const last = Number(lastActed?.[name.toLowerCase()]);
+            const gap = Number.isFinite(Number(turn)) && Number.isFinite(last) && last > 0 ? Number(turn) - last : null;
+            return gap && gap > 1 ? `; last acted ${gap} turns ago` : '';
+        };
+        lines.push(`- Here in the background, on their own: ${background.map(name => `${name}${text(entryOf(name)?.busy) || silent(name) ? ` (${[text(entryOf(name)?.busy), silent(name).replace(/^; /, '')].filter(Boolean).join('; ')})` : ''}`).join(', ')}.`);
+        lines.push('  Anyone listed here who is no longer here in the story — went off, stayed behind elsewhere, was left at another place — leaves the scene with the roster field this turn.');
     }
     if (departed.length) lines.push(`- Gone in that ending: ${departed.join(', ')}. They are not part of this turn unless they come back with a reason.`);
     return lines.join('\n');

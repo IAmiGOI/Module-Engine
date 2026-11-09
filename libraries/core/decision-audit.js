@@ -12,7 +12,7 @@ const text = value => String(value ?? '').trim();
 const filled = part => Object.values(part ?? {}).some(lines => Array.isArray(lines) && lines.some(line => text(line)));
 
 /** До хода: ростер против банков, персонаж пользователя, окно сцены. `{ key, message }` — key для «один раз за чат». */
-export function auditTurnInputs({ greatBank = {}, roster = [], user = '', windowEntries = [], turn = null } = {}) {
+export function auditTurnInputs({ greatBank = {}, roster = [], user = '', windowEntries = [], turn = null, lastActed = null, silentTurns = 10 } = {}) {
     const bank = normalizeGreatBank(greatBank);
     const found = [];
     for (const name of Array.isArray(roster) ? roster : []) {
@@ -23,6 +23,10 @@ export function auditTurnInputs({ greatBank = {}, roster = [], user = '', window
             continue;
         }
         if (isUserCharacter(character)) continue;
+        const last = Number(lastActed?.[character.name.toLowerCase()]);
+        if (Number.isFinite(Number(turn)) && Number.isFinite(last) && last > 0 && Number(turn) - last >= silentTurns) {
+            found.push({ key: `silent:${character.name}`, message: `${character.name} has been in the scene without acting for ${Number(turn) - last} turns — if they left in the story, the roster still holds them.` });
+        }
         const spirit = filled(character.spiritual) && character.sectionsReady !== false;
         const decree = filled(character.decree);
         if (!spirit && !decree) found.push({ key: `empty:${character.name}`, message: `${character.name} is in the scene with neither a written character (spiritual) nor a Decree — the Resolver has only their source card or nothing.` });

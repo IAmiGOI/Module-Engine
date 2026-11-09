@@ -17,3 +17,13 @@ test('the audit names what the roles would otherwise fill in silently', () => {
 test('a whole scene raises nothing', () => {
     assert.deepEqual(auditTurnInputs({ greatBank: { emilia: bank.emilia }, roster: ['Emilia'], user: 'Sasha', windowEntries: [{ kind: 'turn', turn: 64 }], turn: 65 }), []);
 });
+
+test('someone silent in the scene for many turns is named by the audit and shown to the Resolver with the gap', async () => {
+    const { renderCurrentScene } = await import('../libraries/core/decision-scene.js');
+    const puck = { name: 'Puck', sourceKey: 'lorebook:x:3', importance: 'main', spiritual: { 3: ['a'], 5: ['b'] }, decree: { 1: ['x'] } };
+    const found = auditTurnInputs({ greatBank: { puck }, roster: ['Puck'], user: 'Sasha', turn: 70, lastActed: { puck: 29 } }).map(item => item.key);
+    assert.deepEqual(found, ['silent:Puck']);
+    const scene = renderCurrentScene({ form: { characters: [], resolution: 'They walk on.' }, roster: ['Puck'], user: 'Sasha', lastActed: { puck: 29 }, turn: 70 });
+    assert.match(scene, /Puck \(last acted 41 turns ago\)/);
+    assert.match(scene, /leaves the scene with the roster field/);
+});

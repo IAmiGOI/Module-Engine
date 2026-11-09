@@ -1,3 +1,4 @@
+import { lastActedTurns } from '../../libraries/core/decision-scene.js';
 import { auditTurnInputs } from '../../libraries/core/decision-audit.js';
 import { createKnowledge } from './knowledge.js';
 import { createFileLayer } from './files-layer.js';
@@ -249,6 +250,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             const audit = auditTurnInputs({
                 greatBank: (await banks?.great?.load?.().catch(() => ({}))) ?? {}, roster: store.roster().active ?? [],
                 user: String(banks?.persona?.()?.name ?? ''), windowEntries: store.window?.()?.entries ?? [], turn: state.turnCounter,
+                lastActed: lastActedTurns(store.cycles?.() ?? []),
             });
             for (const item of audit) {
                 state.formWarnings.push(`audit: ${item.message}`);

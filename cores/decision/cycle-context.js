@@ -10,7 +10,7 @@ import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import { DIRECTOR_CONCRETE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
 import { buildStorySettingsBlock, resolveGameSettings } from '../../libraries/core/game-settings.js';
-import { lastAcceptedForm, renderAlreadySaid, renderCurrentScene, renderHiddenTruth } from '../../libraries/core/decision-scene.js';
+import { lastAcceptedForm, renderAlreadySaid, renderCurrentScene, renderHiddenTruth, lastActedTurns } from '../../libraries/core/decision-scene.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createKnowledge } from './knowledge.js';
 import { createRetryRunner } from './retry.js';
@@ -183,7 +183,7 @@ export function createCycleContext({ call, store, banks = null, creation = null,
         const scene = renderCurrentScene({
             form: lastAcceptedForm(cycles, { beforeTurn }),
             roster: typeof store.roster === 'function' ? store.roster().active ?? [] : [],
-            user,
+            user, lastActed: lastActedTurns(cycles), turn: beforeTurn,
         });
         // Сказанное — сразу за сценой, у самого задания: следующий шаг героя сверяется со списком, а не с памятью модели.
         return [scene, renderHiddenTruth(cycles, { beforeTurn, user }), renderAlreadySaid(cycles, { beforeTurn, user })].filter(Boolean).join('\n\n');
