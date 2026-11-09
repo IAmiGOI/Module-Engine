@@ -96,3 +96,20 @@ test('deleting the message does the same, and leaves earlier rejected cycles mar
     assert.equal(made.core.log()[0].rejected, true);
     assert.equal(made.core.log()[1].rejected, true);
 });
+
+test('a discarded turn takes its Great Bank changes with it: knowledge and edits written after the turn are rolled back', async () => {
+    const { createRollback } = await import('../cores/decision/rollback.js');
+    const memory = new Map([['greatBank', { emilia: { knowledge: { items: [] } } }]]);
+    const call = async (contract, params) => {
+        if (contract === 'storage.chatMemory.get') return memory.get(params.key) ?? params.fallback;
+        if (contract === 'storage.chatMemory.set') { memory.set(params.key, params.value); return true; }
+        return null;
+    };
+    const noop = async () => {};
+    const store = { roster: () => ({ active: [] }), plan: () => null, arcs: () => [], notes: () => ({}), library: () => ({}), plans: () => [], clock: () => ({ minutes: 0 }), saveRoster: noop, savePlan: noop, saveArcs: noop, saveNotes: noop, saveLibrary: noop, savePlans: noop, saveClock: noop };
+    const rollback = createRollback({ store, getSettings: () => ({ snapshots: true }), publishEvent: () => {}, call });
+    const snapshot = await rollback.snapshotState('run_1', null);
+    memory.set('greatBank', { emilia: { knowledge: { items: [{ id: 'k_x', fact: 'The factor accepted.' }] } } });
+    await rollback.restoreState(snapshot);
+    assert.deepEqual(memory.get('greatBank'), { emilia: { knowledge: { items: [] } } });
+});

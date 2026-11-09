@@ -194,6 +194,10 @@ export function createDecisionStore({ call, publishEvent }) {
                 const entries = Object.entries(snapshots);
                 if (entries.length >= 50) delete snapshots[entries[0][0]];
                 snapshots[mesid] = record.snapshot;
+                // Great Bank тяжёлый (сотни КБ): держим его только в трёх последних снимках — переигрывают почти всегда последний ход.
+                for (const [key] of Object.entries(snapshots).slice(0, -3)) {
+                    if (snapshots[key]?.greatBank) { const { greatBank: _dropped, ...rest } = snapshots[key]; snapshots[key] = rest; }
+                }
                 await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', value: snapshots });
             }
             return stored;

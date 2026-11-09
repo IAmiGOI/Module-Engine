@@ -8,16 +8,22 @@ import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-setting
  */
 // Знания персонажей тоже откатываются: иначе «Пак узнал…» из отброшенной попытки хода оставалось навсегда.
 const KNOWLEDGE = { namespace: DECISION_MEMORY_NAMESPACE, key: 'knowledge' };
+// Great Bank — тоже: знания, внешность, одежда пишутся туда «после хода». Без отката перегенерированный ход видел
+// «фактор уже принял предложение» из отброшенной версии и спорил со сценой («Wait… but the knowledge bank shows…»).
+const GREAT = { namespace: DECISION_MEMORY_NAMESPACE, key: 'greatBank' };
+const copy = value => (value && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : null);
 
 export function createRollback({ store, getSettings, publishEvent, call = null }) {
     async function snapshotState(runId, journal) {
         const knowledge = call ? await call('storage.chatMemory.get', { ...KNOWLEDGE, fallback: {} }).catch(() => null) : null;
+        const great = call ? await call('storage.chatMemory.get', { ...GREAT, fallback: {} }).catch(() => null) : null;
         return {
             runId,
             journal,
             roster: store.roster(), plan: store.plan(), arcs: store.arcs(),
             notes: store.notes(), library: store.library(), plans: store.plans(), clock: store.clock(),
             ...(knowledge && typeof knowledge === 'object' ? { knowledge: JSON.parse(JSON.stringify(knowledge)) } : {}),
+            ...(copy(great) ? { greatBank: copy(great) } : {}),
         };
     }
 
@@ -31,6 +37,7 @@ export function createRollback({ store, getSettings, publishEvent, call = null }
         ]);
         if (state.journal) await store.restoreJournal(state.journal).catch(() => {});
         if (call && state.knowledge && typeof state.knowledge === 'object') await call('storage.chatMemory.set', { ...KNOWLEDGE, value: state.knowledge }).catch(() => {});
+        if (call && state.greatBank && typeof state.greatBank === 'object') await call('storage.chatMemory.set', { ...GREAT, value: state.greatBank }).catch(() => {});
     }
 
     async function restoreSnapshotFor(mesid, { remove = false } = {}) {
