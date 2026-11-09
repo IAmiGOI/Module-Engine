@@ -1,3 +1,4 @@
+import { upcomingWithoutBank } from '../../libraries/core/decision-director.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
 import { promptText } from '../../libraries/core/prompt-overrides.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
@@ -9,7 +10,7 @@ import { libraryLevelsSection } from '../../libraries/core/decision-library.js';
 import {
     COUNSELLOR_SYSTEM, COUNSELLOR_REVIEW, COUNSELLOR_DAY, COUNSELLOR_MESSAGE, COUNSELLOR_GOD, COUNSELLOR_STATUS,
     LEDGER_HEADER, DECREE_HEADER, QUEUES_HEADER, COUNSELLOR_CHAT_HEADER, RP_TIME_HEADER,
-    NO_NEW_LEDGER, NO_DECREE_YET, GOD_ASKS_HEADER, fillPrompt,
+    NO_NEW_LEDGER, NO_DECREE_YET, GOD_ASKS_HEADER, UNWRITTEN_BANKS_HEADER, fillPrompt,
 } from '../../libraries/core/decision-prompts.js';
 import {
     dayOf, dayChanged, shouldReview, makePetition, ensureDayPetitions, decreeNames,
@@ -93,6 +94,9 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         if (openQuestions.length) {
             messages.push({ role: 'system', content: `${GOD_ASKS_HEADER}\n\n${renderGodQuestions(openQuestions)}` });
         }
+        // Кто из названных в строках ещё без банка — данные Советнику; просить Директора подготовить банк — его решение.
+        const unwritten = talk(mode) || !banks?.great?.load ? [] : upcomingWithoutBank(await banks.great.load().catch(() => ({})), rows);
+        if (unwritten.length) messages.push({ role: 'system', content: `${UNWRITTEN_BANKS_HEADER}\n${unwritten.map(name => `- ${name}`).join('\n')}` });
         messages.push(
             { role: 'system', content: `${DECREE_HEADER}\n\n${libraryLevelsSection(store.library()) || 'CHARACTER LIBRARY: no levels yet.'}\n\n${await decreeText()}` },
             { role: 'system', content: `${RP_TIME_HEADER} ${rpNow(store, clockLabel)}` },

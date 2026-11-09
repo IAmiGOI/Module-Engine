@@ -253,3 +253,15 @@ test('await is the Director\'s own tool, and a Petition with no Decree change is
     assert.ok(!(result.cycle.warnings ?? []).some(warning => /without a tool call/.test(warning)), 'await is handled, not an implicit answer');
     assert.equal(result.cycle.toolCalls.filter(item => item.name === 'await').length, 2);
 });
+
+test('the Counsellor\'s data: characters the Ledger names who have a source but no written bank', async () => {
+    const { upcomingWithoutBank } = await import('../libraries/core/decision-director.js');
+    const state = {
+        otto: { name: 'Otto', importance: 'side', fallbackText: 'A timid merchant.', spiritual: {} },
+        lena: { name: 'Lena', importance: 'main', fallbackText: 'x', spiritual: { 1: ['Freedom.'] } },
+        me: { name: 'Sasha', importance: 'side', sourceKey: 'persona:user', fallbackText: 'x', spiritual: {} },
+    };
+    const ledger = [{ turn: 5, character: 'Lena', wanted: 'Find Otto at the yards', did: 'Asks Sasha about Lena', result: '' }];
+    assert.deepEqual(upcomingWithoutBank(state, ledger), ['Otto']);
+    assert.deepEqual(upcomingWithoutBank(state, []), []);
+});

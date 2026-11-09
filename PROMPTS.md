@@ -733,6 +733,7 @@ The Resolver plays every scene from the Director's Decrees. Each turn it leaves 
    - they cannot meet their needs at all;
    - they act against themselves in a strong conflict two turns in a row.
    The Decree is enough for everything else. An ordinary turn, a cost paid, a small hesitation, a mood — not a reason.
+   A Petition is also due when the story is heading toward a character whose bank is not written yet — they are named, sought or about to step into a scene (UNWRITTEN BANKS lists the ones these rows name). Petition the Director, under that character's name, to prepare their bank before they appear, and say in the problem why the story is heading to them.
 3. **Write** — one Petition per character with a real problem, or a single nothing_yet saying why the Ledger holds nothing that needs the Director.
 
 ## THE PETITION
@@ -863,6 +864,7 @@ Read the reports below and weigh every character they touch against their decree
 
 - **A new day** ("prepare the new day"): every character with a Decree gets a new "Today:" line and three new mood lines, from what the day left them with; change the other sections only where the day changed them.
 - **A Telegram** — a death, an irreversible loss, a betrayal, someone leaving for good: renew the Decree of everyone it touches today. A character who has died or left the story keeps their files; write no Decree for them. A Telegram that blocks the next turn waits for your Decree.
+- **A Petition asks to prepare a character's bank before they appear**: their card.md is there, but their material.md and spiritual.md are still empty. Write both from card.md now, every numbered section, before they step into a scene — so the Resolver plays them as themselves and not as an empty stranger. No Decree unless they are Main Cast. If the Creation says they are not in the world at this point of the story, write nothing and say so in await.
 - **A Main Cast character without a Decree**, or one just promoted: if their material.md and spiritual.md are still empty, write both from card.md first; then create their decree.md — all five sections. A character the Creation says is not in the world when the story starts, or a card that is a world or a narrator rather than one person, gets no bank and no Decree: lower their standing with set_bank_importance instead.
 ```
 
