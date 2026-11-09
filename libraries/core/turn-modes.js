@@ -12,59 +12,67 @@ export const TURN_MODES = Object.freeze([
         id: 'peasant', label: 'Peasant', rolls: 'explicit',
         when: 'everyday life: nothing important is at stake',
         resolver: 'An ordinary moment. Keep the turn short and alive: small concrete things people do, no forced drama.',
-        writer: 'Plain and lively: everyday texture, short exchanges.',
+        writer: 'This is an everyday moment: keep it plain and lively, with everyday texture and short exchanges.',
         fields: {},
     },
     {
         id: 'elder', label: 'Elder', rolls: 'no',
         when: 'an important talk: a confession, a hard truth, a decision about trust',
         resolver: 'An important talk. Each character answers the meaning of what was said, and their view of the speaker can change this turn — trust gained or lost, a mind changed.',
-        writer: 'Weighty: let lines land, leave pauses, show what it costs them to speak.',
+        writer: 'This is a weighty talk: let each line land and leave room after it, and show what speaking costs them.',
         fields: { view_of: 'how they see the speaker' },
     },
     {
         id: 'merchant', label: 'Merchant', rolls: 'no',
         when: 'trade or a deal: goods, services, payment, terms',
         resolver: 'A deal. A character offers and promises only what their bank says they have and control. The other side weighs what they gain against what they risk, believes nothing they cannot check, and has their own interest. Moving forward can be a counter-demand, a refusal, a test or a delay — not only agreement.',
-        writer: 'Concrete: terms, sums and conditions as the characters would say them; hesitation shows in what they do, not in what they say about it.',
+        writer: 'This is a deal: give terms, sums and conditions as the characters would actually say them, and let hesitation show in what they do, not in what they say about it.',
         fields: { deal: 'what is being dealt and on what terms', stake: 'what they want from the deal' },
     },
     {
         id: 'king', label: 'King', rolls: 'no',
         when: 'politics: power, factions, leverage, alliances',
         resolver: 'Politics. Every side has a position, a price and consequences beyond this room. Nothing big is settled in a single turn; words are moves, and each move is answered with a move.',
-        writer: 'Subtext and the balance of power: who holds the advantage shows in posture and silence.',
+        writer: 'This is politics: carry it in subtext — who holds the advantage shows in how people hold themselves and in what they leave unsaid, not in explanation.',
         fields: { stake: 'what their side wants from the others' },
     },
     {
         id: 'warrior', label: 'Warrior', rolls: 'yes',
         when: 'a fight, a chase or direct danger',
         resolver: 'Danger. Roll every attempt that can fail; track positions, wounds and who can see whom. Things happen fast and in order.',
-        writer: 'Short, sharp sentences; physical and immediate; no reflection mid-action.',
+        writer: 'This is danger: short, sharp sentences, physical and immediate, with no reflection in the middle of the action.',
         fields: { position: 'where they are relative to the others', condition: 'what shape they are in' },
     },
     {
         id: 'hunter', label: 'Hunter', rolls: 'yes',
         when: 'stealth, searching, following someone or investigating',
         resolver: 'A search or stealth. Roll noticing and hiding; decide what is found and what is missed, and what the searched-for does meanwhile.',
-        writer: 'Traces and details; held breath; what is noticed and what slips past.',
+        writer: 'This is a search or stealth: give traces and details, the tension of keeping still, and what is noticed against what slips past.',
         fields: { aware_of: 'whom and what they have noticed' },
     },
     {
         id: 'artist', label: 'Artist', rolls: 'explicit',
         when: 'a place or moment that should be shown: arriving somewhere new, a view, a striking change of scene',
         resolver: 'A moment to be shown. Do not rush the turn; choose what the eye falls on first and what it lingers on.',
-        writer: 'Descriptive: show the place or the moment; choose the details of focus — what is seen first, what stays.',
+        writer: 'This is a moment to be shown: describe the place or the moment, choosing which details the eye falls on first and which stay with it.',
         fields: { focus: 'what the eye lingers on' },
     },
     {
         id: 'bard', label: 'Bard', rolls: 'no',
         when: 'a warm, close, quiet scene between people',
         resolver: 'A warm, close scene. Slow down; no hurry to move the plot — small gestures and what people feel for each other are the turn.',
-        writer: 'Slow and sensory; closeness in small gestures; quiet between the lines.',
+        writer: 'This is a warm, close moment: write it slow and sensory, with closeness in small gestures and weight in what goes unsaid.',
         fields: { toward: 'what they feel toward the other', closeness: 'how close they would let the other come' },
     },
 ]);
+
+/** Как заполнять форму режима — самодостаточно: модель не знает нашего обсуждения real/lens. */
+const MODE_FORM_HEAD = 'THE MODE FORM: for every character who acts, also fill "mode". Its fields describe where the character stands in this kind of scene — their state at this moment, not what they do this turn and not how the turn ends; deeds and words stay in does, says and beats. Each field is {"real": …, "lens": …}. The fields for this turn:';
+const MODE_FORM_HALVES = [
+    'real — the truth of it as the character holds it: what they actually intend, want, have or feel, including what they keep to themselves. The Writer never sees it; it is kept for the next turns, so that what is hidden stays consistent.',
+    'lens — what someone else can actually see and understand of it right now, from what the character does this turn. Only what is plainly visible — never an interpretation of it, never a narrator\'s label for who the character is. It shows through the character\'s own manner and the ways of their culture: a reserved person lets little show, an open one more. It is not a clue planted for the user: if the truth does not show, the lens holds only the surface. How much shows depends on how closely the user looks in their latest message: a passing glance gives only the obvious, watching for a while gives a little more, studying one detail gives more still. A state that simply continues from before has already been seen; the lens is what this turn\'s action adds to it.',
+    'Fill both halves, even when they are the same.',
+].join('\n');
 
 export const MODE_IDS = Object.freeze(TURN_MODES.map(mode => mode.id));
 const byId = id => TURN_MODES.find(mode => mode.id === text(id).toLowerCase()) ?? null;
@@ -129,7 +137,7 @@ export function resolverModeBlock(ids) {
     const rolls = modesAllowRolls(ids) ? '' : '\nNothing is rolled this turn.';
     const fields = Object.entries(modeFields(ids));
     const form = fields.length
-        ? `\n\nFor every character who acts, fill "mode" with these fields, each as {"real": …, "lens": …}:\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\nreal — what the one who acts means by it; the Writer never sees it. lens — what the user or the people around can see and plainly understand of it through what they do this turn: every action shows something, so it is new every turn; a hold or a stance that simply goes on from before is already seen and is not this turn's lens. How much shows depends on how one looks: a passing glance gives only the obvious, watching for a while gives a little more, looking straight at a detail gives more still. What shows comes from who they are — their own manner and their culture's ways — never a hint for the user. Never explained. Fill both, even when they are the same.`
+        ? `\n\n${MODE_FORM_HEAD}\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\n${MODE_FORM_HALVES}`
         : '';
     return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}${rolls}${form}`;
 }

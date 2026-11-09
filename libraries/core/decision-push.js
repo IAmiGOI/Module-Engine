@@ -133,7 +133,7 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
     return [
         head.join(' '),
         line(modeLine),
-        lenses.length ? `AS IT SHOWS:\n${lenses.join('\n')}` : '',
+        lenses.length ? `AS IT SHOWS — what the user can see of each character this turn. It is the visible surface only: show it through their behaviour in the scene, in your own words; do not copy these phrases onto the page and do not explain what they mean. What lies beneath is kept from you on purpose — do not guess at it or hint at it.\n${lenses.join('\n')}` : '',
         `THE USER'S ACTION (theirs and already done — the others meet it; never give it to anyone else), AND HOW IT LANDS: ${line(form?.userResult)}`,
         `BEATS — in this order, each one happens once:\n${beats.join('\n')}`,
         `END: ${line(form?.stop ?? form?.resolution)} Stop there.`,

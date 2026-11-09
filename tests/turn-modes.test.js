@@ -20,7 +20,7 @@ test('a talk-only turn has no rolls; a fight or an everyday turn keeps them', ()
     assert.equal(modesAllowRolls(['peasant']), true);
     assert.match(resolverModeBlock(['merchant']), /Nothing is rolled this turn\./);
     assert.match(resolverModeBlock(['merchant', 'king']), /^THIS TURN — Merchant \+ King:/);
-    assert.match(writerModeLine(['bard']), /^HOW THIS TURN READS \(Bard\):/);
+    assert.match(writerModeLine(['bard']), /^HOW THIS TURN READS \(Bard\): This is a warm, close moment/);
 });
 
 test('the answer is read even around prose, and the scene is the last messages within 1800 characters', () => {
@@ -34,7 +34,7 @@ test('the answer is read even around prose, and the scene is the last messages w
 test('the mode form: the block names the fields, the engine keeps only them, each as real + lens', async () => {
     const { modeFields, normalizeModeFields } = await import('../libraries/core/turn-modes.js');
     assert.deepEqual(Object.keys(modeFields(['merchant', 'king'])), ['deal', 'stake']);
-    assert.match(resolverModeBlock(['merchant']), /- deal: .*\n- stake: .*\nreal — what the one who acts means by it; the Writer never sees it\./);
+    assert.match(resolverModeBlock(['merchant']), /THE MODE FORM: [^\n]*\n- deal: .*\n- stake: .*\nreal — the truth of it as the character holds it/);
     assert.doesNotMatch(resolverModeBlock(['peasant']), /"mode"/);
     assert.deepEqual(normalizeModeFields({ deal: { real: 'the cloth is rotten', lens: 'fine cloth, ten silver' }, stake: 'get rid of it', focus: { real: 'x' } }, ['merchant']),
         { deal: { real: 'the cloth is rotten', lens: 'fine cloth, ten silver' }, stake: { real: 'get rid of it', lens: 'get rid of it' } });
@@ -46,7 +46,7 @@ test('the Writer sees only the lens; the Resolver sees the real one on the next 
     const mode = { deal: { real: 'the cloth is rotten', lens: 'fine cloth, ten silver' } };
     const form = { characters: [{ name: 'Orm', mode }], beats: [{ who: 'Orm', kind: 'line', text: 'ten silver' }], stop: 'He holds it out.' };
     const push = buildInscription({ form });
-    assert.match(push, /AS IT SHOWS:\n- Orm: deal — fine cloth, ten silver/);
+    assert.match(push, /AS IT SHOWS — [^\n]*\n- Orm: deal — fine cloth, ten silver/);
     assert.doesNotMatch(push, /rotten/);
     const truth = renderHiddenTruth([{ event: 'turn', turn: 1, form }]);
     assert.match(truth, /- Orm: deal — the cloth is rotten \(shows as: fine cloth, ten silver\)/);

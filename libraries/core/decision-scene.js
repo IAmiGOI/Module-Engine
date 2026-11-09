@@ -127,7 +127,7 @@ export function renderHiddenTruth(cycles, { beforeTurn = null, turns = 3, user =
         }
     }
     if (!truth.size) return '';
-    const lines = ['AS IT REALLY IS (from the last turns; hidden from the page):'];
+    const lines = ['AS IT REALLY IS — the hidden truth about the characters from the last turns, from their mode fields: what each actually intends, wants or holds, and, where it differs, what they let show. The Writer and the user never see it. Keep it consistent: a character goes on from this truth unless something in the scene changes it.'];
     for (const [name, fields] of truth) lines.push(`- ${name}: ${[...fields].map(([field, value]) => `${field.replace(/_/g, ' ')} — ${value}`).join('; ')}`);
     return lines.join('\n');
 }
