@@ -46,7 +46,7 @@ export class DecisionConfigError extends Error {
 
 const PREEMPT_WAIT_MS = 3000;
 
-export function createDecisionCycle({ call, callTool, callService = null, getSettings, getGameSettings = null, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, capture = null, now = () => Date.now() }) {
+export function createDecisionCycle({ call, callTool, callService = null, getSettings, getGameSettings = null, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, capture = null, now = () => Date.now(), questions: providedQuestions = null }) {
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
@@ -97,7 +97,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     // Проверка формы классификатором выключена: за 8 ходов с Jev ни одного возврата, а запрос — на каждую попытку записи хода.
     const formChecker = null;
     const pickModes = createModePicker({ call, getSettings });
-    const questions = createQuestionQueue({ callService, publishEvent, now });
+    // Ветка спекуляции приносит свою очередь: вопрос игроку из неё недопустим.
+    const questions = providedQuestions ?? createQuestionQueue({ callService, publishEvent, now });
     // Эпоха чата: смена чата её увеличивает. Фоновый цикл старого чата обрывается и ничего не пишет в новый.
     let chatEpoch = 0;
     let backgroundController = null;
@@ -159,7 +160,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         }]));
     }
 
-    function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {
+    function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [], speculative = null }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
             ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: writerModeLine(state.modes?.chosen) })
@@ -172,12 +173,12 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             warnings: [...(result.warnings ?? []), ...(state.formWarnings ?? [])], at: startedAt,
             usage: typeof runUsage === 'function' ? runUsage() : runUsage,
             form, push, wake, turn: state.turnCounter, clockMinutes: store.clock().minutes, modes: state.modes ?? null,
-            workerId, endedAt, durationMs: endedAt - startedAt,
+            workerId, endedAt, durationMs: endedAt - startedAt, speculative,
         });
         return { cycle, form, push };
     }
 
-    async function runCycle({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true, wake = null }) {
+    async function runCycle({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true, wake = null, signal: externalSignal = null, speculative = null }) {
         // Ход важнее фонового цикла: тот делит с ходом слот модели директора и общее состояние, а срок хода уже идёт (ход 111 ждал 145 с и упал по 180 с).
         if (backgroundController) {
             const preempt = new Error('a turn started');
@@ -210,7 +211,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         live.started({ runId, event: type === 'normal' ? 'turn' : type, wake: startedWake, at: startedAt, type });
         const reroll = type === 'regenerate' || type === 'swipe';
         // Режимы хода (1–2) — до задания: свой блок рядом с ним и броски по режиму. Без выборщика — общий шаблон.
-        state.modes = toolFilter ? null : await pickModes(chat);
+        state.modes = toolFilter ? null : await pickModes(chat, externalSignal);
         const modeBlock = resolverModeBlock(state.modes?.chosen);
         const task = [reroll || modeBlock ? DIRECTOR_TURN : '', reroll ? DIRECTOR_REROLL : '', modeBlock].filter(Boolean).join('\n\n');
         const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task });
@@ -219,6 +220,10 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         // Режим без бросков — инструмента броска на этом ходу просто нет: спорить «бросать или нет» не о чем.
         // Набор инструментов не зависит от режима: он в начале запроса, и смена ломала бы кеш всего контекста.
         const controller = new AbortController();
+        // Спекулятивную ветку отменяет тот, кто её начал: смена черновика, свайп, вопрос игроку.
+        const forwardAbort = () => controller.abort(externalSignal?.reason);
+        if (externalSignal?.aborted) forwardAbort();
+        else externalSignal?.addEventListener?.('abort', forwardAbort, { once: true });
         const hooks = live.hooks({ runId, thinking });
         const agent = runDecisionCycle({
             messages: built.messages,
@@ -248,6 +253,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         } finally {
             // Даже если агент упал, таймер не должен держать процесс живым.
             if (timer) clearTimeout(timer);
+            externalSignal?.removeEventListener?.('abort', forwardAbort);
         }
 
         if (result.type === 'timeout') {
@@ -271,7 +277,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             await store.saveDraft(null).catch(() => {});
             const startedCycle = cycleRecord({
                 runId, event: type === 'normal' ? 'turn' : type, result: { ...result, type: 'await', messages: [], trace: [] },
-                thinking: thinking(), wake: startedWake, startedAt, workerId: worker.id, usage: runUsage,
+                thinking: thinking(), wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, speculative,
             });
             const warnings = ['the form timed out; the saved draft was used'];
             const cycle = { ...startedCycle.cycle, form, push, warnings };
@@ -285,7 +291,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
 
         const { cycle, form, push } = cycleRecord({
             runId, event: type === 'normal' ? 'turn' : type, result, thinking,
-            wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, contextMessages: built.messages,
+            wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, contextMessages: built.messages, speculative,
         });
         await store.appendCycle(cycle).catch(() => {});
         if (form) live.form({ runId, form, push });

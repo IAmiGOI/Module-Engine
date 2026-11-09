@@ -67,6 +67,16 @@ export const DEFAULT_BOOTSTRAP = Object.freeze({
 });
 
 /**
+ * Резолвер заранее: пока игрок печатает, ход решается в ветке. По умолчанию
+ * выключено — иначе спекуляция съедает скриптовые ответы в e-тестах. У уже
+ * сохранённых настроек её включает миграция (см. cores/decision/index.js).
+ */
+export const DEFAULT_SPECULATE = Object.freeze({
+    enabled: false,
+    threshold: 0.6,
+});
+
+/**
  * Советник (часть 18): своё подключение — по умолчанию подключение резолвера;
  * будится каждые N ходов и в конце RP-дня.
  */
@@ -145,6 +155,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     assessSeed: null,
     classifier: DEFAULT_CLASSIFIER,
     bootstrap: DEFAULT_BOOTSTRAP,
+    speculate: DEFAULT_SPECULATE,
     counsellor: DEFAULT_COUNSELLOR,
     director: DEFAULT_DIRECTOR,
     god: DEFAULT_GOD,
@@ -185,6 +196,7 @@ export function clampDecisionSettings(values = {}) {
     const compression = source.compression && typeof source.compression === 'object' ? source.compression : {};
     const classifier = source.classifier && typeof source.classifier === 'object' ? source.classifier : {};
     const bootstrap = source.bootstrap && typeof source.bootstrap === 'object' ? source.bootstrap : {};
+    const speculate = source.speculate && typeof source.speculate === 'object' ? source.speculate : {};
     const counsellor = source.counsellor && typeof source.counsellor === 'object' ? source.counsellor : {};
     const director = source.director && typeof source.director === 'object' ? source.director : {};
     const god = source.god && typeof source.god === 'object' ? source.god : {};
@@ -261,6 +273,10 @@ export function clampDecisionSettings(values = {}) {
             timeoutMs: Math.round(number(bootstrap.timeoutMs, 1000, 3600000, DEFAULT_BOOTSTRAP.timeoutMs)),
             // Старый бутстрап резолвера (до пяти ролей): таймлайн и место пользователя теперь спрашивает God. Только явно.
             legacy: bootstrap.legacy === true,
+        },
+        speculate: {
+            enabled: speculate.enabled === true,
+            threshold: number(speculate.threshold, 0, 1, DEFAULT_SPECULATE.threshold),
         },
         counsellor: {
             workerId: text(counsellor.workerId, DEFAULT_COUNSELLOR.workerId).trim(),

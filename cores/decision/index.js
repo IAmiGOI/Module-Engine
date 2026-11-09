@@ -21,6 +21,8 @@ import { createBootstrap } from './bootstrap.js';
 import { createBankSets } from './bank-sets.js';
 import { createPreparation } from './preparation.js';
 import { createCanon } from './canon.js';
+import { createSpeculator } from './speculate.js';
+import { createBranchScope, mergeBranch } from './speculate-branch.js';
 import { preparationStepText } from '../../libraries/core/decision-preparation.js';
 import { migratePromptSections, sectionsAreEmpty } from '../../libraries/core/decision-prompt-model.js';
 import { clampGameSettings, describeSettingsChange, modeOf, modeValues, patchGameSettings, resolveGameSettings, settingsLabel } from '../../libraries/core/game-settings.js';
@@ -34,7 +36,7 @@ const DECIDE_CONTRACT = 'decision.decide';
 const REWRITE_CONTRACT = 'decision.rewrite';
 const RETRY_DELAY_MS = 500;
 /** Ядро «директор + прозаик»: директива перед отправкой, прозаик на `generation.payload`, банки персонажей. */
-export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_MS } = {}) {
+export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_MS, speculate: speculateOptions = null } = {}) {
     const publishEvent = publish ?? ((event, payload) => host.events.emit(event, payload));
     let settings = clampDecisionSettings(DEFAULT_SETTINGS);
     let workers = [];
@@ -133,6 +135,45 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         call: callStrict, callService, store, banks, creation: cycle.creation, preparation,
         askUser: params => cycle.askUser(params), publishEvent,
     });
+    /**
+     * Спекуляция: пока игрок печатает, тот же Resolver решает ход в ветке.
+     * Ветка строит свой цикл со своим store и своим state — общий не трогает.
+     */
+    function startSpeculativeRun({ runId, chat, signal, onAskUser }) {
+        return (async () => {
+            const scope = await createBranchScope({
+                runId, signal, onAskUser, call, callStrict, callService,
+                getSettings: () => settings, getGameSettings: gameSettingsValues,
+                getWorkers: () => workers, banks,
+                capture: (prefix, handlers) => captureReasoning(host, prefix, handlers),
+            });
+            const captured = captureReasoning(host, `${runId}:`, {});
+            const done = scope.api.run({
+                chat, runId, type: 'normal', signal,
+                thinking: () => captured.value, usage: () => captured.usage,
+            }).finally(() => captured.stop());
+            return { scope, done, reasoning: () => captured.value, usage: () => captured.usage };
+        })();
+    }
+    const speculator = createSpeculator({
+        getSettings: () => settings,
+        call,
+        callService,
+        store,
+        now: speculateOptions?.now ?? (() => Date.now()),
+        intervalMs: speculateOptions?.intervalMs ?? 1000,
+        setTimer: speculateOptions?.setTimer,
+        clearTimer: speculateOptions?.clearTimer,
+        // Мир готов и Указа не ждём: спекуляция не должна обгонять подготовку.
+        isReady: async () => {
+            const prepared = await preparation.assess().catch(() => null);
+            if (prepared && prepared.step !== 'ready') return false;
+            return !store.papers()?.awaitingDecree;
+        },
+        // Пока в журнале незакрытый ход, второй не решаем.
+        isBusy: () => pending !== null,
+        startRun: startSpeculativeRun,
+    });
     // Снимок «стартовых» банков — старая механика наборов; только по настройке `bankColdStart: 'build'`.
     let snapshotTimer = null;
     const scheduleSnapshot = () => {
@@ -148,6 +189,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     // Смена чата: всё, что делалось для старого, отменяется и больше ничего не пишет в новый —
     // фоновый цикл, вопросы, bootstrap, сборщики банков и задания исследователя.
     function chatChanged() {
+        speculator.discard('changed');
         cycle.chatChanged();
         bootstrap.chatChanged();
         preparation.reset();
@@ -156,6 +198,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     }
 
     async function reload() {
+        speculator.discard('changed');
         await store.reload();
         gameValues = null;
         preparation.reset();
@@ -350,6 +393,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         if ((type === 'regenerate' || type === 'swipe') && regenMode === 'writer') {
             const last = store.lastRun();
             if (last) {
+                speculator.discard('changed');
                 const push = last.push ?? last.decision;
                 pending = {
                     runId, type, chat, chatLength: chat.length, decision: push, push, form: last.form ?? null,
@@ -372,6 +416,11 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             await cycle.waitForDecree({ timeoutMs: settings.director?.decreeTimeoutMs })
                 .catch(error => publishEvent('decision.failed', { runId, message: `the Director could not issue a Decree: ${error?.message ?? error}` }));
         }
+        // Ветка, начатая во время набора, решается здесь же: обучение на паузах
+        // этого сообщения и решение «вливаем или идём обычным путём».
+        const speculation = await speculator.beginSend({ chat, runId, type });
+        // Брошенная ветка отпускает слот модели не дольше трёх секунд — затем ход идёт обычным путём.
+        if (!speculation.handle) await speculator.settle();
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
@@ -382,7 +431,47 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             onAnswer: text => publishEvent('decision.cycle.answer', { runId, text }),
         });
         try {
-            const result = await cycle.run({ chat, runId, type, thinking: () => captured.value, usage: () => captured.usage });
+            if (speculation.handle) {
+                const taken = await speculator.take(speculation.handle, {
+                    chat, sentText: speculation.sentText, sentAt: speculation.sentAt,
+                });
+                if (taken.merged) {
+                    const merged = taken.handle;
+                    const result = merged.result;
+                    if (!result?.ok) throw new Error('The speculative turn did not produce a form.');
+                    const steps = recordStep(runId, {
+                        attempt, workerId: result.workerId ?? null,
+                        durationMs: merged.finishedAt ? Math.max(0, merged.finishedAt - merged.startedAt) : Date.now() - startedAt,
+                        error: null,
+                    });
+                    // Снимок уже снят до хода: операции ветки ложатся поверх него, и откат свайпа вернёт мир как у обычного хода.
+                    await mergeBranch({
+                        scope: merged.scope, runId, store, call, publishEvent, banks,
+                        speculative: taken.info,
+                    });
+                    const referenced = (Array.isArray(result.form?.characters) ? result.form.characters : [])
+                        .map(character => character?.assessId)
+                        .filter(Boolean);
+                    const row = merged.scope.assessments();
+                    const assessments = [...new Set(referenced)].map(id => row.get(id)).filter(Boolean).map(item => ({ ...item }));
+                    pending = {
+                        runId, type, chat, chatLength: chat.length, decision: result.decision,
+                        push: result.push ?? result.decision, form: result.form, assessments,
+                        game: settingsLabel(gameSettingsValues()), reasoning: merged.reasoning(),
+                        warnings: [...(result.warnings ?? [])], steps,
+                        workerId: result.workerId ?? null, trace: result.trace ?? [], snapshot: beforeSnapshot,
+                        built: result.built ?? null,
+                    };
+                    publishEvent('decision.completed', { runId, workerId: pending.workerId });
+                    cycle.runPassive({ runId }).catch(error => publishEvent('decision.failed', { runId, message: `passive cycle: ${error?.message ?? error}` }));
+                    return { decision: result.decision };
+                }
+                if (taken.info) speculation.info = taken.info;
+            }
+            const result = await cycle.run({
+                chat, runId, type, thinking: () => captured.value, usage: () => captured.usage,
+                speculative: speculation.info ?? undefined,
+            });
             if (!result.ok) throw new Error(`The director did not submit the turn: ${result.reason ?? 'no form'}.`);
             const steps = recordStep(runId, { attempt, workerId: result.workerId ?? null, durationMs: Date.now() - startedAt, error: null });
             // В запись хода идут только броски, на которые сослалась его форма:
@@ -458,6 +547,13 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         registerStages,
         publishEvent,
         decideStage: DECIDE_STAGE,
+        // Резолвер заранее: паузы набора, начало/конец генерации и события, после которых ветка уже не годится.
+        speculate: {
+            inputBarChanged: payload => speculator.inputBarChanged(payload),
+            generationStarted: () => speculator.setGenerating(true),
+            generationEnded: () => speculator.setGenerating(false),
+            discard: reason => speculator.discard(reason),
+        },
     });
 
     async function load() {
@@ -478,6 +574,13 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             if (stored.modes === undefined) await saveSettings({ modes: { enabled: true, workerId: '' } }).catch(() => {});
             const latest = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'migrations', fallback: {} }).catch(() => ({}));
             await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'migrations', value: { ...(latest ?? {}), turnModes: Date.now() } }).catch(() => {});
+        }
+        // Резолвер заранее — один раз включается у уже сохранённых настроек; у новых выключен
+        // (`DEFAULT_SPECULATE`), иначе е-тесты теряли бы скриптовые ответы.
+        if (stored && !migrations?.speculate) {
+            if (stored.speculate === undefined) await saveSettings({ speculate: { ...settings.speculate, enabled: true } }).catch(() => {});
+            const latest = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'migrations', fallback: {} }).catch(() => ({}));
+            await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'migrations', value: { ...(latest ?? {}), speculate: Date.now() } }).catch(() => {});
         }
         // Подписки — до первого чтения: ST открывает чат, пока ядро грузится, и `st.chatChanged`, пришедший раньше
         // подписки, терялся — ядро оставалось с пустой памятью загрузки, а окно директора висело пустым.
@@ -539,12 +642,15 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         draft: () => store.draft(),
         message: params => cycle.sendMessage(params),
         waiting: () => cycle.waiting(),
+        // Состояние резолвера заранее: только для наблюдения и тестов, ход его не читает.
+        speculateState: () => speculator.state(),
         banks: () => banks.records(),
         bankProgress: () => banks.progress(),
         bootstrap: () => bootstrap.state(),
         question: () => cycle.question(),
         answerQuestion: params => cycle.answerQuestion(params),
         unregister: async () => {
+            speculator.stop();
             for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
             await unregisterStages();
             for (const unregister of unregisters.splice(0)) unregister();

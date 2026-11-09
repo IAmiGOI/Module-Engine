@@ -6,7 +6,7 @@ import { modeScene, modePrompt, parseModeAnswer, chooseModes } from '../../libra
  * ход идёт по общему шаблону. Источник сменный: потом сюда встанет локальная модель DataGen.
  */
 export function createModePicker({ call, getSettings }) {
-    return async function pickModes(chat) {
+    return async function pickModes(chat, signal = null) {
         const settings = getSettings() ?? {};
         if (settings.modes?.enabled !== true) return null;
         const workerId = String(settings.modes?.workerId || settings.decider?.workerId || '').trim();
@@ -17,6 +17,8 @@ export function createModePicker({ call, getSettings }) {
             const answer = await call('model.generate', {
                 workerId, maxTokens: 200, temperature: 0, stream: false, reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
                 messages: [{ role: 'system', content: modePrompt() }, { role: 'user', content: scene }],
+                // Спекулятивную ветку отменяют вместе с остальными её запросами.
+                ...(signal ? { signal } : {}),
             });
             const answers = parseModeAnswer(answer);
             if (!Object.keys(answers).length) return null;

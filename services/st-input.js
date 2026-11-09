@@ -27,5 +27,12 @@ export function registerStInputService(bus, { document: doc = globalThis.documen
         return { ok: true, locked: value };
     }
 
-    return bus.register('stInput.setLocked', setLocked);
+    /** Черновик игрока: ядро спекуляции читает родное поле, а не пилюлю — она лишь его зеркало. */
+    function readText() {
+        return String(byId('send_textarea')?.value ?? '');
+    }
+
+    const offLock = bus.register('stInput.setLocked', setLocked);
+    const offRead = bus.register('stInput.readText', readText);
+    return () => { offLock?.(); offRead?.(); };
 }

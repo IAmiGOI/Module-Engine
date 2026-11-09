@@ -9,6 +9,7 @@ export function createDecisionEvents({
     host, getSettings, getPending, setPending, clearAttempts, deleteAttempt, persist,
     discardPending, getLastFailure, noteCorrection, notify, revealCard, restoreSnapshotFor, lastMesid,
     cycle, reload, chatChanged = () => {}, advance = () => Promise.resolve(), startDraft, canReregister, registerStages, publishEvent, decideStage,
+    speculate = null,
 }) {
     let typingActive = false;
     // Подготовка — явная машина шагов: событие только просит пересмотреть факты,
@@ -21,9 +22,12 @@ export function createDecisionEvents({
             setPending(null);
             clearAttempts();
         }
+        // Ветку не начинаем, пока идёт настоящий ход: текстовое поле в это время ещё не очищено.
+        speculate?.generationStarted?.();
     }
 
     function onCompleted(payload) {
+        speculate?.generationEnded?.();
         const pending = getPending();
         if (!pending) return;
         const mismatched = payload?.runId && pending.runId && payload.runId !== pending.runId;
@@ -57,6 +61,7 @@ export function createDecisionEvents({
     }
 
     function onAborted(payload) {
+        speculate?.generationEnded?.();
         if (payload?.stage === decideStage) {
             const failure = getLastFailure();
             if (failure?.kind === 'config') {
@@ -74,6 +79,7 @@ export function createDecisionEvents({
     }
 
     function onSuperseded(payload) {
+        speculate?.generationEnded?.();
         const pending = getPending();
         if (!payload?.runId || !pending || pending.runId === payload.runId) discardPending();
         deleteAttempt(payload?.runId);
@@ -84,6 +90,8 @@ export function createDecisionEvents({
     }
 
     function onChatChanged() {
+        // Ветка от старого чата не должна пережить смену: отпечаток всё равно не совпадёт, но платить за неё незачем.
+        speculate?.discard?.('changed');
         setPending(null);
         clearAttempts();
         chatChanged();
@@ -91,22 +99,27 @@ export function createDecisionEvents({
     }
 
     function onSwipe() {
+        speculate?.discard?.('changed');
         lastMesid().then(mesid => restoreSnapshotFor(mesid)).catch(() => {});
     }
 
     function onDeleted(payload) {
+        speculate?.discard?.('changed');
         const mesid = payload?.args?.[0];
         restoreSnapshotFor(mesid, { remove: true }).catch(() => {});
         noteCorrection?.({ mesid, action: 'deleted' }).catch(() => {});
     }
 
     function onEdited(payload) {
+        speculate?.discard?.('changed');
         const mesid = payload?.args?.[0] ?? payload?.mesid ?? (typeof payload === 'number' ? payload : null);
         if (mesid === null || mesid === undefined) return;
         noteCorrection?.({ mesid, action: 'edited' }).catch(() => {});
     }
 
     function onTyping(payload) {
+        // Спекуляция слушает паузы всегда; старая «Start on typing» ниже живёт своей настройкой и не переиспользуется.
+        speculate?.inputBarChanged?.(payload);
         const active = Boolean(payload?.active);
         if (!active) { typingActive = false; return; }
         if (typingActive) return;

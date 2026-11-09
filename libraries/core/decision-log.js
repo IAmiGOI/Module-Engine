@@ -14,6 +14,7 @@ export function createCycleRecord({
     id, runId = '', event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], usage = null,
     at = Date.now(), endedAt = null, durationMs = null, form = null, push = '', wake = null, message = null,
     turn = null, clockMinutes = null, workerId = null, rejected = false, rejectedAt = null, modes = null,
+    speculative = null,
 } = {}) {
     const number = value => (Number.isFinite(Number(value)) ? Number(value) : null);
     const cycle = {
@@ -44,6 +45,15 @@ export function createCycleRecord({
         rejectedAt: number(rejectedAt),
         // Режимы хода: сцена, оценки и выбор — заодно готовая разметка для локальной модели (DataGen).
         ...(modes && typeof modes === 'object' ? { modes: { scene: String(modes.scene ?? ''), answers: { ...(modes.answers ?? {}) }, chosen: [...(modes.chosen ?? [])], source: String(modes.source ?? '') } } : {}),
+        // Резолвер заранее: была ли ветка, сколько она сэкономила и почему её выбросили.
+        ...(speculative && typeof speculative === 'object' ? {
+            speculative: {
+                used: Boolean(speculative.used),
+                startedAt: number(speculative.startedAt),
+                savedMs: Math.max(0, Number(speculative.savedMs) || 0),
+                ...(speculative.reason ? { reason: String(speculative.reason) } : {}),
+            },
+        } : {}),
         tokens: 0,
     };
     cycle.tokens = cycleTokens(cycle);
