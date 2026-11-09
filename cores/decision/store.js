@@ -196,7 +196,8 @@ export function createDecisionStore({ call, publishEvent }) {
                 snapshots[mesid] = record.snapshot;
                 // Great Bank тяжёлый (сотни КБ): держим его только в трёх последних снимках — переигрывают почти всегда последний ход.
                 for (const [key] of Object.entries(snapshots).slice(0, -3)) {
-                    if (snapshots[key]?.greatBank) { const { greatBank: _dropped, ...rest } = snapshots[key]; snapshots[key] = rest; }
+                    // Журнал Советника и очереди — тоже только в трёх последних: строки тяжёлые, а переигрывают последний ход.
+                    if (snapshots[key]?.greatBank || snapshots[key]?.ledger || snapshots[key]?.papers) { const { greatBank: _bank, ledger: _ledger, papers: _papers, ...rest } = snapshots[key]; snapshots[key] = rest; }
                 }
                 await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', value: snapshots });
             }
@@ -247,6 +248,7 @@ export function createDecisionStore({ call, publishEvent }) {
         unreviewedLedger: papersStore.unreviewed,
         appendLedger: papersStore.appendLedger,
         saveLedger: papersStore.saveLedger,
+        savePapers: papersStore.save,
         markLedgerReviewed: papersStore.markLedgerReviewed,
         papers: papersStore.papers,
         petitions: papersStore.petitions,

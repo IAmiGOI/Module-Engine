@@ -127,3 +127,23 @@ test('a reroll prunes the knowledge written since the first attempt of the turn'
     assert.deepEqual(great.emilia.knowledge.items.map(item => item.id), ['old']);
     assert.equal(great.ram.name, 'Ram');
 });
+
+test('a rolled-back turn takes its Ledger rows and queued Petitions with it, but keeps the talk with the Counsellor', async () => {
+    const { createRollback } = await import('../cores/decision/rollback.js');
+    let ledger = [{ turn: 60, character: 'Lena' }];
+    let papers = { petitions: [], prayers: [], telegrams: [], awaitingDecree: null, counsellor: { messages: [] } };
+    const store = {
+        roster: () => ({ active: [] }), plan: () => null, arcs: () => [], notes: () => ({}), library: () => ({}), plans: () => [], clock: () => ({ minutes: 0 }),
+        saveRoster: async () => {}, savePlan: async () => {}, saveArcs: async () => {}, saveNotes: async () => {}, saveLibrary: async () => {}, savePlans: async () => {}, saveClock: async () => {},
+        ledger: () => ledger, saveLedger: async rows => { ledger = rows; },
+        papers: () => papers, savePapers: async next => { papers = next; },
+    };
+    const rollback = createRollback({ store, getSettings: () => ({ snapshots: true }), publishEvent: () => {} });
+    const before = await rollback.snapshotState('r1', null);
+    ledger = [...ledger, { turn: 61, character: 'Lena', did: 'the discarded answer' }];
+    papers = { ...papers, petitions: [{ id: 'p', character: 'Lena', turn: 61 }], counsellor: { messages: [{ role: 'user', text: 'hi' }] } };
+    await rollback.restoreState(before);
+    assert.deepEqual(ledger.map(row => row.turn), [60]);
+    assert.deepEqual(papers.petitions, []);
+    assert.equal(papers.counsellor.messages.length, 1, 'the talk with the Counsellor stays');
+});
