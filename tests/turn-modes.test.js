@@ -49,3 +49,11 @@ test('the Writer sees only the lens; the Resolver sees the real one on the next 
     assert.match(truth, /- Orm: deal — the cloth is rotten \(shows as: fine cloth, ten silver\)/);
 });
 
+
+test('the Writer gets each speaker\'s voice from their bank beside the lines', async () => {
+    const { buildInscription } = await import('../libraries/core/decision-push.js');
+    const form = { characters: [{ name: 'Lena' }], beats: [{ who: 'Lena', kind: 'line', text: 'stay' }], stop: 'She asks him to stay.' };
+    const push = buildInscription({ form, voices: { Lena: 'Speaks: politely, drags out "really". Shows feeling: easily flustered.' } });
+    assert.match(push, /VOICES — [^\n]*\n- Lena: Speaks: politely, drags out "really"\. Shows feeling: easily flustered\./);
+    assert.doesNotMatch(buildInscription({ form }), /VOICES/);
+});

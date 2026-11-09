@@ -18,8 +18,8 @@ export const TURN_MODES = Object.freeze([
     {
         id: 'elder', label: 'Elder',
         when: 'an important talk: a confession, a hard truth, a decision about trust',
-        resolver: 'An important talk. Each character answers the meaning of what was said, and their view of the speaker can change this turn — trust gained or lost, a mind changed.',
-        writer: 'This is a weighty talk: let each line land and leave room after it, and show what speaking costs them.',
+        resolver: 'An important talk, where who each character is decides everything. Before what they say, take who they are from their bank: what they value, how they show or hide feeling, how they speak, what makes them shy, proud or afraid. Each answers in that way — with their own measure of openness, hesitation and courage — not in the plain, direct way the words alone might call for. What is said can change how they see the speaker.',
+        writer: 'This is a weighty talk: let each line land and leave room after it, give each character the voice their bank describes, and show what speaking costs them.',
         fields: { view_of: 'how they see the speaker' },
     },
     {
@@ -131,7 +131,7 @@ export function resolverModeBlock(ids) {
     const form = fields.length
         ? `\n\n${MODE_FORM_HEAD}\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\n${MODE_FORM_HALVES}`
         : '';
-    return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}${form}`;
+    return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}\nThis tells you what kind of moment the scene is, not who the people in it are: how each character behaves in it still comes from their own bank, never from the mode.${form}`;
 }
 
 /** Поля формы выбранных режимов: имя → что в нём. Общие у двух режимов (stake) — одно поле. */

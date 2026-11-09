@@ -272,7 +272,8 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         const first = !seen;
         // Первое наблюдение дня только запоминается: иначе первый же ход в новом чате считался бы концом дня.
         if (first && typeof store.saveCounsellor === 'function') await store.saveCounsellor({ day }).catch(() => null);
-        const number = Number.isFinite(Number(turn)) ? Number(turn) : currentTurn();
+        // `turn` не передан — ход берём сами: `Number(null)` равно 0, и Советник вечно считал, что идёт ход 0 (разбор Ведомости не наступал ни разу).
+        const number = turn !== null && turn !== undefined && Number.isFinite(Number(turn)) ? Number(turn) : currentTurn();
         // Вопрос Бога важнее счётчика: пока мироздание ждёт ответа, Советник тоже не спит.
         const openQuestion = typeof store.god === 'function' ? (store.god()?.questions ?? []).some(item => !String(item.answer ?? '').trim()) : false;
         const mode = openQuestion && !first ? 'review' : shouldReview({

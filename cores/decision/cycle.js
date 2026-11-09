@@ -160,10 +160,30 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         }]));
     }
 
+    /**
+     * Голос каждого, кто говорит на ходу, — из его банка (Spiritual 3: как показывает чувства, 5: как говорит), прямо в Inscription.
+     * Банк у Писателя лежит далеко в контексте, а у реплик стояло только «in their own voice» — и он давал всем один свой голос.
+     */
+    async function voicesFor(form) {
+        const speakers = new Set((Array.isArray(form?.beats) ? form.beats : [])
+            .filter(beat => String(beat?.kind ?? '').toLowerCase() === 'line').map(beat => String(beat?.who ?? '').trim().toLowerCase()).filter(Boolean));
+        if (!speakers.size || typeof banks?.great?.load !== 'function') return {};
+        const state = await banks.great.load().catch(() => null);
+        const lines = value => (Array.isArray(value) ? value : []).map(item => String(item ?? '').replace(/^\[[^\]]*\]\s*/, '').trim()).filter(Boolean).join(' ');
+        const voices = {};
+        for (const character of Object.values(state ?? {})) {
+            const name = String(character?.name ?? '').trim();
+            if (!name || !speakers.has(name.toLowerCase())) continue;
+            const feeling = lines(character?.spiritual?.['3']), speech = lines(character?.spiritual?.['5']);
+            if (feeling || speech) voices[name] = [speech ? `Speaks: ${speech}` : '', feeling ? `Shows feeling: ${feeling}` : ''].filter(Boolean).join(' ');
+        }
+        return voices;
+    }
+
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [], speculative = null }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
-            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: writerModeLine(state.modes?.chosen) })
+            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: writerModeLine(state.modes?.chosen), voices: state.voices ?? {} })
             : '';
         if (form) form.push = push;
         const endedAt = now();
@@ -289,6 +309,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             return { ok: true, form, push, decision: fallbackDecision(form), trace: [], warnings, steps: 0, workerId: worker.id, draft: true };
         }
 
+        state.voices = result.type === 'submit' ? await voicesFor(result.form) : {};
         const { cycle, form, push } = cycleRecord({
             runId, event: type === 'normal' ? 'turn' : type, result, thinking,
             wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, contextMessages: built.messages, speculative,

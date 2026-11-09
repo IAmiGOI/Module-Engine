@@ -73,7 +73,8 @@ test('a small window limit switches the window, freezes the summary and puts it 
     assert.equal(core.frozen().length, 1);
     assert.match(core.frozen()[0].text, /The first cycles are over/);
     assert.ok(events.some(payload => payload.reason === '50 cycles'), 'the reason is recorded even with a test limit');
-    assert.equal(core.log().length, 2, 'the log keeps only the cycles still in the window');
+    // В журнале кроме ходов теперь и разбор Советника (он просыпается каждые 3 хода): считаем ходы.
+    assert.equal(core.log().filter(cycle => cycle.event === 'turn').length, 2, 'the log keeps only the turns still in the window');
     assert.ok(core.archive().length >= 2, 'the dropped full cycles are archived');
 
     await turn(5);

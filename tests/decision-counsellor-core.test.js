@@ -225,6 +225,14 @@ test('the wake schedule: every N turns, at midnight, and never twice for the sam
     assert.equal(after.skipped, true, 'one day end, one review');
 });
 
+test('after a turn the engine wakes the Counsellor without a turn number: it reads the current turn itself', async () => {
+    // Number(null) is 0: the review used to see turn 0 forever and never came due.
+    const world = harness({ settings: { counsellor: { everyTurns: 3 } }, answers: [{ text: '', toolCalls: [call('nothing_yet', { reason: 'Fine.', comment: 'Nothing to report.' })] }] });
+    const due = await world.counsellor.maybeRun();
+    assert.equal(due.mode, 'review');
+    assert.equal(due.turn, 6);
+});
+
 test('counsellor settings are clamped and carry the defaults', () => {
     const values = clampDecisionSettings({ counsellor: { everyTurns: 999, maxSteps: 0, workerId: '  flash  ' } });
     assert.equal(values.counsellor.everyTurns, 50);

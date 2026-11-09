@@ -90,7 +90,7 @@ function backgroundLine(characters) {
  * Прежний Push рассказывал каждое событие трижды (развязка, действие, «why it goes»), и писатель отрабатывал
  * каждое упоминание: пересказом и репликой.
  */
-function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine = '' }) {
+function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine = '', voices = {} }) {
     const head = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) head.push(`Place: ${where}.`);
@@ -136,6 +136,7 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
         lenses.length ? `AS IT SHOWS — what the user can see of each character this turn. It is the visible surface only: show it through their behaviour in the scene, in your own words; do not copy these phrases onto the page and do not explain what they mean. What lies beneath is kept from you on purpose — do not guess at it or hint at it.\n${lenses.join('\n')}` : '',
         `THE USER'S ACTION AND HOW IT LANDS — the user has already written what their character does: do not retell it, add to it or give it to anyone else. Open the reply with its effect taking place in the scene as it happens — what anyone present can see, hear or feel of it — and only then the others' answer to it: ${line(form?.userResult)}`,
         `BEATS — in this order, each one happens once:\n${beats.join('\n')}`,
+        Object.keys(voices ?? {}).length ? `VOICES — how each speaker talks and lets feeling show, from their data bank. Their lines and gestures keep to it, whatever the moment asks:\n${Object.entries(voices).map(([name, voice]) => `- ${name}: ${line(voice)}`).join('\n')}` : '',
         `END: ${line(form?.stop ?? form?.resolution)} Stop there.`,
         backgroundLine(characters),
         reasons.length ? `NOT FOR THE PAGE — why they act, so you can play it right:\n${reasons.join('\n')}` : '',
@@ -146,8 +147,8 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
  * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
  * @returns {string}
  */
-export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '', modeLine = '' } = {}) {
-    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine });
+export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '', modeLine = '', voices = {} } = {}) {
+    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine, voices });
     const lines = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) lines.push(`Place: ${where}.`);

@@ -203,7 +203,7 @@ export function createPapersStore({ enqueue, call }) {
     /** Вопросы Бога Советнику — очередью; ответы собирают Декларацию. */
     function addGodQuestions(list, { turn = null, at = 0 } = {}) {
         const current = now();
-        const added = normalizeGodQuestions(list).map(item => ({ ...item, at: Number(at) || 0, turn: Number.isFinite(Number(turn)) ? Number(turn) : null }));
+        const added = normalizeGodQuestions(list).map(item => ({ ...item, at: Number(at) || 0, turn: turn !== null && turn !== undefined && Number.isFinite(Number(turn)) ? Number(turn) : null }));
         return save({ ...current, god: { ...current.god, questions: [...current.god.questions, ...added] } });
     }
 
