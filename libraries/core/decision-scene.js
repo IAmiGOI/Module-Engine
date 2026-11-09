@@ -147,7 +147,12 @@ export function renderAlreadySaid(cycles, { beforeTurn = null, turns = 3, user =
         for (const character of Array.isArray(form.characters) ? form.characters : []) {
             if (character?.idle === true) continue;
             const empty = /^(none|null|n\/a|nothing|-+|—)\.?$/i;
-            const name = text(character?.name), line = text(character?.says).replace(empty, ''), deed = text(character?.does ?? character?.action).replace(empty, '');
+            const name = text(character?.name), line = text(character?.says).replace(empty, '');
+            // Сделанное — `does` и действия персонажа из beats: «останавливается и поворачивается к нему» жило в beats и повторялось каждый ход.
+            const beats = (Array.isArray(form.beats) ? form.beats : [])
+                .filter(beat => String(beat?.kind ?? '').toLowerCase() === 'action' && text(beat?.who).toLowerCase() === name.toLowerCase())
+                .map(beat => text(beat?.text)).filter(Boolean);
+            const deed = [...new Set([text(character?.does ?? character?.action).replace(empty, ''), ...beats].filter(Boolean))].join('; ');
             if (!name || (!line && !deed) || name.toLowerCase() === text(user).toLowerCase()) continue;
             if (!said.has(name)) said.set(name, []);
             said.get(name).push(`(turn ${turn}) ${[deed ? `did: ${deed}` : '', line ? `said: ${line}` : ''].filter(Boolean).join(' | ')}`);
