@@ -98,8 +98,9 @@ export function renderCurrentScene({ form = null, roster = [], user = '', clock 
 }
 
 /**
- * ALREADY SAID — что каждый говорил и просил в последних принятых ходах (смыслом, из формы). Правило
+ * ALREADY SAID AND DONE — что каждый говорил и делал в последних принятых ходах (смыслом, из формы). Правило
  * «не повторяться» без этого держалось на памяти модели; со списком следующий шаг сверяется с ним.
+ * Сделанное — тоже: без него резолвер на следующем ходу снова «отдавал копию», уже отданную ходом раньше.
  */
 /** Правда форм режима (real) за последние ходы — только Resolver: Писатель её не видит. Последнее по каждому полю. */
 export function renderHiddenTruth(cycles, { beforeTurn = null, turns = 3, user = '' } = {}) {
@@ -144,14 +145,16 @@ export function renderAlreadySaid(cycles, { beforeTurn = null, turns = 3, user =
     const said = new Map();
     for (const { turn, form } of forms) {
         for (const character of Array.isArray(form.characters) ? form.characters : []) {
-            const name = text(character?.name), line = text(character?.says).replace(/^(none|null|n\/a|nothing|-+|—)\.?$/i, '');
-            if (!name || !line || name.toLowerCase() === text(user).toLowerCase()) continue;
+            if (character?.idle === true) continue;
+            const empty = /^(none|null|n\/a|nothing|-+|—)\.?$/i;
+            const name = text(character?.name), line = text(character?.says).replace(empty, ''), deed = text(character?.does ?? character?.action).replace(empty, '');
+            if (!name || (!line && !deed) || name.toLowerCase() === text(user).toLowerCase()) continue;
             if (!said.has(name)) said.set(name, []);
-            said.get(name).push(`(turn ${turn}) ${line}`);
+            said.get(name).push(`(turn ${turn}) ${[deed ? `did: ${deed}` : '', line ? `said: ${line}` : ''].filter(Boolean).join(' | ')}`);
         }
     }
     if (!said.size) return '';
-    const lines = ['ALREADY SAID (the last turns, in meaning — none of this is said or asked again; build on it):'];
+    const lines = ['ALREADY SAID AND DONE (the last turns, in meaning — none of this is said, asked or done again; build on it):'];
     for (const [name, items] of said) lines.push(`- ${name}:\n${items.map(item => `  - ${item}`).join('\n')}`);
     return lines.join('\n');
 }

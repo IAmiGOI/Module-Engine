@@ -29,17 +29,19 @@ test('CURRENT SCENE gives one place to everyone: here, in the background, gone',
     assert.doesNotMatch(scene, /active roster|update_roster/, 'no second list of the same people to argue with');
 });
 
-test('ALREADY SAID lists what each character said in the last accepted turns', () => {
+test('ALREADY SAID AND DONE lists what each character said and did in the last accepted turns', () => {
     const cycles = [
+        { event: 'turn', turn: 4, form: { characters: [{ name: 'Lena', does: 'hands over the sealed copy' }, { name: 'Rook', idle: true, busy: 'away' }] } },
         { event: 'turn', turn: 5, form: { characters: [{ name: 'Puck', says: 'give me one landmark' }] } },
         { event: 'turn', turn: 6, form: { characters: [{ name: 'Puck', says: 'one landmark and I go' }, { name: 'Sasha', says: 'no' }] } },
         { event: 'turn', turn: 7, rejected: true, form: { characters: [{ name: 'Puck', says: 'discarded' }] } },
     ];
     const said = renderAlreadySaid(cycles, { user: 'Sasha' });
-    assert.match(said, /^ALREADY SAID/);
-    assert.match(said, /\(turn 5\) give me one landmark/);
-    assert.match(said, /\(turn 6\) one landmark and I go/);
-    assert.doesNotMatch(said, /discarded|Sasha/);
+    assert.match(said, /^ALREADY SAID AND DONE/);
+    assert.match(said, /\(turn 4\) did: hands over the sealed copy/);
+    assert.match(said, /\(turn 5\) said: give me one landmark/);
+    assert.match(said, /\(turn 6\) said: one landmark and I go/);
+    assert.doesNotMatch(said, /discarded|Sasha|Rook/);
     assert.equal(renderAlreadySaid([]), '');
 });
 

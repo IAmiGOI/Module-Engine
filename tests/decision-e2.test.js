@@ -113,7 +113,7 @@ test('the writer receives an Inscription with place, time, the user result and t
     assert.match(text, /took 60 minutes/);
     assert.match(text, /Place: KEEP → EAST WING → EAST CORRIDOR/);
     assert.match(text, /Time: Day 1, 09:00 \(Morning\)/);
-    assert.match(text, /THE USER'S ACTION, AND HOW IT LANDS: The user pushes the door/);
+    assert.match(text, /THE USER'S ACTION \(theirs and already done — the others meet it; never give it to anyone else\), AND HOW IT LANDS: The user pushes the door/);
     assert.match(text, /1\. Lena — ACTION: Opens the east door/);
     assert.match(text, /2\. Lena — LINE \(meaning\): this is the only way out/);
     assert.match(text, /NOT FOR THE PAGE — why they act[\s\S]*- Lena: Feels: calm\. Wants: Get out before the guard turns the corner\./);

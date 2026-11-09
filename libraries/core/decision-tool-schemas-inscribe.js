@@ -33,7 +33,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                         name: { type: 'string' },
                         heard: { type: 'string', description: 'What in the user\'s latest message — or in what just happened — matters to them, in one line. What is new in it for them.' },
                         feels: { type: 'string', description: 'What they feel now, from their Emotions and what they heard. A few words.' },
-                        next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID or already taken. With no Decree yet, toward what their bank wants.' },
+                        next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID AND DONE or already taken. With no Decree yet, toward what their bank wants.' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
                         says: { type: 'string', description: 'What they say, in meaning only — never the wording: the Writer writes the words. Leave it out when they say nothing.' },
                         mode: { type: 'object', description: 'Only when THIS TURN asks for it: the fields it names, each as {"real": …, "lens": …}.' },
@@ -57,7 +57,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                 },
             },
             stop: { type: 'string', description: 'The last beat the turn ends on — the line or gesture after which the user would naturally react — in one sentence. Do not retell the other beats. Never describe anyone as waiting for the user: that pause is implied.' },
-            userResult: { type: 'string', description: 'The result of the user\'s attempt only: success or failure and why. Never decide the user\'s action itself, and do not finish a long action for them — show what has happened up to the moment someone reacts.' },
+            userResult: { type: 'string', description: 'What the user did, as their own deed in their own terms, then the result of it: success or failure and why. It has happened — the others meet it; nobody does it for them or instead of them. Never decide the user\'s action itself, and do not finish a long action for them — show what has happened up to the moment someone reacts.' },
             scene: {
                 type: 'object',
                 description: 'Leave it out for a short exchange in the same place; set it when the scene takes longer or moves.',

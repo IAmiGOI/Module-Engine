@@ -133,7 +133,7 @@ test('the inscription is built from the template: beats, the user result, END, a
     const inscription = buildInscription({ form: repaired.form, assessments, place: 'EAST CORRIDOR', timeAfter: 'Day 1, 08:30' });
     assert.match(inscription, /took 30 minutes/);
     assert.match(inscription, /Place: EAST CORRIDOR/);
-    assert.match(inscription, /THE USER'S ACTION, AND HOW IT LANDS: The user pushes the door\./);
+    assert.match(inscription, /THE USER'S ACTION \(theirs and already done — the others meet it; never give it to anyone else\), AND HOW IT LANDS: The user pushes the door\./);
     assert.match(inscription, /1\. Lena — ACTION: Opens the east door\./);
     assert.match(inscription, /END: They are at the door\. Stop there\./);
     assert.match(inscription, /NOT FOR THE PAGE[\s\S]*- Lena: Feels: calm\. Wants: to be out before the guard turns\./);

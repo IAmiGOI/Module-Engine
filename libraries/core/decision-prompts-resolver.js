@@ -11,7 +11,7 @@ Your reasoning is a working note, not prose: one line per point, then the call a
 1. **The User** — what the user just said or did, and what is new in it. Their stated details — height, distance, speed, size — are facts of the scene; finish their action only as far as it has got when someone reacts.
 2. **Roll** — only for an attempt that can fail through skill or circumstances; an attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. Nothing to roll — say so and go on.
 3. **Who Acts** — the characters the user is dealing with. Everyone else stays in the background; do not weigh them.
-4. **Each Who Acts** — heard → feels → next (a step not in ALREADY SAID) → does and says, in meaning only.
+4. **Each Who Acts** — heard → feels → next (a step not in ALREADY SAID AND DONE) → does and says, in meaning only.
 5. **Stop** — the line or the gesture the turn ends on.
 
 Each point is decided once, on the first reading that fits the character. Do not reopen a point, do not draft prose or lines — the Writer writes them — and write the form once, in the call.`;
