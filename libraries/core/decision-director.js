@@ -48,8 +48,11 @@ export function mainCharacters(state) {
 export function namedCharacters(value, state) {
     const lower = keyOf(value);
     if (!lower) return [];
+    // Целым словом, не подстрокой: «Ram» находился в «frame», «Rem» в «remains», псевдоним «Al» — почти в любом слове.
+    const escape = name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const said = name => new RegExp(`(^|[^\\p{L}\\p{N}])${escape(name)}($|[^\\p{L}\\p{N}])`, 'u').test(lower);
     return Object.values(normalizeGreatBank(state))
-        .filter(character => [character.name, ...(character.aliases ?? [])].some(name => keyOf(name) && lower.includes(keyOf(name))))
+        .filter(character => [character.name, ...(character.aliases ?? [])].some(name => keyOf(name) && said(keyOf(name))))
         .map(character => character.name);
 }
 

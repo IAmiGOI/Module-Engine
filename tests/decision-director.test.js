@@ -265,3 +265,10 @@ test('the Counsellor\'s data: characters the Ledger names who have a source but 
     assert.deepEqual(upcomingWithoutBank(state, ledger), ['Otto']);
     assert.deepEqual(upcomingWithoutBank(state, []), []);
 });
+
+test('names are found as whole words: Ram is not in "frame", Al is not in "always"', async () => {
+    const { namedCharacters } = await import('../libraries/core/decision-director.js');
+    const state = { ram: { name: 'Ram' }, al: { name: 'Aldebaran', aliases: ['Al'] }, otto: { name: 'Otto Suwen', aliases: [] } };
+    assert.deepEqual(namedCharacters('She always stands in the door frame, remains calm.', state), []);
+    assert.deepEqual(namedCharacters('Ram nods; Al shrugs. Ask Otto Suwen.', state).sort(), ['Aldebaran', 'Otto Suwen', 'Ram']);
+});
