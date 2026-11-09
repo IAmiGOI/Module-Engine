@@ -31,6 +31,11 @@ export function createRollback({ store, getSettings, publishEvent, call = null, 
             // он писал по ней Петицию, а Директор переписывал Указ по ходу, которого не было.
             ...(typeof store.ledger === 'function' ? { ledger: copy(store.ledger()) ?? [] } : {}),
             ...(typeof store.papers === 'function' ? { papers: queuesOf(store.papers()) } : {}),
+            // Окно сцены — тоже: удалённые ходы оставались в нём целиком, с текстом Писателя, и следующие ходы
+            // шли по ним почти дословно (строка «message deleted» только дописывалась в конец).
+            ...(typeof store.window === 'function' ? { window: copy(store.window()) } : {}),
+            ...(typeof store.frozen === 'function' ? { frozenWindows: copy(store.frozen()) ?? [] } : {}),
+            ...(typeof store.boundary === 'function' ? { windowBoundary: copy(store.boundary()) } : {}),
         };
     }
 
@@ -45,6 +50,9 @@ export function createRollback({ store, getSettings, publishEvent, call = null, 
         if (state.journal) await store.restoreJournal(state.journal).catch(() => {});
         if (call && state.knowledge && typeof state.knowledge === 'object') await call('storage.chatMemory.set', { ...KNOWLEDGE, value: state.knowledge }).catch(() => {});
         if (call && state.greatBank && typeof state.greatBank === 'object') await call('storage.chatMemory.set', { ...GREAT, value: state.greatBank }).catch(() => {});
+        if (state.window && typeof store.saveWindow === 'function') await store.saveWindow(state.window).catch(() => {});
+        if (Array.isArray(state.frozenWindows) && typeof store.saveFrozen === 'function') await store.saveFrozen(state.frozenWindows).catch(() => {});
+        if (state.windowBoundary && typeof store.saveBoundary === 'function') await store.saveBoundary(state.windowBoundary).catch(() => {});
         if (Array.isArray(state.ledger) && typeof store.saveLedger === 'function') await store.saveLedger(state.ledger).catch(() => {});
         // Только очереди: разговор игрока с Советником и вопросы Бога после снимка остаются.
         if (state.papers && typeof store.savePapers === 'function' && typeof store.papers === 'function') {

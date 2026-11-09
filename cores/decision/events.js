@@ -106,8 +106,10 @@ export function createDecisionEvents({
     function onDeleted(payload) {
         speculate?.discard?.('changed');
         const mesid = payload?.args?.[0];
-        restoreSnapshotFor(mesid, { remove: true }).catch(() => {});
-        noteCorrection?.({ mesid, action: 'deleted' }).catch(() => {});
+        // Откат снимка возвращает и окно сцены; строка-поправка нужна, только если снимка не было.
+        restoreSnapshotFor(mesid, { remove: true })
+            .then(restored => (restored ? null : noteCorrection?.({ mesid, action: 'deleted' })))
+            .catch(() => {});
     }
 
     function onEdited(payload) {

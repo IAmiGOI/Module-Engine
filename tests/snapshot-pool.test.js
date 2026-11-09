@@ -25,3 +25,10 @@ test('a part missing from the pool is reported, not silently skipped; old unpack
     const legacy = { clock: 3, roster: { active: [] } };
     assert.deepEqual(unpackSnapshot(pool, legacy), legacy);
 });
+
+test('the scene window and the frozen windows come back whole from a snapshot', () => {
+    const pool = {};
+    const state = { window: { entries: [{ key: 't1', text: 'TURN 1' }, { key: 't2', text: 'TURN 2' }], lastSwitchAt: 5 }, frozenWindows: [{ key: 'w1', text: 'summary' }] };
+    const packed = packSnapshot(pool, state);
+    assert.deepEqual(unpackSnapshot(pool, packed), state);
+});

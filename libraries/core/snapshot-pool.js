@@ -1,5 +1,5 @@
 /**
- * Пул снимков: тяжёлые части снимка (Great Bank, журнал Советника) хранятся один раз, по хэшу, а снимок держит
+ * Пул снимков: тяжёлые части снимка (Great Bank, журнал Советника, окно сцены) хранятся один раз, по хэшу, а снимок держит
  * ссылки. Персонаж делится на части, списки знаний и истории — на строки: за ход меняется малое, и полный снимок
  * на каждый ход почти ничего не стоит. Раньше тяжёлое держали только три последних снимка, и откат глубже
  * молча оставлял банки и журнал от удалённых ходов. Чистые функции, без хранилища.
@@ -63,6 +63,8 @@ export function packSnapshot(pool, snapshot) {
         out.greatBank = Object.fromEntries(Object.entries(snapshot.greatBank).map(([key, character]) => [key, packCharacter(pool, character)]));
     }
     if (Array.isArray(snapshot.ledger)) out.ledger = { $refs: snapshot.ledger.map(row => refer(pool, row)) };
+    if (Array.isArray(snapshot.window?.entries)) out.window = { ...snapshot.window, entries: { $refs: snapshot.window.entries.map(entry => refer(pool, entry)) } };
+    if (Array.isArray(snapshot.frozenWindows)) out.frozenWindows = { $refs: snapshot.frozenWindows.map(record => refer(pool, record)) };
     return out;
 }
 
@@ -79,7 +81,10 @@ export function unpackSnapshot(pool, snapshot) {
             return [key, full];
         }));
     }
-    if (out.ledger && Array.isArray(out.ledger.$refs)) out.ledger = out.ledger.$refs.map(key => check(read(pool, key))).filter(row => row !== undefined);
+    const list = refs => refs.$refs.map(key => check(read(pool, key))).filter(item => item !== undefined);
+    if (out.ledger && Array.isArray(out.ledger.$refs)) out.ledger = list(out.ledger);
+    if (out.window && Array.isArray(out.window.entries?.$refs)) out.window = { ...out.window, entries: list(out.window.entries) };
+    if (out.frozenWindows && Array.isArray(out.frozenWindows.$refs)) out.frozenWindows = list(out.frozenWindows);
     return missing.length ? { ...out, missing: missing.length } : out;
 }
 
@@ -95,6 +100,8 @@ export function prunePool(pool, snapshots) {
     for (const snapshot of Object.values(snapshots ?? {})) {
         walk(snapshot?.greatBank);
         walk(snapshot?.ledger);
+        walk(snapshot?.window);
+        walk(snapshot?.frozenWindows);
     }
     let removed = 0;
     for (const key of Object.keys(pool)) if (!used.has(key)) { delete pool[key]; removed += 1; }
