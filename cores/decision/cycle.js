@@ -217,7 +217,9 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.knowledgeReturns = new Set();
         state.departureWarned = false;
         state.entrantsRestarted = restarted;
+        state.userMessage = '';
         const lastUser = [...(Array.isArray(chat) ? chat : [])].reverse().find(entry => entry?.is_user === true);
+        state.userMessage = String(lastUser?.mes ?? lastUser?.content ?? '').trim();
         // Номер хода — из сохранённого окна, а не из памяти вкладки: счётчик сбрасывался при каждой перезагрузке страницы.
         state.turnCounter = turnBase({ reroll: type === 'regenerate' || type === 'swipe', userText: String(lastUser?.mes ?? lastUser?.content ?? '') });
         state.canAsk = /\(\s*ooc\s*:/i.test(String(lastUser?.mes ?? lastUser?.content ?? ''));

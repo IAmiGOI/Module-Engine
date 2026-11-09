@@ -25,3 +25,10 @@ test('the Resolver gets how the characters in the scene feel and speak, not the 
     assert.match(out, /merchant cadence/);
     assert.doesNotMatch(out, /Loyal|Calm|user speech/);
 });
+
+test('a userResult cut down to a scrap is replaced by the user\'s own message, so their action still reaches the Writer', async () => {
+    const { repairInscription } = await import('../libraries/core/decision-inscription.js');
+    const form = { characters: [{ name: 'Emilia', does: 'x' }], beats: [{ who: 'Emilia', kind: 'action', text: 'x' }], stop: 'Emilia waits.', userResult: 'S' };
+    const repaired = repairInscription({ form, roster: ['Emilia'], user: 'Sasha', userMessage: 'I trace patterns on her side' });
+    assert.equal(repaired.form.userResult, 'Sasha: I trace patterns on her side');
+});

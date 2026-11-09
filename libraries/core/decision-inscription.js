@@ -34,7 +34,7 @@ export function normalizeConflict(value) {
  * Шаблон → форма хода, которую понимают проекции, Push и запись хода.
  * @returns {{ ok: boolean, missing: string[], form?: object, warnings: string[] }}
  */
-export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [], modes = null } = {}) {
+export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [], modes = null, userMessage = '' } = {}) {
     const missing = [];
     const warnings = [];
     if (!form || typeof form !== 'object') return { ok: false, missing: ['inscribe'], warnings };
@@ -163,6 +163,13 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
     }
     minutes = clampMinutes(minutes);
 
+    // Действие пользователя доходит до Писателя только этой строкой: «S» вместо неё — и прикосновение пропадало со страницы.
+    // Пусто или обрывок — ставится само сообщение пользователя: хотя бы его действие целиком.
+    let userResult = text(form.userResult);
+    if (userResult.split(/\s+/).filter(Boolean).length < 4 && text(userMessage)) {
+        userResult = `${text(user) || 'The user'}: ${text(userMessage)}`;
+        warnings.push('userResult was empty or cut short — the user\'s own message was used for it');
+    }
     const resolution = text(form.stop) || text(form.resolution);
     if (!resolution) missing.push('stop: where the turn ends, in one sentence');
     const formOut = {
@@ -170,7 +177,7 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         beats,
         resolution,
         stop: resolution,
-        userResult: text(form.userResult),
+        userResult,
         scene: { duration: rawDuration, minutes, ...(text(form.scene?.place) ? { place: text(form.scene.place) } : {}) },
         roster: { active: numbered },
     };

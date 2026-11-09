@@ -61,7 +61,7 @@ export function createInscribeHandler({ store, publishEvent, state, resolvePlace
             form: args, roster: store.roster().active, assessments: state.assessments, user,
             nowValue, timeOfDay: typeof timeOfDay === 'function' ? timeOfDay() : null,
             previous, departed: previous ? departedFrom(previous.resolution, store.roster().active, { user }) : [],
-            modes: state.modes?.chosen ?? null,
+            modes: state.modes?.chosen ?? null, userMessage: state.userMessage ?? '',
         });
         if (repaired.warnings.length) state.formWarnings = [...(state.formWarnings ?? []), ...repaired.warnings];
         if (!repaired.ok) return { ok: false, missing: repaired.missing };
