@@ -26,16 +26,16 @@ export const INSCRIBE_TOOL = Object.freeze({
             },
             characters: {
                 type: 'array',
-                description: 'Only the characters who act this turn, in the order of the CoT: heard → feels → next → does and says.',
+                description: 'Only the characters who act this turn. What they do and say comes from whichever is stronger in them now — what they feel or what they plan.',
                 items: {
                     type: 'object',
                     properties: {
                         name: { type: 'string' },
                         heard: { type: 'string', description: 'What in the user\'s latest message — or in what just happened — matters to them, in one line. What is new in it for them.' },
                         feels: { type: 'string', description: 'What they feel now, from their Emotions and what they heard. A few words.' },
-                        next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID AND DONE or already taken. With no Decree yet, toward what their bank wants.' },
+                        next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID AND DONE or already taken. Leave it out when a feeling, not a plan, moves them this turn. With no Decree yet, toward what their bank wants.' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
-                        says: { type: 'string', description: 'What they say, in meaning only — never the wording: the Writer writes the words. Leave it out when they say nothing.' },
+                        says: { type: 'string', description: 'What they say, in meaning — never the wording: the Writer writes the words. When the words do not come out cleanly (they break off, jump, dodge or spill out too much at once), say how they come out as well. Leave it out when they say nothing.' },
                         mode: { type: 'object', description: 'Only when THIS TURN asks for it: the fields it names, each as {"real": …, "lens": …}.' },
                         assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
                         outcome: { type: 'string', description: 'Why it succeeded or failed, written after the assess result is known.' },
@@ -51,7 +51,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                     properties: {
                         who: { type: 'string' },
                         kind: { type: 'string', enum: ['line', 'action'], description: 'line — they speak; action — what their body does.' },
-                        text: { type: 'string', description: 'For a line: what the words mean, in direct form ("what were you two saying at the sill?") — never the wording, never "she asks…". For an action: what they do.' },
+                        text: { type: 'string', description: 'For a line: what the words mean, in direct form ("what were you two saying at the sill?") — never the wording, never "she asks…" — and, when they do not come out cleanly, how they come out. For an action: what they do.' },
                     },
                     required: ['who', 'kind', 'text'],
                 },

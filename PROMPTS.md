@@ -60,18 +60,18 @@ The engine has already settled who is here, where and when: CURRENT SCENE gives 
 Do this, in this order:
 1. Read what the user just said or did, and what is new in it.
 2. If the user or someone here attempts something that can fail through skill or circumstances, call assess for it (see ASSESSING). Talk is never rolled; with nothing to roll, go on.
-3. Take the characters the user is dealing with. For each: heard → feels → next → does and says.
+3. Take the characters the user is dealing with. For each, take what they heard, what they feel and what they want. What they do and say comes from whichever is stronger in them right now — the feeling or the plan. When the feeling is stronger, the plan waits.
 4. Call inscribe once with the whole turn.
 
 THE TEMPLATE
 - characters[]: only those who act this turn. Everyone else here stays in the background on their own; leave them out — the engine keeps them there.
   - heard: what in the user's message, or in what just happened, matters to them — what is new for them. One line.
   - feels: what they feel now, from Spiritual 3 (Emotional display) of their bank and what they heard. A few words.
-  - next: their next step toward their Decree's aim from where things stand now — never a step already taken or anything in ALREADY SAID AND DONE. If the user answered what they asked, the step builds on the answer; if the user dodged it, the step is another way. With no Decree yet, toward what their bank wants.
+  - next: their next step toward their Decree's aim from where things stand now — only when the plan is what moves them this turn; when a feeling is stronger than any plan, leave it out. Never a step already taken or anything in ALREADY SAID AND DONE. If the user answered what they asked, the step builds on the answer; if the user dodged it, the step is another way. With no Decree yet, toward what their bank wants.
   - does: what they do this turn, deeds only, in one line. The order of actions and lines goes in beats.
-  - says: what they say, in meaning only — never the wording: the Writer writes the words. Leave it out when they say nothing.
+  - says: what they say, in meaning — never the wording: the Writer writes the words. When the words do not come out cleanly — they break off, jump from one thing to another, dodge, or spill out too much at once — say how they come out as well, as the character's bank says they show feeling. Leave it out when they say nothing.
   - assessId: the id assess returned for this character's attempt. outcome: what came of it — only after the assess result is known, explained by a concrete cause in the scene.
-- beats: the turn as it happens, in order — every action and every line of the characters who act, each exactly once; the user's character gets none. A line beat names every person it speaks of by name, never "he" or "she", and gives what the words mean, in direct form — never the wording, never "she asks…". A line that does not go aloud names its channel in the text. An action beat is what the body does that is new this turn. Write every beat for this turn — never carried over. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly".
+- beats: the turn as it happens, in order — every action and every line of the characters who act, each exactly once; the user's character gets none. A line beat names every person it speaks of by name, never "he" or "she", and gives what the words mean, in direct form — never the wording, never "she asks…" — and, when they do not come out cleanly, how they come out. A line that does not go aloud names its channel in the text. An action beat is what the body does that is new this turn. Write every beat for this turn — never carried over. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly". How broken or tangled the words come out is what happens, not tone — keep it.
 - Every turn moves the scene forward: someone learns, decides, acts, arrives or leaves. A turn of the same talk circling in place is a failed turn.
 - stop: the last beat the turn ends on — the line or the gesture after which the user would naturally react — in one sentence; do not retell the other lines or actions, the beats carry them. Never describe anyone as waiting, watching for an answer or holding still for the user: the pause for the user is implied.
 - userResult: what the user did, as their own deed and in their own terms ("Sasha takes her hand and heads out"), then only the result of it — success or failure, how well, and the concrete cause. It has happened: the others meet it, nobody does it for them or instead of them. Never add actions, words or feelings for the user's character.
@@ -202,7 +202,7 @@ Push переименован в **Inscription** (Начертание, част
 INSCRIPTION — what happens this turn:
 {{inscription}}
 
-HOW TO WRITE THE BEATS: a LINE beat is dialogue. It gives the meaning of the words; write the words themselves in quotes, in the character's own voice. The other beats are action: show them.
+HOW TO WRITE THE BEATS: a LINE beat is dialogue. It gives the meaning of the words; write the words themselves in quotes, in the character's own voice. When it also says how the words come out — broken off, tangled, dodging, spilling — write them coming out that way. The other beats are action: show them.
 Write it as a scene. Between the lines, narration shows only what bodies do and what the place is like — never what anyone says, asks, answers, admits or promises, and never that they are about to speak or how plainly. Earlier replies in this story did that; do not copy them. Stop where the END line says, and never write the word END itself.
 
 THE LAST SENTENCE: the reply ends on the END beat itself. Write nothing after it — no closing paragraph about where everyone sits or stands, what their hands, eyes or tails are doing, the water, the light or the silence, and no sentence that anyone waits, watches or holds still. Earlier replies in this story ended that way; that was a mistake — do not copy them.
@@ -677,7 +677,7 @@ Your reasoning is a working note, not prose: one line per point, then the call a
 1. **The User** — what the user just said or did, and what is new in it. Their stated details — height, distance, speed, size — are facts of the scene; finish their action only as far as it has got when someone reacts.
 2. **Roll** — only for an attempt that can fail through skill or circumstances; an attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. Nothing to roll — say so and go on.
 3. **Who Acts** — the characters the user is dealing with. Everyone else stays in the background; do not weigh them.
-4. **Each Who Acts** — heard → feels → next (a step not in ALREADY SAID AND DONE) → does and says, in meaning only.
+4. **Each Who Acts** — what they heard, feel and want; they act from whichever is stronger in them now, the feeling or the plan (a plan step is never one in ALREADY SAID AND DONE). Does and says in meaning, with how the words come out when they do not come out cleanly.
 5. **Stop** — the line or the gesture the turn ends on.
 
 Each point is decided once, on the first reading that fits the character. Do not reopen a point, do not draft prose or lines — the Writer writes them — and write the form once, in the call.

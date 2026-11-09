@@ -42,7 +42,7 @@ test('the resolver CoT is the last thing it reads', () => {
     const built = resolver();
     assert.match(built.messages.at(-1).content, /\*\*How You Think This Turn\*\*/);
     assert.match(built.messages.at(-1).content, /1\. \*\*The User\*\*/);
-    assert.match(built.messages.at(-1).content, /heard → feels → next/);
+    assert.match(built.messages.at(-1).content, /whichever is stronger in them now, the feeling or the plan/);
 });
 
 test('the Creation placeholder sits in the stable part and is absent until phase 5', () => {
