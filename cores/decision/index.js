@@ -119,6 +119,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         researcher,
         banks,
         publishEvent,
+        notify,
         // Мысли и расход фоновых циклов (bootstrap, сообщения, пассивные) — тем же перехватом, что у хода.
         capture: (prefix, handlers) => {
             const inner = captureReasoning(host, prefix, handlers);

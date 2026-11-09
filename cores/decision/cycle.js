@@ -1,3 +1,4 @@
+import { auditTurnInputs } from '../../libraries/core/decision-audit.js';
 import { createKnowledge } from './knowledge.js';
 import { createFileLayer } from './files-layer.js';
 import { createCreationProvider } from './files-creation.js';
@@ -46,7 +47,9 @@ export class DecisionConfigError extends Error {
 
 const PREEMPT_WAIT_MS = 3000;
 
-export function createDecisionCycle({ call, callTool, callService = null, getSettings, getGameSettings = null, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, capture = null, now = () => Date.now(), questions: providedQuestions = null }) {
+export function createDecisionCycle({ call, callTool, callService = null, getSettings, getGameSettings = null, getWorkers, store, researcher = null, banks = null, publishEvent, usage = () => null, capture = null, now = () => Date.now(), questions: providedQuestions = null, notify = null }) {
+    // Аудит входов: одна находка — одно уведомление за сессию, дальше только строка в журнале хода.
+    const auditSeen = new Set();
     const assessments = new Map();
     const state = { assessments, assessmentCounter: 0, turnCounter: 0, runId: '' };
     const wakeQueue = createWakeQueue({ enqueue: job => enqueueBackground(job), publishEvent });
@@ -242,6 +245,16 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const contrastBlock = resolverContrastBlock(state.contrast);
         const task = [reroll || modeBlock ? DIRECTOR_TURN : '', reroll ? DIRECTOR_REROLL : '', contrastBlock, modeBlock].filter(Boolean).join('\n\n');
         const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task });
+        if (!restarted) {
+            const audit = auditTurnInputs({
+                greatBank: (await banks?.great?.load?.().catch(() => ({}))) ?? {}, roster: store.roster().active ?? [],
+                user: String(banks?.persona?.()?.name ?? ''), windowEntries: store.window?.()?.entries ?? [], turn: state.turnCounter,
+            });
+            for (const item of audit) {
+                state.formWarnings.push(`audit: ${item.message}`);
+                if (!auditSeen.has(item.key)) { auditSeen.add(item.key); notify?.('warning', `ME: ${item.message}`); }
+            }
+        }
         contextReport.record(built, { turn: state.turnCounter });
         const tools = toolFilter ? await context.toolsFor(settings, { filter: toolFilter }) : await context.toolsFor(settings, { turn: true });
         // Режим без бросков — инструмента броска на этом ходу просто нет: спорить «бросать или нет» не о чем.
