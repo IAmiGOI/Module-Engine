@@ -142,3 +142,10 @@ test('after a window switch the next turn is numbered from the last turn, not fr
     assert.equal(lastTurnNumber(entries) + 1, 87);
     assert.equal(lastTurnNumber([]), 0);
 });
+
+test('the RP time for God, the Director and the Counsellor is the story time after the last accepted turn, not the engine minutes', async () => {
+    const { rpNow } = await import('../libraries/core/decision-scene.js');
+    const store = { cycles: () => [{ event: 'turn', turn: 3, form: { meta: { timeAfter: '2026 March 5 01:34 PM' } } }], clock: () => ({ minutes: 342 }) };
+    assert.equal(rpNow(store, minutes => `Day 1, ${minutes}`), '2026 March 5 01:34 PM');
+    assert.equal(rpNow({ cycles: () => [], clock: () => ({ minutes: 5 }) }, minutes => `Day 1, ${minutes}`), 'Day 1, 5');
+});

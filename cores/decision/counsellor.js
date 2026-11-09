@@ -1,3 +1,4 @@
+import { rpNow } from '../../libraries/core/decision-scene.js';
 import { promptText } from '../../libraries/core/prompt-overrides.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildCounsellorToolList, COUNSELLOR_STOP_TOOLS } from '../../libraries/core/decision-tools.js';
@@ -94,7 +95,7 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         }
         messages.push(
             { role: 'system', content: `${DECREE_HEADER}\n\n${libraryLevelsSection(store.library()) || 'CHARACTER LIBRARY: no levels yet.'}\n\n${await decreeText()}` },
-            { role: 'system', content: `${RP_TIME_HEADER} ${clockLabel(store.clock().minutes)}` },
+            { role: 'system', content: `${RP_TIME_HEADER} ${rpNow(store, clockLabel)}` },
         );
         if (talk(mode)) {
             messages.push(

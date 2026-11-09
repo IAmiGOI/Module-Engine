@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TURN_MODES, modeScene, parseModeAnswer, chooseModes, modesAllowRolls, resolverModeBlock, writerModeLine } from '../libraries/core/turn-modes.js';
+import { TURN_MODES, modeScene, parseModeAnswer, chooseModes, resolverModeBlock, writerModeLine } from '../libraries/core/turn-modes.js';
 
 test('eight modes, each says what it changes for the Resolver and the Writer', () => {
     assert.deepEqual(TURN_MODES.map(mode => mode.id), ['peasant', 'elder', 'merchant', 'king', 'warrior', 'hunter', 'artist', 'bard']);
@@ -14,11 +14,8 @@ test('one or two modes: the best if sure, a second if also sure, Peasant when no
     assert.deepEqual(chooseModes({}), ['peasant']);
 });
 
-test('a talk-only turn has no rolls; a fight or an everyday turn keeps them', () => {
-    assert.equal(modesAllowRolls(['merchant', 'elder']), false);
-    assert.equal(modesAllowRolls(['warrior']), true);
-    assert.equal(modesAllowRolls(['peasant']), true);
-    assert.match(resolverModeBlock(['merchant']), /Nothing is rolled this turn\./);
+test('a mode never forbids rolls: an attempt that can fail is rolled in any mode', () => {
+    assert.doesNotMatch(resolverModeBlock(['merchant', 'king']), /rolled/);
     assert.match(resolverModeBlock(['merchant', 'king']), /^THIS TURN — Merchant \+ King:/);
     assert.match(writerModeLine(['bard']), /^HOW THIS TURN READS \(Bard\): This is a warm, close moment/);
 });

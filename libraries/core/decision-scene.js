@@ -50,6 +50,15 @@ export function departedFrom(resolution, roster = [], { user = '' } = {}) {
 }
 
 /** Последняя принятая форма хода из журнала директора (не отвергнутая). */
+/**
+ * RP-время для Бога, Директора и Советника: время истории после последнего принятого хода («2026 March 5 01:34 PM»).
+ * Часы движка — лишь минуты с начала чата: из них выходило «Day 1, 05:42», когда в истории был день.
+ */
+export function rpNow(store, fallback = () => '') {
+    const form = lastAcceptedForm(typeof store?.cycles === 'function' ? store.cycles() : []);
+    return text(form?.meta?.timeAfter) || text(form?.meta?.timeBefore) || fallback(store?.clock?.()?.minutes ?? 0);
+}
+
 export function lastAcceptedForm(cycles, { beforeTurn = null } = {}) {
     const list = Array.isArray(cycles) ? cycles : [];
     for (let index = list.length - 1; index >= 0; index -= 1) {

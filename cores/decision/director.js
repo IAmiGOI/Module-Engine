@@ -1,3 +1,4 @@
+import { rpNow } from '../../libraries/core/decision-scene.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildDirectorToolList } from '../../libraries/core/decision-tools.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
@@ -138,7 +139,7 @@ export function createDirector({
             characters: info.characters,
             reports: lastReports({ petitions: papers.petitions ?? [], telegrams: papers.telegrams ?? [] }),
             thoughts: lastDecreeThoughts(typeof store.cycles === 'function' ? store.cycles() : []),
-            rpTime: clockLabel(store.clock().minutes),
+            rpTime: rpNow(store, clockLabel),
             reason: info.wake.detail,
             world: await worldAtStart(),
         });

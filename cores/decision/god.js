@@ -1,3 +1,4 @@
+import { rpNow } from '../../libraries/core/decision-scene.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildGodToolList } from '../../libraries/core/decision-tools.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
@@ -136,7 +137,7 @@ export function createGod({
         const context = buildGodContext({
             material, creation: state, kind: info.kind, prayers: info.prayers,
             // До первого хода часов нет: «Day 1, 00:00» — пустые часы движка, Бог принял их за момент старта (полночь).
-            declaration: info.declaration, rpTime: currentTurn() > 0 ? clockLabel(store.clock().minutes) : '',
+            declaration: info.declaration, rpTime: currentTurn() > 0 ? rpNow(store, clockLabel) : '',
             questions: (typeof store.papers === 'function' ? store.papers()?.god?.questions ?? [] : []).filter(item => !text(item.answer)),
             maxQuestions: Number(settings.god?.maxQuestions) || 5,
         });

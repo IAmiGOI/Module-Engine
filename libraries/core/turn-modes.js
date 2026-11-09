@@ -1,7 +1,7 @@
 /**
  * Режимы хода — чистые данные и правила, без модели (DIRECTOR-SPEC «Режимы хода»). Перед ходом выбирается
- * 1–2 режима; каждый кладёт короткий блок рядом с заданием Resolver, решает, есть ли на ходу броски, и даёт
- * указание Писателю. Поля формы режима делятся на `real` (правда, Писателю не видна) и `lens` (что видно нашими глазами). Режим определяется тем, что он меняет, а не темой. Источник выбора сменный: сейчас —
+ * 1–2 режима; каждый кладёт короткий блок рядом с заданием Resolver и даёт указание Писателю. Броски режим
+ * не запрещает: попытка, которая может сорваться, бросается всегда (кислород в «политическом» ходу шёл без броска). Поля формы режима делятся на `real` (правда, Писателю не видна) и `lens` (что видно нашими глазами). Режим определяется тем, что он меняет, а не темой. Источник выбора сменный: сейчас —
  * короткий запрос к воркеру Resolver, потом — локальная модель DataGen; формат ответа один: режим → 0…1.
  */
 
@@ -9,56 +9,56 @@ const text = value => String(value ?? '').trim();
 
 export const TURN_MODES = Object.freeze([
     {
-        id: 'peasant', label: 'Peasant', rolls: 'explicit',
+        id: 'peasant', label: 'Peasant',
         when: 'everyday life: nothing important is at stake',
         resolver: 'An ordinary moment. Keep the turn short and alive: small concrete things people do, no forced drama.',
         writer: 'This is an everyday moment: keep it plain and lively, with everyday texture and short exchanges.',
         fields: {},
     },
     {
-        id: 'elder', label: 'Elder', rolls: 'no',
+        id: 'elder', label: 'Elder',
         when: 'an important talk: a confession, a hard truth, a decision about trust',
         resolver: 'An important talk. Each character answers the meaning of what was said, and their view of the speaker can change this turn — trust gained or lost, a mind changed.',
         writer: 'This is a weighty talk: let each line land and leave room after it, and show what speaking costs them.',
         fields: { view_of: 'how they see the speaker' },
     },
     {
-        id: 'merchant', label: 'Merchant', rolls: 'no',
+        id: 'merchant', label: 'Merchant',
         when: 'trade or a deal: goods, services, payment, terms',
         resolver: 'A deal. A character offers and promises only what their bank says they have and control. The other side weighs what they gain against what they risk, believes nothing they cannot check, and has their own interest. Moving forward can be a counter-demand, a refusal, a test or a delay — not only agreement.',
         writer: 'This is a deal: give terms, sums and conditions as the characters would actually say them, and let hesitation show in what they do, not in what they say about it.',
         fields: { deal: 'what is being dealt and on what terms', stake: 'what they want from the deal' },
     },
     {
-        id: 'king', label: 'King', rolls: 'no',
+        id: 'king', label: 'King',
         when: 'politics: power, factions, leverage, alliances',
         resolver: 'Politics. Every side has a position, a price and consequences beyond this room. Nothing big is settled in a single turn; words are moves, and each move is answered with a move.',
         writer: 'This is politics: carry it in subtext — who holds the advantage shows in how people hold themselves and in what they leave unsaid, not in explanation.',
         fields: { stake: 'what their side wants from the others' },
     },
     {
-        id: 'warrior', label: 'Warrior', rolls: 'yes',
+        id: 'warrior', label: 'Warrior',
         when: 'a fight, a chase or direct danger',
         resolver: 'Danger. Roll every attempt that can fail; track positions, wounds and who can see whom. Things happen fast and in order.',
         writer: 'This is danger: short, sharp sentences, physical and immediate, with no reflection in the middle of the action.',
         fields: { position: 'where they are relative to the others', condition: 'what shape they are in' },
     },
     {
-        id: 'hunter', label: 'Hunter', rolls: 'yes',
+        id: 'hunter', label: 'Hunter',
         when: 'stealth, searching, following someone or investigating',
         resolver: 'A search or stealth. Roll noticing and hiding; decide what is found and what is missed, and what the searched-for does meanwhile.',
         writer: 'This is a search or stealth: give traces and details, the tension of keeping still, and what is noticed against what slips past.',
         fields: { aware_of: 'whom and what they have noticed' },
     },
     {
-        id: 'artist', label: 'Artist', rolls: 'explicit',
+        id: 'artist', label: 'Artist',
         when: 'a place or moment that should be shown: arriving somewhere new, a view, a striking change of scene',
         resolver: 'A moment to be shown. Do not rush the turn; choose what the eye falls on first and what it lingers on.',
         writer: 'This is a moment to be shown: describe the place or the moment, choosing which details the eye falls on first and which stay with it.',
         fields: { focus: 'what the eye lingers on' },
     },
     {
-        id: 'bard', label: 'Bard', rolls: 'no',
+        id: 'bard', label: 'Bard',
         when: 'a warm, close, quiet scene between people',
         resolver: 'A warm, close scene. Slow down; no hurry to move the plot — small gestures and what people feel for each other are the turn.',
         writer: 'This is a warm, close moment: write it slow and sensory, with closeness in small gestures and weight in what goes unsaid.',
@@ -123,23 +123,15 @@ export function chooseModes(answers, { threshold = 0.5, second = 0.5 } = {}) {
     return chosen;
 }
 
-/** Есть ли на этом ходу броски: «да» у любого режима — да; «только явные» — да; все «нет» — инструмента броска нет. */
-export function modesAllowRolls(ids) {
-    const modes = (Array.isArray(ids) ? ids : []).map(byId).filter(Boolean);
-    if (!modes.length) return true;
-    return modes.some(mode => mode.rolls !== 'no');
-}
-
 /** Блок рядом с заданием Resolver. */
 export function resolverModeBlock(ids) {
     const modes = (Array.isArray(ids) ? ids : []).map(byId).filter(Boolean);
     if (!modes.length) return '';
-    const rolls = modesAllowRolls(ids) ? '' : '\nNothing is rolled this turn.';
     const fields = Object.entries(modeFields(ids));
     const form = fields.length
         ? `\n\n${MODE_FORM_HEAD}\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\n${MODE_FORM_HALVES}`
         : '';
-    return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}${rolls}${form}`;
+    return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}${form}`;
 }
 
 /** Поля формы выбранных режимов: имя → что в нём. Общие у двух режимов (stake) — одно поле. */
