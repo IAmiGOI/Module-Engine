@@ -76,6 +76,23 @@ const ALL_PARTS = Object.freeze([
 ]);
 
 const DECREE_PARTS = Object.freeze([{ part: 'decree', nos: DECREE_SECTIONS.map(section => section.no) }]);
+// Нрав — как персонаж проявляет чувства и как говорит. Резолвер решает, что они чувствуют и что говорят, а этих разделов
+// у него не было (в дальней выжимке их нет, Указ — про планы): Отто играли ровным «осторожным купцом» вместо себя.
+const TEMPER_PARTS = Object.freeze([{ part: 'spiritual', nos: [3, 5] }]);
+
+/** Нрав тех, кто в сцене, — резолверу рядом с Указами. Персонаж пользователя — нет. */
+export function renderTemperForResolver(entries, { nowValue = null, names = [] } = {}) {
+    const wanted = new Set((Array.isArray(names) ? names : []).map(name => text(name).toLowerCase()));
+    const blocks = (Array.isArray(entries) ? entries : [])
+        .filter(entry => wanted.has(text(entry?.character?.name).toLowerCase()) && !isUserCharacter(entry?.character))
+        .map(entry => {
+            const body = entry?.character?.sectionsReady === false ? [] : blocksOf(entry?.character, TEMPER_PARTS, nowValue);
+            return body.length ? `### ${text(entry.character.name)}\n${body.join('\n\n')}` : '';
+        })
+        .filter(Boolean);
+    if (!blocks.length) return '';
+    return `HOW THEY FEEL AND SPEAK — from the banks of the characters in this scene: how each shows what they feel and how each talks and thinks. What they feel this turn and what they say come out this way:\n\n${blocks.join('\n\n')}`;
+}
 
 /** Дальняя компактная проекция: Material 1, 3, 6 + Spiritual 4, 6, по всем персонажам. */
 export function renderFarBanks(entries, { nowValue = null } = {}) {

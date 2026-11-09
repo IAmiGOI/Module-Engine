@@ -1,5 +1,5 @@
 import { createGreatBank } from './bank-great.js';
-import { renderDecreeForResolver } from '../../libraries/core/decision-bank-projections.js';
+import { renderDecreeForResolver, renderTemperForResolver } from '../../libraries/core/decision-bank-projections.js';
 
 /**
  * Great Bank поверх банков-карточек: проекции (дальняя компактная, ближняя
@@ -46,7 +46,8 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
         await sync();
         const state = await great.load();
         const entries = Object.values(state).map(character => ({ character }));
-        return renderDecreeForResolver(entries, { names });
+        const temper = Array.isArray(names) && names.length ? renderTemperForResolver(entries, { names }) : '';
+        return [renderDecreeForResolver(entries, { names }), temper].filter(Boolean).join('\n\n');
     }
 
     /** Раздел, который увидит движок: нужен ответу инструмента и проверке прав. */
