@@ -65,8 +65,30 @@ export function parseSectionTracks(text, { server, sectionId, model, dim }) {
 }
 
 export const pickUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/pick`, key);
+export const feedbackUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/feedback`, key);
+export const styleFeedbackUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/style-feedback`, key);
 export const placesUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/places`, key);
 export const timesUrl = ({ url, key }) => withKey(`${trimSlash(url)}/api/times`, key);
+export const choicesUrl = ({ url, key }, sectionId) => withKey(`${trimSlash(url)}/api/choices?section=${encodeURIComponent(sectionId)}`, key);
+
+/**
+ * Варианты «нужной музыки» раздела: `[{ id, label }]` (только то, что показывает сервер). Мусор, чужая модель или пустой список — пустой массив: кнопка выбора просто не появится.
+ */
+export function parseChoices(text, { model } = {}) {
+    let data;
+    try { data = JSON.parse(text); } catch { return []; }
+    if (!data || typeof data !== 'object' || (model && data.model !== model) || !Array.isArray(data.choices)) return [];
+    const seen = new Set();
+    const list = [];
+    for (const item of data.choices) {
+        const id = typeof item?.id === 'string' ? item.id.trim() : '';
+        const label = typeof item?.label === 'string' ? item.label.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+        if (!id || id.length > 64 || !label || seen.has(id)) continue;
+        seen.add(id); list.push({ id, label });
+        if (list.length >= 40) break;
+    }
+    return list;
+}
 
 const MAX_PLACES = 500, MAX_PLACE_KEYWORDS = 60, MAX_KEYWORD_LENGTH = 80;
 
@@ -130,6 +152,10 @@ const MAX_QUESTIONS = 12, MAX_QUESTION_LENGTH = 400;
  * Ответ сервера на выбор → `{ action: 'play' | 'keep' | 'none' | 'ask', track?, similarity?, intensity?, questions? }`; мусор и недопустимые id — `none`.
  * `ask` — сервер просит спросить Jev: `questions` = `{ id: утверждение }` (чужой текст ограничен по числу и длине — это данные, не команды).
  */
+/** Типы музыки, между которыми выбирает нода «Тип музыки» сервера (id совпадают с сервером). */
+export const MUSIC_STYLES = Object.freeze(['ambient', 'score', 'vocal']);
+export const MUSIC_STYLE_LABELS = Object.freeze({ ambient: 'Ambient', score: 'Soundtrack', vocal: 'With lyrics' });
+
 /** План перехода от сервера (доли, бас-своп): только числа в разумных пределах, иначе `null` — ME делает обычный кроссфейд. */
 export function cleanTransition(raw) {
     if (!raw || typeof raw !== 'object' || (raw.kind !== 'beat' && raw.kind !== 'plain')) return null;
@@ -142,6 +168,7 @@ export function parsePick(text, { server, sectionId }) {
     const data = parseJson(text);
     const intensity = Number.isFinite(data?.intensity) ? data.intensity : null;
     const pattern = /^[\w-]+$/.test(String(data?.pattern ?? '')) ? String(data.pattern) : null;   // узел паттерна, который играет: ME лишь возвращает его серверу
+    const style = MUSIC_STYLES.includes(data?.style) ? data.style : null;   // тип музыки, который выбрала нода «Тип музыки» сервера (его можно оценить)
     const place = typeof data?.place === 'string' && /^[\w-]+$/.test(data.place) ? { place: data.place } : {};   // место, которое определил сервер: ME лишь возвращает его в следующем запросе
     if (data?.action === 'keep') return { action: 'keep', intensity, pattern, ...place };
     if (data?.action === 'ask' && data.questions && typeof data.questions === 'object') {
@@ -152,7 +179,7 @@ export function parsePick(text, { server, sectionId }) {
     }
     if (data?.action === 'play' && /^[\w-]+$/.test(String(data.id)) && /^[a-z0-9]{2,5}$/i.test(String(data.ext))) {
         const transition = cleanTransition(data.transition);
-        return { action: 'play', intensity, pattern, ...place, ...(transition ? { transition } : {}), similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
+        return { action: 'play', intensity, pattern, ...place, ...(transition ? { transition } : {}), style, similarity: Number.isFinite(data.similarity) ? data.similarity : null, track: serverTrackFrom({ server, sectionId, id: data.id, ext: data.ext }) };
     }
     return { action: 'none' };
 }

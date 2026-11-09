@@ -17,7 +17,7 @@ model.generate,
 # Вектор сцены и вектора треков — локальный эмбединг.
 embedding.compute, embedding.similarity,
 # Разделы музыкального сервера владельца (сеть — только у Ядра).
-musicServer.sections, musicServer.section, musicServer.pick, musicServer.places, musicServer.times,
+musicServer.sections, musicServer.section, musicServer.pick, musicServer.feedback, musicServer.styleFeedback, musicServer.choices, musicServer.places, musicServer.times,
 # Время суток из «RP Time» (чтение поля трекера; текст чата не используется).
 tracking.value,
 # Умный выбор: Jev пользователя оценивает категории сцены (запрос от сервера, ответ идёт только как номер категории).
@@ -104,6 +104,50 @@ export function createMusicModule(host) {
     let remoteTrack = null;
     const remote = () => server.mode.peek() === 'server' && Boolean(server.selected.peek());
 
+    // Отметка «верно / неверно» у трека сервера: вектор сцены, на которой он НАЧАЛ играть (его и отмечаем), уходит владельцу в очередь на проверку.
+    let playingScene = null;                                   // { vector, rawId, section }
+    const feedbackVisible = signal(false);
+    const feedbackState = signal({ mark: null, status: 'idle' });
+    // «Нужная музыка»: игрок сам называет, какая музыка подошла бы этой сцене (список даёт сервер: id и подписи). Уходит той же отметкой «неверно» с выбранным вариантом.
+    const choicesState = signal({ open: false, status: 'idle', list: [] });
+    // «Тип музыки»: если трек выбран нодой сервера «Тип музыки», владелец может оценить, верно ли она выбрала тип (эмбиент · саундтрек · со словами). Неверно — называет верный из двух остальных.
+    const styleState = signal({ chosen: null, status: 'idle', open: false });
+    function setPlayingScene(scene) { playingScene = scene; feedbackState.set({ mark: null, status: 'idle' }); feedbackVisible.set(Boolean(scene)); choicesState.set({ open: false, status: 'idle', list: [] }); styleState.set({ chosen: scene?.style ?? null, status: 'idle', open: false }); }
+    async function rateStyle(right, correct = null) {
+        const chosen = styleState.peek().chosen;
+        if (!playingScene || !chosen || styleState.peek().status === 'sending' || styleState.peek().status === 'sent') return;
+        if (!right && !correct) { styleState.set({ ...styleState.peek(), open: !styleState.peek().open }); return; }   // «неверно» — сначала показать два других типа
+        styleState.set({ chosen, status: 'sending', open: false });
+        const sent = await call('musicServer.styleFeedback', { section: playingScene.section, vector: playingScene.vector, chosen, right, ...(right ? {} : { correct }) });
+        const ok = Boolean(sent.ok && sent.value?.ok);
+        styleState.set({ chosen, status: ok ? 'sent' : 'failed', open: false, ...(ok ? { right, correct: right ? chosen : correct } : {}) });
+    }
+    async function openChoices() {
+        const current = choicesState.peek();
+        if (!playingScene) return;
+        if (current.open) { choicesState.set({ ...current, open: false }); return; }
+        if (current.status === 'ready') { choicesState.set({ ...current, open: true }); return; }
+        choicesState.set({ open: true, status: 'loading', list: [] });
+        const got = await call('musicServer.choices', { section: playingScene.section });
+        const list = got.ok && got.value?.ok ? got.value.choices : [];
+        choicesState.set({ open: true, status: list.length ? 'ready' : 'failed', list });
+    }
+    async function chooseWanted(id) {
+        if (!playingScene || feedbackState.peek().status === 'sending') return;
+        const choice = choicesState.peek().list.find(item => item.id === id);
+        if (!choice) return;
+        feedbackState.set({ mark: 'bad', status: 'sending' });
+        const sent = await call('musicServer.feedback', { section: playingScene.section, vector: playingScene.vector, track: playingScene.rawId, mark: 'bad', wanted: choice.id });
+        const ok = Boolean(sent.ok && sent.value?.ok);
+        feedbackState.set({ mark: 'bad', status: ok ? 'sent' : 'failed', ...(ok ? { wanted: choice.label } : {}) });
+        if (ok) choicesState.set({ ...choicesState.peek(), open: false });
+    }
+    async function markTrack(mark) {
+        if (!playingScene || feedbackState.peek().status === 'sending') return;
+        feedbackState.set({ mark, status: 'sending' });
+        const sent = await call('musicServer.feedback', { section: playingScene.section, vector: playingScene.vector, track: playingScene.rawId, mark });
+        feedbackState.set({ mark, status: sent.ok && sent.value?.ok ? 'sent' : 'failed' });
+    }
     let patternSection = '';    // раздел, к которому относится patternNode
     let patternNode = null;     // узел паттерна сервера, который играет (его вернул сервер): без него сервер не знает, где мы в паттерне
     let lastIntensity = null;   // накал прошлой сцены (его вернул сервер): нужен ему для сглаживания
@@ -211,9 +255,10 @@ export function createMusicModule(host) {
         if (Number.isFinite(value?.intensity)) lastIntensity = value.intensity;
         if (value?.action === 'keep' || (value?.action === 'play' && !queue)) { patternNode = value.pattern ?? null; if (value.place) lastPlace = value.place; }   // заранее запрошенный шаг становится текущим, только когда начнёт играть
         if (value?.action !== 'play') return;   // «оставь» и «ничего не подходит» — играющее продолжается
-        if (queue) { queuedNext = { track: value.track, similarity: value.similarity, transition: value.transition ?? null, pattern: value.pattern ?? null, place: value.place ?? null }; return; }
+        if (queue) { queuedNext = { track: value.track, similarity: value.similarity, transition: value.transition ?? null, pattern: value.pattern ?? null, place: value.place ?? null, style: value.style ?? null, vector, section: params.section }; return; }
         remoteTrack = value.track;
         await playTrack(value.track, value.similarity, force ? null : value.transition ?? null);   // «следующий» по кнопке — сразу, без ожидания границы такта
+        if (remoteTrack === value.track) setPlayingScene({ vector, rawId: value.track.rawId, section: params.section, style: value.style ?? null });
     }
 
     function playQueued() {
@@ -223,7 +268,7 @@ export function createMusicModule(host) {
         remoteTrack = next.track;
         patternNode = next.pattern;
         if (next.place) lastPlace = next.place;
-        void playTrack(next.track, next.similarity, next.transition ?? null).catch(() => {});
+        void playTrack(next.track, next.similarity, next.transition ?? null).then(() => { if (remoteTrack === next.track) setPlayingScene({ vector: next.vector, rawId: next.track.rawId, section: next.section, style: next.style ?? null }); }).catch(() => {});
         return true;
     }
 
@@ -347,6 +392,7 @@ export function createMusicModule(host) {
             patternNode = null;   // заиграл свой трек — паттерн сервера прерван
             lastPlace = null;     // и место тоже: режим сервера оставлен
             lastTimeSlot = null;
+            setPlayingScene(null);
             const blobResult = await request(host.services, 'audio.get', { params: { id: track.id } });
             if (!blobResult.ok || !blobResult.value) {
                 await notify('error', `Audio for "${track.name}" is missing from this browser's storage — re-import it.`);
@@ -627,6 +673,7 @@ export function createMusicModule(host) {
                 onToggleMute: toggleMute,
                 onToggleAuto: toggleAutoSwitch,
                 onVolumeCommit: savePlayer,
+                feedback: { visible: feedbackVisible, state: feedbackState, onMark: markTrack, style: { state: styleState, onRate: rateStyle }, choices: { state: choicesState, onOpen: openChoices, onPick: chooseWanted } },
             }),
         );
     }
@@ -747,6 +794,11 @@ export function createMusicModule(host) {
         skip,
         seek,
         toggleMute,
+        markTrack,
+        feedbackState,
+        feedbackVisible,
+        choicesState, openChoices, chooseWanted,
+        styleState, rateStyle,
         onGenerationCompleted,
         importFiles,
         importLinkText,

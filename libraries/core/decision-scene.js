@@ -114,7 +114,7 @@ export function renderAlreadySaid(cycles, { beforeTurn = null, turns = 3, user =
     const said = new Map();
     for (const { turn, form } of forms) {
         for (const character of Array.isArray(form.characters) ? form.characters : []) {
-            const name = text(character?.name), line = text(character?.says);
+            const name = text(character?.name), line = text(character?.says).replace(/^(none|null|n\/a|nothing|-+|—)\.?$/i, '');
             if (!name || !line || name.toLowerCase() === text(user).toLowerCase()) continue;
             if (!said.has(name)) said.set(name, []);
             said.get(name).push(`(turn ${turn}) ${line}`);

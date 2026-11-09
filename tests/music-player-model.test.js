@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    formatClock, progressPercent, timeFromPercent, coverHues, coverGradient, coverGlow, trackInitial, matchPercent, describeNowPlaying, volumeLevel,
+    formatClock, progressPercent, timeFromPercent, coverHues, coverGradient, coverGlow, trackInitial, matchPercent, describeNowPlaying, volumeLevel, describeFeedback, describeStyle,
 } from '../libraries/shared/music-player-model.js';
 
 test('the clock reads m:ss, adds hours only when needed, and shows a fixed-width dash for an unknown time', () => {
@@ -73,4 +73,18 @@ test('the window glow uses the same two hues as the cover, so the window is tint
     const glow = coverGlow('Midnight Chase');
     assert.ok(glow.includes(`hsl(${hue} `) && glow.includes(`hsl(${hue2} `));
     assert.equal(coverGlow('Midnight Chase'), glow, 'stable');
+});
+
+
+test('describeFeedback names the music the player chose, and only after it was sent', () => {
+    assert.equal(describeFeedback({ mark: 'bad', status: 'sent', wanted: 'Calm' }), 'Sent: this scene needs “Calm”');
+    assert.equal(describeFeedback({ mark: 'bad', status: 'sending', wanted: 'Calm' }), 'Sending…');
+    assert.equal(describeFeedback({ mark: 'bad', status: 'sent' }), 'Sent: wrong music for this scene');
+});
+
+test('describeStyle names the type the server chose, and what the owner said after sending', () => {
+    assert.equal(describeStyle({ chosen: 'score' }), 'Type: Soundtrack — right?');
+    assert.equal(describeStyle({ chosen: 'score', status: 'sent', right: true }), 'Sent: Soundtrack is right for this scene');
+    assert.equal(describeStyle({ chosen: 'score', status: 'sent', right: false, correct: 'ambient' }), 'Sent: this scene needs Ambient, not Soundtrack');
+    assert.equal(describeStyle({ chosen: 'vocal', status: 'failed' }), 'Could not send — try again');
 });

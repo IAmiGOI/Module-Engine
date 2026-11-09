@@ -11,6 +11,8 @@ import { createGod } from './god.js';
 import { createCreationStore } from './creation.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildInscription } from '../../libraries/core/decision-push.js';
+import { createModePicker } from './turn-modes.js';
+import { resolverModeBlock, modesAllowRolls, writerModeLine } from '../../libraries/core/turn-modes.js';
 import { createHandlers } from './handlers.js';
 import { createCycleJobs } from './cycle-jobs.js';
 import { createTurnWindow } from './window.js';
@@ -94,6 +96,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const files = createFileLayer({ banks, knowledge });
     files.addProvider(createCreationProvider({ creation, state: {} }));
     const formChecker = createFormChecker({ call, getSettings, banks, knowledge });
+    const pickModes = createModePicker({ call, getSettings });
     const questions = createQuestionQueue({ callService, publishEvent, now });
     // Эпоха чата: смена чата её увеличивает. Фоновый цикл старого чата обрывается и ничего не пишет в новый.
     let chatEpoch = 0;
@@ -159,7 +162,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
-            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '' })
+            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: writerModeLine(state.modes?.chosen) })
             : '';
         if (form) form.push = push;
         const endedAt = now();
@@ -168,7 +171,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             thinking: typeof thinking === 'function' ? thinking() : thinking,
             warnings: [...(result.warnings ?? []), ...(state.formWarnings ?? [])], at: startedAt,
             usage: typeof runUsage === 'function' ? runUsage() : runUsage,
-            form, push, wake, turn: state.turnCounter, clockMinutes: store.clock().minutes,
+            form, push, wake, turn: state.turnCounter, clockMinutes: store.clock().minutes, modes: state.modes ?? null,
             workerId, endedAt, durationMs: endedAt - startedAt,
         });
         return { cycle, form, push };
@@ -206,9 +209,15 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const startedAt = now();
         live.started({ runId, event: type === 'normal' ? 'turn' : type, wake: startedWake, at: startedAt, type });
         const reroll = type === 'regenerate' || type === 'swipe';
-        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task: reroll ? `${DIRECTOR_TURN}\n\n${DIRECTOR_REROLL}` : '' });
+        // Режимы хода (1–2) — до задания: свой блок рядом с ним и броски по режиму. Без выборщика — общий шаблон.
+        state.modes = toolFilter ? null : await pickModes(chat);
+        const modeBlock = resolverModeBlock(state.modes?.chosen);
+        const task = [reroll || modeBlock ? DIRECTOR_TURN : '', reroll ? DIRECTOR_REROLL : '', modeBlock].filter(Boolean).join('\n\n');
+        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task });
         contextReport.record(built, { turn: state.turnCounter });
-        const tools = toolFilter ? await context.toolsFor(settings, { filter: toolFilter }) : await context.toolsFor(settings, { turn: true });
+        const allTools = toolFilter ? await context.toolsFor(settings, { filter: toolFilter }) : await context.toolsFor(settings, { turn: true });
+        // Режим без бросков — инструмента броска на этом ходу просто нет: спорить «бросать или нет» не о чем.
+        const tools = state.modes && !modesAllowRolls(state.modes.chosen) ? allTools.filter(tool => tool.name !== 'assess') : allTools;
         const controller = new AbortController();
         const hooks = live.hooks({ runId, thinking });
         const agent = runDecisionCycle({

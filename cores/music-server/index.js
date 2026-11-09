@@ -1,6 +1,6 @@
 import { request } from '../../libraries/shared/request.js';
 import { EMBEDDING_MODEL_ID } from '../../libraries/core/embedding.js';
-import { isServerConfigured, sectionsUrl, sectionUrl, pickUrl, placesUrl, parsePlaces, timesUrl, parseTimes, parseSections, parseSectionTracks, parsePick } from '../../libraries/shared/music-catalog.js';
+import { isServerConfigured, sectionsUrl, sectionUrl, pickUrl, feedbackUrl, styleFeedbackUrl, choicesUrl, placesUrl, parsePlaces, timesUrl, parseTimes, parseSections, parseSectionTracks, parsePick, parseChoices, MUSIC_STYLES } from '../../libraries/shared/music-catalog.js';
 
 /**
  * Ядро музыкального сервера: единственное место, где Music ходит в сеть (Модуль — сообщество, `http.request` ему закрыт). Читает разделы и векторы треков раздела
@@ -70,6 +70,42 @@ export function createMusicServerCore(host, { server = {}, timeoutMs = TIMEOUT_M
     }
 
 
+    /**
+     * Отметка «верно / неверно» у играющего трека: вектор сцены, на которой он начал играть, и сам трек уходят владельцу в очередь на проверку (эталоном отметка становится
+     * только после его разбора в консоли). Текст чата не передаётся. Сбой сети — `{ ok: false }`, ничего не ломается.
+     */
+    async function feedback({ section: id, vector, track, mark, wanted } = {}) {
+        const sectionId = String(id ?? '');
+        if (!isServerConfigured(server) || !sectionId || !track) return { ok: false };
+        const body = JSON.stringify({ model, section: sectionId, vector, track, mark, ...(typeof wanted === 'string' && wanted ? { wanted } : {}) });
+        const result = await request(host.network, 'http.request', { params: { url: feedbackUrl(server), method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, timeoutMs });
+        if (!result.ok || !result.value?.ok) return { ok: false };
+        try { return { ok: JSON.parse(result.value.text)?.ok === true }; } catch { return { ok: false }; }
+    }
+
+    /**
+     * Оценка типа музыки (эмбиент · саундтрек · со словами) у играющего трека: верно ли нода сервера выбрала тип. `right: false` — `correct` — один из двух остальных типов.
+     * Уходит вектор сцены и метка, текст чата не передаётся. Сбой сети — `{ ok: false }`.
+     */
+    async function styleFeedback({ section: id, vector, chosen, right, correct } = {}) {
+        const sectionId = String(id ?? '');
+        if (!isServerConfigured(server) || !sectionId || !MUSIC_STYLES.includes(chosen) || typeof right !== 'boolean') return { ok: false };
+        const body = JSON.stringify({ model, section: sectionId, vector, chosen, right, ...(right === false && MUSIC_STYLES.includes(correct) ? { correct } : {}) });
+        const result = await request(host.network, 'http.request', { params: { url: styleFeedbackUrl(server), method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, timeoutMs });
+        if (!result.ok || !result.value?.ok) return { ok: false };
+        try { return { ok: JSON.parse(result.value.text)?.ok === true }; } catch { return { ok: false }; }
+    }
+
+    /** Что можно назвать «нужной музыкой» для сцены раздела: `{ ok, choices: [{ id, label }] }`. Только id и подписи (теги и векторы сервер не отдаёт); сбой — `{ ok: false, choices: [] }`. */
+    async function choices({ section: id } = {}) {
+        const sectionId = String(id ?? '');
+        if (!isServerConfigured(server) || !sectionId) return { ok: false, choices: [] };
+        const got = await fetchText(choicesUrl(server, sectionId));
+        if (got.text === undefined) return { ok: false, choices: [] };
+        const list = parseChoices(got.text, { model });
+        return { ok: list.length > 0, choices: list };
+    }
+
     /** Реестр мест сервера: `{ ok, places: [{ id, keywords }] }`. Сбой или чужая модель — `{ ok: false, places: [] }`; ответы в память не кладём (кэш держит Music). */
     async function places() {
         if (!isServerConfigured(server)) return { ok: false, places: [] };
@@ -91,9 +127,12 @@ export function createMusicServerCore(host, { server = {}, timeoutMs = TIMEOUT_M
     const unregisters = [
         host.own.register('musicServer.times', () => times()),
         host.own.register('musicServer.places', () => places()),
+        host.own.register('musicServer.choices', params => choices(params)),
         host.own.register('musicServer.pick', params => pick(params)),
+        host.own.register('musicServer.feedback', params => feedback(params)),
+        host.own.register('musicServer.styleFeedback', params => styleFeedback(params)),
         host.own.register('musicServer.sections', params => sections(params)),
         host.own.register('musicServer.section', params => section(params)),
     ];
-    return { sections, section, pick, places, times, unregister: () => { for (const unregister of unregisters) unregister(); } };
+    return { sections, section, pick, feedback, styleFeedback, choices, places, times, unregister: () => { for (const unregister of unregisters) unregister(); } };
 }

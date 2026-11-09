@@ -68,7 +68,9 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         const decreeWants = text(character.next) || text(character.decreeWants) || text(character.decision) || text(character.actionReason);
         const heard = text(character.heard);
         const does = text(character.does) || text(character.action);
-        const says = text(character.says) || text(character.speech);
+        // Молчащему модель пишет «None» — это не реплика: иначе она попадала в ALREADY SAID как сказанное.
+        const said = text(character.says) || text(character.speech);
+        const says = /^(none|null|n\/a|nothing|-+|—)\.?$/i.test(said) ? '' : said;
         const conflict = normalizeConflict(character.conflict);
         if ((conflict.level === 'minor' || conflict.level === 'strong') && !conflict.why) {
             warnings.push(`"${character.name}" has a ${conflict.level} conflict with no reason — it was recorded without one`);

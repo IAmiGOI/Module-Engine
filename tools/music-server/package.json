@@ -1,9 +1,0 @@
-{
-  "name": "me-music-server",
-  "private": true,
-  "type": "module",
-  "description": "Music server for ST Module Engine (ME): sections, owner-written tags, vectors computed with the same model as ME.",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=20" },
-  "dependencies": { "@huggingface/transformers": "3.7.6" }
-}

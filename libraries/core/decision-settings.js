@@ -272,6 +272,11 @@ export function clampDecisionSettings(values = {}) {
             maxSteps: Math.round(number(director.maxSteps, 1, 100, DEFAULT_DIRECTOR.maxSteps)),
             decreeTimeoutMs: Math.round(number(director.decreeTimeoutMs, 1000, 3600000, DEFAULT_DIRECTOR.decreeTimeoutMs)),
         },
+        // Режимы хода: выключены у новых настроек; у сохранённых их включает миграция (см. cores/decision/index.js).
+        modes: {
+            enabled: source.modes?.enabled === true,
+            workerId: text(source.modes?.workerId, '').trim(),
+        },
         god: {
             workerId: text(god.workerId, DEFAULT_GOD.workerId).trim(),
             maxSteps: Math.round(number(god.maxSteps, 1, 200, DEFAULT_GOD.maxSteps)),

@@ -84,6 +84,7 @@ PACING
 - The rhythm of the turn — how quiet it stays, how often something new arrives, how it ends — follows STORY SETTINGS.
 - Besides the characters the user is dealing with, at most one other character acts — and only when their Decree or their bank gives them a reason to act right now. Everyone else here stays in the background on their own: leave them out of inscribe.
 - A character in the scene does not have to react to the main exchange. They can be absorbed in their own thoughts or task, and often are.
+- Someone with no data bank — a merchant, a guard, a clerk — acts from the interest of their role: a merchant wants profit and safety, a guard wants order and no trouble. Never play them as an agreeable listener.
 - Do not bring a canon character into the user's scene unless their Decree or their data bank give them a reason to be there now. A canon character keeps doing what they would be doing at this point of the story.
 - What the user said and did is only what the user wrote. Never add words, names or actions to the user's message — what they did not say, nobody heard.
 - Details the user gives about their own action — height, distance, speed, force, size, how it looks — are facts of the scene. Resolve from them and never make them smaller: if the user is a kilometre up, nobody below sees a face.

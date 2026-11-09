@@ -473,6 +473,12 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'migrations', value: { ...(migrations ?? {}), legacyBlocks: Date.now() } }).catch(() => {});
             if (cleaned.removed.length) publishEvent('decision.settings.cleaned', { removed: cleaned.removed });
         }
+        // Режимы хода — один раз включаются у уже сохранённых настроек (у новых они выключены, пока их не включат).
+        if (stored && !migrations?.turnModes) {
+            if (stored.modes === undefined) await saveSettings({ modes: { enabled: true, workerId: '' } }).catch(() => {});
+            const latest = await call('storage.settings.get', { namespace: DECISION_NAMESPACE, key: 'migrations', fallback: {} }).catch(() => ({}));
+            await call('storage.settings.set', { namespace: DECISION_NAMESPACE, key: 'migrations', value: { ...(latest ?? {}), turnModes: Date.now() } }).catch(() => {});
+        }
         // Подписки — до первого чтения: ST открывает чат, пока ядро грузится, и `st.chatChanged`, пришедший раньше
         // подписки, терялся — ядро оставалось с пустой памятью загрузки, а окно директора висело пустым.
         subscriptions.push(...events.listen());

@@ -1,8 +1,9 @@
 import { h } from '../../cores/ui/tree.js';
 import { signal, computed } from '../../cores/ui/reactive.js';
 import {
-    formatClock, progressPercent, timeFromPercent, coverGradient, coverGlow, trackInitial, describeNowPlaying, volumeLevel,
+    formatClock, progressPercent, timeFromPercent, coverGradient, coverGlow, trackInitial, describeNowPlaying, volumeLevel, describeFeedback, describeStyle,
 } from './music-player-model.js';
+import { MUSIC_STYLES, MUSIC_STYLE_LABELS } from './music-catalog.js';
 
 /**
  * Тело окна плеера Music — дерево `h()` поверх модели (`music-player-model.js`), без DOM и шин; тестируется как данные. Окно (`FloatingPanel`) даёт модуль, а стили —
@@ -27,6 +28,9 @@ export const ICONS = Object.freeze({
     volumeHigh: () => svg(fill(SPEAKER), line('M16 8.5a5 5 0 010 7M18.6 6a8.6 8.6 0 010 12')),
     volumeLow: () => svg(fill(SPEAKER), line('M16 8.5a5 5 0 010 7')),
     volumeMuted: () => svg(fill(SPEAKER), line('M16.5 9.5l5 5M21.5 9.5l-5 5')),
+    thumbUp: () => svg(line('M7 11v9H4v-9h3zM7 11l4-7c1.5 0 2.5 1 2.2 2.6L12.7 10H19a2 2 0 011.9 2.6l-1.7 6A2 2 0 0117.3 20H7')),
+    pencil: () => svg(line('M4 20l4-1 11-11-3-3L5 16l-1 4zM14 7l3 3')),
+    thumbDown: () => svg(line('M7 13V4H4v9h3zM7 13l4 7c1.5 0 2.5-1 2.2-2.6L12.7 14H19a2 2 0 001.9-2.6l-1.7-6A2 2 0 0017.3 4H7')),
 });
 
 /** Ползунок: дорожка-заливка (ширина в процентах) и невидимый настоящий `<input type=range>` поверх — клавиатура, фокус и жесты остаются родными. */
@@ -61,8 +65,9 @@ function ControlButton({ icon, label, onClick, className = '', pressed, disabled
  * @param {Function} props.muted      сигнал «звук выключен»
  * @param {Function} props.autoSwitch сигнал «трек подбирается по сцене»
  * @param {Function} props.hasTracks  сигнал «в библиотеке есть треки»
+ * @param {{ visible: Function, state: Function, onMark: Function }} [props.feedback]  отметка «верно / неверно» (только для трека сервера): `visible` — показывать ли, `state` — `{ mark, status }`
  */
-export function MusicPlayerBody({ now, progress, volume, muted, autoSwitch, hasTracks, onPlayPause, onSkip, onRestart, onSeek, onToggleMute, onToggleAuto, onVolumeCommit }) {
+export function MusicPlayerBody({ now, progress, volume, muted, autoSwitch, hasTracks, onPlayPause, onSkip, onRestart, onSeek, onToggleMute, onToggleAuto, onVolumeCommit, feedback }) {
     const draft = signal(null);
     const info = computed(() => describeNowPlaying(now(), { autoSwitch: autoSwitch(), hasTracks: hasTracks() }));
     const seekPercent = computed(() => (draft() ?? progressPercent(progress().time, progress().duration)));
@@ -100,6 +105,32 @@ export function MusicPlayerBody({ now, progress, volume, muted, autoSwitch, hasT
             }),
             ControlButton({ icon: ICONS.next(), label: 'Next track', onClick: onSkip, disabled: computed(() => !hasTracks()) }),
         ),
+        feedback && computed(() => (feedback.visible() ? h('div', { class: 'stme-music-feedback' },
+            h('span', { class: 'stme-music-feedback-label' }, computed(() => describeFeedback(feedback.state()))),
+            ControlButton({ icon: ICONS.thumbUp(), label: 'Right music for this scene', onClick: () => feedback.onMark('good'), className: 'stme-music-btn-small', pressed: computed(() => feedback.state().mark === 'good'), disabled: computed(() => feedback.state().status === 'sending') }),
+            ControlButton({ icon: ICONS.thumbDown(), label: 'Wrong music for this scene', onClick: () => feedback.onMark('bad'), className: 'stme-music-btn-small', pressed: computed(() => feedback.state().mark === 'bad'), disabled: computed(() => feedback.state().status === 'sending') }),
+        ) : null)),
+        feedback && feedback.style && computed(() => {
+            const state = feedback.style.state();
+            if (!feedback.visible() || !state.chosen) return null;
+            const busy = state.status === 'sending';
+            return h('div', { class: 'stme-music-style' },
+                h('span', { class: 'stme-music-feedback-label' }, describeStyle(state)),
+                state.status === 'sent' ? null : ControlButton({ icon: ICONS.thumbUp(), label: 'Right type of music', onClick: () => feedback.style.onRate(true), className: 'stme-music-btn-small', disabled: busy }),
+                state.status === 'sent' ? null : ControlButton({ icon: ICONS.thumbDown(), label: 'Wrong type of music', onClick: () => feedback.style.onRate(false), className: 'stme-music-btn-small', pressed: state.open, disabled: busy }),
+                state.open ? h('div', { class: 'stme-music-choices' }, ...MUSIC_STYLES.filter(id => id !== state.chosen).map(id => h('button', { type: 'button', class: 'stme-music-choice', 'on:click': () => feedback.style.onRate(false, id) }, MUSIC_STYLE_LABELS[id]))) : null,
+            );
+        }),
+        feedback && feedback.choices && computed(() => (feedback.visible() ? h('div', { class: 'stme-music-choices-box' },
+            ControlButton({ icon: ICONS.pencil(), label: 'Choose the right music for this scene', onClick: feedback.choices.onOpen, className: 'stme-music-btn-small', pressed: computed(() => feedback.choices.state().open), disabled: computed(() => feedback.state().status === 'sending') }),
+            computed(() => {
+                const state = feedback.choices.state();
+                if (!state.open) return null;
+                if (state.status === 'loading') return h('div', { class: 'stme-music-choices-note' }, 'Loading…');
+                if (state.status === 'failed') return h('div', { class: 'stme-music-choices-note' }, 'No choices available for this section');
+                return h('div', { class: 'stme-music-choices' }, ...state.list.map(item => h('button', { type: 'button', class: 'stme-music-choice', title: item.label, 'on:click': () => feedback.choices.onPick(item.id) }, item.label)));
+            }),
+        ) : null)),
         h('div', { class: 'stme-music-volume' },
             ControlButton({
                 icon: computed(() => ({ muted: ICONS.volumeMuted, low: ICONS.volumeLow, high: ICONS.volumeHigh })[volumeLevel(volume(), muted())]()),
