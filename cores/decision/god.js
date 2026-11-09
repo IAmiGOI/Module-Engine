@@ -74,7 +74,8 @@ export function createGod({
         const layer = createFileLayer({ banks: null });
         layer.addProvider(createCreationProvider({ creation: creationStore, state: handlerState }));
         const files = createFileHandlers({ state: handlerState, publishEvent, by: 'god', layer });
-        return { ...legacy, view: files.view, edit: files.edit, create: files.create };
+        // Свой await: без него вызов уходил в общий маршрут и падал, а движок писал «answered without a tool call».
+        return { ...legacy, view: files.view, edit: files.edit, create: files.create, await: args => ({ ok: true, reason: String(args?.reason ?? '') }) };
     }
 
     async function loadMaterial() {

@@ -237,3 +237,19 @@ test('the Director writes banks against the world at the start, and an empty ros
     const entries = [{ character: { name: 'Emilia', decree: { 1: ['Keeps every promise.'] } } }];
     assert.match(renderDecreeForResolver(entries, { names: null }), /Keeps every promise/);
 });
+
+test('await is the Director\'s own tool, and a Petition with no Decree change is handed back once', async () => {
+    // Ram has a Decree; the Director answered «already covered» without touching it — the engine asks once more.
+    const world = harness({
+        petitions: [petition('Ram')],
+        answers: [
+            { text: '', toolCalls: [call('await', { reason: 'Everything is already up to date.', comment: 'Nothing to change.' })] },
+            { text: '', toolCalls: [call('await', { reason: 'Ram: line 1 "Family first." already covers it.', comment: 'Checked the line.' })] },
+        ],
+    });
+    const result = await world.director.run({ runId: 'd1' });
+    assert.equal(world.requests.length, 2, 'the Petition was handed back once');
+    assert.match(JSON.stringify(world.requests[1].messages), /The Petition about Ram still stands/);
+    assert.ok(!(result.cycle.warnings ?? []).some(warning => /without a tool call/.test(warning)), 'await is handled, not an implicit answer');
+    assert.equal(result.cycle.toolCalls.filter(item => item.name === 'await').length, 2);
+});

@@ -86,5 +86,8 @@ export const REPORTS_HEADER = 'REPORTS — the last five things that reached you
 export const NO_REPORTS = 'No reports have reached you yet.';
 export const LAST_DECREES_HEADER = 'YOUR LAST DECREES (your own reasoning, for continuity):';
 export const TOUCHED_BANKS_HEADER = 'FILES — the characters this report touches, exactly as you edit them:';
+/** Петиция осталась без изменений Указа: «уже учтено» без открытого файла не проходит. */
+export const DIRECTOR_PETITION_STANDS = `The Petition about {{names}} still stands: you changed no line of their decree.md in this run. View their decree.md now and compare it with the Petition and its Ledger rows. Change the lines the Petition shows no longer hold — or, if every line truly still holds, call await and say in "reason", for each of them, which line already covers what the Petition describes.`;
+
 export const DIRECTOR_RP_HEADER = 'CURRENT RP TIME:';
 export const WORLD_HEADER = 'THE WORLD AT THE START — from the Creation: the point of the timeline, and who is in the world and who is not yet:';

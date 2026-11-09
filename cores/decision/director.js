@@ -11,6 +11,8 @@ import { createDecreeHandler } from './handlers-decree.js';
 import { createFileHandlers } from './handlers-files.js';
 import { createBankHandlers } from './handlers-bank.js';
 import { createRetryRunner } from './retry.js';
+import { DIRECTOR_PETITION_STANDS } from '../../libraries/core/decision-prompts-director.js';
+import { fillPrompt } from '../../libraries/core/decision-prompts.js';
 
 /**
  * Директор (часть 19): полу-слепой, работает по отчётам. Просыпается в фоне
@@ -116,6 +118,8 @@ export function createDirector({
             ...createDecreeHandler({ banks, state, publishEvent }),
             // Указ и банки — файлами: view / edit / create (часть 21).
             ...createFileHandlers({ banks, state, publishEvent, by: 'director' }),
+            // Без своего await вызов уходил в общий маршрут и падал («no tool named await»), а движок писал «answered without a tool call».
+            await: args => ({ ok: true, reason: String(args?.reason ?? '') }),
         };
     }
 
@@ -132,6 +136,7 @@ export function createDirector({
         const papers = typeof store.papers === 'function' ? store.papers() : {};
         // Только прочитанные сейчас Petition: новая, пришедшая во время работы, останется поводом.
         const petitionIds = (papers.petitions ?? []).map(item => item.id).filter(Boolean);
+        const fresh = (papers.petitions ?? []).filter(item => item.status !== 'read');
         const bank = await bankState();
         const context = buildDirectorContext({
             banks: bank,
@@ -149,21 +154,32 @@ export function createDirector({
             : null;
         live.started({ runId, event: 'decree', wake: info.wake, at: startedAt });
         let result;
+        const cycleParams = messages => ({
+            messages,
+            tools: buildDirectorToolList(),
+            generate: generateFor({ settings, worker, runId, startedAt }),
+            handlers: handlersFor(state),
+            // Старый вызов `decree` (совместимость) кончает цикл сразу; файловые правки кончаются на await.
+            stopAfter: ['decree'],
+            callTool,
+            maxSteps: Math.max(1, Number(settings.director?.maxSteps) || 10),
+            implicitAwait: true,
+            emptyRetry: false,
+            now,
+            ...live.hooks({ runId, thinking: () => captured?.value ?? '' }),
+        });
         try {
-            result = await runDecisionCycle({
-                messages: context.messages,
-                tools: buildDirectorToolList(),
-                generate: generateFor({ settings, worker, runId, startedAt }),
-                handlers: handlersFor(state),
-                // Старый вызов `decree` (совместимость) кончает цикл сразу; файловые правки кончаются на await.
-                stopAfter: ['decree'],
-                callTool,
-                maxSteps: Math.max(1, Number(settings.director?.maxSteps) || 10),
-                implicitAwait: true,
-                emptyRetry: false,
-                now,
-                ...live.hooks({ runId, thinking: () => captured?.value ?? '' }),
-            });
+            result = await runDecisionCycle(cycleParams(context.messages));
+            // Петиция без единой правки Указа: один раз вернуть задачу. Директор отвечал «всё уже учтено», не открыв файлов, и Указ Emilia оставался утренним.
+            // Только те, у кого Указ есть: у побочного без Указа менять нечего.
+            const hasDecree = name => Object.values(bank ?? {}).some(character => String(character?.name ?? '').toLowerCase() === name.toLowerCase()
+                && Object.values(character?.decree ?? {}).some(lines => Array.isArray(lines) && lines.length));
+            const untouched = [...new Set(fresh.map(item => String(item.character ?? '').trim()).filter(Boolean))]
+                .filter(name => hasDecree(name) && !(state.decreeNames ?? []).some(done => String(done).toLowerCase() === name.toLowerCase()));
+            if (result.type !== 'error' && untouched.length) {
+                const again = await runDecisionCycle(cycleParams([...result.messages, { role: 'user', content: fillPrompt(DIRECTOR_PETITION_STANDS, { names: untouched.join(', ') }) }]));
+                result = { ...again, trace: [...(result.trace ?? []), ...(again.trace ?? [])], warnings: [...(result.warnings ?? []), ...(again.warnings ?? [])] };
+            }
         } finally {
             captured?.stop?.();
         }
