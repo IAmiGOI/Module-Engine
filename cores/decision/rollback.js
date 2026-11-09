@@ -78,7 +78,10 @@ export function createRollback({ store, getSettings, publishEvent, call = null, 
         if (!getSettings().snapshots) return false;
         const state = store.snapshot(mesid);
         if (!state) return false;
-        if (state.runId) await store.markRejected(state.runId).catch(() => {});
+        // Всё, что журнал записал с начала этого хода, — удалённая ветка: и сам ход, и Указы, и Советник после него.
+        // Иначе Директор получал свои «последние мысли» из удалённых ходов и вёл сюжет по ним.
+        const startedAt = Math.min(...(typeof store.cycles === 'function' ? store.cycles() : []).filter(cycle => cycle?.runId && cycle.runId === state.runId).map(cycle => Number(cycle.at)).filter(Number.isFinite));
+        if (state.runId) await store.markRejected(state.runId, Number.isFinite(startedAt) ? { since: startedAt } : {}).catch(() => {});
         // Снимок без банков или с потерянными частями откатывает не всё — об этом говорится, а не молчится.
         if (!state.greatBank || !state.ledger || state.missing) notify('warning', `ME: The snapshot for message ${mesid} is incomplete: ${!state.greatBank ? 'character banks, ' : ''}${!state.ledger ? 'the turn ledger, ' : ''}${state.missing ? `${state.missing} missing parts, ` : ''}so they keep their later state.`);
         await restoreState(state);

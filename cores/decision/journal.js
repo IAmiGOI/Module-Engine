@@ -54,11 +54,13 @@ export function createJournal({ enqueue, call, getBank, setBank, getNames, setNa
         });
     }
 
-    function markRejected(runId) {
+    /** Отвергнуть ход по runId, а с `since` — и все циклы с этого момента (Директор, Советник, «после хода» удалённых ходов). */
+    function markRejected(runId, { since = null } = {}) {
         return enqueue(async () => {
-            if (!runId) return false;
+            if (!runId && !Number.isFinite(since)) return false;
             const reject = cycles => cycles.map(cycle => {
-                if (cycle.runId !== runId || cycle.rejected) return cycle;
+                const hit = cycle.runId === runId || (Number.isFinite(since) && Number(cycle.at) >= since);
+                if (!hit || cycle.rejected) return cycle;
                 return { ...cycle, rejected: true, rejectedAt: Date.now() };
             });
             const logBefore = getLog();
