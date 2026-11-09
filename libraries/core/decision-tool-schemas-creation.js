@@ -87,6 +87,62 @@ export const DISCOVERY_WRITE_TOOL = Object.freeze({
     },
 });
 
+/**
+ * Форма проверки Creation: Бог сам, по тем файлам, что видит, отмечает, чего не хватает. Пока в форме что-то открыто,
+ * await не принимается. Модель дешёвая — лишний проход проверки дешевле мира с дырой (DeepSeek сослался на Scales/magic.md
+ * и так и не написал его).
+ */
+export const GOD_REVIEW_TOOL = Object.freeze({
+    name: 'review_creation',
+    displayName: 'Review the Creation',
+    description: 'The review form you fill before you rest. View the files first, then fill every field from what the files actually say — not from what you meant to write. List what is missing honestly: an open item is fixed, not hidden. While anything is open, await is not accepted; fix it and review again.',
+    parameters: {
+        type: 'object',
+        properties: {
+            sections: {
+                type: 'array',
+                description: 'Every one of the six guaranteed section files and every free section file.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        file: { type: 'string', description: 'Its path, as view lists it.' },
+                        missing: { type: 'string', description: 'What its list in the system prompt asks for and this file does not have yet. Empty when nothing is missing.' },
+                    },
+                    required: ['file', 'missing'],
+                },
+            },
+            systems: {
+                type: 'array',
+                description: 'Every system file under Creation/Scales/.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        file: { type: 'string', description: 'Its path, as view lists it.' },
+                        rules: { type: 'integer', description: 'How many rules it holds.' },
+                        missing: { type: 'string', description: 'Rules missing any of the eight lines, a Weight whose level does not start its line or contradicts its own text, a missing Principle or Payment. Empty when nothing is missing.' },
+                    },
+                    required: ['file', 'rules', 'missing'],
+                },
+            },
+            references: {
+                type: 'array',
+                description: 'Every file that scales.md or any other file points to.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        file: { type: 'string' },
+                        exists: { type: 'boolean', description: 'True only if view lists it.' },
+                    },
+                    required: ['file', 'exists'],
+                },
+            },
+            material: { type: 'string', description: 'Places, powers, peoples, factions and faiths the material names that the Creation does not cover yet. Empty when it covers all of them.' },
+            comment: COMMENT,
+        },
+        required: ['sections', 'systems', 'references', 'material', 'comment'],
+    },
+});
+
 export const GOD_ASK_TOOL = Object.freeze({
     name: 'ask',
     displayName: 'Ask the Counsellor',

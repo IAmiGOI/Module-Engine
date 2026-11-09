@@ -94,6 +94,7 @@ test('God wakes to build the Creation when there is none, and the Creation lands
     const answers = [
         [tc('creation_write', { sections: [{ title: 'Geography', text: 'Three islands and a reef.' }, { title: 'History', text: 'The old war.' }], comment })],
         [tc('scale_write', { system: 'Mana', principle: 'Will made real.', payment: 'mana and focus', rules: [{ name: 'Shape', needs: 'an image', yields: 'matter', weight: 'moderate' }], comment })],
+        [tc('review_creation', { sections: [], systems: [], references: [], material: '', comment })],
         [tc('await', { reason: 'The world is written.', comment })],
     ];
     const { god, creationStore, events } = harness({ answers });
@@ -135,6 +136,7 @@ test('a Declaration wakes God and is consumed after the Creation is updated', as
     const declaration = { answers: [{ question: 'Is there iron ore?', answer: 'Yes, under the reef.', at: 2 }], at: 2, delivered: false };
     const answers = [
         [tc('creation_write', { sections: [{ title: 'Geography', text: 'Three islands, and iron under the reef.' }], comment })],
+        [tc('review_creation', { sections: [], systems: [], references: [], material: '', comment })],
         [tc('await', { reason: 'The Declaration is written in.', comment })],
     ];
     const { god, creationStore, papers } = harness({ answers, creation, declaration });
@@ -249,4 +251,17 @@ test('new Discoveries since the resolver\'s snapshot travel as a short block at 
     assert.match(block, /iron can burn/);
     assert.doesNotMatch(block, /old news/);
     assert.equal(discoveriesBlock(creation, 2), '');
+});
+
+test('while building, God cannot rest before a clean review form; an open item comes back to him', async () => {
+    const world = harness({ answers: [
+        [tc('await', { reason: 'Done.', comment })],
+        [tc('review_creation', { sections: [], systems: [], references: [{ file: 'Creation/Scales/magic.md', exists: false }], material: '', comment })],
+        [tc('review_creation', { sections: [], systems: [], references: [], material: '', comment })],
+        [tc('await', { reason: 'Done.', comment })],
+    ] });
+    const result = await world.god.run({ runId: 'g-review', reason: { kind: 'first', wake: { type: 'god', label: 'build', detail: '' } } });
+    const trace = result.cycle.toolCalls.map(item => item.name);
+    assert.deepEqual(trace.filter(name => name === 'review_creation').length, 2);
+    assert.equal(trace.at(-1), 'await');
 });

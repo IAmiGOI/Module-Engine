@@ -75,7 +75,24 @@ export function createGod({
         layer.addProvider(createCreationProvider({ creation: creationStore, state: handlerState }));
         const files = createFileHandlers({ state: handlerState, publishEvent, by: 'god', layer });
         // Свой await: без него вызов уходил в общий маршрут и падал, а движок писал «answered without a tool call».
-        return { ...legacy, view: files.view, edit: files.edit, create: files.create, await: args => ({ ok: true, reason: String(args?.reason ?? '') }) };
+        // Форма проверки: открытые пункты возвращаются Богу; при построении мира await принимается только после чистой формы.
+        const review = args => {
+            const open = [
+                ...(Array.isArray(args?.sections) ? args.sections : []).filter(item => String(item?.missing ?? '').trim()).map(item => `${item.file}: ${item.missing}`),
+                ...(Array.isArray(args?.systems) ? args.systems : []).filter(item => String(item?.missing ?? '').trim()).map(item => `${item.file}: ${item.missing}`),
+                ...(Array.isArray(args?.references) ? args.references : []).filter(item => item?.exists === false).map(item => `${item.file}: referenced but not written`),
+                ...(String(args?.material ?? '').trim() ? [`material not covered: ${String(args.material).trim()}`] : []),
+            ];
+            handlerState.reviewed = open.length === 0;
+            return open.length
+                ? { ok: true, clean: false, open, note: 'Fix every open item with create or edit, then fill review_creation again.' }
+                : { ok: true, clean: true, note: 'Nothing is open. You may rest.' };
+        };
+        const building = ['declaration', 'build', 'first'].includes(handlerState.kind);
+        const rest = args => (building && !handlerState.reviewed
+            ? { ok: false, error: 'Not yet: fill review_creation from the files as they are now. await is accepted after a review with nothing open.' }
+            : { ok: true, reason: String(args?.reason ?? '') });
+        return { ...legacy, view: files.view, edit: files.edit, create: files.create, review_creation: review, await: rest };
     }
 
     async function loadMaterial() {
@@ -144,7 +161,7 @@ export function createGod({
         });
         const handlerState = {
             rpLabel: clockLabel(store.clock().minutes), turn: currentTurn(), questionLimit: Number(settings.god?.maxQuestions) || 5,
-            written: [], systems: [], questionsAsked: 0,
+            written: [], systems: [], questionsAsked: 0, kind: info.kind, reviewed: false,
         };
         const captured = typeof capture === 'function'
             ? capture(`${runId}:`, { onThinking: value => publishEvent('decision.cycle.thinking', { runId, text: value }) })
@@ -178,8 +195,9 @@ export function createGod({
                 // Мир — файлами Creation/… (view / edit / create, часть 21); ask — вопрос Советнику.
                 handlers,
                 callTool,
-                maxSteps: Math.max(1, Number(settings.god?.maxSteps) || 20),
-                implicitAwait: true,
+                // Построение мира с формой проверки — больше шагов, и ответ текстом не считается отдыхом: только чистая форма и await.
+                maxSteps: Math.max(1, Number(settings.god?.maxSteps) || 20) * (['declaration', 'build', 'first'].includes(info.kind) ? 2 : 1),
+                implicitAwait: !['declaration', 'build', 'first'].includes(info.kind),
                 emptyRetry: false,
                 now,
                 ...live.hooks({ runId, thinking: () => captured?.value ?? '' }),

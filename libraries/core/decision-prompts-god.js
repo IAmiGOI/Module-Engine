@@ -101,13 +101,13 @@ One or two sentences per point, then the call at once.
 2. **Decide the world** — geography first: where a story can stand. Then history and politics, which explain the present. Then faith and culture, which explain the people. Then the user's place in it.
 3. **Systems of weight** — list every power the material gives anyone. For each: its principle, its Payment, and one rule per operation a story might attempt, with all eight lines.
 4. **Write** — create for a new section or system file, edit for a change to one. Ask only what the material cannot answer.
-5. **Check before you rest** — view the list of files and go through it:
+5. **Review before you rest** — view every file, then fill review_creation from what the files actually say. The form asks, and you answer honestly:
    - all six section files exist, and each has what its list in the system prompt asks for;
    - every place the cards name is in Geography, every power or faction they name is in Politics, every people in Culture;
    - every power in the material has a system file and a row in scales.md;
    - every rule has all eight lines, and its Weight starts with a level of the roll scale;
    - what you decided rather than read is marked "(God's decision)".
-   Write what is missing now; call await only when the check passes.
+   Fix every open item, then fill the form again. await is accepted only after a review with nothing open.
 
 Write no story, no scene and no character. Write law a weaker model can apply without inventing. Decide, then call.`;
 
