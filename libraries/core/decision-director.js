@@ -63,20 +63,13 @@ export function namedCharacters(value, state) {
  * @returns {{ wake: object, characters: string[], day: boolean, reasons: object[] } | null}
  */
 /**
- * К кому идёт история: персонажи с исходником, но без написанного Spiritual, названные в последних строках Ведомости.
- * Это данные для Советника: заметить, что банк пора писать, и попросить Директора Петицией — его работа (Отто искали шесть
- * ходов, а банк начал строиться, когда он уже говорил).
+ * У кого банк уже написан (Spiritual не пуст): данные Советнику. Кого история встречает и кого нет в этом списке —
+ * у того банка нет, будь он из лорбука или новый; к кому идёт история, Советник видит по Ведомости сам.
  */
-export function upcomingWithoutBank(state, ledger = [], { rows = 12, skip = [] } = {}) {
-    const bank = normalizeGreatBank(state);
-    const recent = (Array.isArray(ledger) ? ledger : []).slice(-rows).map(row => [row?.wanted, row?.did, row?.result, row?.page].map(text).join(' ')).join('\n');
-    if (!recent.trim()) return [];
-    const named = new Set(namedCharacters(recent, bank).map(name => name.toLowerCase()));
-    const skipped = new Set((Array.isArray(skip) ? skip : []).map(name => text(name).toLowerCase()));
-    return Object.values(bank)
-        .filter(character => named.has(text(character.name).toLowerCase()) && !skipped.has(text(character.name).toLowerCase()))
+export function writtenBanks(state) {
+    return Object.values(normalizeGreatBank(state))
         .filter(character => character.importance !== 'mass' && !/^(persona|card|scene):/.test(text(character.sourceKey)))
-        .filter(character => text(character.fallbackText) && !Object.values(character.spiritual ?? {}).some(lines => Array.isArray(lines) && lines.some(line => text(line))))
+        .filter(character => Object.values(character.spiritual ?? {}).some(lines => Array.isArray(lines) && lines.some(line => text(line))))
         .map(character => character.name);
 }
 
