@@ -11,7 +11,6 @@ import { createGod } from './god.js';
 import { createCreationStore } from './creation.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildInscription } from '../../libraries/core/decision-push.js';
-import { lastAcceptedForm } from '../../libraries/core/decision-scene.js';
 import { createModePicker } from './turn-modes.js';
 import { resolverModeBlock, writerModeLine } from '../../libraries/core/turn-modes.js';
 import { createHandlers } from './handlers.js';
@@ -163,7 +162,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [] }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
-            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: writerModeLine(state.modes?.chosen), previousForm: lastAcceptedForm(store.cycles?.() ?? [], { beforeTurn: state.turnCounter }) })
+            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: writerModeLine(state.modes?.chosen) })
             : '';
         if (form) form.push = push;
         const endedAt = now();

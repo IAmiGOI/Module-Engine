@@ -52,12 +52,3 @@ test('the Writer sees only the lens; the Resolver sees the real one on the next 
     assert.match(truth, /- Orm: deal — the cloth is rotten \(shows as: fine cloth, ten silver\)/);
 });
 
-test('the Writer gets a lens only when it changed since the last turn', async () => {
-    const { buildInscription } = await import('../libraries/core/decision-push.js');
-    const character = lens => ({ name: 'Orm', mode: { deal: { real: 'x', lens: 'turns the coin over' }, stake: { real: 'y', lens } } });
-    const form = { characters: [character('glances at the door')], beats: [{ who: 'Orm', kind: 'action', text: 'waits' }], stop: 'He waits.' };
-    const push = buildInscription({ form, previousForm: { characters: [character('taps the desk')] } });
-    assert.match(push, /- Orm: stake — glances at the door$/m);
-    const same = buildInscription({ form, previousForm: { characters: [{ name: 'Orm', mode: form.characters[0].mode }] } });
-    assert.doesNotMatch(same, /AS IT SHOWS/);
-});
