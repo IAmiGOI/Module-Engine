@@ -14,7 +14,7 @@ test('every role\'s tool list is made of real schemas: no undefined entry ever r
 });
 
 test('God edits the world as files: view, edit, create, questions, the review form and await', () => {
-    assert.deepEqual(names(buildGodToolList()), ['view', 'edit', 'create', 'ask', 'review_creation', 'await']);
+    assert.deepEqual(names(buildGodToolList()), ['view', 'edit', 'create', 'ask', 'review_file', 'review_creation', 'await']);
 });
 
 test('the Director ends its work with a real await, not a missing schema', () => {

@@ -1,3 +1,4 @@
+import { GOD_FILE_CHECKS } from '../../libraries/core/decision-prompts-god.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildGodToolList } from '../../libraries/core/decision-tools.js';
@@ -75,11 +76,40 @@ export function createGod({
         layer.addProvider(createCreationProvider({ creation: creationStore, state: handlerState }));
         const files = createFileHandlers({ state: handlerState, publishEvent, by: 'god', layer });
         // Свой await: без него вызов уходил в общий маршрут и падал, а движок писал «answered without a tool call».
-        // Форма проверки: открытые пункты возвращаются Богу; при построении мира await принимается только после чистой формы.
+        // Форма по файлу — сразу после каждой записи, по списку именно этого файла; финальная — то, что видно по всему миру.
+        // Открытое возвращается Богу; при построении await принимается, когда каждый файл проверен после последней правки.
+        const fileKey = path => String(path ?? '').trim().toLowerCase().replace(/^\/+/, '');
+        const checklistFor = path => {
+            const key = fileKey(path);
+            const base = key.split('/').pop().replace(/\.md$/, '');
+            const list = key.startsWith('creation/scales/') ? GOD_FILE_CHECKS.system : (GOD_FILE_CHECKS[base] ?? GOD_FILE_CHECKS.other);
+            return [...list, GOD_FILE_CHECKS.every];
+        };
+        handlerState.unreviewed ??= new Set();
+        const mark = path => { handlerState.unreviewed.add(fileKey(path)); handlerState.reviewed = false; };
+        const create = async args => {
+            const result = await files.create(args);
+            if (result?.ok === false || !/^creation\//.test(fileKey(args?.path))) return result;
+            mark(args.path);
+            return { ...result, review: { file: args.path, checklist: checklistFor(args.path) }, note: 'Fill review_file for this file now, item by item, from the file as it is.' };
+        };
+        const editFiles = async args => {
+            const result = await files.edit(args);
+            const changed = (result?.files ?? []).filter(item => item.ok && !item.unchanged && /^creation\//.test(fileKey(item.path))).map(item => item.path);
+            changed.forEach(mark);
+            return changed.length ? { ...result, review: changed.map(path => ({ file: path, checklist: checklistFor(path) })), note: 'Fill review_file for each changed file now.' } : result;
+        };
+        const reviewFile = args => {
+            const items = Array.isArray(args?.items) ? args.items : [];
+            if (!items.length) return { ok: false, error: 'Answer every item of the file\'s list.' };
+            const open = items.filter(item => item?.done !== true).map(item => `${item.item}${String(item?.missing ?? '').trim() ? ` — ${String(item.missing).trim()}` : ''}`);
+            if (!open.length) handlerState.unreviewed.delete(fileKey(args?.file));
+            return open.length
+                ? { ok: true, clean: false, file: args?.file, open, note: 'Fix these with edit, then review this file again.' }
+                : { ok: true, clean: true, file: args?.file };
+        };
         const review = args => {
             const open = [
-                ...(Array.isArray(args?.sections) ? args.sections : []).filter(item => String(item?.missing ?? '').trim()).map(item => `${item.file}: ${item.missing}`),
-                ...(Array.isArray(args?.systems) ? args.systems : []).filter(item => String(item?.missing ?? '').trim()).map(item => `${item.file}: ${item.missing}`),
                 ...(Array.isArray(args?.references) ? args.references : []).filter(item => item?.exists === false).map(item => `${item.file}: referenced but not written`),
                 ...(String(args?.material ?? '').trim() ? [`material not covered: ${String(args.material).trim()}`] : []),
             ];
@@ -89,10 +119,13 @@ export function createGod({
                 : { ok: true, clean: true, note: 'Nothing is open. You may rest.' };
         };
         const building = ['declaration', 'build', 'first'].includes(handlerState.kind);
-        const rest = args => (building && !handlerState.reviewed
-            ? { ok: false, error: 'Not yet: fill review_creation from the files as they are now. await is accepted after a review with nothing open.' }
-            : { ok: true, reason: String(args?.reason ?? '') });
-        return { ...legacy, view: files.view, edit: files.edit, create: files.create, review_creation: review, await: rest };
+        const rest = args => {
+            if (!building) return { ok: true, reason: String(args?.reason ?? '') };
+            if (handlerState.unreviewed.size) return { ok: false, error: `Not yet: these files changed and are not reviewed — fill review_file for each: ${[...handlerState.unreviewed].join(', ')}.` };
+            if (!handlerState.reviewed) return { ok: false, error: 'Not yet: fill review_creation — the files the others point to and the material still uncovered. await is accepted after a review with nothing open.' };
+            return { ok: true, reason: String(args?.reason ?? '') };
+        };
+        return { ...legacy, view: files.view, edit: editFiles, create, review_file: reviewFile, review_creation: review, await: rest };
     }
 
     async function loadMaterial() {

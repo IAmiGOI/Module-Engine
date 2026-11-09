@@ -265,3 +265,20 @@ test('while building, God cannot rest before a clean review form; an open item c
     assert.deepEqual(trace.filter(name => name === 'review_creation').length, 2);
     assert.equal(trace.at(-1), 'await');
 });
+
+test('each file written while building gets its own checklist and must be reviewed before God rests', async () => {
+    const world = harness({ answers: [
+        [tc('create', { path: 'Creation/geography.md', text: '# Geography', comment })],
+        [tc('await', { reason: 'Done.', comment })],
+        [tc('review_file', { file: 'Creation/geography.md', items: [{ item: 'travel table', done: false, missing: 'no table' }], comment })],
+        [tc('review_file', { file: 'Creation/geography.md', items: [{ item: 'travel table', done: true }], comment })],
+        [tc('review_creation', { references: [], material: '', comment })],
+        [tc('await', { reason: 'Done.', comment })],
+    ] });
+    const result = await world.god.run({ runId: 'g-files', reason: { kind: 'first', wake: { type: 'god', label: 'build', detail: '' } } });
+    const calls = result.cycle.toolCalls;
+    const created = calls.find(item => item.name === 'create');
+    assert.match(JSON.stringify(created.result), /travel table/i, 'the create result carries the file\'s checklist');
+    assert.equal(calls.filter(item => item.name === 'review_file').length, 2);
+    assert.equal(calls.at(-1).name, 'await');
+});

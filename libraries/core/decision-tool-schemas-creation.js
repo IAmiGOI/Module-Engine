@@ -92,38 +92,41 @@ export const DISCOVERY_WRITE_TOOL = Object.freeze({
  * await не принимается. Модель дешёвая — лишний проход проверки дешевле мира с дырой (DeepSeek сослался на Scales/magic.md
  * и так и не написал его).
  */
-export const GOD_REVIEW_TOOL = Object.freeze({
-    name: 'review_creation',
-    displayName: 'Review the Creation',
-    description: 'The review form you fill before you rest. View the files first, then fill every field from what the files actually say — not from what you meant to write. List what is missing honestly: an open item is fixed, not hidden. While anything is open, await is not accepted; fix it and review again.',
+/** Форма по одному файлу: каждый пункт его списка — сделано или чего не хватает. */
+export const GOD_REVIEW_FILE_TOOL = Object.freeze({
+    name: 'review_file',
+    displayName: 'Review one file',
+    description: 'The review form for one Creation file, filled right after you create or edit it. The result of that create or edit lists what the file must hold; answer every item from the file as it is now — view it if you are not sure. An item that is not done names what is missing; fix it with edit and review the file again.',
     parameters: {
         type: 'object',
         properties: {
-            sections: {
+            file: { type: 'string', description: 'The file\'s path.' },
+            items: {
                 type: 'array',
-                description: 'Every one of the six guaranteed section files and every free section file.',
+                description: 'Every item of the file\'s list, in order.',
                 items: {
                     type: 'object',
                     properties: {
-                        file: { type: 'string', description: 'Its path, as view lists it.' },
-                        missing: { type: 'string', description: 'What its list in the system prompt asks for and this file does not have yet. Empty when nothing is missing.' },
+                        item: { type: 'string', description: 'The item, as the list gives it.' },
+                        done: { type: 'boolean', description: 'True only if the file holds it in full.' },
+                        missing: { type: 'string', description: 'What is missing when it is not done; empty otherwise.' },
                     },
-                    required: ['file', 'missing'],
+                    required: ['item', 'done'],
                 },
             },
-            systems: {
-                type: 'array',
-                description: 'Every system file under Creation/Scales/.',
-                items: {
-                    type: 'object',
-                    properties: {
-                        file: { type: 'string', description: 'Its path, as view lists it.' },
-                        rules: { type: 'integer', description: 'How many rules it holds.' },
-                        missing: { type: 'string', description: 'Rules missing any of the eight lines, a Weight whose level does not start its line or contradicts its own text, a missing Principle or Payment. Empty when nothing is missing.' },
-                    },
-                    required: ['file', 'rules', 'missing'],
-                },
-            },
+            comment: COMMENT,
+        },
+        required: ['file', 'items', 'comment'],
+    },
+});
+
+export const GOD_REVIEW_TOOL = Object.freeze({
+    name: 'review_creation',
+    displayName: 'Review the Creation',
+    description: 'The last review before you rest — what only the whole Creation shows: every file one file points to, and what of the material is still uncovered. View the list of files first. While anything is open, await is not accepted; fix it and review again.',
+    parameters: {
+        type: 'object',
+        properties: {
             references: {
                 type: 'array',
                 description: 'Every file that scales.md or any other file points to.',
@@ -139,7 +142,7 @@ export const GOD_REVIEW_TOOL = Object.freeze({
             material: { type: 'string', description: 'Places, powers, peoples, factions and faiths the material names that the Creation does not cover yet. Empty when it covers all of them.' },
             comment: COMMENT,
         },
-        required: ['sections', 'systems', 'references', 'material', 'comment'],
+        required: ['references', 'material', 'comment'],
     },
 });
 

@@ -100,8 +100,8 @@ One or two sentences per point, then the call at once.
 1. **Read the material** — what the lorebook and the cards say this world is. Separate what is stated from what is missing.
 2. **Decide the world** — geography first: where a story can stand. Then history and politics, which explain the present. Then faith and culture, which explain the people. Then the user's place in it.
 3. **Systems of weight** — list every power the material gives anyone. For each: its principle, its Payment, and one rule per operation a story might attempt, with all eight lines.
-4. **Write** — create for a new section or system file, edit for a change to one. Ask only what the material cannot answer.
-5. **Review before you rest** — view every file, then fill review_creation from what the files actually say. The form asks, and you answer honestly:
+4. **Write, and review each file at once** — create for a new section or system file, edit for a change to one. Every create and edit returns the list of what that file must hold: fill review_file for it right away, item by item, from the file as it is, and fix what is open before you move on. Ask only what the material cannot answer.
+5. **Review the whole before you rest** — view the list of files, then fill review_creation: the files the others point to, and what of the material is still uncovered. Go through it honestly:
    - all six section files exist, and each has what its list in the system prompt asks for;
    - every place the cards name is in Geography, every power or faction they name is in Politics, every people in Culture;
    - every power in the material has a system file and a row in scales.md;
@@ -157,3 +157,57 @@ export const GOD_QUESTIONS_HEADER = 'YOUR QUESTIONS THAT WAIT FOR AN ANSWER:';
 export const NO_QUESTIONS = 'No question waits.';
 export const CREATION_HEADER = 'CREATION — the world the story stands in, and the rules it obeys:';
 export const DISCOVERIES_HEADER = 'NEW DISCOVERIES (found since the world was last read; from here on they are the law of the world):';
+
+/**
+ * Что проверяет форма по одному файлу Creation сразу после записи. Те же требования, что в GOD_SYSTEM, —
+ * разложенные по файлам, чтобы проверка шла внутри раздела, а не одной формой по памяти в конце.
+ */
+export const GOD_FILE_CHECKS = Object.freeze({
+    'geography': [
+        'Every place a story can stand in is its own "###" subsection: what it is, who lives there and who rules it, what it looks and sounds like.',
+        'How the places connect, and a travel table | From | To | On foot | Riding or other | Danger | whose times are steps of the engine\'s scale or a number of days.',
+        'The climate and the season the story starts in, and what weather does to travel and work.',
+        'What is dangerous in the land itself.',
+    ],
+    'spirituality-and-culture': [
+        'One "###" subsection per people or region: what they believe and hold holy, what is taboo, what is shameful and what earns respect.',
+        'How each greets, addresses one another, trades, marries, mourns and punishes.',
+        'How a crowd of them reacts to a stranger, a drawn weapon, violence, a power of the Scales, someone of high rank, and someone like the user\'s character.',
+        'Every faith: its gods or powers, its clergy, what it demands and forbids; real miracles are a system of the Scales.',
+    ],
+    'scales': [
+        'A row | System | Principle | Who has it | Payment | for every power any character, people or faith of the material has.',
+        'Every row names its file under Creation/Scales/, and that file exists.',
+        'No ordinary skill is listed as a system.',
+    ],
+    'history': [
+        'A timeline, oldest first, in the world\'s own calendar: | When | What happened | What it left behind |.',
+        'The wars, wrongs, debts and oaths the present still answers for, and who remembers them.',
+        'Where what most people believe differs from what really happened.',
+        'No hour or date is written for the start of the story.',
+    ],
+    'politics-and-conflicts': [
+        'Every power as a "###" subsection: who leads it, what it wants now, what it has, what it fears.',
+        'A table of how the powers stand to one another, with why.',
+        'The conflicts alive now: who against whom, over what, how it is going, what would tip it.',
+        'The law: who judges, what is a crime, what punishment is usual, how far the law reaches.',
+    ],
+    'the-user-in-the-world': [
+        'Where the user\'s character stands — people, rank, faith, what they own, whom they know — as the persona, the cards and the Declaration give it, with no limits of your own.',
+        'How strangers, the powers, the law and the faiths treat someone like them.',
+        'What is ordinary for them here, what is strange, and what they would not know.',
+        'Their powers belong to a system of the Scales, and nothing they do after the start is written.',
+    ],
+    system: [
+        '**Principle:** in one line, and **Payment:** — what every use draws on and how it comes back.',
+        'One "## <Rule>" per operation a scene would roll for.',
+        'Every rule has all eight lines: Needs, Yields, Weight, Scaling, Limit, Cost, Links, Examples.',
+        'Every Weight starts with one level of the roll scale, and its own words do not contradict that level.',
+        'Every Examples line has two or three cases, at least one an unusual use.',
+        '"## Discoveries" closes the file.',
+    ],
+    other: [
+        'It says what it covers, in "###" subsections, and nothing in it contradicts the guaranteed sections.',
+    ],
+    every: 'What you decided rather than read is marked "(God\'s decision)".',
+});

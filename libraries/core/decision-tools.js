@@ -8,7 +8,7 @@ import { INSCRIBE_TOOL } from './decision-tool-schemas-inscribe.js';
 import { AFTER_TURN_TOOL } from './decision-tool-schemas-after-turn.js';
 import { DECREE_TOOL } from './decision-tool-schemas-decree.js';
 import { COUNSELLOR_TOOLS, COUNSELLOR_STOP_TOOLS, GOD_ANSWER_TOOL } from './decision-tool-schemas-counsellor.js';
-import { CREATION_WRITE_TOOL, SCALE_WRITE_TOOL, DISCOVERY_WRITE_TOOL, GOD_ASK_TOOL, GOD_REVIEW_TOOL } from './decision-tool-schemas-creation.js';
+import { CREATION_WRITE_TOOL, SCALE_WRITE_TOOL, DISCOVERY_WRITE_TOOL, GOD_ASK_TOOL, GOD_REVIEW_TOOL, GOD_REVIEW_FILE_TOOL } from './decision-tool-schemas-creation.js';
 
 export * from './decision-tool-schemas-turn.js';
 export * from './decision-tool-schemas-world.js';
@@ -19,7 +19,7 @@ export * from './decision-tool-schemas-after-turn.js';
 export * from './decision-tool-schemas-decree.js';
 export { COMMENT } from './decision-tool-comment.js';
 export { COUNSELLOR_TOOLS, COUNSELLOR_STOP_TOOLS, PETITION_TOOL, NOTHING_YET_TOOL, REPLY_TOOL, PRAYER_TOOL, GOD_ANSWER_TOOL, COUNSELLOR_AWAIT_TOOL } from './decision-tool-schemas-counsellor.js';
-export { CREATION_WRITE_TOOL, SCALE_WRITE_TOOL, DISCOVERY_WRITE_TOOL, GOD_ASK_TOOL, GOD_REVIEW_TOOL } from './decision-tool-schemas-creation.js';
+export { CREATION_WRITE_TOOL, SCALE_WRITE_TOOL, DISCOVERY_WRITE_TOOL, GOD_ASK_TOOL, GOD_REVIEW_TOOL, GOD_REVIEW_FILE_TOOL } from './decision-tool-schemas-creation.js';
 
 /**
  * Инструменты директора — общие правила. Чистые данные и проверки, без шин и
@@ -92,7 +92,7 @@ export function buildDirectorToolList() {
  * вопросы Советнику. Персонажей он не правит — это Great Bank Director.
  */
 export function buildGodToolList() {
-    return [files.VIEW_TOOL, files.EDIT_TOOL, files.CREATE_TOOL, GOD_ASK_TOOL, GOD_REVIEW_TOOL, world.AWAIT_TOOL];
+    return [files.VIEW_TOOL, files.EDIT_TOOL, files.CREATE_TOOL, GOD_ASK_TOOL, GOD_REVIEW_FILE_TOOL, GOD_REVIEW_TOOL, world.AWAIT_TOOL];
 }
 
 /** Все схемы движка, к которым добавляются чужие инструменты. */
