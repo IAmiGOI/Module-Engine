@@ -270,3 +270,9 @@ test('names are found as whole words: Ram is not in "frame", Al is not in "alway
     assert.deepEqual(namedCharacters('She always stands in the door frame, remains calm.', state), []);
     assert.deepEqual(namedCharacters('Ram nods; Al shrugs. Ask Otto Suwen.', state).sort(), ['Aldebaran', 'Otto Suwen', 'Ram']);
 });
+
+test('the Director gets the files of everyone a Petition names, not only of whom it is about', () => {
+    const state = { lena: { name: 'Lena', importance: 'main', decree: { 1: ['x'] } }, otto: { name: 'Otto', importance: 'side' } };
+    const info = directorReason({ petitions: [{ ...petition('Lena'), problem: 'Lena has gone to meet Otto at the yards.' }], banks: state });
+    assert.ok(info.characters.includes('Otto'), JSON.stringify(info.characters));
+});

@@ -91,8 +91,12 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
     if (day.length) reasons.push({ type: 'day', names: unique(day.map(item => item.character)) });
     if (!reasons.length) return null;
 
+    // Файлы — и тех, кого отчёты называют, не только тех, о ком они: Петиция по Emilia называла Отто, а его пустой банк
+    // Директор так и не увидел и ответил «всё учтено».
+    const mentioned = namedCharacters(queued.map(item => `${item.problem ?? ''}\n${item.excerpt ?? ''}`).join('\n'), nameState);
     const characters = unique([
         ...queued.map(item => item.character),
+        ...mentioned,
         ...cast,
         ...promoted.map(item => item.character),
         ...day.map(item => item.character),
