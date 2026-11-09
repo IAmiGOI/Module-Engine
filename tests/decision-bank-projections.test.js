@@ -74,3 +74,13 @@ test('in a short context the near projection still comes after the system prompt
     assert.ok(at(built, 'NEAR-FULL') >= 1);
     assert.equal(built.messages.at(-1).role, 'user');
 });
+
+test('a character whose Spiritual is still empty shows their source beside the few written lines', async () => {
+    const { renderNearBanks } = await import('../libraries/core/decision-bank-projections.js');
+    const otto = { name: 'Otto', sectionsReady: true, material: { 7: ['A sheet lies on his cart.'] }, spiritual: { 1: [] }, fallbackText: '***Otto***\nTimid, talkative travelling merchant who speaks with animals.' };
+    const text = renderNearBanks([{ character: otto }]);
+    assert.match(text, /A sheet lies on his cart\./);
+    assert.match(text, /SOURCE — who they are; their bank is not written yet, so play them from this:\nTimid, talkative travelling merchant/);
+    const written = renderNearBanks([{ character: { ...otto, spiritual: { 1: ['Values his life.'] } } }]);
+    assert.doesNotMatch(written, /SOURCE —/);
+});

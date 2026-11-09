@@ -55,9 +55,13 @@ function entryBlock(entry, parts, nowValue) {
     const character = entry?.character;
     if (!character) return '';
     const blocks = character.sectionsReady === false ? [] : blocksOf(character, parts, nowValue);
-    if (blocks.length) return `### ${text(character.name)}\n${blocks.join('\n\n')}`;
-    const legacy = text(character.fallbackText);
-    return legacy ? `### ${text(character.name)}\n${legacy.replace(/^\s*\*{3}[^\n]*\*{3}\s*\n?/, '')}` : '';
+    const legacy = text(character.fallbackText).replace(/^\s*\*{3}[^\n]*\*{3}\s*\n?/, '');
+    // Кто он — Spiritual — ещё не написан, а исходник есть: показать исходник рядом с тем, что уже записано. Одна строка
+    // «после хода» в Material скрывала весь лорбук, и Отто играли пустым банком — подозрительным возчиком вместо себя.
+    const unwritten = !Object.values(character.spiritual ?? {}).some(lines => Array.isArray(lines) && lines.some(line => text(line)));
+    if (blocks.length && !(unwritten && legacy)) return `### ${text(character.name)}\n${blocks.join('\n\n')}`;
+    if (blocks.length) return `### ${text(character.name)}\n${blocks.join('\n\n')}\n\nSOURCE — who they are; their bank is not written yet, so play them from this:\n${legacy}`;
+    return legacy ? `### ${text(character.name)}\n${legacy}` : '';
 }
 
 const FAR_PARTS = Object.freeze([
