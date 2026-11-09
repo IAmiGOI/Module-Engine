@@ -1,6 +1,7 @@
 import { applyEdit } from '../../libraries/core/text-diff.js';
 import { renderPart, parsePart, editsForPart } from '../../libraries/core/court-bank-files.js';
 import { knowledgeKey } from '../../libraries/core/decision-knowledge.js';
+import { isUserCharacter, USER_CHARACTER_NOTE } from '../../libraries/core/decision-great-bank.js';
 
 /**
  * Файловый слой движка (часть 21): всё, что меняют модели, — виртуальные файлы,
@@ -104,6 +105,7 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
         if (target.part === 'knowledge') return writeKnowledge(name, before, after, comment);
         // Указ пишет только Director: правка резолвера не отклоняется, а остаётся без записи с пояснением.
         if (target.part === 'decree' && by === 'resolver') return { ok: true, unchanged: true, note: 'Only the Director writes the Decree — tell it in the outcome instead.' };
+        if (target.part === 'decree' && isUserCharacter(character)) return { ok: false, error: `${name} ${USER_CHARACTER_NOTE}` };
         if (target.part === 'decree') return great().writeDecree({ character: name, sections: parsePart(after, 'decree'), comment, by });
         return great().edit({ comment, edits: editsForPart(name, target.part, before, after) }, { by });
     }

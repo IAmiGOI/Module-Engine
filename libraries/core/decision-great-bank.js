@@ -19,6 +19,10 @@ export {
 } from './decision-bank-sections.js';
 
 const text = value => String(value ?? '').trim();
+
+/** Персонаж пользователя (из персоны): ни Указа, ни важности — его поступки и планы только у пользователя. */
+export const isUserCharacter = character => /^persona:/.test(text(character?.sourceKey));
+export const USER_CHARACTER_NOTE = "is the user's character: they have no Decree and no standing — their deeds, words and plans are the user's own, and nobody writes them.";
 export const bankKey = name => text(name).toLowerCase();
 
 /** Служебные поля записи переживают нормализацию: по ним движок узнаёт пересборку банка. */
@@ -220,6 +224,7 @@ export function applyDecree(state, decree, { at = '', comment = '', by = 'direct
     next = ensured.state;
     const character = findCharacter(next, decree?.character);
     if (!character) return { state: next, character: null, changed: false, history: [] };
+    if (isUserCharacter(character)) return { state: next, character, changed: false, history: [], refused: true };
     const sections = decreeSections(decree);
     const history = [];
     const decreeState = {};

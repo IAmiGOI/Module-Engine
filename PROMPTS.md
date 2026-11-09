@@ -843,6 +843,7 @@ An example (not of any story):
 - **Side Character** — gets a Decree once the story starts to lean on them.
 - **Temporary Character** — has a bank but no Decree, until they are promoted.
 - **NPC/Mass** — no bank and no Decree: the Resolver plays them from the Creation's Spirituality and Culture.
+- **The user's character** — has a bank, but no standing and no Decree, ever: what they do, say and plan is the user's alone. Do not promote them and do not write their decree.md.
 Apply the promotions the Counsellor offers with set_bank_importance when the reason holds; a character promoted to Main Cast gets a Decree in the same run.
 
 ## What You Do

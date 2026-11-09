@@ -1,6 +1,6 @@
 import { renderPart } from './court-bank-files.js';
 import { normalizeImportanceWord, normalizePetitions } from './decision-counsellor.js';
-import { findCharacter, normalizeGreatBank } from './decision-great-bank.js';
+import { findCharacter, normalizeGreatBank, isUserCharacter } from './decision-great-bank.js';
 import { libraryLevelsSection } from './decision-library.js';
 import {
     DIRECTOR_DECREE_SYSTEM, DIRECTOR_DECREE_TASK, DIRECTOR_THINK_DECREE,
@@ -32,7 +32,7 @@ export function queuedTelegrams(telegrams) {
 export function mainWithoutDecree(state) {
     const bank = normalizeGreatBank(state);
     return Object.values(bank)
-        .filter(character => character.importance === 'main')
+        .filter(character => character.importance === 'main' && !isUserCharacter(character))
         .filter(character => ![1, 2, 3, 4, 5].some(no => (character.decree?.[no] ?? []).some(line => text(line))))
         .map(character => character.name);
 }
@@ -40,7 +40,7 @@ export function mainWithoutDecree(state) {
 /** Main Cast целиком — запасной круг для Телеграммы, где имя не названо прямо. */
 export function mainCharacters(state) {
     return Object.values(normalizeGreatBank(state))
-        .filter(character => character.importance === 'main')
+        .filter(character => character.importance === 'main' && !isUserCharacter(character))
         .map(character => character.name);
 }
 

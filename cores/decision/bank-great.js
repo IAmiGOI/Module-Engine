@@ -1,5 +1,5 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
-import { applyDecrees, applyEdits, bankKey, ensureCharacter, findCharacter, normalizeCharacter, normalizeGreatBank, normalizeImportance, resolveSection } from '../../libraries/core/decision-great-bank.js';
+import { applyDecrees, applyEdits, bankKey, ensureCharacter, findCharacter, normalizeCharacter, normalizeGreatBank, normalizeImportance, resolveSection, isUserCharacter, USER_CHARACTER_NOTE } from '../../libraries/core/decision-great-bank.js';
 import { normalizeDecrees } from '../../libraries/core/decision-decree.js';
 import { parseBankSections } from '../../libraries/core/decision-bank-parse.js';
 import { BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
@@ -153,6 +153,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
         const ensured = ensureCharacter(state, character, { importance });
         const found = findCharacter(ensured.state, character);
         if (!found) return { ok: false, error: `There is no character "${character}".` };
+        if (isUserCharacter(found)) return { ok: false, error: `${found.name} ${USER_CHARACTER_NOTE}` };
         const level = normalizeImportance(importance);
         await save({ ...ensured.state, [bankKey(found.name)]: { ...found, importance: level } });
         return { ok: true, character: found.name, importance: level };

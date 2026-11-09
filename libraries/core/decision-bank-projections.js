@@ -1,5 +1,6 @@
 import { lineIsPast } from './decision-bank-time.js';
 import { MATERIAL_SECTIONS, SPIRITUAL_SECTIONS, DECREE_SECTIONS, sectionsOf } from './decision-bank-sections.js';
+import { isUserCharacter } from './decision-great-bank.js';
 
 /**
  * Проекции Great Bank в контексты — чистые функции над записями персонажей.
@@ -107,6 +108,7 @@ export function renderDecreeForResolver(entries, { nowValue = null, names = null
     const wanted = Array.isArray(names) ? new Set(names.map(name => text(name).toLowerCase())) : null;
     const blocks = (Array.isArray(entries) ? entries : [])
         .filter(entry => !wanted || wanted.has(text(entry?.character?.name).toLowerCase()))
+        .filter(entry => !isUserCharacter(entry?.character))
         .map(entry => {
             const body = blocksOf(entry?.character, DECREE_PARTS, nowValue);
             return body.length ? `### ${text(entry.character.name)}\n${body.join('\n\n')}` : '';
