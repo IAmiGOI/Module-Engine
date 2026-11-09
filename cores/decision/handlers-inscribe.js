@@ -4,6 +4,9 @@ import { departedFrom, lastAcceptedForm } from '../../libraries/core/decision-sc
 import { shiftTimeLabel } from '../../libraries/core/time-shift.js';
 import { advanceClock, clockFromLabel, parseClock } from '../../libraries/core/decision-clock.js';
 import { rpInstant } from '../../libraries/core/decision-bank-time.js';
+import { findCharacter, isUserCharacter } from '../../libraries/core/decision-great-bank.js';
+
+const written = character => ['spiritual', 'decree'].some(part => Object.values(character?.[part] ?? {}).some(lines => Array.isArray(lines) && lines.some(line => String(line ?? '').trim())));
 
 /**
  * `inscribe` — единственный ход резолвера. Ростер, каждый персонаж изнутри,
@@ -11,8 +14,38 @@ import { rpInstant } from '../../libraries/core/decision-bank-time.js';
  * отказывает только без beats при действующих; место и RP-время ставит сам,
  * минуты считает из шкалы слов.
  */
-export function createInscribeHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker = null, userName = () => '', getSettings = null, applyRoster = null, timeOfDay = null }) {
+export function createInscribeHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker = null, userName = () => '', getSettings = null, applyRoster = null, timeOfDay = null, greatBank = null }) {
+    /**
+     * Кто входит в сцену этим ходом и у кого есть банк: резолвер заполнял ход, не видя ни Указа, ни нрава входящего,
+     * и играл его по шаблону. Такой ход не принимается: входящие — в ростер, ход начинается заново уже с ними
+     * (один раз за ход, пользователь видит только итог).
+     */
+    async function entrantsWithBanks(args) {
+        if (state.entrantsRestarted || typeof greatBank !== 'function') return [];
+        const user = String(userName() ?? '').trim().toLowerCase();
+        const active = new Set((store.roster().active ?? []).map(name => String(name).trim().toLowerCase()));
+        const named = [
+            ...(Array.isArray(args?.roster?.add) ? args.roster.add : []).map(item => (typeof item === 'string' ? item : item?.name)),
+            ...(Array.isArray(args?.characters) ? args.characters : []).map(item => item?.name),
+        ].map(name => String(name ?? '').trim()).filter(name => name && name.toLowerCase() !== user && !active.has(name.toLowerCase()));
+        if (!named.length) return [];
+        const bank = (await greatBank().catch(() => null)) ?? {};
+        const found = [];
+        for (const name of new Set(named)) {
+            const character = findCharacter(bank, name);
+            if (character && !isUserCharacter(character) && written(character) && !active.has(character.name.toLowerCase()) && !found.includes(character.name)) found.push(character.name);
+        }
+        return found;
+    }
+
     return async args => {
+        const entrants = await entrantsWithBanks(args);
+        if (entrants.length) {
+            state.entrantsRestarted = true;
+            if (typeof store.saveRoster === 'function') await store.saveRoster({ active: [...(store.roster().active ?? []), ...entrants] });
+            publishEvent('decision.turn.entrants', { runId: state.runId, entrants });
+            return { ok: true, restart: true, entrants };
+        }
         // Ростер — первым делом: остальное читается уже по новой сцене.
         if (args?.roster && typeof applyRoster === 'function') {
             const applied = await applyRoster(args.roster);

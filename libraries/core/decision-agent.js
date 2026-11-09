@@ -150,6 +150,9 @@ export async function runDecisionCycle({
         for (const call of answer.toolCalls) {
             const result = await execute(call);
             conversation.push(toolResultMessage(call, result));
+            if (TURN_TOOLS.includes(call.name) && result?.restart === true) {
+                return { type: 'restart', reason: 'characters entered with their banks', trace, messages: conversation, steps, warnings };
+            }
             if (TURN_TOOLS.includes(call.name) && result?.ok === true) {
                 return { type: 'submit', form: result.form, trace, messages: conversation, steps, warnings };
             }

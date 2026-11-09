@@ -198,7 +198,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         return { cycle, form, push };
     }
 
-    async function runCycle({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true, wake = null, signal: externalSignal = null, speculative = null }) {
+    async function runCycle({ chat, runId, type = 'normal', thinking = () => '', usage: runUsage = usage, toolFilter = null, lorebook = true, wake = null, signal: externalSignal = null, speculative = null, restarted = false }) {
         // Ход важнее фонового цикла: тот делит с ходом слот модели директора и общее состояние, а срок хода уже идёт (ход 111 ждал 145 с и упал по 180 с).
         if (backgroundController) {
             const preempt = new Error('a turn started');
@@ -216,6 +216,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.formWarnings = [];
         state.knowledgeReturns = new Set();
         state.departureWarned = false;
+        state.entrantsRestarted = restarted;
         const lastUser = [...(Array.isArray(chat) ? chat : [])].reverse().find(entry => entry?.is_user === true);
         // Номер хода — из сохранённого окна, а не из памяти вкладки: счётчик сбрасывался при каждой перезагрузке страницы.
         state.turnCounter = turnBase({ reroll: type === 'regenerate' || type === 'swipe', userText: String(lastUser?.mes ?? lastUser?.content ?? '') });
@@ -313,6 +314,12 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             return { ok: true, form, push, decision: fallbackDecision(form), trace: [], warnings, steps: 0, workerId: worker.id, draft: true };
         }
 
+        if (result.type === 'restart') {
+            // Вошли персонажи с банками: ход заново, уже с ними в ростере (их Указ и нрав — в контексте). В журнал не пишется.
+            agent.catch(() => {});
+            wakeQueue.rest();
+            return runCycle({ chat, runId, type, thinking, usage: runUsage, toolFilter, lorebook, wake, signal: externalSignal, speculative, restarted: true });
+        }
         state.voices = result.type === 'submit' ? await voicesFor(result.form) : {};
         const { cycle, form, push } = cycleRecord({
             runId, event: type === 'normal' ? 'turn' : type, result, thinking,
