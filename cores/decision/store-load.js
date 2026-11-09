@@ -3,7 +3,7 @@ import { sanitizeCycles, sanitizeRuns } from './store-sanitize.js';
 
 /** Прочитать всё состояние директора из памяти чата; мусор приводится к безопасной форме. */
 export async function loadChatMemory(call) {
-    const [storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft, storedBoundary, storedWindow, storedFrozen, storedBrief, storedGame, storedLedger, storedPapers] = await Promise.all([
+    const [storedRuns, storedLog, storedArchive, storedRoster, storedPlan, storedArcs, storedNotes, storedLibrary, storedPlans, storedClock, storedBank, storedResearch, storedNames, storedSnapshots, storedDraft, storedBoundary, storedWindow, storedFrozen, storedBrief, storedGame, storedLedger, storedPapers, storedPool] = await Promise.all([
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', fallback: {} }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'log', fallback: [] }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'logArchive', fallback: [] }),
@@ -26,6 +26,7 @@ export async function loadChatMemory(call) {
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'gameSettings', fallback: null }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'ledger', fallback: [] }),
         call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'papers', fallback: null }),
+        call('storage.chatMemory.get', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshotPool', fallback: {} }),
     ]);
     return {
         runs: sanitizeRuns(storedRuns),
@@ -41,6 +42,7 @@ export async function loadChatMemory(call) {
         memoryBank: storedBank && typeof storedBank === 'object' && !Array.isArray(storedBank) ? storedBank : {},
         research: Array.isArray(storedResearch) ? storedResearch.filter(task => task && typeof task === 'object') : [],
         issuedNames: Array.isArray(storedNames) ? storedNames.map(String) : [],
+        snapshotPool: storedPool && typeof storedPool === 'object' && !Array.isArray(storedPool) ? storedPool : {},
         snapshots: storedSnapshots && typeof storedSnapshots === 'object' && !Array.isArray(storedSnapshots) ? storedSnapshots : {},
         draft: storedDraft && typeof storedDraft === 'object' ? storedDraft : null,
         chatBrief: storedBrief && typeof storedBrief === 'object' && !Array.isArray(storedBrief) ? storedBrief : null,

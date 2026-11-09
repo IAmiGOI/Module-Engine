@@ -16,7 +16,7 @@ const queuesOf = papers => copy({
     petitions: papers?.petitions ?? [], prayers: papers?.prayers ?? [], telegrams: papers?.telegrams ?? [], awaitingDecree: papers?.awaitingDecree ?? null,
 });
 
-export function createRollback({ store, getSettings, publishEvent, call = null }) {
+export function createRollback({ store, getSettings, publishEvent, call = null, notify = () => {} }) {
     async function snapshotState(runId, journal) {
         const knowledge = call ? await call('storage.chatMemory.get', { ...KNOWLEDGE, fallback: {} }).catch(() => null) : null;
         const great = call ? await call('storage.chatMemory.get', { ...GREAT, fallback: {} }).catch(() => null) : null;
@@ -71,6 +71,8 @@ export function createRollback({ store, getSettings, publishEvent, call = null }
         const state = store.snapshot(mesid);
         if (!state) return false;
         if (state.runId) await store.markRejected(state.runId).catch(() => {});
+        // Снимок без банков или с потерянными частями откатывает не всё — об этом говорится, а не молчится.
+        if (!state.greatBank || !state.ledger || state.missing) notify('warning', `ME: The snapshot for message ${mesid} is incomplete: ${!state.greatBank ? 'character banks, ' : ''}${!state.ledger ? 'the turn ledger, ' : ''}${state.missing ? `${state.missing} missing parts, ` : ''}so they keep their later state.`);
         await restoreState(state);
         if (remove) await store.deleteSnapshot(mesid);
         publishEvent('decision.snapshot.restored', { mesid: String(mesid) });

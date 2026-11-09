@@ -1,3 +1,4 @@
+import { packSnapshot, unpackSnapshot, prunePool } from '../../libraries/core/snapshot-pool.js';
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { createJournal } from './journal.js';
 import { createLogStore } from './store-log.js';
@@ -16,6 +17,7 @@ export function createDecisionStore({ call, publishEvent }) {
     let research = [];
     let issuedNames = [];
     let snapshots = {};
+    let snapshotPool = {};
     let draft = null;
     let chatBrief = null;
     let gameSettings = null;
@@ -56,6 +58,7 @@ export function createDecisionStore({ call, publishEvent }) {
         research = data.research;
         issuedNames = data.issuedNames;
         snapshots = data.snapshots;
+        snapshotPool = data.snapshotPool ?? {};
         draft = data.draft;
         chatBrief = data.chatBrief;
         gameSettings = data.gameSettings;
@@ -130,8 +133,14 @@ export function createDecisionStore({ call, publishEvent }) {
         });
     }
 
+    async function saveSnapshots() {
+        prunePool(snapshotPool, snapshots);
+        await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshotPool', value: snapshotPool });
+        await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', value: snapshots });
+    }
+
     function snapshot(mesid) {
-        return snapshots[String(mesid)] ? JSON.parse(JSON.stringify(snapshots[String(mesid)])) : null;
+        return snapshots[String(mesid)] ? unpackSnapshot(snapshotPool, JSON.parse(JSON.stringify(snapshots[String(mesid)]))) : null;
     }
 
     function deleteSnapshot(mesid) {
@@ -139,7 +148,7 @@ export function createDecisionStore({ call, publishEvent }) {
             const key = String(mesid);
             if (!(key in snapshots)) return false;
             delete snapshots[key];
-            await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', value: snapshots });
+            await saveSnapshots();
             return true;
         });
     }
@@ -193,13 +202,9 @@ export function createDecisionStore({ call, publishEvent }) {
             if (record.snapshot) {
                 const entries = Object.entries(snapshots);
                 if (entries.length >= 50) delete snapshots[entries[0][0]];
-                snapshots[mesid] = record.snapshot;
-                // Great Bank тяжёлый (сотни КБ): держим его только в трёх последних снимках — переигрывают почти всегда последний ход.
-                for (const [key] of Object.entries(snapshots).slice(0, -3)) {
-                    // Журнал Советника и очереди — тоже только в трёх последних: строки тяжёлые, а переигрывают последний ход.
-                    if (snapshots[key]?.greatBank || snapshots[key]?.ledger || snapshots[key]?.papers) { const { greatBank: _bank, ledger: _ledger, papers: _papers, ...rest } = snapshots[key]; snapshots[key] = rest; }
-                }
-                await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'snapshots', value: snapshots });
+                // Тяжёлое (Great Bank, журнал) — в пуле по хэшу: каждый снимок полный, а неизменное не повторяется.
+                snapshots[mesid] = packSnapshot(snapshotPool, record.snapshot);
+                await saveSnapshots();
             }
             return stored;
         });
