@@ -65,5 +65,26 @@ export function createRollback({ store, getSettings, publishEvent, call = null }
         return true;
     }
 
-    return { snapshotState, restoreState, restoreSnapshotFor, settled };
+    /**
+     * Знания, записанные с начала первой попытки хода, — вон: снимок мог уже нести их (до починки отката они переживали
+     * переигровку), и резолвер читал «она уже ответила так» и отвечал так же, слово в слово, каждую переигровку.
+     */
+    async function pruneKnowledgeSince(since) {
+        if (!call || !Number.isFinite(Number(since)) || Number(since) <= 0) return 0;
+        const great = await call('storage.chatMemory.get', { ...GREAT, fallback: {} }).catch(() => null);
+        if (!great || typeof great !== 'object') return 0;
+        let removed = 0;
+        const next = {};
+        for (const [key, character] of Object.entries(great)) {
+            const items = Array.isArray(character?.knowledge?.items) ? character.knowledge.items : null;
+            if (!items) { next[key] = character; continue; }
+            const kept = items.filter(item => !(Number(item?.at) >= Number(since)));
+            removed += items.length - kept.length;
+            next[key] = kept.length === items.length ? character : { ...character, knowledge: { ...character.knowledge, items: kept } };
+        }
+        if (removed) await call('storage.chatMemory.set', { ...GREAT, value: next }).catch(() => {});
+        return removed;
+    }
+
+    return { snapshotState, restoreState, restoreSnapshotFor, settled, pruneKnowledgeSince };
 }

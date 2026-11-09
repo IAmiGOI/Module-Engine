@@ -113,3 +113,17 @@ test('a discarded turn takes its Great Bank changes with it: knowledge and edits
     await rollback.restoreState(snapshot);
     assert.deepEqual(memory.get('greatBank'), { emilia: { knowledge: { items: [] } } });
 });
+
+test('a reroll prunes the knowledge written since the first attempt of the turn', async () => {
+    const { createRollback } = await import('../cores/decision/rollback.js');
+    let great = { emilia: { name: 'Emilia', knowledge: { items: [{ id: 'old', fact: 'before', at: 100 }, { id: 'a', fact: 'the discarded answer', at: 500 }, { id: 'b', fact: 'again', at: 900 }] } }, ram: { name: 'Ram' } };
+    const call = async (contract, params) => {
+        if (contract === 'storage.chatMemory.get') return params.key === 'greatBank' ? JSON.parse(JSON.stringify(great)) : params.fallback;
+        if (contract === 'storage.chatMemory.set' && params.key === 'greatBank') { great = params.value; return true; }
+        return true;
+    };
+    const rollback = createRollback({ store: {}, getSettings: () => ({ snapshots: true }), publishEvent: () => {}, call });
+    assert.equal(await rollback.pruneKnowledgeSince(400), 2);
+    assert.deepEqual(great.emilia.knowledge.items.map(item => item.id), ['old']);
+    assert.equal(great.ram.name, 'Ram');
+});

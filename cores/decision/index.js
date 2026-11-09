@@ -184,7 +184,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     for (const name of ['decision.bootstrap.finished', 'decision.bank.ready', 'decision.bank.timeline']) host.events.subscribe(name, scheduleSnapshot);
     const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
     const rollback = createRollback({ store, getSettings: () => settings, publishEvent, call: callStrict });
-    const { snapshotState, restoreState, restoreSnapshotFor, settled: rollbackSettled } = rollback;
+    const { snapshotState, restoreState, restoreSnapshotFor, settled: rollbackSettled, pruneKnowledgeSince } = rollback;
 
     // Смена чата: всё, что делалось для старого, отменяется и больше ничего не пишет в новый —
     // фоновый цикл, вопросы, bootstrap, сборщики банков и задания исследователя.
@@ -431,6 +431,11 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             const last = store.lastRun();
             const before = last?.mesid !== undefined && last?.mesid !== null ? store.snapshot(last.mesid) : null;
             if (before) await restoreState(before).catch(() => {});
+            // Все попытки этого хода — с начала первой: их знания не случились.
+            const cycles = typeof store.cycles === 'function' ? store.cycles() : [];
+            const turnOf = cycles.find(cycle => cycle?.runId === last?.id || cycle?.runId === last?.sourceRunId)?.turn;
+            const starts = cycles.filter(cycle => ['turn', 'regenerate', 'swipe'].includes(cycle?.event) && turnOf !== undefined && Number(cycle.turn) === Number(turnOf)).map(cycle => Number(cycle.at)).filter(Number.isFinite);
+            if (starts.length) await pruneKnowledgeSince(Math.min(...starts)).catch(() => 0);
         }
         const journal = store.beginTurn(Boolean(settings.snapshots));
         const beforeSnapshot = settings.snapshots ? await snapshotState(runId, journal) : null;
