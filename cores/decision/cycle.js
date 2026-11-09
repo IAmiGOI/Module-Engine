@@ -23,7 +23,6 @@ import { createWakeQueue } from './queue.js';
 import { createCycleContext, fallbackDecision, turnWake, wakeFor } from './cycle-context.js';
 import { createRosterApplier } from './roster.js';
 import { runAfterTurn } from './cycle-after-turn.js';
-import { createFormChecker } from './form-check.js';
 import { createQuestionQueue } from './questions.js';
 import { createContextReport } from './context-report.js';
 import { bootstrapQuestionCount } from '../../libraries/core/game-settings.js';
@@ -95,7 +94,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     // Вкладка «Files» окна The Court: те же файлы, что правят модели, — от имени пользователя.
     const files = createFileLayer({ banks, knowledge });
     files.addProvider(createCreationProvider({ creation, state: {} }));
-    const formChecker = createFormChecker({ call, getSettings, banks, knowledge });
+    // Проверка формы классификатором выключена: за 8 ходов с Jev ни одного возврата, а запрос — на каждую попытку записи хода.
+    const formChecker = null;
     const pickModes = createModePicker({ call, getSettings });
     const questions = createQuestionQueue({ callService, publishEvent, now });
     // Эпоха чата: смена чата её увеличивает. Фоновый цикл старого чата обрывается и ничего не пишет в новый.

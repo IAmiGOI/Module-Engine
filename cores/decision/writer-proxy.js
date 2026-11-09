@@ -148,11 +148,9 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
     }
 
     async function nextAttempt(context, attempt, violated) {
-        const id = violated[0];
-        const quote = await context.check.quote({
-            reply: context.lastText, push: context.push, userMessage: context.userMessage,
-            resolution: context.resolution, id, signal: context.signal,
-        }).catch(() => '');
+        // Цитату не ищем: это был запрос к классификатору на каждое предложение ответа (десятки подряд), а писатель
+        // находит место по самой причине.
+        const quote = '';
         const reasons = rewriteReasons({ ids: violated, quote, user: context.user, resolution: context.resolution });
         const prompt = rewritePrompt({ reasons, attempt });
         announce(context.publishEvent, { runId: context.runId, attempt, phase: 'rewrite', quote, reasons, violated });
