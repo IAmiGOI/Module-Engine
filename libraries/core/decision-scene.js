@@ -101,6 +101,36 @@ export function renderCurrentScene({ form = null, roster = [], user = '', clock 
  * ALREADY SAID — что каждый говорил и просил в последних принятых ходах (смыслом, из формы). Правило
  * «не повторяться» без этого держалось на памяти модели; со списком следующий шаг сверяется с ним.
  */
+/** Правда форм режима (real) за последние ходы — только Resolver: Писатель её не видит. Последнее по каждому полю. */
+export function renderHiddenTruth(cycles, { beforeTurn = null, turns = 3, user = '' } = {}) {
+    const list = Array.isArray(cycles) ? cycles : [];
+    const forms = [];
+    for (let index = list.length - 1; index >= 0 && forms.length < turns; index -= 1) {
+        const cycle = list[index];
+        if (!['turn', 'regenerate', 'swipe'].includes(cycle?.event) || cycle?.rejected || !cycle?.form) continue;
+        if (Number.isFinite(beforeTurn) && !(Number(cycle.turn) < beforeTurn)) continue;
+        if (forms.some(item => item.turn === cycle.turn)) continue;
+        forms.unshift({ turn: cycle.turn, form: cycle.form });
+    }
+    const truth = new Map();
+    for (const { form } of forms) {
+        for (const character of Array.isArray(form.characters) ? form.characters : []) {
+            const name = text(character?.name);
+            if (!name || name.toLowerCase() === text(user).toLowerCase()) continue;
+            for (const [field, value] of Object.entries(character?.mode ?? {})) {
+                const real = text(value?.real), lens = text(value?.lens);
+                if (!real) continue;
+                if (!truth.has(name)) truth.set(name, new Map());
+                truth.get(name).set(field, real === lens ? real : `${real} (shows as: ${lens || '—'})`);
+            }
+        }
+    }
+    if (!truth.size) return '';
+    const lines = ['AS IT REALLY IS (from the last turns; hidden from the page):'];
+    for (const [name, fields] of truth) lines.push(`- ${name}: ${[...fields].map(([field, value]) => `${field.replace(/_/g, ' ')} — ${value}`).join('; ')}`);
+    return lines.join('\n');
+}
+
 export function renderAlreadySaid(cycles, { beforeTurn = null, turns = 3, user = '' } = {}) {
     const list = Array.isArray(cycles) ? cycles : [];
     const forms = [];

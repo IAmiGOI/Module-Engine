@@ -12,7 +12,7 @@ import { createCreationStore } from './creation.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildInscription } from '../../libraries/core/decision-push.js';
 import { createModePicker } from './turn-modes.js';
-import { resolverModeBlock, modesAllowRolls, writerModeLine } from '../../libraries/core/turn-modes.js';
+import { resolverModeBlock, writerModeLine } from '../../libraries/core/turn-modes.js';
 import { createHandlers } from './handlers.js';
 import { createCycleJobs } from './cycle-jobs.js';
 import { createTurnWindow } from './window.js';
@@ -215,9 +215,9 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const task = [reroll || modeBlock ? DIRECTOR_TURN : '', reroll ? DIRECTOR_REROLL : '', modeBlock].filter(Boolean).join('\n\n');
         const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task });
         contextReport.record(built, { turn: state.turnCounter });
-        const allTools = toolFilter ? await context.toolsFor(settings, { filter: toolFilter }) : await context.toolsFor(settings, { turn: true });
+        const tools = toolFilter ? await context.toolsFor(settings, { filter: toolFilter }) : await context.toolsFor(settings, { turn: true });
         // Режим без бросков — инструмента броска на этом ходу просто нет: спорить «бросать или нет» не о чем.
-        const tools = state.modes && !modesAllowRolls(state.modes.chosen) ? allTools.filter(tool => tool.name !== 'assess') : allTools;
+        // Набор инструментов не зависит от режима: он в начале запроса, и смена ломала бы кеш всего контекста.
         const controller = new AbortController();
         const hooks = live.hooks({ runId, thinking });
         const agent = runDecisionCycle({

@@ -10,7 +10,7 @@ import { renderChatBrief } from '../../libraries/core/decision-brief.js';
 import { DIRECTOR_CONCRETE, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
 import { buildStorySettingsBlock, resolveGameSettings } from '../../libraries/core/game-settings.js';
-import { lastAcceptedForm, renderAlreadySaid, renderCurrentScene } from '../../libraries/core/decision-scene.js';
+import { lastAcceptedForm, renderAlreadySaid, renderCurrentScene, renderHiddenTruth } from '../../libraries/core/decision-scene.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createKnowledge } from './knowledge.js';
 import { createRetryRunner } from './retry.js';
@@ -186,7 +186,7 @@ export function createCycleContext({ call, store, banks = null, creation = null,
             user,
         });
         // Сказанное — сразу за сценой, у самого задания: следующий шаг героя сверяется со списком, а не с памятью модели.
-        return [scene, renderAlreadySaid(cycles, { beforeTurn, user })].filter(Boolean).join('\n\n');
+        return [scene, renderHiddenTruth(cycles, { beforeTurn, user }), renderAlreadySaid(cycles, { beforeTurn, user })].filter(Boolean).join('\n\n');
     }
 
     /** Настройки игры этого чата: без них — Classic. Блок меняется только при смене настроек. */

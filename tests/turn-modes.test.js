@@ -30,3 +30,24 @@ test('the answer is read even around prose, and the scene is the last messages w
     assert.ok(scene.length <= 1800);
     assert.match(modeScene([{ mes: 'hi', is_user: true }, { mes: 'hello' }]), /^User: hi\nCharacter: hello$/);
 });
+
+test('the mode form: the block names the fields, the engine keeps only them, each as real + lens', async () => {
+    const { modeFields, normalizeModeFields } = await import('../libraries/core/turn-modes.js');
+    assert.deepEqual(Object.keys(modeFields(['merchant', 'king'])), ['deal', 'stake']);
+    assert.match(resolverModeBlock(['merchant']), /- deal: .*\n- stake: .*\nreal — how it truly is; the Writer never sees it\./);
+    assert.doesNotMatch(resolverModeBlock(['peasant']), /"mode"/);
+    assert.deepEqual(normalizeModeFields({ deal: { real: 'the cloth is rotten', lens: 'fine cloth, ten silver' }, stake: 'get rid of it', focus: { real: 'x' } }, ['merchant']),
+        { deal: { real: 'the cloth is rotten', lens: 'fine cloth, ten silver' }, stake: { real: 'get rid of it', lens: 'get rid of it' } });
+});
+
+test('the Writer sees only the lens; the Resolver sees the real one on the next turns', async () => {
+    const { buildInscription } = await import('../libraries/core/decision-push.js');
+    const { renderHiddenTruth } = await import('../libraries/core/decision-scene.js');
+    const mode = { deal: { real: 'the cloth is rotten', lens: 'fine cloth, ten silver' } };
+    const form = { characters: [{ name: 'Orm', mode }], beats: [{ who: 'Orm', kind: 'line', text: 'ten silver' }], stop: 'He holds it out.' };
+    const push = buildInscription({ form });
+    assert.match(push, /AS IT SHOWS:\n- Orm: deal — fine cloth, ten silver/);
+    assert.doesNotMatch(push, /rotten/);
+    const truth = renderHiddenTruth([{ event: 'turn', turn: 1, form }]);
+    assert.match(truth, /- Orm: deal — the cloth is rotten \(shows as: fine cloth, ten silver\)/);
+});

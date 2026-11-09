@@ -1,3 +1,4 @@
+import { modeFields, normalizeModeFields } from './turn-modes.js';
 import { durationMinutes, DEFAULT_DURATION, clampMinutes } from './decision-duration.js';
 import { CONFLICT_LEVELS } from './decision-tool-schemas-inscribe.js';
 
@@ -33,7 +34,7 @@ export function normalizeConflict(value) {
  * Шаблон → форма хода, которую понимают проекции, Push и запись хода.
  * @returns {{ ok: boolean, missing: string[], form?: object, warnings: string[] }}
  */
-export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [] } = {}) {
+export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [], modes = null } = {}) {
     const missing = [];
     const warnings = [];
     if (!form || typeof form !== 'object') return { ok: false, missing: ['inscribe'], warnings };
@@ -81,9 +82,12 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         if (rolled && !outcome) {
             warnings.push(`"${character.name}" has an assess id but no outcome — the writer gets it without a reason`);
         }
+        const mode = normalizeModeFields(character.mode, modes);
+        if (Object.keys(modeFields(modes)).length && !Object.keys(mode).length) warnings.push(`"${character.name}" acts but has no "mode" fields for this turn`);
         characters.push({
             ...character,
             name: character.name,
+            mode,
             ...(heard ? { heard } : {}),
             feels,
             decreeWants,

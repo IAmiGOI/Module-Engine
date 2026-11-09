@@ -125,9 +125,15 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
         ].filter(Boolean);
         return parts.length ? `- ${line(character.name)}: ${parts.join(' ')}` : '';
     }).filter(Boolean);
+    // Форма режима: Писателю — только lens; real (правда) не уходит на страницу даже совпадая.
+    const lenses = characters.filter(character => character?.idle !== true && line(character?.name)).map(character => {
+        const fields = Object.entries(character?.mode ?? {}).filter(([, field]) => line(field?.lens));
+        return fields.length ? `- ${line(character.name)}: ${fields.map(([name, field]) => `${name.replace(/_/g, ' ')} — ${line(field.lens)}`).join('; ')}` : '';
+    }).filter(Boolean);
     return [
         head.join(' '),
         line(modeLine),
+        lenses.length ? `AS IT SHOWS:\n${lenses.join('\n')}` : '',
         `THE USER'S ACTION, AND HOW IT LANDS: ${line(form?.userResult)}`,
         `BEATS — in this order, each one happens once:\n${beats.join('\n')}`,
         `END: ${line(form?.stop ?? form?.resolution)} Stop there.`,

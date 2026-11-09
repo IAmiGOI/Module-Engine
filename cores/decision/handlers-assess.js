@@ -1,6 +1,7 @@
 import { assessAction } from '../../libraries/core/decision-probability.js';
 import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js';
 import { difficultyShift } from '../../libraries/core/game-settings.js';
+import { modesAllowRolls } from '../../libraries/core/turn-modes.js';
 
 /**
  * Оценка действия: два уровня из списков → таблица вероятностей → бросок
@@ -13,6 +14,7 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
     return async args => {
         // Разговор не бросается: убедить, соврать, надавить — и как это примет слушатель — решает директор.
         // Обязательный вид попытки не даёт тихо превратить уговоры в бросок «на подачу».
+        if (state.modes?.chosen && !modesAllowRolls(state.modes.chosen)) return { ok: false, error: 'Nothing is rolled this turn: decide it from the characters. Leave assessId out.' };
         const kind = String(args.kind ?? '').trim().toLowerCase();
         if (!ASSESS_KINDS.includes(kind)) return { ok: false, error: `assess needs "kind": one of ${ASSESS_KINDS.join(' / ')}.` };
         if (kind === 'social') return { ok: false, error: ASSESS_SOCIAL_REFUSAL };

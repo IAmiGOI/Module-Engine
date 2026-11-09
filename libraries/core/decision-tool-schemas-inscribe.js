@@ -36,6 +36,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                         next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID or already taken. With no Decree yet, toward what their bank wants.' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
                         says: { type: 'string', description: 'What they say, in meaning only — never the wording: the Writer writes the words. Leave it out when they say nothing.' },
+                        mode: { type: 'object', description: 'Only when THIS TURN asks for it: the fields it names, each as {"real": …, "lens": …}.' },
                         assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
                         outcome: { type: 'string', description: 'Why it succeeded or failed, written after the assess result is known.' },
                     },

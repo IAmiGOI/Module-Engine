@@ -1,7 +1,7 @@
 /**
  * Режимы хода — чистые данные и правила, без модели (DIRECTOR-SPEC «Режимы хода»). Перед ходом выбирается
  * 1–2 режима; каждый кладёт короткий блок рядом с заданием Resolver, решает, есть ли на ходу броски, и даёт
- * указание Писателю. Режим определяется тем, что он меняет, а не темой. Источник выбора сменный: сейчас —
+ * указание Писателю. Поля формы режима делятся на `real` (правда, Писателю не видна) и `lens` (что видно нашими глазами). Режим определяется тем, что он меняет, а не темой. Источник выбора сменный: сейчас —
  * короткий запрос к воркеру Resolver, потом — локальная модель DataGen; формат ответа один: режим → 0…1.
  */
 
@@ -13,48 +13,56 @@ export const TURN_MODES = Object.freeze([
         when: 'everyday life: nothing important is at stake',
         resolver: 'An ordinary moment. Keep the turn short and alive: small concrete things people do, no forced drama.',
         writer: 'Plain and lively: everyday texture, short exchanges.',
+        fields: {},
     },
     {
         id: 'elder', label: 'Elder', rolls: 'no',
         when: 'an important talk: a confession, a hard truth, a decision about trust',
         resolver: 'An important talk. Each character answers the meaning of what was said, and their view of the speaker can change this turn — trust gained or lost, a mind changed.',
         writer: 'Weighty: let lines land, leave pauses, show what it costs them to speak.',
+        fields: { view_of: 'how they see the speaker' },
     },
     {
         id: 'merchant', label: 'Merchant', rolls: 'no',
         when: 'trade or a deal: goods, services, payment, terms',
         resolver: 'A deal. A character offers and promises only what their bank says they have and control. The other side weighs what they gain against what they risk, believes nothing they cannot check, and has their own interest. Moving forward can be a counter-demand, a refusal, a test or a delay — not only agreement.',
         writer: 'Concrete: terms, sums and conditions as the characters would say them; hesitation shows in hands and eyes.',
+        fields: { deal: 'what is being dealt and on what terms', stake: 'what they want from the deal' },
     },
     {
         id: 'king', label: 'King', rolls: 'no',
         when: 'politics: power, factions, leverage, alliances',
         resolver: 'Politics. Every side has a position, a price and consequences beyond this room. Nothing big is settled in a single turn; words are moves, and each move is answered with a move.',
         writer: 'Subtext and the balance of power: who holds the advantage shows in posture and silence.',
+        fields: { stake: 'what their side wants from the others' },
     },
     {
         id: 'warrior', label: 'Warrior', rolls: 'yes',
         when: 'a fight, a chase or direct danger',
         resolver: 'Danger. Roll every attempt that can fail; track positions, wounds and who can see whom. Things happen fast and in order.',
         writer: 'Short, sharp sentences; physical and immediate; no reflection mid-action.',
+        fields: { position: 'where they are relative to the others', condition: 'what shape they are in' },
     },
     {
         id: 'hunter', label: 'Hunter', rolls: 'yes',
         when: 'stealth, searching, following someone or investigating',
         resolver: 'A search or stealth. Roll noticing and hiding; decide what is found and what is missed, and what the searched-for does meanwhile.',
         writer: 'Traces and details; held breath; what is noticed and what slips past.',
+        fields: { aware_of: 'whom and what they have noticed' },
     },
     {
         id: 'artist', label: 'Artist', rolls: 'explicit',
         when: 'a place or moment that should be shown: arriving somewhere new, a view, a striking change of scene',
         resolver: 'A moment to be shown. Do not rush the turn; choose what the eye falls on first and what it lingers on.',
         writer: 'Descriptive: show the place or the moment; choose the details of focus — what is seen first, what stays.',
+        fields: { focus: 'what the eye lingers on' },
     },
     {
         id: 'bard', label: 'Bard', rolls: 'no',
         when: 'a warm, close, quiet scene between people',
         resolver: 'A warm, close scene. Slow down; no hurry to move the plot — small gestures and what people feel for each other are the turn.',
         writer: 'Slow and sensory; closeness in small gestures; quiet between the lines.',
+        fields: { toward: 'what they feel toward the other', closeness: 'how close they would let the other come' },
     },
 ]);
 
@@ -119,7 +127,34 @@ export function resolverModeBlock(ids) {
     const modes = (Array.isArray(ids) ? ids : []).map(byId).filter(Boolean);
     if (!modes.length) return '';
     const rolls = modesAllowRolls(ids) ? '' : '\nNothing is rolled this turn.';
-    return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}${rolls}`;
+    const fields = Object.entries(modeFields(ids));
+    const form = fields.length
+        ? `\n\nFor every character who acts, fill "mode" with these fields, each as {"real": …, "lens": …}:\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\nreal — how it truly is; the Writer never sees it. lens — what shows from outside, to our eyes. Fill both, even when they are the same.`
+        : '';
+    return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}${rolls}${form}`;
+}
+
+/** Поля формы выбранных режимов: имя → что в нём. Общие у двух режимов (stake) — одно поле. */
+export function modeFields(ids) {
+    const out = {};
+    for (const mode of (Array.isArray(ids) ? ids : []).map(byId).filter(Boolean)) {
+        for (const [name, about] of Object.entries(mode.fields ?? {})) if (!out[name]) out[name] = about;
+    }
+    return out;
+}
+
+/** Поле `mode` персонажа → только поля выбранных режимов, каждое { real, lens }; половину без пары дополняем второй. */
+export function normalizeModeFields(value, ids) {
+    const allowed = Object.keys(modeFields(ids));
+    const out = {};
+    if (!value || typeof value !== 'object') return out;
+    for (const name of allowed) {
+        const field = value[name];
+        const real = text(typeof field === 'object' ? field?.real : field);
+        const lens = text(typeof field === 'object' ? field?.lens : field);
+        if (real || lens) out[name] = { real: real || lens, lens: lens || real };
+    }
+    return out;
 }
 
 /** Строка для Писателя — в Inscription. */
