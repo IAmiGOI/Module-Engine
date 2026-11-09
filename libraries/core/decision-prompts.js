@@ -183,7 +183,7 @@ HOW TO WRITE THE BEATS: a LINE beat is dialogue. It gives the meaning of the wor
 Write it as a scene. Between the lines, narration shows only what bodies do and what the place is like — never what anyone says, asks, answers, admits or promises, and never that they are about to speak or how plainly. Earlier replies in this story did that; do not copy them. Stop where the END line says, and never write the word END itself.
 
 THE LAST SENTENCE: the reply ends on the END beat itself. Write nothing after it — no closing paragraph about where everyone sits or stands, what their hands, eyes or tails are doing, the water, the light or the silence, and no sentence that anyone waits, watches or holds still. Earlier replies in this story ended that way; that was a mistake — do not copy them.
-FRESH WRITING: before you write, look at your last replies above. Use no image, gesture, comparison or phrase from them again — find new detail for this moment, or leave the detail out. When an action goes on from before — they still walk, still hold hands, still talk over the desk — do not look closer at it: no new detail of the same hand, step or glance. Move outward instead: where it has brought them, what has changed around it, who else it touches, what comes next.`;
+FRESH WRITING: before you write, look at your last replies above. Use no image, gesture, comparison or phrase from them again — find new detail for this moment, or leave the detail out. An action that goes on from before is not looked at closer; it moves outward, into what it changes.`;
 
 export const RESEARCHER_SYSTEM = `You are a background researcher for the Director of a roleplay. You have web search and page reading. You are given one task; find what it asks for and report.
 
