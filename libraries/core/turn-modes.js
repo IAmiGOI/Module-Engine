@@ -123,6 +123,36 @@ export function chooseModes(answers, { threshold = 0.5, second = 0.5 } = {}) {
     return chosen;
 }
 
+/**
+ * Контраст: сцена резко сменила характер. Оценки режимов этого хода сравниваются с прошлым принятым ходом
+ * (косинус векторов 0…1 по восьми режимам); ниже порога и без общего выбранного режима — поворот.
+ * Без оценок с одной из сторон — не судим.
+ */
+export function modeContrast(previous, current, { threshold = 0.35 } = {}) {
+    const vector = answers => MODE_IDS.map(id => Number(answers?.[id]) || 0);
+    const a = vector(previous), b = vector(current);
+    const norm = list => Math.sqrt(list.reduce((sum, value) => sum + value * value, 0));
+    if (!norm(a) || !norm(b)) return null;
+    const cosine = a.reduce((sum, value, index) => sum + value * b[index], 0) / (norm(a) * norm(b));
+    const from = chooseModes(previous), to = chooseModes(current);
+    if (cosine >= threshold || from.some(id => to.includes(id))) return null;
+    return { from, to, similarity: Math.round(cosine * 100) / 100 };
+}
+
+const labels = ids => (Array.isArray(ids) ? ids : []).map(byId).filter(Boolean).map(mode => `${mode.label} (${mode.when})`).join(' + ');
+
+/** Резолверу: сцена повернула — прошлое настроение не ведёт этот ход. */
+export function resolverContrastBlock(contrast) {
+    if (!contrast) return '';
+    return `THE SCENE TURNS: the last turn was ${labels(contrast.from)}; this one is ${labels(contrast.to)}. The mood of what came before no longer holds and does not lead this turn. Decide it from what has just changed, at the pace this new moment has.`;
+}
+
+/** Писателю: тон, темп и ритм прошлых ответов не переносятся. */
+export function writerContrastLine(contrast) {
+    if (!contrast) return '';
+    return `THE SCENE TURNS: the last reply was ${labels(contrast.from)}; this one is ${labels(contrast.to)}. Write it in its own tone, pace and sentence rhythm. Nothing of the last replies' manner carries over — the change itself should be felt on the page.`;
+}
+
 /** Блок рядом с заданием Resolver. */
 export function resolverModeBlock(ids) {
     const modes = (Array.isArray(ids) ? ids : []).map(byId).filter(Boolean);

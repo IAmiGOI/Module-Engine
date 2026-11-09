@@ -14,7 +14,7 @@ export function createCycleRecord({
     id, runId = '', event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], usage = null,
     at = Date.now(), endedAt = null, durationMs = null, form = null, push = '', wake = null, message = null,
     turn = null, clockMinutes = null, workerId = null, rejected = false, rejectedAt = null, modes = null,
-    speculative = null,
+    speculative = null, contrast = null,
 } = {}) {
     const number = value => (Number.isFinite(Number(value)) ? Number(value) : null);
     const cycle = {
@@ -54,6 +54,8 @@ export function createCycleRecord({
                 ...(speculative.reason ? { reason: String(speculative.reason) } : {}),
             },
         } : {}),
+        // Поворот сцены: режимы до и после — Писатель на таком ходу получает меньше своей прошлой прозы.
+        ...(contrast && typeof contrast === 'object' ? { contrast: { from: [...(contrast.from ?? [])], to: [...(contrast.to ?? [])], similarity: Number(contrast.similarity) || 0 } } : {}),
         tokens: 0,
     };
     cycle.tokens = cycleTokens(cycle);

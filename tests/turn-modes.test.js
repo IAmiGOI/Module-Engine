@@ -57,3 +57,17 @@ test('the Writer gets each speaker\'s voice from their bank beside the lines', a
     assert.match(push, /VOICES — [^\n]*\n- Lena: Speaks: politely, drags out "really"\. Shows feeling: easily flustered\./);
     assert.doesNotMatch(buildInscription({ form }), /VOICES/);
 });
+
+test('a sharp turn of the scene: far mode scores and no shared mode make a contrast; close ones do not', async () => {
+    const { modeContrast, resolverContrastBlock, writerContrastLine } = await import('../libraries/core/turn-modes.js');
+    const warm = { bard: 0.9, elder: 0.6, warrior: 0 };
+    const fight = { warrior: 0.95, hunter: 0.4, bard: 0.05 };
+    const turned = modeContrast(warm, fight);
+    assert.deepEqual(turned.from, ['bard', 'elder']);
+    assert.deepEqual(turned.to, ['warrior']);
+    assert.equal(modeContrast(warm, { bard: 0.8, elder: 0.7 }), null);
+    assert.equal(modeContrast(null, fight), null, 'no scores before — no judgement');
+    assert.match(resolverContrastBlock(turned), /^THE SCENE TURNS: the last turn was Bard \(/);
+    assert.match(writerContrastLine(turned), /Nothing of the last replies' manner carries over/);
+    assert.equal(resolverContrastBlock(null), '');
+});

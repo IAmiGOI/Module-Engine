@@ -14,6 +14,9 @@ import { buildStorySettingsBlock, resolveGameSettings } from '../../libraries/co
  * подключения нет — прежний путь: подменяем тело запроса ST, адрес и ключ
  * остаются ST.
  */
+/** На повороте сцены — последние два обмена вместо обычного окна: факты несут Inscription, сцена и банки. */
+const CONTRAST_MESSAGE_LIMIT = 4;
+
 export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending, banks = null, publishEvent = null }) {
     const writerProxy = createWriterProxy({ host, getSettings, getWorkers });
     const writerChecker = createWriterChecker({ call, getSettings, banks });
@@ -45,7 +48,10 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
             .split('\n').filter(line => !line.startsWith('- Gone in that ending:')).join('\n');
         // Броски в контекст писателя не идут вовсе: строку рисует интерфейс над сообщением.
         const game = resolveGameSettings(typeof store.gameSettings === 'function' ? store.gameSettings() : null, settings.gameDefaults);
+        // Поворот сцены: своей прошлой прозы Писатель видит меньше — её тон и ритм иначе перетягивают новый ход.
+        const turned = Boolean(cycles.find(cycle => cycle?.runId === pending.runId)?.contrast);
         const context = buildWriterContext({
+            ...(turned ? { limit: CONTRAST_MESSAGE_LIMIT } : {}),
             notes: store.notes(), summaries, chat: pending.chat, decision, writerBlock, banksText: bankText,
             examples, lorebookText, knowledgeText, sceneText, decreeText, storySettings: buildStorySettingsBlock('writer', game),
         });

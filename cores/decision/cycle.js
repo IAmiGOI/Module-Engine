@@ -12,7 +12,7 @@ import { createCreationStore } from './creation.js';
 import { createFailureRecorder, withRequiredReply } from './cycle-failure.js';
 import { buildInscription } from '../../libraries/core/decision-push.js';
 import { createModePicker } from './turn-modes.js';
-import { resolverModeBlock, writerModeLine } from '../../libraries/core/turn-modes.js';
+import { resolverModeBlock, writerModeLine, modeContrast, resolverContrastBlock, writerContrastLine } from '../../libraries/core/turn-modes.js';
 import { createHandlers } from './handlers.js';
 import { createCycleJobs } from './cycle-jobs.js';
 import { createTurnWindow } from './window.js';
@@ -183,7 +183,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [], speculative = null }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
-            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: writerModeLine(state.modes?.chosen), voices: state.voices ?? {} })
+            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: [writerContrastLine(state.contrast), writerModeLine(state.modes?.chosen)].filter(Boolean).join('\n'), voices: state.voices ?? {} })
             : '';
         if (form) form.push = push;
         const endedAt = now();
@@ -192,7 +192,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             thinking: typeof thinking === 'function' ? thinking() : thinking,
             warnings: [...(result.warnings ?? []), ...(state.formWarnings ?? [])], at: startedAt,
             usage: typeof runUsage === 'function' ? runUsage() : runUsage,
-            form, push, wake, turn: state.turnCounter, clockMinutes: store.clock().minutes, modes: state.modes ?? null,
+            form, push, wake, turn: state.turnCounter, clockMinutes: store.clock().minutes, modes: state.modes ?? null, contrast: state.contrast ?? null,
             workerId, endedAt, durationMs: endedAt - startedAt, speculative,
         });
         return { cycle, form, push };
@@ -233,7 +233,11 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         // Режимы хода (1–2) — до задания: свой блок рядом с ним и броски по режиму. Без выборщика — общий шаблон.
         state.modes = toolFilter ? null : await pickModes(chat, externalSignal);
         const modeBlock = resolverModeBlock(state.modes?.chosen);
-        const task = [reroll || modeBlock ? DIRECTOR_TURN : '', reroll ? DIRECTOR_REROLL : '', modeBlock].filter(Boolean).join('\n\n');
+        // Резкий поворот сцены: оценки режимов далеко от прошлого принятого хода — обеим ролям сказать, что прошлое настроение не ведёт.
+        const previousCycle = (store.cycles?.() ?? []).filter(cycle => ['turn', 'regenerate', 'swipe'].includes(cycle?.event) && !cycle?.rejected && cycle?.form && Number(cycle.turn) < state.turnCounter).at(-1);
+        state.contrast = state.modes ? modeContrast(previousCycle?.modes?.answers, state.modes.answers) : null;
+        const contrastBlock = resolverContrastBlock(state.contrast);
+        const task = [reroll || modeBlock ? DIRECTOR_TURN : '', reroll ? DIRECTOR_REROLL : '', contrastBlock, modeBlock].filter(Boolean).join('\n\n');
         const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task });
         contextReport.record(built, { turn: state.turnCounter });
         const tools = toolFilter ? await context.toolsFor(settings, { filter: toolFilter }) : await context.toolsFor(settings, { turn: true });
