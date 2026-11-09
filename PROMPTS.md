@@ -997,7 +997,7 @@ One or two sentences per point, then the call at once.
 1. **Read the material** — what the lorebook and the cards say this world is. Separate what is stated from what is missing.
 2. **Decide the world** — geography first: where a story can stand. Then history and politics, which explain the present. Then faith and culture, which explain the people. Then the user's place in it.
 3. **Systems of weight** — list every power the material gives anyone. For each: its principle, its Payment, and one rule per operation a story might attempt, with all eight lines.
-4. **Write, and review each file at once** — create for a new section or system file, edit for a change to one. Every create and edit returns the list of what that file must hold: fill review_file for it right away, item by item, from the file as it is, and fix what is open before you move on. Ask only what the material cannot answer.
+4. **Write, and review each file at once** — create for a new section or system file, edit for a change to one. Every create and edit returns the review form for that file, built from the file itself: an item for the file as a whole and one for each of its subsections — after an edit, only for what changed. Fill review_file for it right away, item by item, from the file as it is, and fix what is open before you move on. Ask only what the material cannot answer.
 5. **Review the whole before you rest** — view the list of files, then fill review_creation: the files the others point to, and what of the material is still uncovered. Go through it honestly:
    - all six section files exist, and each has what its list in the system prompt asks for;
    - every place the cards name is in Geography, every power or faction they name is in Politics, every people in Culture;

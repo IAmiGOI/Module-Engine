@@ -96,18 +96,18 @@ export const DISCOVERY_WRITE_TOOL = Object.freeze({
 export const GOD_REVIEW_FILE_TOOL = Object.freeze({
     name: 'review_file',
     displayName: 'Review one file',
-    description: 'The review form for one Creation file, filled right after you create or edit it. The result of that create or edit lists what the file must hold; answer every item from the file as it is now — view it if you are not sure. An item that is not done names what is missing; fix it with edit and review the file again.',
+    description: 'The review form for one Creation file, filled right after you create or edit it. The result of that create or edit carries the file\'s form, built from the file itself: items for the file as a whole and one for each subsection — after an edit, only for what changed and what was still open. Answer every item of the form, in order, from the file as it is now — view it if you are not sure. An item that is not done names what is missing; fix it with edit and fill the form that edit returns.',
     parameters: {
         type: 'object',
         properties: {
             file: { type: 'string', description: 'The file\'s path.' },
             items: {
                 type: 'array',
-                description: 'Every item of the file\'s list, in order.',
+                description: 'Every item of the file\'s form, in order.',
                 items: {
                     type: 'object',
                     properties: {
-                        item: { type: 'string', description: 'The item, as the list gives it.' },
+                        item: { type: 'string', description: 'The item, as the form gives it.' },
                         done: { type: 'boolean', description: 'True only if the file holds it in full.' },
                         missing: { type: 'string', description: 'What is missing when it is not done; empty otherwise.' },
                     },

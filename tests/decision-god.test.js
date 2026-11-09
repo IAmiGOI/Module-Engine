@@ -266,19 +266,34 @@ test('while building, God cannot rest before a clean review form; an open item c
     assert.equal(trace.at(-1), 'await');
 });
 
-test('each file written while building gets its own checklist and must be reviewed before God rests', async () => {
+test('each file written while building gets a form built from its own subsections, and must be reviewed before God rests', async () => {
+    const geography = '# Geography\n\n### Lugunica\nA kingdom.\n\n### Gusteko\nThe north.';
+    const all = count => Array.from({ length: count }, (_, index) => ({ item: String(index), done: true }));
     const world = harness({ answers: [
-        [tc('create', { path: 'Creation/geography.md', text: '# Geography', comment })],
+        [tc('create', { path: 'Creation/geography.md', text: geography, comment })],
         [tc('await', { reason: 'Done.', comment })],
         [tc('review_file', { file: 'Creation/geography.md', items: [{ item: 'travel table', done: false, missing: 'no table' }], comment })],
-        [tc('review_file', { file: 'Creation/geography.md', items: [{ item: 'travel table', done: true }], comment })],
+        [tc('review_file', { file: 'Creation/geography.md', items: all(7), comment })],
         [tc('review_creation', { references: [], material: '', comment })],
         [tc('await', { reason: 'Done.', comment })],
     ] });
     const result = await world.god.run({ runId: 'g-files', reason: { kind: 'first', wake: { type: 'god', label: 'build', detail: '' } } });
     const calls = result.cycle.toolCalls;
-    const created = calls.find(item => item.name === 'create');
-    assert.match(JSON.stringify(created.result), /travel table/i, 'the create result carries the file\'s checklist');
-    assert.equal(calls.filter(item => item.name === 'review_file').length, 2);
+    const form = calls.find(item => item.name === 'create').result.review.form;
+    assert.equal(form.length, 7, 'the whole-file items, the marking item and one per place');
+    assert.ok(form.some(item => item.startsWith('"Lugunica"')) && form.some(item => item.startsWith('"Gusteko"')));
+    assert.equal(calls.filter(item => item.name === 'review_file')[0].result.ok, false, 'a form answered short is refused');
     assert.equal(calls.at(-1).name, 'await');
+});
+
+test('after an edit the form holds only the changed subsections', async () => {
+    const { godFileForm } = await import('../libraries/core/god-file-form.js');
+    const before = '# Geography\nintro\n\n### A\none\n\n### B\ntwo';
+    const after = '# Geography\nintro\n\n### A\none\n\n### B\ntwo, changed';
+    assert.deepEqual(godFileForm('Creation/geography.md', after, before).map(item => item.slice(0, 3)), ['"B"']);
+    assert.ok(godFileForm('Creation/geography.md', `${after}\n\n### C\nthree`, after).length > 1, 'a new subsection brings the whole-file items back');
+    const system = '# Magic\n**Principle:** x\n\n## Cast\nNeeds: a\n\n## Ward\nNeeds: b\n\n## Discoveries\n';
+    assert.equal(godFileForm('Creation/Scales/magic.md', system).filter(item => /^"(Cast|Ward)"/.test(item)).length, 2, 'every rule of a system is its own item; Discoveries is not');
+    const scales = '# Scales\n| System | Principle | Who has it | Payment |\n|---|---|---|---|\n| Magic | mana | many | od |\n| Spirit Arts | pacts | few | mana |';
+    assert.equal(godFileForm('Creation/scales.md', scales).filter(item => item.startsWith('System "')).length, 2, 'every row of the Scales table is its own item');
 });

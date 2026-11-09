@@ -1,4 +1,4 @@
-import { GOD_FILE_CHECKS } from '../../libraries/core/decision-prompts-god.js';
+import { godFileForm, fileKey } from '../../libraries/core/god-file-form.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildGodToolList } from '../../libraries/core/decision-tools.js';
@@ -78,34 +78,48 @@ export function createGod({
         // Свой await: без него вызов уходил в общий маршрут и падал, а движок писал «answered without a tool call».
         // Форма по файлу — сразу после каждой записи, по списку именно этого файла; финальная — то, что видно по всему миру.
         // Открытое возвращается Богу; при построении await принимается, когда каждый файл проверен после последней правки.
-        const fileKey = path => String(path ?? '').trim().toLowerCase().replace(/^\/+/, '');
-        const checklistFor = path => {
+        // Форма динамическая: собирается из самого файла после записи — пункт на каждый подраздел, после правки — только на изменённые.
+        const readText = async path => { const file = await layer.read(path).catch(() => null); return file?.ok === false ? null : (file?.text ?? null); };
+        handlerState.unreviewed ??= new Map();
+        const formFor = async (path, previous) => {
+            const items = godFileForm(path, await readText(path) ?? '', previous);
             const key = fileKey(path);
-            const base = key.split('/').pop().replace(/\.md$/, '');
-            const list = key.startsWith('creation/scales/') ? GOD_FILE_CHECKS.system : (GOD_FILE_CHECKS[base] ?? GOD_FILE_CHECKS.other);
-            return [...list, GOD_FILE_CHECKS.every];
+            const pending = [...(handlerState.unreviewed.get(key) ?? []), ...items.filter(item => !(handlerState.unreviewed.get(key) ?? []).includes(item))];
+            if (pending.length) { handlerState.unreviewed.set(key, pending); handlerState.reviewed = false; }
+            return pending;
         };
-        handlerState.unreviewed ??= new Set();
-        const mark = path => { handlerState.unreviewed.add(fileKey(path)); handlerState.reviewed = false; };
         const create = async args => {
+            const inCreation = /^creation\//.test(fileKey(args?.path));
+            const previous = inCreation ? await readText(args.path) : null;
             const result = await files.create(args);
-            if (result?.ok === false || !/^creation\//.test(fileKey(args?.path))) return result;
-            mark(args.path);
-            return { ...result, review: { file: args.path, checklist: checklistFor(args.path) }, note: 'Fill review_file for this file now, item by item, from the file as it is.' };
+            if (result?.ok === false || !inCreation) return result;
+            const form = await formFor(args.path, previous);
+            return form.length ? { ...result, review: { file: args.path, form }, note: 'Fill review_file for this file now, item by item, from the file as it is.' } : result;
         };
         const editFiles = async args => {
+            const paths = [...new Set((Array.isArray(args?.edits) ? args.edits : []).map(edit => String(edit?.path ?? '')).filter(path => /^creation\//.test(fileKey(path))))];
+            const before = new Map();
+            for (const path of paths) before.set(fileKey(path), await readText(path));
             const result = await files.edit(args);
             const changed = (result?.files ?? []).filter(item => item.ok && !item.unchanged && /^creation\//.test(fileKey(item.path))).map(item => item.path);
-            changed.forEach(mark);
-            return changed.length ? { ...result, review: changed.map(path => ({ file: path, checklist: checklistFor(path) })), note: 'Fill review_file for each changed file now.' } : result;
+            const review = [];
+            for (const path of changed) {
+                const form = await formFor(path, before.get(fileKey(path)) ?? null);
+                if (form.length) review.push({ file: path, form });
+            }
+            return review.length ? { ...result, review, note: 'Fill review_file for each of these files now — only the items listed.' } : result;
         };
         const reviewFile = args => {
             const items = Array.isArray(args?.items) ? args.items : [];
-            if (!items.length) return { ok: false, error: 'Answer every item of the file\'s list.' };
+            const key = fileKey(args?.file);
+            const form = handlerState.unreviewed.get(key) ?? [];
+            if (!items.length || items.length < form.length) return { ok: false, error: `Answer every item of this file's form, in order (${form.length} items).`, form };
             const open = items.filter(item => item?.done !== true).map(item => `${item.item}${String(item?.missing ?? '').trim() ? ` — ${String(item.missing).trim()}` : ''}`);
-            if (!open.length) handlerState.unreviewed.delete(fileKey(args?.file));
+            // Открытыми остаются только неготовые пункты: следующая форма — они плюс то, что изменит правка.
+            const left = form.length ? form.filter((_, index) => items[index]?.done !== true) : [];
+            if (open.length && left.length) handlerState.unreviewed.set(key, left); else if (!open.length) handlerState.unreviewed.delete(key);
             return open.length
-                ? { ok: true, clean: false, file: args?.file, open, note: 'Fix these with edit, then review this file again.' }
+                ? { ok: true, clean: false, file: args?.file, open, note: 'Fix these with edit; the edit returns the form for what changed.' }
                 : { ok: true, clean: true, file: args?.file };
         };
         const review = args => {
@@ -121,7 +135,7 @@ export function createGod({
         const building = ['declaration', 'build', 'first'].includes(handlerState.kind);
         const rest = args => {
             if (!building) return { ok: true, reason: String(args?.reason ?? '') };
-            if (handlerState.unreviewed.size) return { ok: false, error: `Not yet: these files changed and are not reviewed — fill review_file for each: ${[...handlerState.unreviewed].join(', ')}.` };
+            if (handlerState.unreviewed.size) return { ok: false, error: `Not yet: these files changed and are not reviewed — fill review_file for each: ${[...handlerState.unreviewed.keys()].join(', ')}.` };
             if (!handlerState.reviewed) return { ok: false, error: 'Not yet: fill review_creation — the files the others point to and the material still uncovered. await is accepted after a review with nothing open.' };
             return { ok: true, reason: String(args?.reason ?? '') };
         };
