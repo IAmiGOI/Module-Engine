@@ -128,7 +128,7 @@ test('a reroll prunes the knowledge written since the first attempt of the turn'
     assert.equal(great.ram.name, 'Ram');
 });
 
-test('a rolled-back turn takes its Ledger rows and queued Petitions with it, but keeps the talk with the Counsellor', async () => {
+test('a rolled-back turn takes its Ledger rows, queued Petitions and the talk with the Counsellor since it with it', async () => {
     const { createRollback } = await import('../cores/decision/rollback.js');
     let ledger = [{ turn: 60, character: 'Lena' }];
     let papers = { petitions: [], prayers: [], telegrams: [], awaitingDecree: null, counsellor: { messages: [] } };
@@ -145,5 +145,5 @@ test('a rolled-back turn takes its Ledger rows and queued Petitions with it, but
     await rollback.restoreState(before);
     assert.deepEqual(ledger.map(row => row.turn), [60]);
     assert.deepEqual(papers.petitions, []);
-    assert.equal(papers.counsellor.messages.length, 1, 'the talk with the Counsellor stays');
+    assert.equal(papers.counsellor.messages.length, 0, 'what the Counsellor said about the discarded turn goes too');
 });

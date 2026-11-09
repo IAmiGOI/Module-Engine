@@ -12,8 +12,10 @@ const KNOWLEDGE = { namespace: DECISION_MEMORY_NAMESPACE, key: 'knowledge' };
 // «фактор уже принял предложение» из отброшенной версии и спорил со сценой («Wait… but the knowledge bank shows…»).
 const GREAT = { namespace: DECISION_MEMORY_NAMESPACE, key: 'greatBank' };
 const copy = value => (value && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : null);
+// Переписка с Советником откатывается вместе с ходами: его ответы про удалённые ходы он сам потом читал и вёл по ним.
 const queuesOf = papers => copy({
     petitions: papers?.petitions ?? [], prayers: papers?.prayers ?? [], telegrams: papers?.telegrams ?? [], awaitingDecree: papers?.awaitingDecree ?? null,
+    ...(papers?.counsellor ? { counsellor: papers.counsellor } : {}),
 });
 
 export function createRollback({ store, getSettings, publishEvent, call = null, notify = () => {} }) {
@@ -54,7 +56,7 @@ export function createRollback({ store, getSettings, publishEvent, call = null, 
         if (Array.isArray(state.frozenWindows) && typeof store.saveFrozen === 'function') await store.saveFrozen(state.frozenWindows).catch(() => {});
         if (state.windowBoundary && typeof store.saveBoundary === 'function') await store.saveBoundary(state.windowBoundary).catch(() => {});
         if (Array.isArray(state.ledger) && typeof store.saveLedger === 'function') await store.saveLedger(state.ledger).catch(() => {});
-        // Только очереди: разговор игрока с Советником и вопросы Бога после снимка остаются.
+        // Очереди и переписка с Советником — как в снимке; вопросы Бога после снимка остаются.
         if (state.papers && typeof store.savePapers === 'function' && typeof store.papers === 'function') {
             await store.savePapers({ ...store.papers(), ...copy(state.papers) }).catch(() => {});
         }
