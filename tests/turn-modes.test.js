@@ -17,7 +17,7 @@ test('one or two modes: the best if sure, a second if also sure, Peasant when no
 test('a mode never forbids rolls: an attempt that can fail is rolled in any mode', () => {
     assert.doesNotMatch(resolverModeBlock(['merchant', 'king']), /rolled/);
     assert.match(resolverModeBlock(['merchant', 'king']), /^THIS TURN — Merchant \+ King:/);
-    assert.match(writerModeLine(['bard']), /^HOW THIS TURN READS \(Bard\): This is a warm, close moment/);
+    assert.match(writerModeLine(['bard']), /^HOW THIS TURN READS \(Bard\): A warm, close moment/);
 });
 
 test('the answer is read even around prose, and the scene is the last messages within 1800 characters', () => {

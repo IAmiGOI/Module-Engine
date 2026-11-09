@@ -11,57 +11,57 @@ export const TURN_MODES = Object.freeze([
     {
         id: 'peasant', label: 'Peasant',
         when: 'everyday life: nothing important is at stake',
-        resolver: 'An ordinary moment. Keep the turn short and alive: small concrete things people do, no forced drama.',
-        writer: 'This is an everyday moment: keep it plain and lively, with everyday texture and short exchanges.',
+        resolver: 'An everyday moment: nothing big is at stake. Keep the turn short; it is made of the small concrete things happening here.',
+        writer: 'An everyday moment: plain, light prose and short exchanges.',
         fields: {},
     },
     {
         id: 'elder', label: 'Elder',
         when: 'an important talk: a confession, a hard truth, a decision about trust',
-        resolver: 'An important talk, where who each character is decides everything. Before what they say, take who they are from their bank: what they value, how they show or hide feeling, how they speak, what makes them shy, proud or afraid. Each answers in that way — with their own measure of openness, hesitation and courage — not in the plain, direct way the words alone might call for. What is said can change how they see the speaker.',
-        writer: 'This is a weighty talk: let each line land and leave room after it, give each character the voice their bank describes, and show what speaking costs them.',
+        resolver: 'An important talk: what is said here can change how the characters see each other. Track what each one takes from it and what it changes for them.',
+        writer: 'A weighty talk: give each line room on the page; the pace slows around what is said.',
         fields: { view_of: 'how they see the speaker' },
     },
     {
         id: 'merchant', label: 'Merchant',
         when: 'trade or a deal: goods, services, payment, terms',
-        resolver: 'A deal. A character offers and promises only what their bank says they have and control. The other side weighs what they gain against what they risk, believes nothing they cannot check, and has their own interest. Moving forward can be a counter-demand, a refusal, a test or a delay — not only agreement.',
-        writer: 'This is a deal: give terms, sums and conditions as the characters would actually say them, and let hesitation show in what they do, not in what they say about it.',
+        resolver: 'A deal is on the table. Track what is offered, on what terms, what each side really has and controls — a character offers and promises only what their bank says they have — and what each wants from it. The deal can move by agreement, a counter-demand, a refusal, a test or a delay.',
+        writer: 'A deal: the terms, sums and conditions are written as the characters say them; the prose stays concrete.',
         fields: { deal: 'what is being dealt and on what terms', stake: 'what they want from the deal' },
     },
     {
         id: 'king', label: 'King',
         when: 'politics: power, factions, leverage, alliances',
-        resolver: 'Politics. Every side has a position, a price and consequences beyond this room. Nothing big is settled in a single turn; words are moves, and each move is answered with a move.',
-        writer: 'This is politics: carry it in subtext — who holds the advantage shows in how people hold themselves and in what they leave unsaid, not in explanation.',
+        resolver: 'Power is in play: track who holds which position, what each can bring to bear, and what of this reaches beyond the room. A large matter is rarely settled in a single turn.',
+        writer: 'Politics: carried in subtext — the narration does not explain who holds the advantage.',
         fields: { stake: 'what their side wants from the others' },
     },
     {
         id: 'warrior', label: 'Warrior',
         when: 'a fight, a chase or direct danger',
         resolver: 'Danger. Roll every attempt that can fail; track positions, wounds and who can see whom. Things happen fast and in order.',
-        writer: 'This is danger: short, sharp sentences, physical and immediate, with no reflection in the middle of the action.',
+        writer: 'Danger: short, sharp sentences, physical and immediate, with no reflection in the middle of the action.',
         fields: { position: 'where they are relative to the others', condition: 'what shape they are in' },
     },
     {
         id: 'hunter', label: 'Hunter',
         when: 'stealth, searching, following someone or investigating',
         resolver: 'A search or stealth. Roll noticing and hiding; decide what is found and what is missed, and what the searched-for does meanwhile.',
-        writer: 'This is a search or stealth: give traces and details, the tension of keeping still, and what is noticed against what slips past.',
+        writer: 'A search or stealth: the narration follows traces and details — what is noticed and what slips past.',
         fields: { aware_of: 'whom and what they have noticed' },
     },
     {
         id: 'artist', label: 'Artist',
         when: 'a place or moment that should be shown: arriving somewhere new, a view, a striking change of scene',
-        resolver: 'A moment to be shown. Do not rush the turn; choose what the eye falls on first and what it lingers on.',
-        writer: 'This is a moment to be shown: describe the place or the moment, choosing which details the eye falls on first and which stay with it.',
+        resolver: 'A moment to be shown: a place or a change of scene matters this turn. Decide what is there and what draws the eye first.',
+        writer: 'A moment to be shown: describe the place or the moment, choosing which details the eye falls on first and which stay with it.',
         fields: { focus: 'what the eye lingers on' },
     },
     {
         id: 'bard', label: 'Bard',
         when: 'a warm, close, quiet scene between people',
-        resolver: 'A warm, close scene. Slow down; no hurry to move the plot — small gestures and what people feel for each other are the turn.',
-        writer: 'This is a warm, close moment: write it slow and sensory, with closeness in small gestures and weight in what goes unsaid.',
+        resolver: 'A warm, close scene: what the people here feel for each other is what this turn is about; there is no hurry to move the plot.',
+        writer: 'A warm, close moment: slow, sensory narration, with weight in what goes unsaid.',
         fields: { toward: 'what they feel toward the other', closeness: 'how close they would let the other come' },
     },
 ]);
@@ -161,7 +161,7 @@ export function resolverModeBlock(ids) {
     const form = fields.length
         ? `\n\n${MODE_FORM_HEAD}\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\n${MODE_FORM_HALVES}`
         : '';
-    return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}\nThis tells you what kind of moment the scene is, not who the people in it are: how each character behaves in it still comes from their own bank, never from the mode.${form}`;
+    return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}\nThis tells you what kind of moment the scene is and what to keep track of in it — never how anyone behaves. How each character acts and speaks in it comes from their own bank and Decree alone.${form}`;
 }
 
 /** Поля формы выбранных режимов: имя → что в нём. Общие у двух режимов (stake) — одно поле. */
