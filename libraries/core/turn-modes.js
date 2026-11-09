@@ -129,7 +129,7 @@ export function resolverModeBlock(ids) {
     const rolls = modesAllowRolls(ids) ? '' : '\nNothing is rolled this turn.';
     const fields = Object.entries(modeFields(ids));
     const form = fields.length
-        ? `\n\nFor every character who acts, fill "mode" with these fields, each as {"real": …, "lens": …}:\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\nreal — how it truly is; the Writer never sees it. lens — what shows from outside, to our eyes. Fill both, even when they are the same.`
+        ? `\n\nFor every character who acts, fill "mode" with these fields, each as {"real": …, "lens": …}:\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\nreal — what the one who acts means by it; the Writer never sees it. lens — what the user or the people around can see and plainly understand from it: only the obvious, never explained. Fill both, even when they are the same.`
         : '';
     return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}${rolls}${form}`;
 }

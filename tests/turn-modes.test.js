@@ -34,7 +34,7 @@ test('the answer is read even around prose, and the scene is the last messages w
 test('the mode form: the block names the fields, the engine keeps only them, each as real + lens', async () => {
     const { modeFields, normalizeModeFields } = await import('../libraries/core/turn-modes.js');
     assert.deepEqual(Object.keys(modeFields(['merchant', 'king'])), ['deal', 'stake']);
-    assert.match(resolverModeBlock(['merchant']), /- deal: .*\n- stake: .*\nreal — how it truly is; the Writer never sees it\./);
+    assert.match(resolverModeBlock(['merchant']), /- deal: .*\n- stake: .*\nreal — what the one who acts means by it; the Writer never sees it\./);
     assert.doesNotMatch(resolverModeBlock(['peasant']), /"mode"/);
     assert.deepEqual(normalizeModeFields({ deal: { real: 'the cloth is rotten', lens: 'fine cloth, ten silver' }, stake: 'get rid of it', focus: { real: 'x' } }, ['merchant']),
         { deal: { real: 'the cloth is rotten', lens: 'fine cloth, ten silver' }, stake: { real: 'get rid of it', lens: 'get rid of it' } });
@@ -50,4 +50,14 @@ test('the Writer sees only the lens; the Resolver sees the real one on the next 
     assert.doesNotMatch(push, /rotten/);
     const truth = renderHiddenTruth([{ event: 'turn', turn: 1, form }]);
     assert.match(truth, /- Orm: deal — the cloth is rotten \(shows as: fine cloth, ten silver\)/);
+});
+
+test('the Writer gets a lens only when it changed since the last turn', async () => {
+    const { buildInscription } = await import('../libraries/core/decision-push.js');
+    const character = lens => ({ name: 'Orm', mode: { deal: { real: 'x', lens: 'turns the coin over' }, stake: { real: 'y', lens } } });
+    const form = { characters: [character('glances at the door')], beats: [{ who: 'Orm', kind: 'action', text: 'waits' }], stop: 'He waits.' };
+    const push = buildInscription({ form, previousForm: { characters: [character('taps the desk')] } });
+    assert.match(push, /- Orm: stake — glances at the door$/m);
+    const same = buildInscription({ form, previousForm: { characters: [{ name: 'Orm', mode: form.characters[0].mode }] } });
+    assert.doesNotMatch(same, /AS IT SHOWS/);
 });

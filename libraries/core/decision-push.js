@@ -90,7 +90,7 @@ function backgroundLine(characters) {
  * Прежний Push рассказывал каждое событие трижды (развязка, действие, «why it goes»), и писатель отрабатывал
  * каждое упоминание: пересказом и репликой.
  */
-function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine = '' }) {
+function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine = '', previousForm = null }) {
     const head = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) head.push(`Place: ${where}.`);
@@ -127,7 +127,9 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
     }).filter(Boolean);
     // Форма режима: Писателю — только lens; real (правда) не уходит на страницу даже совпадая.
     const lenses = characters.filter(character => character?.idle !== true && line(character?.name)).map(character => {
-        const fields = Object.entries(character?.mode ?? {}).filter(([, field]) => line(field?.lens));
+        // Тот же lens, что в прошлом ходу, Писатель уже показал — повтор он переписал бы снова.
+        const before = (Array.isArray(previousForm?.characters) ? previousForm.characters : []).find(other => line(other?.name).toLowerCase() === line(character.name).toLowerCase());
+        const fields = Object.entries(character?.mode ?? {}).filter(([name, field]) => line(field?.lens) && line(field.lens) !== line(before?.mode?.[name]?.lens));
         return fields.length ? `- ${line(character.name)}: ${fields.map(([name, field]) => `${name.replace(/_/g, ' ')} — ${line(field.lens)}`).join('; ')}` : '';
     }).filter(Boolean);
     return [
@@ -146,8 +148,8 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
  * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
  * @returns {string}
  */
-export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '', modeLine = '' } = {}) {
-    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine });
+export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '', modeLine = '', previousForm = null } = {}) {
+    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine, previousForm });
     const lines = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) lines.push(`Place: ${where}.`);
