@@ -32,7 +32,7 @@ test('blocks 0–8 stay byte-identical between turns; only the window is appende
     const previous = context({ windowEntries: [turn(1)] });
     const next = context({ windowEntries: [turn(1), turn(2)] });
     const comparison = compareRequests(previous.messages, next.messages);
-    assert.deepEqual(previous.messages.slice(1, 10).map(message => message.content), ['ALL-CHARACTER-BANKS', 'THE LOREBOOK', 'ARCS:\n\n- [open] The escape', 'CHARACTER LIBRARY', 'PREVIOUS WINDOWS (summaries):', 'PREVIOUS WINDOW SUMMARY', 'LONG PLANS', 'ACTIVE ROSTER (everyone who can affect the scene right now; the form must cover each of them):\n\n- Aria', 'ACTIVE-BANKS']);
+    assert.deepEqual(previous.messages.slice(1, 10).map(message => message.content), ['ALL-CHARACTER-BANKS', 'THE LOREBOOK', 'ARCS:\n\n- [open] The escape', 'CHARACTER LIBRARY', 'PREVIOUS WINDOWS (summaries):', 'PREVIOUS WINDOW SUMMARY', 'LONG PLANS', 'ACTIVE ROSTER (everyone who can affect the scene right now; the turn lists only those who act):\n\n- Aria', 'ACTIVE-BANKS']);
     assert.equal(comparison.culprit.index, 11, 'the first difference is the new window entry');
 });
 

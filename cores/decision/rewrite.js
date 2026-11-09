@@ -41,8 +41,8 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const cycles = store.cycles?.() ?? [];
         const currentTurn = Number(cycles.find(cycle => cycle?.runId === pending.runId)?.turn);
         const sceneText = renderCurrentScene({ form: lastAcceptedForm(cycles, { beforeTurn: Number.isFinite(currentTurn) ? currentTurn : null }), roster: store.roster().active, user: banks?.persona?.()?.name || '' })
-            .replace('CURRENT SCENE (where the previous turn left things — start from here):', 'WHERE THE PREVIOUS REPLY LEFT THINGS (start from here; the push says what happens next):')
-            .split('\n').filter(line => !line.startsWith('- Left the scene in that ending:')).join('\n');
+            .replace('CURRENT SCENE (settled by the engine — take it as given and start from here):', 'WHERE THE PREVIOUS REPLY LEFT THINGS (start from here; the push says what happens next):')
+            .split('\n').filter(line => !line.startsWith('- Gone in that ending:')).join('\n');
         // Броски в контекст писателя не идут вовсе: строку рисует интерфейс над сообщением.
         const game = resolveGameSettings(typeof store.gameSettings === 'function' ? store.gameSettings() : null, settings.gameDefaults);
         const context = buildWriterContext({

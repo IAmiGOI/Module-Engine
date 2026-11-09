@@ -139,7 +139,7 @@ test('an incomplete form is refused with the list of missing fields, and the dir
     assert.equal(calls.length, 2, 'the refused template cost one more model call');
 });
 
-test('a form that omits an active roster member fills that member in as idle instead of refusing the turn', async () => {
+test('a form that lists only who acts keeps the rest of the roster in the background', async () => {
     const { pipelineCore, memory } = await build({
         replies: [
             call('assess', { character: 'Lena', action: 'opens the door', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The door is the only exit.', comment: 'I need the chance before writing the outcome.' }),
@@ -152,5 +152,6 @@ test('a form that omits an active roster member fills that member in as idle ins
     const first = log[0].toolCalls.filter(entry => entry.name === 'inscribe')[0];
     assert.equal(first.result.ok, true, 'a missed roster member is filled in, not refused');
     assert.match((first.result.form?.characters ?? []).map(character => character.name).join(','), /Marek/);
-    assert.match((log[0].warnings ?? []).join(' '), /Marek/);
+    // Не вписанный — в фоне, и это не ошибка формы: шаблон перечисляет только действующих.
+    assert.equal(first.result.form.characters.find(character => character.name === 'Marek')?.idle, true);
 });

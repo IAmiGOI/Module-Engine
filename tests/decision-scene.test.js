@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { departedFrom, lastAcceptedForm, renderCurrentScene } from '../libraries/core/decision-scene.js';
+import { departedFrom, lastAcceptedForm, renderAlreadySaid, renderCurrentScene } from '../libraries/core/decision-scene.js';
 import { createInscribeHandler } from '../cores/decision/handlers-inscribe.js';
 import { buildDeciderContext } from '../libraries/core/decision-context.js';
 
@@ -19,13 +19,28 @@ test('who left in the ending is found by name and leave words; the user is never
     assert.deepEqual(departedFrom('Sasha walks off.', ['Sasha'], { user: 'Sasha' }), []);
 });
 
-test('CURRENT SCENE lists the place, the ending, who did what, who is idle and who left', () => {
+test('CURRENT SCENE gives one place to everyone: here, in the background, gone', () => {
     const scene = renderCurrentScene({ form: previous, roster: ['Emilia', 'Diethard Diethain', 'Kadomon'], user: 'Sasha' });
     assert.match(scene, /^CURRENT SCENE/);
     assert.match(scene, /Place: Main thoroughfare, by the fountain\./);
-    assert.match(scene, /Emilia last: answers flatly/);
-    assert.match(scene, /Present, not in the main exchange: Kadomon\./);
-    assert.match(scene, /Left the scene in that ending: Diethard Diethain\. Remove them with update_roster/);
+    assert.match(scene, /Here with Sasha:\n  - Emilia — last: answers flatly/);
+    assert.match(scene, /Here in the background, on their own: Kadomon\./);
+    assert.match(scene, /Gone in that ending: Diethard Diethain\./);
+    assert.doesNotMatch(scene, /active roster|update_roster/, 'no second list of the same people to argue with');
+});
+
+test('ALREADY SAID lists what each character said in the last accepted turns', () => {
+    const cycles = [
+        { event: 'turn', turn: 5, form: { characters: [{ name: 'Puck', says: 'give me one landmark' }] } },
+        { event: 'turn', turn: 6, form: { characters: [{ name: 'Puck', says: 'one landmark and I go' }, { name: 'Sasha', says: 'no' }] } },
+        { event: 'turn', turn: 7, rejected: true, form: { characters: [{ name: 'Puck', says: 'discarded' }] } },
+    ];
+    const said = renderAlreadySaid(cycles, { user: 'Sasha' });
+    assert.match(said, /^ALREADY SAID/);
+    assert.match(said, /\(turn 5\) give me one landmark/);
+    assert.match(said, /\(turn 6\) one landmark and I go/);
+    assert.doesNotMatch(said, /discarded|Sasha/);
+    assert.equal(renderAlreadySaid([]), '');
 });
 
 test('the last accepted form skips rejected attempts and the current turn', () => {

@@ -62,28 +62,66 @@ export function lastAcceptedForm(cycles, { beforeTurn = null } = {}) {
     return null;
 }
 
-/** Блок CURRENT SCENE. Без принятых ходов — пусто. */
+/**
+ * Блок CURRENT SCENE. Без принятых ходов — пусто. Всё механическое движок решает сам и подаёт как данность:
+ * кто здесь, кто в стороне, кто ушёл. Резолвер раньше тратил ризонинг на «Puck idle? он в ростере, но занят
+ * внизу…» — противоречивые строки сцены звали его спорить с ней; теперь у каждого одно место.
+ */
 export function renderCurrentScene({ form = null, roster = [], user = '', clock = '' } = {}) {
     if (!form) return '';
     const place = text(form.meta?.place) || text(form.scene?.place);
     const when = text(form.meta?.timeAfter) || text(clock);
     const characters = Array.isArray(form.characters) ? form.characters : [];
-    const acting = characters.filter(character => character?.idle !== true && text(character?.name));
-    const idle = characters.filter(character => character?.idle === true && text(character?.name)).map(character => (text(character.busy) ? `${text(character.name)} (busy: ${text(character.busy)})` : text(character.name)));
     const present = (Array.isArray(roster) ? roster : []).map(text).filter(Boolean);
     const departed = departedFrom(form.resolution, present, { user });
-    const lines = ['CURRENT SCENE (where the previous turn left things — start from here):'];
+    const here = present.filter(name => !departed.some(gone => gone.toLowerCase() === name.toLowerCase()));
+    const entryOf = name => characters.find(character => text(character?.name).toLowerCase() === name.toLowerCase()) ?? null;
+    const lines = ['CURRENT SCENE (settled by the engine — take it as given and start from here):'];
     if (place) lines.push(`- Place: ${place}.`);
     if (when) lines.push(`- Time: ${when}.`);
     if (text(form.resolution)) lines.push(`- How the previous turn ended: ${text(form.resolution)}`);
     if (text(form.userResult)) lines.push(`- ${text(user) || 'The user'}: ${text(form.userResult)}`);
-    for (const character of acting) {
-        lines.push(`- ${text(character.name)} last: ${text(character.action) || 'present'}`);
-        // Текущая цель — чтобы директор видел, что держится, и не переписывал её без перемены.
-        if (text(character.decision)) lines.push(`  ${text(character.name)}'s current aim: ${text(character.decision)}`);
+    const acting = here.filter(name => entryOf(name) && entryOf(name).idle !== true);
+    const background = here.filter(name => !acting.includes(name));
+    if (acting.length) {
+        lines.push(`- Here with ${text(user) || 'the user'}:`);
+        for (const name of acting) {
+            const entry = entryOf(name);
+            lines.push(`  - ${name} — last: ${text(entry.action) || 'present'}${text(entry.decision) ? `; aim: ${text(entry.decision)}` : ''}`);
+        }
     }
-    if (idle.length) lines.push(`- Present, not in the main exchange: ${idle.join(', ')}.`);
-    if (present.length) lines.push(`- In the scene now (active roster): ${present.join(', ')}.`);
-    if (departed.length) lines.push(`- Left the scene in that ending: ${departed.join(', ')}. Remove them with update_roster before you decide, unless they come back this turn with a reason.`);
+    if (background.length) {
+        lines.push(`- Here in the background, on their own: ${background.map(name => (text(entryOf(name)?.busy) ? `${name} (${text(entryOf(name).busy)})` : name)).join(', ')}.`);
+    }
+    if (departed.length) lines.push(`- Gone in that ending: ${departed.join(', ')}. They are not part of this turn unless they come back with a reason.`);
+    return lines.join('\n');
+}
+
+/**
+ * ALREADY SAID — что каждый говорил и просил в последних принятых ходах (смыслом, из формы). Правило
+ * «не повторяться» без этого держалось на памяти модели; со списком следующий шаг сверяется с ним.
+ */
+export function renderAlreadySaid(cycles, { beforeTurn = null, turns = 3, user = '' } = {}) {
+    const list = Array.isArray(cycles) ? cycles : [];
+    const forms = [];
+    for (let index = list.length - 1; index >= 0 && forms.length < turns; index -= 1) {
+        const cycle = list[index];
+        if (!['turn', 'regenerate', 'swipe'].includes(cycle?.event) || cycle?.rejected || !cycle?.form) continue;
+        if (Number.isFinite(beforeTurn) && !(Number(cycle.turn) < beforeTurn)) continue;
+        if (forms.some(item => item.turn === cycle.turn)) continue;
+        forms.unshift({ turn: cycle.turn, form: cycle.form });
+    }
+    const said = new Map();
+    for (const { turn, form } of forms) {
+        for (const character of Array.isArray(form.characters) ? form.characters : []) {
+            const name = text(character?.name), line = text(character?.says);
+            if (!name || !line || name.toLowerCase() === text(user).toLowerCase()) continue;
+            if (!said.has(name)) said.set(name, []);
+            said.get(name).push(`(turn ${turn}) ${line}`);
+        }
+    }
+    if (!said.size) return '';
+    const lines = ['ALREADY SAID (the last turns, in meaning — none of this is said or asked again; build on it):'];
+    for (const [name, items] of said) lines.push(`- ${name}:\n${items.map(item => `  - ${item}`).join('\n')}`);
     return lines.join('\n');
 }

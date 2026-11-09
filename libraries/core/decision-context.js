@@ -156,7 +156,7 @@ export function summariesSection(summaries) {
 export function rosterSection(roster) {
     const active = Array.isArray(roster) ? roster.filter(Boolean) : [];
     if (!active.length) return '';
-    return `ACTIVE ROSTER (everyone who can affect the scene right now; the form must cover each of them):\n\n${active.map(name => `- ${name}`).join('\n')}`;
+    return `ACTIVE ROSTER (everyone who can affect the scene right now; the turn lists only those who act):\n\n${active.map(name => `- ${name}`).join('\n')}`;
 }
 
 function notesText(notes) {

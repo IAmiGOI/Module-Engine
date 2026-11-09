@@ -46,7 +46,7 @@ test('a complete template passes with the fields the resolver writes', () => {
     assert.deepEqual(repaired.form.roster.active, ['Lena']);
 });
 
-test('the engine repairs instead of refusing: a missing roster member, a duplicate, and no outcome are warnings, not refusals', () => {
+test('the engine repairs instead of refusing: a duplicate is a warning, someone here and not listed stays in the background', () => {
     const repaired = repairInscription({
         form: base({ characters: [
             { name: 'Lena', does: 'Opens the door.', feels: 'calm' },
@@ -59,7 +59,30 @@ test('the engine repairs instead of refusing: a missing roster member, a duplica
     assert.deepEqual(names, ['Lena', 'Marek'], 'the duplicate is dropped and the missing member is filled in');
     assert.equal(repaired.form.characters[1].idle, true);
     assert.match(repaired.warnings.join(' '), /listed twice/);
-    assert.match(repaired.warnings.join(' '), /was not filled in/);
+    assert.doesNotMatch(repaired.warnings.join(' '), /not filled in/, 'only those who act are listed — the background is not a fault');
+});
+
+test('the background keeps its last occupation, and someone gone in the previous ending and not in this turn leaves', () => {
+    const repaired = repairInscription({
+        form: base({ characters: [{ name: 'Lena', heard: 'the guard is coming', next: 'hide the key first', does: 'Pockets the key.' }] }),
+        roster: ['Lena', 'Marek', 'Puck'], assessments, user: 'Sasha',
+        previous: { characters: [{ name: 'Marek', idle: true, busy: 'counting coins' }] }, departed: ['Puck'],
+    });
+    assert.equal(repaired.ok, true);
+    assert.deepEqual(repaired.form.roster.active, ['Lena', 'Marek']);
+    const marek = repaired.form.characters.find(character => character.name === 'Marek');
+    assert.equal(marek.idle, true);
+    assert.equal(marek.busy, 'counting coins');
+    const lena = repaired.form.characters.find(character => character.name === 'Lena');
+    assert.equal(lena.decreeWants, 'hide the key first', 'next is the step toward the aim');
+    assert.equal(lena.heard, 'the guard is coming');
+});
+
+test('no scene duration is a short scene without a warning', () => {
+    const repaired = repairInscription({ form: base({ scene: undefined }), roster: ['Lena'], assessments, user: 'Sasha' });
+    assert.equal(repaired.ok, true);
+    assert.ok(repaired.form.scene.minutes > 0);
+    assert.doesNotMatch(repaired.warnings.join(' '), /duration/);
 });
 
 test('the only refusal is a turn without beats while someone acts', () => {

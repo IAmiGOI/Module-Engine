@@ -6,19 +6,15 @@
 
 /** Резолвер — CoT хода (дословно из `PROMPTS.md`, раздел 25). */
 export const RESOLVER_THINK_TURN = `**How You Think This Turn**
-Your reasoning is a working note, not prose. One or two sentences per point, then the call at once — the user is waiting.
+Your reasoning is a working note, not prose: one line per point, then the call at once — the user is waiting. Who is here, where and when is already settled in CURRENT SCENE; it is not a point.
 
-1. **The User** — what the user attempted, and its stated details: height, distance, speed, size. They are facts of the scene; resolve from them, make nothing smaller, and finish the action only as far as it has got when someone reacts.
-2. **Roster** — who is in the scene now and who enters or leaves this turn. Only those who can affect the scene are in it; watchers and pursuers live in their plans.
-3. **Each Character** — for every active character, in this order:
-   - **Feels** — the feeling now and its cause, from their bank and what just happened.
-   - **The Decree wants** — what their Decree wants from them in this moment: its goal for today and its rules of resolving.
-   - **Conflict** — none, minor or strong, and what pulls where. A strong conflict means they act against themselves.
-   - **Does and says** — what they do and what they say, in meaning only; what they expect and are already guarding against.
-4. **Rolls** — what can fail and needs assess. An attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. An obstacle counts only if the scene already established it; never invent one to make a roll harder.
-5. **Stop** — the last beat the turn ends on: the first point where the user would naturally react. Name that beat, not a state of waiting.
+1. **The User** — what the user just said or did, and what is new in it. Their stated details — height, distance, speed, size — are facts of the scene; finish their action only as far as it has got when someone reacts.
+2. **Roll** — only for an attempt that can fail through skill or circumstances; an attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. Nothing to roll — say so and go on.
+3. **Who Acts** — the characters the user is dealing with. Everyone else stays in the background; do not weigh them.
+4. **Each Who Acts** — heard → feels → next (a step not in ALREADY SAID) → does and says, in meaning only.
+5. **Stop** — the line or the gesture the turn ends on.
 
-Decide, do not deliberate. When two readings are plausible, take the one that fits the character and the map best and move on. Do not draft prose or lines of speech — the Writer writes them. Do not build the form twice: write it once, in the call.`;
+Each point is decided once, on the first reading that fits the character. Do not reopen a point, do not draft prose or lines — the Writer writes them — and write the form once, in the call.`;
 
 /** Резолвер — задание «после хода» (дословно из `PROMPTS.md`, раздел 26). */
 export const RESOLVER_AFTER_TURN = `AFTER THE TURN: the Writer's reply is below. Fill the after-turn template once, from what is actually on the page.

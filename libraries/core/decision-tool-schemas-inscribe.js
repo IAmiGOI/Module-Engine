@@ -12,13 +12,13 @@ export const CONFLICT_LEVELS = Object.freeze(['none', 'minor', 'strong']);
 export const INSCRIBE_TOOL = Object.freeze({
     name: 'inscribe',
     displayName: 'Inscribe the turn',
-    description: 'The mandatory template for this turn: the roster, every active character from the inside, the beats for the Writer, and where the turn stops. Fill it once, in the order of the CoT. Every active roster member appears exactly once; a member with nothing to do is listed with only the name and "idle": true. Where there was a roll, cite the assess id in "assessId" and explain in "outcome" why it went that way; where there was no roll, leave assessId out. The engine repairs what it can and refuses only a turn without beats while someone acts.',
+    description: 'The mandatory template for this turn: the characters who act, from the inside, the beats for the Writer, and where the turn stops. Fill it once, in the order of the CoT. List only those who act this turn; everyone else here stays in the background on their own, and the engine keeps them there. Where there was a roll, cite the assess id in "assessId" and explain in "outcome" why it went that way; where there was no roll, leave assessId out. The engine repairs what it can and refuses only a turn without beats while someone acts.',
     parameters: {
         type: 'object',
         properties: {
             roster: {
                 type: 'object',
-                description: 'Who enters or leaves the active scene this turn. Omit it when nobody does.',
+                description: 'Who enters or leaves the scene this turn. Omit it when nobody does — someone gone in the previous ending and not in this turn leaves on their own.',
                 properties: {
                     add: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, reason: { type: 'string' } }, required: ['name'] }, description: 'Characters entering the active scene.' },
                     remove: { type: 'array', items: { type: 'string' }, description: 'Characters leaving the active scene.' },
@@ -26,24 +26,14 @@ export const INSCRIBE_TOOL = Object.freeze({
             },
             characters: {
                 type: 'array',
-                description: 'Every active character, in the order of the CoT: feels → what the Decree wants → conflict → does and says.',
+                description: 'Only the characters who act this turn, in the order of the CoT: heard → feels → next → does and says.',
                 items: {
                     type: 'object',
                     properties: {
                         name: { type: 'string' },
-                        idle: { type: 'boolean', description: 'True when the character is present but does nothing worth showing this turn. Then only the name and busy are needed.' },
-                        busy: { type: 'string', description: 'For an idle character: what occupies them right now — their own concern, from their bank or Decree. A few words.' },
-                        feels: { type: 'string', description: 'What they feel right now and why — from their Emotions and what just happened.' },
-                        decreeWants: { type: 'string', description: 'What their Decree wants from them in this moment: its goal for today and its rules of resolving. With no Decree yet, what their bank and situation want.' },
-                        conflict: {
-                            type: 'object',
-                            description: 'How far the Decree pulls against what the character would do on their own.',
-                            properties: {
-                                level: { type: 'string', enum: CONFLICT_LEVELS, description: 'none — no tension; minor — a hesitation or a cost; strong — they act against themselves.' },
-                                why: { type: 'string', description: 'What pulls where, in one line. Required for minor and strong.' },
-                            },
-                            required: ['level'],
-                        },
+                        heard: { type: 'string', description: 'What in the user\'s latest message — or in what just happened — matters to them, in one line. What is new in it for them.' },
+                        feels: { type: 'string', description: 'What they feel now, from their Emotions and what they heard. A few words.' },
+                        next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID or already taken. With no Decree yet, toward what their bank wants.' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
                         says: { type: 'string', description: 'What they say, in meaning only — never the wording: the Writer writes the words. Leave it out when they say nothing.' },
                         assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
@@ -69,14 +59,14 @@ export const INSCRIBE_TOOL = Object.freeze({
             userResult: { type: 'string', description: 'The result of the user\'s attempt only: success or failure and why. Never decide the user\'s action itself, and do not finish a long action for them — show what has happened up to the moment someone reacts.' },
             scene: {
                 type: 'object',
+                description: 'Leave it out for a short exchange in the same place; set it when the scene takes longer or moves.',
                 properties: {
                     duration: { type: 'string', description: 'How long the scene took, as one step of the scale: "a moment", "a few minutes", "a quarter hour", "half an hour", "an hour", "a few hours", "until dawn", "until morning", "until noon", "until evening", "until night", "until tomorrow". The engine counts the minutes.' },
                     place: { type: 'string', description: 'Optional; the engine fills it from the map when omitted.' },
                 },
-                required: ['duration'],
             },
             comment: COMMENT,
         },
-        required: ['characters', 'beats', 'stop', 'scene', 'comment'],
+        required: ['characters', 'beats', 'stop', 'comment'],
     },
 });

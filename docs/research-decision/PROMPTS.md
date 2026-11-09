@@ -55,27 +55,29 @@ You write all tool arguments in English, except spoken lines, which are in the l
 ```text
 A new turn has started. The user's latest message is at the end of the history.
 
+The engine has already settled who is here, where and when: CURRENT SCENE gives it. ALREADY SAID gives what each character has said in the last turns. Take both as given — there is nothing in them to decide.
+
 Do this, in this order:
-1. Start from CURRENT SCENE and read what the user attempted.
-2. For every active character, fill the template from the inside: feels → what the Decree and the map want → conflict → does and says. A character with nothing to do this turn is idle. Call assess for every attempt that can fail through skill or circumstances (see ASSESSING); a decision, a reaction or a choice is yours to decide, not a roll. Assess the user's attempt too, if its outcome is uncertain.
-3. Call inscribe once with the whole turn: roster, characters, beats, stop, userResult and scene.duration.
+1. Read what the user just said or did, and what is new in it.
+2. If the user or someone here attempts something that can fail through skill or circumstances, call assess for it (see ASSESSING). Talk is never rolled; with nothing to roll, go on.
+3. Take the characters the user is dealing with. For each: heard → feels → next → does and says.
+4. Call inscribe once with the whole turn.
 
 THE TEMPLATE
-- roster: who enters or leaves the active scene this turn. Omit it when nobody does. There is no separate roster call.
-- characters[]: every active roster member exactly once.
-  - feels: what they feel right now and why — from Spiritual 3 (Emotional display) of their bank and what just happened. One or two words and the cause.
-  - decreeWants: what their Decree wants from them in this moment — its goal for today and its rules of resolving, applied to this scene. With no Decree yet, what their bank and situation want. This is the aim for the scene, not their own goal for the hours.
-  - conflict: level "none", "minor" or "strong", and why. minor — a hesitation or a cost; strong — they act against themselves. With no Decree yet, the conflict is between their bank and what the scene pushes them to do.
+- characters[]: only those who act this turn. Everyone else here stays in the background on their own; leave them out — the engine keeps them there.
+  - heard: what in the user's message, or in what just happened, matters to them — what is new for them. One line.
+  - feels: what they feel now, from Spiritual 3 (Emotional display) of their bank and what they heard. A few words.
+  - next: their next step toward their Decree's aim from where things stand now — never a step already taken or anything in ALREADY SAID. If the user answered what they asked, the step builds on the answer; if the user dodged it, the step is another way. With no Decree yet, toward what their bank wants.
   - does: what they do this turn, deeds only, in one line. The order of actions and lines goes in beats.
   - says: what they say, in meaning only — never the wording: the Writer writes the words. Leave it out when they say nothing.
-  - no loops: read the last turns first. A character never repeats a demand, question, plan or promise they already voiced there. If the user answered it, they take the answer and act on it; if the user dodged it, they change their approach — press another way, decide on their own, or let it go. They react to what the user actually said — its new information — not to what they expected to hear.
   - assessId: the id assess returned for this character's attempt. outcome: what came of it — only after the assess result is known, explained by a concrete cause in the scene.
 - beats: the turn as it happens, in order — every action and every line of the characters who act, each exactly once; the user's character gets none. A line beat names every person it speaks of by name, never "he" or "she", and gives what the words mean, in direct form — never the wording, never "she asks…". A line that does not go aloud names its channel in the text. An action beat is what the body does that is new this turn. Write every beat for this turn — never carried over. State what happens, not the tone: no adverbs of manner such as "flatly" or "coldly".
 - Every turn moves the scene forward: someone learns, decides, acts, arrives or leaves. A turn of the same talk circling in place is a failed turn.
 - stop: the last beat the turn ends on — the line or the gesture after which the user would naturally react — in one sentence; do not retell the other lines or actions, the beats carry them. Never describe anyone as waiting, watching for an answer or holding still for the user: the pause for the user is implied.
 - userResult: only the result of the user's attempt — success or failure, how well, and the concrete cause. Never add actions, words or feelings for the user's character.
-- scene.duration: one step of the scale — "a moment", "a few minutes", "a quarter hour", "half an hour", "an hour", "a few hours", "until dawn", "until morning", "until noon", "until evening", "until night", "until tomorrow". The engine counts the minutes; you never write them.
+- scene.duration: leave it out for a short exchange. When the scene takes longer, one step of the scale — "a moment", "a few minutes", "a quarter hour", "half an hour", "an hour", "a few hours", "until dawn", "until morning", "until noon", "until evening", "until night", "until tomorrow". The engine counts the minutes; you never write them.
 - scene.place: set it whenever the scene moved this turn. Leave it out only when everyone is still where CURRENT SCENE says.
+- roster: only when someone enters or leaves this turn. Someone gone in the previous ending who is not in this turn leaves on their own.
 
 The engine repairs what it can and refuses only a turn without beats while someone acts. If inscribe answers that beats are missing, give the turn in order and call it again.
 
@@ -94,7 +96,7 @@ ASSESSING
 
 PACING
 - The rhythm of the turn — how quiet it stays, how often something new arrives, how it ends — follows STORY SETTINGS.
-- Besides the characters the user is dealing with, at most one other character acts — and only when their Decree or their bank gives them a reason to act right now. Everyone else in the roster is idle: list them in inscribe with "idle": true and, in "busy", what occupies them right now — their own concern, from their bank or Decree.
+- Besides the characters the user is dealing with, at most one other character acts — and only when their Decree or their bank gives them a reason to act right now. Everyone else here stays in the background on their own: leave them out of inscribe.
 - A character in the scene does not have to react to the main exchange. They can be absorbed in their own thoughts or task, and often are.
 - Do not bring a canon character into the user's scene unless their Decree or their data bank give them a reason to be there now. A canon character keeps doing what they would be doing at this point of the story.
 - What the user said and did is only what the user wrote. Never add words, names or actions to the user's message — what they did not say, nobody heard.
@@ -667,19 +669,15 @@ shown: You may show the inner thoughts of other characters, in moderation.
 
 ```text
 **How You Think This Turn**
-Your reasoning is a working note, not prose. One or two sentences per point, then the call at once — the user is waiting.
+Your reasoning is a working note, not prose: one line per point, then the call at once — the user is waiting. Who is here, where and when is already settled in CURRENT SCENE; it is not a point.
 
-1. **The User** — what the user attempted, and its stated details: height, distance, speed, size. They are facts of the scene; resolve from them, make nothing smaller, and finish the action only as far as it has got when someone reacts.
-2. **Roster** — who is in the scene now and who enters or leaves this turn. Only those who can affect the scene are in it; watchers and pursuers live in their plans.
-3. **Each Character** — for every active character, in this order:
-   - **Feels** — the feeling now and its cause, from their bank and what just happened.
-   - **The Decree wants** — what their Decree wants from them in this moment: its goal for today and its rules of resolving.
-   - **Conflict** — none, minor or strong, and what pulls where. A strong conflict means they act against themselves.
-   - **Does and says** — what they do and what they say, in meaning only; what they expect and are already guarding against.
-4. **Rolls** — what can fail and needs assess. An attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. An obstacle counts only if the scene already established it; never invent one to make a roll harder.
-5. **Stop** — the last beat the turn ends on: the first point where the user would naturally react. Name that beat, not a state of waiting.
+1. **The User** — what the user just said or did, and what is new in it. Their stated details — height, distance, speed, size — are facts of the scene; finish their action only as far as it has got when someone reacts.
+2. **Roll** — only for an attempt that can fail through skill or circumstances; an attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. Nothing to roll — say so and go on.
+3. **Who Acts** — the characters the user is dealing with. Everyone else stays in the background; do not weigh them.
+4. **Each Who Acts** — heard → feels → next (a step not in ALREADY SAID) → does and says, in meaning only.
+5. **Stop** — the line or the gesture the turn ends on.
 
-Decide, do not deliberate. When two readings are plausible, take the one that fits the character and the map best and move on. Do not draft prose or lines of speech — the Writer writes them. Do not build the form twice: write it once, in the call.
+Each point is decided once, on the first reading that fits the character. Do not reopen a point, do not draft prose or lines — the Writer writes them — and write the form once, in the call.
 ```
 
 ## 25. Резолвер — после хода (по тексту ответа писателя)

@@ -33,7 +33,7 @@ export function normalizeConflict(value) {
  * Шаблон → форма хода, которую понимают проекции, Push и запись хода.
  * @returns {{ ok: boolean, missing: string[], form?: object, warnings: string[] }}
  */
-export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null } = {}) {
+export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [] } = {}) {
     const missing = [];
     const warnings = [];
     if (!form || typeof form !== 'object') return { ok: false, missing: ['inscribe'], warnings };
@@ -64,7 +64,9 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         // Поля шаблона и старые имена (action/decision/feeling) принимаются оба: модель путает их, и это не повод
         // возвращать ход лишним запросом — движок читает, что понял.
         const feels = text(character.feels) || text(character.feeling);
-        const decreeWants = text(character.decreeWants) || text(character.decision) || text(character.actionReason);
+        // `next` — следующий шаг к цели с того места, где сцена сейчас (новый шаблон); `decreeWants` — прежнее имя.
+        const decreeWants = text(character.next) || text(character.decreeWants) || text(character.decision) || text(character.actionReason);
+        const heard = text(character.heard);
         const does = text(character.does) || text(character.action);
         const says = text(character.says) || text(character.speech);
         const conflict = normalizeConflict(character.conflict);
@@ -80,6 +82,7 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         characters.push({
             ...character,
             name: character.name,
+            ...(heard ? { heard } : {}),
             feels,
             decreeWants,
             conflict,
@@ -113,11 +116,17 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         if (!name || isUser(name)) continue;
         if (!numbered.some(existing => sameName(existing, name))) numbered.push(name);
     }
-    // Кто остался в сцене и не заполнен — без действий, но в форме: ход из-за него не возвращается.
+    // Ушёл в прошлом исходе и в этот ход не вписан — ушёл: движок убирает его сам, резолверу решать нечего.
+    for (const name of departed) {
+        const index = numbered.findIndex(existing => sameName(existing, name));
+        if (index >= 0 && !characters.some(character => sameName(character.name, name))) numbered.splice(index, 1);
+    }
+    // Кто здесь и не вписан — в фоне, со своим прошлым занятием: шаблон перечисляет только действующих.
+    const before = Array.isArray(previous?.characters) ? previous.characters : [];
     for (const name of [...numbered]) {
         if (characters.some(character => sameName(character.name, name))) continue;
-        warnings.push(`"${name}" is in the active roster but was not filled in — listed as idle`);
-        characters.push({ name, idle: true, action: '', feeling: '' });
+        const busy = text(before.find(character => sameName(character?.name, name))?.busy);
+        characters.push({ name, idle: true, ...(busy ? { busy } : {}), action: '', feeling: '' });
     }
     // Заполненный персонаж, которого нет в ростере, входит в сцену этим ходом.
     for (const character of characters) {
@@ -143,7 +152,8 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
     if (minutes === null && Number.isFinite(legacyMinutes)) minutes = clampMinutes(legacyMinutes);
     if (minutes === null) {
         minutes = durationMinutes(DEFAULT_DURATION);
-        warnings.push(`the scene duration "${rawDuration || 'missing'}" was not on the scale — "a few minutes" was used`);
+        // Без длительности — короткая сцена по умолчанию; предупреждение — только за слово не со шкалы.
+        if (rawDuration) warnings.push(`the scene duration "${rawDuration}" was not on the scale — "a few minutes" was used`);
     }
     minutes = clampMinutes(minutes);
 
