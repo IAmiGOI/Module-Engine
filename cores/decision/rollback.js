@@ -40,7 +40,17 @@ export function createRollback({ store, getSettings, publishEvent, call = null }
         if (call && state.greatBank && typeof state.greatBank === 'object') await call('storage.chatMemory.set', { ...GREAT, value: state.greatBank }).catch(() => {});
     }
 
-    async function restoreSnapshotFor(mesid, { remove = false } = {}) {
+    // Откаты идут по одному, и ход может их дождаться: событие удаления сообщения не ждут, и откат ложился
+    // уже поверх нового хода (или ход снимал снимок раньше отката).
+    let inflight = Promise.resolve();
+    const settled = () => inflight;
+    function restoreSnapshotFor(mesid, options = {}) {
+        const job = inflight.then(() => restoreOne(mesid, options));
+        inflight = job.catch(() => {});
+        return job;
+    }
+
+    async function restoreOne(mesid, { remove = false } = {}) {
         if (mesid === null || mesid === undefined) return false;
         // Лог — история размышлений: не откатываем, а помечаем отвергнутый ход.
         const run = store.runs()[String(mesid)];
@@ -55,5 +65,5 @@ export function createRollback({ store, getSettings, publishEvent, call = null }
         return true;
     }
 
-    return { snapshotState, restoreState, restoreSnapshotFor };
+    return { snapshotState, restoreState, restoreSnapshotFor, settled };
 }

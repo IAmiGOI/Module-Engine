@@ -1,3 +1,4 @@
+import { wornPhrasesBlock } from '../../libraries/core/worn-phrases.js';
 import { buildWriterContext, selectRecentChat } from '../../libraries/core/decision-context.js';
 import { lastAcceptedForm, renderCurrentScene } from '../../libraries/core/decision-scene.js';
 import { buildWriterLorebook } from '../../libraries/core/decision-lorebook.js';
@@ -33,7 +34,10 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         const bankText = great?.banks || (banks ? banks.contextFor({ names: store.roster().active, all: false }).text : '');
         const decreeText = great?.decrees ?? '';
         const examples = banks ? banks.examplesForCards() : '';
-        const decision = pending.push ?? pending.decision;
+        // Обороты, которые Писатель уже повторил в последних ответах, — прямо в конце Inscription.
+        const recentReplies = (Array.isArray(pending.chat) ? pending.chat : []).filter(entry => entry && !entry.is_user && !entry.is_system).slice(-6).map(entry => String(entry.mes ?? entry.content ?? ''));
+        const worn = wornPhrasesBlock(recentReplies);
+        const decision = [pending.push ?? pending.decision, worn].filter(Boolean).join('\n\n');
         const lorebookText = await writerLorebookText(call, pending.chat, decision, banks);
         // Прозаику — знания только активных: чтобы персонаж в сцене не выдал того, чего не знает.
         const knowledgeText = await knowledge.textFor(store.roster().active);

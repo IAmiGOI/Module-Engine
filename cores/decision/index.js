@@ -184,7 +184,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
     for (const name of ['decision.bootstrap.finished', 'decision.bank.ready', 'decision.bank.timeline']) host.events.subscribe(name, scheduleSnapshot);
     const cardTurn = createCardTurn({ call: callStrict, getSettings: () => settings, getWorkers: () => workers });
     const rollback = createRollback({ store, getSettings: () => settings, publishEvent, call: callStrict });
-    const { snapshotState, restoreState, restoreSnapshotFor } = rollback;
+    const { snapshotState, restoreState, restoreSnapshotFor, settled: rollbackSettled } = rollback;
 
     // Смена чата: всё, что делалось для старого, отменяется и больше ничего не пишет в новый —
     // фоновый цикл, вопросы, bootstrap, сборщики банков и задания исследователя.
@@ -424,6 +424,14 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const attempt = (attempts.get(runId)?.length ?? 0) + 1;
         publishEvent('decision.started', { runId, type, attempt });
         const startedAt = Date.now();
+        // Переигровка: сначала мир до заменяемого ответа — явно и с ожиданием. Откат по событию удаления сообщения
+        // шёл без ожидания, и правка Директора после отброшенной версии (Указ Emilia) переживала переигровку.
+        await rollbackSettled();
+        if ((type === 'regenerate' || type === 'swipe') && settings.snapshots) {
+            const last = store.lastRun();
+            const before = last?.mesid !== undefined && last?.mesid !== null ? store.snapshot(last.mesid) : null;
+            if (before) await restoreState(before).catch(() => {});
+        }
         const journal = store.beginTurn(Boolean(settings.snapshots));
         const beforeSnapshot = settings.snapshots ? await snapshotState(runId, journal) : null;
         const captured = captureReasoning(host, `${runId}:`, {
