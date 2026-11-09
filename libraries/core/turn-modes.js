@@ -129,7 +129,7 @@ export function resolverModeBlock(ids) {
     const rolls = modesAllowRolls(ids) ? '' : '\nNothing is rolled this turn.';
     const fields = Object.entries(modeFields(ids));
     const form = fields.length
-        ? `\n\nFor every character who acts, fill "mode" with these fields, each as {"real": …, "lens": …}:\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\nreal — what the one who acts means by it; the Writer never sees it. lens — what the user or the people around can see and plainly understand of it through what they do this turn: every action shows something, so it is new every turn. How much shows depends on how one looks: a passing glance gives only the obvious, watching for a while gives a little more, looking straight at a detail gives more still. Never explained. Fill both, even when they are the same.`
+        ? `\n\nFor every character who acts, fill "mode" with these fields, each as {"real": …, "lens": …}:\n${fields.map(([name, about]) => `- ${name}: ${about}`).join('\n')}\nreal — what the one who acts means by it; the Writer never sees it. lens — what the user or the people around can see and plainly understand of it through what they do this turn: every action shows something, so it is new every turn. How much shows depends on how one looks: a passing glance gives only the obvious, watching for a while gives a little more, looking straight at a detail gives more still. What shows comes from who they are — their own manner and their culture's ways — never a hint for the user. Never explained. Fill both, even when they are the same.`
         : '';
     return `THIS TURN — ${modes.map(mode => mode.label).join(' + ')}:\n${modes.map(mode => `- ${mode.resolver}`).join('\n')}${rolls}${form}`;
 }
