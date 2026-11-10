@@ -123,7 +123,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
 
     function handlersFor(settings) {
         const base = {
-            ...createHandlers({ store, call, publishEvent, getSettings, getGameSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions, knowledge, applyRoster, timeOfDay: () => getSettings().bankTimeOfDay }),
+            ...createHandlers({ store, call, publishEvent, getSettings, getGameSettings, state, resolvePlace, lastTimeMark, researcher, banks, window: turnWindow, formChecker, questions, knowledge, applyRoster, timeOfDay: () => getSettings().bankTimeOfDay, getScales: async () => { await creation.load().catch(() => null); return creation.state()?.scales ?? []; } }),
             ...knowledge.handlers,
         };
         return withQuestionStreak({ ...base, update_story: createUpdateStoryHandler(base) });

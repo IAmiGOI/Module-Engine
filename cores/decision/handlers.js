@@ -18,7 +18,7 @@ import { normalizeBrief, normalizeTimelineBanks, renderChatBrief } from '../../l
  */
 const key = value => String(value ?? '').trim().toLowerCase();
 
-export function createHandlers({ store, call, publishEvent, getSettings, getGameSettings = null, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null, knowledge = null, applyRoster = null, timeOfDay = null }) {
+export function createHandlers({ store, call, publishEvent, getSettings, getGameSettings = null, state, resolvePlace, lastTimeMark, researcher, banks = null, window: turnWindow = null, formChecker = null, questions = null, knowledge = null, applyRoster = null, timeOfDay = null, getScales = null }) {
     const findLibraryRecord = character => Object.values(store.library())
         .find(record => key(record.name) === key(character)) ?? null;
 
@@ -232,7 +232,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, getGame
             };
         },
 
-        assess: createAssessHandler({ state, getSettings, getGameSettings }),
+        assess: createAssessHandler({ state, getSettings, getGameSettings, getScales }),
 
         after_turn: createAfterTurnHandler({ store, banks, knowledge, state, publishEvent }),
         inscribe: createInscribeHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker, applyRoster, timeOfDay, getSettings, greatBank: banks?.great?.load ? () => banks.great.load() : null, userName: () => String(banks?.persona?.()?.name ?? '').trim() }),
