@@ -34,6 +34,8 @@ export function normalizeConflict(value) {
  * Шаблон → форма хода, которую понимают проекции, Push и запись хода.
  * @returns {{ ok: boolean, missing: string[], form?: object, warnings: string[] }}
  */
+export const BRINGS = Object.freeze(['say', 'do', 'say and do', 'nothing']);
+
 export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [], modes = null, userMessage = '', strictLines = false } = {}) {
     const missing = [];
     const warnings = [];
@@ -71,7 +73,16 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         const does = text(character.does) || text(character.action);
         // Молчащему модель пишет «None» — это не реплика: иначе она попадала в ALREADY SAID как сказанное.
         const said = text(character.says) || text(character.speech);
-        const says = /^(none|null|n\/a|nothing|-+|—)\.?$/i.test(said) ? '' : said;
+        let says = /^(none|null|n\/a|nothing|-+|—)\.?$/i.test(said) ? '' : said;
+        // Что момент даёт персонажу нового: сказать, сделать, оба или ничего. Пункт хода мыслей Flash пропускал,
+        // поэтому это поле формы; нечего сказать — says пуст. Первый раз — назад резолверу, повтор — движок чинит сам.
+        let brings = BRINGS.includes(text(character.brings).toLowerCase()) ? text(character.brings).toLowerCase() : '';
+        if (!brings && strictLines) missing.push(`characters: "${character.name}" needs "brings" — what this moment gives them that is new: ${BRINGS.join(' / ')}`);
+        if (!brings) brings = says ? 'say and do' : 'do';
+        if (says && !brings.includes('say')) {
+            if (strictLines) missing.push(`characters: "${character.name}" brings "${brings}" yet has "says" — with nothing new to say, says stays empty; if they do speak, set brings to include say`);
+            else { says = ''; warnings.push(`"${character.name}" brings "${brings}" — their says was cleared`); }
+        }
         const conflict = normalizeConflict(character.conflict);
         if ((conflict.level === 'minor' || conflict.level === 'strong') && !conflict.why) {
             warnings.push(`"${character.name}" has a ${conflict.level} conflict with no reason — it was recorded without one`);
@@ -94,6 +105,7 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
             conflict,
             does,
             says,
+            brings,
             ...(rolled ? { assessId: rolled, ...(outcome ? { outcome } : {}) } : {}),
             ...(!rolled ? { noCheck: text(character.noCheck) || DEFAULT_NO_CHECK } : {}),
             // Форма проекций и Push: у резолвера действие — `does`, у писателя — `action`.

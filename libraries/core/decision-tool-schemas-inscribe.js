@@ -34,6 +34,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                         heard: { type: 'string', description: 'What in the user\'s latest message — what was said and what was done — or in what just happened matters to them, in one line. What is new in it for them.' },
                         feels: { type: 'string', description: 'What they feel now, from their Emotions and what they heard. A few words.' },
                         next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID AND DONE or already taken. Leave it out when a feeling, not a plan, moves them this turn. With no Decree yet, toward what their bank wants.' },
+                        brings: { type: 'string', enum: ['say', 'do', 'say and do', 'nothing'], description: 'What this moment gives them that is new: something to say, something to do, both, or nothing. With nothing new to say, "says" stays empty; with nothing new at all, "does" is how they bring nothing new.' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
                         says: { type: 'string', description: 'What they say, in meaning — never the wording: the Writer writes the words. When the words do not come out cleanly (they break off, jump, dodge or spill out too much at once), say how they come out as well. Leave it out when they say nothing.' },
                         practice: { type: 'string', description: 'Only when what they say this turn takes knowledge or practice in a matter: how practised they are in it — none / novice / practised / skilled / expert / master — and the line of their bank or history it rests on; nothing there means none or novice. What they say stays at that level.' },
@@ -42,7 +43,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                         assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
                         outcome: { type: 'string', description: 'Why it succeeded or failed, written after the assess result is known.' },
                     },
-                    required: ['name'],
+                    required: ['name', 'brings'],
                 },
             },
             beats: {

@@ -20,7 +20,7 @@ const hash = text => [...String(text)].reduce((sum, char) => (sum * 31 + char.ch
 
 function lena(assessId = 'asm_run_1_1') {
     return {
-        name: 'Lena', decreeWants: 'Get out before the guard turns the corner.', conflict: { level: 'none' },
+        name: 'Lena', brings: 'say and do', decreeWants: 'Get out before the guard turns the corner.', conflict: { level: 'none' },
         does: 'Opens the east door.', feels: 'calm',
         assessId, outcome: 'The lock gives after a hard pull.', says: 'this is the only way out',
     };

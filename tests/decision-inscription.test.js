@@ -142,7 +142,7 @@ test('the inscription is built from the template: beats, the user result, END, a
 test('a line beat for a character whose says is empty goes back once, then is dropped', async () => {
     const { repairInscription: repair } = await import('../libraries/core/decision-inscription.js');
     const form = {
-        characters: [{ name: 'Mara', does: 'grips the rail' }],
+        characters: [{ name: 'Mara', brings: 'do', does: 'grips the rail' }],
         beats: [{ who: 'Mara', kind: 'action', text: 'grips the rail' }, { who: 'Mara', kind: 'line', text: 'asks where they are going' }],
         stop: 'Mara grips the rail.', userResult: 'The user starts the engine and drives off.',
     };
@@ -152,7 +152,20 @@ test('a line beat for a character whose says is empty goes back once, then is dr
     const loose = repair({ form, roster: ['Mara'] });
     assert.equal(loose.ok, true);
     assert.equal(loose.form.beats.some(beat => beat.kind === 'line'), false);
-    const spoken = repair({ form: { ...form, characters: [{ name: 'Mara', does: 'grips the rail', says: 'where they are going' }] }, roster: ['Mara'], strictLines: true });
+    const spoken = repair({ form: { ...form, characters: [{ name: 'Mara', brings: 'say and do', does: 'grips the rail', says: 'where they are going' }] }, roster: ['Mara'], strictLines: true });
     assert.equal(spoken.ok, true);
     assert.equal(spoken.form.beats.filter(beat => beat.kind === 'line').length, 1);
+});
+
+test('brings: missing or contradicting says goes back once, then the engine infers it or clears says', async () => {
+    const { repairInscription: repair } = await import('../libraries/core/decision-inscription.js');
+    const base = { beats: [{ who: 'Mara', kind: 'action', text: 'grips the rail' }], stop: 'Mara grips the rail.', userResult: 'The user starts the engine and drives off.' };
+    const none = repair({ form: { ...base, characters: [{ name: 'Mara', does: 'grips the rail' }] }, roster: ['Mara'], strictLines: true });
+    assert.ok(none.missing.some(item => item.includes('needs "brings"')));
+    const inferred = repair({ form: { ...base, characters: [{ name: 'Mara', does: 'grips the rail' }] }, roster: ['Mara'] });
+    assert.equal(inferred.form.characters[0].brings, 'do');
+    const clash = { ...base, characters: [{ name: 'Mara', brings: 'nothing', does: 'holds still', says: 'asks where they go' }] };
+    assert.ok(repair({ form: clash, roster: ['Mara'], strictLines: true }).missing.some(item => item.includes('brings "nothing"')));
+    const cleared = repair({ form: clash, roster: ['Mara'] });
+    assert.equal(cleared.form.characters[0].says, '');
 });
