@@ -150,6 +150,11 @@ export async function runDecisionCycle({
         for (const call of answer.toolCalls) {
             const result = await execute(call);
             conversation.push(toolResultMessage(call, result));
+            // Психолог за одним столом говорит с Директором как второй человек: возражение
+            // приходит и отказом инструмента, и репликой role "user" с пометкой.
+            if (result?.speaker === 'PSYCHOLOGIST' && String(result?.error ?? '').trim()) {
+                conversation.push({ role: 'user', content: `PSYCHOLOGIST: ${String(result.error).trim()}` });
+            }
             if (TURN_TOOLS.includes(call.name) && result?.restart === true) {
                 return { type: 'restart', reason: 'characters entered with their banks', trace, messages: conversation, steps, warnings };
             }

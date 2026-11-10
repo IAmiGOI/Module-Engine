@@ -24,7 +24,7 @@ export function parseCharacterPath(path) {
     return part ? { name: rest.slice(0, -1).join('/'), part } : null;
 }
 
-export function createFileLayer({ banks = null, knowledge = null } = {}) {
+export function createFileLayer({ banks = null, knowledge = null, beforeWrite = null } = {}) {
     const providers = [];
     const great = () => banks?.great ?? null;
 
@@ -129,7 +129,8 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
             if (!byPath.has(path)) byPath.set(path, []);
             byPath.get(path).push({ old: String(item?.old ?? ''), new: String(item?.new ?? '') });
         }
-        const results = [];
+        // Сначала весь предлагаемый текст, потом запись: возражение Психолога не применяет вызов целиком.
+        const planned = [];
         for (const [path, list] of byPath) {
             const current = await read(path);
             const target = parseCharacterPath(path);
@@ -137,8 +138,21 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
             let after = before;
             const how = [];
             for (const one of list) { const applied = applyEdit(after, one); after = applied.text; how.push(applied.how); }
-            const written = after === before ? { ok: true, unchanged: true } : await write(current.path ?? path, before, after, { comment, by });
-            results.push({ path: current.path ?? path, ok: written.ok !== false, applied: how, ...(written.error ? { error: written.error } : {}), ...(written.unchanged ? { unchanged: true } : {}), ...(written.note ? { note: written.note } : {}) });
+            planned.push({ path: current.path ?? path, target, before, after, how, unchanged: after === before });
+        }
+        if (typeof beforeWrite === 'function') {
+            for (const item of planned) {
+                if (item.unchanged || !item.target) continue;
+                // Имя из пути может быть псевдонимом: проверяем по тому, кем персонаж записан в банке.
+                const canonical = parseCharacterPath(item.path) ?? item.target;
+                const refusal = await beforeWrite({ path: item.path, target: canonical, before: item.before, after: item.after, comment, by });
+                if (refusal?.ok === false) return { ok: false, error: refusal.error, ...(refusal.speaker ? { speaker: refusal.speaker } : {}), refused: item.path };
+            }
+        }
+        const results = [];
+        for (const item of planned) {
+            const written = item.unchanged ? { ok: true, unchanged: true } : await write(item.path, item.before, item.after, { comment, by });
+            results.push({ path: item.path, ok: written.ok !== false, applied: item.how, ...(written.error ? { error: written.error } : {}), ...(written.unchanged ? { unchanged: true } : {}), ...(written.note ? { note: written.note } : {}) });
         }
         return { ok: true, files: results };
     }
@@ -149,7 +163,13 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
         if (!target) return { ok: false, error: `"${path}" is not a place for a file. Character files are Characters/<Name>/material.md, spiritual.md or decree.md.` };
         const current = await read(path);
         const before = current.ok ? current.text : (target.part === 'psyche' ? '' : renderPart({}, target.part));
-        return write(path, before, String(text ?? ''), { comment, by });
+        const after = String(text ?? '');
+        if (typeof beforeWrite === 'function' && after !== before) {
+            const canonical = (current.ok ? parseCharacterPath(current.path) : null) ?? target;
+            const refusal = await beforeWrite({ path: current.path ?? path, target: canonical, before, after, comment, by });
+            if (refusal?.ok === false) return { ok: false, error: refusal.error, ...(refusal.speaker ? { speaker: refusal.speaker } : {}), refused: current.path ?? path };
+        }
+        return write(path, before, after, { comment, by });
     }
 
     function addProvider(provider) { providers.push(provider); }

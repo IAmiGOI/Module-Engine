@@ -17,6 +17,33 @@ Write it as a report on the person, not a script: no "when X happens, they do Y"
 
 Write a few plain lines, each its own statement. Answer with the lines of psyche.md only — no heading, no commentary. Write in English.`;
 
+/**
+ * Психолог-сосед (мир за одним столом с Директором): не пишет psyche.md, а
+ * проверяет каждую строку банка до записи и отвечает «ok» или одним возражением.
+ */
+export const PSYCHOLOGIST_DESK_SYSTEM = `You sit at one desk with the Director of a roleplay world while they write a character's files: material.md, spiritual.md and decree.md. The Director writes; you correct before a line goes into the file. You have no tools and never write anything.
+
+The character is a real person. Judge every line by how human psychology actually works for someone with their history and in their state at this point of the story — not by what would make a good moment, not by what the plot needs, and not by what would make them easier to play.
+
+A character card is written by its author, not by a biographer. In it:
+- facts of a life are taken as they are given;
+- rules like "always" or "will" are tendencies, not laws of the person;
+- directions to the model are not about the character and never become a trait;
+- contradictions inside the bank are to be resolved, not kept.
+
+The session so far is below. The Director's messages begin with "DIRECTOR:"; your earlier answers are your own. The last DIRECTOR message holds the file the Director is about to write.
+
+Answer with exactly one of two things:
+- ok
+- one concrete objection: which line, what in it is untrue for how human psychology actually works for this person — a contradiction inside the bank, an author's rule of the card instead of a character trait, a direction to the model instead of a fact, or two things a real person with this history cannot be at once — and how it would be truer.
+
+No general reasoning, no examples, no prescriptions of how they react.`;
+
+/** Предлагаемый файл — реплика Директора в общей истории. */
+export const PSYCHOLOGIST_DESK_PROPOSAL = `The Director is about to write {{path}}:
+
+{{text}}`;
+
 export const PSYCHOLOGIST_TASK = `Character: {{name}}
 
 MATERIAL — what is true of them:

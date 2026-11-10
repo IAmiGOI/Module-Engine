@@ -10,15 +10,29 @@ import { renderDecreeForResolver, renderTemperForResolver, renderPsycheForResolv
 export function createGreatBankLayer({ call, store, banks, publishEvent = () => {}, getSettings = null }) {
     const great = createGreatBank({ call, store, banks, timeOfDay: () => getSettings?.()?.bankTimeOfDay ?? null });
     const psychologist = createPsychologist({ call, store, great, getSettings, publishEvent });
+    // Персонажи, которых держит Психолог-сосед: отдельный вызов их psyche.md не пишет.
+    const held = new Set();
+    const heldKey = name => String(name ?? '').trim().toLowerCase();
+    const withoutHeld = state => Object.fromEntries(Object.entries(state ?? {})
+        .filter(([key, character]) => !held.has(heldKey(character?.name ?? key))));
 
     /** Психолог не держит ход: пишет psyche.md, когда банк впервые готов, в фоне. */
-    const schedulePsyche = state => { if (state) psychologist.maybeRun(state).catch(() => {}); };
+    const schedulePsyche = state => { if (state) psychologist.maybeRun(withoutHeld(state)).catch(() => {}); };
     const sync = async () => {
         const state = await great.sync().catch(() => null);
         schedulePsyche(state);
         return state;
     };
-    const ensurePsyche = async () => psychologist.maybeRun(await great.sync().catch(() => null));
+    const ensurePsyche = async () => psychologist.maybeRun(withoutHeld(await great.sync().catch(() => null)));
+
+    /** Сессия Директора берёт персонажей себе: до её конца отдельный Психолог их не трогает. */
+    function holdPsyche(names = []) {
+        for (const name of Array.isArray(names) ? names : []) held.add(heldKey(name));
+    }
+
+    function releasePsyche(names = []) {
+        for (const name of Array.isArray(names) ? names : []) held.delete(heldKey(name));
+    }
 
     /** Дальняя компактная проекция: Material 1, 3, 6 + Spiritual 4, 6, по всем персонажам. */
     async function farContext() {
@@ -66,5 +80,5 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
     /** Раздел, который увидит движок: нужен ответу инструмента и проверке прав. */
     const sectionOf = value => great.sectionOf(value);
 
-    return { great, farContext, nearContext, writerContext, decreeFor, edit, ensurePsyche, sectionOf, historyFor: name => great.historyFor(name) };
+    return { great, farContext, nearContext, writerContext, decreeFor, edit, ensurePsyche, holdPsyche, releasePsyche, sectionOf, historyFor: name => great.historyFor(name) };
 }

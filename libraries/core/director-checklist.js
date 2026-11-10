@@ -53,7 +53,7 @@ const holds = (file, line) => {
  * @param decreeOf    имя → текст decree.md (или null, если неизвестен) — для проверки скопированной строки
  * @param bankWritten имя → true/false/null — написан ли банк (material и spiritual)
  */
-export function withDirectorChecklist(handlers, { allowed = [], everyone = [], importanceOf = () => null, decreeOf = () => null, bankWritten = () => null } = {}) {
+export function withDirectorChecklist(handlers, { allowed = [], everyone = [], importanceOf = () => null, decreeOf = () => null, bankWritten = () => null, onForm = null } = {}) {
     let form = null;
     let refusals = 0;
     const done = new Map();
@@ -94,6 +94,8 @@ export function withDirectorChecklist(handlers, { allowed = [], everyone = [], i
         const sameStanding = characters.filter(item => item.importance && importanceOf(item.name) === item.importance);
         if (sameStanding.length) return { ok: false, error: `Already at that standing — leave importance empty for: ${sameStanding.map(item => `${item.name} (${item.importance})`).join(', ')}.` };
         form = { newDay, characters };
+        // Форма принята: движок узнаёт, что в этом прогоне пишутся банки, и зовёт Психолога за стол.
+        try { onForm?.(form); } catch { /* ошибка соседа не отменяет принятую форму */ }
         const plan = characters.filter(item => item.write_bank || item.decree !== 'none' || item.importance);
         return { ok: true, plan: plan.map(item => `${item.name}: ${[item.write_bank ? 'write material.md and spiritual.md' : '', item.decree !== 'none' ? `${item.decree} decree.md` : '', item.importance ? `standing → ${item.importance}` : ''].filter(Boolean).join('; ')}`), note: plan.length ? 'Do exactly this, then await.' : 'Nothing to change: call await.' };
     };

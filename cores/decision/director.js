@@ -1,7 +1,9 @@
 import { withDirectorChecklist, namedInReports } from '../../libraries/core/director-checklist.js';
+import { isUserCharacter } from '../../libraries/core/decision-great-bank.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildDirectorToolList } from '../../libraries/core/decision-tools.js';
+import { createPsyDesk } from './psy-desk.js';
 import { createCycleRecord } from '../../libraries/core/decision-log.js';
 import { deciderRequestParams, directorWorkerId, godWorkerId, roleRequestParams } from '../../libraries/core/decision-settings.js';
 import { statusReport } from '../../libraries/core/decision-status.js';
@@ -113,12 +115,16 @@ export function createDirector({
         });
     }
 
-    function handlersFor(state, checklist = null) {
+    function handlersFor(state, checklist = null, desk = null) {
         const base = {
             ...createBankHandlers({ banks, state }),
             ...createDecreeHandler({ banks, state, publishEvent }),
             // Указ и банки — файлами: view / edit / create (часть 21).
-            ...createFileHandlers({ banks, state, publishEvent, by: 'director' }),
+            ...createFileHandlers({
+                banks, state, publishEvent, by: 'director',
+                // Психолог за столом проверяет строку до записи; без сессии — прежний порядок.
+                beforeWrite: desk ? ({ path, target, before, after }) => desk.check({ path, part: target?.part, name: target?.name, before, after }) : null,
+            }),
             // Без своего await вызов уходил в общий маршрут и падал («no tool named await»), а движок писал «answered without a tool call».
             await: args => ({ ok: true, reason: String(args?.reason ?? '') }),
         };
@@ -126,7 +132,7 @@ export function createDirector({
     }
 
     /** Форма перед действием: кого называют повод и отчёты (по тексту задания), у кого есть Указ, кто какой важности. */
-    function checklistFor(bank, messages) {
+    function checklistFor(bank, messages, onForm = null) {
         const characters = Object.values(bank ?? {}).filter(character => character?.name);
         // Кого называют: задание (повод) и сами отчёты. Блок файлов — не основание: там бывают и задетые лишь по имени.
         const task = (Array.isArray(messages) ? messages : []).filter(message => message?.role === 'user' || String(message?.content ?? '').startsWith(REPORTS_HEADER)).map(message => String(message.content ?? '')).join('\n');
@@ -138,6 +144,7 @@ export function createDirector({
             importanceOf: name => find(name)?.importance ?? null,
             decreeOf: name => (find(name) ? Object.values(find(name).decree ?? {}).flat().map(line => String(line ?? '')).join('\n') : null),
             bankWritten: name => (find(name) ? ['material', 'spiritual'].every(part => Object.values(find(name)[part] ?? {}).some(lines => Array.isArray(lines) && lines.some(line => String(line ?? '').trim()))) : null),
+            onForm,
         };
     }
 
@@ -167,13 +174,28 @@ export function createDirector({
             world: await worldAtStart(),
         });
         const state = { role: 'director', decreeIssued: false, decreeNames: [] };
+        // Психолог за тем же столом: включается формой с write_bank, иначе молчит.
+        const desk = createPsyDesk({
+            call, getSettings, getWorkers, publishEvent, great: banks?.great ?? null,
+            world: async () => {
+                const built = await worldAtStart();
+                if (text(built)) return built;
+                try { return String(store?.chatBrief?.()?.timeline ?? '').trim(); } catch { return ''; }
+            },
+        });
+        const users = Object.values(bank ?? {}).filter(isUserCharacter).map(character => character.name);
         const captured = typeof capture === 'function'
             ? capture(`${runId}:`, { onThinking: value => publishEvent('decision.cycle.thinking', { runId, text: value }) })
             : null;
         live.started({ runId, event: 'decree', wake: info.wake, at: startedAt });
         let result;
         // Одна форма на весь запуск, и на возврат Петиции тоже.
-        const checklistHandlers = handlersFor(state, checklistFor(bank, context.messages));
+        const checklistHandlers = handlersFor(state, checklistFor(bank, context.messages, form => {
+            const names = (Array.isArray(form?.characters) ? form.characters : []).filter(item => item.write_bank).map(item => item.name);
+            if (!names.length) return;
+            desk.activate({ names, users });
+            banks.holdPsyche?.(desk.targets());
+        }), desk);
         const cycleParams = messages => ({
             messages,
             tools: buildDirectorToolList(),
@@ -208,6 +230,18 @@ export function createDirector({
             if (note) result = { ...result, warnings: [...(result.warnings ?? []), note] };
         } finally {
             captured?.stop?.();
+            // Конец сессии: psyche.md пишет Психолог-сосед, уже с историей сессии.
+            let session = null;
+            try {
+                session = await desk.finish({ state: await bankState() });
+            } catch (error) {
+                session = { warnings: [`the Psychologist could not finish the session: ${error?.message ?? String(error)}`] };
+            } finally {
+                banks.releasePsyche?.(desk.targets());
+            }
+            if (session?.warnings?.length && result) {
+                result = { ...result, warnings: [...(result.warnings ?? []), ...session.warnings] };
+            }
         }
         const endedAt = now();
         const cycle = createCycleRecord({

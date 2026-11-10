@@ -6,8 +6,8 @@ import { pendingDecisions } from '../../libraries/core/decision-director.js';
  * предложениям резолвера. Правка `decree.md` — это и есть выпуск Указа: она
  * отмечается в состоянии цикла директора (часть 21).
  */
-export function createFileHandlers({ banks = null, state = {}, publishEvent = () => {}, by = 'director', layer = null } = {}) {
-    const files = layer ?? createFileLayer({ banks });
+export function createFileHandlers({ banks = null, state = {}, publishEvent = () => {}, by = 'director', layer = null, beforeWrite = null } = {}) {
+    const files = layer ?? createFileLayer({ banks, beforeWrite });
     const noteDecree = paths => {
         const names = paths.map(parseCharacterPath).filter(target => target?.part === 'decree').map(target => target.name);
         if (!names.length) return;
@@ -23,7 +23,7 @@ export function createFileHandlers({ banks = null, state = {}, publishEvent = ()
         },
         edit: async args => {
             const result = await files.edit({ edits: args?.edits, comment: String(args?.comment ?? '') }, { by });
-            noteDecree(result.files.filter(file => file.ok && !file.unchanged).map(file => file.path));
+            noteDecree((Array.isArray(result?.files) ? result.files : []).filter(file => file.ok && !file.unchanged).map(file => file.path));
             return result;
         },
         create: async args => {
