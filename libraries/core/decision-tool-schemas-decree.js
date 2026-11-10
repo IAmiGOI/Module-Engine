@@ -68,3 +68,34 @@ export const DECREE_TOOL = Object.freeze({
         required: ['decrees', 'comment'],
     },
 });
+
+/** Форма Директора перед действием — проверяет движок (libraries/core/director-checklist.js). */
+export const CHECK_REPORTS_TOOL = Object.freeze({
+    name: 'check_reports',
+    displayName: 'Check the reports',
+    description: 'Your first call in every run, before any other: the checklist of what this report asks of you. One entry per character the reports touch — and on a new day, everyone with a Decree. For each: which report names them, whether their bank must be written, what happens to their Decree, and whether their standing changes. Characters the reports do not name are not in the form: their files stay as they are. Afterwards the engine holds you to the form — you can only touch what it lists, and await waits until what it promises is done. To change the plan, fill the form again.',
+    parameters: {
+        type: 'object',
+        properties: {
+            new_day: { type: 'boolean', description: 'True only when the reports say a new day begins.' },
+            characters: {
+                type: 'array',
+                description: 'Every character the reports touch, one entry each — including those for whom nothing changes.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        name: { type: 'string', description: 'Exactly as the bank writes it.' },
+                        named_by: { type: 'string', description: 'Which report names them: the Petition, the Telegram, the Ledger row, "Main Cast without a Decree" or "new day".' },
+                        write_bank: { type: 'boolean', description: 'True only when their material.md and spiritual.md are still empty and they need them now.' },
+                        decree: { type: 'string', enum: ['none', 'edit', 'create'], description: 'none — every line of their decree.md still holds; edit — the report changes some lines; create — they need a Decree and have none.' },
+                        importance: { type: 'string', description: 'The new standing (main / side / temporary / mass) only when it changes now; empty otherwise.' },
+                        why: { type: 'string', description: 'One sentence: what in the report decides this.' },
+                    },
+                    required: ['name', 'named_by', 'write_bank', 'decree', 'why'],
+                },
+            },
+            comment: COMMENT,
+        },
+        required: ['characters', 'comment'],
+    },
+});

@@ -1,3 +1,4 @@
+import { withDirectorChecklist, namedInReports } from '../../libraries/core/director-checklist.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
 import { buildDirectorToolList } from '../../libraries/core/decision-tools.js';
@@ -11,7 +12,7 @@ import { createDecreeHandler } from './handlers-decree.js';
 import { createFileHandlers } from './handlers-files.js';
 import { createBankHandlers } from './handlers-bank.js';
 import { createRetryRunner } from './retry.js';
-import { DIRECTOR_PETITION_STANDS } from '../../libraries/core/decision-prompts-director.js';
+import { DIRECTOR_PETITION_STANDS, REPORTS_HEADER } from '../../libraries/core/decision-prompts-director.js';
 import { fillPrompt } from '../../libraries/core/decision-prompts.js';
 
 /**
@@ -112,14 +113,28 @@ export function createDirector({
         });
     }
 
-    function handlersFor(state) {
-        return {
+    function handlersFor(state, checklist = null) {
+        const base = {
             ...createBankHandlers({ banks, state }),
             ...createDecreeHandler({ banks, state, publishEvent }),
             // Указ и банки — файлами: view / edit / create (часть 21).
             ...createFileHandlers({ banks, state, publishEvent, by: 'director' }),
             // Без своего await вызов уходил в общий маршрут и падал («no tool named await»), а движок писал «answered without a tool call».
             await: args => ({ ok: true, reason: String(args?.reason ?? '') }),
+        };
+        return checklist ? withDirectorChecklist(base, checklist) : base;
+    }
+
+    /** Форма перед действием: кого называют повод и отчёты (по тексту задания), у кого есть Указ, кто какой важности. */
+    function checklistFor(bank, messages) {
+        const characters = Object.values(bank ?? {}).filter(character => character?.name);
+        // Кого называют: задание (повод) и сами отчёты. Блок файлов — не основание: там бывают и задетые лишь по имени.
+        const task = (Array.isArray(messages) ? messages : []).filter(message => message?.role === 'user' || String(message?.content ?? '').startsWith(REPORTS_HEADER)).map(message => String(message.content ?? '')).join('\n');
+        const filled = character => Object.values(character?.decree ?? {}).some(lines => Array.isArray(lines) && lines.some(line => String(line ?? '').trim()));
+        return {
+            allowed: namedInReports(task, characters.map(character => ({ name: character.name, aliases: character.aliases ?? [] }))),
+            everyone: characters.filter(filled).map(character => character.name),
+            importanceOf: name => characters.find(character => character.name.toLowerCase() === String(name ?? '').trim().toLowerCase())?.importance ?? null,
         };
     }
 
@@ -154,11 +169,13 @@ export function createDirector({
             : null;
         live.started({ runId, event: 'decree', wake: info.wake, at: startedAt });
         let result;
+        // Одна форма на весь запуск, и на возврат Петиции тоже.
+        const checklistHandlers = handlersFor(state, checklistFor(bank, context.messages));
         const cycleParams = messages => ({
             messages,
             tools: buildDirectorToolList(),
             generate: generateFor({ settings, worker, runId, startedAt }),
-            handlers: handlersFor(state),
+            handlers: checklistHandlers,
             // Старый вызов `decree` (совместимость) кончает цикл сразу; файловые правки кончаются на await.
             stopAfter: ['decree'],
             callTool,

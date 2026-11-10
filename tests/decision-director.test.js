@@ -243,12 +243,16 @@ test('await is the Director\'s own tool, and a Petition with no Decree change is
     const world = harness({
         petitions: [petition('Ram')],
         answers: [
-            { text: '', toolCalls: [call('await', { reason: 'Everything is already up to date.', comment: 'Nothing to change.' })] },
+            { text: '', toolCalls: [
+                call('check_reports', { characters: [{ name: 'Ram', named_by: 'the Petition', write_bank: false, decree: 'none', why: 'Her lines hold.' }], comment: 'The checklist first.' }),
+                call('await', { reason: 'Everything is already up to date.', comment: 'Nothing to change.' }),
+            ] },
             { text: '', toolCalls: [call('await', { reason: 'Ram: line 1 "Family first." already covers it.', comment: 'Checked the line.' })] },
         ],
     });
     const result = await world.director.run({ runId: 'd1' });
     assert.equal(world.requests.length, 2, 'the Petition was handed back once');
+    assert.equal(result.cycle.toolCalls[0].name, 'check_reports', 'the checklist comes first');
     assert.match(JSON.stringify(world.requests[1].messages), /The Petition about Ram still stands/);
     assert.ok(!(result.cycle.warnings ?? []).some(warning => /without a tool call/.test(warning)), 'await is handled, not an implicit answer');
     assert.equal(result.cycle.toolCalls.filter(item => item.name === 'await').length, 2);
@@ -275,4 +279,23 @@ test('the Director gets the files of everyone a Petition names, not only of whom
     const state = { lena: { name: 'Lena', importance: 'main', decree: { 1: ['x'] } }, otto: { name: 'Otto', importance: 'side' } };
     const info = directorReason({ petitions: [{ ...petition('Lena'), problem: 'Lena has gone to meet Otto at the yards.' }], banks: state });
     assert.ok(info.characters.includes('Otto'), JSON.stringify(info.characters));
+});
+
+test('the Director\'s checklist: nothing before the form, nobody the reports do not name, and no rest before the promise is kept', async () => {
+    const { withDirectorChecklist } = await import('../libraries/core/director-checklist.js');
+    const calls = [];
+    const base = {
+        edit: async args => { calls.push('edit'); return { ok: true, files: args.edits.map(edit => ({ path: edit.path, ok: true })) }; },
+        create: async args => { calls.push('create'); return { ok: true, path: args.path }; },
+        set_bank_importance: async () => ({ ok: true }), await: async () => ({ ok: true }),
+    };
+    const handlers = withDirectorChecklist(base, { allowed: ['Emilia'], everyone: ['Emilia'], importanceOf: name => (name === 'Emilia' ? 'main' : null) });
+    assert.equal((await handlers.edit({ edits: [{ path: 'Characters/Emilia/decree.md', old: 'a', new: 'b' }] })).ok, false, 'no edit before the form');
+    assert.equal((await handlers.check_reports({ characters: [{ name: 'Aldebaran', named_by: 'nothing', write_bank: true, decree: 'none', why: 'empty files' }] })).ok, false, 'a character the reports do not name is refused');
+    assert.equal((await handlers.check_reports({ characters: [{ name: 'Emilia', named_by: 'Petition', write_bank: false, decree: 'edit', importance: 'main', why: 'x' }] })).ok, false, 'the same standing again is refused');
+    assert.equal((await handlers.check_reports({ characters: [{ name: 'Emilia', named_by: 'Petition', write_bank: false, decree: 'edit', why: 'Her goal changed.' }] })).ok, true);
+    assert.equal((await handlers.create({ path: 'Characters/Aldebaran/material.md', text: 'x' })).ok, false, 'files outside the form stay as they are');
+    assert.equal((await handlers.await({})).ok, false, 'no rest while the promised edit is not done');
+    await handlers.edit({ edits: [{ path: 'Characters/Emilia/decree.md', old: 'a', new: 'b' }] });
+    assert.equal((await handlers.await({})).ok, true);
 });

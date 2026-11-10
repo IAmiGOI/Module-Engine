@@ -6,7 +6,7 @@ import * as bootstrap from './decision-tool-schemas-bootstrap.js';
 import * as bank from './decision-tool-schemas-bank.js';
 import { INSCRIBE_TOOL } from './decision-tool-schemas-inscribe.js';
 import { AFTER_TURN_TOOL } from './decision-tool-schemas-after-turn.js';
-import { DECREE_TOOL } from './decision-tool-schemas-decree.js';
+import { DECREE_TOOL, CHECK_REPORTS_TOOL } from './decision-tool-schemas-decree.js';
 import { COUNSELLOR_TOOLS, COUNSELLOR_STOP_TOOLS, GOD_ANSWER_TOOL } from './decision-tool-schemas-counsellor.js';
 import { CREATION_WRITE_TOOL, SCALE_WRITE_TOOL, DISCOVERY_WRITE_TOOL, GOD_ASK_TOOL, GOD_REVIEW_TOOL, GOD_REVIEW_FILE_TOOL } from './decision-tool-schemas-creation.js';
 
@@ -84,7 +84,7 @@ export function buildCounsellorToolList() {
  * предложения резолвера принимаются тем же вызовом `decree`.
  */
 export function buildDirectorToolList() {
-    return [files.VIEW_TOOL, files.EDIT_TOOL, files.CREATE_TOOL, bank.SET_BANK_IMPORTANCE_TOOL, files.RESOLVE_PROPOSALS_TOOL, world.AWAIT_TOOL];
+    return [CHECK_REPORTS_TOOL, files.VIEW_TOOL, files.EDIT_TOOL, files.CREATE_TOOL, bank.SET_BANK_IMPORTANCE_TOOL, files.RESOLVE_PROPOSALS_TOOL, world.AWAIT_TOOL];
 }
 
 /**

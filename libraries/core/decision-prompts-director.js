@@ -77,7 +77,7 @@ export const DIRECTOR_THINK_DECREE = `## How You Issue A Decree
 One or two sentences per point, then the call at once.
 
 1. **Read the reports** — what happened, which character it happened to, and what the Ledger rows show. The report is evidence, not a story to retell.
-2. **Who changes and why** — only the characters the reports touch, and on a new day everyone with a Decree. An ordinary turn, a cost paid or a small mood is not a reason; a broken value, a dead end, a sharp change in their life or a need they cannot close is.
+2. **Who changes and why — check_reports** — fill the form first, before any other call: every character the reports touch, and on a new day everyone with a Decree, with what the report decides for each. An ordinary turn, a cost paid or a small mood is not a reason; a broken value, a dead end, a sharp change in their life or a need they cannot close is. Then do exactly what the form says.
 3. **Decree** — which lines of decree.md change, section by section, in the form the system prompt gives. Copy each old line exactly into "old". A character with an empty decree.md gets all five sections with create.
 4. **Bank** — promotions with set_bank_importance; the Resolver's proposals with resolve_proposals; spiritual.md itself with edit only when the report shows who they are has changed.
 5. **Check before you rest** — every Main Cast character has a written material.md, spiritual.md and a Decree; each Decree you wrote has all five sections; section 3 has a "Long goal:" and a "Today:" line; section 4 has three axis lines in the given form; every line of section 5 is "When …, they …". On a new day, "Today:" and the mood are new for everyone. Fix what fails, then call await.
