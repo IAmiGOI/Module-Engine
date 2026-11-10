@@ -63,9 +63,9 @@ test('the God and Counsellor context headers are the ones documented in sections
     assert.notEqual(GOD_QUESTIONS_HEADER, GOD_ASKS_HEADER, 'the two question headers belong to different readers');
 });
 
-test('the resolver prompt sends a Scales attempt to the rule\'s weight and a bypass to a Prayer', () => {
+test('the resolver prompt binds an attempt to the Scales and sends a bypass to a Prayer', () => {
     const section = sectionBlocks('## 2. Резолвер — задание на ход')[0];
-    assert.match(section, /its difficulty is the weight of the rule that covers it/);
+    assert.match(section, /binds every attempt that uses it/);
     assert.match(section, /not forbidden: it is an honest discovery/);
     assert.match(section, /pass it to God as a prayer/);
 });

@@ -78,7 +78,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     });
     // God (фаза 5): строит Creation и отвечает на Молитвы — своя очередь: долгое построение не держит Советника.
     const god = createGod({
-        call, callTool, store, getSettings, getWorkers, publishEvent, capture, creation, now,
+        call, callTool, callService, store, getSettings, getWorkers, publishEvent, capture, creation, now,
         enqueue: ownQueue(),
     });
     if (banks) god.setLayout({ marksForLorebook: () => banks.marksForLorebook?.() ?? null });

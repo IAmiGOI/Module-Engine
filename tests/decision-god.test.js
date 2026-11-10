@@ -51,7 +51,6 @@ function harness({ answers = [], creation = null, prayers = [], declaration = nu
             return next.toolCalls ? next : { text: '', toolCalls: next };
         }
         if (contract === 'lorebook.entries') return [{ book: 'World', uid: 1, comment: 'The Reef', content: 'Three islands and a reef.' }];
-        if (contract === 'stCharacter.chatCharacters') return [{ name: 'Aria', scenario: 'A drowned world.' }];
         return null;
     };
     const store = {
@@ -80,6 +79,7 @@ function harness({ answers = [], creation = null, prayers = [], declaration = nu
     };
     const creationStore = createCreationStore({ call, store, publishEvent: (event, payload) => events.push([event, payload ?? {}]) });
     const god = createGod({
+        callService: async contract => (contract === 'stCharacter.chatCharacters' ? [{ name: 'Aria', scenario: 'A drowned world.' }] : null),
         call, callTool: async () => ({ ok: true }), store,
         getSettings: () => settings,
         getWorkers: () => [{ id: 'resolver', format: 'openai', model: 'flash' }],

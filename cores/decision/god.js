@@ -42,7 +42,7 @@ function clockLabel(minutes) {
 }
 
 export function createGod({
-    call, callTool, store, getSettings, getWorkers, publishEvent,
+    call, callTool, callService = null, store, getSettings, getWorkers, publishEvent,
     capture = null, creation = null, enqueue = job => job(), now = () => Date.now(),
 }) {
     const live = createCycleLive({ publishEvent, getTurn: () => currentTurn(), getClock: () => store.clock().minutes });
@@ -146,7 +146,8 @@ export function createGod({
         try {
             const [entries, cards] = await Promise.all([
                 call('lorebook.entries').catch(() => []),
-                call('stCharacter.chatCharacters').catch(() => []),
+                // Карточки — сервис, не ядро: через `call` запрос уходил в шину ядер, ошибка глоталась, и Бог видел пустой материал.
+                (callService ?? call)('stCharacter.chatCharacters').catch(() => []),
             ]);
             const marks = typeof layout?.marksForLorebook === 'function' ? layout.marksForLorebook() : null;
             return godMaterial({ lorebookEntries: entries ?? [], cards: cards ?? [], marks });
