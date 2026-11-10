@@ -1,7 +1,7 @@
 import { assessAction } from '../../libraries/core/decision-probability.js';
 import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js';
 import { difficultyShift } from '../../libraries/core/game-settings.js';
-import { findRule, ruleNames, ruleDifficulty, checkSteps } from '../../libraries/core/decision-rule-weight.js';
+import { findRule, ruleNames, ruleDifficulty, checkSteps, failureOf } from '../../libraries/core/decision-rule-weight.js';
 
 /**
  * Оценка действия: два уровня из списков → таблица вероятностей → бросок
@@ -33,7 +33,7 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
             const strip = list => (Array.isArray(list) ? list : []).map(item => String(item ?? '').replace(/^(rule|scene)\s*:\s*/i, '').trim()).filter(Boolean);
             fromRule = ruleDifficulty(found.rule, { rises: strip(args.rises), falls: strip(args.falls), chosen: args.difficulty });
             if (!fromRule) return { ok: false, error: `The rule "${found.rule.name}" has no weight level — give "difficulty" yourself and name the rule in "why".` };
-            fromRule = { ...fromRule, rule: `${found.system.name} / ${found.rule.name}`, ruleRises: String(found.rule.weight?.rises ?? ''), ruleFalls: String(found.rule.weight?.falls ?? '') };
+            fromRule = { ...fromRule, failure: failureOf(found.rule), rule: `${found.system.name} / ${found.rule.name}`, ruleRises: String(found.rule.weight?.rises ?? ''), ruleFalls: String(found.rule.weight?.falls ?? '') };
         }
         state.assessmentCounter += 1;
         const id = `asm_${state.runId}_${state.assessmentCounter}`;
@@ -46,7 +46,15 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
             difficultyShift: difficultyShift(game),
         });
         if (!result.ok) return result;
-        const full = fromRule ? { ...result, rule: fromRule.rule, ruleBase: fromRule.base, ruleLevels: fromRule.named, rises: fromRule.rises, falls: fromRule.falls } : result;
+        // Последствие неудачи — рядом с результатом, последним перед формой: строки промпта модель пропускала, и провал
+        // тонкого щупа маны ронял с пятисот метров и полёт, и спутницу.
+        const failed = ['clumsy', 'botched'].includes(String(result.degree ?? ''));
+        const consequence = failed
+            ? [fromRule?.failure?.[result.degree] ? `What a ${result.degree} attempt costs under this rule: ${fromRule.failure[result.degree]}` : '',
+                'This is all the failure costs. It is the size of what was put into the attempt — a small working at worst simply does not work — and it touches only this attempt: whatever the character already holds and keeps going stays as it was.'].filter(Boolean).join(' ')
+            : '';
+        const base = fromRule ? { ...result, rule: fromRule.rule, ruleBase: fromRule.base, ruleLevels: fromRule.named, rises: fromRule.rises, falls: fromRule.falls } : result;
+        const full = consequence ? { ...base, consequence } : base;
         state.assessments.set(id, { ...full, id });
         return { ...full, id };
     };

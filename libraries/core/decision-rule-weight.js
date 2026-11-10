@@ -28,6 +28,14 @@ export function findRule(systems, name) {
     return null;
 }
 
+/** Что бывает при неудаче — строки Cost правила с «Clumsy»/«Botched»; без них — пусто. */
+export function failureOf(rule) {
+    const cost = (Array.isArray(rule?.cost) ? rule.cost : [rule?.cost]).map(text).join(' ');
+    const clumsy = /Clumsy\s*[—-]\s*([^.]*(?:\.[^.A-Z][^.]*)*)/.exec(cost)?.[1] ?? '';
+    const botched = /Botched\s*[—-]\s*([^.]*(?:\.[^.A-Z][^.]*)*)/.exec(cost)?.[1] ?? '';
+    return { clumsy: text(clumsy), botched: text(botched) };
+}
+
 /** Все правила мира строкой «Система / Правило» — для отказа с подсказкой. */
 export function ruleNames(systems) {
     return (Array.isArray(systems) ? systems : []).flatMap(system => (Array.isArray(system?.rules) ? system.rules : []).map(rule => `${text(system.name)} / ${text(rule.name)}`));
@@ -59,6 +67,7 @@ export function ruleDifficulty(rule, { rises = [], falls = [], chosen = '' } = {
 
 const STOP = new Set(['with', 'when', 'from', 'that', 'this', 'they', 'their', 'into', 'than', 'have', 'been', 'only', 'more', 'less', 'over', 'under', 'what', 'which', 'caster', 'casters', 'already', 'rises', 'falls']);
 const words = value => new Set(text(value).toLowerCase().match(/[a-z]{4,}/g)?.filter(word => !STOP.has(word)).map(word => word.replace(/(ing|ed|es|s)$/, '')) ?? []);
+const EXPERIENCE = /\b(in)?experience(d)?\b|\b(un)?practi[sc]ed\b|\bskill(ed)?\b|\bnovice\b|\bfirst time\b/i;
 const TRAIT = /\b(mana (capacity|pool|reserves?)|enormous mana|vast mana|talent(ed)?|gift(ed)?|innate)\b/i;
 
 /**
@@ -77,6 +86,7 @@ export function checkSteps(rule, { rises = [], falls = [] } = {}) {
             const match = /^(rule|scene)\s*:\s*(.+)$/i.exec(item);
             if (!match) { errors.push(`${side}: "${item}" — start it with "rule:" (a condition the rule itself lists) or "scene:" (an obstacle or help already established in the scene).`); continue; }
             const [, source, body] = match;
+            if (EXPERIENCE.test(body)) { errors.push(`${side}: "${body}" is about their experience — that is the experience level, already counted; it is never a step.`); continue; }
             if (TRAIT.test(body) && !TRAIT.test(ruleText)) { errors.push(`${side}: "${body}" is the character's own trait — that is their experience, not a step.`); continue; }
             if (source.toLowerCase() === 'rule') {
                 const own = [...words(body)];
