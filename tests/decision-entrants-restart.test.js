@@ -37,3 +37,14 @@ test('a stranger without a bank, or the turn already restarted once, goes on as 
     assert.notEqual(result?.restart, true);
     assert.equal(saved, false);
 });
+
+test('a power of the world used by a character the Resolver plays is rolled before the turn is accepted', async () => {
+    const state = { assessments: new Map([['a1', { character: 'Roswaal' }]]) };
+    const handler = createInscribeHandler({
+        store: { roster: () => ({ active: ['Roswaal'] }), saveRoster: async () => {}, clock: () => ({ minutes: 0 }), cycles: () => [] },
+        publishEvent: () => {}, state, resolvePlace: async () => '', lastTimeMark: async () => '',
+    });
+    const refused = await handler({ characters: [{ name: 'Roswaal', does: 'rises after them', power: 'Gate Magic / Yin Interference' }], beats: [{ who: 'Roswaal', kind: 'action', text: 'x' }], stop: 'x' });
+    assert.equal(refused.ok, false);
+    assert.match(refused.missing[0], /roll it with assess/);
+});

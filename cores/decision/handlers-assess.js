@@ -40,7 +40,9 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
                 if (found) notes.push(`The user's own words do not describe the Needs of "${found.system.name} / ${found.rule.name}" — rolled under "${freeform[0].system.name} / ${freeform[0].rule.name}", the rule for a technique built from their own understanding.`);
                 found = freeform[0];
             }
-            if (!found && freeform.length && kind === 'magic') found = freeform[0];
+            // Свободная работа — только для своей техники пользователя; у остальных без найденного правила — их трудность.
+            if (!found && freeform.length && kind === 'magic' && isUser) found = freeform[0];
+            if (!found && String(args.rule ?? '').trim()) notes.push(`There is no rule "${String(args.rule).trim()}" in the Creation — rolled at the difficulty given.`);
             if (found) {
                 const strip = list => (Array.isArray(list) ? list : []).map(item => String(item ?? '').trim()).filter(Boolean);
                 const keep = side => strip(args[side]).filter(item => {

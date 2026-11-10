@@ -51,6 +51,16 @@ export function createInscribeHandler({ store, publishEvent, state, resolvePlace
             const applied = await applyRoster(args.roster);
             if (applied?.warnings?.length) state.formWarnings = [...(state.formWarnings ?? []), ...applied.warnings];
         }
+        // Сила мира у персонажа, которого ведёт резолвер, — тоже бросок: Розвааль поднялся за пользователем на 500 метров
+        // «без видимого усилия», без броска и вопреки правилу, где у него только прыжки.
+        const unrolled = (Array.isArray(args?.characters) ? args.characters : []).filter(character => {
+            if (!String(character?.power ?? '').trim() || character?.idle === true) return false;
+            const roll = state.assessments instanceof Map ? state.assessments.get(String(character?.assessId ?? '')) : null;
+            return !roll || String(roll.character ?? '').trim().toLowerCase() !== String(character?.name ?? '').trim().toLowerCase();
+        });
+        if (unrolled.length) {
+            return { ok: false, missing: unrolled.map(character => `characters: "${character.name}" uses ${String(character.power).trim()} — roll it with assess under that rule and cite the returned id in assessId.`) };
+        }
         const timeBefore = await lastTimeMark();
         const clock = store.clock();
         const nowValue = rpInstant(timeBefore, Number(clock?.minutes) || 0);

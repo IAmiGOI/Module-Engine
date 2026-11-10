@@ -38,6 +38,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                         says: { type: 'string', description: 'What they say, in meaning — never the wording: the Writer writes the words. When the words do not come out cleanly (they break off, jump, dodge or spill out too much at once), say how they come out as well. Leave it out when they say nothing.' },
                         practice: { type: 'string', description: 'Only when what they say this turn takes knowledge or practice in a matter: how practised they are in it — none / novice / practised / skilled / expert / master — and the line of their bank or history it rests on; nothing there means none or novice. What they say stays at that level.' },
                         mode: { type: 'object', description: 'Only when THIS TURN asks for it: the fields it names, each as {"real": …, "lens": …}.' },
+                        power: { type: 'string', description: 'When what they do this turn uses a power of the world: its rule in the Creation, as "System / Rule". Leave it out otherwise. A power used is rolled with assess under that rule.' },
                         assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
                         outcome: { type: 'string', description: 'Why it succeeded or failed, written after the assess result is known.' },
                     },
