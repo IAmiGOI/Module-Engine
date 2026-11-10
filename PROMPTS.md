@@ -689,7 +689,7 @@ Your reasoning is a working note, not prose: one line per point, then the call a
 5. **Each Who Acts** — what they heard, feel and want; they act from whichever is stronger in them now, the feeling or the plan (a plan step is never one in ALREADY SAID AND DONE). Their deeds; what each means to get across and how it comes out of them now — in words only when that is how it comes out, and then in meaning, with how the words come out when they do not come out cleanly. What they say is no wiser than they are: in a matter that takes knowledge or practice, they speak at the level their bank and history give them.
 6. **Stop** — the beat the turn ends on.
 
-Each point is decided once, on the first reading that fits the character. Do not reopen a point, do not draft prose or lines — the Writer writes them — and write the form once, in the call.
+Each point is decided once, on the first reading that fits the character. Do not reopen a point, do not draft prose or lines — the Writer writes them — and write the form once, in the call. The turn does not have to be perfect, and a wrong reading costs little. What matters is that each character stays who they are: the first reading true to them is the one to take.
 ```
 
 ## 25. Резолвер — после хода (по тексту ответа писателя)
