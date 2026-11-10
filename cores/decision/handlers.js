@@ -232,7 +232,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, getGame
             };
         },
 
-        assess: createAssessHandler({ state, getSettings, getGameSettings, getScales }),
+        assess: createAssessHandler({ state, getSettings, getGameSettings, getScales, userName: () => String(banks?.persona?.()?.name ?? '').trim() }),
 
         after_turn: createAfterTurnHandler({ store, banks, knowledge, state, publishEvent }),
         inscribe: createInscribeHandler({ store, publishEvent, state, resolvePlace, lastTimeMark, formChecker, applyRoster, timeOfDay, getSettings, greatBank: banks?.great?.load ? () => banks.great.load() : null, userName: () => String(banks?.persona?.()?.name ?? '').trim() }),

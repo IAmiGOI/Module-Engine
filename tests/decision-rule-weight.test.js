@@ -67,3 +67,20 @@ test('naming a rule shows it in full, and the roll waits until the method meets 
     assert.equal((await ask({ needs: 'narrow rays aimed at one target', yields: 'which direction mana is drawn from' })).ok, false, 'a method the Needs do not describe is refused');
     assert.equal((await ask({ needs: 'spreading his own mana as a thin wide layer', yields: 'which direction mana is drawn from' })).ok, true);
 });
+
+test('for the user\'s character the method is their own words, and a method the Needs do not describe sends the roll to another rule', async () => {
+    const world = [{ name: 'Gate Magic', rules: [
+        { name: 'Mana Sensing & Wide-Area Sweep', needs: ['A still stance, spreading the caster\'s own mana as a thin wide layer'], yields: ['Which direction mana is drawn from, and roughly how strongly'], weight: { level: 'very hard', text: 'very hard' } },
+        { name: 'Imaginative Synthesis', needs: ['Clear concrete mental imagery of the effect'], yields: ['A silent custom working'], weight: { level: 'moderate', text: 'moderate' } },
+    ] }];
+    const state = { assessmentCounter: 0, runId: 'r', assessments: new Map(), userMessage: 'Instead of waves, I send tiny rays of mana, seeing how it will bend.' };
+    const handler = createAssessHandler({ state, getSettings: () => ({ assessSeed: 3 }), getScales: async () => world, userName: () => 'Sasha' });
+    const base = { character: 'Sasha', action: 'rays', kind: 'magic', size: 'small', difficulty: 'moderate', experience: 'novice', why: 'x' };
+    const sweep = await handler({ ...base, rule: 'Gate Magic / Mana Sensing & Wide-Area Sweep', method: 'I send tiny rays of mana, seeing how it will bend', needs: 'spreading the caster\'s own mana as a thin wide layer', yields: 'which direction mana is drawn from' });
+    assert.equal(sweep.ok, false);
+    assert.match(sweep.error, /not what this rule's Needs describe/);
+    const invented = await handler({ ...base, rule: 'Gate Magic / Imaginative Synthesis', method: 'he spreads a sheet of mana', needs: 'clear concrete mental imagery', yields: 'a silent custom working' });
+    assert.equal(invented.ok, false, 'a method not in the user\'s message is refused');
+    const fit = await handler({ ...base, rule: 'Gate Magic / Imaginative Synthesis', method: 'I send tiny rays of mana, seeing how it will bend', needs: 'clear concrete mental imagery of the effect', yields: 'a silent custom working' });
+    assert.equal(fit.ok, true);
+});

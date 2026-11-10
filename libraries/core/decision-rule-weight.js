@@ -127,3 +127,11 @@ export function quotes(source, quoted) {
     const shared = own.filter(word => pool.has(word)).length;
     return shared >= Math.min(3, own.length) || shared / own.length >= 0.5;
 }
+
+/** Насколько способ (словами пользователя) совпадает с Needs правила: доля его значимых слов, которые есть в Needs. */
+export function methodFits(needs, method) {
+    const own = [...words(method)];
+    if (!own.length) return 0;
+    const pool = words(joined(needs));
+    return own.filter(word => pool.has(word)).length / own.length;
+}

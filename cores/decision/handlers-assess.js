@@ -1,7 +1,7 @@
 import { assessAction } from '../../libraries/core/decision-probability.js';
 import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js';
 import { difficultyShift } from '../../libraries/core/game-settings.js';
-import { findRule, ruleNames, ruleDifficulty, checkSteps, failureOf, ruleCard, freeformRules, quotes } from '../../libraries/core/decision-rule-weight.js';
+import { findRule, ruleNames, ruleDifficulty, checkSteps, failureOf, ruleCard, freeformRules, quotes, methodFits } from '../../libraries/core/decision-rule-weight.js';
 
 /**
  * Оценка действия: два уровня из списков → таблица вероятностей → бросок
@@ -10,7 +10,7 @@ import { findRule, ruleNames, ruleDifficulty, checkSteps, failureOf, ruleCard, f
  */
 export const ASSESS_KINDS = Object.freeze(['body', 'stealth', 'perception', 'craft', 'magic', 'social']);
 
-export function createAssessHandler({ state, getSettings, getGameSettings = null, getScales = null }) {
+export function createAssessHandler({ state, getSettings, getGameSettings = null, getScales = null, userName = () => '' }) {
     return async args => {
         // Разговор не бросается: убедить, соврать, надавить — и как это примет слушатель — решает директор.
         // Обязательный вид попытки не даёт тихо превратить уговоры в бросок «на подачу».
@@ -40,6 +40,20 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
             const fitHint = `If the method does not meet these Needs or the aim is not in these Yields, this is not its rule${freeform.length ? ` — a technique the character builds from their own understanding goes under: ${freeform.join('; ')}` : ''}.`;
             if (!String(args.needs ?? '').trim() || !String(args.yields ?? '').trim()) {
                 return { ok: false, error: `Read the rule, then call assess again with "needs" — the part of its Needs the method meets, in its words — and "yields" — the part of its Yields the aim is. ${fitHint}\n\n${card}` };
+            }
+            // Способ персонажа пользователя — его же словами, дословно из сообщения: модель переписывала в «needs» сами Needs
+            // правила, и проверка сравнивала правило с собой. Совпадение с Needs считает движок, а не модель.
+            const isUser = String(userName() ?? '').trim().toLowerCase() === String(args.character ?? '').trim().toLowerCase();
+            const message = String(state.userMessage ?? '');
+            if (isUser && message) {
+                const method = String(args.method ?? '').trim();
+                if (method.length < 12 || !message.toLowerCase().includes(method.toLowerCase())) {
+                    return { ok: false, error: `For the user's own character give "method": how they do it, copied word for word from their latest message. ${fitHint}\n\n${card}` };
+                }
+                const freeformHere = /imagin|imagery|freeform|visuali[sz]/i.test(`${found.rule.name} ${(found.rule.needs ?? []).join(' ')}`);
+                if (!freeformHere && methodFits(found.rule.needs, method) < 0.25) {
+                    return { ok: false, error: `The user's method — "${method}" — is not what this rule's Needs describe. ${fitHint}\n\n${card}` };
+                }
             }
             if (!quotes(found.rule.needs, args.needs)) return { ok: false, error: `"needs" is not in this rule's Needs. ${fitHint}\n\n${card}` };
             if (!quotes(found.rule.yields, args.yields)) return { ok: false, error: `"yields" is not in this rule's Yields. ${fitHint}\n\n${card}` };
