@@ -1,3 +1,4 @@
+import { isUserCharacter } from '../../libraries/core/decision-great-bank.js';
 import { createGreatBank } from './bank-great.js';
 import { createPsychologist } from './psychologist.js';
 import { renderDecreeForResolver, renderTemperForResolver, renderPsycheForResolver } from '../../libraries/core/decision-bank-projections.js';
@@ -71,9 +72,13 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
         await sync();
         const state = await great.load();
         const entries = Object.values(state).map(character => ({ character }));
-        const inScene = Array.isArray(names) && names.length;
-        const temper = inScene ? renderTemperForResolver(entries, { names }) : '';
-        const psyche = inScene ? renderPsycheForResolver(entries, { names }) : '';
+        // Пустой ростер (первый ход) — нрав и психология всех, у кого есть Указ: раньше на первом ходу резолвер
+        // получал голый Указ, без отчёта Психолога и без того, как персонаж проявляет чувства.
+        const filled = part => Object.values(part ?? {}).some(lines => Array.isArray(lines) && lines.some(line => String(line ?? '').trim()));
+        const scene = Array.isArray(names) && names.length ? names
+            : entries.filter(entry => !isUserCharacter(entry.character) && filled(entry.character?.decree)).map(entry => entry.character.name);
+        const temper = scene.length ? renderTemperForResolver(entries, { names: scene }) : '';
+        const psyche = scene.length ? renderPsycheForResolver(entries, { names: scene }) : '';
         return [renderDecreeForResolver(entries, { names }), temper, psyche].filter(Boolean).join('\n\n');
     }
 
