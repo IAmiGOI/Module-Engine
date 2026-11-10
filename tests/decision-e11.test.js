@@ -71,7 +71,7 @@ test('a swipe restores the state from before the turn: roster, plan and clock go
             setPlan(),
             call('update_roster', { add: [{ name: 'Lena' }], comment: 'Lena is now in the scene.' }),
             call('assess', { character: 'Lena', action: 'leaves', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The exit is unguarded.', comment: 'The chance matters for the form.' }),
-            form([{ name: 'Lena', decision: 'Leave.', decisionReason: 'She is out of time.', action: 'Leaves.', feeling: 'calm', need: 'to be safe', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She gets out.' }], 5),
+            form([{ name: 'Lena', means: 'nothing', decision: 'Leave.', decisionReason: 'She is out of time.', action: 'Leaves.', feeling: 'calm', need: 'to be safe', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She gets out.' }], 5),
         ],
     });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });

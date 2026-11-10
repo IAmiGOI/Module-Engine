@@ -152,7 +152,7 @@ test('a line beat for a character whose says is empty goes back once, then is dr
     const loose = repair({ form, roster: ['Mara'] });
     assert.equal(loose.ok, true);
     assert.equal(loose.form.beats.some(beat => beat.kind === 'line'), false);
-    const spoken = repair({ form: { ...form, characters: [{ name: 'Mara', shows: 'words', does: 'grips the rail', says: 'where they are going' }] }, roster: ['Mara'], strictLines: true });
+    const spoken = repair({ form: { ...form, characters: [{ name: 'Mara', means: 'where they go', shows: 'words', does: 'grips the rail', says: 'where they are going' }] }, roster: ['Mara'], strictLines: true });
     assert.equal(spoken.ok, true);
     assert.equal(spoken.form.beats.filter(beat => beat.kind === 'line').length, 1);
 });

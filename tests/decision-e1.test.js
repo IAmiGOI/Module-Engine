@@ -84,7 +84,7 @@ test('update_roster is persisted and reaches the next context', async () => {
             call('inscribe', {
                 comment: 'The turn is ready for the writer.',
                 resolution: 'Lena arrives.', scene: { minutes: 1 }, userResult: 'The user waits.',
-                beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Lena', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', feeling: 'calm', need: 'to be safe', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }],
+                beats: [{ who: 'Someone', kind: 'action', text: 'acts' }], characters: [{ name: 'Lena', means: 'nothing', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', feeling: 'calm', need: 'to be safe', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }],
             }),
         ],
     });

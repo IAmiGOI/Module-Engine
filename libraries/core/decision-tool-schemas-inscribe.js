@@ -34,7 +34,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                         heard: { type: 'string', description: 'What in the user\'s latest message — what was said and what was done — or in what just happened matters to them, in one line. What is new in it for them.' },
                         feels: { type: 'string', description: 'What they feel now, from their Emotions and what they heard. A few words.' },
                         next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID AND DONE or already taken. Leave it out when a feeling, not a plan, moves them this turn. With no Decree yet, toward what their bank wants.' },
-                        means: { type: 'string', description: 'What they mean to get across to someone this turn, in a few words. Leave it out when they mean to get nothing across.' },
+                        means: { type: 'string', description: 'What they mean to get across to someone this turn, in a few words — or "nothing". Decide it before says: says holds only what of it comes out in words.' },
                         shows: { type: 'string', enum: ['words', 'body', 'held back'], description: 'With means: how it comes out of them now — in words, in the body, or held back so that nothing shows — from their state at this moment and how their bank says they show feeling. Only words fill "says".' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
                         says: { type: 'string', description: 'What they say, in meaning — never the wording: the Writer writes the words. When the words do not come out cleanly, say how they come out as well. Leave it out when they say nothing.' },
@@ -44,7 +44,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                         assessId: { type: 'string', description: 'Id returned by assess. Leave it out when no roll was needed.' },
                         outcome: { type: 'string', description: 'Why it succeeded or failed, written after the assess result is known.' },
                     },
-                    required: ['name'],
+                    required: ['name', 'means'],
                 },
             },
             beats: {

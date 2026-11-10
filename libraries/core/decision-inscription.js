@@ -76,8 +76,15 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         let says = /^(none|null|n\/a|nothing|-+|—)\.?$/i.test(said) ? '' : said;
         // Что персонаж хочет передать (means, real) и как это выходит сейчас (shows, lens): словами, телом или сдержано.
         // «Хочет спросить» не равно «говорит»: не words — says пуст. Первый раз — назад резолверу, повтор — движок чинит сам.
-        const means = text(character.means);
+        // means обязателен у каждого действующего: сначала намерение, потом канал; «nothing» — передавать нечего.
+        const meansRaw = text(character.means);
+        if (!meansRaw && strictLines) missing.push(`characters: "${character.name}" needs "means" — what they mean to get across to someone this turn, or "nothing"`);
+        const means = /^nothing\.?$/i.test(meansRaw) ? '' : meansRaw;
         let shows = SHOWS.includes(text(character.shows).toLowerCase()) ? text(character.shows).toLowerCase() : '';
+        if (!means && says) {
+            if (strictLines && meansRaw) missing.push(`characters: "${character.name}" means "nothing" yet has "says" — with nothing to get across, says stays empty`);
+            else if (meansRaw) { says = ''; warnings.push(`"${character.name}" means nothing — their says was cleared`); }
+        }
         if (!shows && (means || says) && strictLines) missing.push(`characters: "${character.name}" needs "shows" — how what they mean to get across comes out now: ${SHOWS.join(' / ')}`);
         if (!shows && (means || says)) shows = says ? 'words' : 'body';
         if (says && shows !== 'words') {
