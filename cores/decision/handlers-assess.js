@@ -1,7 +1,7 @@
 import { assessAction } from '../../libraries/core/decision-probability.js';
 import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js';
 import { difficultyShift } from '../../libraries/core/game-settings.js';
-import { findRule, ruleNames, ruleDifficulty, checkSteps, failureOf, ruleCard, freeformRules, quotes, methodFits } from '../../libraries/core/decision-rule-weight.js';
+import { findRule, ruleDifficulty, checkSteps, failureOf, ruleCard, freeformRules, methodFits } from '../../libraries/core/decision-rule-weight.js';
 
 /**
  * Оценка действия: два уровня из списков → таблица вероятностей → бросок
@@ -20,49 +20,39 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
         if (!String(args.why ?? '').trim()) {
             return { ok: false, error: 'assess needs "why": the circumstances of the attempt in a sentence or two.' };
         }
-        // Размер работы решает цену провала: тонкие лучи маны не бьют отдачей, как волна на весь город.
-        const size = String(args.size ?? '').trim().toLowerCase();
-        if (kind === 'magic' && !['small', 'medium', 'heavy'].includes(size)) {
-            return { ok: false, error: 'A magic attempt needs "size": small (a thin, light working), medium or heavy (a great working that draws hard on the caster). It sets what a failure can cost.' };
-        }
-        // Попытка через систему мира: трудность — от её правила, а не от ощущения резолвера.
+        // Размер работы решает цену провала: тонкие лучи маны не бьют отдачей, как волна на весь город. Не указан — средний.
+        const sizeRaw = String(args.size ?? '').trim().toLowerCase();
+        const size = kind === 'magic' ? (['small', 'medium', 'heavy'].includes(sizeRaw) ? sizeRaw : 'medium') : '';
+        // Попытка через систему мира: трудность — от её правила. Движок не отказывает, а исправляет: отказы гоняли
+        // резолвер по кругу, и ход не укладывался в срок.
         const systems = typeof getScales === 'function' ? (await getScales()) ?? [] : [];
         let fromRule = null;
+        const notes = [];
         if (systems.length && (kind === 'magic' || String(args.rule ?? '').trim())) {
-            const found = findRule(systems, args.rule);
-            if (!found) {
-                return { ok: false, error: `${String(args.rule ?? '').trim() ? `There is no rule "${String(args.rule).trim()}".` : 'An attempt through a power of the world needs "rule".'} Name the rule it uses, as "System / Rule": ${ruleNames(systems).join('; ')}.` };
-            }
-            // Подходит ли правило: способ — по его Needs, цель — по его Yields. Резолвер выбирал правило по имени из строки
-            // открытия, не видя самого правила (его не было в снимке мира), и тащил радар из лучей в «волну маны».
-            const card = ruleCard(found.system, found.rule);
-            const freeform = freeformRules(systems).filter(name => name !== `${found.system.name} / ${found.rule.name}`);
-            const fitHint = `If the method does not meet these Needs or the aim is not in these Yields, this is not its rule${freeform.length ? ` — a technique the character builds from their own understanding goes under: ${freeform.join('; ')}` : ''}.`;
-            if (!String(args.needs ?? '').trim() || !String(args.yields ?? '').trim()) {
-                return { ok: false, error: `Read the rule, then call assess again with "needs" — the part of its Needs the method meets, in its words — and "yields" — the part of its Yields the aim is. ${fitHint}\n\n${card}` };
-            }
-            // Способ персонажа пользователя — его же словами, дословно из сообщения: модель переписывала в «needs» сами Needs
-            // правила, и проверка сравнивала правило с собой. Совпадение с Needs считает движок, а не модель.
+            let found = findRule(systems, args.rule);
+            const freeform = freeformRules(systems).map(name => findRule(systems, name)).filter(Boolean);
+            // Способ персонажа пользователя — его собственное сообщение. Если Needs выбранного правила его не описывают,
+            // это его своя техника: правило свободной работы. Радар из лучей уходил в «волну маны» с её ценой и трудностью.
             const isUser = String(userName() ?? '').trim().toLowerCase() === String(args.character ?? '').trim().toLowerCase();
             const message = String(state.userMessage ?? '');
-            if (isUser && message) {
-                const method = String(args.method ?? '').trim();
-                if (method.length < 12 || !message.toLowerCase().includes(method.toLowerCase())) {
-                    return { ok: false, error: `For the user's own character give "method": how they do it, copied word for word from their latest message. ${fitHint}\n\n${card}` };
-                }
-                const freeformHere = /imagin|imagery|freeform|visuali[sz]/i.test(`${found.rule.name} ${(found.rule.needs ?? []).join(' ')}`);
-                if (!freeformHere && methodFits(found.rule.needs, method) < 0.25) {
-                    return { ok: false, error: `The user's method — "${method}" — is not what this rule's Needs describe. ${fitHint}\n\n${card}` };
+            const isFreeform = rule => /imagin|imagery|freeform|visuali[sz]/i.test(`${rule?.name} ${(rule?.needs ?? []).join(' ')}`);
+            if (isUser && message && freeform.length && (!found || (!isFreeform(found.rule) && methodFits(found.rule.needs, message) < 0.25))) {
+                if (found) notes.push(`The user's own words do not describe the Needs of "${found.system.name} / ${found.rule.name}" — rolled under "${freeform[0].system.name} / ${freeform[0].rule.name}", the rule for a technique built from their own understanding.`);
+                found = freeform[0];
+            }
+            if (!found && freeform.length && kind === 'magic') found = freeform[0];
+            if (found) {
+                const strip = list => (Array.isArray(list) ? list : []).map(item => String(item ?? '').trim()).filter(Boolean);
+                const keep = side => strip(args[side]).filter(item => {
+                    const errors = checkSteps(found.rule, { [side]: [item] });
+                    if (errors.length) notes.push(`not counted — ${errors[0]}`);
+                    return !errors.length;
+                }).map(item => item.replace(/^(rule|scene)\s*:\s*/i, '').trim());
+                fromRule = ruleDifficulty(found.rule, { rises: keep('rises'), falls: keep('falls'), chosen: args.difficulty });
+                if (fromRule) {
+                    fromRule = { ...fromRule, card: ruleCard(found.system, found.rule), limit: (Array.isArray(found.rule.limit) ? found.rule.limit : [found.rule.limit]).filter(Boolean).join(' '), scaling: (Array.isArray(found.rule.scaling) ? found.rule.scaling : [found.rule.scaling]).filter(Boolean).join(' '), failure: failureOf(found.rule), rule: `${found.system.name} / ${found.rule.name}` };
                 }
             }
-            if (!quotes(found.rule.needs, args.needs)) return { ok: false, error: `"needs" is not in this rule's Needs. ${fitHint}\n\n${card}` };
-            if (!quotes(found.rule.yields, args.yields)) return { ok: false, error: `"yields" is not in this rule's Yields. ${fitHint}\n\n${card}` };
-            const stepErrors = checkSteps(found.rule, { rises: args.rises, falls: args.falls });
-            if (stepErrors.length) return { ok: false, error: `Rule "${found.system.name} / ${found.rule.name}": ${stepErrors.join(' ')}` };
-            const strip = list => (Array.isArray(list) ? list : []).map(item => String(item ?? '').replace(/^(rule|scene)\s*:\s*/i, '').trim()).filter(Boolean);
-            fromRule = ruleDifficulty(found.rule, { rises: strip(args.rises), falls: strip(args.falls), chosen: args.difficulty });
-            if (!fromRule) return { ok: false, error: `The rule "${found.rule.name}" has no weight level — give "difficulty" yourself and name the rule in "why".` };
-            fromRule = { ...fromRule, limit: (Array.isArray(found.rule.limit) ? found.rule.limit : [found.rule.limit]).filter(Boolean).join(' '), scaling: (Array.isArray(found.rule.scaling) ? found.rule.scaling : [found.rule.scaling]).filter(Boolean).join(' '), failure: failureOf(found.rule), rule: `${found.system.name} / ${found.rule.name}`, ruleRises: String(found.rule.weight?.rises ?? ''), ruleFalls: String(found.rule.weight?.falls ?? '') };
         }
         state.assessmentCounter += 1;
         const id = `asm_${state.runId}_${state.assessmentCounter}`;
@@ -82,7 +72,7 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
         const consequence = !failed ? '' : size === 'small'
             ? `This was a small working: failing means only that it does not work or tells nothing. No backlash, no harm, no cost beyond the little that was spent. ${ONLY}`
             : [fromRule?.failure?.[result.degree] ? `What a ${result.degree} attempt costs under this rule${size === 'medium' ? ', in a lighter form for a medium working' : ''}: ${fromRule.failure[result.degree]}` : '', `This is all the failure costs. ${ONLY}`].filter(Boolean).join(' ');
-        const base = fromRule ? { ...result, rule: fromRule.rule, ruleBase: fromRule.base, ruleLevels: fromRule.named, rises: fromRule.rises, falls: fromRule.falls, ruleLimit: fromRule.limit, ruleScaling: fromRule.scaling } : result;
+        const base = fromRule ? { ...result, rule: fromRule.rule, ruleBase: fromRule.base, ruleLevels: fromRule.named, rises: fromRule.rises, falls: fromRule.falls, ruleText: fromRule.card, ...(notes.length ? { notes } : {}) } : result;
         const full = consequence ? { ...base, size, consequence } : (size ? { ...base, size } : base);
         state.assessments.set(id, { ...full, id });
         return { ...full, id };

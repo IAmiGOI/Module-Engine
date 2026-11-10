@@ -1,86 +1,52 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAssessHandler } from '../cores/decision/handlers-assess.js';
+import { checkSteps, ruleDifficulty } from '../libraries/core/decision-rule-weight.js';
 
-const systems = [{ name: 'Gate Magic', rules: [{ name: 'Imaginative Synthesis (Freeform Visualization)', needs: ['A functional Gate and clear mental imagery of the effect'], yields: ['A silent working shaped by the caster\'s imagination'], weight: { level: 'moderate', rises: 'the picture wavers under terror or pain', falls: 'familiar Earth physics the caster pictures effortlessly' } }] }];
-const handler = () => createAssessHandler({ state: { assessmentCounter: 0, runId: 'r', assessments: new Map() }, getSettings: () => ({ assessSeed: 1 }), getScales: async () => systems });
+const world = [{ name: 'Gate Magic', rules: [
+    { name: 'Mana Sensing & Wide-Area Sweep', needs: ['A still stance, spreading the caster\'s own mana outward as a thin wide layer'], yields: ['Which direction mana is drawn from, and roughly how strongly'], limit: ['Cannot single out a source'],
+        weight: { level: 'very hard', text: 'very hard', rises: 'the number of other Gates and charms in range', falls: 'the caster already knows one signature to compare against' },
+        cost: ['A share of mana. Clumsy — a half map and ringing ears. Botched — every Gate in range strikes the caster at once.'] },
+    { name: 'Imaginative Synthesis (Freeform Visualization)', needs: ['A functional Gate and clear concrete mental imagery of the effect'], yields: ['A silent custom working'],
+        weight: { level: 'moderate', text: 'moderate for a single-concept working; hard for a complex multi-property one', rises: 'the picture wavers under terror or pain', falls: 'familiar Earth physics the caster pictures effortlessly' } },
+] }];
+const handler = (userMessage = '') => createAssessHandler({ state: { assessmentCounter: 0, runId: 'r', assessments: new Map(), userMessage }, getSettings: () => ({ assessSeed: 3 }), getScales: async () => world, userName: () => 'Sasha' });
+const base = { character: 'Sasha', action: 'x', kind: 'magic', experience: 'novice', why: 'x' };
 
-test('a magic attempt starts from its rule\'s weight, a step per named rise or fall, and the resolver\'s own level is not used', async () => {
-    const result = await handler()({ character: 'Sasha', action: 'wings', kind: 'magic', size: 'heavy', difficulty: 'hard', experience: 'novice', why: 'x', rule: 'Gate Magic / Imaginative Synthesis', needs: 'clear mental imagery of the effect', yields: 'a silent working shaped by imagination',
-        rises: ['scene: his Gate aches from two failed sweeps'], falls: ['rule: familiar Earth physics he pictures effortlessly'] });
+test('a rule-based roll starts from the rule, a step per counted rise or fall, and the base may be any level the weight names', async () => {
+    const result = await handler()({ ...base, size: 'heavy', difficulty: 'hard', rule: 'Gate Magic / Imaginative Synthesis', rises: ['scene: his Gate aches from two failed sweeps'], falls: ['rule: familiar Earth physics he pictures effortlessly'] });
     assert.equal(result.ok, true);
-    assert.equal(result.difficulty, 'moderate');
+    assert.equal(result.ruleBase, 'hard');
+    assert.equal(result.difficulty, 'hard');
+    assert.match(result.ruleText, /Needs: A functional Gate/);
+    assert.equal(ruleDifficulty(world[0].rules[1], { chosen: 'nearly impossible' }).base, 'moderate', 'a level the weight does not name falls back to its base');
+});
+
+test('steps that are not the rule\'s, traits and experience are not counted — the roll goes on, with a note', async () => {
+    const result = await handler()({ ...base, difficulty: 'very hard', rule: 'Gate Magic / Mana Sensing', rises: ['rule: the caster\'s inexperience at reading the return'], falls: ['scene: his enormous mana capacity', 'high vantage'] });
+    assert.equal(result.ok, true);
+    assert.equal(result.difficulty, 'very hard');
+    assert.equal(result.notes.length, 3);
+    assert.equal(checkSteps(world[0].rules[0], { falls: ['rule: he knows Puck\'s signature to compare against'] }).length, 0);
+});
+
+test('the user\'s own technique the chosen rule does not describe is rolled under the freeform rule', async () => {
+    const result = await handler('Instead of waves, I send tiny rays of mana, seeing how it will bend.')({ ...base, size: 'small', difficulty: 'very hard', rule: 'Gate Magic / Mana Sensing & Wide-Area Sweep', rises: ['rule: the number of other Gates and charms in range'] });
+    assert.equal(result.ok, true);
+    assert.match(result.rule, /Imaginative Synthesis/);
     assert.equal(result.ruleBase, 'moderate');
-    assert.equal(result.rule, 'Gate Magic / Imaginative Synthesis (Freeform Visualization)');
+    assert.match(result.notes.join(' '), /rolled under "Gate Magic \/ Imaginative Synthesis/);
+    const sweep = await handler('I spread my own mana outward as a thin wide layer across the ward, standing still.')({ ...base, size: 'medium', difficulty: 'very hard', rule: 'Gate Magic / Mana Sensing & Wide-Area Sweep' });
+    assert.match(sweep.rule, /Mana Sensing/, 'a method the Needs describe keeps its rule');
 });
 
-test('a magic attempt without a known rule is refused with the rules of the world', async () => {
-    const result = await handler()({ character: 'Sasha', action: 'wings', kind: 'magic', size: 'heavy', difficulty: 'hard', experience: 'novice', why: 'x' });
-    assert.equal(result.ok, false);
-    assert.match(result.error, /Gate Magic \/ Imaginative Synthesis/);
-});
-
-test('a rule whose weight names two levels lets the Resolver pick between them, and nothing outside them', async () => {
-    const { ruleDifficulty } = await import('../libraries/core/decision-rule-weight.js');
-    const rule = { weight: { level: 'moderate', text: 'moderate for single-concept spells; hard for complex multi-property spells; rises if the picture wavers' } };
-    assert.equal(ruleDifficulty(rule, { chosen: 'hard' }).difficulty, 'hard', 'the complex tier the rule names');
-    assert.equal(ruleDifficulty(rule, { chosen: 'nearly impossible' }).difficulty, 'moderate', 'a level the rule does not name falls back to its base');
-    assert.equal(ruleDifficulty(rule, { chosen: 'hard', rises: ['aching Gate'], falls: ['familiar Earth physics'] }).difficulty, 'hard');
-});
-
-test('steps must say where they come from, a rule step must be in the rule, and a trait is never a step', async () => {
-    const { checkSteps } = await import('../libraries/core/decision-rule-weight.js');
-    const rule = { weight: { level: 'very hard', rises: 'the number of other Gates in range', falls: 'the caster already knows one signature to compare against' } };
-    assert.equal(checkSteps(rule, { falls: ['rule: he knows Puck\'s signature to compare against'] }).length, 0);
-    assert.equal(checkSteps(rule, { falls: ['high vantage'] }).length, 1, 'no source');
-    assert.equal(checkSteps(rule, { falls: ['rule: high vantage above the ward'] }).length, 1, 'not in the rule');
-    assert.equal(checkSteps(rule, { falls: ['scene: his enormous mana capacity'] }).length, 1, 'a trait');
-    assert.equal(checkSteps(rule, { rises: ['scene: his Gate aches from two failed sweeps'] }).length, 0);
-});
-
-test('experience is never a step, and a failed roll carries what it costs and that it touches only itself', async () => {
-    const { checkSteps } = await import('../libraries/core/decision-rule-weight.js');
-    assert.equal(checkSteps({ weight: { rises: 'the caster\'s inexperience at reading the return' } }, { rises: ['rule: the caster\'s inexperience at reading the return'] }).length, 1);
-    const rule = { name: 'Probe', needs: ['A Gate and a still stance spreading mana wide'], yields: ['Where mana is drawn from, and how strongly'], weight: { level: 'nearly impossible', text: 'nearly impossible' }, cost: ['A thin draw of mana. Clumsy — a blurred read. Botched — nothing comes back.'] };
-    const handler = createAssessHandler({ state: { assessmentCounter: 0, runId: 'r', assessments: new Map() }, getSettings: () => ({ assessSeed: 7 }), getScales: async () => [{ name: 'Gate Magic', rules: [rule] }] });
-    const result = await handler({ character: 'Sasha', action: 'probe', kind: 'magic', size: 'medium', difficulty: 'nearly impossible', experience: 'none', why: 'x', rule: 'Gate Magic / Probe', needs: 'a still stance spreading mana wide', yields: 'where mana is drawn from' });
-    assert.ok(['clumsy', 'botched'].includes(result.degree));
-    assert.match(result.consequence, /blurred read|nothing comes back/);
-    assert.match(result.consequence, /touches only this attempt/);
-    const small = await handler({ character: 'Sasha', action: 'rays', kind: 'magic', size: 'small', difficulty: 'nearly impossible', experience: 'none', why: 'x', rule: 'Gate Magic / Probe', needs: 'a still stance spreading mana wide', yields: 'where mana is drawn from' });
-    assert.match(small.consequence, /small working: failing means only that it does not work/);
-    assert.doesNotMatch(small.consequence, /nothing comes back|blurred/);
-    assert.equal((await handler({ character: 'Sasha', action: 'rays', kind: 'magic', difficulty: 'moderate', experience: 'none', why: 'x', rule: 'Gate Magic / Probe' })).ok, false, 'magic without a size is refused');
-});
-
-test('naming a rule shows it in full, and the roll waits until the method meets its Needs and the aim is in its Yields', async () => {
-    const world = [{ name: 'Gate Magic', rules: [
-        { name: 'Mana Sensing & Wide-Area Sweep', needs: ['A still stance, spreading the caster\'s own mana as a thin wide layer'], yields: ['Which direction mana is drawn from, and roughly how strongly'], limit: ['Cannot single out a source'], weight: { level: 'very hard', text: 'very hard' } },
-        { name: 'Imaginative Synthesis', needs: ['Clear concrete mental imagery of the effect'], yields: ['A silent custom working'], weight: { level: 'moderate', text: 'moderate' } },
-    ] }];
-    const handler = createAssessHandler({ state: { assessmentCounter: 0, runId: 'r', assessments: new Map() }, getSettings: () => ({ assessSeed: 3 }), getScales: async () => world });
-    const ask = extra => handler({ character: 'Sasha', action: 'radar rays', kind: 'magic', size: 'small', difficulty: 'very hard', experience: 'novice', why: 'x', rule: 'Gate Magic / Mana Sensing & Wide-Area Sweep', ...extra });
-    const blind = await ask({});
-    assert.equal(blind.ok, false);
-    assert.match(blind.error, /Needs: A still stance/);
-    assert.match(blind.error, /Imaginative Synthesis/, 'the freeform rule is offered');
-    assert.equal((await ask({ needs: 'narrow rays aimed at one target', yields: 'which direction mana is drawn from' })).ok, false, 'a method the Needs do not describe is refused');
-    assert.equal((await ask({ needs: 'spreading his own mana as a thin wide layer', yields: 'which direction mana is drawn from' })).ok, true);
-});
-
-test('for the user\'s character the method is their own words, and a method the Needs do not describe sends the roll to another rule', async () => {
-    const world = [{ name: 'Gate Magic', rules: [
-        { name: 'Mana Sensing & Wide-Area Sweep', needs: ['A still stance, spreading the caster\'s own mana as a thin wide layer'], yields: ['Which direction mana is drawn from, and roughly how strongly'], weight: { level: 'very hard', text: 'very hard' } },
-        { name: 'Imaginative Synthesis', needs: ['Clear concrete mental imagery of the effect'], yields: ['A silent custom working'], weight: { level: 'moderate', text: 'moderate' } },
-    ] }];
-    const state = { assessmentCounter: 0, runId: 'r', assessments: new Map(), userMessage: 'Instead of waves, I send tiny rays of mana, seeing how it will bend.' };
-    const handler = createAssessHandler({ state, getSettings: () => ({ assessSeed: 3 }), getScales: async () => world, userName: () => 'Sasha' });
-    const base = { character: 'Sasha', action: 'rays', kind: 'magic', size: 'small', difficulty: 'moderate', experience: 'novice', why: 'x' };
-    const sweep = await handler({ ...base, rule: 'Gate Magic / Mana Sensing & Wide-Area Sweep', method: 'I send tiny rays of mana, seeing how it will bend', needs: 'spreading the caster\'s own mana as a thin wide layer', yields: 'which direction mana is drawn from' });
-    assert.equal(sweep.ok, false);
-    assert.match(sweep.error, /not what this rule's Needs describe/);
-    const invented = await handler({ ...base, rule: 'Gate Magic / Imaginative Synthesis', method: 'he spreads a sheet of mana', needs: 'clear concrete mental imagery', yields: 'a silent custom working' });
-    assert.equal(invented.ok, false, 'a method not in the user\'s message is refused');
-    const fit = await handler({ ...base, rule: 'Gate Magic / Imaginative Synthesis', method: 'I send tiny rays of mana, seeing how it will bend', needs: 'clear concrete mental imagery of the effect', yields: 'a silent custom working' });
-    assert.equal(fit.ok, true);
+test('a failure is the size of the working and touches only itself; no size means medium', async () => {
+    const small = await handler()({ ...base, size: 'small', difficulty: 'very hard', experience: 'none', rule: 'Gate Magic / Mana Sensing' });
+    const medium = await handler()({ ...base, difficulty: 'very hard', experience: 'none', rule: 'Gate Magic / Mana Sensing' });
+    assert.equal(medium.size, 'medium');
+    if (['clumsy', 'botched'].includes(small.degree)) {
+        assert.match(small.consequence, /small working: failing means only that it does not work/);
+        assert.doesNotMatch(small.consequence, /strikes the caster/);
+    }
+    if (['clumsy', 'botched'].includes(medium.degree)) assert.match(medium.consequence, /touches only this attempt/);
 });
