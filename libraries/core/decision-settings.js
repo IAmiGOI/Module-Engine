@@ -108,6 +108,14 @@ export const DEFAULT_GOD = Object.freeze({
 });
 
 /**
+ * Психолог (psyche.md): свой воркер, а без него — воркер Директора. Один
+ * вызов модели без рассуждения на персонажа.
+ */
+export const DEFAULT_PSYCHOLOGIST = Object.freeze({
+    workerId: '',
+});
+
+/**
  * Один алгоритм повтора для всех ролей (часть 19): общий лимит попыток,
  * бюджеты времени у блокирующих и фоновых ролей и запасные подключения.
  */
@@ -159,6 +167,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     counsellor: DEFAULT_COUNSELLOR,
     director: DEFAULT_DIRECTOR,
     god: DEFAULT_GOD,
+    psychologist: DEFAULT_PSYCHOLOGIST,
     retry: DEFAULT_RETRY,
     bankTimeOfDay: DEFAULT_BANK_TIME_OF_DAY,
     decider: DEFAULT_DECIDER,
@@ -200,6 +209,7 @@ export function clampDecisionSettings(values = {}) {
     const counsellor = source.counsellor && typeof source.counsellor === 'object' ? source.counsellor : {};
     const director = source.director && typeof source.director === 'object' ? source.director : {};
     const god = source.god && typeof source.god === 'object' ? source.god : {};
+    const psychologist = source.psychologist && typeof source.psychologist === 'object' ? source.psychologist : {};
     const retry = source.retry && typeof source.retry === 'object' ? source.retry : {};
     const backups = retry.backups && typeof retry.backups === 'object' ? retry.backups : {};
     const prompts = source.prompts && typeof source.prompts === 'object' ? source.prompts : {};
@@ -298,6 +308,9 @@ export function clampDecisionSettings(values = {}) {
             maxSteps: Math.round(number(god.maxSteps, 1, 200, DEFAULT_GOD.maxSteps)),
             maxQuestions: Math.round(number(god.maxQuestions, 1, 20, DEFAULT_GOD.maxQuestions)),
         },
+        psychologist: {
+            workerId: text(psychologist.workerId, DEFAULT_PSYCHOLOGIST.workerId).trim(),
+        },
         retry: {
             maxAttempts: Math.round(number(retry.maxAttempts, 1, 5, DEFAULT_RETRY.maxAttempts)),
             turnBudgetMs: Math.round(number(retry.turnBudgetMs, 1000, 3600000, DEFAULT_RETRY.turnBudgetMs)),
@@ -370,6 +383,12 @@ export function godWorkerId(settings = {}) {
     return own || directorWorkerId(settings);
 }
 
+/** Психолог — своё подключение; без него — подключение Director. */
+export function psychologistWorkerId(settings = {}) {
+    const own = String(settings?.psychologist?.workerId ?? '').trim();
+    return own || directorWorkerId(settings);
+}
+
 /** Запасное подключение роли — для двух пустых ответов подряд (часть 19). */
 export function retryBackupId(settings = {}, role = 'resolver') {
     return String(settings?.retry?.backups?.[role] ?? '').trim();
@@ -388,6 +407,7 @@ export function publicDecisionSettings(settings = {}) {
         counsellor: { ...DEFAULT_COUNSELLOR, ...(settings.counsellor ?? {}) },
         director: { ...DEFAULT_DIRECTOR, ...(settings.director ?? {}) },
         god: { ...DEFAULT_GOD, ...(settings.god ?? {}) },
+        psychologist: { ...DEFAULT_PSYCHOLOGIST, ...(settings.psychologist ?? {}) },
         retry: {
             ...DEFAULT_RETRY,
             ...(settings.retry ?? {}),

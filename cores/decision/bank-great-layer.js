@@ -1,5 +1,6 @@
 import { createGreatBank } from './bank-great.js';
-import { renderDecreeForResolver, renderTemperForResolver } from '../../libraries/core/decision-bank-projections.js';
+import { createPsychologist } from './psychologist.js';
+import { renderDecreeForResolver, renderTemperForResolver, renderPsycheForResolver } from '../../libraries/core/decision-bank-projections.js';
 
 /**
  * Great Bank поверх банков-карточек: проекции (дальняя компактная, ближняя
@@ -8,7 +9,16 @@ import { renderDecreeForResolver, renderTemperForResolver } from '../../librarie
  */
 export function createGreatBankLayer({ call, store, banks, publishEvent = () => {}, getSettings = null }) {
     const great = createGreatBank({ call, store, banks, timeOfDay: () => getSettings?.()?.bankTimeOfDay ?? null });
-    const sync = () => great.sync().catch(() => {});
+    const psychologist = createPsychologist({ call, store, great, getSettings, publishEvent });
+
+    /** Психолог не держит ход: пишет psyche.md, когда банк впервые готов, в фоне. */
+    const schedulePsyche = state => { if (state) psychologist.maybeRun(state).catch(() => {}); };
+    const sync = async () => {
+        const state = await great.sync().catch(() => null);
+        schedulePsyche(state);
+        return state;
+    };
+    const ensurePsyche = async () => psychologist.maybeRun(await great.sync().catch(() => null));
 
     /** Дальняя компактная проекция: Material 1, 3, 6 + Spiritual 4, 6, по всем персонажам. */
     async function farContext() {
@@ -38,20 +48,23 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
     async function edit(params = {}, options = {}) {
         const result = await great.edit(params, options);
         publishEvent('decision.bank.edited', { changes: result.changes.length, by: options.by ?? 'director' });
+        schedulePsyche(await great.load().catch(() => null));
         return result;
     }
 
-    /** Указ действующих персонажей — в контекст резолвера на @10. Пока Указов нет — честная строка. */
+    /** Указ, Нрав и psyche действующих — в контекст резолвера на @10. Пока Указов нет — честная строка. */
     async function decreeFor(names = null) {
         await sync();
         const state = await great.load();
         const entries = Object.values(state).map(character => ({ character }));
-        const temper = Array.isArray(names) && names.length ? renderTemperForResolver(entries, { names }) : '';
-        return [renderDecreeForResolver(entries, { names }), temper].filter(Boolean).join('\n\n');
+        const inScene = Array.isArray(names) && names.length;
+        const temper = inScene ? renderTemperForResolver(entries, { names }) : '';
+        const psyche = inScene ? renderPsycheForResolver(entries, { names }) : '';
+        return [renderDecreeForResolver(entries, { names }), temper, psyche].filter(Boolean).join('\n\n');
     }
 
     /** Раздел, который увидит движок: нужен ответу инструмента и проверке прав. */
     const sectionOf = value => great.sectionOf(value);
 
-    return { great, farContext, nearContext, writerContext, decreeFor, edit, sectionOf, historyFor: name => great.historyFor(name) };
+    return { great, farContext, nearContext, writerContext, decreeFor, edit, ensurePsyche, sectionOf, historyFor: name => great.historyFor(name) };
 }

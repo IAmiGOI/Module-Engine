@@ -1,6 +1,7 @@
 import { lineIsPast } from './decision-bank-time.js';
 import { MATERIAL_SECTIONS, SPIRITUAL_SECTIONS, DECREE_SECTIONS, sectionsOf } from './decision-bank-sections.js';
 import { isUserCharacter } from './decision-great-bank.js';
+import { renderPsyche } from './court-bank-files.js';
 
 /**
  * Проекции Great Bank в контексты — чистые функции над записями персонажей.
@@ -92,6 +93,20 @@ export function renderTemperForResolver(entries, { nowValue = null, names = [] }
         .filter(Boolean);
     if (!blocks.length) return '';
     return `HOW THEY FEEL AND SPEAK — emotional display and speech patterns, from the banks of the characters in this scene:\n\n${blocks.join('\n\n')}`;
+}
+
+/** psyches тех, кто в сцене: как движется их состояние и как медленно оно меняется. Персонаж пользователя — нет. */
+export function renderPsycheForResolver(entries, { names = [] } = {}) {
+    const wanted = new Set((Array.isArray(names) ? names : []).map(name => text(name).toLowerCase()));
+    const blocks = (Array.isArray(entries) ? entries : [])
+        .filter(entry => wanted.has(text(entry?.character?.name).toLowerCase()) && !isUserCharacter(entry?.character))
+        .map(entry => {
+            const body = renderPsyche(entry.character);
+            return body ? `### ${text(entry.character.name)}\n${body}` : '';
+        })
+        .filter(Boolean);
+    if (!blocks.length) return '';
+    return `HOW THEIR MIND MOVES — what holds each one's state and how fast it can change:\n\n${blocks.join('\n\n')}`;
 }
 
 /** Дальняя компактная проекция: Material 1, 3, 6 + Spiritual 4, 6, по всем персонажам. */

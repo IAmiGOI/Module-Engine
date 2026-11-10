@@ -15,6 +15,11 @@ export function renderPart(character, part) {
     }).join('\n\n');
 }
 
+/** psyche.md — строки без разделов: механизмы и темп психики. */
+export function renderPsyche(character) {
+    return (Array.isArray(character?.psyche) ? character.psyche : []).map(line => `- ${line}`).join('\n');
+}
+
 export function parsePart(text, part) {
     const out = Object.fromEntries(sectionsOf(part).map(section => [section.no, []]));
     let current = null;

@@ -347,7 +347,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             return true;
         },
         contextFor, examplesForCards,
-        farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit, decreeFor: greatLayer.decreeFor,
+        farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit, decreeFor: greatLayer.decreeFor, ensurePsyche: greatLayer.ensurePsyche,
         writerContext: names => greatLayer.writerContext(names, {
             sceneText: () => renderBankSection(records().filter(record => record.sourceKind === 'scene')),
         }),

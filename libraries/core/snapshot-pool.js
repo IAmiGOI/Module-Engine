@@ -21,7 +21,7 @@ export function hashOf(text) {
 }
 
 const LISTS = ['history'];
-const PARTS = ['material', 'spiritual', 'decree', 'pending'];
+const PARTS = ['material', 'spiritual', 'decree', 'psyche', 'pending'];
 
 /** Значение → ссылка; само значение ложится в пул. */
 function refer(pool, value) {

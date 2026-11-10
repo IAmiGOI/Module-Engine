@@ -1,4 +1,4 @@
-import { renderPart } from './court-bank-files.js';
+import { renderPart, renderPsyche } from './court-bank-files.js';
 import { normalizeImportanceWord, normalizePetitions } from './decision-counsellor.js';
 import { findCharacter, normalizeGreatBank, isUserCharacter } from './decision-great-bank.js';
 import { libraryLevelsSection } from './decision-library.js';
@@ -189,6 +189,8 @@ export function touchedBankText(state, names) {
         if (!character) continue;
         // Ровно как файлы инструментов `view` / `edit`: «old» в правке совпадает дословно.
         for (const part of ['material', 'spiritual', 'decree']) files.push(`### Characters/${character.name}/${part}.md\n${renderPart(character, part)}`);
+        // psyche.md — файл Психолога: Директор видит его, но не правит.
+        if ((character.psyche ?? []).length) files.push(`### Characters/${character.name}/psyche.md (read-only — the Psychologist's file)\n${renderPsyche(character)}`);
         // Не разобранный банк — исходная карточка или запись лорбука: по ней Director пишет material.md и spiritual.md.
         if (String(character.fallbackText ?? '').trim()) files.push(`### Characters/${character.name}/card.md\n${String(character.fallbackText).trim()}`);
     }

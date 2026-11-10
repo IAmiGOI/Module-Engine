@@ -9,6 +9,7 @@ import { createTimeReader } from './readers.js';
 
 const GREAT_KEY = 'greatBank';
 const HISTORY_LIMIT = 300;
+const text = value => String(value ?? '').trim();
 
 /** Источники, у которых банк — описание мира, а не персонаж: в Great Bank не переводятся. */
 const NON_CHARACTER = new Set(['scene']);
@@ -121,6 +122,8 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
             importance: existing.importance ?? fresh.importance,
             history,
             pending: existing.pending ?? [],
+            // psyche.md пишет Психолог, а не сборщик: пересборка банка его не трогает.
+            psyche: existing.psyche ?? [],
         };
         if (existing.decree && Object.values(existing.decree).some(lines => lines.length)) next.decree = existing.decree;
         for (const part of ['material', 'spiritual']) {
@@ -174,6 +177,26 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     /**
+     * psyche.md — строки механизмов и темпа. Пишет только Психолог; персонажу
+     * пользователя — никогда. Прежние строки уходят в историю.
+     */
+    async function setPsyche({ character, lines = [], comment = '', by = 'psychologist' } = {}) {
+        const state = await sync();
+        const found = findCharacter(state, character);
+        if (!found) return { ok: false, error: `There is no character "${character}".` };
+        if (isUserCharacter(found)) return { ok: false, error: `${found.name} ${USER_CHARACTER_NOTE}` };
+        const psyche = (Array.isArray(lines) ? lines : [lines]).map(text).filter(Boolean);
+        if (!psyche.length) return { ok: false, error: 'psyche.md needs at least one line.' };
+        const rp = await rpNow();
+        const history = [...(found.history ?? [])];
+        if ((found.psyche ?? []).length) {
+            history.push({ at: rp.label, by, part: 'psyche', section: 0, old: found.psyche.join('\n'), new: psyche.join('\n'), comment });
+        }
+        await save({ ...state, [bankKey(found.name)]: { ...found, psyche, history: history.slice(-HISTORY_LIMIT) } });
+        return { ok: true, character: found.name, lines: psyche.length };
+    }
+
+    /**
      * Переписать Main Cast заново (по просьбе пользователя): material, spiritual и Указ пустеют,
      * прежние строки — в историю, исходная карточка (card.md) остаётся. Директор пишет их снова.
      */
@@ -192,6 +215,9 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
                     if ((lines ?? []).length) history.push({ at: rp.label, by, part, section: Number(no), old: lines.join('\n'), new: '', comment });
                 }
             }
+            // Психика написана под старые банки: с переписанным персонажем она больше не та.
+            blank.psyche = [];
+            if ((character.psyche ?? []).length) history.push({ at: rp.label, by, part: 'psyche', section: 0, old: character.psyche.join('\n'), new: '', comment });
             next[key] = { ...character, ...blank, history: history.slice(-HISTORY_LIMIT) };
             names.push(character.name);
         }
@@ -285,7 +311,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     return {
-        load, sync, replace, edit, setImportance, setDecree, writeDecree, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
+        load, sync, replace, edit, setImportance, setDecree, writeDecree, setPsyche, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
         farText, nearText, writerText, decreeText, rpNow, historyFor,
         sectionOf: resolveSection,
     };

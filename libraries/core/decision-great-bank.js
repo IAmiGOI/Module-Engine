@@ -25,6 +25,20 @@ export const isUserCharacter = character => /^persona:/.test(text(character?.sou
 export const USER_CHARACTER_NOTE = "is the user's character: they have no Decree and no standing — their deeds, words and plans are the user's own, and nobody writes them.";
 export const bankKey = name => text(name).toLowerCase();
 
+const partFilled = part => Object.values(part ?? {}).some(lines => Array.isArray(lines) && lines.some(line => text(line)));
+
+/**
+ * Психологу есть что писать: main/side, разделы готовы, material и spiritual
+ * уже написаны, psyche.md ещё пуст. Персонаж пользователя — никогда.
+ */
+export function needsPsyche(character) {
+    if (!text(character?.name) || isUserCharacter(character)) return false;
+    if (!['main', 'side'].includes(character.importance)) return false;
+    if (character.sectionsReady === false) return false;
+    if ((Array.isArray(character.psyche) ? character.psyche : []).some(line => text(line))) return false;
+    return partFilled(character.material) && partFilled(character.spiritual);
+}
+
 /** Служебные поля записи переживают нормализацию: по ним движок узнаёт пересборку банка. */
 const EXTRAS = Object.freeze(['sourceKey', 'textHash', 'sectionsReady', 'fallbackText', 'decreeAt']);
 
@@ -45,6 +59,8 @@ export function blankCharacter(name, { importance = 'side', aliases = [] } = {})
         material: Object.fromEntries(MATERIAL_SECTIONS.map(section => [section.no, []])),
         spiritual: Object.fromEntries(sectionsOf('spiritual').map(section => [section.no, []])),
         decree: Object.fromEntries(DECREE_SECTIONS.map(section => [section.no, []])),
+        // psyche.md — механизмы и темп психики: строки, не разделы. Пишет только Психолог.
+        psyche: [],
         // Knowledge — существующая система, привязанная к записи персонажа: форма та же, что у неё была.
         knowledge: { items: [] },
         history: [],
@@ -69,6 +85,7 @@ export function normalizeCharacter(value, fallbackName = '') {
     for (const section of sectionsOf('spiritual')) blank.spiritual[section.no] = cleanLines(spiritual[section.no]);
     const decreeNumbers = new Set([...DECREE_SECTIONS.map(section => section.no), ...Object.keys(decree).map(Number).filter(Number.isFinite)]);
     for (const no of decreeNumbers) blank.decree[no] = cleanLines(decree[no]);
+    blank.psyche = Array.isArray(value.psyche) ? cleanLines(value.psyche) : [];
     const knowledge = value.knowledge && typeof value.knowledge === 'object' ? value.knowledge : {};
     blank.knowledge = { items: (Array.isArray(knowledge.items) ? knowledge.items : []).filter(item => item && typeof item === 'object' && text(item.id) && text(item.fact)) };
     blank.history = (Array.isArray(value.history) ? value.history : [])

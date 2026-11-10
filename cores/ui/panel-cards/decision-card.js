@@ -53,6 +53,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     const directorWorkerId = signal('');
     const directorMaxSteps = signal(10);
     const decreeTimeoutMs = signal(120000);
+    const psychologistWorkerId = signal('');
     const retryMaxAttempts = signal(3);
     const retryTurnBudgetMs = signal(120000);
     const retryBackgroundBudgetMs = signal(600000);
@@ -90,6 +91,10 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     ]);
     const directorOptions = computed(() => [
         { value: '', label: 'Resolver connection (default)' },
+        ...workerOptions().slice(1),
+    ]);
+    const psychologistOptions = computed(() => [
+        { value: '', label: 'Director connection (default)' },
         ...workerOptions().slice(1),
     ]);
     const backupOptions = computed(() => [
@@ -168,6 +173,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
         directorWorkerId.set(String(director.workerId ?? ''));
         directorMaxSteps.set(Number(director.maxSteps ?? 10));
         decreeTimeoutMs.set(Number(director.decreeTimeoutMs ?? 120000));
+        psychologistWorkerId.set(String(value.psychologist?.workerId ?? ''));
         godSettings.apply(value.god ?? {});
         const retry = value.retry ?? {};
         retryMaxAttempts.set(Number(retry.maxAttempts ?? 3));
@@ -208,6 +214,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
             director: {
                 workerId: directorWorkerId.peek(), maxSteps: directorMaxSteps.peek(), decreeTimeoutMs: decreeTimeoutMs.peek(),
             },
+            psychologist: { workerId: psychologistWorkerId.peek() },
             god: godSettings.collect(),
             retry: {
                 maxAttempts: retryMaxAttempts.peek(), turnBudgetMs: retryTurnBudgetMs.peek(), backgroundBudgetMs: retryBackgroundBudgetMs.peek(),
@@ -290,6 +297,11 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                     hint: 'Issues Decrees from reports. Empty: the resolver connection.',
                 }),
                 Slider('A Telegram holds the turn for (ms)', decreeTimeoutMs, { min: 1000, max: 600000, step: 1000 }),
+            ),
+            Row(
+                Field('Psychologist connection', Select(psychologistWorkerId, psychologistOptions), {
+                    hint: 'Writes psyche.md — what holds a character\'s state and how slowly it moves. Empty: the Director connection.',
+                }),
             ),
             godSettings.fields(),
             Details('Director generation settings',

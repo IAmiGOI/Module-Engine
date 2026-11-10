@@ -62,7 +62,7 @@ export function registerDecisionContracts(host, {
         // Остальные файлы слоя — knowledge.md и Creation/…; части банка окно берёт из decision.greatBank.
         host.own.register('decision.files', async () => {
             if (!cycle.files) return [];
-            const paths = (await cycle.files.list()).filter(path => !/\/(material|spiritual|decree)\.md$/i.test(path) || /^creation\//i.test(path));
+            const paths = (await cycle.files.list()).filter(path => !/\/(material|spiritual|decree|psyche)\.md$/i.test(path) || /^creation\//i.test(path));
             const read = await Promise.all(paths.map(path => cycle.files.read(path)));
             return read.filter(file => file.ok).map(file => ({ path: file.path, text: file.text }));
         }),

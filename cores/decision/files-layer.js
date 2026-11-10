@@ -1,5 +1,5 @@
 import { applyEdit } from '../../libraries/core/text-diff.js';
-import { renderPart, parsePart, editsForPart } from '../../libraries/core/court-bank-files.js';
+import { renderPart, renderPsyche, parsePart, editsForPart } from '../../libraries/core/court-bank-files.js';
 import { knowledgeKey } from '../../libraries/core/decision-knowledge.js';
 import { isUserCharacter, USER_CHARACTER_NOTE } from '../../libraries/core/decision-great-bank.js';
 
@@ -10,7 +10,7 @@ import { isUserCharacter, USER_CHARACTER_NOTE } from '../../libraries/core/decis
  * файл. Без отказов: путь, имя и строка ищутся мягко, не найденное дописывается.
  * Свои файлы подключают поставщики (`addProvider`) — так встанет Creation Бога.
  */
-const PARTS = Object.freeze({ material: 'material', spiritual: 'spiritual', decree: 'decree', knowledge: 'knowledge', card: 'card' });
+const PARTS = Object.freeze({ material: 'material', spiritual: 'spiritual', decree: 'decree', psyche: 'psyche', knowledge: 'knowledge', card: 'card' });
 const lineBodies = value => String(value ?? '').split('\n').map(line => line.replace(/^\s*[-*]\s+/, '').trim()).filter(line => line && !line.startsWith('#'));
 const clean = value => String(value ?? '').trim();
 
@@ -79,7 +79,9 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
         const files = [];
         for (const character of Object.values(await characters())) {
             if (!character?.name) continue;
-            for (const part of ['material', 'spiritual', 'decree', ...(knowledge ? ['knowledge'] : [])]) files.push(`Characters/${character.name}/${part}.md`);
+            // psyche.md появляется в списке, когда Психолог его написал: до этого файла нет.
+            const parts = ['material', 'spiritual', 'decree', ...(Array.isArray(character.psyche) && character.psyche.length ? ['psyche'] : []), ...(knowledge ? ['knowledge'] : [])];
+            for (const part of parts) files.push(`Characters/${character.name}/${part}.md`);
         }
         for (const provider of providers) files.push(...(await provider.list()));
         return files;
@@ -92,7 +94,8 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
         if (!character) return { ok: false, error: `There is no file "${path}". Call view without a path to list the files.` };
         const text = target.part === 'card' ? String(character.fallbackText ?? '')
             : target.part === 'knowledge' ? await knowledgeText(character.name)
-                : renderPart(character, target.part);
+                : target.part === 'psyche' ? renderPsyche(character)
+                    : renderPart(character, target.part);
         return { ok: true, path: `Characters/${character.name}/${target.part}.md`, text };
     }
 
@@ -102,12 +105,19 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
         if (!target || target.part === 'card') return { ok: false, error: `"${path}" cannot be written.` };
         const character = await findCharacter(target.name);
         const name = character?.name ?? clean(target.name);
+        // psyche.md — файл Психолога: читать можно, править нельзя (как Указ персонажа пользователя).
+        if (target.part === 'psyche') return { ok: false, error: `${name}'s psyche.md is written by the Psychologist and cannot be changed here.` };
         if (target.part === 'knowledge') return writeKnowledge(name, before, after, comment);
         // Указ пишет только Director: правка резолвера не отклоняется, а остаётся без записи с пояснением.
         if (target.part === 'decree' && by === 'resolver') return { ok: true, unchanged: true, note: 'Only the Director writes the Decree — tell it in the outcome instead.' };
         if (target.part === 'decree' && isUserCharacter(character)) return { ok: false, error: `${name} ${USER_CHARACTER_NOTE}` };
         if (target.part === 'decree') return great().writeDecree({ character: name, sections: parsePart(after, 'decree'), comment, by });
-        return great().edit({ comment, edits: editsForPart(name, target.part, before, after) }, { by });
+        const result = await great().edit({ comment, edits: editsForPart(name, target.part, before, after) }, { by });
+        // material.md и spiritual.md готовы — Психолог пишет psyche.md, не дожидаясь следующего хода.
+        if (target.part === 'material' || target.part === 'spiritual') {
+            if (typeof banks?.ensurePsyche === 'function') banks.ensurePsyche().catch(() => {});
+        }
+        return result;
     }
 
     /** Правки по файлам: каждая — к тексту, каким он стал после предыдущих правок того же файла. */
@@ -123,7 +133,7 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
         for (const [path, list] of byPath) {
             const current = await read(path);
             const target = parseCharacterPath(path);
-            const before = current.ok ? current.text : (target && target.part !== 'knowledge' ? renderPart({}, target.part) : '');
+            const before = current.ok ? current.text : (target && target.part !== 'knowledge' && target.part !== 'psyche' ? renderPart({}, target.part) : '');
             let after = before;
             const how = [];
             for (const one of list) { const applied = applyEdit(after, one); after = applied.text; how.push(applied.how); }
@@ -138,7 +148,7 @@ export function createFileLayer({ banks = null, knowledge = null } = {}) {
         const target = parseCharacterPath(path);
         if (!target) return { ok: false, error: `"${path}" is not a place for a file. Character files are Characters/<Name>/material.md, spiritual.md or decree.md.` };
         const current = await read(path);
-        const before = current.ok ? current.text : renderPart({}, target.part);
+        const before = current.ok ? current.text : (target.part === 'psyche' ? '' : renderPart({}, target.part));
         return write(path, before, String(text ?? ''), { comment, by });
     }
 
