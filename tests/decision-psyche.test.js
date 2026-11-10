@@ -67,7 +67,7 @@ test('the user\'s character never gets a psyche, and the Resolver gets the psych
         { character: { ...ready({ name: 'Sasha', sourceKey: 'persona:user' }), psyche: ['user psyche'] } },
         { character: { ...ready({ name: 'Otto' }), psyche: ['elsewhere'] } },
     ], { names: ['Emilia', 'Sasha'] });
-    assert.match(out, /HOW THEIR MIND MOVES/);
+    assert.match(out, /THEIR PSYCHOLOGY/);
     assert.match(out, /Holds on to an old debt/);
     assert.doesNotMatch(out, /user psyche|elsewhere/);
 });
@@ -78,7 +78,7 @@ test('the Resolver block comes from decreeFor, and the Director may read psyche.
         emilia: ready({ decree: { 1: ['Protect the town.'] }, psyche: ['She is holding a decision back.', 'The fear has deep roots and moves slowly.'] }),
     });
     const block = await layer.decreeFor(['Emilia']);
-    assert.match(block, /HOW THEIR MIND MOVES/);
+    assert.match(block, /THEIR PSYCHOLOGY/);
     assert.match(block, /deep roots and moves slowly/);
 
     const files = createFileLayer({ banks: { great: layer.great } });

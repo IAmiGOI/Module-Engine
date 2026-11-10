@@ -106,7 +106,7 @@ export function renderPsycheForResolver(entries, { names = [] } = {}) {
         })
         .filter(Boolean);
     if (!blocks.length) return '';
-    return `HOW THEIR MIND MOVES — what holds each one's state and how fast it can change:\n\n${blocks.join('\n\n')}`;
+    return `THEIR PSYCHOLOGY — a report on each one's mind at this point: what they can and cannot do now, and what is most likely for them:\n\n${blocks.join('\n\n')}`;
 }
 
 /** Дальняя компактная проекция: Material 1, 3, 6 + Spiritual 4, 6, по всем персонажам. */
