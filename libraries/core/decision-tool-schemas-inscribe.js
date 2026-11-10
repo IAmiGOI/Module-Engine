@@ -58,7 +58,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                     required: ['who', 'kind', 'text'],
                 },
             },
-            stop: { type: 'string', description: 'The last beat the turn ends on — the line or gesture after which the user would naturally react — in one sentence. Do not retell the other beats. Never describe anyone as waiting for the user: that pause is implied.' },
+            stop: { type: 'string', description: 'The last beat the turn ends on, in one sentence. Do not retell the other beats. Never describe anyone as waiting for the user: that pause is implied.' },
             userResult: { type: 'string', description: 'What the user did, as their own deed in their own terms, then the result of it: success or failure and why. Every part of it — what was said and what was done; no part is left out. Only the user\'s action and its result: what the others do after it belongs in characters and beats. It has happened — the others meet it; nobody does it for them or instead of them. Never decide the user\'s action itself, and do not finish a long action for them — show what has happened up to the moment someone reacts.' },
             scene: {
                 type: 'object',
