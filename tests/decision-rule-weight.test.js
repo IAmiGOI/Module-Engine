@@ -19,3 +19,11 @@ test('a magic attempt without a known rule is refused with the rules of the worl
     assert.equal(result.ok, false);
     assert.match(result.error, /Gate Magic \/ Imaginative Synthesis/);
 });
+
+test('a rule whose weight names two levels lets the Resolver pick between them, and nothing outside them', async () => {
+    const { ruleDifficulty } = await import('../libraries/core/decision-rule-weight.js');
+    const rule = { weight: { level: 'moderate', text: 'moderate for single-concept spells; hard for complex multi-property spells; rises if the picture wavers' } };
+    assert.equal(ruleDifficulty(rule, { chosen: 'hard' }).difficulty, 'hard', 'the complex tier the rule names');
+    assert.equal(ruleDifficulty(rule, { chosen: 'nearly impossible' }).difficulty, 'moderate', 'a level the rule does not name falls back to its base');
+    assert.equal(ruleDifficulty(rule, { chosen: 'hard', rises: ['aching Gate'], falls: ['familiar Earth physics'] }).difficulty, 'hard');
+});

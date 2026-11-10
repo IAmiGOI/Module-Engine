@@ -33,13 +33,26 @@ export function ruleNames(systems) {
     return (Array.isArray(systems) ? systems : []).flatMap(system => (Array.isArray(system?.rules) ? system.rules : []).map(rule => `${text(system.name)} / ${text(rule.name)}`));
 }
 
-/** База правила и шаги → итоговая трудность. */
-export function ruleDifficulty(rule, { rises = [], falls = [] } = {}) {
-    const base = text(rule?.weight?.level).toLowerCase();
+/** Уровни, которые вес правила называет: поле level и все уровни в его тексте («умеренно для простого; трудно для сложного»). */
+export function ruleLevels(rule) {
+    const words = `${text(rule?.weight?.level)} ${text(rule?.weight?.text)}`.toLowerCase();
+    // «very hard» и «nearly impossible» — раньше «hard»/«impossible», чтобы не засчитать часть слова.
+    const found = [...DIFFICULTY_LEVELS].sort((a, b) => b.length - a.length).filter(level => new RegExp(`(^|[^a-z])${level}([^a-z]|$)`).test(words.replace(/very hard|nearly impossible/g, match => (level === match ? match : ' '))));
+    return DIFFICULTY_LEVELS.filter(level => found.includes(level));
+}
+
+/**
+ * База и шаги → итоговая трудность. База — уровень, который вес правила называет для такого рода работы (`chosen`,
+ * если он среди названных правилом; иначе поле level). Сверх этого — только названные повышения и понижения.
+ */
+export function ruleDifficulty(rule, { rises = [], falls = [], chosen = '' } = {}) {
+    const named = ruleLevels(rule);
+    const wanted = text(chosen).toLowerCase();
+    const base = named.includes(wanted) ? wanted : text(rule?.weight?.level).toLowerCase();
     const start = DIFFICULTY_LEVELS.indexOf(base);
     if (start < 0) return null;
     const up = (Array.isArray(rises) ? rises : []).map(text).filter(Boolean);
     const down = (Array.isArray(falls) ? falls : []).map(text).filter(Boolean);
     const index = Math.max(0, Math.min(DIFFICULTY_LEVELS.length - 1, start + up.length - down.length));
-    return { base, difficulty: DIFFICULTY_LEVELS[index], rises: up, falls: down };
+    return { base, named, difficulty: DIFFICULTY_LEVELS[index], rises: up, falls: down };
 }

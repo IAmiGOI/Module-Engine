@@ -28,7 +28,7 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
             if (!found) {
                 return { ok: false, error: `${String(args.rule ?? '').trim() ? `There is no rule "${String(args.rule).trim()}".` : 'An attempt through a power of the world needs "rule".'} Name the rule it uses, as "System / Rule": ${ruleNames(systems).join('; ')}.` };
             }
-            fromRule = ruleDifficulty(found.rule, { rises: args.rises, falls: args.falls });
+            fromRule = ruleDifficulty(found.rule, { rises: args.rises, falls: args.falls, chosen: args.difficulty });
             if (!fromRule) return { ok: false, error: `The rule "${found.rule.name}" has no weight level — give "difficulty" yourself and name the rule in "why".` };
             fromRule = { ...fromRule, rule: `${found.system.name} / ${found.rule.name}`, ruleRises: String(found.rule.weight?.rises ?? ''), ruleFalls: String(found.rule.weight?.falls ?? '') };
         }
@@ -43,7 +43,7 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
             difficultyShift: difficultyShift(game),
         });
         if (!result.ok) return result;
-        const full = fromRule ? { ...result, rule: fromRule.rule, ruleBase: fromRule.base, rises: fromRule.rises, falls: fromRule.falls } : result;
+        const full = fromRule ? { ...result, rule: fromRule.rule, ruleBase: fromRule.base, ruleLevels: fromRule.named, rises: fromRule.rises, falls: fromRule.falls } : result;
         state.assessments.set(id, { ...full, id });
         return { ...full, id };
     };
