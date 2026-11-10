@@ -52,7 +52,7 @@ Their powers belong to a system of the Scales like anyone's.
 Then one "## <Rule>" per operation: one thing a user of the system can do that a scene would roll for. Split an operation when its weight, cost or limit differ; join two when everything would be the same. Every rule has all eight lines:
 - **Needs** — what must be true to try at all: knowledge, a tool or material, time, touch or sight, a place or a moment. Without it the attempt cannot be made.
 - **Yields** — what exactly a clean success does: size, range, duration, how many — in things a scene can see.
-- **Weight** — one level of the roll scale: trivial, easy, moderate, hard, very hard or nearly impossible, for someone able to attempt it at all; then "rises with …; falls with …". The Resolver rolls every use at exactly this weight with the character's experience.
+- **Weight** — one level of the roll scale: trivial, easy, moderate, hard, very hard or nearly impossible, for someone able to attempt it at all; then "rises with …; falls with …". What a character must bring to attempt it at all — knowledge, a gift, a bloodline, a contract — belongs in Needs, never in Weight: it makes the attempt impossible for those without it, not harder for those with it. Rises and falls are the circumstances of one attempt. The Resolver rolls every use at exactly this weight with the character's experience.
 - **Scaling** — how the result grows with experience (none, novice, practised, skilled, expert, master) and with more Payment: what a novice gets and what a master gets.
 - **Limit** — the hard edge no roll and no experience passes, written as a fact.
 - **Cost** — what the use takes from the Payment and what else it costs even on success; then what a clumsy result costs and what a botched one does — the backlash.
@@ -221,7 +221,7 @@ export const GOD_FILE_CHECKS = Object.freeze({
             'One "## <Rule>" for every operation a scene would roll for.',
             '"## Discoveries" closes the file.',
         ],
-        part: 'all eight lines — Needs, Yields, Weight, Scaling, Limit, Cost, Links, Examples; Weight starts with one level of the roll scale and its own words do not contradict that level; Examples has two or three cases, at least one an unusual use.',
+        part: 'all eight lines — Needs, Yields, Weight, Scaling, Limit, Cost, Links, Examples; Weight starts with one level of the roll scale and its own words do not contradict that level, and it does not depend on what the caster brings — knowledge, a gift, a bloodline belong in Needs; Examples has two or three cases, at least one an unusual use.',
     },
     other: {
         whole: ['It says what it covers, in "###" subsections, and nothing in it contradicts the guaranteed sections.'],
