@@ -42,7 +42,18 @@ export function namedInReports(reportsText, names) {
  * @param everyone  имена всех с Указом — для нового дня
  * @param importanceOf  имя → текущая важность (или null, если неизвестна)
  */
-export function withDirectorChecklist(handlers, { allowed = [], everyone = [], importanceOf = () => null } = {}) {
+/** Строка Указа без метки времени и маркера списка — чтобы скопированную строку узнать в файле. */
+const bare = value => text(value).replace(/^[-*]\s*/, '').replace(/^\[[^\]]*\]\s*/, '').replace(/[*_`]/g, '').replace(/\s+/g, ' ').toLowerCase();
+const holds = (file, line) => {
+    const probe = bare(line).slice(0, 80);
+    return Boolean(probe) && text(file).split('\n').some(row => bare(row).includes(probe) || (bare(row).length > 20 && probe.includes(bare(row))));
+};
+
+/**
+ * @param decreeOf    имя → текст decree.md (или null, если неизвестен) — для проверки скопированной строки
+ * @param bankWritten имя → true/false/null — написан ли банк (material и spiritual)
+ */
+export function withDirectorChecklist(handlers, { allowed = [], everyone = [], importanceOf = () => null, decreeOf = () => null, bankWritten = () => null } = {}) {
     let form = null;
     let refusals = 0;
     const done = new Map();
@@ -54,14 +65,32 @@ export function withDirectorChecklist(handlers, { allowed = [], everyone = [], i
         const pool = new Set([...allowed, ...(newDay ? everyone : [])].map(key));
         const characters = (Array.isArray(args?.characters) ? args.characters : []).map(item => ({
             name: text(item?.name), named_by: text(item?.named_by), write_bank: item?.write_bank === true,
-            decree: DECREE.includes(text(item?.decree)) ? text(item.decree) : 'none', importance: text(item?.importance).toLowerCase(), why: text(item?.why),
+            decree: DECREE.includes(text(item?.decree)) ? text(item.decree) : 'none', importance: text(item?.importance).toLowerCase(),
+            line: text(item?.line), evidence: text(item?.evidence || item?.why),
         })).filter(item => item.name);
         const outside = characters.filter(item => !pool.has(key(item.name)));
         if (outside.length) {
             return { ok: false, error: `Not named by the reports: ${outside.map(item => item.name).join(', ')}. The form holds only characters the reports touch: ${[...allowed].join(', ') || 'none'}${newDay ? ', and on a new day everyone with a Decree' : ''}. Leave the others as they are.` };
         }
+        // Каждый, кого называют отчёты, — в форме, хотя бы с «none» и строкой, которая это покрывает: иначе его просто пропускали.
+        const listed = new Set(characters.map(item => key(item.name)));
+        const skipped = [...allowed].filter(name => !listed.has(key(name)));
+        if (skipped.length) return { ok: false, error: `The reports also name: ${skipped.join(', ')}. Add each to the form — with decree "none" and the line that already covers the report if nothing changes for them.` };
         const unnamed = characters.filter(item => !item.named_by);
         if (unnamed.length) return { ok: false, error: `Say for each which report names them (named_by): ${unnamed.map(item => item.name).join(', ')}.` };
+        // Самопроверка: решение держится на строке Указа и факте отчёта, а не на ощущении «надо бы обновить».
+        const problems = [];
+        for (const item of characters) {
+            const decree = decreeOf(item.name);
+            const hasDecree = decree !== null && Boolean(text(decree).replace(/^#.*$/gm, '').trim());
+            if (item.decree === 'edit' && (!item.line || !item.evidence)) problems.push(`${item.name}: edit needs the line the report breaks (line) and the fact that breaks it (evidence) — if you cannot name them, the Decree holds: decree "none".`);
+            else if (item.decree === 'edit' && hasDecree && !holds(decree, item.line)) problems.push(`${item.name}: the line you gave is not in their decree.md — copy it exactly from the file.`);
+            if (item.decree === 'none' && item.line && hasDecree && !holds(decree, item.line)) problems.push(`${item.name}: the covering line you gave is not in their decree.md — copy it exactly.`);
+            if (item.decree === 'edit' && decree !== null && !hasDecree) problems.push(`${item.name} has no Decree yet — use decree "create".`);
+            if (item.decree === 'create' && hasDecree) problems.push(`${item.name} already has a Decree — use "edit" for the lines the report breaks, or "none".`);
+            if (item.write_bank && bankWritten(item.name) === true) problems.push(`${item.name}'s bank is already written — write_bank is only for empty material.md and spiritual.md.`);
+        }
+        if (problems.length) return { ok: false, error: `Check your form against the files: ${problems.join(' ')}` };
         const sameStanding = characters.filter(item => item.importance && importanceOf(item.name) === item.importance);
         if (sameStanding.length) return { ok: false, error: `Already at that standing — leave importance empty for: ${sameStanding.map(item => `${item.name} (${item.importance})`).join(', ')}.` };
         form = { newDay, characters };

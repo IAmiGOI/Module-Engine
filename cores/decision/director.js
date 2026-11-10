@@ -130,11 +130,14 @@ export function createDirector({
         const characters = Object.values(bank ?? {}).filter(character => character?.name);
         // Кого называют: задание (повод) и сами отчёты. Блок файлов — не основание: там бывают и задетые лишь по имени.
         const task = (Array.isArray(messages) ? messages : []).filter(message => message?.role === 'user' || String(message?.content ?? '').startsWith(REPORTS_HEADER)).map(message => String(message.content ?? '')).join('\n');
+        const find = name => characters.find(character => character.name.toLowerCase() === String(name ?? '').trim().toLowerCase()) ?? null;
         const filled = character => Object.values(character?.decree ?? {}).some(lines => Array.isArray(lines) && lines.some(line => String(line ?? '').trim()));
         return {
             allowed: namedInReports(task, characters.map(character => ({ name: character.name, aliases: character.aliases ?? [] }))),
             everyone: characters.filter(filled).map(character => character.name),
-            importanceOf: name => characters.find(character => character.name.toLowerCase() === String(name ?? '').trim().toLowerCase())?.importance ?? null,
+            importanceOf: name => find(name)?.importance ?? null,
+            decreeOf: name => (find(name) ? Object.values(find(name).decree ?? {}).flat().map(line => String(line ?? '')).join('\n') : null),
+            bankWritten: name => (find(name) ? ['material', 'spiritual'].every(part => Object.values(find(name)[part] ?? {}).some(lines => Array.isArray(lines) && lines.some(line => String(line ?? '').trim()))) : null),
         };
     }
 
