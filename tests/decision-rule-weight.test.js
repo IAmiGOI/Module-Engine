@@ -6,7 +6,7 @@ const systems = [{ name: 'Gate Magic', rules: [{ name: 'Imaginative Synthesis (F
 const handler = () => createAssessHandler({ state: { assessmentCounter: 0, runId: 'r', assessments: new Map() }, getSettings: () => ({ assessSeed: 1 }), getScales: async () => systems });
 
 test('a magic attempt starts from its rule\'s weight, a step per named rise or fall, and the resolver\'s own level is not used', async () => {
-    const result = await handler()({ character: 'Sasha', action: 'wings', kind: 'magic', difficulty: 'hard', experience: 'novice', why: 'x', rule: 'Gate Magic / Imaginative Synthesis',
+    const result = await handler()({ character: 'Sasha', action: 'wings', kind: 'magic', size: 'heavy', difficulty: 'hard', experience: 'novice', why: 'x', rule: 'Gate Magic / Imaginative Synthesis',
         rises: ['scene: his Gate aches from two failed sweeps'], falls: ['rule: familiar Earth physics he pictures effortlessly'] });
     assert.equal(result.ok, true);
     assert.equal(result.difficulty, 'moderate');
@@ -15,7 +15,7 @@ test('a magic attempt starts from its rule\'s weight, a step per named rise or f
 });
 
 test('a magic attempt without a known rule is refused with the rules of the world', async () => {
-    const result = await handler()({ character: 'Sasha', action: 'wings', kind: 'magic', difficulty: 'hard', experience: 'novice', why: 'x' });
+    const result = await handler()({ character: 'Sasha', action: 'wings', kind: 'magic', size: 'heavy', difficulty: 'hard', experience: 'novice', why: 'x' });
     assert.equal(result.ok, false);
     assert.match(result.error, /Gate Magic \/ Imaginative Synthesis/);
 });
@@ -43,8 +43,12 @@ test('experience is never a step, and a failed roll carries what it costs and th
     assert.equal(checkSteps({ weight: { rises: 'the caster\'s inexperience at reading the return' } }, { rises: ['rule: the caster\'s inexperience at reading the return'] }).length, 1);
     const rule = { name: 'Probe', weight: { level: 'nearly impossible', text: 'nearly impossible' }, cost: ['A thin draw of mana. Clumsy — a blurred read. Botched — nothing comes back.'] };
     const handler = createAssessHandler({ state: { assessmentCounter: 0, runId: 'r', assessments: new Map() }, getSettings: () => ({ assessSeed: 7 }), getScales: async () => [{ name: 'Gate Magic', rules: [rule] }] });
-    const result = await handler({ character: 'Sasha', action: 'probe', kind: 'magic', difficulty: 'nearly impossible', experience: 'none', why: 'x', rule: 'Gate Magic / Probe' });
+    const result = await handler({ character: 'Sasha', action: 'probe', kind: 'magic', size: 'medium', difficulty: 'nearly impossible', experience: 'none', why: 'x', rule: 'Gate Magic / Probe' });
     assert.ok(['clumsy', 'botched'].includes(result.degree));
     assert.match(result.consequence, /blurred read|nothing comes back/);
     assert.match(result.consequence, /touches only this attempt/);
+    const small = await handler({ character: 'Sasha', action: 'rays', kind: 'magic', size: 'small', difficulty: 'nearly impossible', experience: 'none', why: 'x', rule: 'Gate Magic / Probe' });
+    assert.match(small.consequence, /small working: failing means only that it does not work/);
+    assert.doesNotMatch(small.consequence, /nothing comes back|blurred/);
+    assert.equal((await handler({ character: 'Sasha', action: 'rays', kind: 'magic', difficulty: 'moderate', experience: 'none', why: 'x', rule: 'Gate Magic / Probe' })).ok, false, 'magic without a size is refused');
 });
