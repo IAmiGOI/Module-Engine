@@ -946,6 +946,7 @@ Their powers belong to a system of the Scales like anyone's.
 ## A System Of Weight
 **Principle:** — one line: what the power is and where it comes from.
 **Payment:** — what every use of the system draws on (mana, focus, blood, time, faith, a material) and how it comes back.
+**Senses:** — how its workings and its power show to the senses: what anyone present sees, hears or feels, and what only the one who uses it or the gifted perceive.
 Then one "## <Rule>" per operation: one thing a user of the system can do that a scene would roll for. Split an operation when its weight, cost or limit differ; join two when everything would be the same. Every rule has all eight lines:
 - **Needs** — what must be true to try at all: knowledge, a tool or material, time, touch or sight, a place or a moment. Without it the attempt cannot be made.
 - **Yields** — what exactly a clean success does: size, range, duration, how many — in things a scene can see.

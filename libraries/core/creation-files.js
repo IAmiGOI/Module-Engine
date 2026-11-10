@@ -20,7 +20,7 @@ function weightText(weight) {
 }
 
 export function renderScaleFile(system) {
-    const out = [`# ${system.name}`, '', `**Principle:** ${text(system.principle)}`, `**Payment:** ${text(system.payment)}`];
+    const out = [`# ${system.name}`, '', `**Principle:** ${text(system.principle)}`, `**Payment:** ${text(system.payment)}`, ...(text(system.senses) ? [`**Senses:** ${text(system.senses)}`] : [])];
     for (const rule of system.rules ?? []) {
         out.push('', `## ${rule.name}`);
         for (const field of SCALE_RULE_FIELDS.slice(1)) {
@@ -36,7 +36,7 @@ export function renderScaleFile(system) {
 
 /** Файл системы → { system, principle, payment, rules, discoveries: [строки] }. */
 export function parseScaleFile(source) {
-    const result = { system: '', principle: '', payment: '', rules: [], discoveries: [] };
+    const result = { system: '', principle: '', payment: '', senses: '', rules: [], discoveries: [] };
     let rule = null;
     let field = null;
     let inDiscoveries = false;
@@ -51,7 +51,7 @@ export function parseScaleFile(source) {
             if (rule) result.rules.push(rule);
             continue;
         }
-        if ((match = /^\*\*(Principle|Payment):\*\*\s*(.*)$/i.exec(line))) { result[match[1].toLowerCase()] = text(match[2]); continue; }
+        if ((match = /^\*\*(Principle|Payment|Senses):\*\*\s*(.*)$/i.exec(line))) { result[match[1].toLowerCase()] = text(match[2]); continue; }
         if (inDiscoveries) { const body = text(line.replace(/^\s*[-*]\s+/, '')); if (body) result.discoveries.push(body); continue; }
         if (!rule) continue;
         // Метка поля — как пишет модель: «- Needs: …», «- **Needs:** …» или «- **Needs**: …».

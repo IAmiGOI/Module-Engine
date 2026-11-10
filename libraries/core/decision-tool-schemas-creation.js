@@ -64,6 +64,7 @@ export const SCALE_WRITE_TOOL = Object.freeze({
             system: { type: 'string', description: 'The name of the system.' },
             principle: { type: 'string', description: 'What it is, in one line.' },
             payment: { type: 'string', description: 'What everyone pays for using it: mana, focus, time, material, health.' },
+            senses: { type: 'string', description: 'How a working of this system and its power show to the senses: what anyone present sees, hears or feels, and what only the user of it or the gifted perceive.' },
             rules: { type: 'array', description: 'One rule per operation. Two to eight rules is usual; more when the system is large.', items: SCALE_RULE },
             comment: COMMENT,
         },

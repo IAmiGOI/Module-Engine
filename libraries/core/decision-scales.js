@@ -105,6 +105,7 @@ export function normalizeScaleSystem(value) {
         name,
         principle: text(source.principle),
         payment: text(source.payment),
+        senses: text(source.senses),
         rules,
         discoveries: (Array.isArray(source.discoveries) ? source.discoveries : [])
             .filter(item => item && typeof item === 'object' && text(item.text))
@@ -134,6 +135,7 @@ export function renderScaleSystem(system, { discoveries = true } = {}) {
     const lines = [`### ${system.name}`];
     if (system.principle) lines.push(`**Principle:** ${system.principle}`);
     if (system.payment) lines.push(`**Payment:** ${system.payment}`);
+    if (system.senses) lines.push(`**Senses:** ${system.senses}`);
     if (system.rules.length) {
         lines.push(`| Rule | ${SCALE_RULE_FIELDS.slice(1).map(field => FIELD_LABEL[field]).join(' | ')} |`);
         lines.push(`|---|${SCALE_RULE_FIELDS.slice(1).map(() => '---').join('|')}|`);

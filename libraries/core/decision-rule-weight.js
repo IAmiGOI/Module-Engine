@@ -104,6 +104,7 @@ const joined = list => (Array.isArray(list) ? list : [list]).map(text).filter(Bo
 export function ruleCard(system, rule) {
     return [
         `RULE ${text(system?.name)} / ${text(rule?.name)}`,
+        ...(text(system?.senses) ? [`Senses: ${text(system.senses)}`] : []),
         `Needs: ${joined(rule?.needs) || '—'}`,
         `Yields: ${joined(rule?.yields) || '—'}`,
         `Weight: ${text(rule?.weight?.text) || text(rule?.weight?.level) || '—'}`,
