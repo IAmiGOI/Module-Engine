@@ -123,7 +123,7 @@ export function createDirector({
             ...createFileHandlers({
                 banks, state, publishEvent, by: 'director',
                 // Психолог за столом проверяет строку до записи; без сессии — прежний порядок.
-                beforeWrite: desk ? ({ path, target, before, after }) => desk.check({ path, part: target?.part, name: target?.name, before, after }) : null,
+                beforeWrite: desk ? ({ path, target, before, after, comment }) => desk.check({ path, part: target?.part, name: target?.name, before, after, comment }) : null,
             }),
             // Без своего await вызов уходил в общий маршрут и падал («no tool named await»), а движок писал «answered without a tool call».
             await: args => ({ ok: true, reason: String(args?.reason ?? '') }),

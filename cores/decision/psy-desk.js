@@ -119,16 +119,15 @@ export function createPsyDesk({
      * Проверка перед записью файла. Возвращает `{ ok: true }` или отказ с
      * текстом возражения и пометкой, что говорит Психолог.
      */
-    async function check({ path = '', part = '', name = '', before = '', after = '' } = {}) {
+    async function check({ path = '', part = '', name = '', before = '', after = '', comment = '' } = {}) {
         if (!active) return { ok: true };
         if (!CHECKED_PARTS.has(part)) return { ok: true };
         if (!text(name) || users.has(key(name))) return { ok: true };
         const added = addedLines(before, after, part);
         if (!added.length) return { ok: true };
-        // По одной строке — не больше одного круга: увиденной строке второй раз не возражаем.
-        if (!added.some(line => !seen.has(lineKey(name, part, line)))) return { ok: true };
-
-        log.push({ by: 'director', text: fillPrompt(PSYCHOLOGIST_DESK_PROPOSAL, { path: text(path), text: text(after) }) });
+        // Возражать можно сколько угодно: каждая новая версия файла идёт к Психологу. Предел — шаги Директора.
+        // Довод Директора (comment вызова) Психолог видит рядом с файлом.
+        log.push({ by: 'director', text: [fillPrompt(PSYCHOLOGIST_DESK_PROPOSAL, { path: text(path), text: text(after) }), text(comment) ? `The Director says: ${text(comment)}` : ''].filter(Boolean).join('\n\n') });
         const requestParams = request({ system: PSYCHOLOGIST_DESK_SYSTEM });
         if (!requestParams) {
             for (const line of added) seen.add(lineKey(name, part, line));

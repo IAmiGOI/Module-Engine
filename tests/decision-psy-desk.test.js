@@ -126,7 +126,7 @@ test('without write_bank the Psychologist is never called', async () => {
     assert.deepEqual(world.state.held, [], 'nobody is held for a non-bank run');
 });
 
-test('an objection refuses the write and reaches the Director; the same line passes on the second call', async () => {
+test('an objection refuses the write and reaches the Director; the new version is checked again and passes on ok', async () => {
     const world = harness({
         bank: { emilia: EMPTY('Emilia') },
         petitions: [petition('Emilia')],
@@ -143,18 +143,18 @@ test('an objection refuses the write and reaches the Director; the same line pas
             })] },
             { text: '', toolCalls: [call('await', { reason: 'The bank is written.', comment: 'Both files are in place.' })] },
         ],
-        psy: [OBJECTION, 'ok', 'She hides the horn before she trusts anyone.\nFear moves slowly under her calm.'],
+        psy: [OBJECTION, 'ok', 'ok', 'She hides the horn before she trusts anyone.\nFear moves slowly under her calm.'],
     });
     const result = await world.director.run({ runId: 'd1' });
     assert.equal(result.type, 'await');
-    assert.equal(world.psychRequests.length, 3, 'objection, one ok for spiritual, one psyche at the end');
+    assert.equal(world.psychRequests.length, 4, 'objection, ok on the second version, ok for spiritual, psyche at the end');
 
     const creates = result.cycle.toolCalls.filter(item => item.name === 'create');
     const edits = result.cycle.toolCalls.filter(item => item.name === 'edit');
     assert.equal(creates.length, 2);
     assert.equal(creates[0].result.ok, false, 'the objected create is not applied');
     assert.match(creates[0].result.error, /black hair, one horn/i);
-    assert.equal(creates[1].result.ok, true, 'the same line passes on the second call');
+    assert.equal(creates[1].result.ok, true, 'the second version passes once the Psychologist says ok');
     assert.equal(edits.length, 1);
     assert.equal(edits[0].result.ok, true, 'the checked edit is applied');
 
@@ -191,7 +191,7 @@ test('an objection on edit refuses the whole call before anything is written', a
     assert.equal(writes, 0, 'the objected call writes nothing');
 });
 
-test('the desk keeps one round per line: the same proposal is not checked twice', async () => {
+test('the Psychologist may object as often as he likes: the same proposal is checked again', async () => {
     const calls = [];
     const desk = createPsyDesk({
         call: async (contract, params) => { assert.equal(contract, 'model.generate'); calls.push(params); return OBJECTION; },
@@ -204,8 +204,8 @@ test('the desk keeps one round per line: the same proposal is not checked twice'
     assert.equal(first.ok, false);
     assert.equal(first.speaker, 'PSYCHOLOGIST');
     const second = await desk.check(proposal);
-    assert.equal(second.ok, true);
-    assert.equal(calls.length, 1, 'the same line gets no second round');
+    assert.equal(second.ok, false);
+    assert.equal(calls.length, 2, 'every version goes back to the Psychologist');
 });
 
 test('the user\'s character never gets a Psychologist, neither at the desk nor for psyche.md', async () => {

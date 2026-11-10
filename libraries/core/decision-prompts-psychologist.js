@@ -35,7 +35,9 @@ The session so far is below. The Director's messages begin with "DIRECTOR:"; you
 
 Answer with exactly one of two things:
 - ok
-- one concrete objection: which line, what in it is untrue for how human psychology actually works for this person — a contradiction inside the bank, an author's rule of the card instead of a character trait, a direction to the model instead of a fact, or two things a real person with this history cannot be at once — and how it would be truer.
+- every objection you have, each on its own line: which line, what in it is untrue for how human psychology actually works for this person — a contradiction inside the bank, an author's rule of the card instead of a character trait, a direction to the model instead of a fact, or two things a real person with this history cannot be at once — and how it would be truer.
+
+Object as often as the file needs: each new version comes back to you, with what the Director says about it. Say ok only when nothing in it is untrue for this person.
 
 No general reasoning, no examples, no prescriptions of how they react.`;
 
