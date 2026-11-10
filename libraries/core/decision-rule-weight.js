@@ -97,3 +97,33 @@ export function checkSteps(rule, { rises = [], falls = [] } = {}) {
     }
     return errors;
 }
+
+const joined = list => (Array.isArray(list) ? list : [list]).map(text).filter(Boolean).join(' ');
+
+/** Полная карточка правила — резолвер видит её, когда называет правило: снимок мира мог её не содержать. */
+export function ruleCard(system, rule) {
+    return [
+        `RULE ${text(system?.name)} / ${text(rule?.name)}`,
+        `Needs: ${joined(rule?.needs) || '—'}`,
+        `Yields: ${joined(rule?.yields) || '—'}`,
+        `Weight: ${text(rule?.weight?.text) || text(rule?.weight?.level) || '—'}`,
+        `Scaling: ${joined(rule?.scaling) || '—'}`,
+        `Limit: ${joined(rule?.limit) || '—'}`,
+    ].join('\n');
+}
+
+/** Правила свободной работы — те, чьи Needs строятся на воображении персонажа. */
+export function freeformRules(systems) {
+    return (Array.isArray(systems) ? systems : []).flatMap(system => (Array.isArray(system?.rules) ? system.rules : [])
+        .filter(rule => /imagin|imagery|freeform|visuali[sz]/i.test(`${rule?.name} ${joined(rule?.needs)}`))
+        .map(rule => `${text(system.name)} / ${text(rule.name)}`));
+}
+
+/** Процитированное резолвером есть в тексте правила: общие значимые слова. */
+export function quotes(source, quoted) {
+    const own = [...words(quoted)];
+    if (!own.length) return false;
+    const pool = words(joined(source));
+    const shared = own.filter(word => pool.has(word)).length;
+    return shared >= Math.min(3, own.length) || shared / own.length >= 0.5;
+}

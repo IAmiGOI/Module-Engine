@@ -1,3 +1,4 @@
+import { ruleCard } from '../../libraries/core/decision-rule-weight.js';
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import {
     applySections, normalizeCreation, renderCreation, findSection, allSections, isComplete, missingSections,
@@ -123,7 +124,11 @@ export function createCreationStore({ call, store = null, publishEvent = () => {
 
     /** Открытия, которых резолвер не видел: короткий блок у задания. */
     function discoveries() {
-        return discoveriesBlock(creation, Number(snapshot?.seq) || 0);
+        // Правила, которых нет в снимке резолвера (Бог дописал по ходу игры), — целиком: иначе резолвер видел только
+        // строку открытия и толковал правило, не читая его Needs, Yields и Limit.
+        const seen = String(snapshot?.text ?? '');
+        const fresh = seen ? (creation.scales ?? []).flatMap(system => (system.rules ?? []).filter(rule => rule?.name && !seen.includes(rule.name)).map(rule => ruleCard(system, rule))) : [];
+        return [discoveriesBlock(creation, Number(snapshot?.seq) || 0), fresh.length ? `NEW RULES (written since the world was last read; they are the law of the world):\n\n${fresh.join('\n\n')}` : ''].filter(Boolean).join('\n\n');
     }
 
     return {
