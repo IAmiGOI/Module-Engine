@@ -38,6 +38,9 @@ test('the user\'s own technique the chosen rule does not describe is rolled unde
     assert.match(result.notes.join(' '), /rolled under "Gate Magic \/ Imaginative Synthesis/);
     const sweep = await handler('I spread my own mana outward as a thin wide layer across the ward, standing still.')({ ...base, size: 'medium', difficulty: 'very hard', rule: 'Gate Magic / Mana Sensing & Wide-Area Sweep' });
     assert.match(sweep.rule, /Mana Sensing/, 'a method the Needs describe keeps its rule');
+    const invented = await handler('Instead of waves, I send tiny rays of mana, seeing how it will bend.')({ ...base, size: 'small', difficulty: 'moderate', rule: 'Gate Magic / Imaginative Synthesis', falls: ['rule: familiar Earth physics — he presses Emilia\'s crystal pendant as an anchor'] });
+    assert.equal(invented.falls.length, 0, 'help the user did not write is not counted');
+    assert.match(invented.userActionNote, /adding nothing they did not write/);
 });
 
 test('a failure is the size of the working and touches only itself; no size means medium', async () => {

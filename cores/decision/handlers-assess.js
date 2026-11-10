@@ -1,7 +1,7 @@
 import { assessAction } from '../../libraries/core/decision-probability.js';
 import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js';
 import { difficultyShift } from '../../libraries/core/game-settings.js';
-import { findRule, ruleDifficulty, checkSteps, failureOf, ruleCard, freeformRules, methodFits } from '../../libraries/core/decision-rule-weight.js';
+import { findRule, ruleDifficulty, checkSteps, failureOf, sharedWords, ruleCard, freeformRules, methodFits } from '../../libraries/core/decision-rule-weight.js';
 
 /**
  * Оценка действия: два уровня из списков → таблица вероятностей → бросок
@@ -45,6 +45,11 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
                 const strip = list => (Array.isArray(list) ? list : []).map(item => String(item ?? '').trim()).filter(Boolean);
                 const keep = side => strip(args[side]).filter(item => {
                     const errors = checkSteps(found.rule, { [side]: [item] });
+                    // Подмога персонажу пользователя — только из его сообщения: резолвер выдумал ему кристалл-образец, чтобы
+                    // получить понижение из правила.
+                    if (!errors.length && isUser && message && side === 'falls' && sharedWords(item.replace(/^(rule|scene)\s*:\s*/i, ''), message) < 2) {
+                        errors.push(`falls: "${item}" — the user did not write this; only what their message says counts as help they bring.`);
+                    }
                     if (errors.length) notes.push(`not counted — ${errors[0]}`);
                     return !errors.length;
                 }).map(item => item.replace(/^(rule|scene)\s*:\s*/i, '').trim());
@@ -68,12 +73,15 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
         // Последствие неудачи — рядом с результатом, последним перед формой: строки промпта модель пропускала, и провал
         // тонкого щупа маны ронял с пятисот метров и полёт, и спутницу.
         const failed = ['clumsy', 'botched'].includes(String(result.degree ?? ''));
-        const ONLY = 'It touches only this attempt: whatever the character already holds and keeps going — a working, flight, a grip — stays exactly as it was.';
+        const ONLY = 'It touches only this attempt: whatever the character already holds and keeps going stays exactly as it was.';
         const consequence = !failed ? '' : size === 'small'
             ? `This was a small working: failing means only that it does not work or tells nothing. No backlash, no harm, no cost beyond the little that was spent. ${ONLY}`
             : [fromRule?.failure?.[result.degree] ? `What a ${result.degree} attempt costs under this rule${size === 'medium' ? ', in a lighter form for a medium working' : ''}: ${fromRule.failure[result.degree]}` : '', `This is all the failure costs. ${ONLY}`].filter(Boolean).join(' ');
         const base = fromRule ? { ...result, rule: fromRule.rule, ruleBase: fromRule.base, ruleLevels: fromRule.named, rises: fromRule.rises, falls: fromRule.falls, ruleText: fromRule.card, ...(notes.length ? { notes } : {}) } : result;
-        const full = consequence ? { ...base, size, consequence } : (size ? { ...base, size } : base);
+        // Действие пользователя — ровно его сообщение: результат пишется для него, без придуманных средств и движений.
+        const asUser = String(userName() ?? '').trim().toLowerCase() === String(args.character ?? '').trim().toLowerCase() && String(state.userMessage ?? '').trim();
+        const userAct = asUser ? { userAction: String(state.userMessage).trim(), userActionNote: 'This is everything the user did. Write the result of exactly this, adding nothing they did not write.' } : {};
+        const full = { ...(consequence ? { ...base, size, consequence } : (size ? { ...base, size } : base)), ...userAct };
         state.assessments.set(id, { ...full, id });
         return { ...full, id };
     };

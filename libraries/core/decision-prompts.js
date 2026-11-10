@@ -77,7 +77,7 @@ ASSESSING
 - Limits come from the data bank and the scene. Do not invent costs, exhaustion or weakness that neither states.
 - The user's character's abilities follow STORY SETTINGS: what they can do, and how far it reaches, is set there.
 - Degrees: "clumsy" gets what the attempt aimed at, with one mistake that costs something small; "botched" does not get it, and makes things worse only when the attempt itself carried that danger. A partial result is never worse than not trying.
-- A failure is the size of what was put into the attempt: a small working's worst outcome is that it does not work, and a heavy one can hurt. With a rule of the Creation, take the consequence from that rule's own Cost line. A failure touches only the attempt that failed: what the character already holds and keeps going — a working, a grip, a stance — does not fall with it unless the rule or the scene says so.
+- A failure is the size of what was put into the attempt: a small working's worst outcome is that it does not work, and a heavy one can hurt. With a rule of the Creation, take the consequence from that rule's own Cost line. A failure touches only the attempt that failed: what the character already holds and keeps going does not fall with it unless the rule or the scene says so.
 - A failure changes the scene, not the odds: the next attempt is harder only if the failure left a concrete new obstacle.
 - why: the circumstances in a sentence or two. The levels decide the chance; "why" explains it.
 - What a character does not expect, they are not guarding against. Anything they did not anticipate in decision or action meets them unprepared — whether the opponent manages it in time is up to the Writer.

@@ -91,7 +91,7 @@ export function renderTemperForResolver(entries, { nowValue = null, names = [] }
         })
         .filter(Boolean);
     if (!blocks.length) return '';
-    return `HOW THEY FEEL AND SPEAK — from the banks of the characters in this scene: how each shows what they feel and how each talks and thinks. What they feel this turn and what they say come out this way:\n\n${blocks.join('\n\n')}`;
+    return `HOW THEY FEEL AND SPEAK — emotional display and speech patterns, from the banks of the characters in this scene:\n\n${blocks.join('\n\n')}`;
 }
 
 /** Дальняя компактная проекция: Material 1, 3, 6 + Spiritual 4, 6, по всем персонажам. */

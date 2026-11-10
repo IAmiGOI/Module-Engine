@@ -116,7 +116,9 @@ export function ruleCard(system, rule) {
 export function freeformRules(systems) {
     return (Array.isArray(systems) ? systems : []).flatMap(system => (Array.isArray(system?.rules) ? system.rules : [])
         .filter(rule => /imagin|imagery|freeform|visuali[sz]/i.test(`${rule?.name} ${joined(rule?.needs)}`))
-        .map(rule => `${text(system.name)} / ${text(rule.name)}`));
+        // Сначала те, что так и названы: «Basic Spellcasting» тоже упоминает «mental imagery», и брался он.
+        .map(rule => ({ name: `${text(system.name)} / ${text(rule.name)}`, named: /imaginative|freeform/i.test(text(rule?.name)) })))
+        .sort((a, b) => Number(b.named) - Number(a.named)).map(item => item.name);
 }
 
 /** Процитированное резолвером есть в тексте правила: общие значимые слова. */
@@ -134,4 +136,10 @@ export function methodFits(needs, method) {
     if (!own.length) return 0;
     const pool = words(joined(needs));
     return own.filter(word => pool.has(word)).length / own.length;
+}
+
+/** Общие значимые слова — сколько слов шага есть в тексте. */
+export function sharedWords(step, source) {
+    const pool = words(source);
+    return [...words(step)].filter(word => pool.has(word)).length;
 }

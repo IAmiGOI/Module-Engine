@@ -31,7 +31,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                     type: 'object',
                     properties: {
                         name: { type: 'string' },
-                        heard: { type: 'string', description: 'What in the user\'s latest message — what was said and what was done, a touch on them included — or in what just happened matters to them, in one line. What is new in it for them.' },
+                        heard: { type: 'string', description: 'What in the user\'s latest message — what was said and what was done — or in what just happened matters to them, in one line. What is new in it for them.' },
                         feels: { type: 'string', description: 'What they feel now, from their Emotions and what they heard. A few words.' },
                         next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID AND DONE or already taken. Leave it out when a feeling, not a plan, moves them this turn. With no Decree yet, toward what their bank wants.' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
@@ -58,7 +58,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                 },
             },
             stop: { type: 'string', description: 'The last beat the turn ends on — the line or gesture after which the user would naturally react — in one sentence. Do not retell the other beats. Never describe anyone as waiting for the user: that pause is implied.' },
-            userResult: { type: 'string', description: 'What the user did, as their own deed in their own terms, then the result of it: success or failure and why. Every part of it — each thing said and each thing done, a touch as much as a line — with how it reaches whoever it reaches; no part is left out. Only the user\'s action and its result: what the others do after it belongs in characters and beats. It has happened — the others meet it; nobody does it for them or instead of them. Never decide the user\'s action itself, and do not finish a long action for them — show what has happened up to the moment someone reacts.' },
+            userResult: { type: 'string', description: 'What the user did, as their own deed in their own terms, then the result of it: success or failure and why. Every part of it — what was said and what was done; no part is left out. Only the user\'s action and its result: what the others do after it belongs in characters and beats. It has happened — the others meet it; nobody does it for them or instead of them. Never decide the user\'s action itself, and do not finish a long action for them — show what has happened up to the moment someone reacts.' },
             scene: {
                 type: 'object',
                 description: 'Leave it out for a short exchange in the same place; set it when the scene takes longer or moves.',

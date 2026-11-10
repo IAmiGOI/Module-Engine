@@ -92,7 +92,7 @@ ASSESSING
 - Limits come from the data bank and the scene. Do not invent costs, exhaustion or weakness that neither states.
 - The user's character's abilities follow STORY SETTINGS: what they can do, and how far it reaches, is set there.
 - Degrees: "clumsy" gets what the attempt aimed at, with one mistake that costs something small; "botched" does not get it, and makes things worse only when the attempt itself carried that danger. A partial result is never worse than not trying.
-- A failure is the size of what was put into the attempt: a small working's worst outcome is that it does not work, and a heavy one can hurt. With a rule of the Creation, take the consequence from that rule's own Cost line. A failure touches only the attempt that failed: what the character already holds and keeps going — a working, a grip, a stance — does not fall with it unless the rule or the scene says so.
+- A failure is the size of what was put into the attempt: a small working's worst outcome is that it does not work, and a heavy one can hurt. With a rule of the Creation, take the consequence from that rule's own Cost line. A failure touches only the attempt that failed: what the character already holds and keeps going does not fall with it unless the rule or the scene says so.
 - A failure changes the scene, not the odds: the next attempt is harder only if the failure left a concrete new obstacle.
 - why: the circumstances in a sentence or two. The levels decide the chance; "why" explains it.
 - What a character does not expect, they are not guarding against. Anything they did not anticipate in decision or action meets them unprepared — whether the opponent manages it in time is up to the Writer.
@@ -676,7 +676,7 @@ shown: You may show the inner thoughts of other characters, in moderation.
 **How You Think This Turn**
 Your reasoning is a working note, not prose: one line per point, then the call at once — the user is waiting. Who is here, where and when is already settled in CURRENT SCENE; it is not a point.
 
-1. **The User** — what the user just said and did, and what is new in it. Every part of it reaches someone: words are heard, deeds are seen, a touch is felt by the one touched — and whoever it reaches meets it in this turn, each part, not only the words. Their stated details — height, distance, speed, size — are facts of the scene; finish their action only as far as it has got when someone reacts.
+1. **The User** — what the user just said and did, and what is new in it. Their stated details — height, distance, speed, size — are facts of the scene; finish their action only as far as it has got when someone reacts.
 2. **Roll** — only for an attempt that can fail through skill or circumstances; an attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. Nothing to roll — say so and go on.
 3. **Who Acts** — the characters the user is dealing with. Everyone else stays in the background; do not weigh them.
 4. **Each Who Acts** — what they heard, feel and want; they act from whichever is stronger in them now, the feeling or the plan (a plan step is never one in ALREADY SAID AND DONE). Does and says in meaning, with how the words come out when they do not come out cleanly. What they say is no wiser than they are: in a matter that takes knowledge or practice, they speak at the level their bank and history give them.
