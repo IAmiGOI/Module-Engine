@@ -26,14 +26,13 @@ export const INSCRIBE_TOOL = Object.freeze({
             },
             characters: {
                 type: 'array',
-                description: 'Only the characters who act this turn. What they do and say comes from whichever is stronger in them now — what they feel or what they plan.',
+                description: 'Only the characters who act this turn. What they do and say comes from what is in them now.',
                 items: {
                     type: 'object',
                     properties: {
                         name: { type: 'string' },
                         heard: { type: 'string', description: 'What in the user\'s latest message — what was said and what was done — or in what just happened matters to them, in one line. What is new in it for them.' },
                         feels: { type: 'string', description: 'What they feel now, from their Emotions and what they heard. A few words.' },
-                        next: { type: 'string', description: 'Their next step toward their Decree\'s aim from where things stand now — never a step already in ALREADY SAID AND DONE or already taken. Leave it out when a feeling, not a plan, moves them this turn. With no Decree yet, toward what their bank wants.' },
                         means: { type: 'string', description: 'What they mean to get across to someone this turn, in a few words — or "nothing". Decide it before says: says holds only what of it comes out in words.' },
                         shows: { type: 'string', enum: ['words', 'body', 'held back'], description: 'With means: how it comes out of them now — in words, in the body, or held back so that nothing shows — from their state at this moment and how their bank says they show feeling. Only words fill "says".' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
