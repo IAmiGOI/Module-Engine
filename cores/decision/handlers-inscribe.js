@@ -76,7 +76,7 @@ export function createInscribeHandler({ store, publishEvent, state, resolvePlace
         });
         if (repaired.warnings.length) state.formWarnings = [...(state.formWarnings ?? []), ...repaired.warnings];
         if (!repaired.ok) {
-            if (repaired.missing.some(item => item.includes('whose "says" is empty') || item.includes('"brings"') || item.includes('brings "'))) state.linesRefusedRun = state.runId;
+            if (repaired.missing.some(item => item.includes('whose "says" is empty') || item.includes('"shows"') || item.includes('shows "'))) state.linesRefusedRun = state.runId;
             return { ok: false, missing: repaired.missing };
         }
         const form = repaired.form;

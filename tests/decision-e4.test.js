@@ -94,7 +94,7 @@ test('entering the roster interrupts an existing plan: it becomes approximate an
             call('set_character_plan', { character: 'A', summary: 'Find the key.', durationMinutes: 180, comment: 'A has a plan outside the scene.' }),
             call('update_roster', { add: [{ name: 'A' }], comment: 'A walks into the scene.' }),
             call('assess', { character: 'A', action: 'arrives', kind: 'body', difficulty: 'easy', experience: 'skilled', why: 'The road is clear.', comment: 'The chance matters for the form.' }),
-            form([{ name: 'A', brings: 'do', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', feeling: 'calm', need: 'to be safe', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }], 5),
+            form([{ name: 'A', decision: 'Arrive.', decisionReason: 'She was called.', action: 'Walks in.', feeling: 'calm', need: 'to be safe', actionReason: 'The door is open.', assessId: 'asm_run_1_1', outcome: 'She makes it in.' }], 5),
         ],
     });
     const result = await pipelineCore.run({ pipelineId: BEFORE_SEND, input: { runId: 'run_1', chat: [{ mes: 'hi' }], type: 'normal' } });

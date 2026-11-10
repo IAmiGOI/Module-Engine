@@ -34,7 +34,7 @@ export function normalizeConflict(value) {
  * Шаблон → форма хода, которую понимают проекции, Push и запись хода.
  * @returns {{ ok: boolean, missing: string[], form?: object, warnings: string[] }}
  */
-export const BRINGS = Object.freeze(['say', 'do', 'say and do', 'nothing']);
+export const SHOWS = Object.freeze(['words', 'body', 'held back']);
 
 export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [], modes = null, userMessage = '', strictLines = false } = {}) {
     const missing = [];
@@ -74,14 +74,15 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
         // Молчащему модель пишет «None» — это не реплика: иначе она попадала в ALREADY SAID как сказанное.
         const said = text(character.says) || text(character.speech);
         let says = /^(none|null|n\/a|nothing|-+|—)\.?$/i.test(said) ? '' : said;
-        // Что момент даёт персонажу нового: сказать, сделать, оба или ничего. Пункт хода мыслей Flash пропускал,
-        // поэтому это поле формы; нечего сказать — says пуст. Первый раз — назад резолверу, повтор — движок чинит сам.
-        let brings = BRINGS.includes(text(character.brings).toLowerCase()) ? text(character.brings).toLowerCase() : '';
-        if (!brings && strictLines) missing.push(`characters: "${character.name}" needs "brings" — what this moment gives them that is new: ${BRINGS.join(' / ')}`);
-        if (!brings) brings = says ? 'say and do' : 'do';
-        if (says && !brings.includes('say')) {
-            if (strictLines) missing.push(`characters: "${character.name}" brings "${brings}" yet has "says" — with nothing new to say, says stays empty; if they do speak, set brings to include say`);
-            else { says = ''; warnings.push(`"${character.name}" brings "${brings}" — their says was cleared`); }
+        // Что персонаж хочет передать (means, real) и как это выходит сейчас (shows, lens): словами, телом или сдержано.
+        // «Хочет спросить» не равно «говорит»: не words — says пуст. Первый раз — назад резолверу, повтор — движок чинит сам.
+        const means = text(character.means);
+        let shows = SHOWS.includes(text(character.shows).toLowerCase()) ? text(character.shows).toLowerCase() : '';
+        if (!shows && (means || says) && strictLines) missing.push(`characters: "${character.name}" needs "shows" — how what they mean to get across comes out now: ${SHOWS.join(' / ')}`);
+        if (!shows && (means || says)) shows = says ? 'words' : 'body';
+        if (says && shows !== 'words') {
+            if (strictLines) missing.push(`characters: "${character.name}" shows "${shows}" yet has "says" — what does not come out in words stays out of says; if they do speak, shows is words`);
+            else { says = ''; warnings.push(`"${character.name}" shows "${shows}" — their says was cleared`); }
         }
         const conflict = normalizeConflict(character.conflict);
         if ((conflict.level === 'minor' || conflict.level === 'strong') && !conflict.why) {
@@ -105,7 +106,8 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
             conflict,
             does,
             says,
-            brings,
+            ...(means ? { means } : {}),
+            ...(shows ? { shows } : {}),
             ...(rolled ? { assessId: rolled, ...(outcome ? { outcome } : {}) } : {}),
             ...(!rolled ? { noCheck: text(character.noCheck) || DEFAULT_NO_CHECK } : {}),
             // Форма проекций и Push: у резолвера действие — `does`, у писателя — `action`.
