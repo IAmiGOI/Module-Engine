@@ -138,3 +138,21 @@ test('the inscription is built from the template: beats, the user result, END, a
     assert.match(inscription, /END: They are at the door\. Stop there\./);
     assert.match(inscription, /NOT FOR THE PAGE[\s\S]*- Lena: Feels: calm\. Wants: to be out before the guard turns\./);
 });
+
+test('a line beat for a character whose says is empty goes back once, then is dropped', async () => {
+    const { repairInscription: repair } = await import('../libraries/core/decision-inscription.js');
+    const form = {
+        characters: [{ name: 'Mara', does: 'grips the rail' }],
+        beats: [{ who: 'Mara', kind: 'action', text: 'grips the rail' }, { who: 'Mara', kind: 'line', text: 'asks where they are going' }],
+        stop: 'Mara grips the rail.', userResult: 'The user starts the engine and drives off.',
+    };
+    const strict = repair({ form, roster: ['Mara'], strictLines: true });
+    assert.equal(strict.ok, false);
+    assert.ok(strict.missing.some(item => item.includes('whose "says" is empty')));
+    const loose = repair({ form, roster: ['Mara'] });
+    assert.equal(loose.ok, true);
+    assert.equal(loose.form.beats.some(beat => beat.kind === 'line'), false);
+    const spoken = repair({ form: { ...form, characters: [{ name: 'Mara', does: 'grips the rail', says: 'where they are going' }] }, roster: ['Mara'], strictLines: true });
+    assert.equal(spoken.ok, true);
+    assert.equal(spoken.form.beats.filter(beat => beat.kind === 'line').length, 1);
+});

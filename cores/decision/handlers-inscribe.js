@@ -72,9 +72,13 @@ export function createInscribeHandler({ store, publishEvent, state, resolvePlace
             nowValue, timeOfDay: typeof timeOfDay === 'function' ? timeOfDay() : null,
             previous, departed: previous ? departedFrom(previous.resolution, store.roster().active, { user }) : [],
             modes: state.modes?.chosen ?? null, userMessage: state.userMessage ?? '',
+            strictLines: state.linesRefusedRun !== state.runId,
         });
         if (repaired.warnings.length) state.formWarnings = [...(state.formWarnings ?? []), ...repaired.warnings];
-        if (!repaired.ok) return { ok: false, missing: repaired.missing };
+        if (!repaired.ok) {
+            if (repaired.missing.some(item => item.includes('whose "says" is empty'))) state.linesRefusedRun = state.runId;
+            return { ok: false, missing: repaired.missing };
+        }
         const form = repaired.form;
         // Состав сцены — из принятого Начертания: кто действует, тот в ростере, даже если «вошёл» не отмечен.
         // Без этого ростер оставался прежним (однажды — один персонаж пользователя), и резолвер не видел Указов сцены.

@@ -34,7 +34,7 @@ export function normalizeConflict(value) {
  * Шаблон → форма хода, которую понимают проекции, Push и запись хода.
  * @returns {{ ok: boolean, missing: string[], form?: object, warnings: string[] }}
  */
-export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [], modes = null, userMessage = '' } = {}) {
+export function repairInscription({ form, roster = [], assessments = new Map(), user = '', nowValue = null, timeOfDay = null, previous = null, departed = [], modes = null, userMessage = '', strictLines = false } = {}) {
     const missing = [];
     const warnings = [];
     if (!form || typeof form !== 'object') return { ok: false, missing: ['inscribe'], warnings };
@@ -144,9 +144,19 @@ export function repairInscription({ form, roster = [], assessments = new Map(), 
     characters.length = 0;
     characters.push(...present);
 
-    const beats = (Array.isArray(form.beats) ? form.beats : [])
+    let beats = (Array.isArray(form.beats) ? form.beats : [])
         .filter(beat => beat && typeof beat === 'object' && text(beat.text))
         .map(beat => ({ who: text(beat.who), kind: text(beat.kind).toLowerCase() === 'line' ? 'line' : 'action', text: text(beat.text) }));
+    // Реплика — только у того, у кого есть says: Писатель видит биты, а не форму, и пустой says с битом LINE
+    // всё равно давал реплику на странице. Первый раз — назад резолверу; повтор — движок убирает такие биты сам.
+    const silent = characters.filter(character => character.idle !== true && !text(character.says)).map(character => character.name);
+    const unsaid = beats.filter(beat => beat.kind === 'line' && silent.some(name => sameName(name, beat.who)));
+    if (unsaid.length && strictLines) {
+        missing.push(`beats: a line beat for ${[...new Set(unsaid.map(beat => beat.who))].map(name => `"${name}"`).join(', ')}, whose "says" is empty — if they speak, put what they say in "says"; if they do not, the beat is what they do instead`);
+    } else if (unsaid.length) {
+        beats = beats.filter(beat => !unsaid.includes(beat));
+        warnings.push(`line beats were dropped for characters whose "says" is empty: ${[...new Set(unsaid.map(beat => beat.who))].join(', ')}`);
+    }
     const acting = characters.some(character => character.idle !== true);
     if (acting && !beats.length) missing.push('beats: give the turn in order — every action and every line of the characters who act, each once (a line beat is what the words mean, in direct form)');
 
