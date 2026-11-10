@@ -89,7 +89,7 @@ export const GAME_OPTIONS = Object.freeze([
     {
         id: 'hooks', title: 'Hooks', group: 'story', classic: 'natural',
         values: [
-            { value: 'natural', label: "End where you'd react", note: 'Each turn ends where you would answer.' },
+            { value: 'natural', label: 'Where it ends', note: 'Each turn ends on its own last beat.' },
             { value: 'cliffhangers', label: 'Cliffhangers', note: 'Each turn ends on a pull back into the story.' },
         ],
     },

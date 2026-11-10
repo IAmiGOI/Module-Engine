@@ -113,7 +113,7 @@ test('Classic keeps the rules that moved into options, and the turn task no long
     const classic = buildStorySettingsBlock('director', DEFAULT_GAME_SETTINGS);
     assert.match(classic, /abilities as stated, at full strength/);
     assert.match(classic, /Move one thing forward each turn/);
-    assert.match(classic, /End the turn at the first point where the user would naturally react/);
+    assert.match(classic, /End the turn on its own last beat, wherever the moment ends/);
     assert.match(classic, /hold to their canon/);
     assert.doesNotMatch(DIRECTOR_TURN, /Take them as stated, at full strength/);
     assert.doesNotMatch(DIRECTOR_TURN, /At most one new complication per turn/);

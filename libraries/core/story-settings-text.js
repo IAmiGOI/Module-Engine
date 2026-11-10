@@ -53,7 +53,7 @@ export const STORY_SETTINGS_RULES = Object.freeze({
         dark: 'The world is harsh: cruelty, loss and grim detail belong in it.',
     }),
     hooks: Object.freeze({
-        natural: 'End the turn at the first point where the user would naturally react.',
+        natural: 'End the turn on its own last beat, wherever the moment ends.',
         cliffhangers: 'End each turn on a hook that pulls the user back into the story.',
     }),
     replyLength: Object.freeze({
