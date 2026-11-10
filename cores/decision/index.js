@@ -442,7 +442,11 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         // шёл без ожидания, и правка Директора после отброшенной версии (Указ Emilia) переживала переигровку.
         await rollbackSettled();
         if ((type === 'regenerate' || type === 'swipe') && settings.snapshots) {
-            const last = store.lastRun();
+            // Снимок — только ответа на текущее сообщение пользователя. Если ответ не сохранился (генерация оборвалась),
+            // последний сохранённый ход — прошлый, и его снимок откатывал мир на ход назад: попытка крыльев пропадала из окна.
+            const lastUser = (Array.isArray(chat) ? chat : []).map((entry, index) => (entry?.is_user === true ? index : -1)).filter(index => index >= 0).at(-1) ?? -1;
+            const latest = store.lastRun();
+            const last = latest && Number(latest.mesid) > lastUser ? latest : null;
             const before = last?.mesid !== undefined && last?.mesid !== null ? store.snapshot(last.mesid) : null;
             if (before) await restoreState(before).catch(() => {});
             // Все попытки этого хода — с начала первой: их знания не случились.
