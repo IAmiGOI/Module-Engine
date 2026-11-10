@@ -56,3 +56,34 @@ export function ruleDifficulty(rule, { rises = [], falls = [], chosen = '' } = {
     const index = Math.max(0, Math.min(DIFFICULTY_LEVELS.length - 1, start + up.length - down.length));
     return { base, named, difficulty: DIFFICULTY_LEVELS[index], rises: up, falls: down };
 }
+
+const STOP = new Set(['with', 'when', 'from', 'that', 'this', 'they', 'their', 'into', 'than', 'have', 'been', 'only', 'more', 'less', 'over', 'under', 'what', 'which', 'caster', 'casters', 'already', 'rises', 'falls']);
+const words = value => new Set(text(value).toLowerCase().match(/[a-z]{4,}/g)?.filter(word => !STOP.has(word)).map(word => word.replace(/(ing|ed|es|s)$/, '')) ?? []);
+const TRAIT = /\b(mana (capacity|pool|reserves?)|enormous mana|vast mana|talent(ed)?|gift(ed)?|innate)\b/i;
+
+/**
+ * Каждый шаг — «rule: …» (условие из повышений/понижений самого правила — сверяется по словам) или «scene: …»
+ * (помеха или подмога, уже бывшая в сцене). Черта персонажа — опыт, а не шаг, если правило её не называет.
+ * @returns строки ошибок; пусто — шаги приняты
+ */
+export function checkSteps(rule, { rises = [], falls = [] } = {}) {
+    const errors = [];
+    const ruleText = `${text(rule?.weight?.rises)} ${text(rule?.weight?.falls)} ${text(rule?.weight?.text)}`;
+    const ruleWords = words(ruleText);
+    for (const [side, list] of [['rises', rises], ['falls', falls]]) {
+        for (const raw of Array.isArray(list) ? list : []) {
+            const item = text(raw);
+            if (!item) continue;
+            const match = /^(rule|scene)\s*:\s*(.+)$/i.exec(item);
+            if (!match) { errors.push(`${side}: "${item}" — start it with "rule:" (a condition the rule itself lists) or "scene:" (an obstacle or help already established in the scene).`); continue; }
+            const [, source, body] = match;
+            if (TRAIT.test(body) && !TRAIT.test(ruleText)) { errors.push(`${side}: "${body}" is the character's own trait — that is their experience, not a step.`); continue; }
+            if (source.toLowerCase() === 'rule') {
+                const own = [...words(body)];
+                const shared = own.filter(word => ruleWords.has(word)).length;
+                if (shared < Math.min(2, own.length)) errors.push(`${side}: "${body}" is not in this rule — its ${side} are: ${text(side === 'rises' ? rule?.weight?.rises : rule?.weight?.falls) || 'none'}. Use "scene:" only for what the scene already established.`);
+            }
+        }
+    }
+    return errors;
+}

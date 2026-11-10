@@ -1,7 +1,7 @@
 import { assessAction } from '../../libraries/core/decision-probability.js';
 import { ASSESS_SOCIAL_REFUSAL } from '../../libraries/core/decision-prompts.js';
 import { difficultyShift } from '../../libraries/core/game-settings.js';
-import { findRule, ruleNames, ruleDifficulty } from '../../libraries/core/decision-rule-weight.js';
+import { findRule, ruleNames, ruleDifficulty, checkSteps } from '../../libraries/core/decision-rule-weight.js';
 
 /**
  * Оценка действия: два уровня из списков → таблица вероятностей → бросок
@@ -28,7 +28,10 @@ export function createAssessHandler({ state, getSettings, getGameSettings = null
             if (!found) {
                 return { ok: false, error: `${String(args.rule ?? '').trim() ? `There is no rule "${String(args.rule).trim()}".` : 'An attempt through a power of the world needs "rule".'} Name the rule it uses, as "System / Rule": ${ruleNames(systems).join('; ')}.` };
             }
-            fromRule = ruleDifficulty(found.rule, { rises: args.rises, falls: args.falls, chosen: args.difficulty });
+            const stepErrors = checkSteps(found.rule, { rises: args.rises, falls: args.falls });
+            if (stepErrors.length) return { ok: false, error: `Rule "${found.system.name} / ${found.rule.name}": ${stepErrors.join(' ')}` };
+            const strip = list => (Array.isArray(list) ? list : []).map(item => String(item ?? '').replace(/^(rule|scene)\s*:\s*/i, '').trim()).filter(Boolean);
+            fromRule = ruleDifficulty(found.rule, { rises: strip(args.rises), falls: strip(args.falls), chosen: args.difficulty });
             if (!fromRule) return { ok: false, error: `The rule "${found.rule.name}" has no weight level — give "difficulty" yourself and name the rule in "why".` };
             fromRule = { ...fromRule, rule: `${found.system.name} / ${found.rule.name}`, ruleRises: String(found.rule.weight?.rises ?? ''), ruleFalls: String(found.rule.weight?.falls ?? '') };
         }
