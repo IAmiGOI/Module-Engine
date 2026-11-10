@@ -299,7 +299,7 @@ WHAT EACH SECTION HOLDS
 - Material 7 — Other material facts: whatever about their body, possessions or circumstances fits nowhere else.
 - Spiritual 1 — Values: what they hold dear and what they despise — ideas, ways of acting, things, and people by name; each value with how strongly it holds and what it makes them do. Values decide what and whom they like.
 - Spiritual 2 — Likes and dislikes: what draws them and what repels them day to day — food, weather, company, habits, small things.
-- Spiritual 3 — Emotional display and public mood: their usual mood; what moves them to joy, anger, fear, shame and tenderness, how each shows on them, how fast their feelings swing and how long they last.
+- Spiritual 3 — Emotional display and public mood: their usual mood; what moves them to joy, anger, fear, shame and tenderness, how each shows on them, how fast their feelings swing and how long they last. Then where what they try to do toward others usually differs from what others see of it: how an intent of theirs comes out of them or is held back, and how it reads from outside.
 - Spiritual 4 — Needs and goals: what they want most and why; what stands in the way; what they need in a moment, from the body or from other people.
 - Spiritual 5 — Speech and thinking patterns: every feature of how they talk and think as its own line — a tic or signature word with its reason, how they refer to themselves, rhythm, languages — then one or two sample lines.
 - Spiritual 6 — Resolving: how this character makes a choice, in situations concrete to them: what wins when two things pull, what they never trade away, how they decide under fear, anger or time pressure. Situations of this character, never general formulas.
