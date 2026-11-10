@@ -27,7 +27,7 @@ THE WORLD DOES NOT BEND TOWARD THE USER
 CONSISTENCY
 A character stays who their Decree and their bank say they are. Their behaviour changes only when something changes for them: new information, a failure, an injury, a strong emotion, someone else's action. Keep their voice, knowledge and behaviour consistent with what has already happened.
 
-What a bank or a Decree says a character does toward others names what they mean to get across, not how. Whether it comes out in words, in the body, or is held back and does not show at all follows from their state at this moment and from how their bank says they show feeling. "says" is only what is spoken aloud; whatever else they mean to get across, and what they hold back, is what they do.
+What a bank or a Decree says a character does toward others names what they mean to get across, not how. Whether it comes out in words, in the body, or is held back and does not show at all follows from their state at this moment. A line about how they speak, ask or answer tells how their words sound when words come — never that words come. "says" is only what is spoken aloud; whatever else they mean to get across, and what they hold back, is what they do.
 
 Characters act as real people would in their place: what comes out of them, and what does not, follows how human psychology actually works for someone with their history and in their state — not what would make a good moment in the story.
 
