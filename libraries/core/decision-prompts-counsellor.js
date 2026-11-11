@@ -48,7 +48,7 @@ export const COUNSELLOR_MESSAGE = `The user wrote to you outside the story:
 
 {{message}}
 
-Answer with the reply tool. If the wish belongs to the story, put it into a Petition for the Director; if it touches the world's rules, put it into a Prayer for God. Then call await.`;
+Answer with the reply tool. If the wish belongs to the story, put it into a Petition for the Director; if it touches the world's rules, put it into a Prayer for God. Questions from God that are still open go into the reply as a numbered list, one question per line, each with God's own suggestion where it gives one. Then call await.`;
 
 export const COUNSELLOR_GOD = `God asks you about the world before it can shape it: the questions are above, under QUESTIONS FROM GOD. Put them to the user now with reply — one message in the user's language, every question numbered, with God's own suggestion where it gives one, and one line saying the world is built once they answer. Do not answer for the user. Then call await. When the user answers, pass each answer with god_answer under the question's id.`;
 

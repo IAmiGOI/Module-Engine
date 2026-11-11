@@ -783,7 +783,7 @@ The user wrote to you outside the story:
 
 {{message}}
 
-Answer with the reply tool. If the wish belongs to the story, put it into a Petition for the Director; if it touches the world's rules, put it into a Prayer for God. Then call await.
+Answer with the reply tool. If the wish belongs to the story, put it into a Petition for the Director; if it touches the world's rules, put it into a Prayer for God. Questions from God that are still open go into the reply as a numbered list, one question per line, each with God's own suggestion where it gives one. Then call await.
 ```
 
 ## 32. Советник — служебные заголовки контекста

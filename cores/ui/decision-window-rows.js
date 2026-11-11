@@ -3,6 +3,7 @@ import { computed } from './reactive.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
 import { toolLabel, toolFields, entrySummary } from '../../libraries/core/court-lanes.js';
 import { fileCallNode, writingNode, isFileCall } from './court-file-calls.js';
+import { previewNode } from './court-files-editor.js';
 
 /**
  * Строки ленты окна директора — вынесено из `decision-window.js`, чтобы файл
@@ -58,7 +59,8 @@ function callNode(row, ctx = {}) {
             ? h('div', { class: 'stme-dw-ask' }, h('b', {}, String(row.args.question)),
                 Array.isArray(row.args.options) && row.args.options.length ? h('div', { class: 'stme-dw-ask-options' }, row.args.options.map(String).join(' · ')) : null)
             : null,
-        fileView ?? fieldsNode(fields),
+        // Ответ пользователю и Молитва — Markdown, как их пишет Советник: списки, номера, жирный.
+        fileView ?? ((row.name === 'reply' || row.name === 'prayer') && row.args?.text ? h('div', { class: 'stme-dw-md' }, previewNode(String(row.args.text))) : fieldsNode(fields)),
         row.error ? h('div', { class: 'stme-dw-error-text' }, row.error) : null,
         row.pending ? null : h('details', { class: 'stme-dw-fold stme-dw-raw' },
             h('summary', {}, 'Raw'),
@@ -102,7 +104,7 @@ export function rowNode(row, ctx = {}) {
         row.promote ? h('div', { class: 'stme-dw-muted' }, `Promote to ${row.promote.level}: ${row.promote.reason}`) : null,
         row.excerpt ? h('pre', {}, row.excerpt) : null);
     if (row.kind === 'nothing') return h('div', { class: 'stme-dw-nothing' }, h('strong', {}, 'Nothing yet: '), row.reason || '(no reason given)');
-    if (row.kind === 'counsellor_reply') return h('div', { class: 'stme-dw-answer' }, h('strong', {}, 'Counsellor: '), row.text);
+    if (row.kind === 'counsellor_reply') return h('div', { class: 'stme-dw-answer stme-dw-md' }, h('strong', {}, 'Counsellor:'), previewNode(row.text));
     if (row.kind === 'queues') return h('details', { class: 'stme-dw-queues' },
         h('summary', {}, `Queues — ${row.petitions.length} petition(s), ${row.prayers.length} prayer(s)`),
         row.petitions.length ? h('pre', {}, row.petitions.map(item => `- ${item.character} (${item.status})${item.day ? ' [prepare the new day]' : ''}`).join('\n')) : null,
@@ -119,7 +121,7 @@ export function rowNode(row, ctx = {}) {
     if (row.kind === 'discovery') return h('div', { class: 'stme-dw-discovery' }, h('strong', {}, `Discovery — ${row.system || 'the world'}${row.rule ? ` / ${row.rule}` : ''}: `), row.text);
     if (row.kind === 'god_questions') return h('details', { class: 'stme-dw-god-questions' },
         h('summary', {}, `God asks ${row.questions.length} question(s)${row.kept ? ` (${row.kept} held back)` : ''}`),
-        h('pre', {}, row.questions.map(item => `- ${item.question}${item.why ? ` — ${item.why}` : ''}`).join('\n')));
+        h('pre', {}, row.questions.map((item, index) => `${index + 1}. ${item.question}${item.why ? ` — ${item.why}` : ''}`).join('\n')));
     if (row.kind === 'god_answer') return h('div', { class: 'stme-dw-answer' }, h('strong', {}, 'Counsellor answers God: '), row.answer, row.closed ? ' · all questions closed' : '');
     if (row.kind === 'prayer') return h('div', { class: 'stme-dw-prayer' }, h('strong', {}, `Prayer${row.status ? ` (${row.status})` : ''}: `), row.text);
     if (row.kind === 'telegram') return h('div', { class: 'stme-dw-telegram' }, h('strong', {}, `Telegram${row.blocked ? ' (the next turn waits for a Decree)' : ''}: `), row.text);

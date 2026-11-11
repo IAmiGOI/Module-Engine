@@ -48,6 +48,10 @@
 .stme-dw-message { border-left: 3px solid var(--stme-accent); padding: 4px 8px; background: color-mix(in srgb, var(--stme-accent) 10%, transparent); }
 .stme-dw-settings { border-left: 3px solid var(--stme-ok); padding: 4px 8px; font-size: .88em; background: color-mix(in srgb, var(--stme-ok) 10%, transparent); }
 .stme-dw-answer { font-size: .9em; font-style: italic; opacity: .9; white-space: pre-wrap; }
+/* Ответ Советника пользователю — Markdown и заметнее служебных строк. */
+.stme-dw-md { font-style: normal; opacity: 1; white-space: normal; }
+.stme-dw-answer.stme-dw-md { margin: .4em 0; padding: 4px 10px; border-left: 3px solid var(--stme-accent, #6b8cff); }
+.stme-dw-md .stme-files-preview { max-width: none; }
 
 /* Советник: разбор Ведомости, ответы пользователю и очереди. */
 .stme-dw-petition { border-left: 3px solid var(--stme-accent); padding: 4px 8px; background: var(--stme-level-1); border-radius: var(--stme-radius-sm); }
