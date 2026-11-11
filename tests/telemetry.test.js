@@ -47,3 +47,28 @@ test('the store keeps a ring and day rollups without IndexedDB', async () => {
     assert.equal((await handlers.get('telemetry.list')()).length, 2);
     assert.equal(Object.values(await handlers.get('telemetry.days')())[0].calls, 3);
 });
+
+test('statistics, time series, latency and cache-miss detection', async () => {
+    const { statistics, timeSeries, latencyBy, detectCacheMiss, percentile } = await import('../libraries/core/telemetry.js');
+    const base = Date.UTC(2026, 10, 11, 10);
+    const call = (minute, cached, extra = {}) => buildCallRecord({ at: base + minute * 60e3, purpose: 'resolver', model: 'm', chatId: 'c', turn: minute, usage: { prompt_tokens: 10000, prompt_tokens_details: { cached_tokens: cached }, completion_tokens: 100, cost: 0.01 }, durationMs: 1000 + minute * 100, ...extra });
+    const warm = call(0, 9000), cold = call(5, 0);
+    assert.equal(percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 90), 9);
+    const stats = statistics([warm, cold]);
+    assert.equal(stats.turns, 2);
+    assert.equal(Math.round(stats.cacheRate * 100), 45);
+    const miss = detectCacheMiss([warm], cold);
+    assert.equal(miss.lostTokens, 10000);
+    assert.equal(detectCacheMiss([warm], call(5, 8000)), null, 'a warm call is no miss');
+    assert.equal(detectCacheMiss([call(0, 9000, { chatId: 'other' })], cold), null, 'another chat is no evidence');
+    assert.equal(detectCacheMiss([call(-60, 9000)], cold), null, 'a cache from an hour ago has expired anyway');
+    const cost = timeSeries([warm, cold], { bucketMs: 60e3, metric: 'cost' });
+    assert.equal(cost.buckets.length, 6);
+    assert.equal(cost.series[0].values[0], 0.01);
+    const tokensSeries = timeSeries([warm, cold], { bucketMs: 60e3, metric: 'tokens' });
+    assert.deepEqual(tokensSeries.series.map(s => s.key), ['uncached', 'cached', 'out']);
+    const cache = timeSeries([warm, cold], { bucketMs: 60e3, metric: 'cache' });
+    assert.equal(cache.series[0].values[0], 0.9);
+    assert.equal(cache.series[0].values[2], null);
+    assert.equal(latencyBy([warm, cold])[0].key, 'resolver');
+});

@@ -112,7 +112,9 @@ export async function wireDataCores(ctx) {
     });
     // Телеметрия: каждый вызов модели и классификатора — в отдельное хранилище (IndexedDB), вкладка Telemetry в The Court.
     // Сеть — только за таблицей цен OpenRouter раз в сутки.
-    const telemetryCore = createTelemetryCore(engine.registerCaller('core.telemetry', 'cores', { tier: 'official', networkAccess: true }));
+    const telemetryCore = createTelemetryCore(engine.registerCaller('core.telemetry', 'cores', { tier: 'official', networkAccess: true }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.telemetry' }),
+    });
 
     // Карточки персонажей ST: чтение, создание и правка всех полей (гид и любые Модули — через контракты `characterCards.*`).
     const characterCardsCore = createCharacterCardsCore(engine.registerCaller('core.characterCard', 'cores', { tier: 'official' }), {
