@@ -77,3 +77,25 @@ test('the Counsellor reads God\'s questions and records the answer as a Declarat
     assert.match(context, /\[q1\] Is there iron\?/);
     assert.ok(context.includes(COUNSELLOR_SYSTEM));
 });
+
+test('a second batch of God\'s questions that arrives while the first is being put to the user follows it, without repeating the first', async () => {
+    const { counsellor, requests, state } = counsellorWithGodQuestions([
+        [tc('reply', { text: 'God asks: is there iron?', comment })],
+        [tc('await', { reason: 'Asked.', comment })],
+        [tc('reply', { text: 'God also asks: who rules?', comment })],
+        [tc('await', { reason: 'Asked.', comment })],
+    ]);
+    const first = counsellor.relayGodQuestions();
+    state.questions.push({ id: 'q2', question: 'Who rules?', why: 'the law', answer: '' });
+    counsellor.relayGodQuestions();
+    await first;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const asked = requests.filter(request => request.messages.some(message => String(message.content).includes(GOD_ASKS_HEADER)));
+    const blocks = requests.map(request => request.messages.find(message => String(message.content).startsWith(GOD_ASKS_HEADER))?.content ?? '');
+    assert.match(blocks[0], /\[q1\]/);
+    assert.doesNotMatch(blocks[0], /\[q2\]/);
+    const second = blocks.find((block, index) => index > 0 && /\[q2\]/.test(block));
+    assert.ok(second, 'the second batch is relayed');
+    assert.doesNotMatch(second, /\[q1\]/, 'the first batch is not asked again');
+    assert.ok(asked.length >= 2);
+});

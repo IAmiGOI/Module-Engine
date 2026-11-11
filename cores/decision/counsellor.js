@@ -48,6 +48,8 @@ function clockLabel(minutes) {
 const talk = mode => mode === 'message' || mode === 'god' || mode === 'status';
 
 export function createCounsellor({ call, callTool, store, banks = null, getSettings, getWorkers, publishEvent, capture = null, enqueue = job => job(), now = () => Date.now() }) {
+    const relayed = new Set(); // id вопросов Бога, уже переданных пользователю
+    let relayBatch = null; // партия, которую передаёт текущий запуск
     const live = createCycleLive({ publishEvent, getTurn: () => currentTurn(), getClock: () => store.clock().minutes });
     const retry = createRetryRunner({ publishEvent, getSettings });
 
@@ -92,8 +94,10 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
             messages.push({ role: 'system', content: `${LEDGER_HEADER}\n\n${body || NO_NEW_LEDGER}${streaks.length ? `\n\nStrong conflict two turns in a row: ${streaks.join(', ')}.` : ''}` });
         }
         // Вопросы Бога — в любом разборе: ответить можно, пока не закрыты все.
-        if (openQuestions.length) {
-            messages.push({ role: 'system', content: `${GOD_ASKS_HEADER}\n\n${renderGodQuestions(openQuestions)}` });
+        // Передача вопросов показывает только ещё не переданные: вторая партия Бога не повторяет первую.
+        const shownQuestions = mode === 'god' && relayBatch ? openQuestions.filter(item => relayBatch.has(item.id)) : openQuestions;
+        if (shownQuestions.length) {
+            messages.push({ role: 'system', content: `${GOD_ASKS_HEADER}\n\n${renderGodQuestions(shownQuestions)}` });
         }
         // У кого банк написан — данные Советнику; к кому идёт история, он видит по Ведомости и решает сам.
         const written = talk(mode) || !banks?.great?.load ? null : writtenBanks(await banks.great.load().catch(() => ({})));
@@ -322,14 +326,28 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         return { ok: true, record };
     }
 
-    /** Вопросы Бога — пользователю сразу, одним сообщением; несколько вопросов подряд — один запуск. */
+    /**
+     * Вопросы Бога — пользователю сразу, одним сообщением. Бог спрашивает партиями: партия, пришедшая, пока
+     * передаётся прошлая, раньше терялась — Советник говорил «пять вопросов, и мир готов», а ещё четыре
+     * всплывали только в ответе на ответы. Теперь она передаётся следом, без повтора уже переданных.
+     */
     let relaying = null;
+    let relayAgain = false;
     function relayGodQuestions() {
-        if (relaying) return relaying;
+        if (relaying) { relayAgain = true; return relaying; }
+        const fresh = openGodQuestions(typeof store.god === 'function' ? (store.god()?.questions ?? []) : []).filter(item => !relayed.has(item.id));
+        if (!fresh.length) return Promise.resolve({ skipped: true });
+        for (const item of fresh) relayed.add(item.id);
         const runId = `counsellor_god_${now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-        relaying = Promise.resolve().then(() => enqueue(() => run({ runId, mode: 'god' })))
+        relaying = Promise.resolve().then(() => enqueue(() => {
+            relayBatch = new Set(fresh.map(item => item.id));
+            return run({ runId, mode: 'god' }).finally(() => { relayBatch = null; });
+        }))
             .catch(error => live.failed({ runId, message: error?.message ?? String(error) }))
-            .finally(() => { relaying = null; });
+            .finally(() => {
+                relaying = null;
+                if (relayAgain) { relayAgain = false; relayGodQuestions(); }
+            });
         return relaying;
     }
 
