@@ -1,3 +1,4 @@
+import { pastRecorded } from './acquaintance.js';
 import { renderPart, renderPsyche } from './court-bank-files.js';
 import { normalizeImportanceWord, normalizePetitions } from './decision-counsellor.js';
 import { findCharacter, normalizeGreatBank, isUserCharacter } from './decision-great-bank.js';
@@ -34,6 +35,19 @@ export function mainWithoutDecree(state) {
     return Object.values(bank)
         .filter(character => character.importance === 'main' && !isUserCharacter(character))
         .filter(character => ![1, 2, 3, 4, 5].some(no => (character.decree?.[no] ?? []).some(line => text(line))))
+        .map(character => character.name);
+}
+
+/**
+ * Main Cast с Указом, но без записанного прошлого с пользователем: подготовка не кончается, пока Директор его не
+ * запишет — хотя бы «по нулям» (first_meeting). Без этого строка «знакомы пару часов, вех нет» спорила с завязкой.
+ */
+export function mainWithoutPast(state) {
+    const bank = normalizeGreatBank(state);
+    return Object.values(bank)
+        .filter(character => character.importance === 'main' && !isUserCharacter(character))
+        .filter(character => [1, 2, 3, 4, 5].some(no => (character.decree?.[no] ?? []).some(line => text(line))))
+        .filter(character => !pastRecorded(character.withUser))
         .map(character => character.name);
 }
 
@@ -78,6 +92,7 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
     const telegramsOpen = queuedTelegrams(telegrams);
     const nameState = banks?.great ?? banks;
     const cast = worldReady ? mainWithoutDecree(nameState) : [];
+    const past = worldReady ? mainWithoutPast(nameState) : [];
     const promoted = queued.filter(item => item.promote && ['main', 'side'].includes(item.promote.level));
     const day = queued.filter(item => item.prepareNewDay);
     const reasons = [];
@@ -87,6 +102,7 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
         reasons.push({ type: 'telegram', text: text(telegram.text), names: named.length ? named : mainCharacters(nameState) });
     }
     if (cast.length) reasons.push({ type: 'cast', names: cast });
+    if (past.length) reasons.push({ type: 'past', names: past });
     if (promoted.length) reasons.push({ type: 'promotion', names: unique(promoted.map(item => item.character)) });
     if (day.length) reasons.push({ type: 'day', names: unique(day.map(item => item.character)) });
     if (!reasons.length) return null;
@@ -98,6 +114,7 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
         ...queued.map(item => item.character),
         ...mentioned,
         ...cast,
+        ...past,
         ...promoted.map(item => item.character),
         ...day.map(item => item.character),
         ...reasons.flatMap(reason => reason.names ?? []),
@@ -111,12 +128,14 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
         telegram: 'A Telegram reaches the Director',
         petition: 'Petitions reach the Director',
         cast: 'A Main Cast character has no Decree',
+        past: 'A Main Cast character has no past with the user',
         promotion: 'A promotion needs a Decree',
     };
     const detail = [
         queued.length ? `${queued.length} petition(s): ${unique(queued.map(item => item.character)).join(', ')}` : '',
         telegramsOpen.length ? `${telegramsOpen.length} telegram(s)` : '',
         cast.length ? `Main Cast without a Decree: ${cast.join(', ')}` : '',
+        past.length ? `Main Cast without a past with the user: ${past.join(', ')}` : '',
         promoted.length ? `promoted: ${unique(promoted.map(item => item.character)).join(', ')}` : '',
         day.length ? 'prepare the new day' : '',
     ].filter(Boolean).join('; ');

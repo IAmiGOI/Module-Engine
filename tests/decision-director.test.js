@@ -12,7 +12,7 @@ import {
 
 const call = (name, args) => ({ id: `${name}_${Math.random().toString(36).slice(2, 6)}`, name, arguments: { ...args } });
 const bankState = {
-    lena: { name: 'Lena', importance: 'main', material: { 1: ['Tall, grey-eyed.'] }, spiritual: { 4: ['Get out.'] }, decree: {}, history: [], pending: [] },
+    lena: { name: 'Lena', importance: 'main', material: { 1: ['Tall, grey-eyed.'] }, spiritual: { 4: ['Get out.'] }, decree: {}, history: [], pending: [], withUser: { firstMeeting: true } },
     ram: { name: 'Ram', importance: 'side', material: {}, spiritual: {}, decree: { 1: ['Family first.'] }, history: [], pending: [] },
 };
 const petition = name => ({

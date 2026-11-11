@@ -33,10 +33,10 @@ export function createBankHandlers({ banks = null, knowledge = null, state = {} 
         set_acquaintance: async args => {
             if (!banks?.great?.setAcquaintance) return { ok: false, error: 'The Great Bank is not available.' };
             const milestone = args?.milestone && typeof args.milestone === 'object' ? args.milestone : null;
-            if (args?.known_since === undefined && args?.time_together === undefined && !String(milestone?.what ?? '').trim()) {
-                return { ok: false, error: 'Give known_since, time_together or a milestone.' };
+            if (args?.first_meeting !== true && args?.known_since === undefined && args?.time_together === undefined && !String(milestone?.what ?? '').trim()) {
+                return { ok: false, error: 'Give known_since, time_together, a milestone, or first_meeting: true if they have never met before the story.' };
             }
-            return banks.great.setAcquaintance({ character: args.character, knownSince: args.known_since, before: args.time_together, milestone, comment: args.comment });
+            return banks.great.setAcquaintance({ character: args.character, knownSince: args.known_since, before: args.time_together, milestone, firstMeeting: args.first_meeting === true, comment: args.comment });
         },
     };
 }

@@ -1,3 +1,4 @@
+import { pastRecorded } from '../../libraries/core/acquaintance.js';
 import { readOpening } from './opening.js';
 import { withDirectorChecklist, namedInReports } from '../../libraries/core/director-checklist.js';
 import { isUserCharacter } from '../../libraries/core/decision-great-bank.js';
@@ -144,6 +145,10 @@ export function createDirector({
             everyone: characters.filter(filled).map(character => character.name),
             importanceOf: name => find(name)?.importance ?? null,
             decreeOf: name => (find(name) ? Object.values(find(name).decree ?? {}).flat().map(line => String(line ?? '')).join('\n') : null),
+            pastMissing: name => {
+                const character = find(name);
+                return Boolean(character && character.importance === 'main' && !isUserCharacter(character) && !pastRecorded(character.withUser));
+            },
             known: name => characters.some(character => [character.name, ...(character.aliases ?? [])].some(value => String(value ?? '').trim().toLowerCase() === String(name ?? '').trim().toLowerCase())),
             bankWritten: name => (find(name) ? ['material', 'spiritual'].every(part => Object.values(find(name)[part] ?? {}).some(lines => Array.isArray(lines) && lines.some(line => String(line ?? '').trim()))) : null),
             onForm,

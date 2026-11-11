@@ -260,7 +260,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
      * Прошлое с пользователем и вехи (инструмент Директора): с какого времени знакомы до истории, сколько были вместе,
      * и событие между ними. Веха без «when» — событие истории: движок ставит ей час игры сам.
      */
-    async function setAcquaintance({ character, knownSince = null, before = null, milestone = null, comment = '' } = {}) {
+    async function setAcquaintance({ character, knownSince = null, before = null, milestone = null, firstMeeting = false, comment = '' } = {}) {
         const state = await sync();
         const found = findCharacter(state, character);
         if (!found) return { ok: false, error: `There is no character "${character}".` };
@@ -268,13 +268,15 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
         const record = normalizeWithUser(found.withUser);
         if (knownSince !== null && knownSince !== undefined) record.knownSince = text(knownSince);
         if (before !== null && before !== undefined) record.before = text(before);
+        // «По нулям»: до истории не встречались — это тоже записанное прошлое.
+        if (firstMeeting === true) record.firstMeeting = true;
         const what = text(milestone?.what);
         if (what) {
             const when = text(milestone?.when);
             record.milestones = [...record.milestones, { at: when ? null : clockMinutes(), when, what }];
         }
         const rp = await rpNow();
-        const history = [...(found.history ?? []), { at: rp.label, by: 'director', part: 'withUser', section: 0, old: '', new: [record.knownSince, record.before, what].filter(Boolean).join(' · '), comment: text(comment) }];
+        const history = [...(found.history ?? []), { at: rp.label, by: 'director', part: 'withUser', section: 0, old: '', new: [firstMeeting === true ? 'first meets the user in the story' : '', record.knownSince, record.before, what].filter(Boolean).join(' · '), comment: text(comment) }];
         await save({ ...state, [bankKey(found.name)]: { ...found, withUser: record, history: history.slice(-HISTORY_LIMIT) } });
         return { ok: true, character: found.name, knownSince: record.knownSince, before: record.before, milestones: record.milestones.length };
     }

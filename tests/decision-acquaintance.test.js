@@ -57,3 +57,34 @@ test('the Director records a past and milestones; a milestone of the story is da
     assert.deepEqual(record.milestones.map(item => item.at), [null, 480]);
     assert.equal(record.milestones[0].when, 'a week ago, on graduation day');
 });
+
+test('preparation does not end while a Main Cast character has no past with the user; "by zeros" counts as a past', async () => {
+    const { mainWithoutPast, directorReason } = await import('../libraries/core/decision-director.js');
+    const decree = { 1: ['Values.'], 2: ['Self.'], 3: ['Long goal: x', 'Today: y'], 4: ['calm ↔ agitated: neutral'], 5: ['When x, they y.'] };
+    const state = {
+        satsuki: { name: 'Satsuki', importance: 'main', decree },
+        yuto: { name: 'Yuto', importance: 'main', decree, withUser: { firstMeeting: true } },
+        damion: { name: 'Damion', importance: 'main', sourceKey: 'persona:me' },
+    };
+    assert.deepEqual(mainWithoutPast(state), ['Satsuki']);
+    const reason = directorReason({ banks: { great: state } });
+    assert.match(reason.wake.detail, /Main Cast without a past with the user: Satsuki/);
+    const { great } = bankWith(state);
+    const { createBankHandlers } = await import('../cores/decision/handlers-bank.js');
+    await createBankHandlers({ banks: { great } }).set_acquaintance({ character: 'Satsuki', first_meeting: true, comment: 'They meet in the story.' });
+    assert.deepEqual(mainWithoutPast(await great.load()), []);
+});
+
+test('the Director cannot rest while a Main Cast character in the form has no past recorded', async () => {
+    const { withDirectorChecklist } = await import('../libraries/core/director-checklist.js');
+    let recorded = false;
+    const handlers = withDirectorChecklist({ await: async () => ({ ok: true }), set_acquaintance: async args => { recorded = true; return { ok: true, character: args.character }; } }, {
+        allowed: ['Satsuki'], pastMissing: name => name === 'Satsuki' && !recorded,
+    });
+    await handlers.check_reports({ characters: [{ name: 'Satsuki', named_by: 'Main Cast without a past with the user', write_bank: false, decree: 'none', evidence: 'x' }] });
+    const refused = await handlers.await({});
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /past with the user/);
+    await handlers.set_acquaintance({ character: 'Satsuki', first_meeting: true, comment: 'x' });
+    assert.equal((await handlers.await({})).ok, true);
+});

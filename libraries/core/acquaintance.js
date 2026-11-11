@@ -6,7 +6,7 @@
  * Запись в банке персонажа — `withUser`:
  *   { met: минуты часов игры при первой общей сцене | null, together: минуты вместе,
  *     knownSince: прошлое до истории словами Директора, before: сколько вместе до истории,
- *     milestones: [{ at: минуты | null, when: словами, what }] }
+ *     milestones: [{ at: минуты | null, when: словами, what }], firstMeeting: true — «по нулям», знакомятся в истории }
  */
 const text = value => String(value ?? '').trim();
 const HOUR = 60;
@@ -23,7 +23,14 @@ export function normalizeWithUser(value) {
         milestones: (Array.isArray(source.milestones) ? source.milestones : [])
             .filter(item => item && typeof item === 'object' && text(item.what))
             .map(item => ({ at: minutes(item.at), when: text(item.when), what: text(item.what) })),
+        firstMeeting: source.firstMeeting === true,
     };
+}
+
+/** Прошлое с пользователем записано: было знакомство до истории, есть вехи или явно «впервые встречает в истории». */
+export function pastRecorded(value) {
+    const record = normalizeWithUser(value);
+    return Boolean(record.knownSince || record.before || record.milestones.length || record.firstMeeting);
 }
 
 /** Длительность словами — грубо, как сказал бы человек. */

@@ -53,7 +53,7 @@ const holds = (file, line) => {
  * @param decreeOf    имя → текст decree.md (или null, если неизвестен) — для проверки скопированной строки
  * @param bankWritten имя → true/false/null — написан ли банк (material и spiritual)
  */
-export function withDirectorChecklist(handlers, { allowed = [], everyone = [], importanceOf = () => null, decreeOf = () => null, bankWritten = () => null, known = null, onForm = null } = {}) {
+export function withDirectorChecklist(handlers, { allowed = [], everyone = [], importanceOf = () => null, decreeOf = () => null, bankWritten = () => null, known = null, pastMissing = () => false, onForm = null } = {}) {
     let form = null;
     let refusals = 0;
     const done = new Map();
@@ -152,6 +152,11 @@ export function withDirectorChecklist(handlers, { allowed = [], everyone = [], i
             return result;
         },
         resolve_proposals: async args => (form ? handlers.resolve_proposals?.(args) ?? { ok: true } : { ok: false, error: FORM_FIRST }),
+        set_acquaintance: async args => {
+            const result = await handlers.set_acquaintance?.(args) ?? { ok: false, error: 'Not available.' };
+            if (result?.ok !== false) mark(text(result.character) || text(args?.character), 'past');
+            return result;
+        },
         await: async args => {
             if (!form) return { ok: false, error: FORM_FIRST };
             const open = [];
@@ -160,6 +165,8 @@ export function withDirectorChecklist(handlers, { allowed = [], everyone = [], i
                 if (entry.decree !== 'none' && !got.has('decree')) open.push(`${entry.name}: ${entry.decree} decree.md`);
                 if (entry.write_bank && !(got.has('material') && got.has('spiritual'))) open.push(`${entry.name}: material.md and spiritual.md`);
                 if (entry.importance && !got.has('importance')) open.push(`${entry.name}: standing → ${entry.importance}`);
+                // Прошлое с пользователем у Main Cast обязательно — хотя бы «по нулям».
+                if (!got.has('past') && pastMissing(entry.name)) open.push(`${entry.name}: their past with the user — set_acquaintance (first_meeting: true if they have never met)`);
             }
             // Дважды отказали — отпускаем: форма держит, а не запирает Директора навсегда.
             if (open.length && refusals < 2) {

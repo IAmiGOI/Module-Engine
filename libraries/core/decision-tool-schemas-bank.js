@@ -36,7 +36,7 @@ export const BANK_EDIT_TOOL = Object.freeze({
 export const SET_ACQUAINTANCE_TOOL = Object.freeze({
     name: 'set_acquaintance',
     displayName: 'Record their past with the user',
-    description: 'Record a character\'s past with the user\'s character, and the milestones between them. known_since: since when they have known each other before the story, in words ("since childhood", "for three years"); leave it out if they first meet in the story. time_together: roughly how much time they spent together before the story, in words. milestone: an event that changed what they are to each other — "when" in words for an event before the story; leave "when" out for an event of the story, and the engine dates it. The engine counts the time of the story itself.',
+    description: 'Record a character\'s past with the user\'s character, and the milestones between them. known_since: since when they have known each other before the story, in words ("since childhood", "for three years"); leave it out if they first meet in the story. time_together: roughly how much time they spent together before the story, in words. milestone: an event that changed what they are to each other — "when" in words for an event before the story; leave "when" out for an event of the story, and the engine dates it. first_meeting: true when they have never met before the story — that records an empty past. The engine counts the time of the story itself.',
     parameters: {
         type: 'object',
         properties: {
@@ -44,6 +44,7 @@ export const SET_ACQUAINTANCE_TOOL = Object.freeze({
             known_since: { type: 'string' },
             time_together: { type: 'string' },
             milestone: { type: 'object', properties: { when: { type: 'string' }, what: { type: 'string' } }, required: ['what'] },
+            first_meeting: { type: 'boolean' },
             comment: COMMENT,
         },
         required: ['character', 'comment'],
