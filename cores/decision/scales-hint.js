@@ -31,6 +31,7 @@ export function createScalesHint({ call, getSettings, creation = null, publishEv
         try {
             const result = await call('classifier.decide', {
                 calls: [{
+                    purpose: 'scales hint',
                     state: { player_message: scalesHintState(chat) },
                     questions: scalesHintQuestions(systems),
                     connectionId,

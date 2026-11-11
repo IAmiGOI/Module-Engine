@@ -41,7 +41,7 @@ export function createPsychologist({ call, store = null, great, getSettings = ()
         let answer;
         try {
             // Без рассуждения: psyche.md — короткий текст, а не разбор (как сводка окна).
-            answer = await call('model.generate', {
+            answer = await call('model.generate', { purpose: 'psychologist',
                 workerId,
                 systemPrompt: promptText(PSYCHOLOGIST_SYSTEM),
                 prompt,

@@ -181,7 +181,7 @@ export function createGod({
                 const params = roleRequestParams(settings, 'god');
                 if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
                 if (lowerReasoning) params.reasoningEffort = 'low';
-                return call('model.generate', {
+                return call('model.generate', { purpose: 'god',
                     requestId: `${runId}:g${callIndex}:${startedAt}`, ...params,
                     workerId: backupWorkerId || worker.id, messages, tools, toolChoice, stream: true, returnMessage: true,
                 });

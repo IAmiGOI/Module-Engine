@@ -308,6 +308,21 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
             ];
 
             publishEvent('model.generate.started', { requestId, workerId: params?.workerId });
+            // Телеметрия: одна запись на вызов — кто позвал, зачем, модель, usage, время, исход. Без ключей и текстов.
+            const startedAt = Date.now();
+            let attempts = 1;
+            const telemetry = (status, error = '') => {
+                try {
+                    const worker = workers.find(item => item.id === lastWorkerId) ?? null;
+                    let usage = lastRaw?.usage ?? null;
+                    if (!usage && lastRaw?.body) { try { usage = JSON.parse(lastRaw.body)?.usage ?? null; } catch { usage = null; } }
+                    publishEvent('model.generate.telemetry', {
+                        requestId, caller: meta?.callerId ?? '', purpose: params?.purpose ?? '', workerId: lastWorkerId ?? '',
+                        model: worker?.model ?? '', endpoint: worker?.endpoint ?? '', usage, durationMs: Date.now() - startedAt,
+                        status, error, attempts, turn: params?.turn ?? null,
+                    });
+                } catch { /* телеметрия не ломает вызов */ }
+            };
             let lastWorkerId = params?.workerId;
             // Сырое тело последней попытки — нужно, чтобы отдать `tool_calls`
             // и `finish_reason` тем, кто попросил `returnMessage`. Без флага
@@ -346,14 +361,15 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     // normal case) is background, same as before this field existed.
                     priority: meta?.priority === 'pipeline',
                     signal: controller.signal,
-                    onAttemptFailed: ({ tierIndex, error }) => publishEvent('model.generate.retrying', {
+                    onAttemptFailed: ({ tierIndex, error }) => (attempts += 1, publishEvent('model.generate.retrying', {
                         requestId, failedWorkerId: lastWorkerId, reason: error.message,
                         nextWorkerId: tiers[tierIndex + 1]?.workers()?.[0]?.id,
-                    }),
+                    })),
                 },
             ).then(
                 text => {
                     publishEvent('model.generate.finished', { requestId, workerId: lastWorkerId, text });
+                    telemetry(String(text ?? '').trim() || lastRaw?.toolCalls?.length ? 'ok' : 'empty');
                     // `returnMessage` — строго opt-in: без него возвращается та
                     // же строка, что и раньше, и ни один старый вызывающий не
                     // замечает разницы.
@@ -366,7 +382,12 @@ export function createInternalEngineModelsCore(host, { publish, workerWaitMs = 3
                     }
                     return text;
                 },
-                error => { publishEvent('model.generate.failed', { requestId, error: { message: error.message } }); throw error; },
+                error => {
+                    publishEvent('model.generate.failed', { requestId, error: { message: error.message } });
+                    const message = String(error?.message ?? error);
+                    telemetry(/abort|stopped|cancel/i.test(message) ? 'stopped' : /time ?out/i.test(message) ? 'timeout' : /429|rate.?limit/i.test(message) ? 'rate-limited' : 'error', message);
+                    throw error;
+                },
             ).finally(() => { cancellers.delete(requestId); });
         }),
         // Настройка — настоящими контрактами: UI движка — Модуль, и правка ключей API в обход Гейта обошла бы всю систему прав.

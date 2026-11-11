@@ -435,7 +435,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     const FOLD_MAX_TOKENS = 5000;
     /** `priority: 'pipeline'` — ВСЕГДА, у обоих вызывающих (`foldRawUnits()`/`foldChildSummaries()`): фолд всегда на критическом пути ответа пользователю (см. dispatch-queue.js), в отличие от фонового verify/refold ниже, который его НИКОГДА не передаёт — иначе фолд рисковал бы застрять в очереди воркера ЗА уже идущей фоновой проверкой. */
     async function askModelToFold(systemPrompt, prompt) {
-        const result = await call('model.generate', { prompt, systemPrompt, maxTokens: FOLD_MAX_TOKENS, workerId: settings.workerId ?? undefined }, { priority: 'pipeline' });
+        const result = await call('model.generate', { purpose: 'summary', prompt, systemPrompt, maxTokens: FOLD_MAX_TOKENS, workerId: settings.workerId ?? undefined }, { priority: 'pipeline' });
         if (!result.ok) throw new Error(result.error.message);
         return String(result.value ?? '').trim();
     }
@@ -599,7 +599,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
     /** Вызов ревьюера — НИКОГДА `priority: 'pipeline'` (см. doc-comment над `askModelToFold()`): это фон, ему не место впереди реального фолда в очереди воркера. `verifyWorkerId` с фоллбэком на основной `workerId` — не отдельный пул по умолчанию, просто перенастраиваемый отдельно (см. DEFAULT_SETTINGS). Непарсящийся ответ — НЕ ошибка, просто "нет вердикта" вызывающему коду: это фон, вызывающий сам решает, сколько раз повторить. */
     async function askModelToVerify(draft, originalContent) {
         const prompt = `A higher-level summary was produced by condensing several lower-level summaries. Verify it against the ORIGINAL content it is supposed to represent.\n\nORIGINAL CONTENT:\n${originalContent}\n\nSUMMARY TO VERIFY:\n${stripUnverifiedMarker(draft.text)}\n\nReply with ONLY a JSON object, one of:\n- {"verdict":"ok"} — the summary faithfully represents the original; nothing important is missing or wrong.\n- {"verdict":"expand","instruction":"..."} — the summary is missing something important; "instruction" names exactly what to add.\n- {"verdict":"redo","reason":"..."} — the summary is significantly wrong or misleading and should be written from scratch.`;
-        const result = await call('model.generate', { prompt, maxTokens: FOLD_MAX_TOKENS, workerId: settings.verifyWorkerId ?? settings.workerId ?? undefined });
+        const result = await call('model.generate', { purpose: 'summary', prompt, maxTokens: FOLD_MAX_TOKENS, workerId: settings.verifyWorkerId ?? settings.workerId ?? undefined });
         if (!result.ok) return { error: result.error.message };
         const verdict = clampVerifyVerdict(parseModelJson(result.value));
         return verdict ? { verdict } : { malformed: true };
@@ -631,7 +631,7 @@ export function createBasicSummaryCore(host, { publish, now = Date.now, random =
                 { role: 'user', content: originalPrompt },
                 { role: 'system', content: `The previous attempt was discarded${verdict.reason ? ` — ${verdict.reason}` : ''}. Produce a fresh summary from scratch. Output ONLY the summary text, no preamble.` },
               ];
-        const result = await call('model.generate', { messages, maxTokens: FOLD_MAX_TOKENS, workerId: settings.workerId ?? undefined });
+        const result = await call('model.generate', { purpose: 'summary', messages, maxTokens: FOLD_MAX_TOKENS, workerId: settings.workerId ?? undefined });
         if (!result.ok) throw new Error(result.error.message);
         return String(result.value ?? '').trim();
     }

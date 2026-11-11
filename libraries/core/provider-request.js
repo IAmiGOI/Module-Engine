@@ -161,6 +161,8 @@ function buildOpenAiRequest(worker, request, stream) {
             ...(request.presencePenalty ? { presence_penalty: request.presencePenalty } : {}),
             ...buildOpenAiReasoning(worker, request),
             ...buildOpenAiTools(request),
+            // OpenRouter отдаёт цену вызова в usage только по просьбе — для телеметрии.
+            ...(isOpenRouter(worker.endpoint) ? { usage: { include: true } } : {}),
             ...(stream ? { stream: true } : {}),
         }),
     };

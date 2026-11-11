@@ -49,7 +49,7 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
         const attempt = extra => runDecisionCycle({
             messages: [{ role: 'system', content: prompt }],
             tools: [MARK_LOREBOOK_CHARACTERS_TOOL, AWAIT_TOOL],
-            generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', {
+            generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', { purpose: 'lorebook marker',
                 workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 8000, temperature: 0, ...extra,
             })),
             handlers: {

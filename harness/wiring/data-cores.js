@@ -16,6 +16,7 @@ import { createClassifierCore } from '../../cores/classifier/index.js';
 import { createBasicSummaryCore } from '../../cores/summary/index.js';
 import { createMemoryGraphCore } from '../../cores/memory-graph/index.js';
 import { createDecisionCore } from '../../cores/decision/index.js';
+import { createTelemetryCore } from '../../cores/telemetry/index.js';
 
 /** Ядра данных и логики: события, модели, пайплайн, генерация, макросы, трекинг, карта, лорбук, память. Получает общий контекст сборки (`ctx`), возвращает то, что создал. */
 export async function wireDataCores(ctx) {
@@ -106,7 +107,12 @@ export async function wireDataCores(ctx) {
     });
 
     // Классификатор (Jev): ответы на вопросы-утверждения; ходит в сеть, поэтому `networkAccess`.
-    const classifierCore = createClassifierCore(engine.registerCaller('core.classifier', 'cores', { tier: 'official', networkAccess: true }));
+    const classifierCore = createClassifierCore(engine.registerCaller('core.classifier', 'cores', { tier: 'official', networkAccess: true }), {
+        publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.classifier' }),
+    });
+    // Телеметрия: каждый вызов модели и классификатора — в отдельное хранилище (IndexedDB), вкладка Telemetry в The Court.
+    // Сеть — только за таблицей цен OpenRouter раз в сутки.
+    const telemetryCore = createTelemetryCore(engine.registerCaller('core.telemetry', 'cores', { tier: 'official', networkAccess: true }));
 
     // Карточки персонажей ST: чтение, создание и правка всех полей (гид и любые Модули — через контракты `characterCards.*`).
     const characterCardsCore = createCharacterCardsCore(engine.registerCaller('core.characterCard', 'cores', { tier: 'official' }), {
@@ -136,5 +142,5 @@ export async function wireDataCores(ctx) {
         publish: (event, payload) => eventsCore.publish(event, payload, { source: 'core.decision' }),
     });
 
-    return { backupHost, backupCore, eventsCore, modelsHost, modelsCore, diffusionHost, diffusionCore, pipelineCore, generationCore, drawerGuardCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, characterCardsCore, summaryCore, memoryGraphCore, decisionCore };
+    return { backupHost, backupCore, eventsCore, modelsHost, modelsCore, diffusionHost, diffusionCore, pipelineCore, generationCore, drawerGuardCore, macrosCore, trackingCore, speakerCore, mapCore, mapNarrationCore, lorebookCore, classifierCore, telemetryCore, characterCardsCore, summaryCore, memoryGraphCore, decisionCore };
 }

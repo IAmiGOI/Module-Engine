@@ -241,7 +241,7 @@ export function createCycleContext({ call, store, banks = null, creation = null,
             const params = deciderRequestParams(settings.decider, { floor: prefix !== '' });
             if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
             const baseId = `${runId}:${prefix}${modelCall}:${startedAt}`;
-            return call('model.generate', {
+            return call('model.generate', { purpose: 'resolver',
                 requestId: tag === 'cut' ? `${baseId}:c` : baseId, ...params,
                 // Ризонинг ниже на повторе пустого ответа: он и съел лимит.
                 ...(lowerReasoning ? { reasoningEffort: 'low' } : (effort ? { reasoningEffort: effort } : {})),

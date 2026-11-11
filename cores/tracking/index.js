@@ -283,7 +283,7 @@ export function createTrackingCore(host, { onUserFieldRegistered = () => {}, pub
             const systemPrompt = buildTrackerSystemPrompt(tracker, fields, messages, vars);
             const result = await request(host.own, 'model.generate', {
                 params: {
-                    prompt, systemPrompt, workerId: tracker.workerId,
+                    purpose: 'tracker', prompt, systemPrompt, workerId: tracker.workerId,
                     // Пресет сэмплера/ризонинга — свойство ЭТОГО трекера, а не
                     // воркера, который его исполнит: один и тот же воркер вправе
                     // нести и точный трекинг, и творческую генерацию одновременно,

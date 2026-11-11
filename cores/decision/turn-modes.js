@@ -14,7 +14,7 @@ export function createModePicker({ call, getSettings }) {
         const scene = modeScene(chat);
         if (!scene) return null;
         try {
-            const answer = await call('model.generate', {
+            const answer = await call('model.generate', { purpose: 'mode picker',
                 workerId, maxTokens: 200, temperature: 0, stream: false, reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
                 messages: [{ role: 'system', content: modePrompt() }, { role: 'user', content: scene }],
                 // Спекулятивную ветку отменяют вместе с остальными её запросами.

@@ -364,7 +364,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
             const requestId = `guide-${now()}-${(counter += 1)}`;
             streaming = { requestId, painted: 0 };
             trail = debugLog.begin({ requestId, kind: internal ? 'automatic' : 'user', because: internal ? (FOLLOW_UP_NAMES.get(followUp) ?? 'custom') : 'user message', question: question.slice(0, 200), plan: plan.slice(0, 600), focus: focus.characters ? 'characters' : 'general', actionContinues, idleNudges });
-            const reply = await call('model.generate', {
+            const reply = await call('model.generate', { purpose: 'guide',
                 messages: [{ role: 'system', content: system }, ...sent],
                 systemPrompt: system, prompt: sent.map(turn => `${turn.role === 'user' ? 'User' : turn.role === 'system' ? 'Plan' : nameOf()}: ${turn.content}`).join('\n\n'),
                 temperature: internal ? 0.4 : 0.7, ...(internal ? { frequencyPenalty: 0.3 } : {}), maxTokens: COMPLETION_TOKEN_LIMIT, stream: true, requestId,
@@ -468,7 +468,7 @@ export function createGuideCore(host, { publish, mount, loadText = async () => n
         if (!count) return history;
         try {
             const prompt = buildDigestPrompt(digest.text, turns.slice(0, count));
-            const result = await call('model.generate', { prompt, messages: [{ role: 'user', content: prompt }], maxTokens: DIGEST_MAX_TOKENS, temperature: 0.3, ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}) });
+            const result = await call('model.generate', { purpose: 'guide', prompt, messages: [{ role: 'user', content: prompt }], maxTokens: DIGEST_MAX_TOKENS, temperature: 0.3, ...(persona.peek().workerId ? { workerId: persona.peek().workerId } : {}) });
             const text = result.ok ? clampDigest(splitThinking(result.value).visible) : '';
             if (!text) return history;
             digest = { text, upTo: history[count - 1].id };

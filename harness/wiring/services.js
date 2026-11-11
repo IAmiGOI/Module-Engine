@@ -8,6 +8,7 @@ import { registerStBackgroundsService } from '../../services/st-backgrounds.js';
 import { registerImageScaleService } from '../../services/image-scale.js';
 import { registerStUserDataService } from '../../services/st-user-data.js';
 import { registerSyncStateService } from '../../services/sync-state.js';
+import { registerTelemetryStoreService } from '../../services/telemetry-store.js';
 import { registerSyncSignalService } from '../../services/sync-signal.js';
 import { registerSyncPeerService } from '../../services/sync-peer.js';
 import { registerHttpService } from '../../services/http.js';
@@ -68,6 +69,7 @@ export async function wireServices(ctx) {
     registerImageScaleService(engine.buses.services);
     registerStUserDataService(engine.buses.services, { getContext });
     registerSyncStateService(engine.buses.services);
+    registerTelemetryStoreService(engine.buses.services);
     // Сеть синхронизации — на сетевой Шине (как `http.request`): проходит сетевой Гейт, доступна только Ядрам с `networkAccess`.
     registerSyncSignalService(engine.buses.network);
     registerSyncPeerService(engine.buses.network);

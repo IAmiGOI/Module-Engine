@@ -141,7 +141,7 @@ export function createTurnWindow({ store, banks = null, creation = null, call, g
             const worker = deciderWorker(settings);
             const prompt = fillPrompt(DIRECTOR_WINDOW_SUMMARY, { cycles: renderWindow(dropped), arc: String(arc ?? ''), reason });
             // Без ризонинга: у DeepSeek он съедал весь лимит, сводка приходила пустой, и в контекст ложились все выпавшие ходы целиком.
-            const ask = maxTokens => call('model.generate', {
+            const ask = maxTokens => call('model.generate', { purpose: 'window summary',
                 workerId: worker.id, prompt, maxTokens, temperature: 0, stream: false,
                 reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
             }).then(answer => String(answer ?? '').trim());

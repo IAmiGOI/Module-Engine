@@ -1246,7 +1246,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
             const mainCharacters = characterResult.ok && characterResult.value?.name ? [String(characterResult.value.name)] : [];
             prompt = buildStructuredExtractionPrompt({ contextText, nearestNodes, knownNames: knownSubjectNames(), mainCharacters, isFirstNode, currentTime: gameTimeLabel(await readGameTime()), recurringNames: await entityOps.recurringNames() });
         } else prompt = buildExtractionPrompt({ contextText, nearestNodes, isFirstNode });
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+        const result = await call('model.generate', { purpose: 'memory graph', prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) throw new Error(result.error.message);
         const parsed = parseModelJson(result.value);
         const { facts } = parseExtractionResponse(parsed, nearestNodes.map(node => node.id), { structured: features.structuredExtraction });
@@ -1269,7 +1269,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
      */
     async function askSideCarForMerge(nodeA, nodeB) {
         const prompt = `These two memories may describe the same underlying fact:\n\n1. ${nodeA.label}: ${nodeA.content}\n2. ${nodeB.label}: ${nodeB.content}\n\nIf they are genuinely duplicates or near-duplicates, reply with ONLY a JSON object: {"label": short combined name, "content": one combined fact covering everything both said, "importance": 0-10}. If they actually describe DIFFERENT facts that should stay separate, reply with ONLY: {\"distinct\": true}. Two memories that give DIFFERENT values of the same thing (a different outfit, place, mood or time) are different facts, not duplicates — reply {\"distinct\": true} for them.`;
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+        const result = await call('model.generate', { purpose: 'memory graph', prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) return null;
         const parsed = parseModelJson(result.value);
         if (!parsed || typeof parsed !== 'object') return null;
@@ -1298,7 +1298,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
         // `parseModelJson()` тихо отдаёт `undefined`, реконсолидация просто
         // не срабатывает (узлы остаются как были — не потеря данных, но и
         // не то, ради чего очередь вообще заводилась).
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.reconsolidationMaxTokens, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+        const result = await call('model.generate', { purpose: 'memory graph', prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.reconsolidationMaxTokens, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!result.ok) return null;
         const parsed = parseModelJson(result.value);
         if (!parsed || typeof parsed !== 'object' || !parsed.label || !parsed.content) return null;
@@ -1744,7 +1744,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (!rawEntries.length) { failureReason = 'no-content: every Lorebook entry was empty or unreadable'; return false; }
 
                 // Помощник для всех вызовов модели в Проходах 1-2 (одинаковый сэмплер/воркеры).
-                const generateBootstrap = prompt => call('model.generate', { prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+                const generateBootstrap = prompt => call('model.generate', { purpose: 'memory graph', prompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
 
                 // Вызов чанка/сверки: одна повторная попытка на сбой вызова ИЛИ неразобранный JSON (маленькие вызовы
                 // дешёвые, а потеря одного чанка = потеря его записей для структуры).
@@ -1779,7 +1779,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     // Factions или свои варианты) + 2 под-центра на каждый.
                     const promptEntries = fitEntriesToTokenBudget(rawEntries, settings.bootstrapMaxContextTokens);
                     const skeletonPrompt = thematic ? buildThematicSkeletonPrompt(promptEntries, targetRegions, settings.maxRegions) : buildRegionSkeletonPrompt(promptEntries, baseNames);
-                    const skeletonResult = await call('model.generate', { prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+                    const skeletonResult = await call('model.generate', { purpose: 'memory graph', prompt: skeletonPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                     tick('skeleton', `laying out regions from ${rawEntries.length} entries`);
                     if (!skeletonResult.ok) { failureReason = `Проход 1 (skeleton) call failed: ${skeletonResult.error?.message}`; return null; }
                     let skeletonRegions = parseRegionSkeletonResponse(parseModelJson(skeletonResult.value), rawEntries);
@@ -1802,7 +1802,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     // мягкий откат Прохода 3 ниже).
                     const targetTotal = Math.max(skeletonRegions.length, Math.round(rawEntries.length / settings.entriesPerRegionCenter));
                     const centersPrompt = buildAdditionalCentersPrompt(promptEntries, skeletonRegions.map(region => region.name), targetTotal, settings.entriesPerRegionCenter);
-                    const centersResult = await call('model.generate', { prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+                    const centersResult = await call('model.generate', { purpose: 'memory graph', prompt: centersPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                     tick('centers', `targeting ~${targetTotal} region${targetTotal === 1 ? '' : 's'}`);
                     if (!centersResult.ok) { failureReason = `Проход 2 (centers) call failed: ${centersResult.error?.message}`; return null; }
                     const centerAssignments = parseAdditionalCentersResponse(parseModelJson(centersResult.value), rawEntries);
@@ -2022,7 +2022,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                     }
                     const regionNodes = liveRegion.nodeIds.map(id => nodes[id]).filter(Boolean);
                     const edgesPrompt = buildRegionEdgesPrompt(regionNodes.map(node => ({ id: node.id, label: node.label, content: node.content })), { withKinds: features.kinds });
-                    const edgesResult = await call('model.generate', { prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+                    const edgesResult = await call('model.generate', { purpose: 'memory graph', prompt: edgesPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                     linkDone += 1;
                     tick('linking', `linking regions (${linkDone}/${finalRegionPlans.length}) — "${region.name}"`);
                     if (!edgesResult.ok) return;
@@ -2072,7 +2072,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
                 if (orphanIds.length) {
                     const allBootstrappedNodes = bootstrappedIds.map(id => nodes[id]).filter(Boolean);
                     const connectPrompt = buildOrphanConnectionsPrompt(allBootstrappedNodes, orphanIds);
-                    const connectResult = await call('model.generate', { prompt: connectPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+                    const connectResult = await call('model.generate', { purpose: 'memory graph', prompt: connectPrompt, workerId: settings.workerId ?? undefined, maxTokens: settings.bootstrapMaxTokens, temperature: settings.bootstrapTemperature, reasoningMode: 'enabled', reasoningEffort: settings.bootstrapReasoningEffort, systemPrompt: BOOTSTRAP_SYSTEM_PROMPT, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
                     tick('connecting');
                     // Отказ здесь НЕ прерывает бутстрап — тот же принцип,
                     // что у Прохода 3: граф уже целиком построен и рабочий
@@ -2210,7 +2210,7 @@ export function createMemoryGraphCore(host, { publish, now = Date.now, random = 
 
         const listing = batch.map((node, i) => `${i + 1}. ${node.label}: ${node.content}`).join('\n');
         const prompt = `These ${batch.length} facts could not be automatically placed in the memory graph:\n\n${listing}\n\nFor each, reply with its number and either a short category label it clearly belongs to, or "DISCARD" if it fits nowhere. Format: one line per item, "N: label" or "N: DISCARD".`;
-        const result = await call('model.generate', { prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
+        const result = await call('model.generate', { purpose: 'memory graph', prompt, workerId: settings.workerId ?? undefined, stallMs: settings.stallMs, fallbackWorkerIds: settings.fallbackWorkerIds });
         if (!stillSameChat(epoch)) return; // чат сменился, пока ждали модель — записи остаются в накопителе как есть, обработает уже НОВЫЙ граф своим прогоном
         // Сбой модели — записи ОСТАЮТСЯ в накопителе как есть (мы их не трогали выше) и попробуют на следующем
         // sweepStaging() — не удаляем (Этап 3, было наоборот: удаляло весь батч).

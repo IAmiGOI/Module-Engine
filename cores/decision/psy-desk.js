@@ -80,6 +80,7 @@ export function createPsyDesk({
         const worker = workerInfo();
         if (!worker) return null;
         const base = {
+            purpose: system === PSYCHOLOGIST_DESK_SYSTEM ? 'psy-desk' : 'psychologist',
             workerId: worker.id, maxTokens, temperature: 0, stream: false,
             reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
         };

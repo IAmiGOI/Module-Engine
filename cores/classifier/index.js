@@ -43,7 +43,7 @@ export function sanitizeConnections(stored) {
  * вопрос остаётся без ответа, а как это читать, решает вызывающий (у PM условие без ответа истинно). Ответ на тот же срез и то же утверждение берётся из кэша, поэтому
  * реролл и свайп не стоят повторного вызова.
  */
-export function createClassifierCore(host, { sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), setTimer = (callback, ms) => setTimeout(callback, ms), clearTimer = id => clearTimeout(id) } = {}) {
+export function createClassifierCore(host, { publish = () => {}, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), setTimer = (callback, ms) => setTimeout(callback, ms), clearTimer = id => clearTimeout(id) } = {}) {
     let connections = [];
     const cache = new Map();
 
@@ -83,7 +83,7 @@ export function createClassifierCore(host, { sleep = ms => new Promise(resolve =
     }
 
     /** Один вызов классификатора: ответы по тем вопросам, что не нашлись в кэше; `error` — почему часть осталась без ответа. */
-    async function decideOne({ state, questions, connectionId }) {
+    async function decideOne({ state, questions, connectionId, purpose = '' }) {
         const ids = Object.keys(questions ?? {});
         const answers = {};
         const connection = pick(connectionId);
@@ -98,16 +98,26 @@ export function createClassifierCore(host, { sleep = ms => new Promise(resolve =
         if (!connection) return { answers, error: connectionId ? `There is no classifier connection called “${connectionId}”.` : 'No classifier connection is set.' };
         if (!connection.apiKey) return { answers, error: `The classifier connection “${connection.id}” has no API key.` };
         const built = buildJevRequest(connection, { state, questions: Object.fromEntries(missing.map(id => [id, questions[id]])) });
+        const startedAt = Date.now();
+        // Телеметрия: один вызов классификатора — модель, вопросы, сколько ответов, время, исход. Без ключа и текста.
+        const report = (status, { usage = null, answered = 0, error = '' } = {}) => {
+            try { publish('classifier.telemetry', { caller: 'core.classifier', purpose: purpose || 'classifier', workerId: connection.id, model: connection.model, endpoint: connection.endpoint, usage, durationMs: Date.now() - startedAt, status, error, questions: missing.length, answered }); } catch { /* не ломает вызов */ }
+        };
         try {
             let response = await send(connection, built);
             if (RETRY_STATUSES.has(response.status)) { await sleep(RETRY_DELAY_MS); response = await send(connection, built); }
             let data = null;
             try { data = JSON.parse(response.text); } catch { data = null; }
-            if (!response.ok || data?.error) return { answers, error: describeJevFailure(response.status, data) };
+            if (!response.ok || data?.error) {
+                report(response.status === 429 ? 'rate-limited' : 'error', { usage: data?.usage ?? null, error: describeJevFailure(response.status, data) });
+                return { answers, error: describeJevFailure(response.status, data) };
+            }
             const found = readJevAnswers(data, missing);
+            report(Object.keys(found).length ? 'ok' : 'empty', { usage: data?.usage ?? null, answered: Object.keys(found).length });
             for (const [id, chance] of Object.entries(found)) { answers[id] = chance; remember(`${stateKey}.${id}`, chance); }
             return { answers, error: Object.keys(found).length ? '' : 'The endpoint returned no usable answers.' };
         } catch (error) {
+            report(error?.name === 'AbortError' ? 'timeout' : 'error', { error: error?.message ?? '' });
             return { answers, error: error?.name === 'AbortError' ? 'The request timed out.' : (error?.message ?? 'The request failed.') };
         }
     }

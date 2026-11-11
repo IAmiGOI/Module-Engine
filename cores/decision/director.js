@@ -109,7 +109,7 @@ export function createDirector({
                 const params = requestRecord(backupWorkerId || worker.id, settings, runId, 'd', callIndex);
                 if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
                 if (lowerReasoning) params.reasoningEffort = 'low';
-                return call('model.generate', {
+                return call('model.generate', { purpose: 'director',
                     ...params, messages, tools, toolChoice, stream: true, returnMessage: true,
                 });
             },

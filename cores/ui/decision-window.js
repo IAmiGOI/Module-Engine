@@ -7,6 +7,7 @@ import { LANES, LANE_IDS, turnsIn } from '../../libraries/core/court-lanes.js';
 import { createCourtLanes } from './court-lanes-view.js';
 import { createCourtPreparation } from './court-preparation.js';
 import { createCourtFiles } from './court-files.js';
+import { createCourtTelemetry } from './court-telemetry.js';
 import { createFeedState, applyFeedEvent, filterFeed } from '../../libraries/core/decision-feed.js';
 import { writerCheckNode, formCheckNode } from './decision-check-nodes.js';
 import { text } from './decision-window-rows.js';
@@ -58,6 +59,9 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     const all = computed(() => filtered().cycles);
     const archiveOpen = signal(false);
     const files = createCourtFiles({ call });
+    // Вкладка Telemetry: вызовы моделей и классификатора — время, токены, цена.
+    const telemetry = createCourtTelemetry({ call });
+    const telemetryTree = telemetry.tree();
     // Путь файла в ленте — кнопка: открывает этот файл во вкладке Files.
     const openFile = path => { setMode('files'); files.openPath(path).catch(() => {}); };
     // Плашка подготовки и Canon — над дорожками, пока игра не открыта.
@@ -158,17 +162,18 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         mode.set(value);
         saveWindowState();
         if (value === 'files') files.load().catch(() => {});
+        else if (value === 'telemetry') telemetry.load().catch(() => {});
         else scheduleScroll(true);
     }
 
     function body() {
         return h('div', { class: 'stme-panel stme-dw-window-body', tabindex: '-1', 'on:keydown': onKey },
             h('div', { class: 'stme-dw-toolbar' },
-                Segment([{ value: 'all', label: 'All five' }, ...LANES.map(lane => ({ value: lane.id, label: lane.label })), { value: 'files', label: 'Files' }], mode, { label: 'Lanes', onChange: setMode }),
+                Segment([{ value: 'all', label: 'All five' }, ...LANES.map(lane => ({ value: lane.id, label: lane.label })), { value: 'files', label: 'Files' }, { value: 'telemetry', label: 'Telemetry' }], mode, { label: 'Lanes', onChange: setMode }),
                 Select(turnFilter, () => turnOptions(), { onChange: () => scheduleScroll(true) }),
                 h('span', { class: 'stme-court-search' }, TextInput(search, { placeholder: 'Search  (/)' })),
                 Toggle('Thinking', showThinking)),
-            computed(() => (mode() === 'files' ? files.tree() : court.tree())),
+            computed(() => (mode() === 'files' ? files.tree() : mode() === 'telemetry' ? telemetryTree : court.tree())),
             computed(() => (filtered().archive.length
                 // Архив строится, только когда его раскрыли.
                 ? h('details', { class: 'stme-dw-archive', 'on:toggle': event => archiveOpen.set(Boolean(event?.target?.open)) }, h('summary', {}, `Archived arcs (${filtered().archive.length})`),
@@ -196,7 +201,8 @@ export function createDecisionWindowCore(host, { mount } = {}) {
         const saved = (stored.ok ? stored.value : null) ?? {};
         visible.set(Boolean(saved.visible));
         collapsed.set(Boolean(saved.collapsed));
-        if (saved.mode === 'all' || saved.mode === 'files' || LANE_IDS.includes(saved.mode)) mode.set(saved.mode);
+        if (saved.mode === 'all' || saved.mode === 'files' || saved.mode === 'telemetry' || LANE_IDS.includes(saved.mode)) mode.set(saved.mode);
+        if (saved.mode === 'telemetry') telemetry.load().catch(() => {});
         const savedSize = saved.size ?? {};
         size.set({ width: savedSize.width > 0 ? savedSize.width : DEFAULT_SIZE.width, height: savedSize.height > 0 ? savedSize.height : DEFAULT_SIZE.height });
         position.set(saved.position ?? { left: Math.max(24, (globalThis.innerWidth ?? 1600) - DEFAULT_SIZE.width - 24), top: 60 });

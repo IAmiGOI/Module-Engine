@@ -32,7 +32,7 @@ export function createHandlers({ store, call, publishEvent, getSettings, getGame
         if (!canCompress(bank, character, settings.compression.thresholdTokens)) return bank;
         const ordinary = ordinaryRecords(bank, character);
         try {
-            const summary = await call('model.generate', {
+            const summary = await call('model.generate', { purpose: 'memory compression',
                 workerId: settings.compression.workerId || undefined,
                 prompt: buildCompressionPrompt(ordinary),
                 maxTokens: settings.compression.maxTokens,

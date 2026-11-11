@@ -109,7 +109,18 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         const targetFormat = writerSourceFormat(payload?.chat_completion_source);
         const retry = createWriterRetry({ getSettings, publishEvent: (event, data) => publishEvent?.(event, data) });
         const workerForId = idValue => getWorkers().find(item => item.id === idValue) ?? worker;
+        // Телеметрия Писателя: он ходит в сеть сам, мимо ядра моделей, поэтому запись — отсюда, тем же событием.
+        const startedAt = Date.now();
+        const onTelemetry = ({ status = 'ok', usage = null, error = '', attempts = 1 } = {}) => {
+            try {
+                publishEvent?.('model.generate.telemetry', {
+                    caller: 'core.decision', purpose: 'writer', workerId: worker.id, model: worker.model, endpoint: worker.endpoint,
+                    usage, durationMs: Date.now() - startedAt, status, error: String(error ?? ''), attempts,
+                });
+            } catch { /* телеметрия не ломает ответ */ }
+        };
         const context = {
+            onTelemetry,
             id, worker, settings, payload, messages, signal, check: check ?? null,
             push, userMessage, resolution, user, runId, publishEvent, targetFormat, stream, retry,
             requestFor: (nextMessages, options = {}) => makeRequest(
@@ -189,7 +200,11 @@ export function createWriterProxy({ host, getSettings, getWorkers }) {
         const value = result.value;
         if (!value.ok) throw writerFailure(context.id, value.status, value.text);
         const body = writerJsonBody(value.text);
-        return { text: String(body?.choices?.[0]?.message?.content ?? '') };
+        let usage = null;
+        try { usage = JSON.parse(value.text)?.usage ?? null; } catch { usage = null; }
+        const text = String(body?.choices?.[0]?.message?.content ?? '');
+        context.onTelemetry?.({ status: text.trim() ? 'ok' : 'empty', usage });
+        return { text };
     }
 
     function streamResponse(context) {

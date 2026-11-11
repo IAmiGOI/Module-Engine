@@ -194,7 +194,7 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
                 const params = { ...generation, ...(boost > 1 && Number.isFinite(generation.maxTokens) ? { maxTokens: Math.min(32768, Math.round(generation.maxTokens * boost)) } : {}) };
                 if (lowerReasoning) params.reasoningEffort = 'low';
                 const requestId = `${runId}:${modelCall}:${startedAt}`;
-                return call('model.generate', {
+                return call('model.generate', { purpose: 'counsellor',
                     requestId, ...params, workerId: backupWorkerId || worker.id, messages: list, tools, toolChoice, stream: true, returnMessage,
                 });
             },

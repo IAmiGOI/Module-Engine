@@ -22,7 +22,7 @@ export function createJudge({ getSettings, deciderWorker, call, now, publishEven
         await runDecisionCycle({
             messages: [{ role: 'system', content: prompt }],
             tools: [FORCED_MEMORY_TOOL, AWAIT_TOOL],
-            generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', {
+            generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', { purpose: 'judge',
                 workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 800, temperature: 0,
             })),
             handlers: {

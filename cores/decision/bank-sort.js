@@ -41,7 +41,7 @@ export async function sortSources({ call, getSettings, sources }) {
     const workerId = clean(getSettings()?.researcher?.workerId);
     if (!characters.length || !workerId) return levels;
     try {
-        const answer = await call('model.generate', {
+        const answer = await call('model.generate', { purpose: 'bank sort',
             workerId, maxTokens: 2000, temperature: 0.2, stream: false, reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
             messages: [{ role: 'system', content: promptText(BANK_SORT) }, { role: 'user', content: sortTask(characters) }],
         });

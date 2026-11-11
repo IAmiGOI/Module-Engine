@@ -22,7 +22,7 @@ export function createTimelineAdjust({ call, getSettings, publishEvent, bankStor
             const guide = String(currentGuide() ?? '').trim();
             const prompt = fillPrompt(BANK_TIMELINE_ADJUST, { name: record.name, timeline, guide, note: String(note ?? ''), bank: record.text });
             // Без ризонинга: у DeepSeek он съедал весь лимит, ответ был пустым, и правка повторялась при каждом входе в чат.
-            const answer = await call('model.generate', {
+            const answer = await call('model.generate', { purpose: 'bank timeline',
                 workerId, prompt, maxTokens: 8000, temperature: 0.2, stream: false,
                 reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0,
             });

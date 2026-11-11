@@ -362,3 +362,12 @@ span.stme-dw-file-path { cursor: default; text-decoration: none; }
 .stme-prep-note { opacity: .8; font-style: italic; }
 .stme-prep-ready { background: color-mix(in srgb, var(--stme-ok) 10%, transparent); }
 .stme-prep-ready .text_pole { min-width: 140px; }
+
+/* Вкладка Telemetry в The Court: итоги строкой, сводка и лента вызовов таблицами. */
+.stme-tm { display: flex; flex-direction: column; gap: 8px; padding: 8px; overflow: auto; min-height: 0; }
+.stme-tm-totals { padding: 6px 8px; border: 1px solid var(--SmartThemeBorderColor, #444); border-radius: 6px; }
+.stme-tm-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+.stme-tm-table th, .stme-tm-table td { padding: 3px 6px; border-bottom: 1px solid var(--SmartThemeBorderColor, #333); text-align: left; white-space: nowrap; }
+.stme-tm-table th { position: sticky; top: 0; background: var(--SmartThemeBlurTintColor, #222); }
+.stme-tm-bad td { color: var(--warning, #e8a33d); }
+.stme-tm-feed summary { cursor: pointer; margin: 4px 0; }
