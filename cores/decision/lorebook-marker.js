@@ -13,6 +13,11 @@ const text = value => String(value ?? '').trim();
 // Ответ — вызов с записью на каждого персонажа (имя, алиасы, важность): на большой книге это тысячи токенов, а
 // ризонинг воркера директора тратит тот же лимит. С 1600 вызов обрезался, и разметка молча уходила в запасной путь.
 
+const MARK_TASK = 'Mark the character entries of this book now: call mark_lorebook_characters once.';
+
+/** Начало записи для списка: без разметки вроде <story_rules> — обрезанный тег модель тянуло закрыть текстом. */
+const preview = content => text(content).replace(/<\/?[A-Za-z_][\w:-]*[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+
 function entryKeys(entry) {
     return [entry?.key, entry?.keys].flatMap(value => (Array.isArray(value) ? value : String(value ?? '').split(','))).map(text).filter(Boolean);
 }
@@ -33,7 +38,7 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
         const list = Array.isArray(entries) ? entries : [];
         const byUid = new Map(list.map(entry => [Number(entry.uid), entry]));
         const lines = [...list].sort((a, b) => (Number(a?.uid) || 0) - (Number(b?.uid) || 0))
-            .map(entry => `${entry.uid} | ${text(entry.comment) || '(untitled)'} | ${entryKeys(entry).join(', ') || '—'} | ${text(entry.content).slice(0, 200).replace(/\s+/g, ' ')}`)
+            .map(entry => `${entry.uid} | ${text(entry.comment) || '(untitled)'} | ${entryKeys(entry).join(', ') || '—'} | ${preview(entry.content)}`)
             .join('\n');
         const prompt = fillPrompt(LOREBOOK_MARKER, {
             book: text(book) || 'Lorebook',
@@ -47,7 +52,9 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
         // Первая попытка — как раньше; без вызова — вторая, с температурой и без рассуждения: на нуле модель
         // зацикливалась в «перепроверю» и съедала весь лимит, так и не вызвав инструмент (лорбук на 22 записи).
         const attempt = extra => runDecisionCycle({
-            messages: [{ role: 'system', content: prompt }],
+            // Задание — отдельной репликой пользователя: с одним системным сообщением модель продолжала его как документ
+            // и закрывала обрезанный тег из начала записи («</briefly>», «</de…») вместо вызова инструмента.
+            messages: [{ role: 'system', content: prompt }, { role: 'user', content: MARK_TASK }],
             tools: [MARK_LOREBOOK_CHARACTERS_TOOL, AWAIT_TOOL],
             generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', { purpose: 'lorebook marker',
                 workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 8000, temperature: 0, ...extra,

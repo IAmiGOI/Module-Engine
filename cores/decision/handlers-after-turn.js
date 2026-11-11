@@ -39,6 +39,12 @@ export function createAfterTurnHandler({ store, banks = null, knowledge = null, 
             }
         }
 
+        // Время с пользователем: ход принят — каждому в сцене минуты вместе, первым встречным — час знакомства.
+        if (form && typeof banks?.great?.noteTogether === 'function') {
+            const names = Array.isArray(form.roster?.active) && form.roster.active.length ? form.roster.active : (store.roster?.().active ?? []);
+            await banks.great.noteTogether({ names, minutes: Number(form.scene?.minutes) || 0, endMinutes: form.meta?.clockMinutes }).catch(() => null);
+        }
+
         // Цель дня из Указа каждого — для «хотел» в Ведомости.
         const great = banks?.great?.load ? await banks.great.load().catch(() => null) : null;
         const wantedOf = name => {

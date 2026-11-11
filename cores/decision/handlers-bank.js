@@ -29,5 +29,14 @@ export function createBankHandlers({ banks = null, knowledge = null, state = {} 
             if (!banks?.great) return { ok: false, error: 'The Great Bank is not available.' };
             return banks.great.setImportance({ character: args.character, importance: args.importance });
         },
+
+        set_acquaintance: async args => {
+            if (!banks?.great?.setAcquaintance) return { ok: false, error: 'The Great Bank is not available.' };
+            const milestone = args?.milestone && typeof args.milestone === 'object' ? args.milestone : null;
+            if (args?.known_since === undefined && args?.time_together === undefined && !String(milestone?.what ?? '').trim()) {
+                return { ok: false, error: 'Give known_since, time_together or a milestone.' };
+            }
+            return banks.great.setAcquaintance({ character: args.character, knownSince: args.known_since, before: args.time_together, milestone, comment: args.comment });
+        },
     };
 }

@@ -2,6 +2,7 @@ import { isUserCharacter } from '../../libraries/core/decision-great-bank.js';
 import { createGreatBank } from './bank-great.js';
 import { createPsychologist } from './psychologist.js';
 import { renderDecreeForResolver, renderTemperForResolver, renderPsycheForResolver } from '../../libraries/core/decision-bank-projections.js';
+import { renderWithUser } from '../../libraries/core/acquaintance.js';
 
 /**
  * Great Bank поверх банков-карточек: проекции (дальняя компактная, ближняя
@@ -89,8 +90,13 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
             : entries.filter(entry => !isUserCharacter(entry.character) && filled(entry.character?.decree)).map(entry => entry.character.name);
         const temper = scene.length ? renderTemperForResolver(entries, { names: scene }) : '';
         const psyche = scene.length ? renderPsycheForResolver(entries, { names: scene }) : '';
+        // Сколько каждый знает пользователя — по часам игры, словами; вехи — из банка.
+        const userName = entries.map(entry => entry.character).find(isUserCharacter)?.name || 'the user';
+        const present = scene.map(name => entries.find(entry => String(entry.character?.name ?? '').toLowerCase() === String(name).toLowerCase())?.character)
+            .filter(character => character && !isUserCharacter(character));
+        const withUser = renderWithUser(present, { now: great.clockMinutes?.() ?? 0, user: userName });
         // Психология первой: на ней читаются Указ и нрав, а не наоборот.
-        return [psyche, renderDecreeForResolver(entries, { names }), temper].filter(Boolean).join('\n\n');
+        return [psyche, withUser, renderDecreeForResolver(entries, { names }), temper].filter(Boolean).join('\n\n');
     }
 
     /** Раздел, который увидит движок: нужен ответу инструмента и проверке прав. */

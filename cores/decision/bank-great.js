@@ -6,6 +6,7 @@ import { BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
 import { formatInstant, rpInstant } from '../../libraries/core/decision-bank-time.js';
 import { renderFarBanks, renderNearBanks, renderDecreeSection } from '../../libraries/core/decision-bank-projections.js';
 import { createTimeReader } from './readers.js';
+import { normalizeWithUser } from '../../libraries/core/acquaintance.js';
 
 const GREAT_KEY = 'greatBank';
 const CORRECTED_PARTS = ['material', 'spiritual', 'decree', 'psyche'];
@@ -256,6 +257,52 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     /**
+     * Прошлое с пользователем и вехи (инструмент Директора): с какого времени знакомы до истории, сколько были вместе,
+     * и событие между ними. Веха без «when» — событие истории: движок ставит ей час игры сам.
+     */
+    async function setAcquaintance({ character, knownSince = null, before = null, milestone = null, comment = '' } = {}) {
+        const state = await sync();
+        const found = findCharacter(state, character);
+        if (!found) return { ok: false, error: `There is no character "${character}".` };
+        if (isUserCharacter(found)) return { ok: false, error: `${found.name} is the user's character: their past with themselves is not recorded.` };
+        const record = normalizeWithUser(found.withUser);
+        if (knownSince !== null && knownSince !== undefined) record.knownSince = text(knownSince);
+        if (before !== null && before !== undefined) record.before = text(before);
+        const what = text(milestone?.what);
+        if (what) {
+            const when = text(milestone?.when);
+            record.milestones = [...record.milestones, { at: when ? null : clockMinutes(), when, what }];
+        }
+        const rp = await rpNow();
+        const history = [...(found.history ?? []), { at: rp.label, by: 'director', part: 'withUser', section: 0, old: '', new: [record.knownSince, record.before, what].filter(Boolean).join(' · '), comment: text(comment) }];
+        await save({ ...state, [bankKey(found.name)]: { ...found, withUser: record, history: history.slice(-HISTORY_LIMIT) } });
+        return { ok: true, character: found.name, knownSince: record.knownSince, before: record.before, milestones: record.milestones.length };
+    }
+
+    /**
+     * Ход принят: у каждого в сцене, кроме пользователя, — первая общая сцена (если её ещё не было) и минуты вместе.
+     * Лежит в Great Bank, поэтому снимок хода и откат несут его сами.
+     */
+    async function noteTogether({ names = [], minutes = 0, endMinutes = null } = {}) {
+        const spent = Math.max(0, Number(minutes) || 0);
+        const end = Number.isFinite(Number(endMinutes)) ? Number(endMinutes) : clockMinutes();
+        const state = await load();
+        let changed = false;
+        const next = { ...state };
+        for (const name of Array.isArray(names) ? names : []) {
+            const found = findCharacter(next, name);
+            if (!found || isUserCharacter(found)) continue;
+            const record = normalizeWithUser(found.withUser);
+            if (record.met === null) record.met = Math.max(0, end - spent);
+            record.together += spent;
+            next[bankKey(found.name)] = { ...found, withUser: record };
+            changed = true;
+        }
+        if (changed) await save(next);
+        return { ok: true, changed };
+    }
+
+    /**
      * Переписать Main Cast заново (по просьбе пользователя): material, spiritual и Указ пустеют,
      * прежние строки — в историю, исходная карточка (card.md) остаётся. Директор пишет их снова.
      */
@@ -372,6 +419,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     return {
         load, sync, replace, edit, setImportance, setDecree, writeDecree, setPsyche, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
         correct,
+        setAcquaintance, noteTogether, clockMinutes,
         farText, nearText, writerText, decreeText, rpNow, historyFor,
         sectionOf: resolveSection,
     };
