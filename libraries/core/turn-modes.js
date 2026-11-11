@@ -17,10 +17,10 @@ export const TURN_MODES = Object.freeze([
     },
     {
         id: 'elder', label: 'Elder',
-        when: 'an important talk: a confession, a hard truth, a decision about trust',
-        resolver: 'An important talk: what is said here can change how the characters see each other. Track what each one takes from it and what it changes for them.',
-        writer: 'A weighty talk: give each line room on the page; the pace slows around what is said.',
-        fields: { view_of: 'how they see the speaker' },
+        when: 'a moment where it matters most that every character is played exactly as who they are',
+        resolver: 'A moment where it matters most that each character is played true. What each one does, says or holds back comes from who they are and the state they are in now, not from the weight of the moment: stillness and silence count as much as words, and nobody speaks because the moment seems to call for it. Track what each one takes from it and what it changes for them.',
+        writer: 'A weighty moment: give it room on the page; the pace slows around what passes between them, said or unsaid.',
+        fields: { view_of: 'how they see the one in front of them' },
     },
     {
         id: 'merchant', label: 'Merchant',
