@@ -7,8 +7,8 @@ import { BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
  * открытиями), Great Bank (material, spiritual, decree, importance) и записи
  * банков (исходные card.md). Хранится в настройках расширения под ключом
  * набора лорбуков и карточек. Новый чат с тем же набором берёт Canon сразу:
- * мир и банки копируются, подготовка становится `ready`, ни God, ни Director
- * не вызываются.
+ * мир и банки копируются, Психолог дописывает недостающие psyche.md,
+ * подготовка становится `ready`, ни God, ни Director не вызываются.
  *
  * Canon не обновляется по ходу игры: новая версия — только новой кнопкой
  * «Save as Canon».
@@ -78,6 +78,8 @@ export function createCanon({
         await creation?.load?.();
         const creationState = creation?.state?.() ?? {};
         await banks?.great?.sync?.();
+        // Психолог — часть канона: psyche.md пишется до снимка, новый чат получает его готовым.
+        await banks?.ensurePsyche?.()?.catch?.(() => null);
         const great = (await banks?.great?.load?.()) ?? {};
         const records = {};
         for (const record of typeof banks?.records === 'function' ? banks.records() : []) {
@@ -103,6 +105,8 @@ export function createCanon({
         await banks?.applySet?.({ banks: canon.banks });
         await banks?.great?.replace?.(canon.great);
         await banks?.markSorted?.();
+        // Старый Canon мог быть сохранён без psyche.md: Психолог дописывает его до первого хода, а не во время.
+        await banks?.ensurePsyche?.()?.catch?.(() => null);
         await preparation?.markReady?.();
         publishEvent('decision.canon.applied', { canon: canonSummary(canon) });
         return { ok: true, canon: canonSummary(canon) };

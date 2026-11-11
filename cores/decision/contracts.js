@@ -76,6 +76,7 @@ export function registerDecisionContracts(host, {
         host.own.register('decision.bankProgress', () => banks.progress()),
         host.own.register('decision.bankWrite', params => banks.write(params ?? {})),
         host.own.register('decision.bankRebuild', params => banks.rebuild(params ?? {})),
+        host.own.register('decision.ensurePsyche', () => banks.ensurePsyche?.() ?? { skipped: true, written: [] }),
         host.own.register('decision.message', params => cycle.sendMessage(params ?? {})),
         // Старый бутстрап — только по `bootstrap.legacy`: иначе окно не предлагает повторять его «failed» из старых чатов.
         host.own.register('decision.bootstrap', () => (getSettings()?.bootstrap?.legacy === true ? bootstrap?.state?.() ?? null : null)),
