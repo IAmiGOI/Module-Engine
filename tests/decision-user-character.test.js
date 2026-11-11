@@ -16,13 +16,13 @@ test('the user\'s character never gets a Decree, never wakes the Director for on
     assert.doesNotMatch(renderDecreeForResolver([{ character: user }]), /something the user never said/);
 });
 
-test('the Resolver gets how the characters in the scene feel and speak, not the user\'s character and not those elsewhere', async () => {
+test('the Resolver gets how the characters in the scene show feeling — not their speech habits, not the user\'s character, not those elsewhere', async () => {
     const { renderTemperForResolver } = await import('../libraries/core/decision-bank-projections.js');
     const otto = { name: 'Otto Suwen', sourceKey: 'lorebook:x:2', spiritual: { 3: ['Fear and panic are loud.'], 5: ['Talks fast, in merchant cadence.'], 1: ['Loyal.'] } };
     const far = { name: 'Rem', sourceKey: 'lorebook:x:3', spiritual: { 3: ['Calm.'] } };
     const out = renderTemperForResolver([{ character: otto }, { character: far }, { character: { ...user, spiritual: { 5: ['user speech'] } } }], { names: ['Otto Suwen', 'Sasha'] });
     assert.match(out, /panic are loud/);
-    assert.match(out, /merchant cadence/);
+    assert.doesNotMatch(out, /merchant cadence/);
     assert.doesNotMatch(out, /Loyal|Calm|user speech/);
 });
 

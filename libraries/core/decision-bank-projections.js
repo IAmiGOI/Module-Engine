@@ -77,9 +77,9 @@ const ALL_PARTS = Object.freeze([
 ]);
 
 const DECREE_PARTS = Object.freeze([{ part: 'decree', nos: DECREE_SECTIONS.map(section => section.no) }]);
-// Нрав — как персонаж проявляет чувства и как говорит. Резолвер решает, что они чувствуют и что говорят, а этих разделов
-// у него не было (в дальней выжимке их нет, Указ — про планы): Отто играли ровным «осторожным купцом» вместо себя.
-const TEMPER_PARTS = Object.freeze([{ part: 'spiritual', nos: [3, 5] }]);
+// Нрав — как персонаж проявляет чувства (spiritual 3). Речевые привычки (spiritual 5) резолверу не идут: строки «говорит
+// так-то» он читал как «говорит каждый ход». Они у Писателя в полном банке — для звучания реплики, когда она уже решена.
+const TEMPER_PARTS = Object.freeze([{ part: 'spiritual', nos: [3] }]);
 
 /** Нрав тех, кто в сцене, — резолверу рядом с Указами. Персонаж пользователя — нет. */
 export function renderTemperForResolver(entries, { nowValue = null, names = [] } = {}) {
@@ -92,7 +92,7 @@ export function renderTemperForResolver(entries, { nowValue = null, names = [] }
         })
         .filter(Boolean);
     if (!blocks.length) return '';
-    return `HOW THEY FEEL AND SPEAK — emotional display and speech patterns, from the banks of the characters in this scene:\n\n${blocks.join('\n\n')}`;
+    return `HOW THEY SHOW FEELING — emotional display, from the banks of the characters in this scene:\n\n${blocks.join('\n\n')}`;
 }
 
 /** psyches тех, кто в сцене: как движется их состояние и как медленно оно меняется. Персонаж пользователя — нет. */

@@ -21,34 +21,7 @@ Write every character as a real person: what their bank and Decree say they feel
 **## 2. How they see themselves** — two to four lines, from the inside and in their own terms, including where they are wrong about themselves.
 **## 3. Their goal: the long one and the one for today** — exactly two lines: "Long goal: …" and "Today: …". Both concrete enough that a scene shows whether they came closer.
 **## 4. Their mood for the day** — exactly three lines, one per axis, in this form: "calm ↔ agitated: slightly toward agitated", "warm ↔ cold: neutral", "lively ↔ tired: strongly toward tired". A level is slightly, strongly or neutral.
-**## 5. Their rules of resolving right now** — three to six lines, each "When …, they …": the situation this story puts them in, and the choice they make in it. No traits without a situation.
-
-An example (not of any story):
-
---- example ---
-## 1. The values and facts that matter most for understanding them
-- Owes her life to the abbess and will lie to anyone but her.
-- Keeps the convent's ledgers, and knows the debt that will close it by winter.
-- Will not touch a blade again since the river crossing.
-
-## 2. How they see themselves
-- A plain bookkeeper whom nobody needs to notice.
-- Believes she has already paid for the crossing; she has not forgiven herself.
-
-## 3. Their goal: the long one and the one for today
-- Long goal: keep the convent open past winter.
-- Today: find out who in the market buys the convent's debt.
-
-## 4. Their mood for the day
-- calm ↔ agitated: slightly toward agitated
-- warm ↔ cold: neutral
-- lively ↔ tired: slightly toward tired
-
-## 5. Their rules of resolving right now
-- When a stranger asks about the convent, she answers with numbers and gives nothing else.
-- When someone draws steel near her, she backs away and looks for the door, never for a weapon.
-- When the abbess is named with contempt, she stops being careful.
---- end of example ---
+**## 5. Their rules of resolving right now** — three to six lines, each "When …, they …": the situation this story puts them in, and the choice they make in it — what they decide, take, refuse or hold to. A rule names the choice, never the words: whether they say anything is read from the moment, not from a rule, and a rule that fires on being spoken to or asked would have them talk every turn. No traits without a situation.
 
 ## Standing
 - **Main Cast** — always has a Decree. A Main Cast character without one gets it now.

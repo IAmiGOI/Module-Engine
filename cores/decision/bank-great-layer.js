@@ -79,7 +79,8 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
             : entries.filter(entry => !isUserCharacter(entry.character) && filled(entry.character?.decree)).map(entry => entry.character.name);
         const temper = scene.length ? renderTemperForResolver(entries, { names: scene }) : '';
         const psyche = scene.length ? renderPsycheForResolver(entries, { names: scene }) : '';
-        return [renderDecreeForResolver(entries, { names }), temper, psyche].filter(Boolean).join('\n\n');
+        // Психология первой: на ней читаются Указ и нрав, а не наоборот.
+        return [psyche, renderDecreeForResolver(entries, { names }), temper].filter(Boolean).join('\n\n');
     }
 
     /** Раздел, который увидит движок: нужен ответу инструмента и проверке прав. */
