@@ -1,3 +1,4 @@
+import { readOpening } from './opening.js';
 import { withDirectorChecklist, namedInReports } from '../../libraries/core/director-checklist.js';
 import { isUserCharacter } from '../../libraries/core/decision-great-bank.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
@@ -42,7 +43,7 @@ function clockLabel(minutes) {
 }
 
 export function createDirector({
-    call, callTool, store, banks = null, getSettings, getWorkers, publishEvent,
+    call, callTool, callService = null, store, banks = null, getSettings, getWorkers, publishEvent,
     capture = null, enqueue = job => job(), now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), creation = null,
 }) {
     const live = createCycleLive({ publishEvent, getTurn: () => currentTurn(), getClock: () => store.clock().minutes });
@@ -172,6 +173,7 @@ export function createDirector({
             rpTime: rpNow(store, clockLabel),
             reason: info.wake.detail,
             world: await worldAtStart(),
+            opening: await readOpening(callService),
         });
         const state = { role: 'director', decreeIssued: false, decreeNames: [] };
         // Психолог за тем же столом: включается формой с write_bank, иначе молчит.

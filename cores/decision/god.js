@@ -1,3 +1,4 @@
+import { readOpening } from './opening.js';
 import { godFileForm, fileKey } from '../../libraries/core/god-file-form.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
 import { runDecisionCycle, normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js';
@@ -144,13 +145,14 @@ export function createGod({
 
     async function loadMaterial() {
         try {
-            const [entries, cards] = await Promise.all([
+            const [entries, cards, opening] = await Promise.all([
                 call('lorebook.entries').catch(() => []),
                 // Карточки — сервис, не ядро: через `call` запрос уходил в шину ядер, ошибка глоталась, и Бог видел пустой материал.
                 (callService ?? call)('stCharacter.chatCharacters').catch(() => []),
+                readOpening(callService ?? call),
             ]);
             const marks = typeof layout?.marksForLorebook === 'function' ? layout.marksForLorebook() : null;
-            return godMaterial({ lorebookEntries: entries ?? [], cards: cards ?? [], marks });
+            return godMaterial({ lorebookEntries: entries ?? [], cards: cards ?? [], marks, opening });
         } catch { return ''; }
     }
 

@@ -4,7 +4,7 @@ import { findCharacter, normalizeGreatBank, isUserCharacter } from './decision-g
 import { libraryLevelsSection } from './decision-library.js';
 import {
     DIRECTOR_DECREE_SYSTEM, DIRECTOR_DECREE_TASK, DIRECTOR_THINK_DECREE,
-    REPORTS_HEADER, NO_REPORTS, LAST_DECREES_HEADER, TOUCHED_BANKS_HEADER, WORLD_HEADER, DIRECTOR_RP_HEADER,
+    REPORTS_HEADER, NO_REPORTS, LAST_DECREES_HEADER, TOUCHED_BANKS_HEADER, WORLD_HEADER, OPENING_HEADER, DIRECTOR_RP_HEADER,
 } from './decision-prompts.js';
 
 /**
@@ -201,7 +201,7 @@ export function touchedBankText(state, names) {
  * Контекст Director: система → банки затронутых и их уровни → собственный CoT
  * за пять запусков → последние пять отчётов → RP-время → задание.
  */
-export function buildDirectorContext({ banks = {}, library = {}, characters = [], reports = [], thoughts = [], rpTime = '', reason = '', storySettings = '', world = '' } = {}) {
+export function buildDirectorContext({ banks = {}, library = {}, characters = [], reports = [], thoughts = [], rpTime = '', reason = '', storySettings = '', world = '', opening = '' } = {}) {
     const names = unique([...(Array.isArray(characters) ? characters : []), ...reports.flatMap(item => (item.kind === 'petition' ? [item.character] : []))]);
     const bankText = touchedBankText(banks, names);
     const levels = levelsFor(library, names);
@@ -210,6 +210,7 @@ export function buildDirectorContext({ banks = {}, library = {}, characters = []
     if (text(storySettings)) messages.push({ role: 'system', content: text(storySettings) });
     // Мир на момент старта — из Creation: кто уже в мире, а кого ещё нет. Без него банки пишутся по канону карточки.
     if (text(world)) messages.push({ role: 'system', content: `${WORLD_HEADER}\n\n${text(world)}` });
+    if (text(opening)) messages.push({ role: 'system', content: `${OPENING_HEADER}\n\n${text(opening)}` });
     messages.push({ role: 'system', content: `${TOUCHED_BANKS_HEADER}\n\n${bankText || 'No data bank exists for the characters this report touches.'}` });
     if (levels) messages.push({ role: 'system', content: levels });
     const thoughtText = renderThoughts(thoughts);

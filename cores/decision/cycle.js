@@ -73,7 +73,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     });
     // Director (часть 19): полу-слепой, по отчётам; Телеграмма держит следующий ход до Указа.
     const director = createDirector({
-        call, callTool, store, banks, getSettings, getWorkers, publishEvent, capture, now, creation,
+        call, callTool, callService, store, banks, getSettings, getWorkers, publishEvent, capture, now, creation,
         enqueue: job => Promise.resolve(wakeQueue.schedule(job)),
     });
     // God (фаза 5): строит Creation и отвечает на Молитвы — своя очередь: долгое построение не держит Советника.
