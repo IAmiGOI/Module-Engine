@@ -25,7 +25,7 @@ const ask = (call, extra = {}, state = { a: '1' }, questions = { q: 'x' }) => ca
 
 test('connections are a list of named entries with limits and defaults; nameless and duplicate names are dropped; the old single connection becomes the first one called jev so its saved key survives', () => {
     const list = sanitizeConnections({ connections: [{ id: ' a ', timeoutMs: 999999, apiKey: ' k ' }, { id: '' }, { id: 'a' }, { id: 'b', endpoint: 'https://x.org/d' }] });
-    assert.deepEqual(list.map(item => [item.id, item.timeoutMs, item.apiKey, item.model]), [['a', 20000, 'k', 'typesafe/jev-1.13'], ['b', 3000, '', 'typesafe/jev-1.13']]);
+    assert.deepEqual(list.map(item => [item.id, item.timeoutMs, item.apiKey, item.model]), [['a', 20000, 'k', 'perplexity/pplx-decider-v1.2'], ['b', 3000, '', 'perplexity/pplx-decider-v1.2']]);
     const migrated = sanitizeConnections({ endpoint: 'https://old.example/d', apiKey: 'old-key', model: 'm' });
     assert.deepEqual(migrated.map(item => [item.id, item.endpoint, item.apiKey]), [['jev', 'https://old.example/d', 'old-key']]);
     assert.deepEqual(sanitizeConnections({}), []);

@@ -7,7 +7,7 @@
  *   → { "answers": { "<id>": { "noul": 0.82 } }, "usage": { ... } }
  */
 export const JEV_DEFAULT_ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
-export const JEV_DEFAULT_MODEL = 'typesafe/jev-1.13';
+export const JEV_DEFAULT_MODEL = 'perplexity/pplx-decider-v1.2';
 export const JEV_DEFAULT_TIMEOUT_MS = 3000;
 
 export function buildJevRequest({ endpoint, apiKey, model }, { state, questions }) {
