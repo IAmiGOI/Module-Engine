@@ -246,7 +246,7 @@ export function createGod({
                 handlers,
                 callTool,
                 // Построение мира с формой проверки — больше шагов, и ответ текстом не считается отдыхом: только чистая форма и await.
-                maxSteps: Math.max(1, Number(settings.god?.maxSteps) || 20) * (['declaration', 'build', 'first'].includes(info.kind) ? 4 : 1),
+                maxSteps: Math.max(1, Number(settings.god?.maxSteps) || 20) * (['declaration', 'build', 'first'].includes(info.kind) ? 6 : 1),
                 implicitAwait: !['declaration', 'build', 'first'].includes(info.kind),
                 emptyRetry: false,
                 now,

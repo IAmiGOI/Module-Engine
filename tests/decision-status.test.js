@@ -18,3 +18,16 @@ test('the Counsellor gets what God did with a Prayer from the record, not by wak
     assert.equal(statusReport({ role: 'God', handled: [] }), '', 'nothing sent — nothing to report');
     assert.deepEqual(actionLines([{ name: 'edit', error: 'refused', args: {} }]), []);
 });
+
+test('the report to the Counsellor holds deeds only: no form, no refused call, and the role\'s own account of what it could not do', () => {
+    const report = statusReport({
+        role: 'The Director', handled: ['Petition about Yuto: no bank'], account: 'Yuto has no card.md, so nothing could be written.',
+        toolCalls: [
+            { name: 'check_reports', args: { comment: 'Write banks for Yuto.' }, result: { ok: true } },
+            { name: 'create', args: { path: 'Characters/Yuto/material.md', comment: 'Writing Yuto.' }, result: { ok: false, error: 'outside the form' } },
+        ],
+    });
+    assert.match(report, /The Director changed nothing\./);
+    assert.doesNotMatch(report, /check_reports|Writing Yuto/);
+    assert.match(report, /The Director's own account: Yuto has no card\.md/);
+});

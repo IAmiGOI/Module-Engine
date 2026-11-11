@@ -53,7 +53,7 @@ const holds = (file, line) => {
  * @param decreeOf    имя → текст decree.md (или null, если неизвестен) — для проверки скопированной строки
  * @param bankWritten имя → true/false/null — написан ли банк (material и spiritual)
  */
-export function withDirectorChecklist(handlers, { allowed = [], everyone = [], importanceOf = () => null, decreeOf = () => null, bankWritten = () => null, onForm = null } = {}) {
+export function withDirectorChecklist(handlers, { allowed = [], everyone = [], importanceOf = () => null, decreeOf = () => null, bankWritten = () => null, known = null, onForm = null } = {}) {
     let form = null;
     let refusals = 0;
     const done = new Map();
@@ -70,7 +70,13 @@ export function withDirectorChecklist(handlers, { allowed = [], everyone = [], i
         })).filter(item => item.name);
         const outside = characters.filter(item => !pool.has(key(item.name)));
         if (outside.length) {
-            return { ok: false, error: `Not named by the reports: ${outside.map(item => item.name).join(', ')}. The form holds only characters the reports touch: ${[...allowed].join(', ') || 'none'}${newDay ? ', and on a new day everyone with a Decree' : ''}. Leave the others as they are.` };
+            // Без банка в чате — другая причина, чем «отчёты их не называют»: Директор крутил форму, не понимая, почему нельзя.
+            const missing = typeof known === 'function' ? outside.filter(item => !known(item.name)) : [];
+            const unnamed = outside.filter(item => !missing.includes(item));
+            const parts = [];
+            if (missing.length) parts.push(`No bank exists for: ${missing.map(item => item.name).join(', ')} — this chat has no card.md or files for them, so there is nothing to write from. Leave them out of the form and say so in your await reason.`);
+            if (unnamed.length) parts.push(`Not named by the reports: ${unnamed.map(item => item.name).join(', ')}. The form holds only characters the reports touch: ${[...allowed].join(', ') || 'none'}${newDay ? ', and on a new day everyone with a Decree' : ''}. Leave the others as they are.`);
+            return { ok: false, error: parts.join(' ') };
         }
         // Каждый, кого называют отчёты, — в форме, хотя бы с «none» и строкой, которая это покрывает: иначе его просто пропускали.
         const listed = new Set(characters.map(item => key(item.name)));

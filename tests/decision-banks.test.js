@@ -387,3 +387,47 @@ test('banks left pending by a reload are built on the next turn instead of waiti
     assert.ok(world.calls.length > before, 'the stuck bank is built');
     assert.equal(world.banks.records().some(record => record.status === 'pending'), false);
 });
+
+/** Индекс лорбука после смены чата: до скана — пусто (или прошлый чат), после — книга. Сортировка без сборщика. */
+function racyWorld() {
+    const memory = new Map();
+    const settings = new Map();
+    const key = (namespace, name) => `${namespace}:${name}`;
+    const lore = { books: [], entries: [], next: { books: ['World'], entries: LOREBOOK } };
+    const call = async (contract, params = {}) => {
+        if (contract === 'storage.settings.get') return settings.has(key(params.namespace, params.key)) ? settings.get(key(params.namespace, params.key)) : params.fallback;
+        if (contract === 'storage.settings.set') { settings.set(key(params.namespace, params.key), params.value); return true; }
+        if (contract === 'storage.chatMemory.get') return memory.has(key(params.namespace, params.key)) ? memory.get(key(params.namespace, params.key)) : params.fallback;
+        if (contract === 'storage.chatMemory.set') { memory.set(key(params.namespace, params.key), params.value); return true; }
+        if (contract === 'lorebook.scan') { lore.books = lore.next.books; lore.entries = lore.next.entries; return { books: lore.books }; }
+        if (contract === 'lorebook.books') return lore.books;
+        if (contract === 'lorebook.entries') return lore.entries;
+        if (contract === 'model.generate') throw new Error('no model in this test');
+        return undefined;
+    };
+    const callService = async contract => (contract === 'stCharacter.chatCharacters' ? [CARD] : contract === 'stCharacter.persona' ? PERSONA : []);
+    const banks = createCharacterBanks({
+        call, callService, researcher: null, getSettings: () => ({}), getWorkers: () => [],
+        store: { library: () => ({}) }, publishEvent: () => {},
+    });
+    return { banks, lore, memory };
+}
+
+test('cold start scans the lorebook first: a stale index right after a chat change does not lose its characters', async () => {
+    const world = racyWorld();
+    await world.banks.reload();
+    await world.banks.ensureColdStart();
+    assert.deepEqual(world.banks.records().map(record => record.name).sort(), ['Aria', 'Bram', 'Lena', 'Me', 'World / Scene']);
+});
+
+test('a lorebook attached after the world is ready still gives its characters banks on the next turn', async () => {
+    const world = racyWorld();
+    world.lore.next = { books: [], entries: [] };
+    await world.banks.reload();
+    await world.banks.ensureColdStart();
+    assert.deepEqual(world.banks.records().map(record => record.name).sort(), ['Aria', 'Me', 'World / Scene']);
+    world.lore.books = ['World'];
+    world.lore.next = { books: ['World'], entries: LOREBOOK };
+    await world.banks.ensureColdStart();
+    assert.deepEqual(world.banks.records().map(record => record.name).sort(), ['Aria', 'Bram', 'Lena', 'Me', 'World / Scene']);
+});

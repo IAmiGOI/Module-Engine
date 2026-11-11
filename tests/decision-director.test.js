@@ -310,3 +310,17 @@ test('the Director\'s checklist: nothing before the form, nobody the reports do 
     await handlers.edit({ edits: [{ path: 'Characters/Emilia/decree.md', old: 'a', new: 'b' }] });
     assert.equal((await handlers.await({})).ok, true);
 });
+
+test('a character with no bank in the chat is refused for that reason, not as one the reports do not name', async () => {
+    const { withDirectorChecklist } = await import('../libraries/core/director-checklist.js');
+    const handlers = withDirectorChecklist({ await: async () => ({ ok: true }) }, {
+        allowed: ['Emilia'], known: name => ['emilia', 'rem'].includes(String(name).toLowerCase()),
+    });
+    const result = await handlers.check_reports({ characters: [
+        { name: 'Takumi', named_by: 'Petition', write_bank: true, decree: 'none', evidence: 'x' },
+        { name: 'Rem', named_by: 'Petition', write_bank: true, decree: 'none', evidence: 'x' },
+    ] });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /No bank exists for: Takumi —/);
+    assert.match(result.error, /Not named by the reports: Rem\./);
+});

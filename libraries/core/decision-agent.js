@@ -175,6 +175,6 @@ export async function runDecisionCycle({
         if (steps === maxSteps - 1) conversation.push({ role: 'user', content: REMINDER_AWAIT });
     }
 
-    warnings.push(`the resolver hit the ${maxSteps}-step limit without inscribe or await`);
+    warnings.push(`the run hit the ${maxSteps}-step limit without finishing`);
     return { type: 'guard', reason: `step limit of ${maxSteps} reached`, trace, messages: conversation, steps, warnings };
 }

@@ -1,3 +1,4 @@
+import { isUserCharacter, USER_CHARACTER_NOTE } from '../../libraries/core/decision-great-bank.js';
 import { writtenBanks } from '../../libraries/core/decision-director.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
 import { promptText } from '../../libraries/core/prompt-overrides.js';
@@ -120,16 +121,27 @@ export function createCounsellor({ call, callTool, store, banks = null, getSetti
         return messages;
     }
 
+    /** Имя — персонаж пользователя (персона)? По имени, псевдониму или первому слову полного имени. */
+    async function isUserName(name) {
+        const wanted = text(name).toLowerCase();
+        if (!wanted) return false;
+        const state = await banks?.great?.load?.().catch(() => null);
+        return Object.values(state ?? {}).filter(isUserCharacter).some(character => [character.name, ...(character.aliases ?? [])]
+            .map(value => text(value).toLowerCase()).filter(Boolean).some(value => value === wanted || wanted.split(/\s+/)[0] === value));
+    }
+
     function handlersFor({ state, turn }) {
         return {
             petition: async args => {
-                const petition = makePetition({ ...args, turn, at: now(), day: state.day });
+                // Персонаж пользователя не повышается: Директор обещал в форме положение, движок отказывал, await не пускал.
+                const userCharacter = args?.promote ? await isUserName(args.character) : false;
+                const petition = makePetition({ ...args, ...(userCharacter ? { promote: null } : {}), turn, at: now(), day: state.day });
                 if (!petition) return { ok: false, error: 'A petition needs a character and a problem.' };
                 await store.addPetition(petition);
                 state.petitioned.add(petition.character.toLowerCase());
                 state.decided = true;
                 publishEvent('decision.counsellor.petition', { character: petition.character, promote: petition.promote?.level ?? null, day: petition.day });
-                return { ok: true, id: petition.id, status: petition.status };
+                return { ok: true, id: petition.id, status: petition.status, ...(userCharacter ? { note: `${petition.character} ${USER_CHARACTER_NOTE} The promotion was dropped; the rest of the Petition stands.` } : {}) };
             },
             nothing_yet: async args => {
                 state.decided = true;

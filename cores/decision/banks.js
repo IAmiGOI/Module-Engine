@@ -11,6 +11,9 @@ import { createGreatBankLayer } from './bank-great-layer.js';
  * первым ходом, короткий банк для нового ростера, инструменты директора.
  * Модель зовётся только субагентом через `bank-tasks.js`.
  */
+const booksKey = names => [...new Set((Array.isArray(names) ? names : []).map(name => String(name ?? '').trim()).filter(Boolean))].sort();
+const sameBooks = (a, b) => a.length === b.length && a.every((name, index) => name === b[index]);
+
 export function createCharacterBanks({ call, callService, getSettings, getWorkers = () => [], store, researcher, publishEvent, now = () => Date.now() }) {
     const bankStore = createBankStore({ call });
     const tasks = createBankTasks({ getSettings, researcher, publishEvent });
@@ -20,6 +23,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     let queueRunning = null; // очередь сборки живёт дольше холодного старта (он отпускает ход по таймауту)
     let sourcesCache = [];
     let markWarnings = [];
+    let sourceBooks = []; // книги лорбука, из которых собраны последние источники
     const timelineQueue = new Set();
 
     const brief = () => (typeof store.chatBrief === 'function' ? store.chatBrief() : null);
@@ -56,11 +60,16 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
     }
 
     async function collectSources() {
+        // Свежий скан, не кэш: сразу после смены чата индекс лорбука ещё от прошлого чата (или пуст), и записи-персонажи
+        // терялись — банков у них не было, а из материала Бога они уже вычитались как «банки».
+        await call('lorebook.scan').catch(() => null);
         const [cards, persona, entries] = await Promise.all([
             callService('stCharacter.chatCharacters').catch(() => []),
             callService('stCharacter.persona').catch(() => null),
             call('lorebook.entries').catch(() => []),
         ]);
+        const books = await call('lorebook.books').catch(() => null);
+        sourceBooks = booksKey(Array.isArray(books) ? books : (Array.isArray(entries) ? entries : []).map(entry => entry?.book));
         const lorebookMarks = await markLorebooks(entries, cards);
         sourcesCache = bankSourcesForChat({ cards, persona, lorebookEntries: entries, lorebookMarks });
         return sourcesCache;
@@ -149,7 +158,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         for (const source of pending) chat[source.sourceKey] = { ...chat[source.sourceKey], importance: levels.get(source.sourceKey) ?? 'side' };
         await bankStore.saveChat(chat);
         publishEvent('decision.bank.sorted', { total: pending.length, main: pending.filter(source => levels.get(source.sourceKey) === 'main').map(source => source.name) });
-        await bankStore.saveColdStart({ ...progress(), status: 'ready', builderVersion: BANK_BUILDER_VERSION, total: sources.length, done: sources.length, errors: 0, warnings: markWarnings });
+        await bankStore.saveColdStart({ ...progress(), status: 'ready', builderVersion: BANK_BUILDER_VERSION, total: sources.length, done: sources.length, errors: 0, warnings: markWarnings, books: sourceBooks });
         return progress({ timedOut: false, sources: sources.length });
     }
 
@@ -231,7 +240,19 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         const busyFailed = records().some(record => record.status === 'error' && /busy/i.test(String(record.error ?? '')));
         // «pending» без живой очереди в этой вкладке — сборка оборвалась (перезагрузка, таймаут холодного старта): продолжить.
         const unfinished = records().some(record => record.status === 'pending' || record.status === 'short');
-        if (current && !busyFailed && !unfinished && (state.status === 'ready' || state.status === 'partial')) return Promise.resolve(progress());
+        if (current && !busyFailed && !unfinished && (state.status === 'ready' || state.status === 'partial')) {
+            if (getSettings()?.bankColdStart === 'build') return Promise.resolve(progress());
+            // Книги лорбука сменились после подготовки (или набор не записан — старый чат): источники собираются ещё раз,
+            // уже готовые банки пропускаются, модель зовётся только на новых персонажей.
+            coldStartPromise = (async () => {
+                if (Array.isArray(state.books)) {
+                    const books = await call('lorebook.books').catch(() => null);
+                    if (!Array.isArray(books) || sameBooks(booksKey(books), state.books)) return progress();
+                }
+                return runColdStart();
+            })().finally(() => { coldStartPromise = null; });
+            return coldStartPromise;
+        }
         coldStartPromise = runColdStart().finally(() => { coldStartPromise = null; });
         return coldStartPromise;
     }

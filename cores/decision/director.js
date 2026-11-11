@@ -144,6 +144,7 @@ export function createDirector({
             everyone: characters.filter(filled).map(character => character.name),
             importanceOf: name => find(name)?.importance ?? null,
             decreeOf: name => (find(name) ? Object.values(find(name).decree ?? {}).flat().map(line => String(line ?? '')).join('\n') : null),
+            known: name => characters.some(character => [character.name, ...(character.aliases ?? [])].some(value => String(value ?? '').trim().toLowerCase() === String(name ?? '').trim().toLowerCase())),
             bankWritten: name => (find(name) ? ['material', 'spiritual'].every(part => Object.values(find(name)[part] ?? {}).some(lines => Array.isArray(lines) && lines.some(line => String(line ?? '').trim()))) : null),
             onForm,
         };
@@ -265,7 +266,9 @@ export function createDirector({
         }
         // Отчёт Советнику: какие Петиции директор прочёл и что изменил в банках и Указах.
         const handled = (papers.petitions ?? []).filter(item => petitionIds.includes(item.id)).map(item => `Petition about ${item.character}: ${item.problem}`);
-        const report = statusReport({ role: 'The Director', handled, toolCalls: cycle.toolCalls, failed });
+        // Свой отчёт Директора — причина последнего await: что не удалось и почему, словами роли.
+        const account = [...(cycle.toolCalls ?? [])].reverse().find(call => call?.name === 'await' && call?.result?.ok !== false)?.args?.reason ?? '';
+        const report = statusReport({ role: 'The Director', handled, toolCalls: cycle.toolCalls, failed, account });
         publishEvent('decision.director.finished', { runId, decrees: state.decreeNames.length, issued: state.decreeIssued, report });
         return { ok: !failed, type: result.type, issued: state.decreeIssued, characters: state.decreeNames, cycle };
     }
