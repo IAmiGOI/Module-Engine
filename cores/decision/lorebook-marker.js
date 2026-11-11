@@ -44,11 +44,13 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
         const marks = [];
         const ignored = [];
         let called = false;
-        const outcome = await runDecisionCycle({
+        // Первая попытка — как раньше; без вызова — вторая, с температурой и без рассуждения: на нуле модель
+        // зацикливалась в «перепроверю» и съедала весь лимит, так и не вызвав инструмент (лорбук на 22 записи).
+        const attempt = extra => runDecisionCycle({
             messages: [{ role: 'system', content: prompt }],
             tools: [MARK_LOREBOOK_CHARACTERS_TOOL, AWAIT_TOOL],
             generate: async ({ messages, tools, toolChoice, returnMessage }) => normalizeGenerateAnswer(await call('model.generate', {
-                workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 8000, temperature: 0,
+                workerId: worker.id, messages, tools, toolChoice, stream: false, returnMessage, maxTokens: 8000, temperature: 0, ...extra,
             })),
             handlers: {
                 mark_lorebook_characters: args => {
@@ -74,6 +76,8 @@ export function createLorebookMarker({ call, getSettings, getWorkers, publishEve
             stopAfter: ['mark_lorebook_characters'],
             implicitAwait: true,
         });
+        let outcome = await attempt({});
+        if (!called) outcome = await attempt({ temperature: 0.6, reasoningMode: 'disabled', reasoningEffort: 'low', reasoningBudget: 0 });
         if (!called) {
             // Причина видна в окне директора: последняя ошибка вызова или чем кончился цикл.
             const lastError = [...(outcome?.trace ?? [])].reverse().find(step => step?.error)?.error;

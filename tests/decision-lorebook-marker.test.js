@@ -73,6 +73,6 @@ test('a call rejected for a missing comment is retried, and a good marking ends 
 
 test('a failed marking names the reason', async () => {
     const bad = { text: '', toolCalls: [{ id: 'a', name: 'mark_lorebook_characters', arguments: { characters: [] } }] };
-    const { marker } = build([bad, bad, bad]);
+    const { marker } = build([bad, bad, bad, bad, bad, bad]); // две попытки по три шага
     await assert.rejects(() => marker.mark({ book: 'Story', entries: ENTRIES }), /did not mark the lorebook characters: .*comment/i);
 });

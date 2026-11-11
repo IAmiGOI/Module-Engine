@@ -244,7 +244,30 @@ export function bankSourcesForChat({ cards = [], persona = null, lorebookEntries
         });
     }
     const seen = new Set();
-    return sources.filter(source => (seen.has(source.sourceKey) ? false : (seen.add(source.sourceKey), true)));
+    return mergeCardWithLorebook(sources.filter(source => (seen.has(source.sourceKey) ? false : (seen.add(source.sourceKey), true))));
+}
+
+/**
+ * Карточка и запись лорбука об одном персонаже — один источник, без модели: имя карточки совпадает с именем
+ * или псевдонимом записи. Раньше при упавшей разметке «Satsuki» (карточка) и «Satsuki Saionji» (лорбук)
+ * становились двумя банками, и Указ доставался не главной героине.
+ */
+export function mergeCardWithLorebook(sources) {
+    const list = Array.isArray(sources) ? [...sources] : [];
+    const lower = value => text(value).toLowerCase();
+    const namesOf = source => [source.name, source.canonicalName, ...(Array.isArray(source.aliases) ? source.aliases : [])].map(lower).filter(Boolean);
+    for (const card of list.filter(source => source.sourceKind === 'card')) {
+        const wanted = lower(card.name);
+        if (!wanted) continue;
+        const index = list.findIndex(source => source.sourceKind === 'lorebook entry' && namesOf(source).includes(wanted));
+        if (index < 0) continue;
+        const entry = list[index];
+        card.source = [card.source, `Lorebook entry "${text(entry.canonicalName) || text(entry.name)}":\n${text(entry.source)}`].filter(Boolean).join('\n\n');
+        card.aliases = [...new Set([...(Array.isArray(card.aliases) ? card.aliases : []), text(entry.name), ...(Array.isArray(entry.aliases) ? entry.aliases : [])].map(text).filter(name => name && lower(name) !== wanted))];
+        if (!card.canonHint && entry.canonHint) card.canonHint = entry.canonHint;
+        list.splice(index, 1);
+    }
+    return list;
 }
 
 export function findBankSource(sources, name) {
