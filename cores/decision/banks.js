@@ -155,7 +155,10 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
         // Сортировка, а не сборка: один вызов модели банков раскладывает новых по важности.
         const levels = pending.length ? await sortSources({ call, getSettings, sources: pending }) : new Map();
         if (startEpoch !== bankStore.epoch()) return progress({ stale: true });
-        for (const source of pending) chat[source.sourceKey] = { ...chat[source.sourceKey], importance: levels.get(source.sourceKey) ?? 'side' };
+        for (const source of pending) {
+            const several = levels.several?.get(source.sourceKey);
+            chat[source.sourceKey] = { ...chat[source.sourceKey], importance: levels.get(source.sourceKey) ?? 'side', ...(several ? { several } : {}) };
+        }
         await bankStore.saveChat(chat);
         publishEvent('decision.bank.sorted', { total: pending.length, main: pending.filter(source => levels.get(source.sourceKey) === 'main').map(source => source.name) });
         await bankStore.saveColdStart({ ...progress(), status: 'ready', builderVersion: BANK_BUILDER_VERSION, total: sources.length, done: sources.length, errors: 0, warnings: markWarnings, books: sourceBooks });

@@ -58,8 +58,11 @@ export function lorebookSourceText(entry = {}) {
 // 5: сборщик пишет сразу по разделам Great Bank — старые банки пересобираются один раз.
 export const BANK_BUILDER_VERSION = 5;
 
-export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0, timelineHash = '', importance = '' }) {
+export function createBankRecord({ sourceKey, sourceKind, name, sourceHash, text: bankText = '', sizeBand = 'minor', rawSource = '', examples = '', aliases = [], canonicalName = '', status = 'pending', error = null, at = Date.now(), builderVersion = 0, timelineHash = '', importance = '', several = [] }) {
+    const people = (Array.isArray(several) ? several : []).map(item => text(item)).filter(Boolean);
     return {
+        // Источник описывает нескольких людей (отметка сортировки): Директор делит его на персонажей.
+        ...(people.length > 1 ? { several: people } : {}),
         // Важность из сортировки холодного старта (main / side / temporary / mass); пусто — не сортирован.
         ...(text(importance) ? { importance: text(importance) } : {}),
         builderVersion: Number(builderVersion) || 0,

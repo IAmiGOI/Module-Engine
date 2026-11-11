@@ -30,10 +30,19 @@ export function queuedTelegrams(telegrams) {
 }
 
 /** Персонажи Main Cast без Указа — они получают его сразу. */
+/** Карточка на нескольких, ещё не разделённая: её Директор делит раньше, чем пишет Указ или банк. */
+const waitsForSplit = character => Array.isArray(character?.several) && character.several.length > 1 && !(Array.isArray(character.splitInto) && character.splitInto.length);
+
+export function unsplitCards(state) {
+    return Object.values(normalizeGreatBank(state))
+        .filter(character => ['main', 'side'].includes(character.importance) && !isUserCharacter(character) && waitsForSplit(character))
+        .map(character => `${character.name} (${character.several.join(', ')})`);
+}
+
 export function mainWithoutDecree(state) {
     const bank = normalizeGreatBank(state);
     return Object.values(bank)
-        .filter(character => character.importance === 'main' && !isUserCharacter(character))
+        .filter(character => character.importance === 'main' && !isUserCharacter(character) && !waitsForSplit(character))
         .filter(character => ![1, 2, 3, 4, 5].some(no => (character.decree?.[no] ?? []).some(line => text(line))))
         .map(character => character.name);
 }
@@ -45,7 +54,7 @@ export function mainWithoutDecree(state) {
 export function mainWithoutPast(state) {
     const bank = normalizeGreatBank(state);
     return Object.values(bank)
-        .filter(character => character.importance === 'main' && !isUserCharacter(character))
+        .filter(character => character.importance === 'main' && !isUserCharacter(character) && !waitsForSplit(character))
         .filter(character => [1, 2, 3, 4, 5].some(no => (character.decree?.[no] ?? []).some(line => text(line))))
         .filter(character => !pastRecorded(character.withUser))
         .map(character => character.name);
@@ -93,6 +102,7 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
     const nameState = banks?.great ?? banks;
     const cast = worldReady ? mainWithoutDecree(nameState) : [];
     const past = worldReady ? mainWithoutPast(nameState) : [];
+    const split = worldReady ? unsplitCards(nameState) : [];
     const promoted = queued.filter(item => item.promote && ['main', 'side'].includes(item.promote.level));
     const day = queued.filter(item => item.prepareNewDay);
     const reasons = [];
@@ -103,6 +113,7 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
     }
     if (cast.length) reasons.push({ type: 'cast', names: cast });
     if (past.length) reasons.push({ type: 'past', names: past });
+    if (split.length) reasons.push({ type: 'split', names: split.map(item => item.replace(/ \(.*$/, '')) });
     if (promoted.length) reasons.push({ type: 'promotion', names: unique(promoted.map(item => item.character)) });
     if (day.length) reasons.push({ type: 'day', names: unique(day.map(item => item.character)) });
     if (!reasons.length) return null;
@@ -129,6 +140,7 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
         petition: 'Petitions reach the Director',
         cast: 'A Main Cast character has no Decree',
         past: 'A Main Cast character has no past with the user',
+        split: 'A card holds several characters',
         promotion: 'A promotion needs a Decree',
     };
     const detail = [
@@ -136,6 +148,7 @@ export function directorReason({ petitions = [], telegrams = [], banks = {}, wor
         telegramsOpen.length ? `${telegramsOpen.length} telegram(s)` : '',
         cast.length ? `Main Cast without a Decree: ${cast.join(', ')}` : '',
         past.length ? `Main Cast without a past with the user: ${past.join(', ')}` : '',
+        split.length ? `Cards to split into their characters: ${split.join('; ')}` : '',
         promoted.length ? `promoted: ${unique(promoted.map(item => item.character)).join(', ')}` : '',
         day.length ? 'prepare the new day' : '',
     ].filter(Boolean).join('; ');

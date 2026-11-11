@@ -1,6 +1,6 @@
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { godWorkerId, directorWorkerId } from '../../libraries/core/decision-settings.js';
-import { mainWithoutDecree, mainWithoutPast } from '../../libraries/core/decision-director.js';
+import { mainWithoutDecree, mainWithoutPast, unsplitCards } from '../../libraries/core/decision-director.js';
 import { normalizePreparation, stepFromFacts } from '../../libraries/core/decision-preparation.js';
 
 /**
@@ -76,7 +76,7 @@ export function createPreparation({
         try {
             const state = await banks.great.sync?.() ?? await banks.great.load();
             // Указ и прошлое с пользователем — оба обязательны: без прошлого подготовка не кончается.
-            return mainWithoutDecree(state).length + mainWithoutPast(state).length;
+            return mainWithoutDecree(state).length + mainWithoutPast(state).length + unsplitCards(state).length;
         } catch { return 0; }
     }
 

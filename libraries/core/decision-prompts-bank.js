@@ -136,4 +136,6 @@ For each character below choose one level:
 
 Judge by what the material says about them and how much of it there is, not by how famous they are. A card that describes a world, a game or a narrator rather than one person is mass. The user's own character is not in the list.
 
-Answer only with JSON: [{"name": "the name exactly as written below", "importance": "main"}, …], one item per character.`;
+A card or an entry may describe more than one person. Then add "several": the names of the people it describes, not counting the user's own character — the Director will split it into one character each.
+
+Answer only with JSON: [{"name": "the name exactly as written below", "importance": "main"}, …], one item per card or entry, with "several" where it applies.`;

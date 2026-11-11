@@ -21,13 +21,21 @@ export function parseSort(answer) {
     const raw = clean(answer?.text ?? answer);
     const start = raw.indexOf('[');
     const end = raw.lastIndexOf(']');
-    if (start < 0 || end <= start) return new Map();
+    const levels = new Map();
+    // Карточка на нескольких персонажей: имя → кто в ней; делит Директор (split_character).
+    levels.several = new Map();
+    if (start < 0 || end <= start) return levels;
     try {
         const list = JSON.parse(raw.slice(start, end + 1));
-        return new Map((Array.isArray(list) ? list : [])
-            .map(item => [keyOf(item?.name), keyOf(item?.importance)])
-            .filter(([name, level]) => name && LEVELS.has(level)));
-    } catch { return new Map(); }
+        for (const item of Array.isArray(list) ? list : []) {
+            const name = keyOf(item?.name);
+            const level = keyOf(item?.importance);
+            if (name && LEVELS.has(level)) levels.set(name, level);
+            const several = (Array.isArray(item?.several) ? item.several : []).map(clean).filter(Boolean);
+            if (name && several.length > 1) levels.several.set(name, several);
+        }
+    } catch { /* без JSON — без сортировки */ }
+    return levels;
 }
 
 export function sortTask(sources) {
@@ -37,6 +45,7 @@ export function sortTask(sources) {
 /** Источники → Map(sourceKey → важность). Персона пользователя в сортировку не идёт. */
 export async function sortSources({ call, getSettings, sources }) {
     const levels = new Map(sources.map(source => [source.sourceKey, fallbackImportance(source)]));
+    levels.several = new Map();
     const characters = sources.filter(source => source.sourceKind !== 'persona' && source.sourceKind !== 'scene');
     const workerId = clean(getSettings()?.researcher?.workerId);
     if (!characters.length || !workerId) return levels;
@@ -49,6 +58,8 @@ export async function sortSources({ call, getSettings, sources }) {
         for (const source of characters) {
             const level = sorted.get(keyOf(source.name));
             if (level) levels.set(source.sourceKey, level);
+            const several = sorted.several?.get(keyOf(source.name));
+            if (several) levels.several.set(source.sourceKey, several);
         }
     } catch { /* без ответа — по виду источника */ }
     return levels;

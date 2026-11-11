@@ -84,6 +84,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
             textHash: source,
             sectionsReady: ready,
             fallbackText: ready ? '' : source,
+            ...(Array.isArray(record?.several) && record.several.length > 1 ? { several: [...record.several] } : {}),
         };
     }
 
@@ -282,6 +283,36 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     /**
+     * Карточка на нескольких (инструмент Директора): каждый человек из неё — свой персонаж со своей важностью и тем же
+     * card.md; общая запись уходит в NPC/Mass с отметкой, на кого разделена, и больше не играется и не показывается.
+     */
+    async function splitCharacter({ character, into = [], comment = '' } = {}) {
+        const state = await sync();
+        const found = findCharacter(state, character);
+        if (!found) return { ok: false, error: `There is no character "${character}".` };
+        if (isUserCharacter(found)) return { ok: false, error: `${found.name} is the user's character.` };
+        const people = (Array.isArray(into) ? into : []).map(item => ({ name: text(item?.name), importance: normalizeImportance(item?.importance || 'side') })).filter(item => item.name);
+        if (people.length < 2) return { ok: false, error: 'Split into at least two characters: { name, importance } for each person the card describes.' };
+        const card = text(found.fallbackText) || text(found.textHash);
+        const rp = await rpNow();
+        let next = { ...state };
+        const made = [];
+        for (const person of people) {
+            const ensured = ensureCharacter(next, person.name, { importance: person.importance });
+            next = ensured.state;
+            const target = findCharacter(next, person.name);
+            if (isUserCharacter(target)) continue;
+            const note = `This card describes several characters; this file is for ${target.name}.\n\n${card}`;
+            next = { ...next, [bankKey(target.name)]: { ...target, importance: person.importance, splitFrom: found.name, fallbackText: text(target.fallbackText) || note,
+                history: [...(target.history ?? []), { at: rp.label, by: 'director', part: 'split', section: 0, old: found.name, new: target.name, comment: text(comment) }].slice(-HISTORY_LIMIT) } };
+            made.push(target.name);
+        }
+        next = { ...next, [bankKey(found.name)]: { ...next[bankKey(found.name)], importance: 'mass', splitInto: made, fallbackText: '' } };
+        await save(next);
+        return { ok: true, split: found.name, into: made };
+    }
+
+    /**
      * Ход принят: у каждого в сцене, кроме пользователя, — первая общая сцена (если её ещё не было) и минуты вместе.
      * Лежит в Great Bank, поэтому снимок хода и откат несут его сами.
      */
@@ -421,6 +452,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     return {
         load, sync, replace, edit, setImportance, setDecree, writeDecree, setPsyche, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
         correct,
+        splitCharacter,
         setAcquaintance, noteTogether, clockMinutes,
         farText, nearText, writerText, decreeText, rpNow, historyFor,
         sectionOf: resolveSection,

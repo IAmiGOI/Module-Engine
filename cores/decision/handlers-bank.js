@@ -30,6 +30,11 @@ export function createBankHandlers({ banks = null, knowledge = null, state = {} 
             return banks.great.setImportance({ character: args.character, importance: args.importance });
         },
 
+        split_character: async args => {
+            if (!banks?.great?.splitCharacter) return { ok: false, error: 'The Great Bank is not available.' };
+            return banks.great.splitCharacter({ character: args.character, into: args.into, comment: args.comment });
+        },
+
         set_acquaintance: async args => {
             if (!banks?.great?.setAcquaintance) return { ok: false, error: 'The Great Bank is not available.' };
             const milestone = args?.milestone && typeof args.milestone === 'object' ? args.milestone : null;

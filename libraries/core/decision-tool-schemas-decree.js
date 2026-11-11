@@ -85,7 +85,7 @@ export const CHECK_REPORTS_TOOL = Object.freeze({
                     type: 'object',
                     properties: {
                         name: { type: 'string', description: 'Exactly as the bank writes it.' },
-                        named_by: { type: 'string', description: 'Which report names them: the Petition, the Telegram, the Ledger row, "Main Cast without a Decree", "Main Cast without a past with the user" or "new day".' },
+                        named_by: { type: 'string', description: 'Which report names them: the Petition, the Telegram, the Ledger row, "Main Cast without a Decree", "Main Cast without a past with the user", "Cards to split" or "new day".' },
                         write_bank: { type: 'boolean', description: 'True only when their material.md and spiritual.md are still empty and they need them now.' },
                         decree: { type: 'string', enum: ['none', 'edit', 'create'], description: 'none — every line of their decree.md still holds; edit — the report breaks a line of it; create — they need a Decree and have none.' },
                         line: { type: 'string', description: 'The proof, copied from their decree.md. For edit: the line the report breaks. For none: the line that already covers what the report shows. Empty only for create, or when the report says nothing about who they are or what they do.' },

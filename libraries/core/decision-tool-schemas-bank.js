@@ -33,6 +33,21 @@ export const BANK_EDIT_TOOL = Object.freeze({
     },
 });
 
+export const SPLIT_CHARACTER_TOOL = Object.freeze({
+    name: 'split_character',
+    displayName: 'Split a card into its characters',
+    description: 'Split a card that describes several people into one character each. into: every person the card describes, with their standing ("main", "side", "temporary"); the user\'s own character is not one of them. Each gets the same card.md to write from; the shared card stops being a character.',
+    parameters: {
+        type: 'object',
+        properties: {
+            character: { type: 'string', description: 'The card\'s name as the bank writes it.' },
+            into: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, importance: { type: 'string', enum: ['main', 'side', 'temporary'] } }, required: ['name', 'importance'] } },
+            comment: COMMENT,
+        },
+        required: ['character', 'into', 'comment'],
+    },
+});
+
 export const SET_ACQUAINTANCE_TOOL = Object.freeze({
     name: 'set_acquaintance',
     displayName: 'Record their past with the user',
