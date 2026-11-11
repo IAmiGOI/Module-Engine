@@ -140,6 +140,12 @@ export function createCycleContext({ call, store, banks = null, creation = null,
             .join('\n');
     }
 
+    /** Первое сообщение чата (приветствие), если это не реплика пользователя. */
+    function openingOf(chat) {
+        const first = (Array.isArray(chat) ? chat : []).find(entry => !entry?.is_system);
+        return first && first.is_user !== true ? String(first.mes ?? first.content ?? '').trim() : '';
+    }
+
     function lastUserText(chat) {
         const list = Array.isArray(chat) ? chat : [];
         for (let index = list.length - 1; index >= 0; index -= 1) {
@@ -197,15 +203,19 @@ export function createCycleContext({ call, store, banks = null, creation = null,
         return buildStorySettingsBlock('director', game);
     }
 
-    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '', turn = null, nearBanks = '', decreeText = '', creationText = '', decreeWait = '' }) {
+    function buildContext({ task = '', lorebookText = '', knowledgeText = '', directorBlock = [], banksText = '', boundary = null, currentUser = '', reroll = false, storySettings = '', turn = null, nearBanks = '', decreeText = '', creationText = '', decreeWait = '', opening = '' }) {
         const safe = boundary ?? { roster: [], libraryText: '', plansText: '', activeBanksText: '', chatBriefText: '' };
         const win = typeof store.window === 'function' ? store.window() : null;
         const all = Array.isArray(win?.entries) ? win.entries : [];
         const entries = reroll ? withoutRejectedTurn(all, currentUser) : all;
+        // Первое сообщение чата в окно ходов не входит: резолвер начинал историю без завязки. Пока окно его не держит — отдельным блоком.
+        const firstLine = String(opening ?? '').trim();
+        const openingBlock = firstLine && !JSON.stringify(entries).includes(JSON.stringify(firstLine.slice(0, 120)).slice(1, -1))
+            ? `THE STORY'S OPENING — the chat's first message, where this story begins:\n${firstLine}` : '';
         return buildDeciderContext({
             plan: store.plan(), arcs: store.arcs(), notes: store.notes(), storySettings,
             libraryText: safe.libraryText, plansText: safe.plansText, roster: safe.roster, activeBanksText: safe.activeBanksText,
-            chatBriefText: safe.chatBriefText ?? '', planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
+            chatBriefText: [safe.chatBriefText ?? '', openingBlock].filter(Boolean).join('\n\n'), planMissing: !store.plan(), directorBlock, lorebookText, knowledgeText, banksText, task,
             nearBanksText: nearBanks, decreeText, creationText, decreeWait, resolverTurn: true,
             windowEntries: [...entries, ...pendingTurn(entries, currentUser, reroll, turn)],
             sceneText: currentSceneText({ beforeTurn: reroll && entries.length < all.length ? Number(all.filter(entry => entry.kind === 'turn').at(-1)?.turn) : null }),
@@ -227,6 +237,7 @@ export function createCycleContext({ call, store, banks = null, creation = null,
             task: [base, discoveries, String(scalesHint ?? '').trim()].filter(Boolean).join('\n\n'),
             lorebookText, knowledgeText, directorBlock, boundary, decreeText: decree, creationText,
             currentUser: lastUserText(chat), reroll, turn, storySettings: storySettingsText(settings), decreeWait: decreeWaitText(),
+            opening: openingOf(chat),
         });
     }
 
