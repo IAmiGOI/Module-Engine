@@ -14,7 +14,7 @@ export function createCycleRecord({
     id, runId = '', event = 'turn', messages = [], toolCalls = [], thinking = '', warnings = [], usage = null,
     at = Date.now(), endedAt = null, durationMs = null, form = null, push = '', wake = null, message = null,
     turn = null, clockMinutes = null, workerId = null, rejected = false, rejectedAt = null, modes = null,
-    speculative = null, contrast = null,
+    speculative = null, contrast = null, scalesHint = null,
 } = {}) {
     const number = value => (Number.isFinite(Number(value)) ? Number(value) : null);
     const cycle = {
@@ -56,6 +56,10 @@ export function createCycleRecord({
         } : {}),
         // Поворот сцены: режимы до и после — Писатель на таком ходу получает меньше своей прошлой прозы.
         ...(contrast && typeof contrast === 'object' ? { contrast: { from: [...(contrast.from ?? [])], to: [...(contrast.to ?? [])], similarity: Number(contrast.similarity) || 0 } } : {}),
+        // Системы Scales, найденные классификатором на этом ходу, — для разбора в The Court.
+        ...(Array.isArray(scalesHint) && scalesHint.length
+            ? { scalesHint: scalesHint.map(item => ({ name: String(item?.name ?? ''), chance: Number(item?.chance) || 0 })) }
+            : {}),
         tokens: 0,
     };
     cycle.tokens = cycleTokens(cycle);

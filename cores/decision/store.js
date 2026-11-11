@@ -196,6 +196,7 @@ export function createDecisionStore({ call, publishEvent }) {
                 writerText: String(last?.text ?? last?.mes ?? last?.content ?? '').trim(),
                 reasoning: record.reasoning ?? '', steps: record.steps ?? [], workerId: record.workerId ?? null,
                 warnings: record.warnings ?? [],
+                scalesHint: Array.isArray(record.scalesHint) ? record.scalesHint : null,
             };
             runs = { ...runs, [mesid]: stored };
             await call('storage.chatMemory.set', { namespace: DECISION_MEMORY_NAMESPACE, key: 'runs', value: runs });

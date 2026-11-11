@@ -23,6 +23,7 @@ import { createPlaceReader, createTimeReader } from './readers.js';
 import { createCycleLive } from './live.js';
 import { createWakeQueue } from './queue.js';
 import { createCycleContext, fallbackDecision, turnWake, wakeFor } from './cycle-context.js';
+import { createScalesHint } from './scales-hint.js';
 import { createRosterApplier } from './roster.js';
 import { runAfterTurn } from './cycle-after-turn.js';
 import { createQuestionQueue } from './questions.js';
@@ -58,6 +59,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     // Creation (фаза 5) — один экземпляр на ядро: его читает резолвер и правит God.
     const creation = createCreationStore({ call, store, publishEvent, now });
     const context = createCycleContext({ call, store, banks, creation, capture, getGameSettings, getSettings, publishEvent });
+    // Подсказка систем Scales: её оценки кладут карточки правил в хвост задания хода.
+    const scalesHintFor = createScalesHint({ call, getSettings, creation, publishEvent });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
     // Своя последовательная очередь роли: задания идут по одному, но не ждут чужих фоновых циклов.
@@ -184,7 +187,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         return voices;
     }
 
-    function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [], speculative = null }) {
+    function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [], speculative = null, scalesHint = null }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
             ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: [writerContrastLine(state.contrast), writerModeLine(state.modes?.chosen)].filter(Boolean).join('\n'), voices: state.voices ?? {} })
@@ -197,7 +200,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             warnings: [...(result.warnings ?? []), ...(state.formWarnings ?? [])], at: startedAt,
             usage: typeof runUsage === 'function' ? runUsage() : runUsage,
             form, push, wake, turn: state.turnCounter, clockMinutes: store.clock().minutes, modes: state.modes ?? null, contrast: state.contrast ?? null,
-            workerId, endedAt, durationMs: endedAt - startedAt, speculative,
+            workerId, endedAt, durationMs: endedAt - startedAt, speculative, scalesHint,
         });
         return { cycle, form, push };
     }
@@ -221,6 +224,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.knowledgeReturns = new Set();
         state.departureWarned = false;
         state.entrantsRestarted = restarted;
+        state.scalesHint = null;
         state.userMessage = '';
         const lastUser = [...(Array.isArray(chat) ? chat : [])].reverse().find(entry => entry?.is_user === true);
         state.userMessage = String(lastUser?.mes ?? lastUser?.content ?? '').trim();
@@ -245,7 +249,10 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.contrast = state.modes ? modeContrast(previousCycle?.modes?.answers, state.modes.answers) : null;
         const contrastBlock = resolverContrastBlock(state.contrast);
         const task = [reroll || modeBlock ? DIRECTOR_TURN : '', reroll ? DIRECTOR_REROLL : '', contrastBlock, modeBlock].filter(Boolean).join('\n\n');
-        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task });
+        // Каких систем Scales касается ход: блок карточек их правил идёт в хвост задания; сбой не держит ход.
+        const scalesHint = await scalesHintFor(chat).catch(() => null);
+        state.scalesHint = scalesHint?.systems ?? null;
+        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task, scalesHint: scalesHint?.text ?? '' });
         if (!restarted) {
             const audit = auditTurnInputs({
                 greatBank: (await banks?.great?.load?.().catch(() => ({}))) ?? {}, roster: store.roster().active ?? [],
@@ -320,6 +327,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             const startedCycle = cycleRecord({
                 runId, event: type === 'normal' ? 'turn' : type, result: { ...result, type: 'await', messages: [], trace: [] },
                 thinking: thinking(), wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, speculative,
+                scalesHint: state.scalesHint,
             });
             const warnings = ['the form timed out; the saved draft was used'];
             const cycle = { ...startedCycle.cycle, form, push, warnings };
@@ -328,7 +336,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             live.finished({ cycle });
             wakeQueue.rest();
             publishEvent('decision.cycle.draft_used', { runId, minutes: form.scene.minutes });
-            return { ok: true, form, push, decision: fallbackDecision(form), trace: [], warnings, steps: 0, workerId: worker.id, draft: true };
+            return { ok: true, form, push, decision: fallbackDecision(form), trace: [], warnings, steps: 0, workerId: worker.id, draft: true, scalesHint: state.scalesHint };
         }
 
         if (result.type === 'restart') {
@@ -341,6 +349,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         const { cycle, form, push } = cycleRecord({
             runId, event: type === 'normal' ? 'turn' : type, result, thinking,
             wake: startedWake, startedAt, workerId: worker.id, usage: runUsage, contextMessages: built.messages, speculative,
+            scalesHint: state.scalesHint,
         });
         await store.appendCycle(cycle).catch(() => {});
         if (form) live.form({ runId, form, push });
@@ -350,12 +359,12 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         if (result.type !== 'submit') {
             if (result.type === 'error') researcher?.cancel?.({ runId });
             publishEvent('decision.cycle.ended', { runId, type: result.type, reason: result.reason, steps: result.steps });
-            return { ok: false, reason: result.reason, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id };
+            return { ok: false, reason: result.reason, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id, scalesHint: state.scalesHint };
         }
         const decision = fallbackDecision(form);
         publishEvent('decision.cycle.submitted', { runId, type, steps: result.steps, characters: form.characters?.length ?? 0 });
         // «После хода» ждёт ответа писателя: исход пишется по странице, а не по замыслу формы.
-        return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id, built, messages: result.messages };
+        return { ok: true, form, push, decision, trace: result.trace, warnings: result.warnings, steps: result.steps, workerId: worker.id, built, messages: result.messages, scalesHint: state.scalesHint };
     }
 
     async function run(options) {

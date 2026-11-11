@@ -3,7 +3,7 @@ import { signal, computed } from '../reactive.js';
 import { Card, Toggle, Select, Field, Row, Button, Slider, Details } from '../../../libraries/shared/widgets.js';
 import { SAMPLER_PRESETS } from '../../models/generate-request.js';
 import { rosterView, planView, libraryView, bankView, arcsNotesView, forcedView } from './decision-views.js';
-import { createClassifierOptions, writerCheckSection } from './decision-card-check.js';
+import { createClassifierOptions, writerCheckSection, scalesHintSection } from './decision-card-check.js';
 import { createBootstrapSettings } from './decision-card-bootstrap.js';
 import { createGodSettings } from './decision-card-god.js';
 /**
@@ -46,6 +46,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     const classifierThreshold = signal(0.85);
     const classifierCheckTokens = signal(150);
     const classifierRewriteLimit = signal(2);
+    const scalesHintConnectionId = signal('');
     const classifierConnections = signal([]);
     const counsellorWorkerId = signal('');
     const counsellorEveryTurns = signal(3);
@@ -165,6 +166,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
         classifierThreshold.set(Number(classifier.threshold ?? 0.85));
         classifierCheckTokens.set(Number(classifier.checkTokens ?? 150));
         classifierRewriteLimit.set(Number(classifier.rewriteLimit ?? 2));
+        scalesHintConnectionId.set(String(value.scalesHint?.connectionId ?? ''));
         const counsellor = value.counsellor ?? {};
         counsellorWorkerId.set(String(counsellor.workerId ?? ''));
         counsellorEveryTurns.set(Number(counsellor.everyTurns ?? 3));
@@ -208,6 +210,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                 connectionId: classifierConnectionId.peek(), threshold: classifierThreshold.peek(),
                 checkTokens: classifierCheckTokens.peek(), rewriteLimit: classifierRewriteLimit.peek(),
             },
+            scalesHint: { connectionId: scalesHintConnectionId.peek() },
             counsellor: {
                 workerId: counsellorWorkerId.peek(), everyTurns: counsellorEveryTurns.peek(), maxSteps: counsellorMaxSteps.peek(),
             },
@@ -360,6 +363,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                 ),
             ),
             writerCheckSection({ classifierConnectionId, classifierThreshold, classifierCheckTokens, classifierRewriteLimit, classifierOptions }),
+            scalesHintSection({ scalesHintConnectionId, classifierOptions }),
             Details('Retries',
                 h('small', { class: 'stme-module-hint' }, 'One policy for every role: network, 5xx, 429, timeout and a dropped stream pause 1 / 3 / 8 s; an empty answer is retried once with a larger limit and lower reasoning; two empty answers switch to the backup connection.'),
                 Row(

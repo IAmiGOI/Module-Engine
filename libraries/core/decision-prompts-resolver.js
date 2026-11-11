@@ -17,6 +17,12 @@ Your reasoning is a working note, not prose: one line per point, then the call a
 
 Each point is decided once, on the first reading that fits the character. Do not reopen a point, do not draft prose or lines — the Writer writes them — and write the form once, in the call. The turn does not have to be perfect, and a wrong reading costs little. What matters is that each character stays who they are: the first reading true to them is the one to take.`;
 
+/** Подсказка систем Scales на ходу: заголовок блока в хвосте задания. */
+export const SCALES_HINT_HEADER = `THE WORLD'S SYSTEMS THIS TURN TOUCHES — their rules in full:`;
+
+/** Утверждение классификатору (Noul) — одно на систему Scales. */
+export const SCALES_HINT_QUESTION = `The latest user message concerns {{system}}: the user's character uses it, keeps using it, or talks about it. {{system}}: {{principle}}`;
+
 /** Резолвер — задание «после хода» (дословно из `PROMPTS.md`, раздел 26). */
 export const RESOLVER_AFTER_TURN = `AFTER THE TURN: the Writer's reply is below. Fill the after-turn template once, from what is actually on the page.
 

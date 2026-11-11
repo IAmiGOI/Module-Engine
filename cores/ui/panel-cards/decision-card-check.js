@@ -15,6 +15,15 @@ export function createClassifierOptions(classifierConnections) {
     ]);
 }
 
+export function scalesHintSection({ scalesHintConnectionId, classifierOptions }) {
+    return Details('Scales hint (classifier)',
+        Field('Classifier connection', Select(scalesHintConnectionId, classifierOptions), {
+            hint: 'Before each turn the classifier names the world systems (Scales) the user\'s message touches; the rule cards of those systems go to the end of the turn. Empty: no hint. Measured with perplexity/pplx-decider-v1.2.',
+        }),
+        h('small', { class: 'stme-module-hint' }, 'The hint says what the turn touches, not what to do. Without a connection or a key the turn goes on as before.'),
+    );
+}
+
 export function writerCheckSection({ classifierConnectionId, classifierThreshold, classifierCheckTokens, classifierRewriteLimit, classifierOptions }) {
     return Details('Writer check (classifier)',
         Field('Classifier connection', Select(classifierConnectionId, classifierOptions), {

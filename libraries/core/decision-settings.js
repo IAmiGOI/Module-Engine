@@ -60,6 +60,11 @@ export const DEFAULT_CLASSIFIER = Object.freeze({
     rewriteLimit: 2,
 });
 
+/** Подсказка систем Scales: подключение классификатора, чьи оценки идут в ход. Пусто — шаг пропускается. */
+export const DEFAULT_SCALES_HINT = Object.freeze({
+    connectionId: '',
+});
+
 export const DEFAULT_BOOTSTRAP = Object.freeze({
     maxQuestions: 5,
     maxSteps: 30,
@@ -162,6 +167,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Seed оценки — только для тестов; `null` означает настоящий бросок.
     assessSeed: null,
     classifier: DEFAULT_CLASSIFIER,
+    scalesHint: DEFAULT_SCALES_HINT,
     bootstrap: DEFAULT_BOOTSTRAP,
     speculate: DEFAULT_SPECULATE,
     counsellor: DEFAULT_COUNSELLOR,
@@ -204,6 +210,7 @@ export function clampDecisionSettings(values = {}) {
     const writer = source.writer && typeof source.writer === 'object' ? source.writer : {};
     const compression = source.compression && typeof source.compression === 'object' ? source.compression : {};
     const classifier = source.classifier && typeof source.classifier === 'object' ? source.classifier : {};
+    const scalesHint = source.scalesHint && typeof source.scalesHint === 'object' ? source.scalesHint : {};
     const bootstrap = source.bootstrap && typeof source.bootstrap === 'object' ? source.bootstrap : {};
     const speculate = source.speculate && typeof source.speculate === 'object' ? source.speculate : {};
     const counsellor = source.counsellor && typeof source.counsellor === 'object' ? source.counsellor : {};
@@ -276,6 +283,9 @@ export function clampDecisionSettings(values = {}) {
             threshold: number(classifier.threshold, 0, 1, DEFAULT_CLASSIFIER.threshold),
             checkTokens: Math.round(number(classifier.checkTokens, 20, 4000, DEFAULT_CLASSIFIER.checkTokens)),
             rewriteLimit: Math.round(number(classifier.rewriteLimit, 0, 10, DEFAULT_CLASSIFIER.rewriteLimit)),
+        },
+        scalesHint: {
+            connectionId: text(scalesHint.connectionId, DEFAULT_SCALES_HINT.connectionId).trim(),
         },
         bootstrap: {
             maxQuestions: Math.round(number(bootstrap.maxQuestions, 1, 20, DEFAULT_BOOTSTRAP.maxQuestions)),
@@ -404,6 +414,7 @@ export function publicDecisionSettings(settings = {}) {
         promptSections: structuredClone(settings.promptSections ?? {}),
         gameDefaults: { ...settings.gameDefaults },
         gameMixes: (settings.gameMixes ?? []).map(mix => ({ ...mix, values: { ...mix.values } })),
+        scalesHint: { ...DEFAULT_SCALES_HINT, ...(settings.scalesHint ?? {}) },
         counsellor: { ...DEFAULT_COUNSELLOR, ...(settings.counsellor ?? {}) },
         director: { ...DEFAULT_DIRECTOR, ...(settings.director ?? {}) },
         god: { ...DEFAULT_GOD, ...(settings.god ?? {}) },

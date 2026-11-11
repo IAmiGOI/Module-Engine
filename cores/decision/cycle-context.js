@@ -7,7 +7,7 @@ import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
 import { createBoundary, normalizeBoundary, lastTurnNumber, BOUNDARY_BANKS_FORMAT } from '../../libraries/core/decision-window.js';
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
-import { DIRECTOR_CONCRETE, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { DIRECTOR_CONCRETE, DIRECTOR_TURN, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { estimateTokens } from '../../libraries/core/token-estimate.js';
 import { buildStorySettingsBlock, resolveGameSettings } from '../../libraries/core/game-settings.js';
 import { lastAcceptedForm, renderAlreadySaid, renderCurrentScene, renderHiddenTruth, lastActedTurns } from '../../libraries/core/decision-scene.js';
@@ -214,15 +214,17 @@ export function createCycleContext({ call, store, banks = null, creation = null,
         });
     }
 
-    async function runContext({ settings, chat = [], task = '', lorebook = true, worker, reroll = false, turn = null }) {
+    async function runContext({ settings, chat = [], task = '', lorebook = true, worker, reroll = false, turn = null, scalesHint = '' }) {
         const [lorebookText, directorBlock, knowledgeText, boundary, decree, creationText] = await Promise.all([
             lorebookTextFor(lorebook), directorBlockFor(settings, chat ?? [], worker), knowledge.textFor(null), ensureBoundary(), decreeTextFor(), creationTextFor(),
         ]);
         // Резолверу — дальняя компактная проекция (в границе окна) и Указ действующих на @10. Ближняя полная проекция
-        // здесь не нужна: она директора. Creation — в стабильной части; новые открытия — строкой у задания.
+        // здесь не нужна: она директора. Creation — в стабильной части; новые открытия и карточки затронутых систем — в хвосте задания.
         const discoveries = creationDiscoveries();
+        // Хвост подсказки не должен подменять собой шаблон хода: без режимов и переигровки задание приходит пустым.
+        const base = String(task ?? '').trim() || (String(scalesHint ?? '').trim() ? DIRECTOR_TURN : '');
         return buildContext({
-            task: discoveries ? `${task}\n\n${discoveries}` : task,
+            task: [base, discoveries, String(scalesHint ?? '').trim()].filter(Boolean).join('\n\n'),
             lorebookText, knowledgeText, directorBlock, boundary, decreeText: decree, creationText,
             currentUser: lastUserText(chat), reroll, turn, storySettings: storySettingsText(settings), decreeWait: decreeWaitText(),
         });

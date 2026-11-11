@@ -491,7 +491,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                         game: settingsLabel(gameSettingsValues()), reasoning: merged.reasoning(),
                         warnings: [...(result.warnings ?? [])], steps,
                         workerId: result.workerId ?? null, trace: result.trace ?? [], snapshot: beforeSnapshot,
-                        built: result.built ?? null,
+                        built: result.built ?? null, scalesHint: result.scalesHint ?? null,
                     };
                     publishEvent('decision.completed', { runId, workerId: pending.workerId });
                     cycle.runPassive({ runId }).catch(error => publishEvent('decision.failed', { runId, message: `passive cycle: ${error?.message ?? error}` }));
@@ -518,7 +518,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
                 warnings: [...(result.warnings ?? [])], steps,
                 workerId: result.workerId ?? null, trace: result.trace ?? [], snapshot: beforeSnapshot,
                 // Контекст хода нужен «после хода»: тот же разговор и тот же кеш.
-                built: result.built ?? null,
+                built: result.built ?? null, scalesHint: result.scalesHint ?? null,
             };
             publishEvent('decision.completed', { runId, workerId: pending.workerId });
             // Пассивный цикл — ПОСЛЕ формы и НЕ ожидается: прозаик не должен
