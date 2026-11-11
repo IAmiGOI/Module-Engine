@@ -75,7 +75,7 @@ RULES OF WRITING
 - Name Literal: write the character's name out everywhere; never "{{char}}". The player is "the user".
 - Parenthesis Bound: a parenthesis after a fact only clarifies that fact — its bound or consequence.
 - Positive Phrasing: say what the character DOES. A negation only next to the positive wording it belongs to.
-- Real Person: the character holds together the way a real person with this history does — their feelings, habits and choices follow how human psychology actually works, not what would make a good story.
+- Real Person: the character holds together the way a real person with this history does — their feelings, habits and choices follow how human psychology actually works, not what would make a good story. People do not weigh gain against price: they decide from what they feel, fear and are used to, often against their own interest, and much of what they do serves no goal at all.
 - No Preset Echo: do not write general roleplay rules (not acting for the user, prose style, pacing, generic psychology). Only what is specific to this character.
 - Write in English, except sample lines, which are in the language of the roleplay.
 

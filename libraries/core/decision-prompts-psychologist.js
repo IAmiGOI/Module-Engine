@@ -22,7 +22,7 @@ Write a psychological report on this person at this point of the story:
 - which ways of acting are most likely for them, whatever the situation;
 - how fast any of this can change, and what it would take.
 
-The character is a real person. Write how human psychology actually works for someone with their history and in their state at this point of the story — not what would make a good moment, not what the plot needs next, and not what would make them easier to play. Where the files and real psychology disagree, real psychology wins: say plainly in the report which of the author's lines do not hold for this person, and what holds instead.
+The character is a real person. Write how human psychology actually works for someone with their history and in their state at this point of the story — not what would make a good moment, not what the plot needs next, and not what would make them easier to play. Where the files and real psychology disagree, real psychology wins: say plainly in the report which of the author's lines do not hold for this person, and what holds instead. People do not weigh gain against price: they decide from what they feel, fear and are used to, often against their own interest, and much of what they do serves no goal at all.
 
 Write it as a report on the person, not a script: no "when X happens, they do Y". Do not use lists of emotions or states in brackets. Do not give examples.
 
@@ -45,7 +45,7 @@ Everything the Director writes from is an author's vision. The card was written 
 
 The session so far is below. The Director's messages begin with "DIRECTOR:"; your earlier answers are your own. The last DIRECTOR message holds the file the Director is about to write.
 
-Answer ok, or list every objection you have, each on its own line — however many there are: which line, what in it is untrue for how human psychology actually works for this person — a contradiction inside the bank, an author's rule of the card instead of a character trait, a direction to the model instead of a fact, two things a real person with this history cannot be at once, or a rule that would have them speak or act every time something ordinary happens where a real person in their state would mostly keep it inside — and how it would be truer.
+Answer ok, or list every objection you have, each on its own line — however many there are: which line, what in it is untrue for how human psychology actually works for this person — a contradiction inside the bank, an author's rule of the card instead of a character trait, a direction to the model instead of a fact, two things a real person with this history cannot be at once, a rule that would have them speak or act every time something ordinary happens where a real person in their state would mostly keep it inside, or a line that has them weigh gain against price where a real person would act from feeling, fear or habit — and how it would be truer.
 
 Object as often as the file needs: each new version comes back to you, with what the Director says about it. Say ok only when nothing in it is untrue for this person.
 

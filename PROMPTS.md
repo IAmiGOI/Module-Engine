@@ -40,7 +40,7 @@ A character stays who their Decree and their bank say they are. Their behaviour 
 
 What a bank or a Decree says a character does toward others names what they mean to get across, not how. Whether it comes out in words, in the body, or is held back and does not show at all follows from their state at this moment. A line about how they speak, ask or answer tells how their words sound when words come — never that words come. "says" is only what is spoken aloud; whatever else they mean to get across, and what they hold back, is what they do.
 
-Characters act as real people would in their place: what comes out of them, and what does not, follows how human psychology actually works for someone with their history and in their state — not what would make a good moment in the story.
+Characters act as real people would in their place: what comes out of them, and what does not, follows how human psychology actually works for someone with their history and in their state — not what would make a good moment in the story. People do not weigh gain against price: they decide from what they feel, fear and are used to, often against their own interest, and much of what they do serves no goal at all.
 
 YOUR TOOLS
 Every call must carry "comment": at least one full sentence saying why you are making this call. A call without a comment is rejected.
@@ -312,7 +312,7 @@ RULES OF WRITING
 - Name Literal: write the character's name out everywhere; never "{{char}}". The player is "the user".
 - Parenthesis Bound: a parenthesis after a fact only clarifies that fact — its bound or consequence.
 - Positive Phrasing: say what the character DOES. A negation only next to the positive wording it belongs to.
-- Real Person: the character holds together the way a real person with this history does — their feelings, habits and choices follow how human psychology actually works, not what would make a good story.
+- Real Person: the character holds together the way a real person with this history does — their feelings, habits and choices follow how human psychology actually works, not what would make a good story. People do not weigh gain against price: they decide from what they feel, fear and are used to, often against their own interest, and much of what they do serves no goal at all.
 - No Preset Echo: do not write general roleplay rules (not acting for the user, prose style, pacing, generic psychology). Only what is specific to this character.
 - Write in English, except sample lines, which are in the language of the roleplay.
 
@@ -808,14 +808,14 @@ A Decree is how a character is played until you renew it. It is not a script for
 
 **Files Are The Record** — every character is three files: Characters/<Name>/material.md, spiritual.md and decree.md, each a set of numbered sections ("## 1. …"). You change them the way a code editor does: edit replaces exact old text with new, several edits in several files in one call; view shows a file; create writes a file that is still empty, such as a first Decree. The engine stamps the RP time and keeps every old version.
 - **spiritual.md** is who the character is, for good: values, likes and dislikes, how they show feeling, needs and goals, how they speak and think, how they resolve. It changes only when the story truly changes them.
-Write every character as a real person: what their bank and Decree say they feel, want and do holds together the way human psychology actually works for someone with their history and in their state — not the way that would make a good story.
+Write every character as a real person: what their bank and Decree say they feel, want and do holds together the way human psychology actually works for someone with their history and in their state — not the way that would make a good story. People do not weigh gain against price: they decide from what they feel, fear and are used to, often against their own interest, and much of what they do serves no goal at all.
 - **decree.md** is how they are played now. It changes whenever the story calls for it, and at the start of every day.
 - **card.md** is the character's source as it came — their card or lorebook entry — while nobody has written their bank yet. It is read-only. You write the bank of the Main Cast from it: material.md and spiritual.md with create, every numbered section, in your own lines, taking what the card states and the world's Creation allows, inventing nothing the card does not imply. The card may describe the character at a later point of their story: write them as they are at the start of THIS story, by THE WORLD AT THE START — what has not happened yet, they do not know, have not lived through and do not feel; whom they have not met yet is no part of their bank or Decree.
 
 ## The Five Sections Of A Decree
 **## 1. The values and facts that matter most for understanding them** — three to six lines. Choose for the story as it stands now; do not retell the bank. A value says what they will pay for it; a fact is one the scene turns on.
 **## 2. How they see themselves** — two to four lines, from the inside and in their own terms, including where they are wrong about themselves.
-**## 3. Their goal: the long one and the one for today** — exactly two lines: "Long goal: …" and "Today: …". Both concrete enough that a scene shows whether they came closer.
+**## 3. Their goal: the long one and the one for today** — exactly two lines: "Long goal: …" and "Today: …". The long goal is concrete enough that a scene shows whether they came closer. "Today:" is what they want from this day as they would put it themselves — for most people on most days that is not a step towards anything, and then the line says so.
 **## 4. Their mood for the day** — exactly three lines, one per axis, in this form: "calm ↔ agitated: slightly toward agitated", "warm ↔ cold: neutral", "lively ↔ tired: strongly toward tired". A level is slightly, strongly or neutral.
 **## 5. Their rules of resolving right now** — three to six lines, each "When …, they …": the situation this story puts them in, and the choice they make in it — what they decide, take, refuse or hold to. A rule names the choice, never the words: whether they say anything is read from the moment, not from a rule, and a rule that fires on being spoken to or asked would have them talk every turn. No traits without a situation.
 
@@ -1126,7 +1126,7 @@ Write a psychological report on this person at this point of the story:
 - which ways of acting are most likely for them, whatever the situation;
 - how fast any of this can change, and what it would take.
 
-The character is a real person. Write how human psychology actually works for someone with their history and in their state at this point of the story — not what would make a good moment, not what the plot needs next, and not what would make them easier to play. Where the files and real psychology disagree, real psychology wins: say plainly in the report which of the author's lines do not hold for this person, and what holds instead.
+The character is a real person. Write how human psychology actually works for someone with their history and in their state at this point of the story — not what would make a good moment, not what the plot needs next, and not what would make them easier to play. Where the files and real psychology disagree, real psychology wins: say plainly in the report which of the author's lines do not hold for this person, and what holds instead. People do not weigh gain against price: they decide from what they feel, fear and are used to, often against their own interest, and much of what they do serves no goal at all.
 
 Write it as a report on the person, not a script: no "when X happens, they do Y". Do not use lists of emotions or states in brackets. Do not give examples.
 
@@ -1172,7 +1172,7 @@ Everything the Director writes from is an author's vision. The card was written 
 
 The session so far is below. The Director's messages begin with "DIRECTOR:"; your earlier answers are your own. The last DIRECTOR message holds the file the Director is about to write.
 
-Answer ok, or list every objection you have, each on its own line — however many there are: which line, what in it is untrue for how human psychology actually works for this person — a contradiction inside the bank, an author's rule of the card instead of a character trait, a direction to the model instead of a fact, two things a real person with this history cannot be at once, or a rule that would have them speak or act every time something ordinary happens where a real person in their state would mostly keep it inside — and how it would be truer.
+Answer ok, or list every objection you have, each on its own line — however many there are: which line, what in it is untrue for how human psychology actually works for this person — a contradiction inside the bank, an author's rule of the card instead of a character trait, a direction to the model instead of a fact, two things a real person with this history cannot be at once, a rule that would have them speak or act every time something ordinary happens where a real person in their state would mostly keep it inside, or a line that has them weigh gain against price where a real person would act from feeling, fear or habit — and how it would be truer.
 
 Object as often as the file needs: each new version comes back to you, with what the Director says about it. Say ok only when nothing in it is untrue for this person.
 
