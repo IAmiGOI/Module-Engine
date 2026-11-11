@@ -26,6 +26,16 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
     };
     const ensurePsyche = async () => psychologist.maybeRun(withoutHeld(await great.sync().catch(() => null)));
 
+    /** По просьбе пользователя: Психолог переписывает psyche.md заново; это исправление — откат хода его не отменяет. */
+    async function rewritePsyche(name) {
+        const state = await great.sync().catch(() => null);
+        const character = Object.values(state ?? {}).find(item => heldKey(item?.name) === heldKey(name));
+        if (!character) return { ok: false, error: `There is no character "${name}".` };
+        if (isUserCharacter(character)) return { ok: false, error: `${character.name} is the user's character: nobody writes their psyche.md.` };
+        if (held.has(heldKey(character.name))) return { ok: false, error: `${character.name} is at the Director's desk right now — try again when the session ends.` };
+        return psychologist.runOne(character, { correction: true });
+    }
+
     /** Сессия Директора берёт персонажей себе: до её конца отдельный Психолог их не трогает. */
     function holdPsyche(names = []) {
         for (const name of Array.isArray(names) ? names : []) held.add(heldKey(name));
@@ -86,5 +96,5 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
     /** Раздел, который увидит движок: нужен ответу инструмента и проверке прав. */
     const sectionOf = value => great.sectionOf(value);
 
-    return { great, farContext, nearContext, writerContext, decreeFor, edit, ensurePsyche, holdPsyche, releasePsyche, sectionOf, historyFor: name => great.historyFor(name) };
+    return { great, farContext, nearContext, writerContext, decreeFor, edit, ensurePsyche, rewritePsyche, holdPsyche, releasePsyche, sectionOf, historyFor: name => great.historyFor(name) };
 }

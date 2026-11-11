@@ -104,7 +104,8 @@ function actionsNode(ctx, file) {
         file.kind === 'block' ? Button('Rename', () => ctx.renameBlock(file.id)) : null,
         file.kind === 'block' ? Button('Duplicate', () => ctx.duplicateBlock(file.id)) : null,
         file.kind === 'block' ? HoldButton('Hold to delete', () => ctx.deleteBlock(file.id)) : null,
-        file.kind === 'builtin' && file.changed ? Button('Reset to default', () => ctx.resetToDefault(file.id)) : null);
+        file.kind === 'builtin' && file.changed ? Button('Reset to default', () => ctx.resetToDefault(file.id)) : null,
+        file.kind === 'character' && file.part === 'psyche' ? Button(ctx.busy() ? 'Working…' : 'Ask the Psychologist again', () => ctx.rewritePsyche(file.id), { disabled: ctx.busy() }) : null);
 }
 
 function saveBar(ctx, file) {

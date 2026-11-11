@@ -8,6 +8,8 @@ import { renderFarBanks, renderNearBanks, renderDecreeSection } from '../../libr
 import { createTimeReader } from './readers.js';
 
 const GREAT_KEY = 'greatBank';
+const CORRECTED_PARTS = ['material', 'spiritual', 'decree', 'psyche'];
+const clone = value => JSON.parse(JSON.stringify(value ?? null));
 const HISTORY_LIMIT = 300;
 const text = value => String(value ?? '').trim();
 
@@ -138,8 +140,26 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     /** Правка одним вызовом: несколько персонажей, без отказов. `by` — director или resolver. */
+    /**
+     * Правка вне сюжета доходит до снимков: иначе перегенерация хода восстанавливала банк из снимка, и правка
+     * пользователя (или из входящего ящика) тихо пропадала.
+     */
+    async function propagate(before, after) {
+        if (typeof store?.correctSnapshots !== 'function') return 0;
+        const corrections = [];
+        for (const [key, character] of Object.entries(after ?? {})) {
+            for (const part of CORRECTED_PARTS) {
+                const from = before?.[key]?.[part];
+                if (from === undefined || JSON.stringify(from) === JSON.stringify(character?.[part])) continue;
+                corrections.push({ key, part, from, to: character[part] });
+            }
+        }
+        return corrections.length ? store.correctSnapshots(corrections).catch(() => 0) : 0;
+    }
+
     async function edit({ comment = '', edits = [] } = {}, { by = 'director' } = {}) {
         const state = await sync();
+        const before = by === 'user' ? clone(state) : null;
         const rp = await rpNow();
         const applied = applyEdits(state, { edits, comment, by, at: rp.label, nowValue: rp.value, importance: 'temporary', timeOfDay: timeOfDay() });
         for (const [key, character] of Object.entries(applied.state)) {
@@ -147,6 +167,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
             if (character.sectionsReady === false) applied.state[key] = { ...applied.state[key], sectionsReady: true };
         }
         await save(applied.state);
+        if (before) await propagate(before, applied.state);
         return { ok: true, at: rp.label, changes: applied.changes, created: applied.created };
     }
 
@@ -180,7 +201,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
      * psyche.md — строки механизмов и темпа. Пишет только Психолог; персонажу
      * пользователя — никогда. Прежние строки уходят в историю.
      */
-    async function setPsyche({ character, lines = [], comment = '', by = 'psychologist' } = {}) {
+    async function setPsyche({ character, lines = [], comment = '', by = 'psychologist', correction = false } = {}) {
         const state = await sync();
         const found = findCharacter(state, character);
         if (!found) return { ok: false, error: `There is no character "${character}".` };
@@ -192,8 +213,46 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
         if ((found.psyche ?? []).length) {
             history.push({ at: rp.label, by, part: 'psyche', section: 0, old: found.psyche.join('\n'), new: psyche.join('\n'), comment });
         }
-        await save({ ...state, [bankKey(found.name)]: { ...found, psyche, history: history.slice(-HISTORY_LIMIT) } });
+        const key = bankKey(found.name);
+        await save({ ...state, [key]: { ...found, psyche, history: history.slice(-HISTORY_LIMIT) } });
+        // Переписан по просьбе пользователя — исправление, а не событие: в снимки тоже.
+        if (correction) await propagate({ [key]: { psyche: found.psyche ?? [] } }, { [key]: { psyche } });
         return { ok: true, character: found.name, lines: psyche.length };
+    }
+
+    /**
+     * Исправление вне сюжета (входящий ящик, вкладка Files): часть целиком (psyche — строки) или названные разделы
+     * (material, spiritual, decree — `{ номер: строки }`) заменяются, старое — в историю, снимки — тоже.
+     */
+    async function correct({ character, part, lines = null, sections = null, comment = '', by = 'user' } = {}) {
+        if (!CORRECTED_PARTS.includes(part)) return { ok: false, error: `Unknown part "${part}": use ${CORRECTED_PARTS.join(', ')}.` };
+        const state = await sync();
+        const found = findCharacter(state, character);
+        if (!found) return { ok: false, error: `There is no character "${character}".` };
+        if (isUserCharacter(found) && (part === 'decree' || part === 'psyche')) return { ok: false, error: `${found.name} ${USER_CHARACTER_NOTE}` };
+        const rp = await rpNow();
+        const note = text(comment) || 'Corrected outside the story.';
+        const history = [...(found.history ?? [])];
+        let value;
+        if (part === 'psyche') {
+            value = (Array.isArray(lines) ? lines : [lines]).map(text).filter(Boolean);
+            if (!value.length) return { ok: false, error: 'psyche.md needs at least one line.' };
+            history.push({ at: rp.label, by, part, section: 0, old: (found.psyche ?? []).join('\n'), new: value.join('\n'), comment: note });
+        } else {
+            const given = Object.entries(sections && typeof sections === 'object' ? sections : {});
+            if (!given.length) return { ok: false, error: `Name the sections of ${part}.md to replace: { "1": ["line", …] }.` };
+            value = clone(found[part] ?? {});
+            for (const [no, rows] of given) {
+                const next = (Array.isArray(rows) ? rows : [rows]).map(text).filter(Boolean);
+                history.push({ at: rp.label, by, part, section: Number(no), old: (value[no] ?? []).join('\n'), new: next.join('\n'), comment: note });
+                value[no] = next;
+            }
+        }
+        const key = bankKey(found.name);
+        const before = { [key]: { [part]: clone(found[part] ?? (part === 'psyche' ? [] : {})) } };
+        await save({ ...state, [key]: { ...found, [part]: value, history: history.slice(-HISTORY_LIMIT) } });
+        const snapshots = await propagate(before, { [key]: { [part]: value } });
+        return { ok: true, character: found.name, part, snapshots };
     }
 
     /**
@@ -312,6 +371,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
 
     return {
         load, sync, replace, edit, setImportance, setDecree, writeDecree, setPsyche, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
+        correct,
         farText, nearText, writerText, decreeText, rpNow, historyFor,
         sectionOf: resolveSection,
     };

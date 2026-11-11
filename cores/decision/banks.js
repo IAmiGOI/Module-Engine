@@ -368,7 +368,7 @@ export function createCharacterBanks({ call, callService, getSettings, getWorker
             return true;
         },
         contextFor, examplesForCards,
-        farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit, decreeFor: greatLayer.decreeFor, ensurePsyche: greatLayer.ensurePsyche,
+        farContext: greatLayer.farContext, nearContext: greatLayer.nearContext, edit: greatLayer.edit, decreeFor: greatLayer.decreeFor, ensurePsyche: greatLayer.ensurePsyche, rewritePsyche: greatLayer.rewritePsyche,
         holdPsyche: greatLayer.holdPsyche, releasePsyche: greatLayer.releasePsyche,
         writerContext: names => greatLayer.writerContext(names, {
             sceneText: () => renderBankSection(records().filter(record => record.sourceKind === 'scene')),

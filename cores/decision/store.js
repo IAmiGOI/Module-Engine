@@ -1,4 +1,4 @@
-import { packSnapshot, unpackSnapshot, prunePool } from '../../libraries/core/snapshot-pool.js';
+import { packSnapshot, unpackSnapshot, prunePool, correctSnapshotPart } from '../../libraries/core/snapshot-pool.js';
 import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { createJournal } from './journal.js';
 import { createLogStore } from './store-log.js';
@@ -143,6 +143,24 @@ export function createDecisionStore({ call, publishEvent }) {
         return snapshots[String(mesid)] ? unpackSnapshot(snapshotPool, JSON.parse(JSON.stringify(snapshots[String(mesid)]))) : null;
     }
 
+    /** Правки вне сюжета — во все снимки, где была прежняя версия части. Ответ — сколько снимков изменено. */
+    function correctSnapshots(corrections = []) {
+        return enqueue(async () => {
+            let changed = 0;
+            for (const [mesid, packed] of Object.entries(snapshots)) {
+                let next = packed;
+                for (const correction of Array.isArray(corrections) ? corrections : []) {
+                    const result = correctSnapshotPart(snapshotPool, next, correction);
+                    next = result.snapshot;
+                    if (result.changed) changed += 1;
+                }
+                snapshots[mesid] = next;
+            }
+            if (changed) await saveSnapshots();
+            return changed;
+        });
+    }
+
     function deleteSnapshot(mesid) {
         return enqueue(async () => {
             const key = String(mesid);
@@ -244,6 +262,7 @@ export function createDecisionStore({ call, publishEvent }) {
         addName,
         snapshot,
         deleteSnapshot,
+        correctSnapshots,
         draft: () => (draft ? JSON.parse(JSON.stringify(draft)) : null),
         saveDraft,
         chatBrief: () => (chatBrief ? JSON.parse(JSON.stringify(chatBrief)) : null),

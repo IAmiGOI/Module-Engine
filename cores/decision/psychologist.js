@@ -24,7 +24,7 @@ export function createPsychologist({ call, store = null, great, getSettings = ()
         try { return String(store?.chatBrief?.()?.timeline ?? '').trim(); } catch { return ''; }
     }
 
-    async function runOne(character) {
+    async function runOne(character, { correction = false } = {}) {
         const workerId = psychologistWorkerId(settings());
         if (!workerId) {
             publishEvent('decision.psyche.skipped', { character: character.name, reason: 'no connection is configured' });
@@ -59,7 +59,8 @@ export function createPsychologist({ call, store = null, great, getSettings = ()
         }
         const written = await great.setPsyche({
             character: character.name, lines,
-            comment: 'The Psychologist wrote how their mind moves.',
+            comment: correction ? 'The Psychologist rewrote the report at the user\'s request.' : 'The Psychologist wrote how their mind moves.',
+            correction,
         }).catch(error => ({ ok: false, error: error?.message ?? String(error) }));
         if (written?.ok === false) {
             publishEvent('decision.psyche.failed', { character: character.name, message: written.error });

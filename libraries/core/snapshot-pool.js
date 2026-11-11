@@ -88,6 +88,20 @@ export function unpackSnapshot(pool, snapshot) {
     return missing.length ? { ...out, missing: missing.length } : out;
 }
 
+/**
+ * Правка вне сюжета (пользователь, вкладка Files, входящий ящик): часть персонажа, которая в снимке совпадает с прежней
+ * версией, заменяется новой — перегенерация и свайп её не откатывают. Снимки, где часть была другой (раньше по сюжету),
+ * не трогаются: исправляется настройка, а не история.
+ */
+export function correctSnapshotPart(pool, snapshot, { key, part, from, to } = {}) {
+    const character = snapshot?.greatBank?.[key];
+    if (!character || typeof character !== 'object' || '$value' in character || !(part in character)) return { snapshot, changed: false };
+    const current = snapshot.packed ? unpackValue(pool, character[part]) : character[part];
+    if (json(current) !== json(from)) return { snapshot, changed: false };
+    const value = snapshot.packed ? { $ref: refer(pool, to) } : JSON.parse(json(to));
+    return { snapshot: { ...snapshot, greatBank: { ...snapshot.greatBank, [key]: { ...character, [part]: value } } }, changed: true };
+}
+
 /** Ссылки, на которые опираются снимки; всё прочее из пула можно выбросить. */
 export function prunePool(pool, snapshots) {
     const used = new Set();

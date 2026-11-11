@@ -1,7 +1,7 @@
 /** Контракты ядра «директор + прозаик». Только регистрация; логика — в index.js. */
 export function registerDecisionContracts(host, {
     getSettings, configure, store, researcher, banks, cycle, cardTurn, decide, rewrite, reload, preview, decideContract, rewriteContract, bootstrap = null,
-    gameSettings = null, messageRolls = null, regenOnce = null, preparation = null, canon = null,
+    gameSettings = null, messageRolls = null, regenOnce = null, preparation = null, canon = null, patchInbox = null,
 }) {
     const settings = () => {
         const value = getSettings();
@@ -53,6 +53,10 @@ export function registerDecisionContracts(host, {
         // The Court, «Files»: Great Bank целиком и правка разделов от имени пользователя (часть 21).
         host.own.register('decision.greatBank', async () => { await banks.great.sync(); return banks.great.load(); }),
         host.own.register('decision.greatBankEdit', params => banks.edit(params ?? {}, { by: 'user' })),
+        // Исправления вне сюжета: часть персонажа целиком или по разделам; доходят и до снимков ходов.
+        host.own.register('decision.greatBankCorrect', params => banks.great.correct({ ...(params ?? {}), by: 'user' })),
+        host.own.register('decision.psycheRewrite', params => banks.rewritePsyche?.(params?.character) ?? { ok: false, error: 'The Psychologist is not available.' }),
+        host.own.register('decision.patchInbox', () => patchInbox?.take?.() ?? null),
         // Переписать Main Cast директором: банки и Указы пустеют (история остаётся), директор пишет их по card.md и миру.
         host.own.register('decision.rewriteMainCast', async () => {
             const cleared = await banks.great.clearForRewrite({});

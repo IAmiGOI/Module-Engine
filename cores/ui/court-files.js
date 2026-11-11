@@ -2,7 +2,7 @@ import { h } from './tree.js';
 import { signal, computed } from './reactive.js';
 import { applyEdit, parseEdits } from '../../libraries/core/text-diff.js';
 import { builtInPrompts } from '../../libraries/core/prompt-catalog.js';
-import { renderPart, renderPsyche, editsForPart } from '../../libraries/core/court-bank-files.js';
+import { renderPart, renderPsyche, editsForPart, parsePart } from '../../libraries/core/court-bank-files.js';
 import { roleOfPrompt, ROLE_FOLDERS, placeholderProblems } from '../../libraries/core/court-files-model.js';
 import { filesTreeView } from './court-files-tree.js';
 import { filesEditorView } from './court-files-editor.js';
@@ -50,13 +50,14 @@ export function createCourtFiles({ call }) {
         ...['material', 'spiritual', 'decree'].map(part => ({
             id: `character:${character.name}:${part}`, kind: 'character', path: `Characters/${character.name}/${part}.md`,
             title: `${character.name} — ${part}`, text: renderPart(character, part), character: character.name, part,
-            importance: character.importance, readOnly: part === 'decree', role: part === 'decree' ? 'director' : 'banks',
+            // Указ правится и пользователем: правка вне сюжета доходит до снимков ходов и не откатывается перегенерацией.
+            importance: character.importance, readOnly: false, role: part === 'decree' ? 'director' : 'banks',
         })),
-        // psyche.md пишет Психолог: в файлах виден, но не правится.
+        // psyche.md пишет Психолог; пользователь правит его как исправление или просит Психолога переписать заново.
         ...(Array.isArray(character.psyche) && character.psyche.length ? [{
             id: `character:${character.name}:psyche`, kind: 'character', path: `Characters/${character.name}/psyche.md`,
             title: `${character.name} — psyche`, text: renderPsyche(character), character: character.name, part: 'psyche',
-            importance: character.importance, readOnly: true, role: 'director',
+            importance: character.importance, readOnly: false, role: 'director',
         }] : []),
         // Банк старой версии ещё не разложен по разделам — его текст виден целиком, пока сборщик его не пересоберёт.
         ...(character.fallbackText ? [{
@@ -178,7 +179,15 @@ export function createCourtFiles({ call }) {
         if (problems.missing.length || problems.unknown.length) { note.set('Fix the variables first — the engine fills only the ones the default has.'); return; }
         const value = draftOf(id);
         await run(async () => {
-            if (file.kind === 'character') {
+            if (file.kind === 'character' && (file.part === 'psyche' || file.part === 'decree')) {
+                // psyche и Указ — исправлением: обычная правка Указа стала бы лишь предложением Директору.
+                const lines = value.split('\n').map(line => line.replace(/^\s*[-*]\s+/, '').trim()).filter(Boolean);
+                const body = file.part === 'psyche' ? { lines } : { sections: parsePart(value, 'decree') };
+                const answer = await call('decision.greatBankCorrect', { character: file.character, part: file.part, ...body, comment: saveNote.peek() || 'Edited by the user in The Court.' });
+                if (!answer.ok || answer.value?.ok === false) throw new Error(answer.error?.message ?? answer.value?.error ?? 'Not saved.');
+                const fresh = await call('decision.greatBank');
+                if (fresh.ok && fresh.value) great.set(fresh.value);
+            } else if (file.kind === 'character') {
                 const answer = await call('decision.greatBankEdit', { comment: saveNote.peek() || 'Edited by the user in The Court.', edits: editsForPart(file.character, file.part, file.text, value) });
                 if (!answer.ok) throw new Error(answer.error?.message ?? 'Not saved.');
                 const fresh = await call('decision.greatBank');
@@ -302,6 +311,20 @@ export function createCourtFiles({ call }) {
     }
 
     /** Банки и Указы Main Cast — заново директором (по card.md и миру). Один запуск директора — платный. */
+    /** psyche.md заново — один вызов Психолога по текущему банку; старый отчёт уходит в историю. */
+    async function rewritePsyche(id = active.peek()) {
+        const file = byId(id);
+        if (file?.kind !== 'character' || file.part !== 'psyche') return;
+        await run(async () => {
+            const answer = await call('decision.psycheRewrite', { character: file.character });
+            if (!answer.ok || answer.value?.ok === false) throw new Error(answer.error?.message ?? answer.value?.error ?? 'The Psychologist did not answer.');
+            const fresh = await call('decision.greatBank');
+            if (fresh.ok && fresh.value) great.set(fresh.value);
+            const { [id]: _old, ...rest } = drafts.peek();
+            drafts.set(rest);
+        }, 'The Psychologist rewrote the report.');
+    }
+
     async function rewriteMainCast() {
         const ok = typeof globalThis.confirm !== 'function' || globalThis.confirm('Clear the banks and Decrees of every Main Cast character and let the Director write them again from their cards and the world? This is one paid Director run. The old lines stay in History.');
         if (!ok) return;
@@ -328,7 +351,7 @@ export function createCourtFiles({ call }) {
     const ctx = {
         files, current, tabs, active, search, expanded, history, note, saveNote, wish, proposals, busy, showHistory,
         draftOf, isDirty, viewOf, problemsOf, open, close, setDraft, setView, toggleFolder, save, discard, restore, resetToDefault,
-        askAi, accept, reject, acceptAll, newBlock, renameBlock, setBlockRole, duplicateBlock, deleteBlock, rewriteMainCast,
+        askAi, accept, reject, acceptAll, newBlock, renameBlock, setBlockRole, duplicateBlock, deleteBlock, rewriteMainCast, rewritePsyche,
     };
 
     const tree = () => h('div', { class: 'stme-files' }, filesTreeView(ctx), filesEditorView(ctx));

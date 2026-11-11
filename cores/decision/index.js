@@ -21,6 +21,7 @@ import { createBootstrap } from './bootstrap.js';
 import { createBankSets } from './bank-sets.js';
 import { createPreparation } from './preparation.js';
 import { createCanon } from './canon.js';
+import { createPatchInbox } from './patch-inbox.js';
 import { createSpeculator } from './speculate.js';
 import { createBranchScope, mergeBranch } from './speculate-branch.js';
 import { preparationStepText } from '../../libraries/core/decision-preparation.js';
@@ -146,6 +147,8 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         call: callStrict, callService, store, banks, creation: cycle.creation, preparation,
         askUser: params => cycle.askUser(params), publishEvent,
     });
+    // Входящий ящик правок вне сюжета: при открытии чата и перед каждым ходом.
+    const patchInbox = createPatchInbox({ callService, banks, publishEvent });
     /**
      * Спекуляция: пока игрок печатает, тот же Resolver решает ход в ветке.
      * Ветка строит свой цикл со своим store и своим state — общий не трогает.
@@ -222,6 +225,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
             publishEvent('decision.reloaded', { at: Date.now() });
             return { runs: store.runs() };
         }
+        await patchInbox.take();
         if (settings.bootstrap?.legacy === true) bootstrap.maybeStart().catch(error => publishEvent('decision.bootstrap.warning', { message: error?.message ?? String(error) }));
         // Подготовка идёт в фоне: новый чат — сортировка, Бог, ответы, Указы; старый готовый — сразу `ready`.
         bootstrap.isNewChat().then(async fresh => {
@@ -392,6 +396,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         const chat = Array.isArray(input.chat) ? input.chat : [];
         // Ход игры ждёт готовый мир: до `ready` — отказ с понятным сообщением,
         // а не тихая игра без мира. Только факты, без запуска God и Director.
+        await patchInbox.take();
         const prepared = await preparation.assess().catch(() => null);
         if (prepared && prepared.step !== 'ready') {
             const step = preparationStepText(prepared.step);
@@ -619,6 +624,7 @@ export function createDecisionCore(host, { publish, retryDelayMs = RETRY_DELAY_M
         await reload();
         await cycle.syncWindow().catch(error => publishEvent('decision.log.warning', { reason: `window sync failed: ${error?.message ?? error}` }));
         unregisters.push(...registerDecisionContracts(host, {
+            patchInbox,
             getSettings: () => settings,
             configure: saveSettings,
             store,
