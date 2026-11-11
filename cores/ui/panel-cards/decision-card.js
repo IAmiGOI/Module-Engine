@@ -3,7 +3,7 @@ import { signal, computed } from '../reactive.js';
 import { Card, Toggle, Select, Field, Row, Button, Slider, Details } from '../../../libraries/shared/widgets.js';
 import { SAMPLER_PRESETS } from '../../models/generate-request.js';
 import { rosterView, planView, libraryView, bankView, arcsNotesView, forcedView } from './decision-views.js';
-import { createClassifierOptions, writerCheckSection, scalesHintSection } from './decision-card-check.js';
+import { createClassifierOptions, scalesHintSection } from './decision-card-check.js';
 import { createBootstrapSettings } from './decision-card-bootstrap.js';
 import { createGodSettings } from './decision-card-god.js';
 /**
@@ -362,7 +362,6 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                     Slider('Steps per character bank', researcherSettings.bankMaxSteps, { min: 2, max: 60, step: 1 }),
                 ),
             ),
-            writerCheckSection({ classifierConnectionId, classifierThreshold, classifierCheckTokens, classifierRewriteLimit, classifierOptions }),
             scalesHintSection({ scalesHintConnectionId, classifierOptions }),
             Details('Retries',
                 h('small', { class: 'stme-module-hint' }, 'One policy for every role: network, 5xx, 429, timeout and a dropped stream pause 1 / 3 / 8 s; an empty answer is retried once with a larger limit and lower reasoning; two empty answers switch to the backup connection.'),

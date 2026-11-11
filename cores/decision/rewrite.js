@@ -4,7 +4,6 @@ import { buildWriterLorebook } from '../../libraries/core/decision-lorebook.js';
 import { computeWriterPayload } from '../../libraries/core/decision-body.js';
 import { assembleSectionFor } from './prompt-sections.js';
 import { createWriterProxy } from './writer-proxy.js';
-import { createWriterChecker } from './writer-check.js';
 import { createKnowledge } from './knowledge.js';
 import { buildStorySettingsBlock, resolveGameSettings } from '../../libraries/core/game-settings.js';
 
@@ -19,7 +18,6 @@ const CONTRAST_MESSAGE_LIMIT = 4;
 
 export function createWriterRewrite({ host, call, getSettings, getWorkers, store, getPending, banks = null, publishEvent = null }) {
     const writerProxy = createWriterProxy({ host, getSettings, getWorkers });
-    const writerChecker = createWriterChecker({ call, getSettings, banks });
     const knowledge = createKnowledge({ call, store, banks });
     return async function rewrite(input = {}) {
         const payload = input.payload ?? input;
@@ -58,7 +56,8 @@ export function createWriterRewrite({ host, call, getSettings, getWorkers, store
         if (writerId && writerId !== 'st-main') {
             const own = await writerProxy.respond({
                 payload, messages: context.messages, signal: input.signal,
-                check: writerChecker, push: decision, userMessage: lastUserText(pending.chat),
+                // Проверка ответа Писателя классификатором убрана владельцем: пользы не было.
+                check: null, push: decision, userMessage: lastUserText(pending.chat),
                 resolution: pending.form?.resolution ?? '', user: banks?.persona?.()?.name || 'the user',
                 runId: pending.runId, publishEvent,
             });

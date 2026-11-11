@@ -26,7 +26,7 @@ test('the decision card reads its state through the decision contracts and rende
     assert.equal(node.tag, 'details');
     assert.match(node.props.class, /stme-card/);
     const text = strings(node).join(' | ');
-    for (const expected of ['Director / Writer', 'Always on', 'Open game settings', 'Director model connection', 'Writer model connection', 'Limits and background workers', 'Writer check (classifier)', 'Director state', 'Memory bank', 'Arcs and character notes', 'Forced summaries', 'Last decision', 'Open director', 'The writer request goes to this connection: its endpoint, key and model.']) {
+    for (const expected of ['Director / Writer', 'Always on', 'Open game settings', 'Director model connection', 'Writer model connection', 'Limits and background workers', 'Director state', 'Memory bank', 'Arcs and character notes', 'Forced summaries', 'Last decision', 'Open director', 'The writer request goes to this connection: its endpoint, key and model.']) {
         assert.match(text, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     assert.deepEqual(calls.map(entry => entry.contract).sort(), [
