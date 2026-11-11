@@ -48,8 +48,10 @@ test('the Director context headers are the ones documented in section 35', () =>
     }
 });
 
-test('the Decree prompt carries no example, and a rule of section 5 names a choice, not words', async () => {
+test('the Decree prompt carries no example, and section 5 is a report on the person, not rules to perform', async () => {
     const { DIRECTOR_DECREE_SYSTEM } = await import('../libraries/core/decision-prompts-director.js');
     assert.doesNotMatch(DIRECTOR_DECREE_SYSTEM, /--- example ---/);
-    assert.match(DIRECTOR_DECREE_SYSTEM, /A rule names the choice, never the words/);
+    assert.match(DIRECTOR_DECREE_SYSTEM, /names no action to repeat, no words and no gesture/);
+    assert.match(DIRECTOR_DECREE_SYSTEM, /which of the two is the stronger now/);
+    assert.doesNotMatch(DIRECTOR_DECREE_SYSTEM, /each "When …, they …"/);
 });

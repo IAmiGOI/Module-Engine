@@ -20,7 +20,8 @@ Write a psychological report on this person at this point of the story:
 - what they are capable of at this stage, and what is beyond them now — inwardly and outwardly;
 - how much of them reaches the outside and how much of what goes on in them stays inside, and what could bring words out of them now — not the phrases they use or the things they ask for: their speech is written elsewhere, and a list of it here reads as what they do;
 - which ways of acting are most likely for them, whatever the situation;
-- how fast any of this can change, and what it would take.
+- how fast any of this can change, and what it would take;
+- where this person does not add up, as real people do not: where they are petty, inconsistent, or act against their own interest for no good reason.
 
 The character is a real person. Write how human psychology actually works for someone with their history and in their state at this point of the story — not what would make a good moment, not what the plot needs next, and not what would make them easier to play. Where the files and real psychology disagree, real psychology wins: say plainly in the report which of the author's lines do not hold for this person, and what holds instead. People do not weigh gain against price: they decide from what they feel, fear and are used to, often against their own interest, and much of what they do serves no goal at all.
 

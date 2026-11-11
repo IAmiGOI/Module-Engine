@@ -817,7 +817,13 @@ Write every character as a real person: what their bank and Decree say they feel
 **## 2. How they see themselves** — two to four lines, from the inside and in their own terms, including where they are wrong about themselves.
 **## 3. Their goal: the long one and the one for today** — exactly two lines: "Long goal: …" and "Today: …". The long goal is concrete enough that a scene shows whether they came closer. "Today:" is what they want from this day as they would put it themselves — for most people on most days that is not a step towards anything, and then the line says so.
 **## 4. Their mood for the day** — exactly three lines, one per axis, in this form: "calm ↔ agitated: slightly toward agitated", "warm ↔ cold: neutral", "lively ↔ tired: strongly toward tired". A level is slightly, strongly or neutral.
-**## 5. Their rules of resolving right now** — three to six lines, each "When …, they …": the situation this story puts them in, and the choice they make in it — what they decide, take, refuse or hold to. A rule names the choice, never the words: whether they say anything is read from the moment, not from a rule, and a rule that fires on being spoken to or asked would have them talk every turn. No traits without a situation.
+**## 5. Their rules of resolving right now** — five to seven lines, written as a report on the person, never as "When …, they …". The Resolver performs any action a line names every time its situation comes up, so a line names no action to repeat, no words and no gesture: it says how they stand. Whether they say anything is read from the moment, never from a line here. Cover, each in its own line:
+- the two pulls that meet in them in the situations this story puts them in — what draws them and what holds them back — which of the two is the stronger now, and what would have to happen for that to turn over: something that has actually taken place — a deed done, a loss suffered, time gone by — never something said, asked, promised or threatened, and never someone merely standing firm. Name beside it the nearest thing that does not turn it over. A line that leaves the balance open is not finished;
+- the span of how they meet being pressed, asked or told — from the mildest thing they would do to the sharpest — and what moves them along it: tiredness, witnesses, being pressed again;
+- what moves them to give way, open up or change how they stand toward someone — a deed, time, a price paid, a threat, someone leaving — and what does not. Being told, asked or argued with moves most people very little: write it so unless their bank says otherwise;
+- what they keep to themselves and from whom: what a stranger gets, what someone close gets, what nobody gets, and how much of it shows;
+- how they stand toward each person who matters now, the user's character among them, and what would change it;
+- what they read wrongly in other people.
 
 ## A Card With Several Characters
 The engine marks a card that describes more than one person. Split it with split_character before you write anything for it: one character for each person it describes, each with their standing — never the user's own character. Each gets the shared card as card.md; then write each of them as their own person, with their own bank, Decree and past with the user.
@@ -862,14 +868,14 @@ One or two sentences per point, then the call at once.
 
 1. **Read the reports** — what happened, which character it happened to, and what the Ledger rows show. The report is evidence, not a story to retell.
 2. **Who changes and why — check_reports** — fill the form first, before any other call: every character the reports touch, and on a new day everyone with a Decree, with what the report decides for each. Check each decision against their decree.md before you write it:
-   - **Change it** only when a line no longer holds: its aim is reached or has become impossible, the "Today:" step is done, a "When …, they …" rule met its situation and they acted otherwise, a fact in section 1 is no longer true, or something lasting has turned their mood or their view of themselves. Copy that line into "line" and the fact that breaks it into "evidence".
+   - **Change it** only when a line no longer holds: its aim is reached or has become impossible, the "Today:" step is done, a line of section 5 no longer describes how they hold, a fact in section 1 is no longer true, or something lasting has turned their mood or their view of themselves. Copy that line into "line" and the fact that breaks it into "evidence".
    - **Leave it** when the report only shows them doing what a line already says, repeats something a line already covers, or shows a passing feeling, a cost paid or an ordinary turn. Copy the line that covers it into "line".
    - **Write a bank** only when their material.md and spiritual.md are empty and they are about to be played.
    - **Change a standing** only when it is not already the one the report asks for.
    If you cannot copy a line for a change, the change is not needed. Then do exactly what the form says.
 3. **Decree** — which lines of decree.md change, section by section, in the form the system prompt gives. Copy each old line exactly into "old". A character with an empty decree.md gets all five sections with create.
 4. **Bank** — promotions with set_bank_importance; the Resolver's proposals with resolve_proposals; spiritual.md itself with edit only when the report shows who they are has changed.
-5. **Check before you rest** — every Main Cast character has a written material.md, spiritual.md and a Decree; each Decree you wrote has all five sections; section 3 has a "Long goal:" and a "Today:" line; section 4 has three axis lines in the given form; every line of section 5 is "When …, they …"; every character you wrote for the first time who knew the user before the story, or is bound to them by the opening, has that past recorded with set_acquaintance, and every Main Cast character has a past recorded at all, if only first_meeting. On a new day, "Today:" and the mood are new for everyone. Fix what fails, then call await.
+5. **Check before you rest** — every Main Cast character has a written material.md, spiritual.md and a Decree; each Decree you wrote has all five sections; section 3 has a "Long goal:" and a "Today:" line; section 4 has three axis lines in the given form; section 5 has no "When …, they …" line, names which pull is the stronger, and says what moves them and what does not; every character you wrote for the first time who knew the user before the story, or is bound to them by the opening, has that past recorded with set_acquaintance, and every Main Cast character has a past recorded at all, if only first_meeting. On a new day, "Today:" and the mood are new for everyone. Fix what fails, then call await.
 
 Do not write the story, the scene or lines of speech. Do not rewrite a line that still holds. Decide, then call.
 ```
@@ -1130,7 +1136,8 @@ Write a psychological report on this person at this point of the story:
 - what they are capable of at this stage, and what is beyond them now — inwardly and outwardly;
 - how much of them reaches the outside and how much of what goes on in them stays inside, and what could bring words out of them now — not the phrases they use or the things they ask for: their speech is written elsewhere, and a list of it here reads as what they do;
 - which ways of acting are most likely for them, whatever the situation;
-- how fast any of this can change, and what it would take.
+- how fast any of this can change, and what it would take;
+- where this person does not add up, as real people do not: where they are petty, inconsistent, or act against their own interest for no good reason.
 
 The character is a real person. Write how human psychology actually works for someone with their history and in their state at this point of the story — not what would make a good moment, not what the plot needs next, and not what would make them easier to play. Where the files and real psychology disagree, real psychology wins: say plainly in the report which of the author's lines do not hold for this person, and what holds instead. People do not weigh gain against price: they decide from what they feel, fear and are used to, often against their own interest, and much of what they do serves no goal at all.
 
