@@ -16,7 +16,7 @@ export const LEDGER_LIMIT = 400;
 export const CONFLICT_SCALE = Object.freeze(['none', 'minor', 'strong']);
 
 /** Одна строка Ведомости на персонажа за ход. */
-export function buildLedgerRows({ turn = null, at = 0, form = null, outcome = [], writerText = '' } = {}) {
+export function buildLedgerRows({ turn = null, at = 0, form = null, outcome = [], writerText = '', wantedOf = () => '' } = {}) {
     const characters = Array.isArray(form?.characters) ? form.characters : [];
     const results = new Map((Array.isArray(outcome) ? outcome : []).map(item => [keyOf(item?.character), text(item?.result)]));
     const rows = [];
@@ -32,7 +32,8 @@ export function buildLedgerRows({ turn = null, at = 0, form = null, outcome = []
             turn: Number.isFinite(Number(turn)) ? Number(turn) : null,
             at: Number(at) || 0,
             character: name,
-            wanted: text(character.decreeWants) || text(character.does),
+            // «Хотел» — по Указу (строка «Today:»), его берёт движок, а не резолвер: иначе «хотел» всегда равнялось «сделал».
+            wanted: text(wantedOf(name)) || text(character.decreeWants),
             did: text(character.does),
             conflict,
             result: results.get(keyOf(name)) ?? '',

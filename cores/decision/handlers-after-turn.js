@@ -1,3 +1,4 @@
+import { findCharacter } from '../../libraries/core/decision-great-bank.js';
 import { buildLedgerRows, isClosedTelegram } from '../../libraries/core/decision-ledger.js';
 import { createFileLayer } from './files-layer.js';
 
@@ -38,7 +39,15 @@ export function createAfterTurnHandler({ store, banks = null, knowledge = null, 
             }
         }
 
-        const rows = buildLedgerRows({ turn: state.turnCounter, at: Date.now(), form, outcome, writerText });
+        // Цель дня из Указа каждого — для «хотел» в Ведомости.
+        const great = banks?.great?.load ? await banks.great.load().catch(() => null) : null;
+        const wantedOf = name => {
+            const character = great ? findCharacter(great, name) : null;
+            const lines = Object.values(character?.decree ?? {}).flat().map(line => String(line ?? ''));
+            const today = lines.find(line => /(^|\]\s*)Today:/i.test(line));
+            return today ? today.replace(/^\[[^\]]*\]\s*/, '').replace(/^Today:\s*/i, '').trim() : '';
+        };
+        const rows = buildLedgerRows({ turn: state.turnCounter, at: Date.now(), form, outcome, writerText, wantedOf });
         const ledger = await store.appendLedger?.(rows).catch(() => null);
         if (!ledger && typeof store.saveLedger === 'function') await store.saveLedger(rows).catch(() => {});
 

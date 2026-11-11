@@ -33,6 +33,7 @@ export const INSCRIBE_TOOL = Object.freeze({
                         name: { type: 'string' },
                         heard: { type: 'string', description: 'What in the user\'s latest message — what was said and what was done — or in what just happened matters to them, in one line. What is new in it for them.' },
                         feels: { type: 'string', description: 'What they feel now, from their Emotions and what they heard. A few words.' },
+                        conflict: { type: 'object', properties: { level: { type: 'string', enum: ['none', 'minor', 'strong'] }, why: { type: 'string' } }, description: 'How far what they do this turn goes against their Decree: none, minor or strong, and why in a few words when it is not none.' },
                         means: { type: 'string', description: 'What they mean to get across to someone this turn, in a few words — or "nothing". Decide it before says: says holds only what of it comes out in words.' },
                         shows: { type: 'string', enum: ['words', 'body', 'held back'], description: 'With means: how it comes out of them now — in words, in the body, or held back so that nothing shows — from their state at this moment and how their bank says they show feeling. Only words fill "says".' },
                         does: { type: 'string', description: 'What they do this turn, deeds only, in one line. The order of actions and lines goes in beats.' },
