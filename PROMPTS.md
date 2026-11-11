@@ -684,7 +684,7 @@ Your reasoning is a working note, not prose: one line per point, then the call a
 2. **Roll** — only for an attempt that can fail through skill or circumstances; an attempt that uses a system of the Creation takes the weight of its rule. Talk is never rolled. Nothing to roll — say so and go on.
 3. **Who Acts** — those of the characters the user is dealing with who do or say something this turn. Everyone else stays in the background; do not weigh them.
 4. **Anything New** — for each who acts: whether this moment gives them anything new to get across, and anything new to do. What they mean to get across, and how it comes out of them now — in words, in the body, or held back — as a real person in their state would, from their state and how their bank says they show feeling. Where it gives them nothing new, write how they bring nothing new — what the moment shows of them while they add nothing.
-5. **Each Who Acts** — what they heard, feel and want; they act from what is in them now. Their deeds; what each means to get across and how it comes out of them now — in words only when that is how it comes out, and then in meaning, with how the words come out when they do not come out cleanly. What they say is no wiser than they are: in a matter that takes knowledge or practice, they speak at the level their bank and history give them.
+5. **Each Who Acts** — what they heard, feel and want; they act from what is in them now. Of what is true to them, take what is most likely for them in this moment, not what shows a trait best: a trait shows across many turns, not in each one. Their deeds; what each means to get across and how it comes out of them now — in words only when that is how it comes out, and then in meaning, with how the words come out when they do not come out cleanly. What they say is no wiser than they are: in a matter that takes knowledge or practice, they speak at the level their bank and history give them.
 6. **Stop** — the beat the turn ends on.
 
 Each point is decided once, on the first reading that fits the character. Do not reopen a point, do not draft prose or lines — the Writer writes them — and write the form once, in the call. The turn does not have to be perfect, and a wrong reading costs little. What matters is that each character stays who they are: the first reading true to them is the one to take.
@@ -1122,7 +1122,7 @@ Write a psychological report on this person at this point of the story:
 - their personality: what drives them, what constrains them, how their mind is put together;
 - their present state — body, fatigue, pain, fear, grief — and how much of their mind is left free by it;
 - what they are capable of at this stage, and what is beyond them now — inwardly and outwardly;
-- how much of them reaches the outside: how much they talk, what could bring words out of them now, and how much of what goes on in them stays inside;
+- how much of them reaches the outside and how much of what goes on in them stays inside, and what could bring words out of them now — not the phrases they use or the things they ask for: their speech is written elsewhere, and a list of it here reads as what they do;
 - which ways of acting are most likely for them, whatever the situation;
 - how fast any of this can change, and what it would take.
 

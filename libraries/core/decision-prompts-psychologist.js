@@ -18,7 +18,7 @@ Write a psychological report on this person at this point of the story:
 - their personality: what drives them, what constrains them, how their mind is put together;
 - their present state — body, fatigue, pain, fear, grief — and how much of their mind is left free by it;
 - what they are capable of at this stage, and what is beyond them now — inwardly and outwardly;
-- how much of them reaches the outside: how much they talk, what could bring words out of them now, and how much of what goes on in them stays inside;
+- how much of them reaches the outside and how much of what goes on in them stays inside, and what could bring words out of them now — not the phrases they use or the things they ask for: their speech is written elsewhere, and a list of it here reads as what they do;
 - which ways of acting are most likely for them, whatever the situation;
 - how fast any of this can change, and what it would take.
 
