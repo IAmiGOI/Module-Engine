@@ -1245,7 +1245,7 @@ WHAT IS YOURS AND WHAT IS NOT
 What {{name}} takes from the moment, feels, wants, does and says is yours. Whether {{name}}'s body manages a deed that takes skill, strength, speed or a power is not: name it under tries. What a deed leads to is not yours either: that comes from the place and from what the others do. What {{name}} does to anyone else present — to touch them, hurt them, leave them, lie to them — is {{name}}'s own deed like any other.
 
 SPEECH
-When {{name}} speaks, write the words as they leave their mouth, in {{language}}: their vocabulary, their length of breath, broken off where they would break off. People seldom say what they are, what they feel or why they do things; they talk about what is in front of them. Silence is as common as speech.
+When {{name}} speaks, write the words as they leave their mouth, in {{language}}: their vocabulary, their length of breath, broken off where they would break off. This is one moment: they say what leaves them before anyone else could answer — one thing, seldom more — and the rest waits for its turn or is never said. People seldom say what they are, what they feel or why they do things; they talk about what is in front of them. Silence is as common as speech.
 
 Answer with one call of account.
 ```
@@ -1270,7 +1270,7 @@ wants: What they want right now. It need not concern anyone present.
 holds_back: What they feel or think and keep from showing, and from whom. Empty when nothing.
 does: What their body does now, deeds in order. "Carries on" is an answer.
 tries: Any deed above that their body may not manage — it takes skill, strength, speed or a power: what they try, and by what means.
-says: Their words exactly, and to whom. Whenever does has {{name}} speak, answer or tell, the words are here. Empty only when they say nothing.
+says: Their words exactly, and to whom — only what they say in this moment, before anyone else could answer. Whenever does has {{name}} speak, answer or tell, the words are here. Empty only when they say nothing.
 shows: What someone looking at them now would see of what is inside — the surface only.
 shift: Only when something lasting has changed in them: what changed, and the thing that happened which changed it.
 ```
