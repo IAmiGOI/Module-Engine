@@ -3,7 +3,7 @@ import { normalizeGenerateAnswer } from '../../libraries/core/decision-agent.js'
 import { buildToolList, buildTurnToolList } from '../../libraries/core/decision-tools.js';
 import { TURN_TOOLS } from '../../libraries/core/decision-agent.js';
 import { staticDirectorLorebook } from '../../libraries/core/decision-lorebook-static.js';
-import { deciderRequestParams, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
+import { deciderRequestParams, TURN_MIN_TOKENS, DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-settings.js';
 import { libraryLevelsSection, longPlansSection } from '../../libraries/core/decision-library.js';
 import { createBoundary, normalizeBoundary, lastTurnNumber, BOUNDARY_BANKS_FORMAT } from '../../libraries/core/decision-window.js';
 import { renderChatBrief } from '../../libraries/core/decision-brief.js';
@@ -249,7 +249,9 @@ export function createCycleContext({ call, store, banks = null, creation = null,
         let modelCall = 0;
         const send = ({ list, tools, toolChoice, returnMessage, requestSignal, boost = 1, lowerReasoning = false, backupWorkerId = '', tag = '' }) => {
             modelCall += 1;
-            const params = deciderRequestParams(settings.decider, { floor: prefix !== '' });
+            // Ход тоже с нижней границей: при 2000 с ризонингом форма обрывалась на stop и beats, и ход переделывался до 7 раз.
+            const params = deciderRequestParams(settings.decider);
+            if (prefix === '' && Number.isFinite(params.maxTokens)) params.maxTokens = Math.max(params.maxTokens, TURN_MIN_TOKENS);
             if (boost > 1 && Number.isFinite(params.maxTokens)) params.maxTokens = Math.min(32768, Math.round(params.maxTokens * boost));
             const baseId = `${runId}:${prefix}${modelCall}:${startedAt}`;
             return call('model.generate', { purpose: 'resolver',

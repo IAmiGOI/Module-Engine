@@ -31,7 +31,7 @@ export function normalizeGenerateAnswer(value) {
 
 export function normalizeAnswer(answer) {
     if (typeof answer === 'string') return { text: answer, toolCalls: [] };
-    return { text: String(answer?.text ?? ''), toolCalls: Array.isArray(answer?.toolCalls) ? answer.toolCalls : [] };
+    return { text: String(answer?.text ?? ''), toolCalls: Array.isArray(answer?.toolCalls) ? answer.toolCalls : [], finishReason: answer?.finishReason ?? null };
 }
 
 /**
@@ -124,6 +124,8 @@ export async function runDecisionCycle({
             }
             if (!answer.toolCalls.length && !String(answer.text ?? '').trim()) warnings.push('the answer was empty again — cut off by the token limit; raise the director max tokens');
         }
+        // Обрыв по лимиту видно в журнале: иначе он выглядел как «модель забыла stop» и повтор за повтором.
+        if (String(answer.finishReason ?? '').toLowerCase() === 'length') warnings.push(`step ${steps}: the answer was cut off by the token limit (finish_reason: length) — raise the Resolver max tokens`);
         onModelEnd({
             step: steps, at: now(), durationMs: now() - modelStartedAt,
             text: String(answer?.text ?? ''), toolCalls: Array.isArray(answer?.toolCalls) ? answer.toolCalls : [],
