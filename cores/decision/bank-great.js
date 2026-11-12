@@ -312,6 +312,22 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
         return { ok: true, split: found.name, into: made };
     }
 
+    /** Отчёты Симулятора — последние моменты каждого (до трёх): непрерывность состояния между ходами. */
+    async function noteMoments(list = []) {
+        const state = await load();
+        let changed = false;
+        const next = { ...state };
+        for (const { name, account } of Array.isArray(list) ? list : []) {
+            const found = findCharacter(next, name);
+            if (!found || !account) continue;
+            const keep = ['took', 'inner', 'does', 'says'].reduce((out, field) => ({ ...out, [field]: text(account[field]) }), {});
+            next[bankKey(found.name)] = { ...found, moments: [...(Array.isArray(found.moments) ? found.moments : []), keep].slice(-3) };
+            changed = true;
+        }
+        if (changed) await save(next);
+        return { ok: true, changed };
+    }
+
     /**
      * Срок (инструмент Директора): к какому моменту RP-времени персонаж должен что-то сделать или что с ним случится.
      * Момент — в той же форме, что метки строк в файлах; движок показывает резолверу, сколько осталось.
@@ -472,6 +488,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     return {
         load, sync, replace, edit, setImportance, setDecree, writeDecree, setPsyche, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
         correct,
+        noteMoments,
         setDeadline,
         splitCharacter,
         setAcquaintance, noteTogether, clockMinutes,

@@ -55,6 +55,8 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     const directorMaxSteps = signal(10);
     const decreeTimeoutMs = signal(120000);
     const psychologistWorkerId = signal('');
+    const simulatorEnabled = signal(false);
+    const simulatorWorkerId = signal('');
     const retryMaxAttempts = signal(3);
     const retryTurnBudgetMs = signal(120000);
     const retryBackgroundBudgetMs = signal(600000);
@@ -96,6 +98,10 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
     ]);
     const psychologistOptions = computed(() => [
         { value: '', label: 'Director connection (default)' },
+        ...workerOptions().slice(1),
+    ]);
+    const simulatorOptions = computed(() => [
+        { value: '', label: 'Resolver connection (default)' },
         ...workerOptions().slice(1),
     ]);
     const backupOptions = computed(() => [
@@ -176,6 +182,8 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
         directorMaxSteps.set(Number(director.maxSteps ?? 10));
         decreeTimeoutMs.set(Number(director.decreeTimeoutMs ?? 120000));
         psychologistWorkerId.set(String(value.psychologist?.workerId ?? ''));
+        simulatorEnabled.set(value.simulator?.enabled === true);
+        simulatorWorkerId.set(String(value.simulator?.workerId ?? ''));
         godSettings.apply(value.god ?? {});
         const retry = value.retry ?? {};
         retryMaxAttempts.set(Number(retry.maxAttempts ?? 3));
@@ -218,6 +226,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                 workerId: directorWorkerId.peek(), maxSteps: directorMaxSteps.peek(), decreeTimeoutMs: decreeTimeoutMs.peek(),
             },
             psychologist: { workerId: psychologistWorkerId.peek() },
+            simulator: { enabled: simulatorEnabled.peek(), workerId: simulatorWorkerId.peek() },
             god: godSettings.collect(),
             retry: {
                 maxAttempts: retryMaxAttempts.peek(), turnBudgetMs: retryTurnBudgetMs.peek(), backgroundBudgetMs: retryBackgroundBudgetMs.peek(),
@@ -305,6 +314,10 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
                 Field('Psychologist connection', Select(psychologistWorkerId, psychologistOptions), {
                     hint: 'Writes psyche.md — what holds a character\'s state and how slowly it moves. Empty: the Director connection.',
                 }),
+            ),
+            Row(
+                Toggle('Person simulator', simulatorEnabled, { hint: 'On: before each turn every character here is modelled apart, from the inside — what they feel, want, do and say — and the Resolver stages the turn from those accounts. One more call per character each turn.' }),
+                Field('Simulator connection', Select(simulatorWorkerId, simulatorOptions), { hint: 'Empty: the Resolver connection.' }),
             ),
             godSettings.fields(),
             Details('Director generation settings',

@@ -40,7 +40,7 @@ export function needsPsyche(character) {
 }
 
 /** Служебные поля записи переживают нормализацию: по ним движок узнаёт пересборку банка. */
-const EXTRAS = Object.freeze(['sourceKey', 'textHash', 'sectionsReady', 'fallbackText', 'decreeAt', 'withUser', 'several', 'splitInto', 'splitFrom', 'deadlines']);
+const EXTRAS = Object.freeze(['sourceKey', 'textHash', 'sectionsReady', 'fallbackText', 'decreeAt', 'withUser', 'several', 'splitInto', 'splitFrom', 'deadlines', 'moments', 'kind']);
 
 export function normalizeImportance(value) {
     const clean = text(value).toLowerCase();

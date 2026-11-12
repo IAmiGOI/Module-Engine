@@ -90,7 +90,7 @@ function backgroundLine(characters) {
  * Прежний Push рассказывал каждое событие трижды (развязка, действие, «why it goes»), и писатель отрабатывал
  * каждое упоминание: пересказом и репликой.
  */
-function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine = '', voices = {} }) {
+function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine = '', voices = {}, ownWords = false }) {
     const head = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) head.push(`Place: ${where}.`);
@@ -101,7 +101,8 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
     const told = new Set();
     const beats = form.beats.map((beat, index) => {
         const who = line(beat?.who) || 'Someone';
-        const kind = String(beat?.kind ?? '').toLowerCase() === 'line' ? 'LINE (meaning)' : 'ACTION';
+        // С Симулятором реплика — слова человека, а не смысл: Писатель кладёт их как есть.
+        const kind = String(beat?.kind ?? '').toLowerCase() === 'line' ? (ownWords ? 'LINE (their own words)' : 'LINE (meaning)') : 'ACTION';
         let text = `${index + 1}. ${who} — ${kind}: ${line(beat?.text)}`;
         const character = byName(who);
         const words = line(assessmentOf(assessments, character?.assessId)?.words);
@@ -147,8 +148,8 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
  * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
  * @returns {string}
  */
-export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '', modeLine = '', voices = {} } = {}) {
-    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine, voices });
+export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '', modeLine = '', voices = {}, ownWords = false } = {}) {
+    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine, voices: ownWords ? {} : voices, ownWords });
     const lines = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) lines.push(`Place: ${where}.`);

@@ -120,6 +120,13 @@ export const DEFAULT_PSYCHOLOGIST = Object.freeze({
     workerId: '',
 });
 
+/** Симулятор человека: перед ходом резолвера — отчёт каждого присутствующего с банком. Выключен по умолчанию. */
+export const DEFAULT_SIMULATOR = Object.freeze({
+    enabled: false,
+    workerId: '',
+    maxPeople: 3,
+});
+
 /**
  * Один алгоритм повтора для всех ролей (часть 19): общий лимит попыток,
  * бюджеты времени у блокирующих и фоновых ролей и запасные подключения.
@@ -174,6 +181,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     director: DEFAULT_DIRECTOR,
     god: DEFAULT_GOD,
     psychologist: DEFAULT_PSYCHOLOGIST,
+    simulator: DEFAULT_SIMULATOR,
     retry: DEFAULT_RETRY,
     bankTimeOfDay: DEFAULT_BANK_TIME_OF_DAY,
     decider: DEFAULT_DECIDER,
@@ -321,6 +329,11 @@ export function clampDecisionSettings(values = {}) {
         psychologist: {
             workerId: text(psychologist.workerId, DEFAULT_PSYCHOLOGIST.workerId).trim(),
         },
+        simulator: {
+            enabled: (source.simulator ?? {}).enabled === true,
+            workerId: text((source.simulator ?? {}).workerId, DEFAULT_SIMULATOR.workerId).trim(),
+            maxPeople: Math.round(number((source.simulator ?? {}).maxPeople, 1, 6, DEFAULT_SIMULATOR.maxPeople)),
+        },
         retry: {
             maxAttempts: Math.round(number(retry.maxAttempts, 1, 5, DEFAULT_RETRY.maxAttempts)),
             turnBudgetMs: Math.round(number(retry.turnBudgetMs, 1000, 3600000, DEFAULT_RETRY.turnBudgetMs)),
@@ -419,6 +432,7 @@ export function publicDecisionSettings(settings = {}) {
         director: { ...DEFAULT_DIRECTOR, ...(settings.director ?? {}) },
         god: { ...DEFAULT_GOD, ...(settings.god ?? {}) },
         psychologist: { ...DEFAULT_PSYCHOLOGIST, ...(settings.psychologist ?? {}) },
+        simulator: { ...DEFAULT_SIMULATOR, ...(settings.simulator ?? {}) },
         retry: {
             ...DEFAULT_RETRY,
             ...(settings.retry ?? {}),

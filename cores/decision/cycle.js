@@ -1,3 +1,4 @@
+import { createSimulator, renderAccounts } from './simulator.js';
 import { lastActedTurns } from '../../libraries/core/decision-scene.js';
 import { auditTurnInputs } from '../../libraries/core/decision-audit.js';
 import { createKnowledge } from './knowledge.js';
@@ -61,6 +62,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     const context = createCycleContext({ call, store, banks, creation, capture, getGameSettings, getSettings, publishEvent });
     // Подсказка систем Scales: её оценки кладут карточки правил в хвост задания хода.
     const scalesHintFor = createScalesHint({ call, getSettings, creation, publishEvent });
+    const simulator = createSimulator({ call, banks, store, getSettings, publishEvent });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
     // Своя последовательная очередь роли: задания идут по одному, но не ждут чужих фоновых циклов.
@@ -190,7 +192,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [], speculative = null, scalesHint = null }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
-            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: [writerContrastLine(state.contrast), writerModeLine(state.modes?.chosen)].filter(Boolean).join('\n'), voices: state.voices ?? {} })
+            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: [writerContrastLine(state.contrast), writerModeLine(state.modes?.chosen)].filter(Boolean).join('\n'), voices: state.voices ?? {}, ownWords: state.simulated === true })
             : '';
         if (form) form.push = push;
         const endedAt = now();
@@ -252,7 +254,15 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         // Каких систем Scales касается ход: блок карточек их правил идёт в хвост задания; сбой не держит ход.
         const scalesHint = await scalesHintFor(chat).catch(() => null);
         state.scalesHint = scalesHint?.systems ?? null;
-        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task, scalesHint: scalesHint?.text ?? '' });
+        // Симулятор: люди решаются каждый в своём вызове, резолвер ставит ход из их отчётов. Сбой — ход без отчётов.
+        state.simulated = false;
+        let accountsBlock = '';
+        if (simulator.enabled() && !toolFilter) {
+            const accounts = await simulator.accountsFor({ chat, signal: externalSignal }).catch(error => { publishEvent('decision.simulator.failed', { message: error?.message ?? String(error) }); return []; });
+            accountsBlock = renderAccounts(accounts);
+            state.simulated = Boolean(accountsBlock);
+        }
+        const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task: [task, accountsBlock].filter(Boolean).join('\n\n'), scalesHint: scalesHint?.text ?? '' });
         if (!restarted) {
             const audit = auditTurnInputs({
                 greatBank: (await banks?.great?.load?.().catch(() => ({}))) ?? {}, roster: store.roster().active ?? [],
