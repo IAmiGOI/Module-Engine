@@ -65,6 +65,8 @@ test('the Creation is complete only when every guaranteed section and at least o
     const done = { ...state, scales: [{ id: 'scale:mana', name: 'Mana', principle: 'Will made real.', payment: 'focus', rules: [], discoveries: [] }] };
     assert.deepEqual(missingSections(done), []);
     assert.equal(isComplete(done), true);
+    const mundane = { ...state, sections: state.sections.map(section => (section.key === 'scales' ? { ...section, text: '# Scales\n\nNo systems. This world is ordinary.' } : section)) };
+    assert.deepEqual(missingSections(mundane), [], 'a world that says it has no systems is complete');
 });
 
 test('the Creation renders as the stable part of the resolver context: every written section, then the systems', () => {

@@ -27,7 +27,7 @@ This is how the Resolver plays every NPC and every crowd. One "###" subsection p
 Every faith: its gods or powers, its clergy, what it demands and forbids. If its miracles are real, they are a system of the Scales.
 
 **Creation/scales.md — Scales**
-The index of the systems of weight: | System | Principle | Who has it | Payment |. Every power that any character, people or faith of the material has belongs to a system: magic, divine gifts, alchemy, psionics, curses, bloodlines, technology beyond the ordinary. Ordinary skills — fencing, riding, trade, medicine without miracles — are not systems: the roll scale already covers them. Each system is its own file, Creation/Scales/<system>.md, laid out as below.
+The index of the systems of weight: | System | Principle | Who has it | Payment |. Every power that any character, people or faith of the material has belongs to a system: magic, divine gifts, alchemy, psionics, curses, bloodlines, technology beyond the ordinary. Ordinary skills — fencing, riding, trade, medicine without miracles — are not systems: the roll scale already covers them. Each system is its own file, Creation/Scales/<system>.md, laid out as below. When nothing in the material is a power, scales.md says so in its first line, "No systems.", and no system file is written.
 
 **Creation/history.md — History**
 - A timeline, oldest first, in the world's own calendar: | When | What happened | What it left behind |.

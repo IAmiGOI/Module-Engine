@@ -115,7 +115,11 @@ export function findSection(creation, title) {
 export function missingSections(creation) {
     const state = normalizeCreation(creation);
     const missing = state.sections.filter(section => !text(section.text)).map(section => section.title);
-    if (!state.scales.length) missing.push('Scales — no system is written yet');
+    // Мир без систем — честный ответ (обычная современность): Scales написан и говорит, что систем нет. Раньше такой мир
+    // не считался готовым никогда — Бог достраивал его кругами вопросов, а подготовка не доходила до Директора.
+    // Индекс должен прямо сказать «No systems.»: просто текст без систем по-прежнему не считается (Бог забывал файлы систем).
+    const index = state.sections.find(section => section.key === 'scales');
+    if (!state.scales.length && !/\bno systems\b/i.test(text(index?.text))) missing.push('Scales — no system is written yet');
     return missing;
 }
 
