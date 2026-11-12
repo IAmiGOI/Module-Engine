@@ -1,4 +1,5 @@
 import { createSimulator, renderAccounts } from './simulator.js';
+import { createSceneCast } from './scene-cast.js';
 import { lastActedTurns } from '../../libraries/core/decision-scene.js';
 import { auditTurnInputs } from '../../libraries/core/decision-audit.js';
 import { createKnowledge } from './knowledge.js';
@@ -63,6 +64,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     // Подсказка систем Scales: её оценки кладут карточки правил в хвост задания хода.
     const scalesHintFor = createScalesHint({ call, getSettings, creation, publishEvent });
     const simulator = createSimulator({ call, banks, store, getSettings, publishEvent });
+    const sceneCast = createSceneCast({ call, banks, store, publishEvent });
     const resolvePlace = createPlaceReader(call);
     const lastTimeMark = createTimeReader(call);
     // Своя последовательная очередь роли: задания идут по одному, но не ждут чужих фоновых циклов.
@@ -257,6 +259,8 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         // Симулятор: люди решаются каждый в своём вызове, резолвер ставит ход из их отчётов. Сбой — ход без отчётов.
         state.simulated = false;
         let accountsBlock = '';
+        // Первый ход: ростер пуст — кто на странице, решает отдельный короткий вызов модели резолвера, до симулятора и резолвера.
+        if (!toolFilter) await sceneCast.castIfEmpty({ chat, workerId: worker.id, signal: externalSignal }).catch(error => publishEvent('decision.cast.failed', { message: error?.message ?? String(error) }));
         if (simulator.enabled() && !toolFilter) {
             const accounts = await simulator.accountsFor({ chat, signal: externalSignal }).catch(error => { publishEvent('decision.simulator.failed', { message: error?.message ?? String(error) }); return []; });
             accountsBlock = renderAccounts(accounts);

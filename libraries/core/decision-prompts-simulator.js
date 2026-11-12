@@ -44,6 +44,21 @@ export const ACCOUNT_FIELDS = Object.freeze({
     shift: 'Only when something lasting has changed in them: what changed, and the thing that happened which changed it.',
 });
 
+/** Каст первого хода: отдельный вызов модели резолвера без его контекста — кто на странице прямо сейчас. */
+export const CAST_SYSTEM = `You read where a story stands and say who is there right now. A person is there when the page puts them there: they are seen or heard there, they speak or are spoken to there, or the page says they are there. Someone the page only names, remembers or talks about is not there, and neither is someone whose place is elsewhere, however much they matter to the story. When the page does not put a person there, they are not there.
+
+Answer with one call of cast.`;
+
+export const CAST_TASK = `THE PAGE:
+{{page}}
+
+THEN {{user}}: {{message}}
+
+WHO MIGHT BE THERE — {{user}} is not among them:
+{{people}}
+
+Who is there right now?`;
+
 /** Резолверу: отчёты людей — до постановки хода; людей он не решает. */
 export const RESOLVER_ACCOUNTS = `THE PEOPLE ARE NOT YOURS THIS TURN
 Every person below was modelled apart from you, from the inside, and their ACCOUNTS are what they set out to do and what they said. In the inscribe form:

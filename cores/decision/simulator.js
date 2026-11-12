@@ -61,16 +61,28 @@ export function renderAccounts(accounts) {
     return blocks.length ? fillPrompt(RESOLVER_ACCOUNTS, { accounts: blocks.join('\n\n') }) : '';
 }
 
+/** Принятая страница и сообщение пользователя после неё. */
+export function lastExchange(chat) {
+    const entries = (Array.isArray(chat) ? chat : []).filter(entry => !entry?.is_system);
+    const lastUser = [...entries].reverse().find(entry => entry?.is_user === true);
+    const page = [...entries].reverse().find(entry => entry?.is_user !== true && entries.indexOf(entry) < entries.indexOf(lastUser));
+    return { page: text(page?.mes ?? page?.content), message: lastUser ? text(lastUser.mes ?? lastUser.content) : '' };
+}
+
 export function createSimulator({ call, banks, store, getSettings = () => ({}), publishEvent = () => {} }) {
     const settings = () => { try { return getSettings?.() ?? {}; } catch { return {}; } };
     const workerOf = value => text(value?.simulator?.workerId) || text(value?.decider?.workerId);
 
     /** Кого моделировать: присутствующие с банком (Указ или psyche), не пользователь; без ростера — Main Cast с Указом. */
-    function people(state) {
+    function people(state, event = '') {
         const filled = character => Object.values(character?.decree ?? {}).some(lines => Array.isArray(lines) && lines.some(line => text(line))) || (character?.psyche ?? []).length;
         const roster = (store?.roster?.().active ?? []).map(name => text(name).toLowerCase());
         const all = Object.values(state ?? {}).filter(character => character?.name && !isUserCharacter(character) && filled(character));
-        const here = roster.length ? all.filter(character => roster.includes(character.name.toLowerCase())) : all.filter(character => character.importance === 'main');
+        // Без ростера (каст не сработал) — только главные, кого страница называет: важность не ставит человека в сцену.
+        const page = text(event).toLowerCase();
+        const named = character => [character.name, ...(character.aliases ?? [])].map(name => text(name).toLowerCase()).filter(Boolean)
+            .some(name => page.includes(name) || page.includes(name.split(/\s+/)[0]));
+        const here = roster.length ? all.filter(character => roster.includes(character.name.toLowerCase())) : all.filter(character => character.importance === 'main' && named(character));
         return here.slice(0, Math.max(1, Number(settings().simulator?.maxPeople) || 3));
     }
 
@@ -105,13 +117,11 @@ export function createSimulator({ call, banks, store, getSettings = () => ({}), 
         const great = banks?.great;
         if (!great?.load) return [];
         const state = await great.load().catch(() => ({}));
-        const list = people(state);
-        if (!list.length) return [];
         const user = Object.values(state).find(isUserCharacter)?.name || 'the user';
-        const entries = (Array.isArray(chat) ? chat : []).filter(entry => !entry?.is_system);
-        const lastUser = [...entries].reverse().find(entry => entry?.is_user === true);
-        const page = [...entries].reverse().find(entry => entry?.is_user !== true && entries.indexOf(entry) < entries.indexOf(lastUser));
-        const event = [text(page?.mes ?? page?.content), lastUser ? `Then ${user}: ${text(lastUser.mes ?? lastUser.content)}` : ''].filter(Boolean).join('\n\n');
+        const { page, message } = lastExchange(chat);
+        const event = [page, message ? `Then ${user}: ${message}` : ''].filter(Boolean).join('\n\n');
+        const list = people(state, event);
+        if (!list.length) return [];
         const now = Number(great.clockMinutes?.()) || 0;
         const rpNow = (await great.rpNow?.().catch(() => null))?.value ?? 0;
         publishEvent('decision.simulator.started', { people: list.map(character => character.name) });
