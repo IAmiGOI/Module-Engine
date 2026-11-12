@@ -14,11 +14,21 @@ export function castCandidates(state) {
     return Object.values(state ?? {}).filter(character => text(character?.name) && !isUserCharacter(character));
 }
 
-export function candidateLine(character) {
+const words = value => text(value).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(word => word.length > 1);
+
+/** Тёзка пользователя: общее слово в имени или другом имени («Tohzan Sasha» при пользователе Sasha). */
+export function sharesName(character, user) {
+    const own = new Set(words(user));
+    return own.size > 0 && [character?.name, ...(character?.aliases ?? [])].some(name => words(name).some(word => own.has(word)));
+}
+
+export function candidateLine(character, user = '') {
     const aliases = (character.aliases ?? []).map(text).filter(Boolean);
     const day = text((character.decree?.[1] ?? []).map(text).filter(Boolean).join(' ')).replace(/^\[[^\]]*\]\s*/, '');
     const short = day.length > DAY_CHARS ? `${day.slice(0, DAY_CHARS).trimEnd()}…` : day;
-    return `- ${character.name}${aliases.length ? ` (also ${aliases.join(', ')})` : ''}${short ? ` — their day: ${short}` : ''}`;
+    // Каст кидал в ростер тёзку пользователя: «THEN Sasha:» и «Tohzan Sasha» в списке модель сводила в одного.
+    const namesake = user && sharesName(character, user) ? ` — not ${user}: only the name is alike` : '';
+    return `- ${character.name}${aliases.length ? ` (also ${aliases.join(', ')})` : ''}${namesake}${short ? ` — their day: ${short}` : ''}`;
 }
 
 export function createSceneCast({ call, banks, store, publishEvent = () => {} }) {
@@ -41,7 +51,7 @@ export function createSceneCast({ call, banks, store, publishEvent = () => {} })
             tools: [tool], toolChoice: { type: 'function', function: { name: 'cast' } },
             messages: [
                 { role: 'system', content: CAST_SYSTEM },
-                { role: 'user', content: fillPrompt(CAST_TASK, { page, user, message: message || '(nothing yet)', people: candidates.map(candidateLine).join('\n') }) },
+                { role: 'user', content: fillPrompt(CAST_TASK, { page, user, message: message || '(nothing yet)', people: candidates.map(character => candidateLine(character, user)).join('\n') }) },
             ],
         });
         const callOf = (Array.isArray(answer?.toolCalls) ? answer.toolCalls : []).find(item => item?.name === 'cast') ?? answer?.toolCalls?.[0];

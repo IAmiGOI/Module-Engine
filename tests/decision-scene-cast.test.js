@@ -68,3 +68,9 @@ test('the Simulator has its own lane in The Court: who is here and each account,
     assert.equal(toolLabel('cast', { present: ['Vladilena Milizé'] }), 'Who is here — Vladilena Milizé');
     assert.deepEqual(toolFields('account', { took: 'A second asking.', says: '"Good afternoon."' }), [['Took', 'A second asking.'], ['Says', '"Good afternoon."']]);
 });
+
+test('a namesake of the user is marked as someone else, so the cast does not take them for the user', async () => {
+    const { candidateLine } = await import('../cores/decision/scene-cast.js');
+    assert.equal(candidateLine({ name: 'Tohzan Sasha' }, 'Sasha'), '- Tohzan Sasha — not Sasha: only the name is alike');
+    assert.equal(candidateLine({ name: 'Shinei Nouzen' }, 'Sasha'), '- Shinei Nouzen');
+});
