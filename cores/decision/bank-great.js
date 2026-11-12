@@ -312,7 +312,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
         return { ok: true, split: found.name, into: made };
     }
 
-    /** Отчёты Симулятора — последние моменты каждого (до трёх): непрерывность состояния между ходами. */
+    /** Отчёты Симулятора — последние моменты каждого (до семи): непрерывность состояния между ходами. */
     async function noteMoments(list = []) {
         const state = await load();
         let changed = false;
@@ -321,7 +321,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
             const found = findCharacter(next, name);
             if (!found || !account) continue;
             const keep = ['took', 'inner', 'does', 'says'].reduce((out, field) => ({ ...out, [field]: text(account[field]) }), {});
-            next[bankKey(found.name)] = { ...found, moments: [...(Array.isArray(found.moments) ? found.moments : []), keep].slice(-3) };
+            next[bankKey(found.name)] = { ...found, moments: [...(Array.isArray(found.moments) ? found.moments : []), keep].slice(-7) };
             changed = true;
         }
         if (changed) await save(next);

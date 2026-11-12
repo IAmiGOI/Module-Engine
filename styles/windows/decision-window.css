@@ -208,6 +208,7 @@
 .stme-court-lane-god { --stme-lane: #c9a227; }
 .stme-court-lane-director { --stme-lane: #b5523b; }
 .stme-court-lane-counsellor { --stme-lane: #4f8a6e; }
+.stme-court-lane-simulator { --stme-lane: #3f7fa6; }
 .stme-court-lane-resolver { --stme-lane: var(--stme-accent); }
 .stme-court-lane-writer { --stme-lane: #8a6fb5; }
 .stme-court-lane-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 2px solid var(--stme-lane); font-weight: 700; font-size: .86em; letter-spacing: .03em; text-transform: uppercase; }

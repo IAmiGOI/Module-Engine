@@ -8,6 +8,7 @@ export const LANES = Object.freeze([
     { id: 'god', label: 'God', empty: 'God has not shaped this world yet.' },
     { id: 'director', label: 'Director', empty: 'No Decrees yet.' },
     { id: 'counsellor', label: 'Counsellor', empty: 'The Counsellor has nothing to report yet.' },
+    { id: 'simulator', label: 'Simulator', empty: 'Nobody has been modelled yet.' },
     { id: 'resolver', label: 'Resolver', empty: 'No turns yet.' },
     { id: 'writer', label: 'Writer', empty: 'The Writer has not written yet.' },
 ]);
@@ -25,6 +26,7 @@ const EVENT_LANE = {
     message: 'counsellor', counsellor: 'counsellor', counsellor_day: 'counsellor', settings: 'counsellor',
     decree: 'director', director: 'director', bootstrap: 'director', researcher: 'director',
     god: 'god', creation: 'god', prayer_answer: 'god', seraph: 'god',
+    simulator: 'simulator',
 };
 // Строки, которые относятся к Writer, даже если лежат в цикле хода резолвера.
 const WRITER_ROWS = new Set(['push', 'writer_check']);
@@ -87,6 +89,8 @@ export function toolLabel(name, args = {}) {
         case 'character_knowledge': return `Knowledge — ${text(a.character) || 'a character'}`;
         case 'character_bank': return `Data bank — ${text(a.name ?? a.character) || 'a character'}`;
         case 'update_roster': return 'Who is in the scene';
+        case 'cast': return `Who is here — ${(Array.isArray(a.present) ? a.present : []).join(', ') || 'nobody'}`;
+        case 'account': return `${text(a.person) || 'Someone'} — ${text(a.says) ? 'speaks' : (text(a.does) || 'carries on').slice(0, 60)}`;
         case 'edit': {
             const paths = [...new Set((Array.isArray(a.edits) ? a.edits : []).map(item => text(item?.path).replace(/^Characters\//, '')).filter(Boolean))];
             return `Edit — ${paths.slice(0, 3).join(', ') || 'files'}${paths.length > 3 ? ` +${paths.length - 3}` : ''}`;
@@ -119,6 +123,8 @@ export function toolFields(name, args = {}) {
         case 'create': return pick([[text(a.path), a.text]]);
         case 'nothing_yet': case 'rest': return pick([['Why', a.reason]]);
         case 'reply': case 'prayer': return pick([['Text', a.text]]);
+        case 'account': return pick([['Took', a.took], ['Learned', a.learned], ['Inner', a.inner], ['Busy with', a.busy_with], ['Wants', a.wants], ['Holds back', a.holds_back], ['Does', a.does], ['Tries', a.tries], ['Says', a.says], ['Shows', a.shows], ['Shift', a.shift]]);
+        case 'cast': return pick([['Here', (Array.isArray(a.present) ? a.present : []).join(', ')]]);
         default: return [];
     }
 }

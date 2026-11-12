@@ -9,7 +9,7 @@ import { promptText } from '../../libraries/core/prompt-overrides.js';
  * Последние отчёты лежат в Great Bank (`moments`): снимок хода и откат несут их сами.
  */
 const text = value => String(value ?? '').trim();
-const MOMENTS = 3;
+const MOMENTS = 7;
 const MAX_TOKENS = 6000;
 const SPEAKS = /\b(answer|answers|answered|reply|replies|says|said|speak|speaks|tells|told|asks|line|words|voice|retort|retorts|quips|jokes)\b/i;
 

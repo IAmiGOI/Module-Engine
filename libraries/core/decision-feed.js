@@ -17,6 +17,7 @@ const EVENT_LABELS = {
     counsellor: 'The Counsellor read the Ledger', counsellor_day: 'The Counsellor closes the RP day',
     decree: 'The Director issues a Decree', retry: 'A retry in the background', warning: 'A warning',
     god_build: 'God shapes the world', god_prayer: 'Prayers reach God', god_declaration: 'God receives the Declaration',
+    simulator: 'The people here are modelled',
 };
 
 const text = value => String(value ?? '').trim();

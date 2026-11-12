@@ -259,12 +259,27 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         // Симулятор: люди решаются каждый в своём вызове, резолвер ставит ход из их отчётов. Сбой — ход без отчётов.
         state.simulated = false;
         let accountsBlock = '';
+        const peopleStartedAt = now();
         // Первый ход: ростер пуст — кто на странице, решает отдельный короткий вызов модели резолвера, до симулятора и резолвера.
-        if (!toolFilter) await sceneCast.castIfEmpty({ chat, workerId: worker.id, signal: externalSignal }).catch(error => publishEvent('decision.cast.failed', { message: error?.message ?? String(error) }));
+        const cast = toolFilter ? [] : await sceneCast.castIfEmpty({ chat, workerId: worker.id, signal: externalSignal }).catch(error => { publishEvent('decision.cast.failed', { message: error?.message ?? String(error) }); return []; });
+        let accounts = [];
         if (simulator.enabled() && !toolFilter) {
-            const accounts = await simulator.accountsFor({ chat, signal: externalSignal }).catch(error => { publishEvent('decision.simulator.failed', { message: error?.message ?? String(error) }); return []; });
+            accounts = await simulator.accountsFor({ chat, signal: externalSignal }).catch(error => { publishEvent('decision.simulator.failed', { message: error?.message ?? String(error) }); return []; });
             accountsBlock = renderAccounts(accounts);
             state.simulated = Boolean(accountsBlock);
+        }
+        // Дорожка Simulator в The Court: каст и отчёт каждого человека — своя запись журнала, отдельно от хода резолвера.
+        if (cast.length || accounts.length) {
+            const endedAt = now();
+            await store.appendCycle(createCycleRecord({
+                runId: `${runId}_people`, event: 'simulator', at: peopleStartedAt, endedAt, durationMs: endedAt - peopleStartedAt,
+                turn: state.turnCounter, clockMinutes: store.clock().minutes,
+                workerId: String(settings.simulator?.workerId ?? '').trim() || worker.id,
+                toolCalls: [
+                    ...(cast.length ? [{ name: 'cast', args: { present: cast }, at: peopleStartedAt }] : []),
+                    ...accounts.map(item => ({ name: 'account', args: { person: item.name, ...item.account }, error: item.error ?? null, at: peopleStartedAt })),
+                ],
+            })).catch(() => {});
         }
         const built = await context.runContext({ settings, chat, lorebook, worker, reroll, turn: state.turnCounter, task: [task, accountsBlock].filter(Boolean).join('\n\n'), scalesHint: scalesHint?.text ?? '' });
         if (!restarted) {

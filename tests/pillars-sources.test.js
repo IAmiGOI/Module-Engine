@@ -206,7 +206,7 @@ test('lane records keep the same split the Court window uses (no second model of
     const ours = toLaneEntries([entry]).map(record => record.lane).sort();
     const theirs = Object.keys(splitEntry(entry)).sort();
     assert.deepEqual(ours, theirs);
-    assert.deepEqual(Object.keys(lanesFrom([entry])).sort(), ['counsellor', 'director', 'god', 'resolver', 'writer']);
+    assert.deepEqual(Object.keys(lanesFrom([entry])).sort(), ['counsellor', 'director', 'god', 'resolver', 'simulator', 'writer']);
 });
 
 test('book spreads say whose they are, so a thumb or ribbon finds its page', () => {

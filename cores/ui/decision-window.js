@@ -169,7 +169,7 @@ export function createDecisionWindowCore(host, { mount } = {}) {
     function body() {
         return h('div', { class: 'stme-panel stme-dw-window-body', tabindex: '-1', 'on:keydown': onKey },
             h('div', { class: 'stme-dw-toolbar' },
-                Segment([{ value: 'all', label: 'All five' }, ...LANES.map(lane => ({ value: lane.id, label: lane.label })), { value: 'files', label: 'Files' }, { value: 'telemetry', label: 'Telemetry' }], mode, { label: 'Lanes', onChange: setMode }),
+                Segment([{ value: 'all', label: 'All' }, ...LANES.map(lane => ({ value: lane.id, label: lane.label })), { value: 'files', label: 'Files' }, { value: 'telemetry', label: 'Telemetry' }], mode, { label: 'Lanes', onChange: setMode }),
                 Select(turnFilter, () => turnOptions(), { onChange: () => scheduleScroll(true) }),
                 h('span', { class: 'stme-court-search' }, TextInput(search, { placeholder: 'Search  (/)' })),
                 Toggle('Thinking', showThinking)),

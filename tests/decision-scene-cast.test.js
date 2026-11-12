@@ -54,3 +54,17 @@ test('the cast prompts are mirrored in PROMPTS.md', () => {
     const doc = readFileSync(new URL('../docs/research-decision/PROMPTS.md', import.meta.url), 'utf8');
     for (const prompt of [CAST_SYSTEM, CAST_TASK]) assert.ok(doc.includes(prompt));
 });
+
+test('the Simulator has its own lane in The Court: who is here and each account, field by field', async () => {
+    const { lanesFrom, toolLabel, toolFields } = await import('../libraries/core/court-lanes.js');
+    const { buildCycleEntry } = await import('../libraries/core/decision-feed.js');
+    const entry = buildCycleEntry({ id: 'c1', event: 'simulator', turn: 1, toolCalls: [
+        { name: 'cast', args: { present: ['Vladilena Milizé'] } },
+        { name: 'account', args: { person: 'Vladilena Milizé', took: 'A second asking.', does: 'Stands.', says: '"Good afternoon."' } },
+    ] });
+    const lanes = lanesFrom([entry]);
+    assert.equal(lanes.simulator.length, 1);
+    assert.equal(lanes.resolver.length, 0);
+    assert.equal(toolLabel('cast', { present: ['Vladilena Milizé'] }), 'Who is here — Vladilena Milizé');
+    assert.deepEqual(toolFields('account', { took: 'A second asking.', says: '"Good afternoon."' }), [['Took', 'A second asking.'], ['Says', '"Good afternoon."']]);
+});

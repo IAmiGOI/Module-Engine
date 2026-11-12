@@ -557,13 +557,16 @@ const ROLE_ANGLES = Object.freeze({ god: -90, director: -18, counsellor: 54, res
  * `toCourt(state)` — круглый стол: роли (кто работает, вопрос God), ходы,
  * файлы, Ведомость. `state` — `{ entries, god, turns, files, clock, place, name }`.
  */
+// Столпов пять по утверждённому макету: дорожка Simulator живёт только в старом окне The Court.
+const PILLAR_LANES = new Set(['god', 'director', 'counsellor', 'resolver', 'writer']);
+
 export function toCourt(state = {}) {
     const entries = arr(state.entries);
     const ledgerRecords = toLedger(entries);
     const laneRecords = toLaneEntries(entries);
     const working = new Set(arr(state.working));
     const questions = arr(state.god?.questions).filter(question => !text(question?.answer));
-    const roles = LANES.map(lane => {
+    const roles = LANES.filter(lane => PILLAR_LANES.has(lane.id)).map(lane => {
         const records = laneRecords.filter(record => record.lane === lane.id);
         const asks = questions.map(question => makeRecord({
             id: `god-ask|${text(question.id)}`, lane: 'god', turn: question?.turn ?? null,
