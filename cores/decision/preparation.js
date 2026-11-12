@@ -2,6 +2,7 @@ import { DECISION_MEMORY_NAMESPACE } from '../../libraries/core/decision-setting
 import { godWorkerId, directorWorkerId } from '../../libraries/core/decision-settings.js';
 import { mainWithoutDecree, mainWithoutPast, unsplitCards } from '../../libraries/core/decision-director.js';
 import { normalizePreparation, stepFromFacts } from '../../libraries/core/decision-preparation.js';
+import { readOpening, openingHash } from './opening.js';
 
 /**
  * Явная машина подготовки к игре. Шаги не будят друг друга событиями: каждый
@@ -80,7 +81,29 @@ export function createPreparation({
         } catch { return 0; }
     }
 
+    /**
+     * Пользователь переписал первое сообщение, а мир ещё не начат: старые вопросы Бога построены на старой завязке.
+     * Они снимаются, и Бог изучает материал заново — раньше он ждал ответов на вопросы, которые уже не подходили.
+     */
+    async function restudyIfOpeningChanged() {
+        const papers = (typeof store?.papers === 'function' ? store.papers() : null) ?? {};
+        const god = papers.god ?? {};
+        if (creation?.started?.() || !(god.studiedAt || god.lastRunAt || (god.questions ?? []).length)) return false;
+        const current = openingHash(await readOpening(callService ?? call).catch(() => ''));
+        const changed = Boolean(god.openingHash && current && current !== god.openingHash);
+        // До мира Бог Молитвы не читает (он их берёт только у готового мира): Молитва Советника до постройки — просьба
+        // изучить заново. Так переписанная завязка доходит до Бога и в чатах, изученных до отпечатка.
+        const asked = (papers.prayers ?? []).some(item => item?.source === 'counsellor' && String(item?.status ?? 'queued') === 'queued');
+        if (!changed && !asked) return false;
+        await store.saveGod?.({ questions: [], declaration: null, studiedAt: 0, lastRunAt: 0, openingHash: '' });
+        if (asked) await store.markPrayersRead?.(now()).catch(() => null);
+        publishEvent('decision.god.restudy', { reason: 'the first message changed' });
+        return true;
+    }
+
     async function defaultFacts() {
+        await creation?.load?.().catch(() => {});
+        await restudyIfOpeningChanged().catch(() => false);
         const papers = typeof store?.papers === 'function' ? store.papers() ?? {} : {};
         const god = papers.god && typeof papers.god === 'object' ? papers.god : {};
         const questions = Array.isArray(god.questions) ? god.questions : [];

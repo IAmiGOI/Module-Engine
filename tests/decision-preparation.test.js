@@ -152,3 +152,32 @@ test('a role without a connection does not hold the game: its step is skipped', 
     assert.equal(stepFromFacts({ sorted: true, creationComplete: true, directorConfigured: false, mainWithoutDecree: 2 }), 'ready');
     assert.equal(stepFromFacts({ sorted: true }), 'study', 'with connections nothing changes');
 });
+
+test('a rewritten first message, or a Counsellor\'s prayer before the world exists, sends God back to study it', async () => {
+    const { openingHash } = await import('../cores/decision/opening.js');
+    let papers = { god: { studiedAt: 5, openingHash: openingHash('Old opening.'), questions: [{ id: 'q1', question: 'Old?', answer: '' }] }, prayers: [] };
+    let opening = 'New opening.';
+    const saved = [];
+    const preparation = createPreparation({
+        call: async contract => (contract === 'storage.chatMemory.get' ? null : true),
+        callService: async contract => (contract === 'stChat.messages' ? [{ mesid: '0', isUser: false, text: opening }] : contract === 'stCharacter.chatCharacters' ? [{ name: 'Lena' }] : []),
+        store: {
+            papers: () => papers, cycles: () => [], runs: () => ({}),
+            saveGod: async patch => { saved.push(patch); papers = { ...papers, god: { ...papers.god, ...patch } }; },
+            markPrayersRead: async () => { papers = { ...papers, prayers: papers.prayers.map(item => ({ ...item, status: 'read' })) }; },
+        },
+        banks: { progress: () => ({ status: 'ready' }), records: () => [], great: null },
+        creation: { load: async () => {}, complete: () => false, started: () => false },
+        cycle: { maybeRunGod: async () => ({ ok: true }) },
+        getSettings: () => ({ god: { workerId: 'god' }, director: { workerId: 'director' } }),
+    });
+    const state = await preparation.assess();
+    assert.equal(saved.length, 1, 'the old questions are withdrawn');
+    assert.deepEqual(papers.god.questions, []);
+    assert.equal(state.step, 'study');
+    papers = { god: { studiedAt: 5, questions: [{ id: 'q2', question: 'x', answer: '' }] }, prayers: [{ id: 'p', source: 'counsellor', status: 'queued', text: 'Read the new opening.' }] };
+    opening = 'Same.';
+    await preparation.assess();
+    assert.equal(saved.length, 2, 'a prayer before the world exists is a request to study again');
+    assert.equal(papers.prayers[0].status, 'read');
+});

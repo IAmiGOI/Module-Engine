@@ -1,3 +1,4 @@
+import { openingHash } from './opening.js';
 import { readOpening } from './opening.js';
 import { godFileForm, fileKey } from '../../libraries/core/god-file-form.js';
 import { rpNow } from '../../libraries/core/decision-scene.js';
@@ -143,6 +144,7 @@ export function createGod({
         return { ...legacy, view: files.view, edit: editFiles, create, review_file: reviewFile, review_creation: review, await: rest };
     }
 
+    let lastOpening = '';
     async function loadMaterial() {
         try {
             const [entries, cards, opening, persona] = await Promise.all([
@@ -153,6 +155,7 @@ export function createGod({
                 (callService ?? call)('stCharacter.persona').catch(() => null),
             ]);
             const marks = typeof layout?.marksForLorebook === 'function' ? layout.marksForLorebook() : null;
+            lastOpening = String(opening ?? '').trim();
             return godMaterial({ lorebookEntries: entries ?? [], cards: cards ?? [], marks, opening, persona });
         } catch { return ''; }
     }
@@ -269,7 +272,8 @@ export function createGod({
             const ids = (info.prayers ?? []).map(item => item.id).filter(Boolean);
             if (ids.length) await store.markPrayersRead?.(now(), ids).catch(() => null);
             if (info.kind === 'declaration') await store.consumeDeclaration?.(now()).catch(() => null);
-            await store.saveGod?.({ lastRunAt: now(), lastReason: info.wake.detail, ...(info.kind === 'study' ? { studiedAt: now() } : {}) }).catch(() => null);
+            // Изучение запоминает завязку: если пользователь перепишет первое сообщение до постройки мира, Бог изучит заново.
+            await store.saveGod?.({ lastRunAt: now(), lastReason: info.wake.detail, ...(info.kind === 'study' ? { studiedAt: now(), openingHash: openingHash(lastOpening) } : {}) }).catch(() => null);
         }
         // Отчёт Советнику: на какие Молитвы и ответы Бог ответил и что изменил — тот пересказывает пользователю.
         const handled = info.kind === 'prayer' ? (info.prayers ?? []).map(item => item.text) : (info.kind === 'declaration' ? ['The answers to God\'s questions (the Declaration).'] : []);
