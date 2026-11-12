@@ -145,14 +145,15 @@ export function createGod({
 
     async function loadMaterial() {
         try {
-            const [entries, cards, opening] = await Promise.all([
+            const [entries, cards, opening, persona] = await Promise.all([
                 call('lorebook.entries').catch(() => []),
                 // Карточки — сервис, не ядро: через `call` запрос уходил в шину ядер, ошибка глоталась, и Бог видел пустой материал.
                 (callService ?? call)('stCharacter.chatCharacters').catch(() => []),
                 readOpening(callService ?? call),
+                (callService ?? call)('stCharacter.persona').catch(() => null),
             ]);
             const marks = typeof layout?.marksForLorebook === 'function' ? layout.marksForLorebook() : null;
-            return godMaterial({ lorebookEntries: entries ?? [], cards: cards ?? [], marks, opening });
+            return godMaterial({ lorebookEntries: entries ?? [], cards: cards ?? [], marks, opening, persona });
         } catch { return ''; }
     }
 

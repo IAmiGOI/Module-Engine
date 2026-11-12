@@ -37,7 +37,7 @@ export function worldFromCards(cards) {
  * Материал мира: записи лорбука, которые не стали дата-банками персонажей, и
  * мировые части карт. Персонажи — не его: их ведут банки.
  */
-export function godMaterial({ lorebookEntries = [], cards = [], marks = null, opening = '' } = {}) {
+export function godMaterial({ lorebookEntries = [], cards = [], marks = null, opening = '', persona = null } = {}) {
     const world = withoutCharacterEntries(lorebookEntries, marks)
         .filter(entry => entry && !entry.disable && text(entry.content));
     const books = new Map();
@@ -52,7 +52,10 @@ export function godMaterial({ lorebookEntries = [], cards = [], marks = null, op
     ].join('\n\n')).join('\n\n');
     // Первое сообщение чата, как выбрано сейчас: где и когда начинается история.
     const start = text(opening) ? `### The story's opening — the chat's first message as it stands now\n${text(opening)}` : '';
-    return [lorebook, worldFromCards(cards), start].filter(Boolean).join('\n\n');
+    // Персона — кого играет пользователь: без неё Бог угадывал по карточке и однажды записал пользователем героиню.
+    const name = text(persona?.name);
+    const who = name ? `### The user's character — the persona the user plays\nName: ${name}${text(persona?.description) ? `\n${text(persona.description)}` : ''}` : '';
+    return [who, lorebook, worldFromCards(cards), start].filter(Boolean).join('\n\n');
 }
 
 /** Молитвы, которые ждут Бога: статус `queued`, от резолвера и от Советника. */

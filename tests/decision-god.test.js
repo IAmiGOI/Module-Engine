@@ -297,3 +297,9 @@ test('after an edit the form holds only the changed subsections', async () => {
     const scales = '# Scales\n| System | Principle | Who has it | Payment |\n|---|---|---|---|\n| Magic | mana | many | od |\n| Spirit Arts | pacts | few | mana |';
     assert.equal(godFileForm('Creation/scales.md', scales).filter(item => item.startsWith('System "')).length, 2, 'every row of the Scales table is its own item');
 });
+
+test('God is told which character the user plays', async () => {
+    const { godMaterial } = await import('../libraries/core/decision-god.js');
+    const material = godMaterial({ cards: [{ name: 'Iris', description: 'Iris likes Daniel.' }], persona: { name: 'Daniel', description: 'A designer on her team.' } });
+    assert.match(material, /The user's character — the persona the user plays\nName: Daniel\nA designer on her team\./);
+});
