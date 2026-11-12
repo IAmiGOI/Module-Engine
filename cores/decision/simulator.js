@@ -1,4 +1,4 @@
-import { SIMULATOR_SYSTEM, SIMULATOR_TASK, ACCOUNT_FIELDS, RESOLVER_ACCOUNTS, fillPrompt } from '../../libraries/core/decision-prompts.js';
+import { SIMULATOR_SYSTEM, SIMULATOR_TASK, SIMULATOR_SAME_MOMENT, ACCOUNT_FIELDS, RESOLVER_ACCOUNTS, fillPrompt } from '../../libraries/core/decision-prompts.js';
 import { isUserCharacter } from '../../libraries/core/decision-great-bank.js';
 import { renderDeadlines, withUserLine } from '../../libraries/core/acquaintance.js';
 import { promptText } from '../../libraries/core/prompt-overrides.js';
@@ -6,6 +6,7 @@ import { promptText } from '../../libraries/core/prompt-overrides.js';
 /**
  * Симулятор человека (SIMULATOR-DESIGN.md): перед ходом резолвера — по вызову на каждого присутствующего с банком,
  * параллельно. Отчёт (`account`) говорит, что в человеке и что он делает; резолвер ставит ход из отчётов и людей не решает.
+ * Люди идут по очереди в общем ходе момента: следующий видит поступки и слова предыдущих, их мысли — нет.
  * Последние отчёты лежат в Great Bank (`moments`): снимок хода и откат несут их сами.
  */
 const text = value => String(value ?? '').trim();
@@ -45,6 +46,23 @@ const argsOf = answer => {
     if (!call) return {};
     try { return typeof call.arguments === 'string' ? JSON.parse(call.arguments) : (call.arguments ?? {}); } catch { return {}; }
 };
+
+/** Что человек сделал и сказал — как это видят и слышат другие в том же моменте; мысли и скрытое сюда не идут. */
+export function seenOf({ name, account }) {
+    const parts = [text(account?.does) || 'carries on', text(account?.tries) ? `tries: ${text(account.tries)}` : '', text(account?.says) ? `says: ${text(account.says)}` : 'says nothing', text(account?.shows) ? `looks: ${text(account.shows)}` : ''];
+    return `- ${name}: ${parts.filter(Boolean).join('; ')}`;
+}
+
+/** Порядок момента: сначала те, кого пользователь назвал в своём сообщении, дальше — как в ростере. */
+export function speakingOrder(list, message) {
+    const said = text(message).toLowerCase();
+    const at = character => {
+        const spots = [character.name, ...(character.aliases ?? [])].map(name => text(name).toLowerCase()).filter(Boolean)
+            .flatMap(name => [name, name.split(/\s+/)[0]]).map(name => said.indexOf(name)).filter(index => index >= 0);
+        return spots.length ? Math.min(...spots) : Infinity;
+    };
+    return list.map((character, index) => ({ character, index, at: at(character) })).sort((a, b) => a.at - b.at || a.index - b.index).map(item => item.character);
+}
 
 /** Отчёты → блок резолверу: поступки и слова; скрытое (wants, holds_back) — одной строкой как мотив, не для страницы. */
 export function renderAccounts(accounts) {
@@ -86,13 +104,13 @@ export function createSimulator({ call, banks, store, getSettings = () => ({}), 
         return here.slice(0, Math.max(1, Number(settings().simulator?.maxPeople) || 3));
     }
 
-    async function one(character, { event, now, rpNow, user, signal }) {
+    async function one(character, { event, before = [], now, rpNow, user, signal }) {
         const name = character.name;
         const kind = text(character.kind) === 'mind' ? 'mind' : 'person';
         const messages = [
             { role: 'system', content: fillPrompt(promptText(SIMULATOR_SYSTEM), { name, kind, language: 'the language of the story' }) },
             { role: 'system', content: personBlock(character, { now, rpNow, user }) },
-            { role: 'user', content: fillPrompt(SIMULATOR_TASK, { name, event }) },
+            { role: 'user', content: fillPrompt(SIMULATOR_TASK, { name, event: before.length ? `${event}\n\n${fillPrompt(SIMULATOR_SAME_MOMENT, { others: before.map(seenOf).join('\n') })}` : event }) },
         ];
         const workerId = workerOf(settings());
         const base = { purpose: 'simulator', workerId, stream: false, returnMessage: true, maxTokens: MAX_TOKENS, temperature: 0.7, signal };
@@ -120,13 +138,18 @@ export function createSimulator({ call, banks, store, getSettings = () => ({}), 
         const user = Object.values(state).find(isUserCharacter)?.name || 'the user';
         const { page, message } = lastExchange(chat);
         const event = [page, message ? `Then ${user}: ${message}` : ''].filter(Boolean).join('\n\n');
-        const list = people(state, event);
+        const list = speakingOrder(people(state, event), message);
         if (!list.length) return [];
         const now = Number(great.clockMinutes?.()) || 0;
         const rpNow = (await great.rpNow?.().catch(() => null))?.value ?? 0;
         publishEvent('decision.simulator.started', { people: list.map(character => character.name) });
-        const accounts = await Promise.all(list.map(character => one(character, { event, now, rpNow, user, signal })
-            .catch(error => ({ name: character.name, account: { took: 'Nothing.', inner: '', does: 'Carries on.' }, error: error?.message ?? String(error) }))));
+        // Общий ход момента: по очереди, каждый со своим промптом видит, что уже сделали и сказали те, кто был до него.
+        const accounts = [];
+        for (const character of list) {
+            if (signal?.aborted) break;
+            accounts.push(await one(character, { event, before: accounts, now, rpNow, user, signal })
+                .catch(error => ({ name: character.name, account: { took: 'Nothing.', inner: '', does: 'Carries on.' }, error: error?.message ?? String(error) })));
+        }
         await great.noteMoments?.(accounts.filter(item => !item.error).map(item => ({ name: item.name, account: item.account }))).catch(() => null);
         publishEvent('decision.simulator.finished', { accounts: accounts.map(item => ({ name: item.name, says: text(item.account?.says), does: text(item.account?.does), error: item.error ?? null })) });
         return accounts;

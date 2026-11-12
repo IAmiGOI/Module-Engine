@@ -91,3 +91,27 @@ test('with the simulator the Writer gets a person\'s words from the account itse
     const plain = buildInscription({ form });
     assert.match(plain, /LINE \(meaning\): Second: he did not answer her/);
 });
+
+test('people share one moment: in turn, each with their own prompt, the next one sees what the ones before did and said, never what they thought', async () => {
+    const bank = {
+        lena: { name: 'Lena', importance: 'main', psyche: ['Holds to the record.'] },
+        karl: { name: 'Karlstahl', importance: 'main', psyche: ['Tired.'] },
+    };
+    const requests = [];
+    const replies = [
+        { toolCalls: [{ name: 'account', arguments: { took: 'An order.', inner: 'SECRET-ANGER', wants: 'SECRET-WANT', does: 'Puts the sheet down.', says: '"Sit, Major."' } }] },
+        { toolCalls: [{ name: 'account', arguments: { took: 'He told the Major to sit.', inner: 'Cold.', does: 'Stays standing.' } }] },
+    ];
+    const call = async (contract, params) => { if (contract === 'model.generate') { requests.push(params); return replies.shift(); } };
+    const store = { roster: () => ({ active: ['Lena', 'Karlstahl'] }) };
+    const simulator = createSimulator({ call, banks: { great: { load: async () => structuredClone(bank) } }, store, getSettings: () => ({ simulator: { enabled: true } }) });
+    const chat = [{ is_user: false, mes: 'The office.' }, { is_user: true, mes: 'Karlstahl, transfer her.' }];
+    const accounts = await simulator.accountsFor({ chat });
+    assert.deepEqual(accounts.map(item => item.name), ['Karlstahl', 'Lena']);
+    assert.match(requests[0].messages[0].content, /You model one person: Karlstahl/);
+    assert.match(requests[1].messages[0].content, /You model one person: Lena/);
+    const task = requests[1].messages.at(-1).content;
+    assert.match(task, /THEN, IN THE SAME MOMENT[^\n]*\n- Karlstahl: Puts the sheet down\.; says: "Sit, Major\."/);
+    assert.doesNotMatch(task, /SECRET-ANGER|SECRET-WANT/);
+    assert.doesNotMatch(requests[0].messages.at(-1).content, /IN THE SAME MOMENT/);
+});

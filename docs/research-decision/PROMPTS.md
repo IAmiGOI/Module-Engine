@@ -1275,11 +1275,18 @@ shows: What someone looking at them now would see of what is inside — the surf
 shift: Only when something lasting has changed in them: what changed, and the thing that happened which changed it.
 ```
 
+Общий ход момента — люди считаются по очереди (первым тот, кого назвал пользователь), у каждого свой промпт; к задаче следующего добавляется, что предыдущие сделали и сказали (does, tries, says, shows — без inner, wants, holds_back):
+
+```text
+THEN, IN THE SAME MOMENT — what the others here did and said, one after another, as far as it could be seen and heard:
+{{others}}
+```
+
 Резолверу (хвост задания):
 
 ```text
 THE PEOPLE ARE NOT YOURS THIS TURN
-Every person below was modelled apart from you, from the inside, and their ACCOUNTS are what they set out to do and what they said. In the inscribe form:
+Every person below was modelled apart from you, from the inside, one after another — each saw what the ones before did and said — and their ACCOUNTS are what they set out to do and what they said, in that order. In the inscribe form:
 - each of them is in characters with what their account gives — does from does, says from says, feels from inner, means from wants — and you do not change what they want, do or say, and add no deeds or words of your own to them;
 - their line beats carry their words exactly as the account gives them; a deed under tries is rolled with assess like any attempt, and the roll says whether the body did it, never whether it worked on anyone;
 - an account with nothing in it stays out of the turn; nobody is brought in to fill a silence;

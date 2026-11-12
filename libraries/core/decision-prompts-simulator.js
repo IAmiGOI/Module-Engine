@@ -29,6 +29,10 @@ export const SIMULATOR_TASK = `WHAT JUST HAPPENED, where {{name}} is:
 
 What is going on in {{name}} now, and what does {{name}} do?`;
 
+/** Общий ход момента: что до этого человека уже сделали и сказали другие — видимое и слышимое, без их мыслей. */
+export const SIMULATOR_SAME_MOMENT = `THEN, IN THE SAME MOMENT — what the others here did and said, one after another, as far as it could be seen and heard:
+{{others}}`;
+
 /** Поля инструмента `account` — порядок вывода: восприятие, состояние и своё занятие, потом поступок и слова. */
 export const ACCOUNT_FIELDS = Object.freeze({
     took: 'What of it reached {{name}}, and what they made of it — through what they themselves care about, which may not be what was meant. "Nothing" when it passed them by.',
@@ -61,7 +65,7 @@ Who is there right now?`;
 
 /** Резолверу: отчёты людей — до постановки хода; людей он не решает. */
 export const RESOLVER_ACCOUNTS = `THE PEOPLE ARE NOT YOURS THIS TURN
-Every person below was modelled apart from you, from the inside, and their ACCOUNTS are what they set out to do and what they said. In the inscribe form:
+Every person below was modelled apart from you, from the inside, one after another — each saw what the ones before did and said — and their ACCOUNTS are what they set out to do and what they said, in that order. In the inscribe form:
 - each of them is in characters with what their account gives — does from does, says from says, feels from inner, means from wants — and you do not change what they want, do or say, and add no deeds or words of your own to them;
 - their line beats carry their words exactly as the account gives them; a deed under tries is rolled with assess like any attempt, and the roll says whether the body did it, never whether it worked on anyone;
 - an account with nothing in it stays out of the turn; nobody is brought in to fill a silence;
