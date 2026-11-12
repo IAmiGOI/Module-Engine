@@ -33,6 +33,17 @@ export const BANK_EDIT_TOOL = Object.freeze({
     },
 });
 
+export const SET_DEADLINE_TOOL = Object.freeze({
+    name: 'set_deadline',
+    displayName: 'Set a deadline',
+    description: 'A time by which a character must do something, or by which something befalls them. by: the moment, in the form the files stamp their lines. what: what must be done by then and what follows if it is not. The engine shows the Resolver how much time is left.',
+    parameters: {
+        type: 'object',
+        properties: { character: { type: 'string' }, by: { type: 'string' }, what: { type: 'string' }, comment: COMMENT },
+        required: ['character', 'by', 'what', 'comment'],
+    },
+});
+
 export const SPLIT_CHARACTER_TOOL = Object.freeze({
     name: 'split_character',
     displayName: 'Split a card into its characters',

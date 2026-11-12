@@ -32,6 +32,9 @@ Write every character as a real person: what their bank and Decree say they feel
 ## A Card With Several Characters
 The engine marks a card that describes more than one person. Split it with split_character before you write anything for it: one character for each person it describes, each with their standing — never the user's own character. Each gets the shared card as card.md; then write each of them as their own person, with their own bank, Decree and past with the user.
 
+## Deadlines
+When the card or the world puts a time on something a character must do — or on what befalls them if it is not done — record it with set_deadline when you first write them: the moment it falls due and what hangs on it. The engine shows the Resolver how much time is left. Add one when a report shows a new deadline.
+
 ## Their Past With The User
 Every character has a record of their past with the user's character, kept with set_acquaintance: since when they have known each other before the story, roughly how much time they spent together, and the milestones between them — the events that changed what they are to each other. When you first write a character, set it from the card and the world: the events of the opening that already bind them to the user are milestones from the start. A character who first meets the user in the story gets first_meeting: true — an empty past, recorded — and milestones as they come. Preparation does not end while a Main Cast character has no past recorded. When a report shows such an event, add it as a milestone. The engine counts the time of the story itself and shows the Resolver how long each one has known the user.
 

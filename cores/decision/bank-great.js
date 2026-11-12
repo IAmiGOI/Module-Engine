@@ -3,7 +3,7 @@ import { applyDecrees, applyEdits, bankKey, ensureCharacter, findCharacter, norm
 import { normalizeDecrees } from '../../libraries/core/decision-decree.js';
 import { parseBankSections } from '../../libraries/core/decision-bank-parse.js';
 import { BANK_BUILDER_VERSION } from '../../libraries/core/decision-banks.js';
-import { formatInstant, rpInstant } from '../../libraries/core/decision-bank-time.js';
+import { formatInstant, rpInstant, parseInstant } from '../../libraries/core/decision-bank-time.js';
 import { renderFarBanks, renderNearBanks, renderDecreeSection } from '../../libraries/core/decision-bank-projections.js';
 import { createTimeReader } from './readers.js';
 import { normalizeWithUser } from '../../libraries/core/acquaintance.js';
@@ -313,6 +313,26 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     }
 
     /**
+     * Срок (инструмент Директора): к какому моменту RP-времени персонаж должен что-то сделать или что с ним случится.
+     * Момент — в той же форме, что метки строк в файлах; движок показывает резолверу, сколько осталось.
+     */
+    async function setDeadline({ character, by = '', what = '', comment = '' } = {}) {
+        const state = await sync();
+        const found = findCharacter(state, character);
+        if (!found) return { ok: false, error: `There is no character "${character}".` };
+        const rp = await rpNow();
+        const at = parseInstant(by);
+        // Мир с датой — срок тоже с датой; мир на счётчике дней — «Day N, HH:MM». Голое «06:00» не принимается.
+        const DATED = 999_999_999_360;
+        const dated = at !== null && (rp.value >= DATED ? at >= DATED : /^day\b/i.test(text(by)));
+        if (!dated || !text(what)) return { ok: false, error: `Give "by" in the form the files stamp their lines — now is "${rp.label}" — and "what" hangs on it.` };
+        const deadlines = [...(Array.isArray(found.deadlines) ? found.deadlines : []).filter(item => text(item?.what) !== text(what)), { at, what: text(what) }];
+        const history = [...(found.history ?? []), { at: rp.label, by: 'director', part: 'deadline', section: 0, old: '', new: `${formatInstant(at)} — ${text(what)}`, comment: text(comment) }];
+        await save({ ...state, [bankKey(found.name)]: { ...found, deadlines, history: history.slice(-HISTORY_LIMIT) } });
+        return { ok: true, character: found.name, by: formatInstant(at), what: text(what) };
+    }
+
+    /**
      * Ход принят: у каждого в сцене, кроме пользователя, — первая общая сцена (если её ещё не было) и минуты вместе.
      * Лежит в Great Bank, поэтому снимок хода и откат несут его сами.
      */
@@ -452,6 +472,7 @@ export function createGreatBank({ call, store = null, banks = null, timeOfDay = 
     return {
         load, sync, replace, edit, setImportance, setDecree, writeDecree, setPsyche, clearForRewrite, pending, resolvePending, resolveName, setKnowledge,
         correct,
+        setDeadline,
         splitCharacter,
         setAcquaintance, noteTogether, clockMinutes,
         farText, nearText, writerText, decreeText, rpNow, historyFor,

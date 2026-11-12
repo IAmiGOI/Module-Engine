@@ -30,6 +30,11 @@ export function createBankHandlers({ banks = null, knowledge = null, state = {} 
             return banks.great.setImportance({ character: args.character, importance: args.importance });
         },
 
+        set_deadline: async args => {
+            if (!banks?.great?.setDeadline) return { ok: false, error: 'The Great Bank is not available.' };
+            return banks.great.setDeadline({ character: args.character, by: args.by, what: args.what, comment: args.comment });
+        },
+
         split_character: async args => {
             if (!banks?.great?.splitCharacter) return { ok: false, error: 'The Great Bank is not available.' };
             return banks.great.splitCharacter({ character: args.character, into: args.into, comment: args.comment });

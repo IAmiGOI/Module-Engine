@@ -84,7 +84,7 @@ export function buildCounsellorToolList() {
  * предложения резолвера принимаются тем же вызовом `decree`.
  */
 export function buildDirectorToolList() {
-    return [CHECK_REPORTS_TOOL, files.VIEW_TOOL, files.EDIT_TOOL, files.CREATE_TOOL, bank.SET_BANK_IMPORTANCE_TOOL, bank.SET_ACQUAINTANCE_TOOL, bank.SPLIT_CHARACTER_TOOL, files.RESOLVE_PROPOSALS_TOOL, world.AWAIT_TOOL];
+    return [CHECK_REPORTS_TOOL, files.VIEW_TOOL, files.EDIT_TOOL, files.CREATE_TOOL, bank.SET_BANK_IMPORTANCE_TOOL, bank.SET_ACQUAINTANCE_TOOL, bank.SPLIT_CHARACTER_TOOL, bank.SET_DEADLINE_TOOL, files.RESOLVE_PROPOSALS_TOOL, world.AWAIT_TOOL];
 }
 
 /**

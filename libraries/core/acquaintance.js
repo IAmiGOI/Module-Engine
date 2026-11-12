@@ -100,6 +100,20 @@ export function withUserLine(name, record, { now = 0, user = 'the user' } = {}) 
     return `- ${name}: ${parts.join('')}.${milestones.length ? ` Milestones: ${milestones.join('; ')}.` : ' No milestones between them yet.'}`;
 }
 
+/** Сроки тех, кто в сцене: что висит и сколько осталось — словами. */
+export function renderDeadlines(characters, { now = 0 } = {}) {
+    const lines = [];
+    for (const character of Array.isArray(characters) ? characters : []) {
+        for (const item of Array.isArray(character?.deadlines) ? character.deadlines : []) {
+            if (!text(item?.what) || !Number.isFinite(Number(item.at))) continue;
+            const left = Number(item.at) - now;
+            const when = left > 0 ? `${humanSpan(left)} left` : left > -30 ? 'due now' : `passed ${humanSpan(-left)} ago`;
+            lines.push(`- ${text(character.name)}: ${text(item.what)} — ${when}.`);
+        }
+    }
+    return lines.length ? `DEADLINES — what hangs over those here, by the clock of the story:\n${lines.join('\n')}` : '';
+}
+
 export const WITH_USER_HEADER = 'THEM AND {{user}} — how long each one here has known {{user}}, by the clock of the story, and what has happened between them. What they feel for {{user}} fits how long and how they have known each other, unless a milestone explains more:';
 
 /** Блок резолверу — только те, кто в сцене, без самого пользователя. */

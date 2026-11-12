@@ -2,7 +2,7 @@ import { isUserCharacter } from '../../libraries/core/decision-great-bank.js';
 import { createGreatBank } from './bank-great.js';
 import { createPsychologist } from './psychologist.js';
 import { renderDecreeForResolver, renderTemperForResolver, renderPsycheForResolver } from '../../libraries/core/decision-bank-projections.js';
-import { renderWithUser } from '../../libraries/core/acquaintance.js';
+import { renderWithUser, renderDeadlines } from '../../libraries/core/acquaintance.js';
 
 /**
  * Great Bank поверх банков-карточек: проекции (дальняя компактная, ближняя
@@ -95,8 +95,10 @@ export function createGreatBankLayer({ call, store, banks, publishEvent = () => 
         const present = scene.map(name => entries.find(entry => String(entry.character?.name ?? '').toLowerCase() === String(name).toLowerCase())?.character)
             .filter(character => character && !isUserCharacter(character));
         const withUser = renderWithUser(present, { now: great.clockMinutes?.() ?? 0, user: userName });
+        // Сроки — по RP-времени (метка с датой), как их ставит Директор.
+        const deadlines = renderDeadlines(present, { now: (await great.rpNow?.().catch(() => null))?.value ?? 0 });
         // Психология первой: на ней читаются Указ и нрав, а не наоборот.
-        return [psyche, withUser, renderDecreeForResolver(entries, { names }), temper].filter(Boolean).join('\n\n');
+        return [psyche, withUser, deadlines, renderDecreeForResolver(entries, { names }), temper].filter(Boolean).join('\n\n');
     }
 
     /** Раздел, который увидит движок: нужен ответу инструмента и проверке прав. */

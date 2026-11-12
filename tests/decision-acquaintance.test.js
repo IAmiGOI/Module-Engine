@@ -88,3 +88,25 @@ test('the Director cannot rest while a Main Cast character in the form has no pa
     await handlers.set_acquaintance({ character: 'Satsuki', first_meeting: true, comment: 'x' });
     assert.equal((await handlers.await({})).ok, true);
 });
+
+test('a deadline from the Director shows the Resolver how much time is left, in words', async () => {
+    const { renderDeadlines } = await import('../libraries/core/acquaintance.js');
+    const block = renderDeadlines([{ name: 'Mara', deadlines: [{ at: 360, what: 'Daniel dead, or the family drowns Tomas' }] }], { now: 280 });
+    assert.match(block, /Mara: Daniel dead, or the family drowns Tomas — about an hour left\./);
+    assert.match(renderDeadlines([{ name: 'Mara', deadlines: [{ at: 360, what: 'x' }] }], { now: 500 }), /passed a couple of hours ago/);
+    const { great } = bankWith({ mara: { name: 'Mara', importance: 'main' } });
+    const { createBankHandlers } = await import('../cores/decision/handlers-bank.js');
+    const handlers = createBankHandlers({ banks: { great } });
+    assert.equal((await handlers.set_deadline({ character: 'Mara', by: '06:00', what: 'x', comment: 'c' })).ok, false, 'a bare hour is refused');
+    const set = await handlers.set_deadline({ character: 'Mara', by: 'Day 0, 06:00', what: 'Daniel dead, or Tomas dies', comment: 'The card puts dawn on it.' });
+    assert.equal(set.ok, true);
+    assert.equal((await great.load()).mara.deadlines[0].at, 360);
+});
+
+test('the Resolver is told that what others do to the user is theirs, and that a pressing want moves a person', async () => {
+    const { DECIDER_SYSTEM } = await import('../libraries/core/decision-prompts.js').catch(() => ({}));
+    const prompts = await import('../libraries/core/decision-prompts.js');
+    const all = Object.values(prompts).filter(value => typeof value === 'string').join('\n');
+    assert.match(all, /What the others do to the user's character is theirs, not the user's/);
+    assert.match(all, /A want that is pressing in them/);
+});
