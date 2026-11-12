@@ -122,5 +122,5 @@ export function createSimulator({ call, banks, store, getSettings = () => ({}), 
         return accounts;
     }
 
-    return { accountsFor, enabled: () => settings().simulator?.enabled === true };
+    return { accountsFor, enabled: () => settings().simulator?.enabled !== false };
 }

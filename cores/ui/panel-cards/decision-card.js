@@ -182,7 +182,7 @@ export function createDecisionCard({ call, collapse, notify, workers, openSettin
         directorMaxSteps.set(Number(director.maxSteps ?? 10));
         decreeTimeoutMs.set(Number(director.decreeTimeoutMs ?? 120000));
         psychologistWorkerId.set(String(value.psychologist?.workerId ?? ''));
-        simulatorEnabled.set(value.simulator?.enabled === true);
+        simulatorEnabled.set(value.simulator?.enabled !== false);
         simulatorWorkerId.set(String(value.simulator?.workerId ?? ''));
         godSettings.apply(value.god ?? {});
         const retry = value.retry ?? {};

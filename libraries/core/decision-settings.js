@@ -120,9 +120,9 @@ export const DEFAULT_PSYCHOLOGIST = Object.freeze({
     workerId: '',
 });
 
-/** Симулятор человека: перед ходом резолвера — отчёт каждого присутствующего с банком. Выключен по умолчанию. */
+/** Симулятор человека: перед ходом резолвера — отчёт каждого присутствующего с банком. Включён по умолчанию. */
 export const DEFAULT_SIMULATOR = Object.freeze({
-    enabled: false,
+    enabled: true,
     workerId: '',
     maxPeople: 3,
 });
@@ -330,7 +330,7 @@ export function clampDecisionSettings(values = {}) {
             workerId: text(psychologist.workerId, DEFAULT_PSYCHOLOGIST.workerId).trim(),
         },
         simulator: {
-            enabled: (source.simulator ?? {}).enabled === true,
+            enabled: (source.simulator ?? {}).enabled !== false,
             workerId: text((source.simulator ?? {}).workerId, DEFAULT_SIMULATOR.workerId).trim(),
             maxPeople: Math.round(number((source.simulator ?? {}).maxPeople, 1, 6, DEFAULT_SIMULATOR.maxPeople)),
         },

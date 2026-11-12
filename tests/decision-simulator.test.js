@@ -64,8 +64,9 @@ test('the Resolver gets the accounts, and the Writer gets their words as their o
     assert.match(buildInscription({ form }), /LINE \(meaning\)/);
 });
 
-test('the simulator is off by default and its prompts are PROMPTS.md section 48', () => {
-    assert.equal(clampDecisionSettings({}).simulator.enabled, false);
+test('the simulator is on by default, can be turned off, and its prompts are PROMPTS.md section 48', () => {
+    assert.equal(clampDecisionSettings({}).simulator.enabled, true);
+    assert.equal(clampDecisionSettings({ simulator: { enabled: false } }).simulator.enabled, false);
     const doc = readFileSync(new URL('../docs/research-decision/PROMPTS.md', import.meta.url), 'utf8');
     for (const prompt of [SIMULATOR_SYSTEM, SIMULATOR_TASK, RESOLVER_ACCOUNTS]) assert.ok(doc.includes(prompt));
     assert.ok(personBlock(mara, { now: 0 }).includes('True Of Them'));
