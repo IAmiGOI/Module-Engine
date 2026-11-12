@@ -90,7 +90,7 @@ function backgroundLine(characters) {
  * Прежний Push рассказывал каждое событие трижды (развязка, действие, «why it goes»), и писатель отрабатывал
  * каждое упоминание: пересказом и репликой.
  */
-function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine = '', voices = {}, ownWords = false }) {
+function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine = '', voices = {}, ownWords = false, words: spoken = {} }) {
     const head = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) head.push(`Place: ${where}.`);
@@ -99,11 +99,23 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
     const characters = Array.isArray(form?.characters) ? form.characters : [];
     const byName = name => characters.find(character => line(character?.name).toLowerCase() === line(name).toLowerCase()) ?? null;
     const told = new Set();
-    const beats = form.beats.map((beat, index) => {
+    // С Симулятором слова человека берутся из его отчёта, а не из бита: резолвер пересказывал их косвенной речью
+    // («he did not answer her»), и Писатель путал лица. Первая реплика человека несёт все его слова, остальные его реплики уходят.
+    const ownLine = new Map(Object.entries(spoken ?? {}).map(([name, said]) => [line(name).toLowerCase(), line(said)]).filter(([, said]) => said));
+    const voiced = new Set();
+    const kept = form.beats.filter(beat => {
+        const key = line(beat?.who).toLowerCase();
+        if (!ownWords || String(beat?.kind ?? '').toLowerCase() !== 'line' || !ownLine.has(key)) return true;
+        if (voiced.has(key)) return false;
+        voiced.add(key);
+        return true;
+    });
+    const beats = kept.map((beat, index) => {
         const who = line(beat?.who) || 'Someone';
         // С Симулятором реплика — слова человека, а не смысл: Писатель кладёт их как есть.
         const kind = String(beat?.kind ?? '').toLowerCase() === 'line' ? (ownWords ? 'LINE (their own words)' : 'LINE (meaning)') : 'ACTION';
-        let text = `${index + 1}. ${who} — ${kind}: ${line(beat?.text)}`;
+        const said = kind !== 'ACTION' && ownWords ? ownLine.get(who.toLowerCase()) : '';
+        let text = `${index + 1}. ${who} — ${kind}: ${said || line(beat?.text)}`;
         const character = byName(who);
         const words = line(assessmentOf(assessments, character?.assessId)?.words);
         // Как прошла попытка — у первого действия того, кто бросал.
@@ -148,8 +160,8 @@ function buildBeatInscription({ form, assessments, place, timeBefore, timeAfter,
  * @param {{ form: object, assessments?: Map|object, place?: string, timeBefore?: string, timeAfter?: string }} input
  * @returns {string}
  */
-export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '', modeLine = '', voices = {}, ownWords = false } = {}) {
-    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine, voices: ownWords ? {} : voices, ownWords });
+export function buildInscription({ form, assessments = new Map(), place = '', timeBefore = '', timeAfter = '', modeLine = '', voices = {}, ownWords = false, words = {} } = {}) {
+    if (Array.isArray(form?.beats) && form.beats.some(beat => line(beat?.text))) return buildBeatInscription({ form, assessments, place, timeBefore, timeAfter, modeLine, voices: ownWords ? {} : voices, ownWords, words });
     const lines = [minutesLabel(form?.scene?.minutes)];
     const where = line(place) || line(form?.scene?.place);
     if (where) lines.push(`Place: ${where}.`);

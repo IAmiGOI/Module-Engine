@@ -71,3 +71,23 @@ test('the simulator is on by default, can be turned off, and its prompts are PRO
     for (const prompt of [SIMULATOR_SYSTEM, SIMULATOR_TASK, RESOLVER_ACCOUNTS]) assert.ok(doc.includes(prompt));
     assert.ok(personBlock(mara, { now: 0 }).includes('True Of Them'));
 });
+
+test('with the simulator the Writer gets a person\'s words from the account itself, not the Resolver\'s retelling of them', () => {
+    const form = {
+        userResult: 'Sasha laid out the plan.',
+        characters: [{ name: 'Lena', feels: 'Tired.' }],
+        beats: [
+            { who: 'Lena', kind: 'action', text: 'Looks at the window.' },
+            { who: 'Lena', kind: 'line', text: 'Second: he did not answer her, and she noticed.' },
+            { who: 'Lena', kind: 'action', text: 'Her hands tighten.' },
+            { who: 'Lena', kind: 'line', text: 'Fourth: he has still not told her the numbers.' },
+        ],
+        stop: 'She waits for the numbers.',
+    };
+    const push = buildInscription({ form, ownWords: true, words: { Lena: '"You did not answer me. And you still have not told me the numbers."' } });
+    assert.match(push, /2\. Lena — LINE \(their own words\): "You did not answer me\. And you still have not told me the numbers\."/);
+    assert.match(push, /3\. Lena — ACTION: Her hands tighten\./);
+    assert.doesNotMatch(push, /he did not answer her|4\. Lena/);
+    const plain = buildInscription({ form });
+    assert.match(plain, /LINE \(meaning\): Second: he did not answer her/);
+});

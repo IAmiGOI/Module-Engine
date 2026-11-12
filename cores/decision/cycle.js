@@ -194,7 +194,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
     function cycleRecord({ runId, event, result, thinking, wake, startedAt, workerId, usage: runUsage, contextMessages = [], speculative = null, scalesHint = null }) {
         const form = result.type === 'submit' ? (result.form ?? {}) : null;
         const push = form
-            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: [writerContrastLine(state.contrast), writerModeLine(state.modes?.chosen)].filter(Boolean).join('\n'), voices: state.voices ?? {}, ownWords: state.simulated === true })
+            ? buildInscription({ form, assessments, place: form.meta?.place ?? '', timeBefore: form.meta?.timeBefore ?? '', timeAfter: form.meta?.timeAfter ?? '', modeLine: [writerContrastLine(state.contrast), writerModeLine(state.modes?.chosen)].filter(Boolean).join('\n'), voices: state.voices ?? {}, ownWords: state.simulated === true, words: state.words ?? {} })
             : '';
         if (form) form.push = push;
         const endedAt = now();
@@ -258,6 +258,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
         state.scalesHint = scalesHint?.systems ?? null;
         // Симулятор: люди решаются каждый в своём вызове, резолвер ставит ход из их отчётов. Сбой — ход без отчётов.
         state.simulated = false;
+        state.words = {};
         let accountsBlock = '';
         const peopleStartedAt = now();
         // Первый ход: ростер пуст — кто на странице, решает отдельный короткий вызов модели резолвера, до симулятора и резолвера.
@@ -267,6 +268,7 @@ export function createDecisionCycle({ call, callTool, callService = null, getSet
             accounts = await simulator.accountsFor({ chat, signal: externalSignal }).catch(error => { publishEvent('decision.simulator.failed', { message: error?.message ?? String(error) }); return []; });
             accountsBlock = renderAccounts(accounts);
             state.simulated = Boolean(accountsBlock);
+            state.words = Object.fromEntries(accounts.filter(item => !item.error && String(item.account?.says ?? '').trim()).map(item => [item.name, String(item.account.says).trim()]));
         }
         // Дорожка Simulator в The Court: каст и отчёт каждого человека — своя запись журнала, отдельно от хода резолвера.
         if (cast.length || accounts.length) {
